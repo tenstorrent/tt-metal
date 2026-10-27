@@ -24,8 +24,7 @@ the packed scalar is baked into the program, so it must participate in the cache
 
 Run on the Quasar simulator:
     unset TT_METAL_DISABLE_SFPLOADMACRO
-    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
-        TT_METAL_SLOW_DISPATCH_MODE=1 \
+    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_scalar.py
 
 Run on real Wormhole / Blackhole (first-silicon validation of the DFB path):
@@ -36,8 +35,11 @@ import pytest
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
     _run_scalar,
+    _block_sharded_config,
     _height_sharded_config,
+    _dram_height_sharded_config,
 )
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 
 @pytest.mark.parametrize("op_name", ["add", "subtract"])
@@ -107,6 +109,64 @@ def test_scalar_sharded_lhs(device, op_name):
     # handles a sharded operand correctly even though nothing is borrowed. add takes the FPU compute
     # kernel, multiply the SFPU kernel -- both exercised sharded.
     _run_scalar(device, op_name, _SCALAR_LHS_HEIGHT, ttnn.bfloat16, _SCALAR_LHS_SHAPE, 3.5)
+
+
+# bfloat8_b keeps a tensor-scalar op on the descriptor ProgramFactory (the DFB gate admits only bf16/fp32),
+# which borrows a sharded `a` and output as CBs whenever is_native_L1_sharding holds. CBs can alias only L1,
+# and per-core work comes from a's shard, so a DRAM shard or an output shard spec that differs from a's must
+# decline to the TensorAccessor path. The descriptor path cannot run on Quasar.
+_SCALAR_ROUTER_SHAPE = [1, 1, 128, 128]
+_SCALAR_ROUTER_L1 = _height_sharded_config([32, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}))
+# One shard spec, two layouts: HEIGHT puts the second [64, 128] shard on (1, 0), BLOCK on (0, 1).
+_SCALAR_ROUTER_GRID_2X2 = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 1))})
+_SCALAR_ROUTER_HEIGHT_2X2 = _height_sharded_config([64, 128], _SCALAR_ROUTER_GRID_2X2)
+_SCALAR_ROUTER_BLOCK_2X2 = _block_sharded_config([64, 128], _SCALAR_ROUTER_GRID_2X2)
+# 32x32 shards round-robin over 4 cores, which has no legacy ShardSpec equivalent, so the config stays ND-only
+# (an ND config that maps to a legacy shard spec, e.g. 32x128 height shards, is converted back to one).
+_SCALAR_ROUTER_ND = ttnn.MemoryConfig(
+    buffer_type=ttnn.BufferType.L1,
+    nd_shard_spec=ttnn.NdShardSpec(
+        shard_shape=[1, 1, 32, 32],
+        grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    ),
+)
+
+
+@pytest.mark.skipif(is_quasar(), reason="bfloat8_b tensor-scalar routes to the descriptor path, which Quasar lacks")
+@pytest.mark.parametrize(
+    "a_mem,out_mem",
+    [
+        pytest.param(_SCALAR_ROUTER_L1, None, id="l1_same_spec"),
+        pytest.param(
+            _dram_height_sharded_config([32, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))})),
+            None,
+            id="dram_sharded",
+        ),
+        pytest.param(
+            _SCALAR_ROUTER_L1,
+            _height_sharded_config([64, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 0))})),
+            id="l1_output_on_other_grid",
+        ),
+        pytest.param(_SCALAR_ROUTER_HEIGHT_2X2, _SCALAR_ROUTER_BLOCK_2X2, id="same_shard_spec_different_layout"),
+        pytest.param(_SCALAR_ROUTER_ND, None, id="nd_sharded_inferred_output"),
+    ],
+)
+def test_scalar_sharded_native_routing(device, a_mem, out_mem):
+    # With no output override, memory_config is omitted so the op infers the output config from a's.
+    _run_scalar(
+        device,
+        "add",
+        a_mem,
+        ttnn.bfloat8_b,
+        _SCALAR_ROUTER_SHAPE,
+        5.0,
+        # bfloat8_b rounds the output to a shared exponent per block, which costs up to 4 ULP at bfloat16
+        # resolution on every case here. A misplaced or stale shard is off by hundreds of ULP, not a few.
+        ulp_threshold=4,
+        out_mem=out_mem,
+        infer_output_config=out_mem is None,
+    )
 
 
 @pytest.mark.parametrize("op_name", ["add", "multiply"])

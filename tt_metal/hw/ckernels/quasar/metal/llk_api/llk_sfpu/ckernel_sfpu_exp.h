@@ -17,7 +17,7 @@
 #include "llk_assert.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_operand.h"
+#include "ckernel_sfpu_operand.h"
 // After sfpi.h: the Blackhole 21f helpers below use PolynomialEvaluator.
 #include "ckernel_sfpu_polyval.h"
 
@@ -219,19 +219,29 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
 // silicon-verified -- no Quasar target available.
 // unsafe = true drops the overflow/underflow guards, as the Blackhole template of the same name does;
 // only for callers that already bound the argument inside exp's finite range.
-template <bool unsafe = false>
+//
+// base_two = true computes 2^a instead of e^a. The reduction is then exact: j = round(a) and
+// a - j are both representable, so the only rounding before the polynomial is one multiply by
+// ln 2 on |a - j| <= 1/2. Passing a * ln2 to the base-e form instead rounds the argument,
+// and that relative error grows into the result in proportion to |a| (tens of ULP near 2^-126).
+template <bool unsafe = false, bool base_two = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     sfpi::vInt i;
     sfpi::vFloat f, r, j;
 
-    // j = round(a / ln2) (as a float) and i = the same value as an integer, interleaved with the
-    // first coefficient of the polynomial.
     r = 1.37805939e-3f;
-    j = _sfpu_round_to_nearest_int32_(1.442695f * a, i);
+    if constexpr (base_two) {
+        // j = round(a) and i = the same value as an integer, f = (a - j) * ln2.
+        j = _sfpu_round_to_nearest_int32_(a, i);
+        f = (a - j) * 6.93147182e-1f;
+    } else {
+        // j = round(a / ln2) (as a float) and i = the same value as an integer.
+        j = _sfpu_round_to_nearest_int32_(1.442695f * a, i);
 
-    // f = a - j*ln2 (two-part Cody-Waite).
-    f = j * -6.93145752e-1f + a;
-    f = j * -1.42860677e-6f + f;
+        // f = a - j*ln2 (two-part Cody-Waite).
+        f = j * -6.93145752e-1f + a;
+        f = j * -1.42860677e-6f + f;
+    }
 
     // r = exp(f) on [-ln2/2, ln2/2] via a degree-6 minimax polynomial in Horner form.
     r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
@@ -241,16 +251,19 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     r = r * f + 1.0f;
     r = r * f + 1.0f;
 
-    // exp(a) = 2^i * exp(f), applied via the result's biased exponent e. The legal IEEE-754 range
-    // is 1..254, and i pushes e outside it for |a| beyond ~88. Writing (i + 127) << 23 directly
-    // would wrap into the sign bit there -- Quasar's integer adder is 32-bit two's complement and
-    // SHFT discards the high bits (Quasar/Trinity SFPU MAS), so a = -100 yields i + 127 = -17 ->
-    // 0xF7800000 = -2^112 rather than ~0. Nothing routes large-magnitude inputs away from this
-    // path (calculate_exponential selects purely on EN_32BIT_DEST / APPROXIMATION_MODE).
+    // exp(a) = 2^i * exp(f) (2^a = 2^i * exp(f) for base_two), applied via the result's biased
+    // exponent e. The legal IEEE-754 range is 1..254, and i pushes e outside it for |a| beyond ~88
+    // (~127 for base_two). Writing (i + 127) << 23 directly would wrap into the sign bit there --
+    // Quasar's integer adder is 32-bit two's complement and SHFT discards the high bits
+    // (Quasar/Trinity SFPU MAS), so base-e a = -100 yields i + 127 = -17 -> 0xF7800000 = -2^112
+    // rather than ~0 (base_two wraps the same way from a ~ -128). Nothing routes large-magnitude
+    // inputs away from this path (calculate_exponential selects purely on EN_32BIT_DEST /
+    // APPROXIMATION_MODE).
     //
     // Seed y with the overflow result unpredicated, as the Blackhole source does, and take the
-    // exponent path only when e is in range. Seeding from a (not from the polynomial, which is
-    // NaN for a = +-Inf because f = j*-ln2 + a is -Inf + Inf) keeps exp(+Inf) = +Inf.
+    // exponent path only when e is in range. Seeding from a (not from the polynomial, which in
+    // base e is NaN for a = +-Inf because f = j*-ln2 + a is -Inf + Inf) keeps exp(+Inf) = +Inf in
+    // either mode.
     //
     // NB: the earlier Quasar port bug was elsewhere -- the Blackhole kernel's sign-magnitude
     // rounding (abs(as<vInt>(convert<vSMag16>(x))) + copysgn feeding a two's-complement add),
@@ -272,6 +285,12 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
 
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
 
+// 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN. As in base e
+// above, -NaN lands in the underflow arm (0). The only caller, logaddexp2, zeroes NaN gaps first.
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
+    return _sfpu_exp_fp32_accurate_</*unsafe=*/false, /*base_two=*/true>(x);
+}
+
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_exp_accurate_(sfpi::vFloat val);
 
@@ -288,10 +307,12 @@ sfpi_inline sfpi::vFloat _sfpu_exp_accurate_<true>(sfpi::vFloat val) {
 }
 
 struct ExpHwLut {
+    using value_type = sfpi::vFloat;
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return sfpi::approx_exp(x); }
 };
 
 struct ExpFp32Accurate {
+    using value_type = sfpi::vFloat;
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_(x); }
 };
 
@@ -299,38 +320,16 @@ template <bool APPROXIMATION_MODE, bool FP32_RESULT>
 using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
 
 /**
- * @brief EXP on independently located floating-point operands: output = Algo::apply(input).
+ * @brief EXP over a Dest span.
  *
- * Advances explicit indices only; the caller owns setup and synchronization. Input/output
- * ranges must coincide or be disjoint.
- *
- * @tparam Algo: @ref ExpHwLut or @ref ExpFp32Accurate (see @ref ExpAlgo).
+ * The fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE; otherwise the HW LUT.
  */
-template <typename Algo, int ITERATIONS, typename Input, typename Output>
-sfpi_inline void calculate_exponential_operands(const Input& input, const Output& output) {
-    static_assert(ITERATIONS > 0, "EXP requires at least one SFPI access");
-    static_assert(
-        std::is_same_v<typename Input::value_type, sfpi::vFloat> &&
-            std::is_same_v<typename Output::value_type, sfpi::vFloat>,
-        "EXP requires floating-point operands");
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        output.store(d, Algo::apply(input.load(d)));
-    }
-}
-
-// Calculates EXP over a Dest span (one face by default). Quasar exposes two implementations:
-//   - approximate exp via the HW nonlinear lookup table (sfpi::approx_exp), and
-//   - full-precision fp32 exp (_sfpu_exp_fp32_accurate_, ported from Blackhole).
-// The LUT is ~1 ULP once the result lands in a bf16 Dest, so the accurate path is only worth
-// running for a 32-bit Dest in non-approximate mode; every bf16 case (and any explicit approx
-// request) uses the LUT. EN_32BIT_DEST (is_fp32_dest_acc_en) selects the accurate path.
 template <
     bool APPROXIMATION_MODE,
     bool EN_32BIT_DEST,
-    bool SCALE_EN /*maybe_unused*/ = false,
+    [[maybe_unused]] bool SCALE_EN = false,
     int ITERATIONS = SFPU_ITERATIONS,
-    bool CLAMP_NEGATIVE /*maybe_unused*/ = true>
+    [[maybe_unused]] bool CLAMP_NEGATIVE = true>
 void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     static_assert(SCALE_EN == false, "Non-default SCALE_EN not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");
@@ -341,32 +340,16 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
     using Algo = ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_exponential_operands<Algo, 1>(Operand{}, Operand{});
+        calculate_unary_operands<Algo, 1 /*ITERATIONS*/>(Operand{}, Operand{});
         sfpi::dst_reg++;
     }
 }
 
-/**
- * @brief EXP over one SrcS slice (slots per @ref SrcsLayout), algorithm per @ref ExpAlgo.
- *
- * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
- *         source formats must match.
- * @note The caller runs unpack/pack and clears the SrcS valids after this call, as
- *       llk_sfpu_srcs_unary does.
- */
-template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT>
-sfpi_inline void calculate_exponential_srcs() {
-    using Layout = SrcsLayout<LAYOUT>;
-    using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
-    using Algo = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>;
-    calculate_exponential_operands<Algo, Layout::ops>(Operand{Layout::in0}, Operand{Layout::out});
-}
-
 template <
-    bool APPROXIMATION_MODE /*maybe_unused*/,
-    std::uint32_t scale /*maybe_unused*/ = 0x3F800000,
-    bool CLAMP_NEGATIVE /*maybe_unused*/ = true,
-    bool EN_32BIT_DEST /*maybe_unused*/>
+    [[maybe_unused]] bool APPROXIMATION_MODE,
+    [[maybe_unused]] std::uint32_t scale = 0x3F800000,
+    [[maybe_unused]] bool CLAMP_NEGATIVE = true,
+    [[maybe_unused]] bool EN_32BIT_DEST>
 void exp_init() {
     static_assert(scale == 0x3F800000, "Non-default scale not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");
@@ -375,51 +358,46 @@ void exp_init() {
 
 #ifndef DISABLE_SFPLOADMACRO
 
-// Replay slot 0 holds one LOADMACRO per iteration.
+/** @brief Replay slot holding the exp LOADMACROs, one per iteration. */
+constexpr std::uint32_t EXP_LOADMACRO_REPLAY_SLOT = 0;
 inline constexpr std::uint32_t _exp_loadmacro_replay_len_(const int num_sfpu_iterations) {
     return static_cast<std::uint32_t>(num_sfpu_iterations);
 }
 
-// Program the exp LOADMACRO sequence and record one macro per iteration into replay slot 0.
-// Each macro is self-contained: LREG <- LD[addr]; STG <- EXP[LREG]; ST[addr + STORE_OFFSET] <- STG.
-// The final macro sets the `done` bit to reset the SrcS dvalids, so callers must not clear them.
-// load_sfpmem / store_sfpmem are sfpmem format codes resolved by the caller via _sfpu_sfpmem_type_
-// (Float16 needs explicit FP16A; DEFAULT never resolves to it).
-// STORE_OFFSET must be a compile-time constant so the store is captured via the immediate field.
+/**
+ * @brief Record one self-contained macro per pass (load, EXP, store) into EXP_LOADMACRO_REPLAY_SLOT.
+ *
+ * @tparam STORE_OFFSET: Load-to-store distance in rows; must be compile-time for the store immediate.
+ * @note The last macro's done bit resets the SrcS dvalids, so callers must not clear them.
+ */
 template <std::uint32_t STORE_OFFSET>
 inline void _exp_init_loadmacro_(
     const std::uint32_t load_base_addr,
     const int num_sfpu_iterations,
     const std::uint32_t load_sfpmem,
     const std::uint32_t store_sfpmem) {
-    LLK_ASSERT(num_sfpu_iterations <= 4, "Replay cycles LREG0-3 (d & 3); >4 in-flight macros would reuse a live LREG");
-
-    // LOADMACRO CONTROL: DEFAULT_STORE_INSMOD = store_sfpmem. With
-    // STORE_INHERITS_INSMOD=0 this register, not the captured SFPSTORE, sets the store format.
+    // The store format comes from MACRO_CTRL, not from the captured SFPSTORE.
     TT_SFPCONFIG(store_sfpmem, p_sfpconfig::MACRO_CTRL, 0x1);
     TTI_SFPNOP(0, 0, 0);  // SFPCONFIG hazard: no instr may issue the cycle after SFPCONFIG
 
     // Instr reg 4: STG <- EXP[LREG]  (captured via the MACRO_CAPTURE backdoor, not executed)
     TTI_SFPNONLINEAR(p_sfpu::LREG0 /* VC */, p_sfpu::MACRO_CAPTURE_INSTR4 /* VD */, p_sfpnonlinear::EXP_MODE);
 
-    // Instr reg 6: ST[load_addr + STORE_OFFSET] <- STG (the capture index also selects the staging register as store
-    // source)
+    // Instr reg 6: ST[addr + STORE_OFFSET] <- STG
     TT_SFPSTORE(p_sfpu::MACRO_CAPTURE_INSTR6, store_sfpmem, ADDR_MOD_0, 0b0, STORE_OFFSET);
 
-    // Sequence register 0:
-    //   SIMPLE = 0x44 -> instr 4 (EXP) with USE_STAGING (result to STG)
-    //   STORE  = 0xCE -> STORE slot enabled, STORE_ADDR_OFFSET set, instr 6 (store from STG)
+    // Sequence 0: SIMPLE runs instr 4 into STG, STORE runs instr 6 from STG.
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0244);  // [MAD | SIMPLE]
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0xCE02);  // [STORE | ROUND]
     TTI_SFPCONFIG(0x0000, p_sfpconfig::MACRO_SEQ0, 0x0);
     TTI_SFPNOP(0, 0, 0);  // SFPCONFIG hazard: no instr may issue the cycle after SFPCONFIG
 
     load_replay_buf(
-        0,
+        EXP_LOADMACRO_REPLAY_SLOT,
         _exp_loadmacro_replay_len_(num_sfpu_iterations),
-        false,
-        0,
-        0,
+        false /*execute_while_loading*/,
+        0 /*set_mutex*/,
+        0 /*last*/,
         [load_base_addr, num_sfpu_iterations, load_sfpmem] {
             for (int d = 0; d < num_sfpu_iterations; d++) {
                 const std::uint32_t done = (d == num_sfpu_iterations - 1);
@@ -429,13 +407,57 @@ inline void _exp_init_loadmacro_(
         });
 }
 
-// Op-word that executes the LOADMACRO replay recorded by `_exp_init_loadmacro_`.
-// Replay slot 0 and length stay private to this header; use with MOP / programmed paths.
-inline std::uint32_t _exp_loadmacro_op_(const int num_sfpu_iterations) {
-    return TT_OP_REPLAY(0, _exp_loadmacro_replay_len_(num_sfpu_iterations), 0, 0, 0, 0);
-}
+/**
+ * @brief SrcS EXP via SFPLOADMACRO; LUT only, bit-identical to Sfpi.
+ *
+ * @note Owns EXP_LOADMACRO_REPLAY_SLOT and macro sequence 0.
+ */
+template <sfpi::DataLayout LAYOUT>
+struct SrcsUnary<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>
+    : SfpuSrcsUnaryOp<SrcsUnary<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>> {
+    using Layout = SrcsLayout<LAYOUT>;
+    static_assert(Layout::ops <= 4, "Replay cycles LREG0-3 (d & 3); >4 in-flight macros would reuse a live LREG");
+
+    // The last macro's `done` bit hands both SrcS banks back.
+    static constexpr bool hw_clears_valids = true;
+
+    static void init_op() {
+        // The folded store lands in the out slot: STORE_OFFSET is the in0 -> out distance in rows.
+        constexpr std::uint32_t store_offset =
+            static_cast<std::uint32_t>((Layout::out - Layout::in0) * ckernel::math::SFP_ROWS);
+        _exp_init_loadmacro_<store_offset>(
+            ckernel::math::SFPU_SRCS_BASE_ADDR + Layout::in0 * ckernel::math::SFP_ROWS,
+            Layout::ops,
+            Layout::sfpmem,
+            Layout::sfpmem);
+    }
+
+    static void calculate() {
+        TTI_REPLAY(
+            EXP_LOADMACRO_REPLAY_SLOT,
+            _exp_loadmacro_replay_len_(Layout::ops),
+            0 /*last*/,
+            0 /*set_mutex*/,
+            0 /*execute_while_loading*/,
+            0 /*load_mode*/);
+    }
+};
 
 #endif
+
+template <sfpi::DataLayout LAYOUT, bool APPROXIMATION_MODE>
+using ExpSrcsAlgo = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>;
+
+/**
+ * @brief SrcS EXP op type.
+ *
+ * @tparam IMPL: Sfpi or LoadMacro; LoadMacro needs the LUT path (APPROXIMATION_MODE or a 16-bit layout).
+ */
+template <sfpi::DataLayout LAYOUT, bool APPROXIMATION_MODE, SfpuImpl IMPL = SfpuImpl::Sfpi>
+using ExpSrcs = SrcsUnary<
+    ExpSrcsAlgo<LAYOUT, APPROXIMATION_MODE>,
+    LAYOUT,
+    resolve_sfpu_impl<IMPL, std::is_same_v<ExpSrcsAlgo<LAYOUT, APPROXIMATION_MODE>, ExpHwLut>>()>;
 
 }  // namespace sfpu
 }  // namespace ckernel

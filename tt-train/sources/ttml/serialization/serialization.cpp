@@ -142,7 +142,8 @@ void read_autograd_tensor(FlatBufferFile& file, std::string_view name, ttml::aut
     bool has_grads = false;
     bool requires_grads = false;
     read_ttnn_tensor(file, std::string(name) + "/value", value);
-    tensor->set_value(value);
+    // Cast to the dtype the tensor is stored in: the model decides the precision, not the file.
+    tensor->assign(value);
     requires_grads = file.get_bool(std::string(name) + "/requires_grads");
     has_grads = file.get_bool(std::string(name) + "/has_grads");
     tensor->set_requires_grad(requires_grads);

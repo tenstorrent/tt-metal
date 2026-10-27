@@ -25,7 +25,7 @@ from ....models.vae.minimax_h3.vae_minimax_h3 import (
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.yuv_d2h import fast_device_to_host_yuv, replicated_to_host_yuv
-from .common import GALAXY_MESHES
+from .common import GALAXY_MESHES, fabric_topology
 
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
 
@@ -419,7 +419,7 @@ def test_replicated_readback_matches_gather_path(mesh_device, width):
     )
 
     padded_width = -(-width // (2 * mesh_cols)) * (2 * mesh_cols)
-    ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    ccl_manager = CCLManager(mesh_device, num_links=2, topology=fabric_topology())
 
     def gather_path():
         reference_in = canvas

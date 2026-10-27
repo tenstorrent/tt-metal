@@ -165,6 +165,10 @@ void kernel_main() {
 
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_scaler(dfb_scaler_id);
+    // The reader pushes the reduce scaler tile(s) once. The variance reduce below reads them by index on both
+    // the LayerNorm and RMSNorm paths, so they are waited for once after hw startup (row_wise_mean also waits,
+    // which is a no-op re-wait) and popped at the end.
+    constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tile_width);
     DataflowBuffer dfb_in(dfb_in_id);
 #ifdef TILIZE_IN
     DataflowBuffer dfb_in_rm(dfb_in_rm_id);
@@ -172,13 +176,13 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_inb(dfb_inb_id);
 #else
-    DataflowBuffer& dfb_inb = dfb_in;
+    auto& dfb_inb = dfb_in;
 #endif
     DataflowBuffer dfb_out(dfb_out_id);
 #ifndef RMSNORM
     DataflowBuffer dfb_ex(dfb_ex_id);
 #else
-    DataflowBuffer& dfb_ex = dfb_in;
+    auto& dfb_ex = dfb_in;
 #endif
     DataflowBuffer dfb_xmm2(dfb_xmm2_id);
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
@@ -188,19 +192,19 @@ void kernel_main() {
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma(dfb_gamma_id);
 #else
-    DataflowBuffer& dfb_gamma = dfb_out;
+    auto& dfb_gamma = dfb_out;
 #endif
 #ifdef FUSE_BETA
     DataflowBuffer dfb_beta(dfb_beta_id);
 #else
-    DataflowBuffer& dfb_beta = dfb_out;
+    auto& dfb_beta = dfb_out;
 #endif
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
     DataflowBuffer dfb_fusion(dfb_fusion_id);
-    DataflowBuffer& dfb_im_or_out = dfb_fusion;
+    auto& dfb_im_or_out = dfb_fusion;
 #else
-    DataflowBuffer& dfb_fusion = dfb_out;
-    DataflowBuffer& dfb_im_or_out = dfb_out;
+    auto& dfb_fusion = dfb_out;
+    auto& dfb_im_or_out = dfb_out;
 #endif
 
 #ifdef FUSE_PRE_ADD
@@ -215,7 +219,8 @@ void kernel_main() {
 #else
     compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
-#endif                      // FUSE_PRE_ADD
+#endif  // FUSE_PRE_ADD
+    dfb_scaler.wait_front(num_scaler_tiles);
     dfb_eps.wait_front(1);  // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -349,7 +354,7 @@ void kernel_main() {
 
             const auto final_iter = block.last() == Wt;
             const auto pack_dfb_id = final_iter ? dfb_ex2_id : dfb_accumulate_id;
-            DataflowBuffer& pack_dfb_obj = final_iter ? dfb_ex2 : dfb_accumulate;
+            auto& pack_dfb_obj = final_iter ? dfb_ex2 : dfb_accumulate;
             if (final_iter) {
                 // Divide by W
                 binop_with_scalar_tile_init();
@@ -448,7 +453,7 @@ void kernel_main() {
 
             if constexpr (do_gamma == 1) {
                 constexpr auto dfb_gamma_out_id = do_beta ? dfb_fusion_id : dfb_out_id;
-                DataflowBuffer& dfb_gamma_out = do_beta ? dfb_fusion : dfb_out;
+                auto& dfb_gamma_out = do_beta ? dfb_fusion : dfb_out;
                 ckl::eltwise_chain(
                     block_shape,
                     ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, fusion_input, gamma_input>{dfb_fusion, dfb_gamma},
@@ -483,14 +488,12 @@ void kernel_main() {
         dfb_ex2pe.pop_front(onetile);
     }  // NCHt loop
 
-    // The reduce scalers are pushed once by the reader and waited inside row_wise_mean (or
-    // row_wise_mean_with_pre_add), which never pops them. Those calls compute E[x], so they are
-    // compiled out under RMSNORM and the pop carries the same condition. reduce_scaler_tile_count
-    // is needed to determine the number of tiles to pop, since the number is different for
-    // different compile time args.
-#ifndef RMSNORM
-    dfb_scaler.pop_front(norm::layernorm::reduce_scaler_tile_count(W, tile_width));
-#endif
+    // The reduce scalers are pushed once by the reader (on both the LayerNorm and RMSNorm paths) and
+    // waited above; nothing else pops them. reduce_scaler_tile_count gives the number pushed, which
+    // depends on the compile time args. dummy_unpack orders the pop after the wait on Quasar for a core
+    // whose row loop never unpacked the scaler (TEN-4746).
+    dummy_unpack(dfb_scaler_id);
+    dfb_scaler.pop_front(num_scaler_tiles);
 
     // The epsilon tile is pushed once by the reader and read on every NCHt iteration, so it is
     // waited once up front rather than per iteration. Pop it here to balance the buffer.

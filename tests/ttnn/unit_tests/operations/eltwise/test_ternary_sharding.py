@@ -7,7 +7,7 @@ import ttnn
 import pytest
 from functools import partial
 
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -1465,7 +1465,7 @@ def test_where_ttt_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, devic
     predicate_config = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
     # DRAM sharded config for true tensor
-    from models.common.utility_functions import divup
+    from tt_py_test_utils_common.utility_functions import divup
 
     dram_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet(

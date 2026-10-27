@@ -105,6 +105,7 @@ def migrate_runs(runs, out_dir, *, compression="zstd", overwrite=False):
                 **base,
                 "dropped_columns": {},
                 "coerced_values": {},
+                "renamed_columns": {},
                 "skipped": True,
             }
             continue
@@ -137,6 +138,7 @@ def migrate_runs(runs, out_dir, *, compression="zstd", overwrite=False):
             **base,
             "dropped_columns": diagnostics["unknown_columns"],
             "coerced_values": diagnostics["coerced_values"],
+            "renamed_columns": diagnostics["renamed_columns"],
             "skipped": False,
         }
     return report

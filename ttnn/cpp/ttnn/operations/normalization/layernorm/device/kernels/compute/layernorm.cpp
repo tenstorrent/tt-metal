@@ -17,7 +17,7 @@
 #ifdef UNTILIZE_OUT
 #include "api/compute/pack_untilize.h"
 #endif
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
@@ -107,7 +107,7 @@ void kernel_main() {
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_in(dfb_in_id);
 #if defined RMSNORM and not defined FUSE_PRE_ADD
-    DataflowBuffer& dfb_xmm = dfb_in;
+    auto& dfb_xmm = dfb_in;
 #else
     DataflowBuffer dfb_xmm(dfb_xmm_id);
 #endif
@@ -137,6 +137,10 @@ void kernel_main() {
     constexpr auto dfb_in_rm_id = dfb::in_rm;
     DataflowBuffer dfb_in_rm(dfb_in_rm_id);
 #endif
+#ifdef UNTILIZE_OUT
+    constexpr auto dfb_out_rm_id = dfb::out_rm;
+    DataflowBuffer dfb_out_rm(dfb_out_rm_id);
+#endif
 
     constexpr int onetile = 1;
     constexpr int dst0 = 0;
@@ -158,7 +162,7 @@ void kernel_main() {
 #ifndef RMSNORM
     DataflowBuffer dfb_x(dfb_x_id);
 #elif defined(FUSE_PRE_ADD)
-    DataflowBuffer& dfb_x = dfb_xmm;
+    auto& dfb_x = dfb_xmm;
 #endif
 
 #ifdef TILIZE_IN
@@ -177,10 +181,10 @@ void kernel_main() {
     // when there is gamma or beta to fold in, otherwise the output buffer directly.
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
     constexpr auto dfb_im_or_out_id = dfb_fusion_id;
-    DataflowBuffer& dfb_im_or_out = dfb_fusion;
+    auto& dfb_im_or_out = dfb_fusion;
 #else
     constexpr auto dfb_im_or_out_id = dfb_out_id;
-    DataflowBuffer& dfb_im_or_out = dfb_out;
+    auto& dfb_im_or_out = dfb_out;
 #endif
 
     // Intermediate buffers need to be reserved/pushed/popped
@@ -335,8 +339,8 @@ void kernel_main() {
 #endif
 #endif
 #ifdef FUSE_GAMMA
-            constexpr uint32_t dfb_outg_id = do_beta ? dfb_fusion_id : dfb_out_id;
-            DataflowBuffer& dfb_outg = do_beta ? dfb_fusion : dfb_out;
+            constexpr auto dfb_outg_id = do_beta ? dfb_fusion_id : dfb_out_id;
+            auto& dfb_outg = do_beta ? dfb_fusion : dfb_out;
             if constexpr (!do_beta) {
                 pack_reconfig_data_format(dfb_out_id);
 #ifdef ARCH_QUASAR
@@ -413,8 +417,6 @@ void kernel_main() {
         dfb_xmm.pop_front(total_buffer_size);
 
 #ifdef UNTILIZE_OUT
-        constexpr auto dfb_out_rm_id = dfb::out_rm;
-        DataflowBuffer dfb_out_rm(dfb_out_rm_id);
         untilize_all_blocks_from_dfb<block_size>(dfb_out, dfb_out_rm, Wt);
 #endif
     }  // NCHt loop
@@ -440,13 +442,16 @@ void kernel_main() {
 
     // Gamma and beta are each one row of Wt tiles pushed once by the reader and read by tile offset
     // on every block of every NCHt row. Their chain inputs wait Upfront with PopPolicy::None, so the
-    // chain waits block.start() + block.size() tiles and never pops. Blocks clamp their end to Wt,
-    // so that sum never exceeds Wt and reaches Wt on the last block of a row. Pop Wt once here
-    // rather than per block.
+    // chain waits block.start() + block.size() tiles and never pops. Pop them once here rather than
+    // per block. The reader pushes a full block_size for every block, including the last partial
+    // one, so pop that padded total rather than Wt. The reader pushes them only on its first row, so a
+    // core with no rows has nothing to pop.
+    if (NCHt > 0) {
 #ifdef FUSE_GAMMA
-    dfb_gamma.pop_front(Wt);
+        dfb_gamma.pop_front(total_buffer_size);
 #endif
 #ifdef FUSE_BETA
-    dfb_beta.pop_front(Wt);
+        dfb_beta.pop_front(total_buffer_size);
 #endif
+    }
 }

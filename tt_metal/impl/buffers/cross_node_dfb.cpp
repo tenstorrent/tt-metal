@@ -9,6 +9,7 @@
 #include <device.hpp>
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
@@ -21,6 +22,7 @@
 #include "hostdev/remote_dfb_config_layout.h"
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -81,7 +83,7 @@ bool is_compatible_borrowed_device(distributed::MeshDevice* expected, IDevice* b
     if (expected == buffer_device) {
         return true;
     }
-    for (IDevice* local : expected->get_devices()) {
+    for (auto* local : expected->impl().get_devices()) {
         if (local == buffer_device) {
             return true;
         }
@@ -124,8 +126,7 @@ void CrossNodeDFB::allocate_config_buffer(BufferType config_buffer_type) {
         config_buffer_type == BufferType::L1 || config_buffer_type == BufferType::L1_SMALL,
         "CrossNodeDFB can only use L1 buffer types");
 
-    const auto context_id = extract_context_id(device_);
-    const auto& hal = MetalContext::instance(context_id).hal();
+    const auto& hal = device_->impl().metal_env().get_hal();
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     const uint32_t num_all_cores = all_cores_.num_cores();
     config_page_size_ = compute_config_page_layout(max_num_receivers_per_sender_, l1_alignment).page_size;
@@ -145,8 +146,7 @@ void CrossNodeDFB::build_config_pages() {
     TT_FATAL(config_buffer_ != nullptr, "CrossNodeDFB config buffer must exist before building pages");
     TT_FATAL(data_address_ != 0, "CrossNodeDFB data address must be set before building config pages");
 
-    const auto context_id = extract_context_id(device_);
-    const auto& hal = MetalContext::instance(context_id).hal();
+    const auto& hal = device_->impl().metal_env().get_hal();
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     const uint32_t ring_size = entry_size_ * num_entries_;
 

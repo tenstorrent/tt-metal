@@ -13,12 +13,12 @@
 #include "cmath_common.h"
 #include "llk_defs.h"
 #include "llk_sfpu/ckernel_sfpu_relu.h"
+#include "llk_sfpu/ckernel_sfpu_sqrt.h"
+#include "llk_sfpu/ckernel_sfpu_typecast_fp16b_uint16.h"
+#include "llk_sfpu/ckernel_sfpu_typecast_fp32_to_uint16.h"
+#include "llk_sfpu/ckernel_sfpu_typecast_int32_fp16b.h"
+#include "llk_sfpu/ckernel_sfpu_typecast_int32_fp32.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_sqrt.h"
-#include "sfpu/ckernel_sfpu_typecast_fp16b_uint16.h"
-#include "sfpu/ckernel_sfpu_typecast_fp32_to_uint16.h"
-#include "sfpu/ckernel_sfpu_typecast_int32_fp16b.h"
-#include "sfpu/ckernel_sfpu_typecast_int32_fp32.h"
 
 namespace ckernel
 {
