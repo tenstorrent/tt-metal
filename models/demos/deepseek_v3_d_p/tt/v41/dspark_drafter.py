@@ -247,7 +247,12 @@ class TtDSparkDrafter:
             )
             complete_layer(self.cache_dir, layer)
             if k == config.NUM_DSPARK_LAYERS - 1:
-                self.markov = {name: t.detach().to(torch.bfloat16) for name, t in weights["markov"].items()}
+                # the Markov tables for the host loop: the embedding rows bf16, the head as fp32 once (the reference's
+                # ``F.linear(embed.float(), head)`` with a bf16-valued head; a per-call conversion was 75 ms)
+                self.markov = {
+                    "embed": weights["markov"]["embed"].detach().to(torch.bfloat16),
+                    "head": weights["markov"]["head"].detach().to(torch.bfloat16).float(),
+                }
                 if self.head is None:
                     self.head = TtV41Head(mesh_device, config, weights["norm"], head_weight)
             self.build_s[f"build{k}"] = round(time.time() - t0, 1)
@@ -365,8 +370,9 @@ class TtDSparkDrafter:
         return logits, main_x
 
     def logits_rows(self, logits, rows: int = DSPARK_BLOCK_SIZE) -> torch.Tensor:
-        """The block's first ``rows`` rows of the logits tile on the host, ``[rows, vocab]`` fp32."""
-        return self.head._tile_to_host(logits, 0)[:rows]
+        """The block's first ``rows`` rows of the logits tile on the host, ``[rows, vocab]`` fp32 (``scored_rows``:
+        the device untilizes and slices the rows, the host reads ``rows`` instead of 32; consumes ``logits``)."""
+        return self.head._tile_to_host(self.head.scored_rows(logits, 0, rows), 0)
 
     def markov_loop(self, token: int, logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """The reference's ``forward_head`` loop on the host: ``logits`` [block, vocab] fp32 (modified in place:
@@ -376,8 +382,7 @@ class TtDSparkDrafter:
         out = torch.empty(logits.shape[0] + 1, dtype=torch.int64)
         out[0] = token
         for i in range(logits.shape[0]):
-            e = embed[out[i]]
-            logits[i] += torch.nn.functional.linear(e.float(), head.float())
+            logits[i] += torch.mv(head, embed[out[i]].float())
             out[i + 1] = logits[i].argmax()
         return out, logits
 
