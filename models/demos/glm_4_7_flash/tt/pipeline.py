@@ -152,10 +152,10 @@ class FastArgmax:
     def _build(self, rm):
         V = rm.shape[-1]
         batch = self.batch
-        chunk_elems = 16384
+        chunk_elems = V
         cb_idx = 0
-        chunk_bytes = ((chunk_elems * 2) + 31) & ~31
-        cb_total = chunk_bytes + 32
+        row_bytes = ((V * 2) + 31) & ~31
+        cb_total = row_bytes + 32
 
         rep = ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh else None
 
