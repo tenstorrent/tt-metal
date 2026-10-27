@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <set>
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -363,15 +364,15 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
             socket_mem_config.socket_storage_type == BufferType::L1,
             "Per-core socket allocation is only supported for L1 storage (got {}).",
             socket_mem_config.socket_storage_type);
-        std::unordered_set<MeshCoreCoord> receiver_cores;
+        // One core coordinate, any devices: one shared FIFO address.
+        std::set<CoreCoord> receiver_cores;
         for (const auto& connection : config.socket_connection_config) {
-            receiver_cores.insert(connection.receiver_core);
+            receiver_cores.insert(connection.receiver_core.core_coord);
         }
         TT_FATAL(
             receiver_cores.size() == 1,
-            "Per-core socket allocation (v1) supports exactly one distinct receiver core (device + core) per "
-            "socket, but the connection config resolves to {} distinct (device, core) receivers. A per-core "
-            "socket may not span multiple receiver cores or devices.",
+            "Per-core socket allocation supports exactly one receiver core coordinate per socket (on any "
+            "number of devices), but the connection config resolves to {} distinct core coordinates.",
             receiver_cores.size());
 
         TT_FATAL(
@@ -379,7 +380,7 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
             "Per-core socket allocation requires the device to be opened with AllocatorMode::HYBRID "
             "(set TT_METAL_ALLOCATOR_MODE_HYBRID=1 before opening the device).");
 
-        shard_grid = CoreRangeSet(receiver_cores.begin()->core_coord);
+        shard_grid = CoreRangeSet(*receiver_cores.begin());
         num_data_cores = 1;
     } else if (socket_mem_config.socket_storage_type == BufferType::DRAM) {
         // Allocate DRAM Sharded Buffer
