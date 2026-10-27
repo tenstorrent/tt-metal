@@ -61,7 +61,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
         for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
             transpose_tile(in0_transpose_dfb_id, tile_idx, tile_idx);
         }
-        tile_regs_commit_matmul();
+        tile_regs_commit();
         in0_transpose_dfb.pop_front(block_size);
 
         in0_dfb.reserve_back(block_size);
@@ -79,7 +79,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
         for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
             transpose_tile(in0_transpose_dfb_id, tile_idx, tile_idx);
         }
-        tile_regs_commit_matmul();
+        tile_regs_commit();
         in0_transpose_dfb.pop_front(last_block_size);
 
         in0_dfb.reserve_back(last_block_size);
@@ -92,7 +92,6 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
     }
 }
 
-template <bool row_mop, uint32_t kt_per_section, DataFormat out_format, DataFormat in0_format, DataFormat in1_format, uint32_t reuse_dir = 0>
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_dfb_id,
     uint32_t in1_dfb_id,
@@ -129,7 +128,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     mm_partials_dfb.pop_front(static_cast<uint16_t>(out_subblock_num_tiles));
     // Reconfigure srcA back
     reconfig_data_format_srca(mm_partials_reload_dfb_id, in1_dfb_id);
-    matmul_block_init<row_mop, false, kt_per_section, out_format, 0, in0_format, in1_format, reuse_dir>(
+    matmul_block_init(
         in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
 }
 
@@ -156,7 +155,7 @@ inline void reblock_and_untilize(
                 const uint32_t tile_index = block_offset + within_block_index + w;
                 copy_tile(interm_dfb_id, tile_index, w);
             }
-            tile_regs_commit_matmul();
+            tile_regs_commit();
             tile_regs_wait();
             pack_untilize_dest<out_subblock_w, out_block_w>(out_dfb_id, 1, n);
             tile_regs_release();
@@ -209,77 +208,6 @@ void kernel_main() {
     constexpr uint32_t in1_dfb_id = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t out_dfb_id = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t mm_partials_dfb_id = get_named_compile_time_arg_val("cb_intermed0");
-#ifdef ARCH_BLACKHOLE
-    // MATH_FIDELITY exists on the math thread only, the one thread that reads row_mop; a Float32 pack from a 16-bit
-    // DEST needs the DEST read cycles the tile MOP leaves free
-#if defined(UCK_CHLKC_MATH)
-    constexpr bool row_mop_fidelity = MATH_FIDELITY != ckernel::MathFidelity::LoFi;
-#else
-    constexpr bool row_mop_fidelity = true;
-#endif
-    // the CCL decode matmuls that build this kernel read slower with the row MOP below 4-tile sub blocks or with
-    // 16-bit weights
-    constexpr DataFormat in1_format = static_cast<DataFormat>(unpack_src_format[in1_dfb_id]);
-    // cells where the keyed forms read slower than main's on the tt-llk sweep keep main's form (llk_matmul_forms.h)
-#ifdef FUSE_BIAS
-    constexpr uint32_t bmm_section_out_dfb_id = mm_partials_dfb_id;
-#else
-    constexpr uint32_t bmm_section_out_dfb_id = untilize_out ? mm_partials_dfb_id : out_dfb_id;
-#endif
-#if defined(UCK_CHLKC_PACK)
-    constexpr uint32_t bmm_reuse_dir = 0;
-    constexpr bool bmm_main_cell = false;
-    constexpr char bmm_forced_form = 0;
-    constexpr DataFormat bmm_forced_key = DataFormat::Invalid;
-#else
-    // a block with one 32-bit and one 16-bit operand at LoFi holds the 32-bit operand (llk_matmul_forms.h matmul_reuse_dir); main's tile form
-    constexpr uint32_t bmm_reuse_dir = ckernel::matmul_reuse_dir(
-        MATH_FIDELITY,
-        static_cast<DataFormat>(unpack_src_format[in0_dfb_id]),
-        in1_format,
-        out_subblock_w,
-        out_subblock_h,
-        DST_SYNC_MODE == DstSync::SyncHalf && unpack_src_format[out_dfb_id] == (uint8_t)DataFormat::Float32);
-    // one tile in one section for the whole kernel: the row MOP's init is not repaid (HiFi4 bf16 1x1 reads 6 to 14 ns slower than main)
-    constexpr bool bmm_single_tile_kernel =
-        out_subblock_num_tiles == 1 && !get_batch_from_reader &&
-        batch * num_blocks_h_dim * num_blocks_w_dim * in0_num_subblocks * in1_num_subblocks * num_blocks_inner_dim == 1;
-    constexpr bool bmm_main_cell = bmm_single_tile_kernel || bmm_reuse_dir != 0 || ckernel::matmul_main_form_cell_selected<
-        MATH_FIDELITY,
-        in0_block_w,
-        DST_ACCUM_MODE,
-        static_cast<DataFormat>(unpack_src_format[in0_dfb_id]),
-        in1_format,
-        static_cast<DataFormat>(unpack_src_format[out_dfb_id]),
-        static_cast<DataFormat>(unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : bmm_section_out_dfb_id]),
-        (num_blocks_inner_dim > 1),
-        (out_subblock_w > out_subblock_h ? out_subblock_w : out_subblock_h),
-        (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0),
-        (out_subblock_w < out_subblock_h ? out_subblock_w : out_subblock_h)>();
-    constexpr char bmm_forced_form = bmm_main_cell ? 0 : ckernel::matmul_forced_form<
-        MATH_FIDELITY,
-        in0_block_w,
-        DST_ACCUM_MODE,
-        static_cast<DataFormat>(unpack_src_format[in0_dfb_id]),
-        in1_format,
-        static_cast<DataFormat>(unpack_src_format[out_dfb_id]),
-        static_cast<DataFormat>(unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : bmm_section_out_dfb_id]),
-        (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0),
-        out_subblock_h,
-        out_subblock_w,
-        (num_blocks_inner_dim > 1),
-        (get_batch_from_reader ? 2 : batch * num_blocks_h_dim * num_blocks_w_dim * in0_num_subblocks * in1_num_subblocks)>();
-    constexpr DataFormat bmm_forced_key = ckernel::matmul_forced_form_key(bmm_forced_form);
-#endif
-    constexpr bool row_mop =
-        !bmm_main_cell && (bmm_forced_form == 0 || bmm_forced_form == 'r') && (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
-        (DST_ACCUM_MODE || (unpack_src_format[out_dfb_id] != (uint8_t)DataFormat::Float32 &&
-                            unpack_src_format[mm_partials_dfb_id] != (uint8_t)DataFormat::Float32)) &&
-        out_subblock_num_tiles >= 4 && (is_bfp8_b_format(in1_format) || is_bfp4_b_format(in1_format));
-#else
-    constexpr bool row_mop = false;
-    constexpr uint32_t bmm_reuse_dir = 0;
-#endif
     // CB view the cross-block reload copies through: the UnpackToDestFp32-marked alias of the partials
     // CB when it is also read as an FPU operand (fused bias), otherwise the partials CB itself.
 #ifdef MM_PARTIALS_RELOAD_ALIAS_CB
@@ -315,20 +243,7 @@ void kernel_main() {
 #else
     constexpr uint32_t mm_out_dfb_id = untilize_mode_out_dfb_id;
 #endif
-    // a Bfp8_b section pack below HiFi3 reads slower without the half-sync flip's base write on the tt-llk sweep: keep it there
-    constexpr bool bmm_keep_flip_write =
-        MATH_FIDELITY != ckernel::MathFidelity::HiFi3 && MATH_FIDELITY != ckernel::MathFidelity::HiFi4 &&
-        unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : bmm_section_out_dfb_id] == (uint8_t)DataFormat::Bfp8_b;
     DataflowBuffer mm_out_dfb(mm_out_dfb_id);
-#ifdef ARCH_BLACKHOLE
-    // the format each DEST section is packed to: the partials until the last inner block
-    constexpr DataFormat mm_pack_format =
-        bmm_main_cell ? DataFormat::Invalid
-        : bmm_forced_form != 0 ? bmm_forced_key
-                      : static_cast<DataFormat>(unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : mm_out_dfb_id]);
-#else
-    constexpr DataFormat mm_pack_format = DataFormat::Invalid;
-#endif
 
     // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
     // planner may pad per_core_N_compute beyond per_core_N_in1_sender so that out_subblock_w can be
@@ -358,21 +273,11 @@ void kernel_main() {
 #else
     constexpr bool in1_transpose_tile = false;
 #endif
-#ifdef ARCH_BLACKHOLE
-    // operand formats for the fidelity phases they cannot use (matmul_phase_fidelity); unknown with a transposed in1
-    constexpr DataFormat mm_in0_format =
-        in1_transpose_tile ? DataFormat::Invalid : static_cast<DataFormat>(unpack_src_format[in0_dfb_id]);
-    constexpr DataFormat mm_in1_format =
-        in1_transpose_tile ? DataFormat::Invalid : static_cast<DataFormat>(unpack_src_format[in1_dfb_id]);
-#else
-    constexpr DataFormat mm_in0_format = DataFormat::Invalid;
-    constexpr DataFormat mm_in1_format = DataFormat::Invalid;
-#endif
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
-    matmul_block_init<row_mop, false, in0_block_w, mm_pack_format, 0, mm_in0_format, mm_in1_format, bmm_reuse_dir>(
+    matmul_block_init(
         in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
@@ -413,7 +318,7 @@ void kernel_main() {
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb_id, in0_dfb_id);
                         reconfig_data_format_srca(in0_transpose_dfb_id, in1_dfb_id);
-                        matmul_block_init<row_mop, false, in0_block_w, mm_pack_format, 0, mm_in0_format, mm_in1_format, bmm_reuse_dir>(
+                        matmul_block_init(
                             in0_dfb_id,
                             in1_dfb_id,
                             static_cast<uint32_t>(in1_transpose_tile),
@@ -450,7 +355,7 @@ void kernel_main() {
 
                             tile_regs_acquire();
                             if (enable_reload) {
-                                reload_from_cb_to_dst<row_mop, in0_block_w, mm_pack_format, mm_in0_format, mm_in1_format, bmm_reuse_dir>(
+                                reload_from_cb_to_dst(
                                     in0_dfb_id,
                                     in1_dfb_id,
                                     mm_partials_dfb_id,
@@ -474,7 +379,7 @@ void kernel_main() {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
-                                matmul_block<row_mop, false, in0_block_w, mm_pack_format, 0, mm_in0_format, mm_in1_format, bmm_reuse_dir>(
+                                matmul_block(
                                     in0_dfb_id,
                                     in1_dfb_id,
                                     in0_index,
@@ -492,7 +397,7 @@ void kernel_main() {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
-                                tile_regs_commit_matmul<DST_ACCUM_MODE, bmm_keep_flip_write>();
+                                tile_regs_commit();
                                 mm_out_dfb.reserve_back(out_subblock_num_tiles);
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
@@ -521,18 +426,13 @@ void kernel_main() {
 #endif
 #endif
                                 const uint32_t start_dst_index = 0;
-#ifdef ARCH_BLACKHOLE
-                                PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
-                                    start_dst_index, mm_out_dfb_id, out_subblock_num_tiles)));
-#else
                                 pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
-#endif
 
                                 tile_regs_release();
                                 mm_out_dfb.push_back(out_subblock_num_tiles);
 
                             } else {
-                                tile_regs_commit_matmul<DST_ACCUM_MODE, bmm_keep_flip_write>();
+                                tile_regs_commit();
                                 mm_partials_dfb.reserve_back(out_subblock_num_tiles);
                                 tile_regs_wait();
 
@@ -547,12 +447,7 @@ void kernel_main() {
 #endif
 
                                 const uint32_t start_dst_index = 0;
-#ifdef ARCH_BLACKHOLE
-                                PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
-                                    start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles)));
-#else
                                 pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
-#endif
 
                                 tile_regs_release();
                                 mm_partials_dfb.push_back(out_subblock_num_tiles);
@@ -660,7 +555,7 @@ void kernel_main() {
                                 bias_tile_idx++;
                             }
                         }
-                        tile_regs_commit_matmul<DST_ACCUM_MODE, bmm_keep_flip_write>();
+                        tile_regs_commit();
 
                         mm_partials_dfb.pop_front(out_subblock_num_tiles);
 
@@ -719,7 +614,7 @@ void kernel_main() {
                     reconfig_data_format_srca(mm_partials_dfb_id, in1_dfb_id);
 #endif
                     // reconfigure init for matmul
-                    matmul_block_init<row_mop, false, in0_block_w, mm_pack_format, 0, mm_in0_format, mm_in1_format, bmm_reuse_dir>(
+                    matmul_block_init(
                         in0_dfb_id,
                         in1_dfb_id,
                         static_cast<uint32_t>(in1_transpose_tile),

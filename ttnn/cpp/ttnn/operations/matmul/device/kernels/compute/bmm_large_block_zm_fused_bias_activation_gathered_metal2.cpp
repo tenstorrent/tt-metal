@@ -42,7 +42,6 @@ FORCE_INLINE void step_over_in1_blocks(DFB0& in1_dfb, uint32_t num_blocks, uint3
     }
 }
 
-template <DataFormat in0_format, DataFormat in1_format>
 FORCE_INLINE void reload_from_dfb_to_dst(
     uint32_t in0_dfb_id,
     uint32_t in1_dfb_id,
@@ -64,8 +63,7 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     mm_partials_dfb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
     reconfig_data_format_srca(mm_partials_dfb_id, in1_dfb_id);
-    matmul_block_init<false, false, 0, DataFormat::Invalid, 0, in0_format, in1_format>(
-        in0_dfb_id, in1_dfb_id, /*transpose=*/false, out_subblock_w, out_subblock_h, in0_block_w);
+    matmul_block_init(in0_dfb_id, in1_dfb_id, /*transpose=*/false, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 void kernel_main() {
@@ -126,23 +124,9 @@ void kernel_main() {
 
     // With a single output subblock the partial sums stay in DEST across K-blocks; only several
     // subblocks have to spill them to the partials buffer between blocks.
-
-#ifdef ARCH_BLACKHOLE
-    // operand formats for the fidelity phases they cannot use (matmul_phase_fidelity); unknown when in0 and the ring buffer differ
-    constexpr bool mm_same_in0 = unpack_src_format[in0_dfb_id] == unpack_src_format[in2_dfb_id];
-    constexpr DataFormat mm_in0_format =
-        mm_same_in0 ? static_cast<DataFormat>(unpack_src_format[in0_dfb_id]) : DataFormat::Invalid;
-    constexpr DataFormat mm_in1_format =
-        mm_same_in0 ? static_cast<DataFormat>(unpack_src_format[in1_dfb_id]) : DataFormat::Invalid;
-#else
-    constexpr DataFormat mm_in0_format = DataFormat::Invalid;
-    constexpr DataFormat mm_in1_format = DataFormat::Invalid;
-#endif
-
     constexpr bool spill = num_blocks > 1 && (out_block_num_tiles / out_subblock_num_tiles) > 1;
 
-    matmul_block_init<false, false, 0, DataFormat::Invalid, 0, mm_in0_format, mm_in1_format>(
-        in0_dfb_id, in1_dfb_id, /*transpose=*/false, out_subblock_w, out_subblock_h, in0_block_w);
+    matmul_block_init(in0_dfb_id, in1_dfb_id, /*transpose=*/false, out_subblock_w, out_subblock_h, in0_block_w);
 
     // In K order the layer starts at in1's front. This kernel steps over its first ring_idx K-blocks to
     // reach its own, and after the layer's last K-block over the rest of the ring, which holds none of
@@ -180,7 +164,7 @@ void kernel_main() {
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                 tile_regs_acquire();
                 if (enable_reload) {
-                    reload_from_dfb_to_dst<mm_in0_format, mm_in1_format>(
+                    reload_from_dfb_to_dst(
                         input0_dfb_id,
                         in1_dfb_id,
                         mm_partials_dfb_id,
@@ -199,7 +183,7 @@ void kernel_main() {
                     // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                     // accumulation is done by iterating matmul_block across inner dim
                     // in0_block_w is passed as inner dim (kt) to matmul_block, internally used to stride in0
-                    matmul_block<false, false, 0, DataFormat::Invalid, 0, mm_in0_format, mm_in1_format>(
+                    matmul_block(
                         input0_dfb_id,
                         in1_dfb_id,
                         in0_index,
@@ -217,7 +201,7 @@ void kernel_main() {
                     if constexpr (untilize_out) {
                         pack_untilize_dest_init<out_subblock_num_tiles>(mm_out_dfb_id);
                     }
-                    tile_regs_commit_matmul();
+                    tile_regs_commit();
                     // Pack out to output buffer
                     mm_out_dfb.reserve_back(out_subblock_num_tiles);
 
@@ -228,9 +212,6 @@ void kernel_main() {
                         activation_param1,
                         activation_param2>(out_subblock_num_tiles);
 #else
-                    if constexpr (!untilize_out) {
-                        pack_block_prepare(0, mm_out_dfb_id, out_subblock_num_tiles);
-                    }
                     tile_regs_wait();
 #endif
 
@@ -246,7 +227,7 @@ void kernel_main() {
                     if constexpr (untilize_out) {
                         pack_untilize_dest<out_subblock_num_tiles>(mm_out_dfb_id);
                     } else {
-                        pack_block_prepared(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
+                        pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
                     }
 
                     tile_regs_release();
@@ -256,10 +237,9 @@ void kernel_main() {
                     mm_out_dfb.push_back(out_subblock_num_tiles);
 
                 } else if (spill) {
-                    tile_regs_commit_matmul();
+                    tile_regs_commit();
                     // Move partial result to interm buffer
                     mm_partials_dfb.reserve_back(out_subblock_num_tiles);
-                    pack_block_prepare(0, mm_partials_dfb_id, out_subblock_num_tiles);
                     tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
@@ -271,7 +251,7 @@ void kernel_main() {
 #endif
 
                     const uint32_t start_dst_index = 0;
-                    pack_block_prepared(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
+                    pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
 
                     tile_regs_release();
                     mm_partials_dfb.push_back(out_subblock_num_tiles);

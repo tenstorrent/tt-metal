@@ -37,17 +37,7 @@ void kernel_main() {
     DataflowBuffer out_dfb(dfb_out);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb_in0, dfb_in1, dfb_out);
-#ifdef ARCH_BLACKHOLE
-    // operand formats for the fidelity phases they cannot use (matmul_phase_fidelity)
-    constexpr DataFormat mm_in0_format = static_cast<DataFormat>(unpack_src_format[dfb_in0]);
-    constexpr DataFormat mm_in1_format = static_cast<DataFormat>(unpack_src_format[dfb_in1]);
-    constexpr DataFormat mm_out_format = static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb_out)]);
-#else
-    constexpr DataFormat mm_in0_format = DataFormat::Invalid;
-    constexpr DataFormat mm_in1_format = DataFormat::Invalid;
-    constexpr DataFormat mm_out_format = DataFormat::Invalid;
-#endif
-    matmul_init<mm_in0_format, mm_in1_format, mm_out_format>(dfb_in0, dfb_in1);
+    matmul_init(dfb_in0, dfb_in1);
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
@@ -60,7 +50,7 @@ void kernel_main() {
                     in0_dfb.wait_front(onetile);
                     in1_dfb.wait_front(onetile);
 
-                    matmul_tiles<mm_in0_format, mm_in1_format, mm_out_format>(dfb_in0, dfb_in1, 0, 0, 0);
+                    matmul_tiles(dfb_in0, dfb_in1, 0, 0, 0);
 
                     in0_dfb.pop_front(onetile);
                     in1_dfb.pop_front(onetile);

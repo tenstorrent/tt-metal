@@ -276,15 +276,8 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-            if constexpr (!DST_ACCUM_MODE) {
-                pack_block_mop(0, dfb_xmm, subblock_w);
-            } else
-#endif
-            {
-                for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
-                    pack_tile(dst_i, dfb_xmm);
-                }
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_xmm);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
@@ -324,15 +317,8 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-            if constexpr (!DST_ACCUM_MODE) {
-                pack_block_mop(0, dfb_im, subblock_w);
-            } else
-#endif
-            {
-                for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
-                    pack_tile(dst_i, dfb_im);
-                }
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_im);
             }
             tile_regs_release();
 
@@ -375,15 +361,8 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-                if constexpr (!DST_ACCUM_MODE) {
-                    pack_block_mop(0, dfb_outgamma, subblock_w);
-                } else
-#endif
-                {
-                    for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
-                        pack_tile(dst_i, dfb_outgamma);
-                    }
+                for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                    pack_tile(dst_i, dfb_outgamma);
                 }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
@@ -417,15 +396,8 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-                if constexpr (!DST_ACCUM_MODE) {
-                    pack_block_mop(0, dfb_out, subblock_w);
-                } else
-#endif
-                {
-                    for (uint32_t i = 0; i < subblock_w; i++) {
-                        pack_tile(i, dfb_out);
-                    }
+                for (uint32_t i = 0; i < subblock_w; i++) {
+                    pack_tile(i, dfb_out);
                 }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;

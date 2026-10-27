@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define CKL_ELTWISE_CHAIN_PACK_BLOCK
-#define CKL_ELTWISE_CHAIN_PACK_BLOCK_IF (!DST_ACCUM_MODE)
-
 #include <cstdint>
 
 #include "api/compute/tile_move_copy.h"  // dummy_unpack
@@ -115,24 +112,10 @@ void kernel_main() {
         pack_init(dfb::rotated_interm);
 #endif
         ACQ();
-#ifdef ARCH_BLACKHOLE
-        if constexpr (!DST_ACCUM_MODE) {
-            for (uint32_t j = 0; j < Wt; ++j) {
-                matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);
-            }
-            pack_block_mop(0, dfb::rotated_interm, Wt);
-        } else {
-            for (uint32_t j = 0; j < Wt; ++j) {
-                matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);
-                pack_tile(j, dfb::rotated_interm, j);
-            }
-        }
-#else
         for (uint32_t j = 0; j < Wt; ++j) {
             matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);
             pack_tile(j, dfb::rotated_interm, j);
         }
-#endif
         REL();
         rotated_in_interm_dfb_obj.push_back(Wt);
         mul_bcast_rows_init(dfb::rotated_interm, dfb::sin);
