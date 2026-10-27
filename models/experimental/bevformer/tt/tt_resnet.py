@@ -311,29 +311,6 @@ class TTResLayer:
                 ttnn.deallocate(y)
                 y = ttnn.to_layout(staged, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(staged)
-            if next_conv1 is not None:
-                # Whole tiles untilize in their shards; the ROW_MAJOR rows are already in L1 otherwise.
-                rows_major = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT) if tiled else y
-                group_sub = TTResLayer._subsample_group(rows_major, next_conv1, first.cameras)
-                if tiled:
-                    ttnn.deallocate(rows_major)
-                sub_rows = group_sub.shape[2]
-                if subsample is None:
-                    subsample = ttnn.empty(
-                        (1, 1, num_groups * sub_rows, channels),
-                        dtype=group_sub.dtype,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                        device=group_sub.device(),
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
-                ttnn.experimental.slice_write(
-                    group_sub,
-                    subsample,
-                    [0, 0, group * sub_rows, 0],
-                    [1, 1, (group + 1) * sub_rows, channels],
-                    [1, 1, 1, 1],
-                )
-                ttnn.deallocate(group_sub)
             if out is None:
                 out = ttnn.empty(
                     (1, 1, num_groups * group_rows, channels),
@@ -345,22 +322,67 @@ class TTResLayer:
             ttnn.experimental.slice_write(
                 y, out, [0, 0, group * group_rows, 0], [1, 1, (group + 1) * group_rows, channels], [1, 1, 1, 1]
             )
-            ttnn.deallocate(y)
+            if next_conv1 is None:
+                ttnn.deallocate(y)
+                continue
+            # Once the group is written out, the subsample takes its place in L1.
+            group_sub = TTResLayer._subsample_group(y, next_conv1, first.cameras)
+            sub_rows = group_sub.shape[2]
+            if subsample is None:
+                subsample = ttnn.empty(
+                    (1, 1, num_groups * sub_rows, channels),
+                    dtype=group_sub.dtype,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=group_sub.device(),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            ttnn.experimental.slice_write(
+                group_sub,
+                subsample,
+                [0, 0, group * sub_rows, 0],
+                [1, 1, (group + 1) * sub_rows, channels],
+                [1, 1, 1, 1],
+            )
+            ttnn.deallocate(group_sub)
         return out if next_conv1 is None else (out, subsample)
 
     @staticmethod
-    def _subsample_group(rows_major, conv1, cameras):
-        """``cameras`` cameras of ``conv1``'s input, ``(1, 1, cameras*H*W, C)`` ROW_MAJOR in L1, at
-        its stride, in L1: ROW_MAJOR, where the strided slice copies whole channel rows."""
-        nhwc = (cameras, conv1.input_height, conv1.input_width, rows_major.shape[-1])
+    def _subsample_group(y, conv1, cameras):
+        """``cameras`` cameras of ``conv1``'s input ``y``, ``(1, 1, cameras*H*W, C)`` in L1, at its
+        stride, ROW_MAJOR in L1; ``y`` is freed. Sharded tiles go through a 1x1 max pool at that
+        stride, which picks the pixels in the shards; ROW_MAJOR rows, already interleaved, through
+        a strided slice, which copies whole channel rows."""
+        if y.is_sharded():
+            return ttnn.max_pool2d(
+                input_tensor=pool_rows(y),
+                batch_size=cameras,
+                input_h=conv1.input_height,
+                input_w=conv1.input_width,
+                channels=y.shape[-1],
+                kernel_size=[1, 1],
+                stride=list(conv1.stride),
+                padding=[0, 0],
+                dilation=[1, 1],
+                ceil_mode=False,
+                deallocate_input=True,
+                output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        nhwc = (cameras, conv1.input_height, conv1.input_width, y.shape[-1])
         sub = ttnn.slice(
-            ttnn.reshape(rows_major, nhwc),
-            [0, 0, 0, 0],
-            list(nhwc),
-            [1, *conv1.stride, 1],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            ttnn.reshape(y, nhwc), [0, 0, 0, 0], list(nhwc), [1, *conv1.stride, 1], memory_config=ttnn.L1_MEMORY_CONFIG
         )
+        ttnn.deallocate(y)
         return ttnn.reshape(sub, (1, 1, cameras * conv1.output_height * conv1.output_width, nhwc[-1]))
+
+
+def pool_rows(x):
+    """``x``, a TILE height-sharded L1 tensor, untilized in its shards for a max pool: given TILE
+    rows, the pool's halo untilizes them itself and deadlocks on some shard sizes (small's layer2
+    input, 58880 x 256 over the grid). ``x`` is freed and the rows move to the top of L1, which
+    leaves the halo its room below them."""
+    rows = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(x)
+    return ttnn.reallocate(rows)
 
 
 def _for_cameras(args, cameras):
@@ -592,23 +614,31 @@ class TTCameraBottleneck:
         return y
 
     def _subsample(self, x):
-        """The block input at the block's stride, in the block's layout. ROW_MAJOR, where the
-        strided slice copies whole channel rows."""
-        rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(x)
-        flat = ttnn.sharded_to_interleaved(rm, ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(rm)
-        nhwc = [self.cameras, self.input_height, self.input_width, self.in_channels]
-        sub = ttnn.slice(
-            ttnn.reshape(flat, nhwc), [0, 0, 0, 0], nhwc, [1, *self.stride, 1], memory_config=ttnn.L1_MEMORY_CONFIG
+        """The block input at the block's stride, in the block's layout: a 1x1 max pool at that
+        stride, which picks the pixels in the shards, where a strided slice needs the rows
+        interleaved. The pool reads ROW_MAJOR (pool_rows)."""
+        sub = ttnn.max_pool2d(
+            input_tensor=pool_rows(x),
+            batch_size=self.cameras,
+            input_h=self.input_height,
+            input_w=self.input_width,
+            channels=self.in_channels,
+            kernel_size=[1, 1],
+            stride=list(self.stride),
+            padding=[0, 0],
+            dilation=[1, 1],
+            ceil_mode=False,
+            deallocate_input=True,
+            output_layout=ttnn.TILE_LAYOUT,
         )
-        ttnn.deallocate(flat)
-        rows = self.cameras * self.height * self.width
-        tiled = ttnn.to_layout(ttnn.reshape(sub, (1, 1, rows, self.in_channels)), ttnn.TILE_LAYOUT)
-        ttnn.deallocate(sub)
-        out = ttnn.to_memory_config(tiled, self._sharded(self.in_channels))
-        ttnn.deallocate(tiled)
-        return out
+        layout = self._sharded(self.in_channels)
+        if sub.memory_config() != layout:
+            moved = ttnn.to_memory_config(sub, layout)
+            ttnn.deallocate(sub)
+            sub = moved
+        # At the top of L1, as a block's output is: the downsample's and conv1's circular buffers fill
+        # L1 from the bottom up to it.
+        return ttnn.reallocate(sub)
 
     def __call__(self, x):
         if self.stride != (1, 1):
