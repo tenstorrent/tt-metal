@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.runners.hang_detector import HangDetector
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
 from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionRingWriter
@@ -713,6 +714,7 @@ def run_request_loop(
     idx_in=None,
     idx_out=None,
     sockets=None,
+    hang_detector: Optional[HangDetector] = None,
 ) -> None:
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
@@ -736,6 +738,8 @@ def run_request_loop(
             mtp_tokens = None
         indices = _d2d_recv_indices(d2d_in, idx_in) if idx_in is not None else None
         if _is_shutdown_sentinel(meta):
+            if hang_detector is not None:
+                hang_detector.stop()
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             if sockets.tokens is None:
                 ttnn.deallocate(inp)
@@ -853,6 +857,8 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "mtp_levels": MTP_LEVELS,
         "mtp_decode_levels": MTP_DECODE_LEVELS,
         "sparse_kv_cache_format": _sparse_kv_cache_format(),
+        "use_trace": USE_TRACE,
+        "dflash": DFLASH_ENABLED,
         "PREFILL_ENABLE_MIGRATION": migration_publish_enabled(),
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
     }
@@ -1165,6 +1171,20 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
 
+    hang_detector = HangDetector.arm(
+        mesh_device,
+        rank,
+        h2d=h2d_service,
+        d2d_in=d2d_in,
+        d2d_out=d2d_out,
+        d2h=d2h_service,
+        idx_in=idx_in,
+        idx_out=idx_out,
+        acks_per_chunk=layout.rank_record_count,
+        dummy=int(traced),
+        layers=f"{first_layer_idx}-{first_layer_idx + num_my_layers - 1}",
+    )
+
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
     try:
@@ -1185,8 +1205,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             idx_in=idx_in,
             idx_out=idx_out,
             sockets=sockets,
+            hang_detector=hang_detector,
         )
     finally:
+        if hang_detector is not None:
+            hang_detector.stop()
         import gc
 
         sockets.release_traces()

@@ -174,6 +174,11 @@ public:
     // get_consumed_counter_addr to build the NoC destination workers inc into.
     CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;
 
+    // L1 address of this coord's socket config buffer on its service core. The host advances its
+    // bytes_sent word for every page it pushes, data and metadata alike.
+    // Owner-only; TT_FATALs in connector mode.
+    DeviceAddr get_socket_config_addr(const distributed::MeshCoordinate& coord) const;
+
     // L1 address of the metadata destination, uniform across every worker core.
     DeviceAddr get_metadata_addr() const;
 

@@ -493,6 +493,8 @@ struct D2DStreamServiceReceiver::Impl {
     // Per-coord service-core L1 words (service cores differ per device).
     std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> consumed_counter_addrs;
     std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> termination_addrs;
+    // Sender lanes per coord: the data-landed increments the kernel awaits per transfer.
+    std::map<tt::tt_metal::distributed::MeshCoordinate, uint32_t> num_lanes;
     // Fabric-link lease — mirror of the sender. Single per-coord link_grant word
     // (0 = idle/done, 1 = granted one drain); same ping-pong protocol. Always set
     // from Config in create_pair (this member default never takes effect).
@@ -660,6 +662,12 @@ DeviceAddr D2DStreamServiceSender::get_metadata_addr(const tt::tt_metal::distrib
     return it->second;
 }
 
+DeviceAddr D2DStreamServiceSender::get_socket_config_addr() const {
+    TT_FATAL(impl_->socket.has_value(), "D2DStreamServiceSender::get_socket_config_addr: socket not built");
+    // The address build_sender_side hands the kernels.
+    return impl_->socket->get_config_buffer()->address();
+}
+
 void D2DStreamServiceSender::wait_for_fabric_links() {
     TT_FATAL(
         impl_->share_fabric_links,
@@ -804,6 +812,18 @@ DeviceAddr D2DStreamServiceReceiver::get_metadata_addr() const {
         impl_->metadata_size_bytes > 0,
         "D2DStreamServiceReceiver::get_metadata_addr: metadata not configured (Config::metadata_size_bytes == 0)");
     return impl_->metadata_l1_addr;
+}
+
+DeviceAddr D2DStreamServiceReceiver::get_socket_config_addr() const {
+    TT_FATAL(impl_->socket.has_value(), "D2DStreamServiceReceiver::get_socket_config_addr: socket not built");
+    // The address build_receiver_side hands the kernels.
+    return impl_->socket->get_config_buffer()->address();
+}
+
+uint32_t D2DStreamServiceReceiver::get_num_lanes(const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+    auto it = impl_->num_lanes.find(coord);
+    TT_FATAL(it != impl_->num_lanes.end(), "D2DStreamServiceReceiver::get_num_lanes: no receiver at coord {}", coord);
+    return it->second;
 }
 
 void D2DStreamServiceReceiver::wait_for_fabric_links() {
@@ -1324,6 +1344,7 @@ SenderSideResources build_sender_side(
 struct ReceiverSideResources {
     std::map<distributed::MeshCoordinate, DeviceAddr> consumed_counter_addrs;
     std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs;
+    std::map<distributed::MeshCoordinate, uint32_t> num_lanes;
     std::map<distributed::MeshCoordinate, DeviceAddr> link_grant_addrs;
     std::optional<GlobalSemaphore> data_ready_sem;
     std::shared_ptr<distributed::MeshBuffer> metadata_buffer;
@@ -1401,6 +1422,7 @@ ReceiverSideResources build_receiver_side(
     constexpr bool worker_sync_enabled = true;
     auto workload = std::make_unique<distributed::MeshWorkload>();
     const uint32_t socket_config_addr = static_cast<uint32_t>(receiver_socket.get_config_buffer()->address());
+    std::map<distributed::MeshCoordinate, uint32_t> lanes_by_coord;
 
     for (const auto& coord : coords) {
         const Buffer* recv_buf = backing.mesh_buffer().get_device_buffer(coord);
@@ -1417,6 +1439,7 @@ ReceiverSideResources build_receiver_side(
         // forwarding links)) — symmetric link topology ⇒ same value. This is how many
         // data-landed increments the receiver awaits per transfer (one per sender lane).
         const uint32_t num_lanes = std::min<uint32_t>(cfg.max_sender_lanes, static_cast<uint32_t>(links.size()));
+        lanes_by_coord.emplace(coord, num_lanes);
 
         const auto ws = make_worker_sync_args(
             device,
@@ -1463,6 +1486,7 @@ ReceiverSideResources build_receiver_side(
     return ReceiverSideResources{
         .consumed_counter_addrs = std::move(consumed_counter_addrs),
         .termination_addrs = std::move(termination_addrs),
+        .num_lanes = std::move(lanes_by_coord),
         .link_grant_addrs = std::move(link_grant_addrs),
         .data_ready_sem = std::move(data_ready_sem),
         .metadata_buffer = std::move(metadata_buffer),
@@ -1553,6 +1577,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
         .num_workers = CMAKE_UNIQUE_NAMESPACE::core_range_size(cfg.receiver_worker_cores),
         .consumed_counter_addrs = std::move(res.consumed_counter_addrs),
         .termination_addrs = std::move(res.termination_addrs),
+        .num_lanes = std::move(res.num_lanes),
         .share_fabric_links = cfg.share_fabric_links,
         .link_grant_addrs = std::move(res.link_grant_addrs),
         .data_ready_sem = std::move(res.data_ready_sem),
