@@ -320,4 +320,92 @@ constexpr MathFidelity matmul_phase_fidelity()
         return math_fidelity;
     }
 }
+// The Z counter step of the streamed in1 tile (the harness key MATMUL_STREAM_Z, test_variant_parameters.py): at LoFi where in1 streams
+// (ct_dim >= rt_dim, 4 or more output tiles) and both operands are the same dense 16-bit or Float32 format in 32x32 tiles, the unpacker steps
+// the Z counter one tile per UNPACR instead of a config read and write. 4 where it gained on the tt-llk sweep (ABBA, 0 slower than the config
+// step), else 0. The cells that read slower, the Float32 operands at half sync and a few half sync shapes are left out.
+constexpr bool matmul_stream_z_loses(
+    const bool full_sync,
+    const std::uint32_t rt_dim,
+    const std::uint32_t ct_dim,
+    const std::uint32_t kt_dim,
+    const int throttle,
+    const DataFormat in_format,
+    const DataFormat out_format)
+{
+    // (sync full, rt, ct, kt, throttle, input format, output format)
+    struct Cell
+    {
+        bool full;
+        std::uint8_t rt, ct, kt, throttle;
+        DataFormat in, out;
+    };
+    constexpr Cell cells[] = {
+        {true, 1, 6, 1, 0, DataFormat::Float32, DataFormat::Float16_b},
+        {true, 1, 7, 1, 0, DataFormat::Float32, DataFormat::Bfp8_b},
+        {true, 1, 7, 4, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {true, 1, 7, 4, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {true, 1, 7, 4, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {true, 1, 7, 4, 0, DataFormat::Float32, DataFormat::Float32},
+        {true, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {true, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 1, 4, 1, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 1, 4, 1, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {false, 1, 4, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 1, 5, 1, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 1, 6, 1, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {false, 1, 7, 32, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 1, 8, 32, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 2, 2, 4, 5, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 2, 2, 4, 5, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 2, 3, 1, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 2, 3, 4, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+        {false, 2, 3, 4, 0, DataFormat::Float16_b, DataFormat::Float16_b},
+        {false, 2, 4, 4, 0, DataFormat::Float16_b, DataFormat::Bfp8_b},
+    };
+    for (const Cell& c : cells)
+    {
+        if (c.full == full_sync && c.rt == rt_dim && c.ct == ct_dim && c.kt == kt_dim && c.throttle == throttle && c.in == in_format && c.out == out_format)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+constexpr std::uint32_t matmul_stream_z(
+    const MathFidelity fidelity,
+    const bool full_sync,
+    const DataFormat in0,
+    const DataFormat in1,
+    const DataFormat out_format,
+    const std::uint32_t kt_dim,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const int throttle,
+    const std::uint32_t reuse_dir,
+    const bool dense_tiles)
+{
+    if (fidelity != MathFidelity::LoFi || !dense_tiles || reuse_dir != 0 || ct_dim < rt_dim || ct_dim * rt_dim < 4 || in0 != in1)
+    {
+        return 0;
+    }
+    if (in1 != DataFormat::Float16 && in1 != DataFormat::Float16_b && in1 != DataFormat::Float32)
+    {
+        return 0;
+    }
+    // 32-bit input at half sync loses 1 percent on 1x4 with 4 blocks
+    if (in1 == DataFormat::Float32 && !full_sync)
+    {
+        return 0;
+    }
+    // at half sync the Z step loses where the unpack is not the bound: k 4 on a single row, a 2 wide block at k 1, and k 1 under a static throttle
+    if (!full_sync && ((kt_dim == 4 && rt_dim == 1) || (kt_dim == 1 && ct_dim == 2) || (kt_dim == 1 && throttle == 5)))
+    {
+        return 0;
+    }
+    return matmul_stream_z_loses(full_sync, rt_dim, ct_dim, kt_dim, throttle, in1, out_format) ? 0 : 4;
+}
 } // namespace ckernel

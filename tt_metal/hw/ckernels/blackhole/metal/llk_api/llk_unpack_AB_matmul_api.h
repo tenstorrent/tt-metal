@@ -16,7 +16,7 @@
 // FORMAT-FREE at the op level (src/dst formats are programmed at compute_kernel_hw_startup<SrcOrder::Reverse>),
 // so the cores take only the already-resolved geometry (face_r_dim / num_faces / partial_face per src) +
 // runtime addresses + per-tile sizes. The role swap (in0 -> SrcB, in1 -> SrcA) is applied by the callers.
-template <std::uint32_t auto_ttsync = false, bool stream_narrow = false, std::uint32_t reuse_dir = 0>
+template <std::uint32_t auto_ttsync = false, bool stream_narrow = false, std::uint32_t reuse_dir = 0, std::uint32_t stream_z = 0>
 inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
@@ -28,7 +28,7 @@ inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t unpB_num_faces,
     const bool partial_face_a,
     const bool partial_face_b) {
-    _llk_unpack_AB_matmul_init_<0, 0, auto_ttsync, stream_narrow, 0, reuse_dir>(
+    _llk_unpack_AB_matmul_init_<0, 0, auto_ttsync, stream_narrow, stream_z, reuse_dir>(
         transpose,
         ct_dim,
         rt_dim,
@@ -43,7 +43,7 @@ inline void llk_unpack_AB_matmul_init_impl(
 
 // kt_per_section and out_format pick the per-row or hoisted call (unpack_AB_matmul_hoist_rows); 0 and Invalid when
 // unknown.
-template <std::uint32_t auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid, std::uint32_t reuse_dir = 0>
+template <std::uint32_t auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid, std::uint32_t reuse_dir = 0, std::uint32_t stream_z = 0>
 inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -64,7 +64,7 @@ inline void llk_unpack_AB_matmul_impl(
         get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
         unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>(),
         get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
-        0,
+        stream_z,
         reuse_dir>(
         base_address_a,
         base_address_b,
@@ -99,7 +99,7 @@ constexpr bool llk_unpack_AB_matmul_kernel_has_narrow_format() {
     return false;
 }
 
-template <std::uint32_t auto_ttsync = false, std::uint32_t reuse_dir = 0>
+template <std::uint32_t auto_ttsync = false, std::uint32_t reuse_dir = 0, std::uint32_t stream_z = 0>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -173,7 +173,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
             partial_face_a,
             partial_face_b);
     } else {
-        llk_unpack_AB_matmul_init_impl<auto_ttsync, false, reuse_dir>(
+        llk_unpack_AB_matmul_init_impl<auto_ttsync, false, reuse_dir, stream_z>(
             transpose,
             ct_dim,
             rt_dim,
@@ -187,7 +187,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     }
 }
 
-template <std::uint32_t auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid, std::uint32_t reuse_dir = 0>
+template <std::uint32_t auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid, std::uint32_t reuse_dir = 0, std::uint32_t stream_z = 0>
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -239,7 +239,7 @@ inline void llk_unpack_AB_matmul(
         StateDiscard<std::uint32_t>(tile_index_a),
         StateDiscard<std::uint32_t>(tile_index_b)));
 
-    llk_unpack_AB_matmul_impl<auto_ttsync, kt_per_section, out_format, reuse_dir>(
+    llk_unpack_AB_matmul_impl<auto_ttsync, kt_per_section, out_format, reuse_dir, stream_z>(
         base_address_a,
         base_address_b,
         tile_index_a,
@@ -254,6 +254,7 @@ inline void llk_unpack_AB_matmul(
 }
 
 // llk_unpack_AB_matmul for num_k k steps in one call: in0 advances one tile and in1 in1_k_stride tiles per step.
+template <std::uint32_t stream_z = 0>
 inline void llk_unpack_AB_matmul_k(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -281,7 +282,7 @@ inline void llk_unpack_AB_matmul_k(
         get_operand_num_faces(operandA_id)));
 
     WAYPOINT("UPMW");
-    _llk_unpack_AB_matmul_k_<get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()>(
+    _llk_unpack_AB_matmul_k_<get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(), stream_z>(
         get_local_cb_interface(operandA_id).fifo_rd_ptr - 1,
         get_local_cb_interface(operandB_id).fifo_rd_ptr - 1,
         tile_index_a,

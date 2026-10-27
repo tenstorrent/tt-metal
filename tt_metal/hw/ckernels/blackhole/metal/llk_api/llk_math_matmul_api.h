@@ -25,7 +25,8 @@ template <
     bool row_mop = false,
     bool tile_mop = true,
     int in1_order = 0,
-    std::uint32_t reuse_dir = 0>
+    std::uint32_t reuse_dir = 0,
+    bool row_end_fold = false>
 inline void llk_math_matmul_init_impl(
     const std::uint32_t in0_tile_r_dim,
     const std::uint32_t in0_tile_c_dim,
@@ -35,7 +36,7 @@ inline void llk_math_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim) {
-    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE), DST_SYNC_MODE == DstSync::SyncFull, reuse_dir>(
+    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE), DST_SYNC_MODE == DstSync::SyncFull, reuse_dir, row_end_fold>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
@@ -52,7 +53,8 @@ template <
     bool row_mop = false,
     bool tile_mop = true,
     int in1_order = 0,
-    std::uint32_t reuse_dir = 0>
+    std::uint32_t reuse_dir = 0,
+    bool row_end_fold = false>
 inline void llk_math_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -83,7 +85,7 @@ inline void llk_math_matmul_init(
         StateDiscard<std::uint32_t>(in1_tile_c_dim),
         StateDiscard<bool>(partial_face)));
 
-    llk_math_matmul_init_impl<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, reuse_dir>(
+    llk_math_matmul_init_impl<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
@@ -93,7 +95,8 @@ template <
     std::uint32_t num_faces = 4 /*not used*/,
     bool row_mop = false,
     bool tile_mop = true,
-    std::uint32_t reuse_dir = 0>
+    std::uint32_t reuse_dir = 0,
+    bool row_end_fold = false>
 inline void llk_math_matmul(
     const std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
     static_assert(num_faces == 4, "num_faces other than 4 is not supported in llk_math_matmul");
@@ -120,5 +123,5 @@ inline void llk_math_matmul(
         StateVal<OperationFpuMatmul::RtDim>(rt_dim),
         StateDiscard<uint>(dst_index)));
 
-    _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, reuse_dir>(dst_index, ct_dim, rt_dim);
+    _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, reuse_dir, row_end_fold>(dst_index, ct_dim, rt_dim);
 }
