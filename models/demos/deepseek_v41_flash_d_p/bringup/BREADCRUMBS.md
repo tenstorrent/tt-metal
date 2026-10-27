@@ -3369,3 +3369,54 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   models/demos/deepseek_v41_flash_d_p/tt/perf_flat_program_key.py -s`; fork: `BRINGUP_TEST_MESH=8x4
   scripts/run_safe_pytest.sh --run-all --no-precompile
   ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_with_program_patch.py`.
+
+## K.1 contract attempt 3 (galaxy_8x4-full)
+- OV-12: `tt/runners/kv_contract.golden_rows` returns (rows, first row, mode). The window KV of a layer with per-chunk
+  golden dumps (all chunks present: step_dump_layers 0,1,2,3,14,20,21,24) is compared over [0, length) ("full"); any
+  other layer over the last min(128, length) positions from `golden.state(layer, at=length)["window_kv"]`, unrolled by
+  position (ring row p % 128) ("last-window"). Ring layout checked on CPU: layer 0's ring at 10208 and at 10240 equal
+  the per-chunk 'kv' dumps exactly (max diff 0). Compressed KV / index keys unchanged (final state, full). No layer is
+  skipped; the per-layer mode is logged and summarized (`KV comparison per config and kind`). Test-side read-back
+  only; the model path reads no golden.
+- Gate units: test_contract PASS (window_kv 0.9762 / limit 0.9434, compress_kv 0.9839 / 0.9370, index_k 0.9914 / 0.9465;
+  acks_early 0; contract_checks_failed 0); test_kv_layout PASS.
+- Blocker outside K.1's paths (DS41-124): the frozen tests test_adapter_acks / test_runner_contract build
+  `caches.GoldenKV()`, which needs ladder rung `s4096` (server_rules.GOLDEN_RUNG, CHUNK 2048 / MAX_SEQ 4096). The 8x4
+  spec has no such rung and golden_full/galaxy_8x4 no s4096 golden: CPU probe `C.GoldenKV()` -> SpecError. With the
+  rung, GoldenKV._boundary would still need per-chunk 'kv' / 'in' for all 40 layers. Needs a spec rung + golden, or a
+  test change (overseer / owner). test_runner_smoke (no GoldenKV) not run by me: left to the orchestrator's gate.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate K.1 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check --unit 'K.1#test_contract'`.
+
+## K.1 contract attempt 5 (galaxy_8x4-full)
+- OV-15: `tests/bringup/contract/server_rules.golden_geometry()` derives (GOLDEN_RUNG, CHUNK, MAX_SEQ) from the running
+  spec: the shortest ladder rung (by seq) with its own golden and `full_dumps`. Seed spec.yaml -> s4096 / 2048 / 4096,
+  galaxy_8x4 -> s10240 / 5120 / 10240 (CPU check, Spec.load, no device). Scenario / runner / ack lengths are written
+  as the seed's offsets from H = CHUNK / 2, CHUNK and MAX_SEQ: the seed gets exactly its old plans (1000 / 3000 /
+  3017 / 1330 / 3001 / 4000 / 1500 / 3500); 8x4 gets 2536 / 6072 / 6089 / 2866 / 6073 / 10144 / 3036 / 6572.
+  self_check asserts the same shapes symbolically (plus the ACK_TURNS interleave). test_runner_contract T1 / B come
+  from RUNNER_TURNS.
+- Golden gap (OV-12 rule, test side): `caches.GoldenKV.select` / `caches.golden_failures`. Window KV of a dumped layer
+  (all chunks: 0,1,2,3,14,20,21,24 on 8x4; every served layer on the seed) and every compressed / index cache: every
+  row ("full", unchanged). Other layers: the positions the golden's ring snapshots hold ("last-window": [4992, 5120)
+  and [10080, 10240) on 8x4), the final ring first: the 10208 snapshot is a separate reference run, fp32 noise apart
+  (max 7.7e-4 of 2.7 at layer 39, not bit-equal). `coverage_failures` fails any served (config, layer) never compared;
+  each test prints the per-config, per-mode layer list. 8x4 coverage per test: adapter acks / runner contract / cache
+  starts: window_kv layers 0-3,14,20,21,24 full, the other 32 last-window (128 rows in [0, 6072), 288 in [0, 10240));
+  compress / index (2, 8, 14, 20) full. The ack-time checks of [0, 2536) compare no rows of a non-dumped layer's
+  window KV (none in the golden there); the slot-final checks do.
+- `parts.run_chunk`: a layer with no golden block input (neither its "in" nor the previous layer's "out", F164) runs
+  from the previous layer's device output of the same chunk (test_cache_starts on a full 8x4 run).
+- Paths: OV-15 orders `tests/bringup/contract` changed; the brief's contract-role allowed list does not include it.
+- test_adapter_acks on 8x4 (unit run): all 4 chunks give 40 acks in order, coverage as above (dumped layers 24328 rows,
+  others 512 last-window rows), 6 failures, all window_kv "nope" PCC of the dumped deep layers vs the frozen
+  per-layer state limit: L20 0.981 / 0.9896 ([0, 2536)), 0.9873 ([0, 5120)), 0.9888 ([0, 6072)); L21 0.985 / 0.9886;
+  L24 0.980 / 0.9837. DS41-125: the limit comes from the ring drift (last 128 positions); L20's KV is L19's output,
+  which the ladder measures at err 0.159 over all positions. Limit unchanged; left to the owner.
+- test_runner_smoke on 8x4 (unit run, feeder tt-d-gen engine /scratch/dnijemcevic/tt-d-gen @ a9701ce6675): the runner
+  came up (40 layers, table and device map exported, request loop entered); the engine driver died before any chunk:
+  ENGINE_FATAL chunk_size=5120 not divisible by sp_factor=1800000 (DS41-126: testing/dgen_prefill_driver.py:79 passes
+  layers_per_chunk positionally; tt-d-gen 1cf343887 removed it). Framework file, outside K.1's paths: not changed.
+  test_runner_contract uses the same driver; not run.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate K.1 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.

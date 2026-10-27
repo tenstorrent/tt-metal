@@ -95,6 +95,66 @@ notes:
     decodes a fixed max_new=8 tokens; DeepSeek-V4.1 thinks first (device: ''We need answer one word. Capital of'', coherent;
     the CPU smoke at R.1 needed 24 tokens: ''...Capital of France = Paris...</think>Paris''). The overseer fixes the framework;
     no model change.'
+- id: OV-11
+  tasks:
+  - K.1
+  status: closed
+  t: '2026-10-27T18:56:22'
+  text: 'The overseer stopped attempt 1 (contract): K.1 test_contract failed on a missing golden file (golden_full/galaxy_8x4/s10240_c5120/chunk_00/layer_04.safetensors):
+    data / framework, not model code. The overseer fixes it; no model change.'
+  closed: '2026-10-27T18:57:26'
+  why_closed: 'wrong classification: the missing golden is a model-code assumption (kv_contract.golden_rows), see OV-12'
+- id: OV-12
+  tasks:
+  - K.1
+  status: open
+  t: '2026-10-27T18:57:05'
+  text: 'K.1 test_contract failed with FileNotFoundError chunk_00/layer_04.safetensors: this run''s goldens (golden_full/galaxy_8x4,
+    manifest step_dump_layers [0,1,2,3,14,20,21,24]) keep per-chunk dumps (with the per-position ''kv'') only for the step
+    layers; kv_cache/layer_{i}.safetensors has the final state of ALL 40 layers (window_kv_cache_layer_i is the 128-row
+    sliding-window ring, position p at row p % 128). tt/runners/kv_contract.golden_rows assumed every served layer has per-chunk
+    dumps (true on the 2x2 seed, layers 0-3). Fix it there, honestly and for both boxes: step layers keep the full [0, length)
+    window-KV comparison; other layers compare the window KV of the last min(window, length) positions against golden.state(layer)''s
+    ring, unrolled by position (compressed KV / index keys already come from the final state). Never skip a layer, never
+    loosen a limit, never read a golden inside the model path. Record per layer which comparison ran (full / last-window)
+    in the test output so the overseer can report it. The same golden_rows is used by test_runner_contract / test_runner_smoke''s
+    read-back: check them too.'
+- id: OV-13
+  tasks:
+  - K.1
+  status: closed
+  t: '2026-10-27T18:57:18'
+  text: 'The overseer stopped attempt 2 (contract): Attempt started before the overseer''s diagnosis note OV-12 reached
+    the brief; follow OV-12 (OV-11 withdrawn).'
+  closed: '2026-10-27T18:57:26'
+  why_closed: 'administrative: the brief lacked OV-12'
+- id: OV-14
+  tasks:
+  - K.1
+  status: closed
+  t: '2026-10-27T19:19:27'
+  text: 'The overseer stopped attempt 4 (contract): test_adapter_acks fails on the frozen contract tests'' seed geometry
+    (server_rules.py CHUNK 2048 / MAX_SEQ 4096 / GOLDEN_RUNG s4096 from the 2x2 seed; this run has 5120 and s10240 / s56320).
+    Frozen tests: the overseer fixes the framework cause; do not edit or work around them.'
+  closed: '2026-10-27T19:20:07'
+  why_closed: 'superseded by OV-15: the contract tests are not frozen in this ledger; the geometry fix is the honest change'
+- id: OV-15
+  tasks:
+  - K.1
+  status: open
+  t: '2026-10-27T19:20:08'
+  text: 'tests/bringup/contract/server_rules.py hard-codes the 2x2 seed''s geometry (CHUNK 2048, MAX_SEQ 4096, GOLDEN_RUNG
+    ''s4096''); this galaxy_8x4 run has chunk 5120 and rungs s10240 / s56320, so test_adapter_acks dies with ''no ladder
+    rung s4096''. These files are NOT hash-frozen in this ledger (K.1 runs them; the seed''s FIX.8 edited them before):
+    fix the cause in server_rules.py, the same rule as tt/: derive the geometry from the running spec, never one box''s
+    literals. GOLDEN_RUNG = the spec''s shortest ladder rung (by seq) whose golden has full dumps; CHUNK = that rung''s
+    chunk; MAX_SEQ = its seq. On the 2x2 seed spec this must still give exactly s4096 / 2048 / 4096 (check it with Spec.load
+    on models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml, no device); on 8x4 s10240 / 5120 / 10240. Do not change any
+    rule, threshold or check of the contract; only where the sizes come from. Then run every contract test K.1 runs (and
+    the seed''s test_cache_starts / producer_case users) through the same golden gap you fixed in kv_contract.golden_rows:
+    this golden has per-chunk dumps only for its step_dump_layers; any test that reads a non-step layer''s per-chunk dump
+    or block input must use what the golden has for that layer (final state, kv_cache), never skip a layer. Report in your
+    commit message: the derived values on both specs, and per test which layers are compared fully vs on the final state.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -175,7 +235,7 @@ fixes:
   title: 'Owner order (2026-10-27): ttnn.bringup.flat_routed_expert_with_program misses the program cache on e'
   gate:
   - W.1
-  status: queued
+  status: placed
   t: '2026-10-27T10:12:24'
   text: 'Owner order (2026-10-27): ttnn.bringup.flat_routed_expert_with_program misses the program cache on every run, fix
     it IN THE OP. Evidence (overseer census, /scratch/dnijemcevic/posprof/census.json + census0.log; F196/F197 in testing/profile.py):
@@ -195,6 +255,7 @@ fixes:
     (as FIX.2); (3) the op''s per-call host time before / after on a hit. Gate: W.1 (accuracy unchanged).'
   paths:
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-27T16:49:34'
 classified:
   L.smoke:
     kind: framework

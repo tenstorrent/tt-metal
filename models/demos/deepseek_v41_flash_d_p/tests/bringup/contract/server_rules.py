@@ -36,16 +36,8 @@ PREFILL_GOLDEN_PCC = 0.93  # tools/launch_harness/validation.py:18-22 PCC_DEFAUL
 LAST_BLOCK_PCC = 0.99  # validation.py:18-22 PCC_DEFAULTS["last-block-pcc"] (last block / prefix decode held)
 DRAM_ALIGN = 64  # kv_manager/device_io/src/noc_address_resolver.cpp:18-22 (BH NIU: offset % 64 == 0)
 
+
 # ---------------------------------------------------------------- the tests' serving geometry
-# The contract tests run the server's rules at chunk 2048 / max_seq 4096: the s4096 golden rung (full dumps, so every
-# position's window KV and block input is in the golden). The rules do not depend on the size; the deployment is
-# 8192 / 1048576 (spec deploy), this run's target 5120 / 56320.
-CHUNK = 2048
-MAX_SEQ = 4096
-GOLDEN_RUNG = "s4096"
-assert MAX_SEQ % CHUNK == 0 and CHUNK % TILE == 0 and MAX_SEQ % TILE == 0  # backend_runtime.cpp:124-129
-
-
 def _spec():
     from models.demos.common.bringup.core.spec import Spec
 
@@ -57,14 +49,31 @@ def _spec():
         return Spec.load(Path(__file__).resolve().parents[3] / "bringup" / "spec.yaml")
 
 
+def golden_geometry(spec=None) -> tuple[str, int, int]:
+    """(rung, chunk, max_seq) the contract tests run at: the running spec's shortest ladder rung (by seq) with a golden
+    of its own and full dumps (every chunk dumped, so every position of a dumped layer's window KV and block input is
+    in the golden); chunk = that rung's chunk, max_seq = its seq. Never one box's literals: s4096 / 2048 / 4096 on the
+    QuietBox seed, s10240 / 5120 / 10240 on galaxy_8x4. The server's rules do not depend on the size."""
+    s = spec or _spec()
+    own = [r for r in s.data.get("ladder", []) if r.get("golden", r["name"]) == r["name"] and r.get("full_dumps")]
+    if not own:
+        raise ValueError("the spec's ladder has no rung with its own full-dump golden: the contract tests need one")
+    r = min(own, key=lambda x: int(x["seq"]))
+    return r["name"], int(r["chunk"]), int(r["seq"])
+
+
+GOLDEN_RUNG, CHUNK, MAX_SEQ = golden_geometry()
+assert MAX_SEQ % CHUNK == 0 and CHUNK % TILE == 0 and MAX_SEQ % TILE == 0  # backend_runtime.cpp:124-129
+
+
 def _mesh() -> tuple[int, int]:
     """spec box.mesh: SP over axis 0 (rows), TP over axis 1 (columns)."""
     rows, cols = _spec().mesh
     return int(rows), int(cols)
 
 
-SP, TP = _mesh()  # 2, 2 on the QuietBox (this run); 4, 4 on the deployment Galaxy
-W = CHUNK // SP  # tokens per SP row per chunk: 1024 here (2048 at the deployment's 8192 / SP 4)
+SP, TP = _mesh()  # 2, 2 on the QuietBox seed; 8, 4 on galaxy_8x4
+W = CHUNK // SP  # tokens per SP row per chunk: 1024 on the seed (2048 / SP 2), 640 on galaxy_8x4 (5120 / SP 8)
 assert CHUNK % SP == 0, "prefill_pipeline.cpp:37-39: chunk_size % sp_factor == 0"
 
 
@@ -219,26 +228,33 @@ def header(slot: int, start: int, end: int) -> bytes:
 
 
 # ---------------------------------------------------------------- the tests' prompts
-# Chunk plans for the tests at CHUNK 2048 / MAX_SEQ 4096 (chunk_plan / interleave are the server's rules; check() asserts
-# the shape each test relies on). W = 1024 on the QuietBox (SP 2), 512 on a 4x4 Galaxy, 256 on an 8x4 one.
-#   cold_mid_end   cold 3017: (0, 2048), (2048, 3017): a second chunk ending mid-record and inside a ratio-2 group
-#   follow_block   turn 1000 then 3000 over a 960-token resident prefix (kv blocks of 64): (960, 3000), a start off the
-#                  SP period, so every SP row's slab of the chunk wraps (prefill_pipeline.cpp:146-153)
-#   follow_tile    kv_block_size 32 (legal: only a multiple of the tile is required): turn 1330 then 3001 over 1312:
-#                  (1312, 3001), a start that is a multiple of 32 but not of 64
-#   pulled_back    turn 1000 then 4000 over 960: (960, 3008), then the last chunk pulled back to (2048, 4000) over rows
-#                  the chunk before it wrote (prefill_writer.cpp:63-67)
+# Chunk plans for the tests, from CHUNK / MAX_SEQ (H = CHUNK / 2; chunk_plan / interleave are the server's rules;
+# self_check() asserts the shape each test relies on). The lengths keep the seed's offsets, so the QuietBox seed (CHUNK
+# 2048, MAX_SEQ 4096, W 1024) gets exactly its numbers in brackets; galaxy_8x4 (5120 / 10240, W 640) the second ones.
+#   cold_mid_end   cold CHUNK + 969 [3017; 6089]: (0, CHUNK), (CHUNK, end): a second chunk ending mid-record and
+#                  inside a ratio-2 group
+#   follow_block   turn H - 24 [1000; 2536] then CHUNK + 952 [3000; 6072] over a resident prefix H - 64 [960; 2496]
+#                  (kv blocks of 64): one chunk from a start off the SP period, so every SP row's slab of the chunk wraps
+#                  (prefill_pipeline.cpp:146-153)
+#   follow_tile    kv_block_size 32 (legal: only a multiple of the tile is required): turn H + 306 [1330; 2866] then
+#                  CHUNK + 953 [3001; 6073] over H + 288 [1312; 2848]: a start that is a multiple of 32 but not of 64
+#   pulled_back    turn H - 24 then MAX_SEQ - 96 [4000; 10144] over H - 64: (H - 64, H - 64 + CHUNK), then the last
+#                  chunk pulled back to (MAX_SEQ - CHUNK, MAX_SEQ - 96) over rows the chunk before it wrote
+#                  (prefill_writer.cpp:63-67)
+H = CHUNK // 2
+assert H % KV_BLOCK == 0 and H >= 1024, f"the scenario offsets need CHUNK / 2 a multiple of 64 and >= 1024 ({H})"
 SCENARIOS = {
-    "cold_mid_end": {"turns": [3017], "kv_block": KV_BLOCK},
-    "follow_block": {"turns": [1000, 3000], "kv_block": KV_BLOCK},
-    "follow_tile": {"turns": [1330, 3001], "kv_block": 32},
-    "pulled_back": {"turns": [1000, 4000], "kv_block": KV_BLOCK},
+    "cold_mid_end": {"turns": [CHUNK + 969], "kv_block": KV_BLOCK},
+    "follow_block": {"turns": [H - 24, CHUNK + 952], "kv_block": KV_BLOCK},
+    "follow_tile": {"turns": [H + 306, CHUNK + 953], "kv_block": 32},
+    "pulled_back": {"turns": [H - 24, MAX_SEQ - 96], "kv_block": KV_BLOCK},
 }
-# The runner test's requests. Producer fallback: slot 0 1000 then 4000 (follow-up from 960, pulled back), slot 1 1500
-# then 3500 (follow-up from 1472), interleaved round-robin. Engine: see test_runner_contract.ENGINE_CASE.
-RUNNER_TURNS = {0: [1000, 4000], 1: [1500, 3500]}
+# The runner test's requests. Producer fallback: slot 0 H - 24 then MAX_SEQ - 96 (follow-up from H - 64, pulled back),
+# slot 1 H + 476 [1500; 3036] then CHUNK + 1452 [3500; 6572] (follow-up from H + 448 [1472; 3008]), interleaved
+# round-robin. Engine: see test_runner_contract.ENGINE_CASE.
+RUNNER_TURNS = {0: [H - 24, MAX_SEQ - 96], 1: [H + 476, CHUNK + 1452]}
 # The adapter test's turns: slot 0 one chunk then a follow-up from its reused prefix; slot 1 cold over two chunks.
-ACK_TURNS = {0: [1000, 3000], 1: [3000]}
+ACK_TURNS = {0: [H - 24, CHUNK + 952], 1: [CHUNK + 952]}
 
 
 def scenario_plan(name: str) -> list[tuple[int, list[tuple]]]:
@@ -270,19 +286,27 @@ def self_check() -> None:
     big = {"chunk": 8192, "max_seq": 1048576}
     assert chunk_plan(1048576, 2944, **big)[-1] == (1048576 - 8192, 1048576)
     assert chunk_plan(3000, **big) == [(0, 3000)] and follow_up_resident(3000, 9000) == 2944
-    assert scenario_plan("cold_mid_end") == [(0, [(0, 2048), (2048, 3017)])]
-    assert scenario_plan("follow_block")[1] == (960, [(960, 3000)])
-    assert scenario_plan("follow_tile")[1] == (1312, [(1312, 3001)])
+    assert scenario_plan("cold_mid_end") == [(0, [(0, CHUNK), (CHUNK, CHUNK + 969)])]
+    assert scenario_plan("follow_block")[1] == (H - 64, [(H - 64, CHUNK + 952)])
+    assert (H - 64) % W, "follow_block: the start must be off the SP period"
+    assert scenario_plan("follow_tile")[1] == (H + 288, [(H + 288, CHUNK + 953)]) and (H + 288) % 64 == 32
     res, plan = scenario_plan("pulled_back")[1]
-    assert res == 960 and plan == [(960, 3008), (2048, 4000)] and plan[-1][0] == MAX_SEQ - CHUNK < plan[-2][1]
+    assert res == H - 64 and plan == [(H - 64, H - 64 + CHUNK), (MAX_SEQ - CHUNK, MAX_SEQ - 96)]
+    assert plan[-1][0] == MAX_SEQ - CHUNK < plan[-2][1]
     for turns in (RUNNER_TURNS, ACK_TURNS):
         assert max(n for t in turns.values() for n in t) <= MAX_SEQ
     assert [(p.slot, p.start, p.end) for p in interleave(RUNNER_TURNS)] == [
-        (0, 0, 1000),
-        (1, 0, 1500),
-        (0, 960, 3008),
-        (1, 1472, 3500),
-        (0, 2048, 4000),
+        (0, 0, H - 24),
+        (1, 0, H + 476),
+        (0, H - 64, H - 64 + CHUNK),
+        (1, H + 448, CHUNK + 1452),
+        (0, MAX_SEQ - CHUNK, MAX_SEQ - 96),
+    ]
+    assert [(p.slot, p.start, p.end) for p in interleave(ACK_TURNS)] == [
+        (0, 0, H - 24),
+        (1, 0, CHUNK),
+        (0, H - 64, CHUNK + 952),
+        (1, CHUNK, CHUNK + 952),
     ]
 
 
@@ -349,7 +373,7 @@ STATE_OF_KIND = {"window": "window_kv", "compress": "compress_kv", "index": "ind
 
 def state_threshold():
     """KV vs golden limit per (config, layer): the stricter of the server's prefill-golden PCC (its own rule) and
-    calib x the reference's drift for that state and layer on the s4096 rung (F128, testing/e2e_limits.py)."""
+    calib x the reference's drift for that state and layer on the GOLDEN_RUNG rung (F128, testing/e2e_limits.py)."""
     from models.demos.common.bringup.reference.golden import Golden
     from models.demos.common.bringup.testing import e2e_limits as E
 

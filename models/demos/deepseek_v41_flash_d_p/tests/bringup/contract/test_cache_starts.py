@@ -5,11 +5,14 @@
 (serving_contract.md "Input", "KV cache", "Attention and cache writes").
 
 The device model (hooks.device_model) runs the server's chunk plans (server_rules.chunk_plan / follow_up_resident) at
-chunk 2048 / max_seq 4096, one state per scenario (one slot), for the layers of the gate's block type
-(parts.run_layers: at C.<block type>.attention its representative and that layer's state sources; by hand every
-spec layer). Layer 0 starts from model.embed(tokens, start) (the server's ids, PAD_ID past actual_end), every other
-layer from its golden block input; the golden is the s4096 rung (every position dumped).
+R.CHUNK / R.MAX_SEQ (the spec's golden rung: 2048 / 4096 on the seed, 5120 / 10240 on galaxy_8x4), one state per
+scenario (one slot), for the layers of the gate's block type (parts.run_layers: at C.<block type>.attention its
+representative and that layer's state sources; by hand every spec layer). Layer 0 starts from model.embed(tokens,
+start) (the server's ids, PAD_ID past actual_end), every other layer from its golden block input, or, where the golden
+has none (a full run dumps its step layers only), from the previous layer's device output (parts.run_chunk). The KV
+is compared through caches.golden_failures (a layer without dumps: its window KV at the ring snapshots' positions).
 
+Scenarios (server_rules.SCENARIOS; seed numbers):
   cold_mid_end   cold 3017: (0, 2048), (2048, 3017): a chunk ending mid-record, inside a ratio-2 group
   follow_block   1000, then 3000 over the 960 resident prefix: (960, 3000), a start off the SP period
   follow_tile    kv_block_size 32: 1330, then 3001 over 1312: (1312, 3001), a start that is not a multiple of 64
@@ -80,7 +83,9 @@ def test_cache_starts(mesh_device, scenario):
                         )
         held = {i: parts.served(state, i, end) for i in layers}
         prev_end = end
+    fails += gk.coverage_failures(C.served_configs(layers), "golden")
     if hasattr(state, "free"):
         state.free()
+    print(f"[cache starts] {scenario}: golden comparison per config and mode: {gk.coverage_summary()}")
     print(f"[cache starts] {scenario}: {len(fails)} failures (end {prev_end})")
     assert not fails, "\n".join(fails[:40])
