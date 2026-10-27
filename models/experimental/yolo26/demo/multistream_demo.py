@@ -39,8 +39,11 @@ PERSON = 0
 PANEL_W = 420
 
 
-def load_clips(video_dir, num_streams, max_frames):
-    """Decode clips into memory (BGR). Streams beyond the number of clips reuse clips at a different start frame."""
+def load_clips(video_dir, num_streams, max_frames, rgba=True):
+    """
+    Decode clips into memory (BGR, and the model-input RGBA copy unless rgba=False). Streams beyond the number of clips
+    reuse clips at a different start frame.
+    """
     paths = sorted(glob.glob(os.path.join(video_dir, "*.mpg")) + glob.glob(os.path.join(video_dir, "*.mp4")))
     if not paths:
         raise FileNotFoundError(f"no .mpg / .mp4 videos in {video_dir}")
@@ -56,15 +59,15 @@ def load_clips(video_dir, num_streams, max_frames):
         cap.release()
         if frames:
             # Model input copy: RGB + a zero 4th byte, so a pixel is one uint32 (see Letterbox.fill)
-            rgba = [cv2.cvtColor(f, cv2.COLOR_BGR2RGBA) for f in frames]
-            for f in rgba:
+            inputs = [cv2.cvtColor(f, cv2.COLOR_BGR2RGBA) for f in frames] if rgba else None
+            for f in inputs or []:
                 f[..., 3] = 0
-            clips.append((os.path.splitext(os.path.basename(path))[0], frames, rgba))
+            clips.append((os.path.splitext(os.path.basename(path))[0], frames, inputs))
             logger.info(f"loaded {path}: {len(frames)} frames {frames[0].shape[1]}x{frames[0].shape[0]}")
     streams = []
     for i in range(num_streams):
-        name, frames, rgba = clips[i % len(clips)]
-        streams.append({"name": name, "frames": frames, "rgba": rgba, "offset": (i // len(clips)) * len(frames) // 2})
+        name, frames, inputs = clips[i % len(clips)]
+        streams.append({"name": name, "frames": frames, "rgba": inputs, "offset": (i // len(clips)) * len(frames) // 2})
     return streams
 
 
@@ -106,18 +109,21 @@ def anchor_grid(size):
     return np.concatenate(anchors).astype(np.float32), np.concatenate(strides).astype(np.float32)
 
 
-def decode_people(host_outputs, shapes, batch, anchors, strides, conf):
+def decode_people(host_outputs, shapes, batch, anchors, strides, conf, mesh_composer=None):
     """
-    host_outputs: [box_p3, box_p4, box_p5, cls_p3, cls_p4, cls_p5] host tile tensors.
+    host_outputs: [box_p3, box_p4, box_p5, cls_p3, cls_p4, cls_p5] host tile tensors (on a mesh, gathered along the
+    batch with mesh_composer, so batch counts the images of all devices).
     Returns per image an array [k, 5] of (x1, y1, x2, y2, conf) in input-image pixels for class 0 (person).
     NMS-free one2one head: boxes are ltrb distances in units of the stride, scores are logits.
     """
     logit = np.log(conf / (1 - conf))
     boxes, scores = [], []
     for t, (h, w) in zip(host_outputs[:3], shapes):
-        boxes.append(ttnn.to_torch(t).reshape(batch, h * w, -1)[..., :4].float().numpy())
+        boxes.append(ttnn.to_torch(t, mesh_composer=mesh_composer).reshape(batch, h * w, -1)[..., :4].float().numpy())
     for t, (h, w) in zip(host_outputs[3:], shapes):
-        scores.append(ttnn.to_torch(t).reshape(batch, h * w, -1)[..., PERSON].float().numpy())
+        scores.append(
+            ttnn.to_torch(t, mesh_composer=mesh_composer).reshape(batch, h * w, -1)[..., PERSON].float().numpy()
+        )
     boxes, scores = np.concatenate(boxes, 1), np.concatenate(scores, 1)
     people = []
     for b in range(batch):
@@ -264,6 +270,51 @@ class Display:
                 p, (bar_x0, y + 2), (bar_x0 + int((bar_x1 - bar_x0) * n / scale), y + row_h - 4), (60, 170, 60), -1
             )
             text(f"{n:2d}", PANEL_W - 56, y + 13)
+
+
+def run_device_loop(device, runner, out_list, prep_q, post_q, t_end, images_per_batch):
+    """
+    Run queued host batches until t_end. prep_q items end with the host input tensor; each item is handed to post_q
+    with the host outputs in place of the input once their read has finished.
+
+    CQ1 uploads the next batch while CQ0 runs the trace; outputs go DRAM -> host on CQ1.
+    """
+    staging, l1_input = runner.tt_image_res, runner.input_tensor
+    read_event = ttnn.record_event(device, 1)
+    item = prep_q.get()
+    ttnn.wait_for_event(1, runner.op_event)
+    ttnn.copy_host_to_device_tensor(item[-1], staging, 1)
+    write_event = ttnn.record_event(device, 1)
+    in_flight = None
+    processed = 0
+    while time.perf_counter() < t_end:
+        ttnn.wait_for_event(0, write_event)
+        ttnn.copy(staging, l1_input)
+        first_op_event = ttnn.record_event(device, 0)
+        ttnn.execute_trace(device, runner.tid, cq_id=0, blocking=False)
+        ttnn.wait_for_event(0, read_event)
+        dram = [ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in out_list]
+        last_op_event = ttnn.record_event(device, 0)
+
+        current = item
+        item = prep_q.get()
+        ttnn.wait_for_event(1, first_op_event)
+        ttnn.copy_host_to_device_tensor(item[-1], staging, 1)
+        write_event = ttnn.record_event(device, 1)
+
+        ttnn.wait_for_event(1, last_op_event)
+        host = [ttnn.from_device(t, blocking=False, cq_id=1) for t in dram]
+        read_event = ttnn.record_event(device, 1)
+
+        # Hand the previous batch's outputs over once their read has finished (the current trace runs meanwhile)
+        if in_flight is not None:
+            ttnn.event_synchronize(in_flight[0])
+            post_q.put(in_flight[1])
+        in_flight = (read_event, current[:-1] + (host,))
+        processed += images_per_batch
+    ttnn.event_synchronize(in_flight[0])
+    post_q.put(in_flight[1])
+    return processed
 
 
 def main():
@@ -439,45 +490,9 @@ def main():
     if args.port:
         logger.info(f"live view: http://localhost:{args.port}/")
 
-    # Device loop: CQ1 uploads the next batch while CQ0 runs the trace; outputs go DRAM -> host on CQ1.
-    staging, l1_input = runner.tt_image_res, runner.input_tensor
-    read_event = ttnn.record_event(device, 1)
-    item = prep_q.get()
-    ttnn.wait_for_event(1, runner.op_event)
-    ttnn.copy_host_to_device_tensor(item[-1], staging, 1)
-    write_event = ttnn.record_event(device, 1)
-    in_flight = None
     processed = 0
-    t_end = time.perf_counter() + args.duration
     try:
-        while time.perf_counter() < t_end:
-            ttnn.wait_for_event(0, write_event)
-            ttnn.copy(staging, l1_input)
-            first_op_event = ttnn.record_event(device, 0)
-            ttnn.execute_trace(device, runner.tid, cq_id=0, blocking=False)
-            ttnn.wait_for_event(0, read_event)
-            dram = [ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in out_list]
-            last_op_event = ttnn.record_event(device, 0)
-
-            current = item
-            item = prep_q.get()
-            ttnn.wait_for_event(1, first_op_event)
-            ttnn.copy_host_to_device_tensor(item[-1], staging, 1)
-            write_event = ttnn.record_event(device, 1)
-
-            ttnn.wait_for_event(1, last_op_event)
-            host = [ttnn.from_device(t, blocking=False, cq_id=1) for t in dram]
-            read_event = ttnn.record_event(device, 1)
-
-            # Hand the previous batch's outputs over once their read has finished (the current trace runs meanwhile)
-            if in_flight is not None:
-                ttnn.event_synchronize(in_flight[0])
-                post_q.put(in_flight[1])
-            tick, b, ids, frame_idx, captured, _ = current
-            in_flight = (read_event, (tick, b, ids, frame_idx, captured, host))
-            processed += B
-        ttnn.event_synchronize(in_flight[0])
-        post_q.put(in_flight[1])
+        processed = run_device_loop(device, runner, out_list, prep_q, post_q, time.perf_counter() + args.duration, B)
     finally:
         stop.set()
         post_q.put(None)

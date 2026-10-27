@@ -46,6 +46,8 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0024 | Batch > 2 per chip | 2026-10-23 | DONE: max batch 4 (batch-aware conv blocking); e2e batch 4 s 659.7 FPS, n 1092.6 FPS; PCC intact; batch 5 still fails |
 | YOLO26-0025 | dp=4 with batch 2 / 4 per chip | 2026-10-23 | DONE: batch 4/chip n 2561–2571 FPS, s 2347–2404 FPS; batch 2/chip n ~1868, s ~1805; one trace-capture hang (batch 2, n) |
 | YOLO26-0026 | Can one chip serve 20 camera streams at 30 FPS (600 images/s)? Live multi-stream demo | 2026-10-26 | DONE: yolo26s batch 4, 20 CAVIAR shopping-centre streams, 30.0 FPS per stream sustained 60 s with recording (599.4 images/s); ceiling 661 images/s (33 FPS per stream) |
+| YOLO26-0027 | Demo says batch 4: are the 20 streams run 4 at a time, in sequence? | 2026-10-27 | ANSWERED: yes, each 33.3 ms tick runs 5 batch-4 traces back to back (~30 ms of compute); panel changes and v2/v3 recordings |
+| YOLO26-0028 | 80 streams × 30 FPS on all 4 QB2 chips (same 20 clips on each chip), live demo + recording | 2026-10-27 | DONE: dp=4 mesh, batch 4/chip, outputs packed on device, host prep in worker processes: 2399.2 images/s = 30.0 FPS per stream for 60 s with recording; ceiling 2598.5 images/s (32.5 FPS/stream); capture hang hit 2× (OPEN, see YOLO26-0025) |
 
 ## Entries
 
@@ -706,3 +708,106 @@ or hardware decode).
   stream's measured result rate over the last second (top right).
 - MEASURED (recording + live MJPEG, 60 s): 599.3 and 599.4 images/s = 30.0 FPS per stream, display 30.0 FPS,
   latency 53–54 ms, 1799/1800 frames recorded. Per-tile readouts 30.0–30.1 FPS.
+
+### YOLO26-0027 — How 20 streams map onto batch 4 (appended 2026-10-27)
+
+Question: the panel says "batch 4". Are the 20 streams run 4 at a time, in sequence?
+
+Answer: yes. The chip runs one batch-4 forward at a time; each tick is served by five of them back to back.
+
+- READ (`demo/multistream_demo.py`, pacing thread, lines 321–342): every 1/30 s tick takes the current frame of each
+  of the 20 streams and builds `nb = streams / B = 5` batches grouped by camera number: CAM 01–04, 05–08, 09–12,
+  13–16, 17–20. Each batch is uploaded and run as one execution of the captured batch-4 trace; the 5 executions go
+  through the chip in order. Within a batch the 4 images share one forward pass; across batches it is time-sharing.
+- INFERRED from YOLO26-0024 (e2e batch 4, trace+2CQ, 659.7 FPS): one batch-4 forward ≈ 4 / 660 ≈ 6.1 ms; five per
+  tick ≈ 30 ms of the 33.3 ms tick, i.e. ~10 % headroom. With two command queues, the upload of the next batch (CQ1)
+  and the readback of the previous one overlap the current trace (CQ0), so those ~30 ms are almost all compute.
+- INFERRED: within a tick, CAM 01–04 results complete first and CAM 17–20 about 4 × 6.1 ≈ 24 ms later. The median
+  capture-to-display latency (MEASURED 53–54 ms, YOLO26-0026 addendum) includes this queueing.
+- Why batch 4 (MEASURED, YOLO26-0024 / perf table, yolo26s e2e trace+2CQ, 1 chip): batch 1 418 FPS, batch 2 604 FPS,
+  batch 4 660 FPS. At batch 1, 600 images/s does not fit; batch 2 has ~0.7 % headroom; batch 8 does not fit in
+  device memory (batch 5 already fails, YOLO26-0024).
+
+Panel changes in this period (requested by the user; READ, commits `d6b963ffa4d`, `4d788ee864d`):
+- FPS readouts (tile top right and panel headline) are always green; the red/orange colour below 0.97 × target was
+  removed. The "(target 600)" text was removed.
+- The "avg 10 s" column (mean per-camera count over the last 300 results) and its history buffer were removed; the
+  bars were widened into the freed space.
+
+MEASURED (60 s, recording + live MJPEG, yolo26s batch 4, 1 chip, from each run's log):
+- v2 (`yolo26_demo_outputs/multistream/yolo26s_20streams_1chip_v2.mp4`): 599.6 images/s = 30.0 FPS per stream,
+  latency 54 ms median, 1799 frames, 59.97 s, 34.7 MB.
+- v3 (`yolo26s_20streams_1chip_v3.mp4`, without the avg column): 36000 images in 60.0 s = 599.6 images/s = 30.0 FPS
+  per stream, latency 54 ms median, display 30.5 FPS, 1799 frames, 59.97 s. Frame at 30 s: tile counts equal panel
+  counts (43 total), per-tile 29.9–30.0 FPS.
+- OPEN: v3 is 114.9 MB against 34.7 MB for v2 with the same encoder settings in code, length and frame count. Cause
+  not investigated.
+
+### YOLO26-0028 — 80 streams × 30 FPS on 4 chips (appended 2026-10-27)
+
+Question: dp=4 batch 4/chip measured 2347–2404 FPS e2e (YOLO26-0025). Can the QB2 serve the same 20 clips on each of
+the 4 chips, 80 streams × 30 FPS = 2400 images/s, as a live demo? Note the requirement sits at the top of that
+measured range, and that test re-uploaded one pre-built input and did no decode.
+
+Refuted approach — 4 independent processes, one per chip (MEASURED, `multistream_demo.py` unchanged, 30 s each,
+`TT_VISIBLE_DEVICES=k` + p150 descriptor, logs confirm PCIe ids 0/1/2/3, i.e. 4 different chips):
+- 4 processes: 166.9 / 165.6 / 166.0 / 175.7 images/s = 8.1–8.8 FPS per stream (one process alone: 599.6).
+- 4 processes pinned to 4 cores each (`taskset`, `OMP_NUM_THREADS=2`): 161–168 images/s each — so not CPU
+  oversubscription.
+- 2 processes: 346.2 + 344.4 images/s.
+- 1 process pinned to 4 cores: 599.6 images/s.
+- INFERRED: separate processes share a host-side limit of ~660–690 images/s in total (≈ one chip's batch-4 rate);
+  cause not investigated (candidates: per-process dispatch / host-memory locking in UMD). One of the 4 processes also
+  aborted at exit (`terminate called without an active exception`, pthread_exit during interpreter shutdown) after
+  logging its result.
+
+dp=4 mesh, first version (READ: new `demo/multichip_demo.py`; one process, `open_mesh_device(1×4)`, input sharded with
+`ShardTensorToMesh(dim=0)`, outputs gathered with `ConcatMeshToTensor(dim=0)`; prep / decode / device loop as in the
+1-chip demo, render in a separate process): MEASURED 768.6 images/s = 9.6 FPS per stream (20 s).
+
+Host cost per 16-image mesh pass (MEASURED, `scratchpad/bench/mc_host_bench.py`, mean of 10, ms): `pad.copy` of the
+[16, 640, 640, 8] input 4.26; letterbox 16 frames 2.96; `from_torch` + mapper 0.02 (no copy); `to_torch` + composer
+of the 6 tile outputs 6.91; full decode 7.03; blocking `from_device` of the 6 outputs 4.63; trace alone 5.86.
+At 5 passes per 33.3 ms tick the host work (~15–19 ms per pass) is ~3× the budget, all under one Python lock.
+Threads do not fix it (MEASURED letterbox 16: 2.73 ms with 1 thread, 1.77 with 2, 1.87 with 4; the threaded decode
+test stalled and was abandoned).
+
+Fixes (READ, `demo/multichip_demo.py`; `demo/multistream_demo.py` refactored to share them):
+1. Output packing inside the trace (`pack_outputs`): per level copy box / score outputs to DRAM, slice the person
+   logit, concat with the 4 box values, concat the levels, convert to row-major → one [1, 1, 33600, 5] bf16 DRAM
+   tensor per chip (336 KB instead of ~8.6 MB of tile outputs). MEASURED (`mc_pack_bench.py`): trace + pack 6.083 ms
+   vs 5.86 ms; `to_torch` of the packed result 0.070 ms vs 6.91 ms; max abs difference packed vs full outputs 0
+   (random uint8 input, all 16 images, all anchors). Defects hit on the way: packing directly on the L1 outputs →
+   `TT_FATAL bank_manager.cpp:514` (L1 allocation), then with DRAM outputs of the slice / concat only →
+   `TT_THROW: Statically allocated dataflow buffers ... clash with L1 buffers` (circular buffers vs the model's L1
+   outputs); fixed by copying the 6 outputs to DRAM first (the device loop did this copy anyway).
+2. Host prep in `--prep-workers` (2) processes writing into a shared-memory ring of 16 mesh input buffers
+   (2 × passes per tick + 6). The padding is written once at creation, so the per-pass `pad.copy` is gone. A slot
+   goes back to the free list when its pass reaches decode: by then its read-back event, recorded on CQ1 after its
+   upload, has completed.
+3. Decode of the packed tensor (`decode_packed`) in the main process; render, MJPEG and recording in their own
+   process (newest tick only).
+4. `multistream_demo.py`: device loop moved into `run_device_loop` (shared), `load_clips(rgba=False)`,
+   `decode_people(mesh_composer=)`. MEASURED regression, 1 chip, 20 s: 599.6 images/s = 30.0 FPS per stream.
+
+Results (MEASURED, yolo26s, batch 4 per chip, 4 chips, 640×640, CAVIAR 20 clips × 4 at start offsets of 0, ¼, ½, ¾
+clip; one run each):
+- 20 s, no recording: 2397.8 images/s = 30.0 FPS per stream, median capture-to-display latency 57 ms, 600 frames
+  displayed.
+- 20 s, `--fps 40` (ceiling): 2598.5 images/s = 32.5 FPS per stream (~8 % above 2400). That is above the 2377 of the
+  YOLO26-0025 perf test; INFERRED cause: the packed read-back (336 KB vs ~8.6 MB per chip per pass).
+- 60 s with recording + live MJPEG: 143984 images in 60.0 s = 2399.2 images/s = 30.0 FPS per stream, latency 61 ms
+  median, 1799 frames, 59.97 s, 2340×1152 H.264, 107.5 MB
+  (`yolo26_demo_outputs/multistream/yolo26s_80streams_4chips.mp4`).
+- Visual check (frame at 30 s and end snapshot): tile counts equal panel cells, per-chip sums equal "People now"
+  (43 + 58 + 58 + 50 = 209), per-tile 29.9–30.3 FPS.
+
+Defect, MEASURED: the recording run hung in `capture_trace_2cq` twice in a row (attempt 1 03:31:57, after 4 clean
+runs of the same code; attempt 2 03:42:49, after `tt-smi -r` with its output discarded). Attempt 3 passed after a
+reset whose output showed "Re-initializing boards after reset". tt-triage was run on the attempt-1 hang
+(`yolo26_demo_outputs/multistream/triage_capture_hang.txt`, last 60 lines): it reports cores on all 4 devices as
+"halted by triage but no longer halted - core was broken during triage", so it is inconclusive. Same symptom as
+YOLO26-0021/0022/0025; status stays OPEN.
+
+Limits: as YOLO26-0026 (per-frame counts, no tracking, 25 FPS clips played at 30). 80 streams are 20 clips × 4
+offsets, not 80 cameras. The 4 chips run in lockstep (one mesh trace), so every chip shows the same FPS.
