@@ -80,7 +80,10 @@ struct EDMChannelWorkerLocationInfo {
     uint32_t align_pad_8{};
 
     uint32_t edm_read_counter = 0;
-    uint32_t align_pad_9{};  // Padding added for safe reading over noc
+    // How the router takes sender-channel credits, written by the router at bring-up:
+    // connection_interface::credit_mode_stream_registers or credit_mode_software_counters. A producer
+    // checks it against its own mode when it connects.
+    uint32_t credit_mode{};
     uint32_t align_pad_10{};
     uint32_t align_pad_11{};
 };
@@ -89,8 +92,11 @@ static_assert(sizeof(EDMChannelWorkerLocationInfo) <= 64);
 
 // Producer-owned cursor state for one sender channel, persisted in the *receiver's* L1
 // (router or mux) across connection open/close. The receiver only zeroes this at
-// bring-up; it never reads or writes it afterwards. The handoff is producer ->
-// producer, with the receiver's L1 acting only as the letterbox.
+// bring-up and never writes it afterwards. The handoff is producer -> producer,
+// with the receiver's L1 acting only as the letterbox. With software credits
+// (connection_interface::credit_mode_software_counters) the producer also writes
+// write_counter after every packet, and the router reads it as the channel's
+// written count.
 //
 // write_index is persisted rather than re-derived as `write_counter % num_buffers`,
 // because that derivation is only correct when num_buffers divides 2^32.

@@ -461,6 +461,8 @@ struct EdmChannelWorkerInterface {
         connection_live_semaphore(connection_live_semaphore),
         sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf) {
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_read_counter)) = edm_read_counter_initial_value;
+        *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->credit_mode)) =
+            connection_interface::kernel_credit_mode;
         static_cast<DERIVED*>(this)->reset_counters();
     }
 
@@ -560,7 +562,9 @@ struct StaticSizedSenderChannelWorkerInterface
             connection_live_semaphore,
             sender_sync_noc_cmd_buf,
             edm_read_counter_initial_value),
-        read_counter_update_src_address(read_counter_update_src_address) {}
+        read_counter_update_src_address(read_counter_update_src_address),
+        remote_producer_write_counter(remote_producer_write_counter),
+        packets_taken(0) {}
 
     // CRTP implementation methods
     FORCE_INLINE void reset_counters() {
@@ -604,7 +608,19 @@ struct StaticSizedSenderChannelWorkerInterface
 
     [[nodiscard]] FORCE_INLINE BufferIndex get_write_buffer_index() const { return local_write_counter.index; }
 
+    // Software credits (connection_interface::credit_mode_software_counters): packets the producers
+    // have written into this channel, as their write count in the channel's
+    // SenderChannelProducerCursor, less those this receiver has taken. Not for stream-register
+    // credits, where remote_producer_write_counter may be null.
+    [[nodiscard]] FORCE_INLINE uint32_t get_num_untaken_packets() const {
+        return *remote_producer_write_counter - packets_taken;
+    }
+
+    FORCE_INLINE void take_packet() { packets_taken++; }
+
     uint32_t read_counter_update_src_address;
+    volatile tt_l1_ptr uint32_t* remote_producer_write_counter;
+    uint32_t packets_taken;
     ChannelCounter<NUM_BUFFERS> local_write_counter;
     ChannelCounter<NUM_BUFFERS> local_read_counter;
 };
