@@ -43,7 +43,7 @@ def test_padding_preparation_and_scan(device):
         summary = ttnn.experimental.kda.summarize_chunk_recurrence(
             *prepared, actual_start=start_bound, actual_end=end_bound
         )
-        return (*prepared, output, state, *summary)
+        return (*prepared, output, state, summary)
 
     for _ in range(2):
         for tensor in run():
@@ -71,9 +71,7 @@ def test_padding_preparation_and_scan(device):
                     ttnn.to_torch(observed)[:, : length // 32], ttnn.to_torch(expected), rtol=0, atol=0
                 )
             torch.testing.assert_close(ttnn.to_torch(outputs[8]), ttnn.to_torch(expected_state), rtol=0, atol=0)
-            # Dynamic summaries use the PR's BF16 transport boundary.
-            for observed, expected in zip(outputs[9:11], expected_summary[:2], strict=True):
-                torch.testing.assert_close(ttnn.to_torch(observed), ttnn.to_torch(expected).bfloat16(), rtol=0, atol=0)
+            torch.testing.assert_close(ttnn.to_torch(outputs[9]), ttnn.to_torch(expected_summary), rtol=0, atol=0)
             # Rebind cached programs to fresh scalar addresses while the captured
             # scalars describe a different length. Stale addresses cannot pass.
             source = scalar(sequence)
@@ -86,11 +84,10 @@ def test_padding_preparation_and_scan(device):
                     ttnn.to_torch(observed)[:, : length // 32], ttnn.to_torch(expected), rtol=0, atol=0
                 )
             torch.testing.assert_close(ttnn.to_torch(rebound[8]), ttnn.to_torch(expected_state), rtol=0, atol=0)
-            for observed, expected in zip(rebound[9:11], expected_summary[:2], strict=True):
-                torch.testing.assert_close(ttnn.to_torch(observed), ttnn.to_torch(expected).bfloat16(), rtol=0, atol=0)
+            torch.testing.assert_close(ttnn.to_torch(rebound[9]), ttnn.to_torch(expected_summary), rtol=0, atol=0)
             for tensor in (*rebound, fresh_start, fresh_end):
                 ttnn.deallocate(tensor)
-            for tensor in (*trimmed, trimmed_beta, *expected_terms, expected_output, expected_state, *expected_summary):
+            for tensor in (*trimmed, trimmed_beta, *expected_terms, expected_output, expected_state, expected_summary):
                 ttnn.deallocate(tensor)
     finally:
         ttnn.release_trace(device, trace)
@@ -215,34 +212,27 @@ def test_padding_unaligned_end_ignores_padding_values(device):
     start, end = scalar(0), scalar(sequence)
 
     def run(flat, beta_input, end_bound):
-        """Return named results: prepared terms, scan output and state, head summary.
-
-        start=0 on one device has no separated tail, so the tail summary slots are
-        unspecified and are released here.
-        """
+        """Return named results: prepared terms, scan output and state, head summaries."""
         prepared = ttnn.experimental.kda.prepare_chunk_recurrence(
             *flat, beta_input, heads, actual_start=start, actual_end=end_bound
         )
         output, state = ttnn.experimental.kda.recurrent_chunk_scan(
             *prepared, initial_tt, actual_start=start, actual_end=end_bound, tail_entry_states=initial_tt
         )
-        head_a, head_b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
+        summaries = ttnn.experimental.kda.summarize_chunk_recurrence(
             *prepared, actual_start=start, actual_end=end_bound
         )
-        ttnn.deallocate(tail_a)
-        ttnn.deallocate(tail_b)
         return {
             **dict(zip(_PREPARED_TERMS, prepared, strict=True)),
             "output": output,
             "state": state,
-            "head_a": head_a,
-            "head_b": head_b,
+            "summaries": summaries,
         }
 
     def comparable(name, tensor, length):
         """The defined part of a result: valid chunks, and valid rows of query-row terms."""
         host = ttnn.to_torch(tensor)
-        if name in ("state", "head_a", "head_b"):
+        if name in ("state", "summaries"):
             return host
         host = host[:, : -(-length // 32)]
         if name in _QUERY_ROW_TERMS:
