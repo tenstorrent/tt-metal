@@ -173,8 +173,8 @@ def test_pipeline_distilled(
     steady_state_prompt = prompt if dynamic_load else os.environ.get("PROMPT_STEADY_STATE", STEADY_STATE_LTX_PROMPT)
     replay_prompt = prompt if dynamic_load else STEADY_STATE_REPLAY_LTX_PROMPT
 
-    def run(*, prompt, number, seed):
-        output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
+    def run(*, prompt, number, seed, output_path=None):
+        output_filename = output_path or os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
         logger.info(f"Running LTX AV Fast: '{prompt[:80]}...'")
         logger.info(f"Config: {height}x{width}, {num_frames} frames @ {fps}fps ({num_frames / fps:.4f}s)")
         if images:
@@ -266,12 +266,17 @@ def test_pipeline_distilled(
 
         with tempfile.TemporaryDirectory() as scratch:
             bundle = vbench_bundle.create_bundle(export_dir or os.path.join(scratch, "vbench"))
-            for k, clip_seed in enumerate(seeds):
-                clip_number = number if k == 0 else 1000 + k
-                if k:
-                    run(prompt=prompt, number=clip_number, seed=clip_seed)
-                rendered = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{clip_number}.mp4")
-                shutil.copyfile(rendered, vbench_bundle.clip_path(bundle, 0, clip_seed))
+            # The clip at `seed` is copied from where it was rendered (OUTPUT_PATH if pinned, which then
+            # keeps the requested seed's video); the replays render straight into the bundle.
+            rendered = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
+            shutil.copyfile(rendered, vbench_bundle.clip_path(bundle, 0, seeds[0]))
+            for k, clip_seed in enumerate(seeds[1:], start=1):
+                run(
+                    prompt=prompt,
+                    number=1000 + k,
+                    seed=clip_seed,
+                    output_path=str(vbench_bundle.clip_path(bundle, 0, clip_seed)),
+                )
             vbench_bundle.write_manifest(
                 bundle, prompts=[vbench_bundle.GatePrompt(prompt, thresholds)], seeds=seeds, **scorer
             )

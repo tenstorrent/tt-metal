@@ -4,6 +4,7 @@
 
 import os
 import statistics
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -151,7 +152,7 @@ def test_pipeline_performance(
     # devices; without it rank 0 scores the bundle at the end of the test.
     run_vbench = os.environ.get("RUN_VBENCH", "0") == "1"
     vbench_export_dir = os.environ.get("VBENCH_EXPORT_DIR")
-    vbench_dir = vbench_export_dir or tmp_path / "vbench"
+    vbench_dir = Path(vbench_export_dir) if vbench_export_dir else tmp_path / "vbench"
 
     # Skip 4U.
     if galaxy_type == "4U":
