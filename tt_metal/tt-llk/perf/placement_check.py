@@ -16,6 +16,7 @@ Each stage-1 regression gets one outcome; none is dropped from the report:
 
     placement_check.py nodes  --candidates R.regressions.csv --map 'current/**/*.windowhash' --out nodes.txt
     placement_check.py decide --candidates R.regressions.csv --baseline DIR --current DIR --report stage2.md
+    placement_check.py render --results 'legs/**/stage2.json' --report stage2.md
 """
 
 import argparse
@@ -312,8 +313,8 @@ def render(results, arch, limit_note=""):
     lines = [
         f"## {name}: {verdict}",
         "",
-        "Stage 2 measured every stage-1 regression again with the TRISC code at 5 positions, on the branch point "
-        "and on the PR head.",
+        "Stage 2 measured every stage-1 regression again with the TRISC code at 5 positions, on the base "
+        "and on the head.",
         "",
         f"- {len(results)} stage-1 regression(s)",
     ]
@@ -374,7 +375,19 @@ def main(argv=None):
         "--limit-note", default="", help="shown when candidates were over the cap"
     )
     d.add_argument("--report", required=True)
+    r = sub.add_parser("render")
+    r.add_argument("--results", required=True, help="glob of decide's .json files")
+    r.add_argument("--arch", default="")
+    r.add_argument("--report", required=True)
     a = ap.parse_args(argv)
+    if a.cmd == "render":
+        results = [
+            row
+            for path in sorted(glob.glob(a.results, recursive=True))
+            for row in json.loads(Path(path).read_text())
+        ]
+        Path(a.report).write_text(render(results, a.arch) + "\n")
+        return 0
     candidates = read_candidates(a.candidates)
     if a.cmd == "nodes":
         selected, over = nodes(

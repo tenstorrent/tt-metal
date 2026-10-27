@@ -7,6 +7,7 @@
 Run: pytest test_perf_placement_check.py
 """
 
+import json
 import pathlib
 import sys
 
@@ -18,6 +19,7 @@ from placement_check import (  # noqa: E402
     POSITIONS,
     _value,
     decide,
+    main,
     nodes,
     read_candidates,
     read_window_map,
@@ -242,3 +244,30 @@ def test_over_the_limit_makes_the_count_a_lower_bound(tmp_path):
     )
     assert "**The confirmed count is a lower bound.** 1 stage-1 regression(s)" in report
     assert "Run the full check." in report
+
+
+def test_render_joins_the_legs(tmp_path):
+    base = _side(tmp_path / "base", [_BASE] * 5)
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb")
+    for leg in ("1", "2"):
+        out = tmp_path / "legs" / leg / "stage2.json"
+        out.parent.mkdir(parents=True)
+        out.write_text(json.dumps(_decide(tmp_path, base, cur), default=str))
+
+    main(
+        [
+            "render",
+            "--results",
+            f"{tmp_path}/legs/**/stage2.json",
+            "--arch",
+            "blackhole",
+            "--report",
+            str(tmp_path / "r.md"),
+        ]
+    )
+
+    assert (
+        (tmp_path / "r.md")
+        .read_text()
+        .startswith("## Blackhole stage 2: ❌ 2 confirmed regression(s)")
+    )

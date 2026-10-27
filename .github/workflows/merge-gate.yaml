@@ -664,6 +664,7 @@ jobs:
       perf-run-types: L1_TO_L1
       pipeline: merge_baseline
       upload-to-warehouse: true
+      stage2-baseline-ref: ${{ github.event.merge_group.base_sha || github.sha }}
     secrets: inherit
 
   llk-perf-merge-gate:
