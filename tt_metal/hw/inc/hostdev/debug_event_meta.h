@@ -56,6 +56,12 @@ struct ZoneColorMeta {
     uint32_t color;  // 0xRRGGBB
 };
 
+struct ZoneVerbosityMeta {
+    const char* name;
+    uint32_t color;     // 0xRRGGBB
+    uint8_t verbosity;  // carried to the host as is; the device does not filter on it
+};
+
 // ---- Field walk, shared by the device marshaller and the host unmarshaller -----------------------------------------
 
 inline constexpr size_t kMaxFields = 8;

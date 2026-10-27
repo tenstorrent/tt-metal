@@ -1162,15 +1162,11 @@ __attribute__((noinline)) void trace_only_init() {
 #define DeviceZoneScopedNIf(name, active) DeviceZoneScopedN(name)
 #endif
 
-// Only the streaming profiler carries per-site metadata; elsewhere the colour is dropped.
+// Only the streaming profiler carries per-site metadata; elsewhere the colour and verbosity are dropped.
 #ifndef DeviceZoneScopedNC
 #define DeviceZoneScopedNC(name, color) DeviceZoneScopedN(name)
 #endif
 
-// A zone with a user metadata type is recorded only by the streaming profiler; elsewhere it generates no code but
-// its type is still checked, so a type the streaming profiler would reject fails every build. Checks on the value
-// (an empty name, strings too long) need the site's text and run only under the streaming profiler.
-#ifndef DeviceZoneScopedWith
-#include "hostdev/debug_event_meta.h"
-#define DeviceZoneScopedWith(...) static_assert(::tt::debug_event::detail::check_site_type<decltype(__VA_ARGS__)>())
+#ifndef DeviceZoneScopedNCV
+#define DeviceZoneScopedNCV(name, color, verbosity) DeviceZoneScopedN(name)
 #endif

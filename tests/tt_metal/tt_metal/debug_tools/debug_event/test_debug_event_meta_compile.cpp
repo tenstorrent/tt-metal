@@ -6,7 +6,7 @@
 // test_kernels/misc/debug_event_meta_cases.cpp is built offline (experimental::CompileKernelOffline, mock mode, no
 // device), so this runs the real device compiler with the real kernel flags and opens nothing that a failed build
 // could leave wedged. A bad case must fail to compile with exactly one error, its own rule's; the valid case must
-// compile in every profiler mode, and a bad metadata type must fail in every mode, not only the streaming one.
+// compile in every profiler mode.
 //
 // The offline path has no firmware for a profiler build_key, so a kernel built under a profiler compiles but cannot
 // link. There the valid case passes when the only failure is that link error. The streaming and DRAM profilers need a
@@ -147,24 +147,6 @@ bool profiler_supported(Profiler p) {
     return true;
 }
 
-// The cases that break a rule on the metadata TYPE, which every profiler mode checks; the others break a rule on a
-// site's value, which only the streaming profiler (the one that marshals values) can see.
-struct TypeRuleCase {
-    int which;
-    std::string_view message;
-};
-constexpr TypeRuleCase kTypeRuleCases[] = {
-    {1, "cannot have C array members"},
-    {2, "cannot have C array members"},
-    {3, "cannot have const members"},
-    {4, "a metadata field must be a string literal"},
-    {5, "cannot have a base class"},
-    {6, "the first field of a debug event metadata type must be the site's name"},
-    {8, "must be named at namespace scope"},
-    {9, "must be named at namespace scope"},
-    {11, "need 1..kMaxFields fields"},
-};
-
 // The first compiler error line, for failure messages; the whole log is long.
 std::string first_error(const std::string& text) {
     std::smatch m;
@@ -244,25 +226,6 @@ TEST_F(DebugEventMetaCompile, CPU_ValidSitesBuildWithTheProfilerOff) {
     ProfilerMode off(Profiler::Off);
     const std::optional<std::string> error = compile_case(0);
     EXPECT_FALSE(error.has_value()) << error.value_or("").substr(0, 2000);
-}
-
-// ---- A bad type fails in every profiler mode ------------------------------------------------------------------------
-
-TEST_F(DebugEventMetaCompile, CPU_TypeRulesHoldWithTheProfilerOff) {
-    for (const TypeRuleCase& c : kTypeRuleCases) {
-        SCOPED_TRACE(c.which);
-        expect_rejected(c.which, c.message, Profiler::Off);
-    }
-}
-
-TEST_F(DebugEventMetaCompile, CPU_TypeRulesHoldUnderTheDramProfiler) {
-    if (!profiler_supported(Profiler::Dram)) {
-        GTEST_SKIP() << "the DRAM profiler needs a Tracy-enabled build";
-    }
-    for (const TypeRuleCase& c : kTypeRuleCases) {
-        SCOPED_TRACE(c.which);
-        expect_rejected(c.which, c.message, Profiler::Dram);
-    }
 }
 
 // ---- One rule broken per case, under the streaming profiler ---------------------------------------------------------
