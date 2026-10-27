@@ -68,6 +68,17 @@ ALWI void sdpa_exp_first_column_sfpu(uint32_t idst) {
         VectorMode::C);
 }
 
+// Stands for any run of the pack thread's exps: each SFPU field ends as no exp (WHICH 0), the block exp (1) or
+// the first-column exp (2) leaves it.
+template <uint32_t scale_fp32>
+ALWI void sdpa_last_exp_sfpu(uint32_t which, uint32_t idst) {
+    if (which == 1) {
+        sdpa_exp_block_sfpu<scale_fp32>(idst);
+    } else if (which == 2) {
+        sdpa_exp_first_column_sfpu<uint16_t(scale_fp32 >> 16)>(idst);
+    }
+}
+
 // DST[1] = exp(DST[1] * scale) in the first column; DST[0] += DST[1].
 template <uint16_t scale_bf16>
 ALWI void sdpa_sink_sfpu() {
@@ -656,11 +667,8 @@ static inline __attribute__((always_inline)) void normalize_row_streaming(
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
             if constexpr (peer_sfpu) {
-                // The matmul above waits for the sums, which the pack thread pushes after its last exp. Every
-                // exp it runs is one of these two; claiming both is safe since only exp writes LREG12 and LREG13.
-                MATH((__builtin_rvtt_peer_ran(reinterpret_cast<void*>(&sdpa_exp_block_sfpu<scale_fp32>))));
-                MATH((__builtin_rvtt_peer_ran(
-                    reinterpret_cast<void*>(&sdpa_exp_first_column_sfpu<uint16_t(scale_fp32 >> 16)>))));
+                // The matmul above waits for the sums, which the pack thread pushes after its last exp.
+                MATH((__builtin_rvtt_peer_ran(reinterpret_cast<void*>(&sdpa_last_exp_sfpu<scale_fp32>))));
             }
 #endif
             if constexpr (use_attention_sink) {
