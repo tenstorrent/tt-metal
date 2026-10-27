@@ -42,7 +42,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
 }
 }  // namespace detail
 
-void Conv3dDeviceOperation::validate_on_program_cache_miss(
+void Conv3dDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
     const auto& input_shape = input_tensor_a.logical_shape();
@@ -204,7 +204,7 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
             weight_tensor.dtype(),
             weight_tensor.logical_shape());
         [[maybe_unused]] const auto [fidelity, approx, fp32_dest_acc, l1_acc, full_sync] =
-            get_compute_kernel_config_args(hal::get_arch(), args.compute_kernel_config);
+            get_compute_kernel_config_args(input_tensor_a.device()->arch(), args.compute_kernel_config);
         TT_FATAL(
             fp32_dest_acc,
             "enable_fp32_operand_split accumulates three products in fp32 DST; fp32_dest_acc_en must be set.");
@@ -310,6 +310,15 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
             2 * sizeof(uint32_t),
             offset_tensor.buffer()->aligned_page_size());
     }
+}
+
+// The framework runs the hit validator on every call, so the L1 plan is only derived here, on a miss:
+// it raises with the blocking and the span in the message when the static circular buffers cannot be
+// placed below the top of L1 even at out_subblock_h=1.
+void Conv3dDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_hit(args, tensor_args);
+    select_l1_plan(args, tensor_args);
 }
 
 tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(

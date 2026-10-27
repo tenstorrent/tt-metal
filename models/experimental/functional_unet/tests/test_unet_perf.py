@@ -281,6 +281,9 @@ def test_unet_trace_perf(
         expected_inference_time=expected_inference_time,
         comments=f"batch_{perf_results.batch}-groups_{perf_results.groups}-num_devices_{perf_results.num_devices}",
     )
+    from models.demos.utils.common_demo_utils import report_vision_fps
+
+    report_vision_fps("shallow-unet", float(fps), int(perf_results.batch))
 
     confidence_margin = 2 * fps_std  # 95% confidence interval
     performance_threshold = expected_throughput - confidence_margin
@@ -342,6 +345,9 @@ def test_unet_trace_perf_multi_device(
         expected_inference_time=expected_inference_time,
         comments=f"batch_{perf_results.batch}-groups_{perf_results.groups}-num_devices_{perf_results.num_devices}",
     )
+    from models.demos.utils.common_demo_utils import report_vision_fps
+
+    report_vision_fps("shallow-unet", float(fps), int(perf_results.batch))
 
     confidence_margin = 2 * fps_std  # 95% confidence interval
     performance_threshold = expected_throughput - confidence_margin

@@ -8,8 +8,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/cluster_descriptor.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
 
 namespace tt::llrt {
 

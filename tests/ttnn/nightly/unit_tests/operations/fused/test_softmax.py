@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_softmax
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 
 # Module-scoped device: every test here shares one device configuration
 pytestmark = pytest.mark.use_module_device

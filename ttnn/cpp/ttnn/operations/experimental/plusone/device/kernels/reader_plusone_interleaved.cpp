@@ -19,11 +19,9 @@ void kernel_main() {
     constexpr uint32_t H = get_arg(args::H);
     constexpr bool skip_negative_entries = get_arg(args::skip_negative_entries);
 
-    // The input tensor is bound (and DMA'd through the accessor) only on the DRAM path;
-    // SRC0_IS_DRAM is defined by the host when the input is DRAM-interleaved. On the
-    // sharded / L1-interleaved paths the DFB is the working buffer directly (borrowed
-    // input shard, or plain scratch) and no accessor is bound.
-#ifdef SRC0_IS_DRAM
+    // Interleaved input (NEEDS_NOC_COPY): copy each stick into the DFB, update it, and write it back.
+    // Sharded input: the DFB is the shard itself, so update it in place.
+#ifdef NEEDS_NOC_COPY
     const auto s0 = TensorAccessor(tensor::input);
 #endif
 
@@ -34,7 +32,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* stick = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_addr);
 
     for (uint32_t h = 0; h < H; h++) {
-#ifdef SRC0_IS_DRAM
+#ifdef NEEDS_NOC_COPY
         noc.async_read(s0, CoreLocalMem<uint32_t>(cb_addr), stick_size, {.page_id = h}, {});
         noc.async_read_barrier();
 #endif
@@ -50,7 +48,7 @@ void kernel_main() {
                 stick[i] = val + 1;
             }
         }
-#ifdef SRC0_IS_DRAM
+#ifdef NEEDS_NOC_COPY
         noc.async_write(CoreLocalMem<uint32_t>(cb_addr), s0, stick_size, {}, {.page_id = h});
         noc.async_write_barrier();
 #endif

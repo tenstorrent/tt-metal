@@ -18,10 +18,11 @@
 //                        — arrive over the NoC from the producers' writers. This core is receiver
 //                        (h, vb) of NV per head: it carries V columns [vb*Vt, +Vt) (Vt = the slice
 //                        width, CT arg 2). Handshake per chunk: reserve the 7 CBs -> reset VALID ->
-//                        atomically increment credit[h] on the producer that owns the chunk
-//                        (c % NP of this head) -> wait VALID -> push. The producer sends only once
-//                        all NV receivers have credited. A one-time init barrier (SEM_INIT) orders
-//                        the producers' zeroing of their credit words before any credit.
+//                        atomically increment credit[h][slot] on the producer that owns the chunk (the
+//                        shared producer map, chunk_gdn_fused_map.hpp) -> wait VALID -> push. The
+//                        producer sends only once all NV receivers have credited. A one-time init
+//                        barrier (SEM_INIT) orders the producers' zeroing of their credit words
+//                        before any credit.
 // The handshake follows the production matmul in0 mcast idiom (reader_bmm_tile_layout_in0_
 // sender_padding.cpp / _receiver.cpp): ready counts receivers that RESERVED space (so the sender
 // can never overwrite unconsumed data), the data mcasts and the valid-flag mcast share one NOC /
@@ -38,6 +39,19 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/debug/assert.h"
+#include "api/debug/ring_buffer.h"
+#include "api/debug/waypoint.h"
+#include "chunk_gdn_fused_rt_args.hpp"
+#include "chunk_gdn_handoff.hpp"
+
+// Runtime checks of the hand-off protocol's invariants (chunk_gdn_handoff_protocol.md, "Runtime checks"): compiled
+// only where the watcher's ASSERT is, so release kernels are unchanged.
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
+#define GDN_HANDOFF_WATCHER_CHECKS 1
+#else
+#define GDN_HANDOFF_WATCHER_CHECKS 0
+#endif
 
 #if defined(GDN_MCAST_SENDER) || defined(GDN_MCAST_RECEIVER) || defined(GDN_FUSED_RECEIVER)
 #include "api/dataflow/endpoints.h"
@@ -47,6 +61,9 @@
 // Semaphore ids (SEM_READY/SEM_VALID) arrive as the two trailing compile-time args after the
 // accessor chain — read in kernel_main below, so factory and kernel cannot drift.
 #endif
+#if defined(GDN_FUSED_RECEIVER)
+#include "chunk_gdn_fused_map.hpp"
+#endif
 
 // The seven per-chunk input CBs sit at PREP'S OUTPUT indices (v_beta=14, dl=22; the rest were
 // already aligned) so the fused program declares one hand-off CB set on the producer/receiver
@@ -54,12 +71,18 @@
 constexpr uint32_t cb_dl = 22, cb_S = 8, cb_Tinv = 13;
 constexpr uint32_t cb_eye = 5;  // one 32x32 fp32 identity tile for the compute's `I @ v_beta` accumulation
 constexpr uint32_t cb_vbeta = 14, cb_nkd = 18, cb_qdecay = 19, cb_intra = 20, cb_kdec_t = 24;
+static_assert(
+    cb_Tinv == gdn_handoff::kCbTinv && cb_vbeta == gdn_handoff::kCbVbeta && cb_nkd == gdn_handoff::kCbNkd &&
+        cb_qdecay == gdn_handoff::kCbQdecay && cb_intra == gdn_handoff::kCbIntra &&
+        cb_kdec_t == gdn_handoff::kCbKdecT && cb_dl == gdn_handoff::kCbDl,
+    "hand-off CB indices drifted from chunk_gdn_handoff.hpp");
 
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
     constexpr uint32_t Vt = get_compile_time_arg_val(2);       // per-core V-block width (tiles)
     constexpr uint32_t Vt_full = get_compile_time_arg_val(3);  // full V (tiles) for row stride
+    static_assert(Vt >= 1 && Vt_full % Vt == 0, "the V-block width must tile the full V width");
 
 #if defined(GDN_FUSED_RECEIVER)
     // Fused receivers touch DRAM only for s0; the accessor chain is a single block.
@@ -97,6 +120,35 @@ void kernel_main() {
     constexpr uint32_t CREDIT_OFF = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 4);
     constexpr uint32_t NBUF = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 5);  // hand-off slots
     (void)SEM_READY;  // superseded by the credit words on this variant
+    // The protocol tag is the LAST compile-time arg: a trailing-arg drift against the factory fails here.
+    static_assert(
+        s0_a.next_compile_time_args_offset() + 7 == kernel_compile_time_args.size() &&
+            get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 6) == gdn_handoff::kHandoffTag,
+        "reader_chunk_gdn_scan (fused receiver): compile-time arg layout drifted from "
+        "chunk_gdn_fused_program_factory.cpp");
+    // The producer's slot addressing assumes one tile size across the seven hand-off CBs (all fp32).
+    static_assert(
+        get_dataformat(cb_vbeta) == DataFormat::Float32 && get_dataformat(cb_Tinv) == DataFormat::Float32 &&
+            get_dataformat(cb_nkd) == DataFormat::Float32 && get_dataformat(cb_qdecay) == DataFormat::Float32 &&
+            get_dataformat(cb_intra) == DataFormat::Float32 && get_dataformat(cb_kdec_t) == DataFormat::Float32 &&
+            get_dataformat(cb_dl) == DataFormat::Float32,
+        "hand-off CBs must be fp32");
+    static_assert(
+        get_tile_size(cb_Tinv) == get_tile_size(cb_vbeta) && get_tile_size(cb_nkd) == get_tile_size(cb_vbeta) &&
+            get_tile_size(cb_qdecay) == get_tile_size(cb_vbeta) && get_tile_size(cb_intra) == get_tile_size(cb_vbeta) &&
+            get_tile_size(cb_kdec_t) == get_tile_size(cb_vbeta) && get_tile_size(cb_dl) == get_tile_size(cb_vbeta),
+        "hand-off CBs must share one tile size");
+    static_assert(
+        NBUF >= 1 && SEM_VALID + NBUF <= gdn_handoff::kMaxSemaphores,
+        "valid[slot] semaphore ids exceed the program's semaphore cap");
+    static_assert(
+        SEM_INIT < SEM_VALID || SEM_INIT >= SEM_VALID + NBUF, "init semaphore collides with a valid[slot] id");
+    static_assert(
+        SEM_READY != SEM_INIT && (SEM_READY < SEM_VALID || SEM_READY >= SEM_VALID + NBUF),
+        "ready semaphore collides with the init or a valid[slot] id");
+    static_assert(
+        CREDIT_OFF % 4 == 0 && CREDIT_OFF == gdn_handoff::kMaskTiles * get_tile_size(CB_CREDIT),
+        "credit words must sit in the tile behind the mask tiles of the u CB");
 #endif
 #endif
 
@@ -106,14 +158,26 @@ void kernel_main() {
     const uint32_t NC = get_arg_val<uint32_t>(2);
 #if defined(GDN_FUSED_RECEIVER)
     const uint32_t s0_addr = get_arg_val<uint32_t>(3);
-    // NP producers share this head's prep work round-robin (producer p owns chunks c = p, p+NP,
-    // ...); the per-chunk credit goes to producer (c % NP) — that rotation IS the in-order delivery
-    // mechanism: a producer sends chunk c only once every receiver of the head has reserved chunk
-    // c's slots, so at most one hand-off per receiver is in flight and VALIDs cannot interleave.
-    // N_INIT = init-barrier increments to expect before the first credit (NP in the per-head form).
-    // The producers' virtual worker coords follow as NP (x, y) pairs from arg 6.
-    const uint32_t NP = get_arg_val<uint32_t>(4);
-    const uint32_t N_INIT = get_arg_val<uint32_t>(5);
+    // The per-chunk credit goes to the producer the shared map assigns chunk c of this head — a
+    // producer sends chunk c only once every receiver of the head has reserved chunk c's slots. A
+    // receiver keeps up to NBUF-1 hand-offs in flight, each signalled on its own slot's VALID flag, so
+    // the VALIDs of different chunks cannot interleave.
+    // N_INIT = init-barrier increments to expect before the first credit: the distinct producers that
+    // serve this head. kickoff_wait_cycles holds the initial-state read back, out of chunk 0's
+    // input-read burst. Map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp, then the DRAM row
+    // offset of this program's head 0 in initial_state (the protocol's head indices start at 0). Common args:
+    // the producers' virtual worker coords x | y << 8, two per word, producer p in word p / 2.
+    const uint32_t N_INIT = get_arg_val<uint32_t>(4);
+    const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(5);
+    const GdnFusedMap map{
+        get_arg_val<uint32_t>(6),
+        NC,
+        get_arg_val<uint32_t>(7),
+        get_arg_val<uint32_t>(8),
+        get_arg_val<uint32_t>(9),
+        get_arg_val<uint32_t>(10)};
+    auto producer_word = [](uint32_t p) { return (get_common_arg_val<uint32_t>(p / 2) >> (16 * (p % 2))) & 0xFFFFu; };
+    const uint32_t s0_row = h + get_arg_val<uint32_t>(fused_rt::kReceiverHeadOffsetArg);
 #elif defined(GDN_MCAST_RECEIVER)
     const uint32_t vb_addr = get_arg_val<uint32_t>(3);
     const uint32_t s0_addr = get_arg_val<uint32_t>(4);
@@ -138,7 +202,7 @@ void kernel_main() {
     const uint32_t num_dests = get_arg_val<uint32_t>(15);  // NV-1; excludes the sender
 #endif
 
-    const uint32_t tb = get_tile_size(cb_vbeta);  // all inputs fp32 -> same tile size
+    constexpr uint32_t tb = get_tile_size(cb_vbeta);  // all inputs fp32 -> same tile size
 #if !defined(GDN_FUSED_RECEIVER)
     const auto vb_acc = TensorAccessor(vb_a, vb_addr, tb);
 #endif
@@ -189,9 +253,12 @@ void kernel_main() {
         cb.push_back(R * Vt);
     };
 
-    // initial state S [K, V] (once) — a required input (the public op builds zeros for a fresh sequence). V-sliced
-    // (degenerates to the full state on fused receivers: vb = 0, Vt = Vt_full).
+    // initial state S [K, V] (once) — a required input (the public op builds zeros for a fresh sequence). V-sliced.
+    // The fused receiver reads it after its first credits (below): the state is first needed when chunk 0 arrives,
+    // and a producer whose item is done must not wait on this read for its credit.
+#if !defined(GDN_FUSED_RECEIVER)
     read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
+#endif
 
     // One fp32 identity tile for the compute's `I @ v_beta` DST accumulation (scan_step). Written once,
     // never popped: the NoC zero-fills the tile (a loopback read of the firmware's zero region, no RISC
@@ -348,11 +415,54 @@ void kernel_main() {
     // address on every core of the program — so this receiver can name head h's words on any
     // producer without being told an address. Word (h, slot) is at CREDIT_OFF + 4*(h*NBUF + slot).
     const uint32_t credit_base = CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF + 4 * h * NBUF;
+#ifdef GDN_HANDOFF_CHECKS
+    // C8 canary words (this core's, written remotely by the producers): the tile behind the credit tile.
+    constexpr uint32_t CANARY_OFF = CREDIT_OFF + get_tile_size(CB_CREDIT);
+    CoreLocalMem<volatile uint32_t> canary(CircularBuffer(CB_CREDIT).get_read_ptr() + CANARY_OFF);
+    for (uint32_t s = 0; s < NBUF; s++) {
+        canary[s] = 0xFFFFFFFFu;  // no chunk index
+    }
+#endif
+#if GDN_HANDOFF_WATCHER_CHECKS
+    // C3: the producer computes this core's slot addresses from the global chunk index (base + (c % NBUF) * n * tb,
+    // and the NV*NBUF-slot ring for v_beta); the write pointers must land exactly there at every push, i.e. this
+    // side reserves and pushes exactly n tiles per chunk into CBs of NBUF * n tiles. Bases captured before any push.
+    const uint32_t wbase_vbeta = CircularBuffer(cb_vbeta).get_write_ptr();
+    const uint32_t wbase_nkd = CircularBuffer(cb_nkd).get_write_ptr();
+    const uint32_t wbase_qdecay = CircularBuffer(cb_qdecay).get_write_ptr();
+    const uint32_t wbase_intra = CircularBuffer(cb_intra).get_write_ptr();
+    const uint32_t wbase_kdec_t = CircularBuffer(cb_kdec_t).get_write_ptr();
+    const uint32_t wbase_dl = CircularBuffer(cb_dl).get_write_ptr();
+    const uint32_t wbase_Tinv = CircularBuffer(cb_Tinv).get_write_ptr();
+    constexpr uint32_t VB_RING = Ct * Vt_full * NBUF;  // the producer-sized v_beta ring, in tiles
+    auto valid_word = [](uint32_t slot) { return Semaphore<>(SEM_VALID + slot).value(); };
+#endif
 
     // Init barrier: dispatch re-initializes only Semaphore objects per launch, so the producers
     // zero their credit words themselves and then bump `init` here; crediting earlier could land
     // an increment on a word about to be zeroed (a hang at credit == NV).
     init.wait(N_INIT);
+
+#if defined(GDN_HANDOFF_CHECKS) && defined(GDN_HANDOFF_FAULT)
+    // Fault injection (gdn_handoff::HandoffFault, handoff_checks test builds only): chunk c's credit with the
+    // configured breach, so the fault test can prove the named check fires.
+    auto credit_with_fault = [&](uint32_t c, uint32_t slot, uint32_t owner) {
+        constexpr uint32_t FAULT = GDN_HANDOFF_FAULT;
+        if (FAULT == gdn_handoff::kFaultNoCredit && c == 3) {
+            return;  // C9: the owner's credit wait and our VALID wait expire
+        }
+        if (FAULT == gdn_handoff::kFaultWrongOwner && c == 1) {
+            // C9: the owner never sees chunk 1's credit; the next producer of the map gets a stray one.
+            owner = (owner + 1) % (map.BH * map.NPH + map.NX);
+        }
+        const uint32_t pw = producer_word(owner);
+        gdn_handoff::credit_inc(noc, pw & 0xFFu, pw >> 8, credit_base + 4 * slot);
+        if (FAULT == gdn_handoff::kFaultDoubleCredit && c == 0) {
+            gdn_handoff::credit_inc(
+                noc, pw & 0xFFu, pw >> 8, credit_base + 4 * slot);  // C1 on the owner (or C2 at its exit)
+        }
+    };
+#endif
 
     // Issue the hand-off of chunk c: reserve, mark its slot INVALID, credit its owner.
     // reserve_back does not remember earlier unpushed reservations, so ask for D chunks' worth: that
@@ -360,6 +470,7 @@ void kernel_main() {
     // condition the credit promises the producer. (The v_beta ring is NV*NBUF chunks deep for this
     // slice and therefore free a fortiori.)
     auto issue = [&](uint32_t c) {
+        WAYPOINT("RXRS");
         {
             DeviceZoneScopedN("rx_reserve");
             CircularBuffer(cb_vbeta).reserve_back(D * cv);
@@ -371,16 +482,32 @@ void kernel_main() {
             CircularBuffer(cb_Tinv).reserve_back(D * cc);
         }
         const uint32_t slot = c % NBUF;
+#if GDN_HANDOFF_WATCHER_CHECKS
+        // C4: the slot's flag is exactly where the protocol leaves it: VALID from the consumed chunk c - NBUF (I2), or
+        // the launch value INVALID for the first round. Anything else is a lost or early flag (I6).
+#ifdef GDN_HANDOFF_CHECKS
+        ASSERT(valid_word(slot) == (c >= NBUF ? c - NBUF + 1 : INVALID));  // C7 flags carry chunk + 1
+#else
+        ASSERT(valid_word(slot) == (c >= NBUF ? VALID : INVALID));
+#endif
+#endif
         // Reset the slot's flag BEFORE crediting: a fast producer may set VALID immediately after
         // the credit lands, and a late reset would overwrite it (lost wakeup -> deadlock).
         Semaphore<>(SEM_VALID + slot).set(INVALID);
         // Credit the owner of chunk c by incrementing ITS copy of credit[h][slot]. INVARIANT: a slot
         // is credited only after it was reserved, i.e. after compute popped the chunk
         // that last used it — which the producer's VALID for that chunk preceded, which its reset of
-        // this very word preceded. Hence the word counts exactly one chunk at a time for any NP.
-        const uint32_t pi = c % NP;
-        gdn_handoff::credit_inc(
-            noc, get_arg_val<uint32_t>(6 + 2 * pi), get_arg_val<uint32_t>(7 + 2 * pi), credit_base + 4 * slot);
+        // this very word preceded. Hence the word counts exactly one chunk at a time for any map.
+        const uint32_t owner = gdn_fused_owner(map, h, c);
+#if defined(GDN_HANDOFF_CHECKS) && defined(GDN_HANDOFF_FAULT)
+        credit_with_fault(c, slot, owner);
+#else
+        const uint32_t pw = producer_word(owner);
+        gdn_handoff::credit_inc(noc, pw & 0xFFu, pw >> 8, credit_base + 4 * slot);
+#endif
+#ifdef GDN_HANDOFF_CHECKS
+        WATCHER_RING_BUFFER_PUSH(gdn_handoff::handoff_trace_word(gdn_handoff::kRxIssued, c, slot, owner));
+#endif
     };
 
     uint32_t next = 0;
@@ -388,15 +515,72 @@ void kernel_main() {
     for (; next < nmin; next++) {
         issue(next);
     }
+    // Initial state, after the first credits are out and, if asked, after a hold that keeps this read out of the
+    // kickoff burst of chunk 0's input reads (the state is needed one prep item from now).
+    if (kickoff_wait_cycles != 0) {
+        riscv_wait(kickoff_wait_cycles);
+    }
+    {
+        DeviceZoneScopedN("rx_s0");
+        read_vslice(s0_acc, cb_S, s0_row * Kt * Vt_full, Kt);
+    }
     for (uint32_t c = 0; c < NC; c++) {
+        WAYPOINT("RXVL");
         {
             DeviceZoneScopedN("rx_wait_valid");
+#ifdef GDN_HANDOFF_CHECKS
+            // C7: exactly this chunk's flag; C9: a flag that never comes reports (chunk, slot, value seen) instead of
+            // hanging.
+            {
+                const uint32_t slot = c % NBUF;
+                const Semaphore<> flag(SEM_VALID + slot);
+                uint32_t polls = 0;
+                uint32_t seen;
+                do {
+                    seen = flag.value();
+                    if (seen != c + 1 && ++polls > gdn_handoff::kHandoffSpinLimit) {
+                        WATCHER_RING_BUFFER_PUSH(
+                            gdn_handoff::handoff_trace_word(gdn_handoff::kRxValidTimeout, c, slot, seen));
+                        ASSERT(false);
+                        polls = 0;
+                    }
+                } while (seen != c + 1);
+                WATCHER_RING_BUFFER_PUSH(gdn_handoff::handoff_trace_word(gdn_handoff::kRxValidSeen, c, slot, seen));
+            }
+#else
             Semaphore<>(SEM_VALID + (c % NBUF)).wait(VALID);
+#endif
         }
+#ifdef GDN_HANDOFF_CHECKS
+        {
+            // C8: the canary the producer wrote last before its barrier must hold this chunk's index; poison it so a
+            // stale value cannot satisfy the slot's next chunk.
+            const uint32_t slot = c % NBUF;
+            ASSERT(gdn_handoff::read_word(canary + slot) == c);
+            canary[slot] = ~c;
+        }
+#endif
 
+#if GDN_HANDOFF_WATCHER_CHECKS
+        {
+            const uint32_t slot = c % NBUF;
+            ASSERT(CircularBuffer(cb_vbeta).get_write_ptr() == wbase_vbeta + ((c * cv) % VB_RING) * tb);
+            ASSERT(CircularBuffer(cb_nkd).get_write_ptr() == wbase_nkd + slot * ck * tb);
+            ASSERT(CircularBuffer(cb_qdecay).get_write_ptr() == wbase_qdecay + slot * ck * tb);
+            ASSERT(CircularBuffer(cb_intra).get_write_ptr() == wbase_intra + slot * cc * tb);
+            ASSERT(CircularBuffer(cb_kdec_t).get_write_ptr() == wbase_kdec_t + slot * kc * tb);
+            ASSERT(CircularBuffer(cb_dl).get_write_ptr() == wbase_dl + slot * 1 * tb);
+            ASSERT(CircularBuffer(cb_Tinv).get_write_ptr() == wbase_Tinv + slot * cc * tb);
+        }
+#endif
         // The chunk's seven blocks are in our CBs; make them visible to compute.
         CircularBuffer(cb_vbeta).push_back(cv);
+#if defined(GDN_HANDOFF_CHECKS) && defined(GDN_HANDOFF_FAULT)
+        // Fault injection: chunk 1's nkd block one tile short (C3 trips at the slot's next push).
+        CircularBuffer(cb_nkd).push_back((GDN_HANDOFF_FAULT == gdn_handoff::kFaultShortPush && c == 1) ? ck - 1 : ck);
+#else
         CircularBuffer(cb_nkd).push_back(ck);
+#endif
         CircularBuffer(cb_qdecay).push_back(ck);
         CircularBuffer(cb_intra).push_back(cc);
         CircularBuffer(cb_kdec_t).push_back(kc);
@@ -409,11 +593,24 @@ void kernel_main() {
         }
     }
 
+#if GDN_HANDOFF_WATCHER_CHECKS
+    // C5: every chunk was issued and consumed, and each used slot's flag still shows its last chunk's VALID.
+    ASSERT(next == NC);
+    for (uint32_t s = 0; s < std::min(NBUF, NC); s++) {
+#ifdef GDN_HANDOFF_CHECKS
+        const uint32_t last_c = NC - 1 - ((NC - 1 - s) % NBUF);  // the last chunk that used slot s
+        ASSERT(valid_word(s) == last_c + 1);
+#else
+        ASSERT(valid_word(s) == VALID);
+#endif
+    }
+#endif
     for (uint32_t s = 0; s < NBUF; s++) {
         Semaphore<>(SEM_VALID + s).set(INVALID);  // local store: restore the initial values
     }
     // Drain the credit atomics: no non-posted inc may be in flight at kernel exit.
     noc.async_atomic_barrier();
+    WAYPOINT("DONE");
 
 #else
     for (uint32_t c = 0; c < NC; c++) {

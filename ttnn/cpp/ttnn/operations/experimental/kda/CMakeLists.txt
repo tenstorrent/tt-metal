@@ -45,7 +45,6 @@ install(
 
 install(TARGETS ttnn_op_experimental_kda_common LIBRARY COMPONENT tar)
 
-add_subdirectory(chronological_selections)
 add_subdirectory(sigmoid_gated_rms_norm)
 add_subdirectory(qkv_causal_conv1d_silu)
 add_subdirectory(reduce_affine_transforms)
@@ -60,7 +59,6 @@ add_library(TTNN::Ops::Experimental::KDA ALIAS ttnn_op_experimental_kda)
 target_link_libraries(
     ttnn_op_experimental_kda
     INTERFACE
-        TTNN::Ops::Experimental::KDA::ChronologicalSelections
         TTNN::Ops::Experimental::KDA::Common
         TTNN::Ops::Experimental::KDA::SigmoidGatedRMSNorm
         TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu
@@ -78,7 +76,6 @@ target_link_libraries(
 target_sources(
     ttnn_op_experimental_kda
     INTERFACE
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::ChronologicalSelections>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::Common>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::SigmoidGatedRMSNorm>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu>

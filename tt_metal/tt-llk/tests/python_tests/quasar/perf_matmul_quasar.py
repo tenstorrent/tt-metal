@@ -13,7 +13,6 @@ from quasar.test_matmul_quasar import (
     matmul_dest_acc_modes,
     matmul_dest_sync_modes,
     matmul_enable_direct_indexing,
-    matmul_implied_math_formats,
     matmul_register_format_hints,
     matmul_tile_dimensions,
 )
@@ -36,9 +35,6 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
             is_perf=True,
         )
     ),
-    implied_math_format=lambda format: matmul_implied_math_formats(
-        format, is_perf=True
-    ),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
     transpose=[Transpose.No],
@@ -54,7 +50,6 @@ def test_perf_matmul_quasar(
     dest_sync_mode,
     dest_acc,
     format,
-    implied_math_format,
     register_format_hint,
     enable_direct_indexing,
     transpose,
@@ -69,7 +64,6 @@ def test_perf_matmul_quasar(
         dest_sync_mode,
         dest_acc,
         format,
-        implied_math_format,
         register_format_hint,
         enable_direct_indexing,
         transpose,
@@ -96,9 +90,6 @@ def test_perf_matmul_quasar(
             is_perf=True,
         )
     ),
-    implied_math_format=lambda format: matmul_implied_math_formats(
-        format, is_perf=True
-    ),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
     transpose=[Transpose.No],
@@ -114,7 +105,6 @@ def test_perf_matmul_tiny_quasar(
     dest_acc,
     matmul_tile_dims,
     format,
-    implied_math_format,
     register_format_hint,
     enable_direct_indexing,
     transpose,
@@ -129,7 +119,6 @@ def test_perf_matmul_tiny_quasar(
         dest_sync_mode,
         dest_acc,
         format,
-        implied_math_format,
         register_format_hint,
         enable_direct_indexing,
         transpose,

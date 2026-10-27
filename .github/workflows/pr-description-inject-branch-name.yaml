@@ -26,11 +26,6 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
-            // Normalize line endings: webhook payload delivers CRLF from Windows-edited
-            // PR bodies, but GitHub stores LF. Sending CRLF back causes GitHub API 500s.
-            let body = (pr.body || "").replace(/\r\n/g, '\n');
-            body = body.replaceAll("{{branch_name}}", branchName);
-
             // Pipelines to report on.
             // optional: true  → shown as opt-in, "no run" is expected
             // optional: false → required, "no run" is a signal something's missing
@@ -102,39 +97,79 @@ jobs:
               return out;
             };
             const pingCheckboxRegex = /^ {0,3}[-*] \[[ xX]\] Ping pending code owners\s*$/;
-            const lines = visibleLines(body);
-            if (!lines.some((l) => pingCheckboxRegex.test(l.text))) {
-              const codeownersSection = [
-                "### Code owners",
-                "<!-- Tick to ping pending code owners on Slack (same as commenting /codeowners ping).",
-                "     Untick and tick again to re-ping. Leave unticked until the PR is ready for their review. -->",
-                "- [ ] Ping pending code owners",
-              ].join("\n");
-              const headingAt = lines.findIndex((l) => /^### Code owners\s*$/.test(l.text));
-              const ciStatus = lines.find((l) => l.text.startsWith("### CI Status"));
-              if (headingAt !== -1) {
-                // Heading survived but the checkbox line was deleted or reworded.
-                const next = lines.slice(headingAt + 1).find((l) => /^#{1,6} /.test(l.text));
-                body = body.slice(0, lines[headingAt].start) + codeownersSection +
-                  (next ? "\n\n" + body.slice(next.start) : "");
-              } else if (ciStatus) {
-                body = body.slice(0, ciStatus.start) + codeownersSection + "\n\n" + body.slice(ciStatus.start);
-              } else {
-                body = body.trimEnd() + "\n\n" + codeownersSection;
+
+            // Pure transformation of a PR body. The PR body can be edited by someone else
+            // (notably the Copilot cloud agent, which rewrites it right after pushing) at
+            // any moment, so this must be applied to the body as it is *now*, not to the
+            // `pull_request` event payload: the payload is a snapshot taken when the event
+            // fired, which is stale by the time this job has started. Writing a render of
+            // that snapshot back silently discards whatever was edited in between.
+            const render = (rawBody) => {
+              // Normalize line endings: webhook payload delivers CRLF from Windows-edited
+              // PR bodies, but GitHub stores LF. Sending CRLF back causes GitHub API 500s.
+              let body = (rawBody || "").replace(/\r\n/g, '\n');
+              body = body.replaceAll("{{branch_name}}", branchName);
+
+              const lines = visibleLines(body);
+              if (!lines.some((l) => pingCheckboxRegex.test(l.text))) {
+                const codeownersSection = [
+                  "### Code owners",
+                  "<!-- Tick to ping pending code owners on Slack (same as commenting /codeowners ping).",
+                  "     Untick and tick again to re-ping. Leave unticked until the PR is ready for their review. -->",
+                  "- [ ] Ping pending code owners",
+                ].join("\n");
+                const headingAt = lines.findIndex((l) => /^### Code owners\s*$/.test(l.text));
+                const ciStatus = lines.find((l) => l.text.startsWith("### CI Status"));
+                if (headingAt !== -1) {
+                  // Heading survived but the checkbox line was deleted or reworded.
+                  const next = lines.slice(headingAt + 1).find((l) => /^#{1,6} /.test(l.text));
+                  body = body.slice(0, lines[headingAt].start) + codeownersSection +
+                    (next ? "\n\n" + body.slice(next.start) : "");
+                } else if (ciStatus) {
+                  body = body.slice(0, ciStatus.start) + codeownersSection + "\n\n" + body.slice(ciStatus.start);
+                } else {
+                  body = body.trimEnd() + "\n\n" + codeownersSection;
+                }
               }
-            }
 
-            // Replace existing CI Status section if present, otherwise append
-            const ciStatusRegex = /### CI Status[\s\S]*?(?=\n#{1,6} |\s*$)/;
-            if (ciStatusRegex.test(body)) {
-              body = body.replace(ciStatusRegex, statusSection);
-            } else {
-              body = body.trimEnd() + "\n\n" + statusSection;
-            }
+              // Replace existing CI Status section if present, otherwise append
+              const ciStatusRegex = /### CI Status[\s\S]*?(?=\n#{1,6} |\s*$)/;
+              if (ciStatusRegex.test(body)) {
+                body = body.replace(ciStatusRegex, statusSection);
+              } else {
+                body = body.trimEnd() + "\n\n" + statusSection;
+              }
+              return body;
+            };
 
-            await github.rest.pulls.update({
-              owner,
-              repo,
-              pull_number: pr.number,
-              body,
-            });
+            const readBody = async () => {
+              const { data } = await github.rest.pulls.get({ owner, repo, pull_number: pr.number });
+              return data.body || "";
+            };
+
+            // Read the live body, render it, then re-read right before writing; if it changed
+            // in the meantime, render again from the new body. This narrows the lost-update
+            // window from "event delivery + job start-up" (several seconds) to the gap between
+            // the last read and the write (one API round trip). `pulls.update` has no
+            // compare-and-swap, so that residual window cannot be closed completely.
+            const MAX_ATTEMPTS = 3;
+            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+              const current = await readBody();
+              const body = render(current);
+              if (body === current.replace(/\r\n/g, '\n')) {
+                core.info("PR description is already up to date; nothing to write.");
+                return;
+              }
+              if ((await readBody()) !== current) {
+                core.info(`Attempt ${attempt}/${MAX_ATTEMPTS}: description edited while rendering; retrying.`);
+                continue;
+              }
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number: pr.number,
+                body,
+              });
+              return;
+            }
+            core.setFailed(`PR description kept changing; gave up after ${MAX_ATTEMPTS} attempts, nothing written.`);

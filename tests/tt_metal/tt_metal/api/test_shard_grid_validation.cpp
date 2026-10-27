@@ -18,6 +18,7 @@
 
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
+#include "distributed/mesh_device_impl.hpp"
 
 // A sharded buffer's cores are validated when the buffer is constructed. Nothing further down the
 // allocation path can do it: the allocator is handed a shard *count*, not the coordinates, so an
@@ -36,31 +37,21 @@ namespace {
 
 constexpr uint32_t kPageSize = 1024;
 
-ShardedBufferConfig one_shard_config(IDevice* device, BufferType buffer_type, const CoreCoord& core) {
-    // One shard, on one core. Size is irrelevant to the core validation, but must be page-aligned.
+// One shard of kPageSize bytes, on one core. Size is irrelevant to the core validation, but must be page-aligned.
+BufferShardingArgs one_shard_args(const CoreCoord& core) {
     const CoreRangeSet grid(std::set<CoreRange>({CoreRange(core, core)}));
-    return ShardedBufferConfig{
-        .device = device,
-        .size = kPageSize,
-        .page_size = kPageSize,
-        .buffer_type = buffer_type,
-        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = ShardSpecBuffer(
+    return BufferShardingArgs(
+        ShardSpecBuffer(
             grid,
             {1, kPageSize / sizeof(uint32_t)},
             ShardOrientation::ROW_MAJOR,
             {1, 1},
-            {1, kPageSize / sizeof(uint32_t)})};
+            {1, kPageSize / sizeof(uint32_t)}),
+        TensorMemoryLayout::WIDTH_SHARDED);
 }
 
 std::shared_ptr<Buffer> make_width_sharded_buffer(IDevice* device, BufferType buffer_type, const CoreCoord& core) {
-    const auto config = one_shard_config(device, buffer_type, core);
-    return BufferImpl::create(
-        config.device,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        BufferShardingArgs(config.shard_parameters, config.buffer_layout));
+    return BufferImpl::create(device, kPageSize, kPageSize, buffer_type, one_shard_args(core));
 }
 
 // Constructs the buffer without allocating it: the explicit-address overload skips allocate_impl().
@@ -70,21 +61,20 @@ std::shared_ptr<Buffer> make_width_sharded_buffer(IDevice* device, BufferType bu
 // out, so an L1_SMALL config tensor there is constructed and never allocated.
 std::shared_ptr<Buffer> make_unallocated_width_sharded_buffer(
     IDevice* device, BufferType buffer_type, const CoreCoord& core) {
-    const auto config = one_shard_config(device, buffer_type, core);
     return BufferImpl::create(
-        config.device,
+        device,
         device->allocator()->get_base_allocator_addr(HalMemType::L1),
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        BufferShardingArgs(config.shard_parameters, config.buffer_layout));
+        kPageSize,
+        kPageSize,
+        buffer_type,
+        one_shard_args(core));
 }
 
 }  // namespace
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationL1RejectsCoreOutsideGrid) {
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         // Shards live on the compute-with-storage rectangle; a core outside it has no L1 bank.
         const CoreCoord grid = device->compute_with_storage_grid_size();
 
@@ -95,7 +85,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationL1RejectsCoreO
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationL1AcceptsCoreInsideGrid) {
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         const CoreCoord grid = device->compute_with_storage_grid_size();
 
         EXPECT_NO_THROW(make_width_sharded_buffer(device, BufferType::L1, CoreCoord(grid.x - 1, grid.y - 1)));
@@ -104,7 +94,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationL1AcceptsCoreI
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationL1SmallAcceptsCoreInsideGrid) {
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         const CoreCoord grid = device->compute_with_storage_grid_size();
 
         // A compute core is a legal L1_SMALL shard core whether or not this device has a small
@@ -117,7 +107,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationL1SmallAccepts
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationL1SmallRejectsCoreOutsideGrid) {
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         const CoreCoord grid = device->compute_with_storage_grid_size();
 
         // L1_SMALL banks sit on the same cores as L1 banks, so the grid bound still applies.
@@ -128,7 +118,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationL1SmallRejects
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationDramRejectsCoreBeyondBankCount) {
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         // bank_id == logical x, so x == the bank count names a bank that does not exist. A harvested
         // device has fewer banks here than an unharvested one.
         const uint32_t num_banks = device->dram_grid_size().x;
@@ -139,7 +129,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationDramRejectsCor
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationDramRejectsCoreOffRowZero) {
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         // (0, 1) is a real DRAM coordinate -- logical y indexes a view's subchannels -- but banks are
         // keyed {bank_id, 0}, so sharding there would alias onto bank 0.
         EXPECT_ANY_THROW(make_width_sharded_buffer(device, BufferType::DRAM, CoreCoord(0, 1)));
@@ -148,7 +138,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationDramRejectsCor
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardGridValidationDramAcceptsCoreWithinBankCount) {
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         const uint32_t num_banks = device->dram_grid_size().x;
 
         EXPECT_NO_THROW(make_width_sharded_buffer(device, BufferType::DRAM, CoreCoord(num_banks - 1, 0)));

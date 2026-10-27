@@ -133,6 +133,10 @@ void kernel_main() {
         real_faces_w = NUM_FACES_W;
     }
 
+    // One DataflowBuffer for the whole loop: on Quasar a DataflowBuffer drains when it goes out of scope (#60848),
+    // so a per-block one would wait after every push for the compute to pop that block (no double buffering).
+    DataflowBuffer dfb(dfb::cb_in);
+
     // ------------------------------------------------------------------------
     // 5) Main loop over [start_block..end_block)
     // ------------------------------------------------------------------------
@@ -185,7 +189,6 @@ void kernel_main() {
         }
 
         // Reserve a slot in the circular buffer, get L1 pointer
-        DataflowBuffer dfb(dfb::cb_in);
         dfb.reserve_back(1);
         uint32_t src_buffer_l1_addr = dfb.get_write_ptr();
 
@@ -217,8 +220,17 @@ void kernel_main() {
                                 {.page_id = (uint32_t)tile, .offset_bytes = total_offset},
                                 {.offset_bytes = 0});
                             noc.async_read_barrier();
+#ifdef ARCH_QUASAR
+                            // Quasar: tt_memmove's 16B-aligned path is a NoC self-copy (L1 -> same-core L1
+                            // loopback), which Gen2 can stall on or drop (quasar_porting.md section 6). Use the
+                            // shared RISC memmove fallback instead; it is the copy tt_memmove itself falls back
+                            // to, and it normalises the uncached DFB aliases on Quasar DM.
+                            tt::data_movement::common::copy_via_memmove<false>(
+                                l1_base, misaligned_addr, SUBTILE_LINE_BYTES);
+#else
                             tt::data_movement::common::tt_memmove<true, false, false, SUBTILE_LINE_BYTES>(
                                 noc, l1_base, misaligned_addr, SUBTILE_LINE_BYTES);
+#endif
                         } else {
                             CoreLocalMem<uint32_t> dst(l1_col_base + cb_w_offset);
                             noc.async_read(

@@ -26,6 +26,12 @@
 #     guaranteed to be split across engine steps. Must equal the
 #     --max-num-batched-tokens passed in additional-server-args.
 #   chunked-prefill-test-timeout: per-step timeout for that step (minutes, default 15).
+#   server-default-top-k: top_k for requests that do not set one, passed to the server
+#     as --override-generation-config. Set it to the device sampler's top-k limit (32)
+#     when the entry samples on device, the model's default temperature is above 0,
+#     and its generation_config.json top_k is unset or above that limit. Without it
+#     those requests (all of vllm bench serve) sample on host, or are silently capped
+#     on device for model classes that declare no max_device_top_k.
 #
 # For max allowed timeout refer to .github/time_budget.yaml
 
@@ -38,6 +44,7 @@
   mesh-device: T3K
   arch: arch-wormhole_b0
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "l1_small_size": 4096}'
+  server-default-top-k: 32
   additional-server-args: "--async-scheduling"
   tt-llama-text-ver: tt_transformers
   multimodal: true
@@ -57,6 +64,7 @@
   mesh-device: "(4, 8)"
   arch: arch-wormhole_b0
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D_RING", "l1_small_size": 4096}'
+  server-default-top-k: 32
   additional-server-args: "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling"
   tt_mm_throttle_perf: 5
   tt-llama-text-ver: tt_transformers
@@ -98,6 +106,7 @@
   mesh-device: P150x4
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  server-default-top-k: 32
   additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
   multimodal: false
   skus:
@@ -124,6 +133,7 @@
   mesh-device: P150x8
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  server-default-top-k: 32
   additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
   multimodal: false
   skus:
@@ -143,6 +153,7 @@
   mesh-device: P150x8
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 960000000, "l1_small_size": 24576}'
+  server-default-top-k: 32
   additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 16384 --long_prefill_token_threshold 4096 --async-scheduling"
   additional-benchmark-args: "--random-input-len 40960 --random-output-len 128 --num-prompts 32 --max-concurrency 32"
   extra-env: "GEMMA4_HYBRID_KV_CACHE_GROUPS=1 GEMMA4_PREFIX_CACHING=1 GEMMA4_KV_BFP8=1 GEMMA4_BOUNDED_SLIDING_KV_CACHE=0 GEMMA4_CHUNKED_PREFILL_TRACE=0 GEMMA4_MAX_TOKENS_ALL_USERS=1523712 GEMMA4_DECODE_WARMUP_BATCHES=1,4,8,32 GEMMA4_CCL_TOPOLOGY=linear GEMMA4_PAGE_BLOCK_SIZE=64"
@@ -193,7 +204,9 @@
 
 # dFlash on the plugin's speculative contract: vLLM schedules the drafts and
 # the plugin verifies and accepts them, so every step streams. Server flags
-# match "Gemma4-31B dFlash tp=8" apart from the class and --speculative-config.
+# match "Gemma4-31B dFlash tp=8" apart from the class, --speculative-config and
+# --no-async-scheduling: the class declares no async decode, because a row the
+# drafter answers leaves the plain decode's device-resident inputs stale.
 #
 # The 2048-position ring allocates a KV shape no other leg caches, so the first
 # run on a fresh cache needs mlperf-write-access.
@@ -209,19 +222,17 @@
   mesh-device: P150x8
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
-  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 5"
-  # conc-1 at the CLIENT: this class also speculates only while one request is
-  # live (see the leg above). --temperature 0 because a speculating server
-  # answers any other temperature with HTTP 400, and `vllm bench serve` no
-  # longer sends greedy unless asked.
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --no-async-scheduling --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 5"
+  # conc-1 at the client: this class speculates only while one request is live.
+  # `vllm bench serve` sends greedy requests to exercise speculation. The
+  # server can also serve sampled requests through ordinary decode.
   additional-benchmark-args: "--max-concurrency 1 --num-prompts 8 --temperature 0"
-  # GEMMA4_CONTRACT_ASYNC=1: the class declares async decode only with it.
   # GEMMA4_SPEC_RING_HEADROOM_BLOCKS=16: 262144 turns bounded sliding KV on,
   #   and an exact 1024-position ring has no room for the K + 1 verify rows, so
   #   the class stops speculating near position 1018. 16 blocks make it 2048.
   # GEMMA4_CHUNKED_PREFILL_TRACE=0: the impl exports 1 for 31B, and a traced
   #   prefill chunk skips the hook that captures the drafter taps.
-  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM GEMMA4_DFLASH_VERIFY=5 GEMMA4_DFLASH_SHARD_ARGMAX=1 GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_CONTRACT_ASYNC=1 GEMMA4_SPEC_RING_HEADROOM_BLOCKS=16 GEMMA4_CHUNKED_PREFILL_TRACE=0"
+  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4DFlashContractForCausalLM GEMMA4_DFLASH_VERIFY=5 GEMMA4_DFLASH_SHARD_ARGMAX=1 GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_SPEC_RING_HEADROOM_BLOCKS=16 GEMMA4_CHUNKED_PREFILL_TRACE=0"
   multimodal: false
   skus:
     bh_loudbox:
@@ -264,6 +275,7 @@
   mesh-device: P150x4
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 300000000}'
+  server-default-top-k: 32
   additional-server-args: "--max_model_len 131072 --max_num_seqs 1 --async-scheduling"
   multimodal: false
   skus:
@@ -318,6 +330,7 @@
   mesh-device: T3K
   arch: arch-wormhole_b0
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 80000000}'
+  server-default-top-k: 32
   additional-server-args: "--max_model_len 16384 --max_num_seqs 1 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048"
   additional-benchmark-args: "--num-prompts 16"
   multimodal: false
@@ -337,6 +350,7 @@
   mesh-device: P150x4
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  server-default-top-k: 32
   additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
   multimodal: false
   skus:
@@ -398,6 +412,7 @@
   multimodal: false
   tt-llama-text-ver: tt_transformers
   tt-config: '{"sample_on_device_mode": "all", "l1_small_size": 16384}'
+  server-default-top-k: 32
   additional-server-args: "--max_num_seqs 1 --async-scheduling"
   structured-output: true
   # The structured output run issues 32 x 1024-token requests against a server
@@ -423,6 +438,7 @@
   multimodal: false
   tt-llama-text-ver: tt_transformers
   tt-config: '{"fabric_config": "FABRIC_1D_RING", "sample_on_device_mode": "all", "trace_region_size": 100000000, "l1_small_size": 16384}'
+  server-default-top-k: 32
   tt_mm_throttle_perf: 2
   additional-server-args: "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling"
   structured-output: true
@@ -448,6 +464,7 @@
   arch: arch-wormhole_b0
   tt-llama-text-ver: tt_transformers
   tt-config: '{"fabric_config": "FABRIC_1D", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
+  server-default-top-k: 32
   additional-server-args: "--async-scheduling"
   structured-output: true
   sampling-tests: true
@@ -545,6 +562,7 @@
   # also reserves a traced resumed prefill per traced sequence length at warmup,
   # which the 50 MB default does not cover.
   tt-config: '{"fabric_config": "FABRIC_1D", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
+  server-default-top-k: 32
   multimodal: false
   additional-server-args: "--enable-chunked-prefill --max-num-batched-tokens 2048 --max_model_len 32768 --async-scheduling"
   # Prompts long enough to be split, at a concurrency that makes continuations
@@ -572,6 +590,7 @@
   # is too small fails at server startup rather than mid-run, so this is loud if
   # it is wrong.
   tt-config: '{"fabric_config": "FABRIC_1D_RING", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
+  server-default-top-k: 32
   tt-llama-text-ver: tt_transformers
   additional-server-args: "--data_parallel_size 4 --async-scheduling"
   structured-output: true
@@ -593,6 +612,7 @@
   arch: arch-wormhole_b0
   tt-llama-text-ver: llama3_70b_galaxy
   tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 220000000}'
+  server-default-top-k: 32
   additional-server-args: "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling"
   additional-benchmark-args: "--random-prefix-len 256"
   sampling-tests: true
@@ -655,7 +675,7 @@
 
 - name: "Qwen2.5-VL-72B-Instruct"
   model: Qwen/Qwen2.5-VL-72B-Instruct
-  server-timeout: 12
+  server-timeout: 20
   benchmark-timeout: 10
   mesh-device: T3K
   arch: arch-wormhole_b0
@@ -666,12 +686,30 @@
   additional-server-args: "--max_model_len 2048 --async-scheduling"
   skus:
     wh_llmbox:
-      timeout: 52
+      timeout: 45
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: vllm
 
+- name: "Qwen2.5-VL-7B-Instruct"
+  model: Qwen/Qwen2.5-VL-7B-Instruct
+  server-timeout: 15
+  benchmark-timeout: 10
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: tt_transformers
+  tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 60000000, "sample_on_device_mode": "decode_only"}'
+  structured-output: true
+  multimodal: true
+  additional-server-args: "--max_model_len 2048 --async-scheduling"
+  skus:
+    wh_llmbox:
+      timeout: 35
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  budget_type: vllm
 - name: "Qwen3-VL-32B-Instruct"
   model: Qwen/Qwen3-VL-32B-Instruct
   coherence-test: false

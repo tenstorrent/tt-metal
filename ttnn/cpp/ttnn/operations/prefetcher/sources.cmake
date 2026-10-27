@@ -5,6 +5,7 @@ set(TTNN_OP_PREFETCHER_API_HEADERS prefetcher/dram_prefetcher.hpp)
 
 set(TTNN_OP_PREFETCHER_SRCS
     prefetcher/device/dram_prefetcher_device_operation.cpp
+    prefetcher/device/dram_prefetcher_pipe_spec_factory.cpp
     prefetcher/device/dram_prefetcher_program_factory.cpp
     prefetcher/dram_prefetcher.cpp
 )

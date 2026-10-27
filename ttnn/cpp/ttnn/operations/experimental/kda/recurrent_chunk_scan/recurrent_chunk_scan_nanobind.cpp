@@ -105,23 +105,27 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
     ttnn::bind_function<"summarize_chunk_recurrence", "ttnn.experimental.kda.">(
         mod,
         R"doc(
-        Summarize each group's chronological head and tail segments into separate
-        affine state transitions.
+        Summarize each group's chronological head and tail segments into affine
+        state transitions, packed into one tensor.
 
         In grouped execution, groups are flattened into the leading dimension:
 
-            leading = B * H * G
+            N = B * H * G
 
         The operation applies the same state update as ``recurrent_chunk_scan`` without
-        producing token outputs. Each defined head or tail pair describes its
-        segment's state transition:
+        producing token outputs. Each transform describes its segment's state transition:
 
             S_after = A @ S_before + B
 
-        A group crossing the chronological wrap has both head and tail summaries,
+        and is stored as ``K`` rows of ``[A | B]`` in a ``[S, N, K, K+V]`` tensor. Slot 0
+        holds head transforms; with ``tail``, slot 1 holds tail transforms (``S = 2``).
+        A group crossing the chronological wrap has both a head and a tail transform,
         allowing other ranks' transitions to be applied between them. Groups wholly
-        before or after the split define only their head or tail pair, respectively.
-        Unsplit ranks define only head pairs; inactive slots are unspecified.
+        before or after the split have only a head or only a tail segment, respectively,
+        and unsplit ranks have only head segments. A slot whose segment holds no valid
+        chunk -- including every slot of a group past ``actual_end`` or of a rank with
+        no valid chunk -- holds the identity ``(I, 0)`` with ``init``, and is unspecified
+        without it.
 
         It derives the transform through two parallel recurrence evaluations:
 
@@ -159,26 +163,22 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 sequence. Native mesh coordinates supply each device's rank.
             groups_per_head (int, optional): Groups folded into the leading
                 dimension. Defaults to 1.
-            memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
-                Defaults to DRAM.
+            memory_config (ttnn.MemoryConfig, optional): Output memory configuration:
+                interleaved, height-sharded or ND-sharded. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
                 Compute-kernel configuration.
 
-            packed_head (bool, optional): With one group per head, return only the head
-                transform as one ``[1,B*H,K,K+V]`` tensor whose rows are ``[A | B]``, the
-                layout the distributed prefix gathers. A rank with no valid chunk writes the
-                identity ``(I, 0)``; the tail is not written.
-                Requires an interleaved ``memory_config``. Defaults to False.
+            tail (bool, optional): Also write tail transforms as slot 1. Defaults to False.
+            init (bool, optional): Write the identity ``(I, 0)`` into every slot without a
+                valid segment. When False those slots are unspecified. Defaults to True.
 
         Returns:
-            tuple[ttnn.Tensor, ...]: Four BFLOAT16 TILE tensors: head A/B followed by
-                tail A/B. A has shape ``[B*H*G,K,K]`` and B ``[B*H*G,K,V]``. With
-                ``packed_head``, the single packed head transform.
+            ttnn.Tensor: BFLOAT16 TILE tensor ``[S, B*H*G, K, K+V]`` with ``S = 2`` when
+                ``tail`` is set and ``S = 1`` otherwise, in ``memory_config``.
 
         Note:
             Summaries accumulate in FLOAT32 and pack directly to BFLOAT16 for transport.
-            Unsplit execution defines only the head pair. Inactive head/tail slots
-            are unspecified; consumers must use the same chronology and geometry.
+            Consumers must use the same chronology and geometry.
 
             The current summary path requires ``K=V``. ``q_decay`` and ``intra`` are
             accepted as part of the shared prepared-chunk protocol but do not contribute
@@ -202,7 +202,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("actual_end") = nb::none(),
-        nb::arg("packed_head") = false);
+        nb::arg("tail") = false,
+        nb::arg("init") = true);
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail

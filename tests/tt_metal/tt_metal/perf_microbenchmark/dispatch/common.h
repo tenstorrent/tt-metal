@@ -40,6 +40,7 @@
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "host_api/temp_quasar_api.hpp"
 #include "tt_metal/impl/dispatch/host_device_transfer.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::tt_dispatch_tests::Common {
 
@@ -1023,22 +1024,23 @@ inline tt_metal::KernelHandle create_sd_cq_kernel(
             .defines = defines});
 }
 
-// Quasar simulator exposes only 64 MB as physical DRAM memory; addresses above this alias back into the same physical
-// space even though the bank is configured as 1 GB. Code that places data in DRAM on Quasar must keep it within this 64
-// MB window to avoid aliasing collisions.
-static constexpr uint32_t QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE = 1u << 26;  // 64 MB
+// The Quasar 1x3, 2x3 and 2x3_DISPATCH emulators back 64 MiB of DRAM per channel. Their soc descriptors declare
+// 1 GiB, but an offset at or above 64 MiB wraps onto the low 64 MiB. tt-metal clamps the descriptor's DRAM size to
+// 64 MiB on these models (qa_emulator_models.hpp), so the allocator, dram_size_per_channel() and both watchers see
+// 64 MiB on every run. Test code that places DRAM data by hand must still stay below 64 MiB itself.
+static constexpr uint32_t QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE = 1u << 26;  // 64 MiB
 
-// DRAM addresses and sizes for the command queue on the Quasar simulator. Issue queue (8 MB) and completion queue (8
-// MB) sit at [48, 56) and [56, 64) MB respectively, exactly reaching the physical DRAM window size limit.
-static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_BASE = 0x3000000u;  // 48 MB
-static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_SIZE = 0x800000;    // 8 MB
+// DRAM addresses and sizes for the command queue on the Quasar simulator. Issue queue (8 MiB) and completion queue
+// (8 MiB) sit at [48, 56) and [56, 64) MiB, ending at the top of the emulator's 64 MiB DRAM channel.
+static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_BASE = 0x3000000u;  // 48 MiB
+static constexpr uint32_t QUASAR_SIMULATION_ISSUE_QUEUE_SIZE = 0x800000;    // 8 MiB
 static constexpr uint32_t QUASAR_SIMULATION_COMPLETION_QUEUE_BASE =
-    QUASAR_SIMULATION_ISSUE_QUEUE_BASE + QUASAR_SIMULATION_ISSUE_QUEUE_SIZE;   // 56 MB
-static constexpr uint32_t QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE = 0x800000;  // 8 MB
+    QUASAR_SIMULATION_ISSUE_QUEUE_BASE + QUASAR_SIMULATION_ISSUE_QUEUE_SIZE;   // 56 MiB
+static constexpr uint32_t QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE = 0x800000;  // 8 MiB
 static_assert(
     QUASAR_SIMULATION_COMPLETION_QUEUE_BASE + QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE <=
         QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE,
-    "CQ overruns Quasar simulator physical DRAM window");
+    "CQ overruns the Quasar emulator's 64 MiB DRAM channel");
 
 inline bool is_quasar_sim() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
@@ -1146,7 +1148,7 @@ protected:
         // Initialize common pointers
         auto& mcq = mesh_device_->mesh_command_queue();
         fdcq_ = &dynamic_cast<distributed::FDMeshCommandQueue&>(mcq);
-        device_ = mesh_device_->get_devices()[0];
+        device_ = mesh_device_->impl().get_devices()[0];
         mgr_ = &device_->sysmem_manager();  // Use Chip 0's SystemMemoryManager
 
         if (Common::is_quasar_sim()) {
@@ -1204,7 +1206,7 @@ protected:
 
     // SD (slow dispatch) issue + completion queue sizes. Must fit in one device's hugepage slot
     // (MAX_DEV_CHANNEL_SIZE = 256 MB) on WH/BH; an even 50/50 split gives 128 MB each. Quasar's default
-    // DRAM-backed policy uses fixed 8 MB queues in its 64 MB physical-DRAM window. An explicit
+    // DRAM-backed policy uses fixed 8 MiB queues at the top of the emulator's 64 MiB DRAM channel. An explicit
     // TT_METAL_DRAM_BACKED_CQ=0 uses the same mapped-host split as WH/BH.
     uint32_t sd_issue_queue_size() const {
         return Common::is_quasar_cq_dram_backed() ? QUASAR_SIMULATION_ISSUE_QUEUE_SIZE
@@ -1348,7 +1350,7 @@ protected:
         // between test fixtures possibly because the previously issued commands
         // are not completed before next firmware launch
         HostMemDeviceCommand cmd(metal_ctx, cmd_calc.write_offset_bytes());
-        cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
+        cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
         dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
         entry_sizes.push_back(cmd.size_bytes());
 
@@ -1461,6 +1463,10 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"MAX_NUM_WORKER_SEMS", std::to_string(DispatchSettings::DISPATCH_MESSAGE_ENTRIES)},
         {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES", std::to_string(DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES)},
         {"MCAST_GO_SIGNAL_ADDR", "0"},
+        {"MCAST_GO_RING_SIZE", "0"},  // The harness sends no gos.
+        // Workers report done for a go to the dispatcher that sent it.
+        {"GO_DONE_NOC_X", std::to_string(my_virtual.x)},
+        {"GO_DONE_NOC_Y", std::to_string(my_virtual.y)},
         {"UNICAST_GO_SIGNAL_ADDR", "0"},
         {"DISTRIBUTED_DISPATCHER", "0"},
         {"HOST_COMPLETION_Q_WR_PTR",

@@ -85,6 +85,10 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                 "Embedding only supports height sharded Row Major outputs");
+            TT_FATAL(
+                operation_attributes.output_mem_config.is_l1(),
+                "Embedding sharded Row Major output must be in L1: the reader writes rows straight into its own "
+                "shard");
         }
     }
     if (a.layout() == Layout::ROW_MAJOR) {

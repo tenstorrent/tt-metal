@@ -30,10 +30,18 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::tmp_weight, dfb::tmp_input, dfb::output);
 
+    DataflowBuffer dfb_tmp_input_obj(dfb::tmp_input);
+    DataflowBuffer dfb_tmp_weight_obj(dfb::tmp_weight);
+    DataflowBuffer dfb_tmp1_obj(dfb::tmp1);
+    DataflowBuffer dfb_tmp3_obj(dfb::tmp3);
+    DataflowBuffer dfb_divisor_recip_obj(dfb::divisor_recip);
+    DataflowBuffer dfb_output_obj(dfb::output);
+
     // `dfb::divisor` is not declared at all in the sum-reduction program.  This
     // must be a preprocessor guard rather than `if constexpr`: non-dependent
     // DFB token names are resolved before the discarded branch is eliminated.
 #if defined(DIVISOR)
+    DataflowBuffer dfb_divisor_obj(dfb::divisor);
     ckl::unary<
         ckl::Recip<D::D0>,
         ckl::input(dfb::divisor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckernel::moreh_data_format_reconfig),
@@ -41,11 +49,11 @@ void kernel_main() {
             dfb::divisor_recip,
             ckl::ReservePolicy::PerTile,
             ckl::PushPolicy::PerTile,
-            ckernel::moreh_data_format_reconfig)>(ckl::IterationShape::one_tile());
+            ckernel::moreh_data_format_reconfig)>(
+        ckl::IterationShape::one_tile(), dfb_divisor_obj, dfb_divisor_recip_obj);
 
     // The reciprocal is reused by every output tile. Keep it pinned while the per-tile stages run;
     // their chain inputs use caller-managed lifecycle so it is consumed only after the final tile.
-    DataflowBuffer dfb_divisor_recip_obj(dfb::divisor_recip);
     dfb_divisor_recip_obj.wait_front(1);
 #endif
 
@@ -62,13 +70,13 @@ void kernel_main() {
                     dfb::tmp_input,
                     ckl::WaitPolicy::PerTile,
                     ckl::PopPolicy::PerTile,
-                    ckernel::moreh_data_format_reconfig)>{},
+                    ckernel::moreh_data_format_reconfig)>{dfb_tmp_input_obj},
                 ckl::Negative<D::D0>{},
                 ckl::PackTile<ckl::output(
                     dfb::tmp1,
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
-                    ckernel::moreh_data_format_reconfig)>{});
+                    ckernel::moreh_data_format_reconfig)>{dfb_tmp1_obj});
 
             if constexpr (has_weight) {
                 ckl::eltwise_chain(
@@ -86,12 +94,12 @@ void kernel_main() {
                             ckl::WaitPolicy::PerTile,
                             ckl::PopPolicy::PerTile,
                             ckl::InputTileMapping::Scalar,
-                            ckernel::moreh_data_format_reconfig)>{},
+                            ckernel::moreh_data_format_reconfig)>{dfb_tmp1_obj, dfb_tmp_weight_obj},
                     ckl::PackTile<ckl::output(
                         has_divisor ? dfb::tmp3 : dfb::output,
                         ckl::ReservePolicy::PerTile,
                         ckl::PushPolicy::PerTile,
-                        ckernel::moreh_data_format_reconfig)>{});
+                        ckernel::moreh_data_format_reconfig)>{has_divisor ? dfb_tmp3_obj : dfb_output_obj});
             }
 
             if constexpr (has_divisor) {
@@ -110,12 +118,13 @@ void kernel_main() {
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
                             ckl::InputTileMapping::Scalar,
-                            ckernel::moreh_data_format_reconfig)>{},
+                            ckernel::moreh_data_format_reconfig)>{
+                        has_weight ? dfb_tmp3_obj : dfb_tmp1_obj, dfb_divisor_recip_obj},
                     ckl::PackTile<ckl::output(
                         dfb::output,
                         ckl::ReservePolicy::PerTile,
                         ckl::PushPolicy::PerTile,
-                        ckernel::moreh_data_format_reconfig)>{});
+                        ckernel::moreh_data_format_reconfig)>{dfb_output_obj});
             }
         }
     } else {
@@ -125,13 +134,13 @@ void kernel_main() {
                 dfb::tmp_input,
                 ckl::WaitPolicy::PerTile,
                 ckl::PopPolicy::PerTile,
-                ckernel::moreh_data_format_reconfig)>{},
+                ckernel::moreh_data_format_reconfig)>{dfb_tmp_input_obj},
             ckl::Negative<D::D0>{},
             ckl::PackTile<ckl::output(
                 dfb::output,
                 ckl::ReservePolicy::PerTile,
                 ckl::PushPolicy::PerTile,
-                ckernel::moreh_data_format_reconfig)>{});
+                ckernel::moreh_data_format_reconfig)>{dfb_output_obj});
     }
 
 #if defined(DIVISOR)

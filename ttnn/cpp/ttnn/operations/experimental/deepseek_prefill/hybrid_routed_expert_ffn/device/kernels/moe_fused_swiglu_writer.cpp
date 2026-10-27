@@ -31,6 +31,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/moe_fused_swiglu_dataflow.hpp"  // the transport vocabulary shared with the reader
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/moe_fused_swiglu_common.hpp"  // the ONE definition of the mailbox word layout
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/moe_fused_swiglu_ct_args.hpp"  // the ONE definition of the compile-time arg order
+#include "hybrid_expert_done.hpp"  // outside HYB_NS: it reads absolute, unshifted runtime-arg indices
 // Under HYB_NS this body is one half of the union kernel: everything below is namespaced so
 // the two halves cannot collide at file scope, and the shims rebase its argument indices into
 // the concatenated lists. Without HYB_NS it is the standalone kernel, unchanged.
@@ -600,6 +601,7 @@ void kernel_main() {
                 out_pending = OUT_FULL;
             }
         }
+        HYB_EXPERT_DONE();
     }
 
     if (out_pending) {

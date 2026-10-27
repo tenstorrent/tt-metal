@@ -4,7 +4,7 @@
 
 from loguru import logger
 import pytest
-from models.common.utility_functions import nearest_32
+from tt_py_test_utils_common.utility_functions import nearest_32
 
 import torch
 
@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import (
     check_with_pcc_without_tensor_printout,
 )
 from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
-from models.common.utility_functions import torch_random, run_for_blackhole
+from tt_py_test_utils_common.utility_functions import torch_random, run_for_blackhole
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)

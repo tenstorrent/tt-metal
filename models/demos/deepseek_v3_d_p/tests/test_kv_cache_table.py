@@ -24,9 +24,11 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_TOKENS,
     MlaKvCacheFormat,
+    allocate_mla_kvpe_cache,
     create_kv_chunk_address_table_block_cyclic,
     init_kvpe_cache,
     init_mla_kv_cache,
+    is_tp_deduped_kv_cache,
     populate_kv_chunk_address_table_block_cyclic,
     populate_kv_chunk_address_table_dflash,
 )
@@ -184,27 +186,19 @@ def test_kimi_kv_cache_mock(
     num_layers,
     device_params,
 ):
-    sp_axis = 0
+    from models.demos.deepseek_v3_d_p.utils.test_utils import tp_stripe_major_cache
+
+    sp_axis, tp_axis = 0, 1
     mesh_shape = list(mesh_device.shape)
-    sp_factor = mesh_shape[sp_axis]
+    sp, tp = mesh_shape
     kvpe_cache_head_dim = 576  # qk_rope_head_dim(64) + kv_lora_rank(512); same for Kimi and DeepSeek
     num_kvpe_cache_layers = num_users * num_layers
 
-    chunk_tokens = PREFILL_CHUNK_TOKENS
-    tokens_per_chunk_per_device = chunk_tokens // sp_factor  # 640
-    num_seq_chunks = seq_len // chunk_tokens
-
     torch.manual_seed(42)
     reference = torch.randn(num_kvpe_cache_layers, 1, seq_len, kvpe_cache_head_dim).to(torch.bfloat16)
-
-    # For 10k, device 0 holds tokens [0-639, 5120-5759], device 1 holds [640-1279, 5760-6399], … device 7 holds [4480-5119, 9600-10239].
-    device_buffers = []
-    for d in range(sp_factor):
-        lo = d * tokens_per_chunk_per_device
-        hi = lo + tokens_per_chunk_per_device
-        slices = [reference[:, :, c * chunk_tokens + lo : c * chunk_tokens + hi, :] for c in range(num_seq_chunks)]
-        device_buffers.append(torch.cat(slices, dim=2))
-    host_stacked = torch.cat(device_buffers, dim=2)  # [num_users*num_layers, 1, seq_len, head_dim], shardable across SP
+    # TP-deduped: block-cyclic over sp*tp, re-laid TP-major for the mapper.
+    rows = reference[:, 0, blockcyclic_positions(sp * tp, PREFILL_CHUNK_TOKENS, seq_len), :]
+    host_stacked = torch.stack([tp_stripe_major_cache(rows[b], sp, tp) for b in range(num_kvpe_cache_layers)])
 
     # 32-token shards round-robined over the dram banks.
     core_ranges = [
@@ -221,7 +215,7 @@ def test_kimi_kv_cache_mock(
     )
 
     shard_dims = [None, None]
-    shard_dims[sp_axis] = -2
+    shard_dims[sp_axis], shard_dims[tp_axis] = -2, 1
     tt_kvpe_cache = ttnn.from_torch(
         host_stacked,
         dtype=ttnn.bfloat8_b,
@@ -247,6 +241,7 @@ def test_kimi_kv_cache_mock(
         kvpe_cache=tt_kvpe_cache,
         chunk_size_bytes=CHUNK_SIZE_BYTES,
         num_users=num_users,
+        tp_axis=tp_axis,
     )
 
     reference_bf8 = ttnn.to_torch(ttnn.from_torch(reference, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(
@@ -266,6 +261,114 @@ def test_kimi_kv_cache_mock(
                 assert_equal(chunk_torch, expected_chunk)
 
 
+# sp x tp -- Kimi-K2.7 KV chunk table built through the runner's allocator and builder, TP-deduped.
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(8, 4)],
+    ids=["8x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [torus_xy_device_params()],
+    ids=["torus-xy"],
+    indirect=True,
+)
+@pytest.mark.parametrize("seq_len", [5 * 1024, 25 * 1024], ids=["seq5k", "seq25k"])
+@pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
+@pytest.mark.parametrize("num_layers", [2], ids=["2layers"])
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.timeout(0)
+def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers, device_params, monkeypatch):
+    from types import SimpleNamespace
+
+    from models.demos.deepseek_v3_d_p.tt.runners import kv_chunk_table
+    from models.demos.deepseek_v3_d_p.utils.test_utils import preload_cache, tp_stripe_major_cache
+
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = tuple(mesh_device.shape)
+    sp, tp = mesh_shape
+    hf_config = SimpleNamespace(kv_lora_rank=512, qk_rope_head_dim=64)  # Kimi-K2.7 / DeepSeek MLA geometry
+    kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
+    num_slots = num_users * num_layers
+
+    kvpe_cache = allocate_mla_kvpe_cache(
+        mesh_device=mesh_device,
+        hf_config=hf_config,
+        max_seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_layers=num_layers,
+        num_users=num_users,
+        tp_axis=tp_axis,
+    )
+    assert is_tp_deduped_kv_cache(kvpe_cache.storage, mesh_shape)
+
+    # Block-cyclic over sp*tp like the write op, re-laid TP-major for the mapper.
+    torch.manual_seed(42)
+    reference = torch.randn(num_slots, 1, seq_len, kvpe_dim).to(torch.bfloat16)
+    rows = reference[:, 0, blockcyclic_positions(sp * tp, PREFILL_CHUNK_TOKENS, seq_len), :]  # [slots, seq, D]
+    host = torch.stack([tp_stripe_major_cache(rows[b], sp, tp) for b in range(num_slots)])
+    shard_dims = [None, None]
+    shard_dims[sp_axis], shard_dims[tp_axis] = -2, 1
+    preload_cache(
+        ttnn.from_torch(
+            host,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
+        ),
+        kvpe_cache.storage,
+    )
+    ttnn.synchronize_device(mesh_device)
+    assert is_tp_deduped_kv_cache(kvpe_cache.storage, mesh_shape)
+
+    built = {}
+
+    def _keep_table(*, table_builder, num_layers, max_seq_len, num_users, chunk_n_tokens, chunk_size_bytes, path):
+        cfg = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+        cfg.num_layers = num_layers
+        cfg.max_sequence_length = max_seq_len
+        cfg.num_slots = num_users
+        cfg.chunk_n_tokens = chunk_n_tokens
+        cfg.chunk_size_bytes = chunk_size_bytes
+        built["table"] = table_builder(config=cfg, chunk_size_bytes=chunk_size_bytes, num_users=num_users)
+        return path
+
+    monkeypatch.setattr(kv_chunk_table, "serialize_kv_chunk_table", _keep_table)
+    kv_chunk_table.build_and_serialize_kv_chunk_table(
+        mesh_device=mesh_device,
+        kvpe_cache=kvpe_cache,
+        seq_len=seq_len,
+        num_layers=num_layers,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_users=num_users,
+        chunk_size_global=PREFILL_CHUNK_TOKENS,
+        path="unused",
+    )
+    lookup_table = built["table"]
+
+    reference_bf8 = ttnn.to_torch(ttnn.from_torch(reference, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(
+        torch.bfloat16
+    )
+    chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_dim]
+    for slot in range(num_users):
+        for layer in range(num_layers):
+            batch_idx = slot * num_layers + layer
+            for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                raw_bytes = lookup_table.read_device_chunk(layer=layer, position=position, slot=slot)
+                chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
+                chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
+                assert_equal(chunk_torch, reference_bf8[batch_idx : batch_idx + 1, :, position:pos_end, :])
+    logger.info(
+        f"[kimi] runner KV table (TP-deduped) readback verified over "
+        f"{num_users} user(s) x {num_layers} layer(s) x {seq_len} tokens"
+    )
+
+
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
@@ -282,6 +385,8 @@ def test_kimi_kv_cache_mock(
 @pytest.mark.parametrize("seq_len", [5 * 1024, 10 * 1024], ids=["seq5k", "seq10k"])
 @pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
 @pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
+# (num_key_value_heads, head_dim) of the Kimi-K2.x DFlash and the Kimi-K3 DSpark drafters.
+@pytest.mark.parametrize("num_kv_heads, head_dim", [(8, 128), (16, 64)], ids=["dflash", "dspark"])
 @pytest.mark.skipif(not is_blackhole(), reason="DFlash is Blackhole-only")
 @pytest.mark.timeout(0)
 def test_dflash_kv_cache_mock(
@@ -289,6 +394,8 @@ def test_dflash_kv_cache_mock(
     seq_len,
     num_users,
     num_layers,
+    num_kv_heads,
+    head_dim,
     device_params,
 ):
     """DFlash analogue of test_kimi_kv_cache_mock (mock caches -> table -> readback). Global cache shape
@@ -298,9 +405,6 @@ def test_dflash_kv_cache_mock(
     mesh_shape = list(mesh_device.shape)
     sp_factor, tp_factor = mesh_shape[sp_axis], mesh_shape[tp_axis]
 
-    # dflash_drafter_config: head_dim 128, num_key_value_heads 8. 8 / tp(4) = 2 heads per chip.
-    head_dim = 128
-    num_kv_heads = 8
     heads_per_chip = num_kv_heads // tp_factor
     batch = num_users * num_layers
 
@@ -360,7 +464,7 @@ def test_dflash_kv_cache_mock(
         tt_k.buffer_address() != tt_v.buffer_address()
     ), "K and V must be distinct allocations for the per-config base address to mean anything"
 
-    CHUNK_SIZE_BYTES = (head_dim // 32) * 1088  # [1, 1, 32, 128] bfp8 = 4 tiles, 1024 + 64 bytes each
+    CHUNK_SIZE_BYTES = (head_dim // 32) * 1088  # [1, 1, 32, head_dim] bfp8: 1024 + 64 bytes a tile
     K_BASE, V_BASE = 0, num_kv_heads  # config id order == the src<->dst migration contract
 
     def table_config():
@@ -666,8 +770,7 @@ def test_glm53_tp_sharded_kv_cache_mock(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
 
-    # create_kv_chunk_address_table_block_cyclic has no tp_axis (and always builds a stage_layout, which the
-    # TP-sharded path rejects), so build the table and populate it directly.
+    # Populated directly; test_kimi_runner_kv_cache_table covers the builder path.
     CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
     # Compacted: publish on a GLOBAL layer axis strictly wider than the cache's dense rows, mapped
     # non-contiguously (dense d -> global 2*d + 1), exactly what the merged builder does for a compacted

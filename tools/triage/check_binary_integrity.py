@@ -67,7 +67,8 @@ def check_binary_integrity(risc_location: RiscLocation, dispatcher_data: Dispatc
                 )
 
     # Check kernel ELF binary state on the device
-    if dispatcher_core_data.kernel_xip_path is not None:
+    # Firmware clears enables after a run, so a disabled RISC's launch slot is stale
+    if dispatcher_core_data.kernel_xip_path is not None and dispatcher_core_data.risc_enabled_by_kernel is not False:
         log_check_risc(
             risc_name,
             location,

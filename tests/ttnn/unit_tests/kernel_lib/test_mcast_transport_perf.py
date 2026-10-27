@@ -8,7 +8,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.perf.device_perf_utils import run_device_perf_detailed
+from tt_py_test_utils_common.perf.device_perf_utils import run_device_perf_detailed
 from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import (
     KERNEL_DIR,
     core_set,

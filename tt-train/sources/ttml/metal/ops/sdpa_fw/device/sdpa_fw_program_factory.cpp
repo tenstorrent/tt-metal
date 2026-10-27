@@ -27,6 +27,7 @@ constexpr uint32_t kQueryBufferIdx = 0;
 constexpr uint32_t kKeyBufferIdx = 1U;
 constexpr uint32_t kValueBufferIdx = 2U;
 constexpr uint32_t kMaskBufferIdx = 3U;
+constexpr uint32_t kGateBufferIdx = 4U;
 
 // writer runtime args
 constexpr uint32_t kOutputBufferIdx = 0;
@@ -50,6 +51,7 @@ constexpr auto kPrevMmOutCbIndex = tt::CBIndex::c_13;    // used for holding pre
 constexpr auto kCurMmOutCbIndex = tt::CBIndex::c_14;     // used for holding current matmul output
 
 constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
+constexpr auto kGateCbIndex = tt::CBIndex::c_16;
 
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kNumCausalMaskTiles = 2U;  // [0] = causal-diag pattern (0 kept / -1e9 masked),
@@ -63,6 +65,8 @@ const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
+
+const std::string kHasGateDefKey = "HAS_GATE";
 
 // Pick the multi-tile K/V chunk size. Returns the number of K tiles processed per inner-loop
 // iteration of the compute kernel.
@@ -138,64 +142,6 @@ struct SDPAForwardKernels {
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
  *        for each core in the grid. (Standard row-based distribution)
  */
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const SDPAForwardKernels& kernels,
-    const tt::tt_metal::Buffer* query_buffer,
-    const tt::tt_metal::Buffer* key_buffer,
-    const tt::tt_metal::Buffer* value_buffer,
-    const tt::tt_metal::Buffer* mask_buffer,
-    const tt::tt_metal::Buffer* output_buffer,
-    const tt::tt_metal::Buffer* intermediates_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        // Determine how many rows this core will process
-        uint32_t num_rows_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_2;
-        } else {
-            TT_FATAL(false, "Core not in specified core ranges");
-        }
-
-        // Reader kernel: (query_addr, key_addr, value_addr, mask_addr, number_of_rows, offset_in_rows)
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {query_buffer->address(),
-             key_buffer->address(),
-             value_buffer->address(),
-             mask_buffer != nullptr ? mask_buffer->address() : 0,
-             num_rows_per_core,
-             num_rows_written});
-
-        // Writer kernel: (output_addr, intermediates_addr, number_of_rows, offset_in_rows)
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {output_buffer->address(),
-             intermediates_buffer != nullptr ? intermediates_buffer->address() : 0,
-             num_rows_per_core,
-             num_rows_written});
-
-        // Compute kernel: (start_row) - needed for causal mask to know global position
-        auto compute_kernel = core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2;
-        SetRuntimeArgs(program, compute_kernel, core, {num_rows_written});
-
-        num_rows_written += num_rows_per_core;
-    }
-}
-
 /**
  * Set up the runtime arguments for balanced parallelism mode.
  * In this mode, work is distributed by pairs rather than rows.
@@ -208,6 +154,7 @@ void assign_per_core_runtime_args_balanced(
     const tt::tt_metal::Buffer* query_buffer,
     const tt::tt_metal::Buffer* key_buffer,
     const tt::tt_metal::Buffer* value_buffer,
+    const tt::tt_metal::Buffer* gate_buffer,
     const tt::tt_metal::Buffer* output_buffer,
     const tt::tt_metal::Buffer* intermediates_buffer,
     uint32_t num_cores,
@@ -217,7 +164,8 @@ void assign_per_core_runtime_args_balanced(
         const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
         const auto& [start_pair_idx, num_pairs] = pair_distribution[i];
 
-        // Reader kernel: (query_addr, key_addr, value_addr, mask_addr(unused), num_pairs, start_pair_idx)
+        // Reader kernel: (query_addr, key_addr, value_addr, mask_addr(unused), gate_addr (optional), num_pairs,
+        // start_pair_idx)
         SetRuntimeArgs(
             program,
             kernels.reader,
@@ -226,6 +174,7 @@ void assign_per_core_runtime_args_balanced(
              key_buffer->address(),
              value_buffer->address(),
              0,  // mask_addr unused for balanced causal - mask generated on chip
+             gate_buffer != nullptr ? gate_buffer->address() : 0,
              num_pairs,
              start_pair_idx});
 
@@ -254,6 +203,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const auto& value = tensor_args.value;
     const auto& attn_mask = tensor_args.mask;
     const AttentionMaskType mask_type = args.mask_type;
+    const auto& gate = tensor_args.gate;
     /*
     Shape note:
     Q: B x qNH x S x qE
@@ -412,6 +362,12 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, num_attn_mask_tiles);
     }
 
+    // Create gate buffer if the model has a gating mechanism. Double-buffered to overlap DRAM reads with compute.
+    if (args.has_gate) {
+        [[maybe_unused]] auto cb_gate = create_circular_buffer(
+            program, all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+    }
+
     // create intermediate buffer only if we need to return intermediates
     // Intermediate shape: (B, H, S, 32) = 1 FP32 tile wide (logsumexp = max + log(sum_exp))
     if (args.return_intermediates) {
@@ -494,6 +450,14 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             enchantum::to_string(mask_buffer->buffer_type()));
     }
 
+    auto* gate_buffer = args.has_gate ? gate.value().buffer() : nullptr;
+    if (gate_buffer != nullptr) {
+        TT_FATAL(
+            gate_buffer->buffer_type() == ttnn::BufferType::DRAM,
+            "Gate buffer must be in DRAM. Gate buffer of type {}",
+            enchantum::to_string(gate_buffer->buffer_type()));
+    }
+
     auto* output_buffer = output.front().buffer();
     TT_FATAL(
         output_buffer->buffer_type() == ttnn::BufferType::DRAM,
@@ -529,6 +493,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             break;
     }
 
+    if (args.has_gate) {
+        defines[kHasGateDefKey] = "1";
+    }
+
     // Add balanced parallelism define if using that mode
     if (use_balanced_parallelism) {
         defines[kBalancedParallelismDefKey] = "1";
@@ -554,6 +522,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(value_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_compile_args);
 
     kernels.reader = create_reader_kernel(
         program,
@@ -686,27 +655,44 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             query_buffer,
             key_buffer,
             value_buffer,
+            gate_buffer,
             output_buffer,
             intermediates_buffer,
             num_cores,
             num_cores_y,
             pair_distribution);
     } else {
-        assign_per_core_runtime_args(
-            program,
-            kernels,
-            query_buffer,
-            key_buffer,
-            value_buffer,
-            mask_buffer,
-            output_buffer,
-            intermediates_buffer,
+        for_each_core_with_work(
             num_cores,
             num_cores_y,
+            core_group_1,
+            core_group_2,
             num_rows_per_core_group_1,
             num_rows_per_core_group_2,
-            core_group_1,
-            core_group_2);
+            [&](const CoreWork& work) {
+                const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+                SetRuntimeArgs(
+                    program,
+                    kernels.reader,
+                    core,
+                    {query_buffer->address(),
+                     key_buffer->address(),
+                     value_buffer->address(),
+                     mask_buffer != nullptr ? mask_buffer->address() : 0,
+                     gate_buffer != nullptr ? gate_buffer->address() : 0,
+                     num_rows,
+                     start_row});
+                SetRuntimeArgs(
+                    program,
+                    kernels.writer,
+                    core,
+                    {output_buffer->address(),
+                     intermediates_buffer != nullptr ? intermediates_buffer->address() : 0,
+                     num_rows,
+                     start_row});
+                SetRuntimeArgs(
+                    program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {start_row});
+            });
     }
 
     // -------------------------------------------------------------------------
@@ -741,6 +727,7 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     const auto* key_buffer = tensor_args.key.buffer();
     const auto* value_buffer = tensor_args.value.buffer();
     const auto* mask_buffer = tensor_args.mask.has_value() ? tensor_args.mask.value().buffer() : nullptr;
+    const auto* gate_buffer = tensor_args.gate.has_value() ? tensor_args.gate.value().buffer() : nullptr;
     auto* output_buffer = tensor_return_value.front().buffer();
     auto* intermediates_buffer =
         operation_attributes.return_intermediates ? tensor_return_value.back().buffer() : nullptr;
@@ -750,9 +737,7 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_fw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_fw_writer_kernel);
 
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
+    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         // Update input buffers for the reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
@@ -762,6 +747,7 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
             // For causal mask, mask is generated on-chip (mask_buffer is nullptr)
             // For DRAM mask, use actual mask buffer address
             runtime_args[kMaskBufferIdx] = (mask_buffer != nullptr) ? mask_buffer->address() : 0;
+            runtime_args[kGateBufferIdx] = (gate_buffer != nullptr) ? gate_buffer->address() : 0;
         }
 
         // Update output buffer for the writer kernel
@@ -771,7 +757,7 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
             runtime_args[kIntermediateBufferIdx] =
                 intermediates_buffer != nullptr ? intermediates_buffer->address() : 0;
         }
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::sdpa_fw::device

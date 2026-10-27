@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
 from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import ttnn_prod
 
 # Module-scoped device: these tests all run with the default device config, so the device is

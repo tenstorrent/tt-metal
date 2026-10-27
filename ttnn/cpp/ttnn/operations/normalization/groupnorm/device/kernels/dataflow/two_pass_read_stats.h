@@ -11,12 +11,18 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 
-template <std::uint32_t TilesPerRow, std::uint32_t TileBytes, bool HasAlias, typename Accessor>
+template <
+    std::uint32_t TilesPerRow,
+    std::uint32_t TileBytes,
+    bool HasAlias,
+    typename Accessor,
+    typename InputDfb,
+    typename AliasDfb>
 inline void read_two_pass_stats_block(
     const Noc& noc,
     const Accessor& src,
-    DataflowBuffer& input,
-    DataflowBuffer& alias,
+    InputDfb& input,
+    AliasDfb& alias,
     std::uint32_t ring_end,
     std::uint32_t start_tile,
     std::uint32_t row_stride,

@@ -5,6 +5,8 @@
 #include "recv_async_h2d_op_device_operation_types.hpp"
 #include "recv_async_h2d_op_device_operation.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include "ttnn/operation.hpp"
 
@@ -31,6 +33,13 @@ void RecvAsyncH2DDeviceOperation::validate_on_program_cache_miss(
         active_cores.size() == 1,
         "recv_async_h2d: expected H2DSocket to have exactly one active receiver core, found {}",
         active_cores.size());
+
+    // create_descriptor emits a program only on the socket's device coordinate, so that coordinate
+    // must be one the output tensor lives on.
+    const auto tensor_coords = output_tensor.device_storage().get_coords();
+    TT_FATAL(
+        std::find(tensor_coords.begin(), tensor_coords.end(), active_cores.front().device_coord) != tensor_coords.end(),
+        "recv_async_h2d: H2DSocket device coordinate is not part of the output tensor's coordinate set");
 
     // The kernel relies on writing whole tensor pages directly from the socket FIFO, so the
     // socket page size must match the tensor's aligned page size. The H2DSocket's page size
@@ -59,9 +68,18 @@ ttsl::hash::hash_t RecvAsyncH2DDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "RecvAsyncH2DDeviceOperation::compute_program_hash is called");
     const ttnn::Tensor& output_tensor = tensor_args;
-    // Hash on the stable, structural properties of the H2D socket exposed via attributes()
-    // along with the output tensor.
+    const auto active_cores = args.h2d_socket->get_active_cores();
+    TT_FATAL(
+        active_cores.size() == 1,
+        "recv_async_h2d: expected H2DSocket to have exactly one active receiver core, found {}",
+        active_cores.size());
+    // The active receiver core selects the mesh coordinate that gets a program and the core the
+    // writer kernel runs on, and the config buffer address is a compile-time arg of that kernel;
+    // all of them are structural and must stay in the key. The config address is core-local, so
+    // it does not identify the socket on its own. The output tensor address is a Buffer* binding
+    // in create_descriptor and is patched by the framework on every cache hit.
     return tt::tt_metal::operation::hash_operation<RecvAsyncH2DDeviceOperation>(
+        active_cores.front(),
         args.h2d_socket->get_config_buffer_address(),
         static_cast<uint8_t>(args.h2d_socket->get_h2d_mode()),
         output_tensor);

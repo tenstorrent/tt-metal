@@ -10,7 +10,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
-#include <umd/device/pcie/pci_device.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
 
 #include <cerrno>
 #include <chrono>

@@ -1,0 +1,4 @@
+# Drain sites reviewed and kept, one per line: `<path>:<declarator line prefix>  # reason`.
+# The key is the file path and the first 60 characters of the function's declarator line, as
+# check_redundant_drain.py prints it. Remove a line when the site is fixed.
+tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel_debug.h:DataFormat fmt, std::uint32_t tile_id, std::conditional_t<op  # debug-only: the caller resumes Tensix ops that read the tile the RISC just stored; kept at the writer

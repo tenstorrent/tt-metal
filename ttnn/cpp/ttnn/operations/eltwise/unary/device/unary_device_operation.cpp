@@ -4,6 +4,7 @@
 
 #include "unary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -14,10 +15,11 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::unary {
 namespace {
 
-// is_integer_dtype doesn't include INT8 as of now because no unary op has native INT8 implementation yet.
+// No unary op has a native INT8 implementation yet, so INT8 is accepted only by the dtype-agnostic
+// copy/typecast ops in unary_op_supports_integer_dtype.
 bool is_integer_dtype(DataType dtype) {
     return dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16 ||
-           dtype == DataType::UINT8;
+           dtype == DataType::UINT8 || dtype == DataType::INT8;
 }
 
 bool is_int32(DataType dtype) { return dtype == DataType::INT32; }
@@ -142,6 +144,32 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
     validate_integer_input_dtype(args.op_chain, input_tensor.dtype());
+
+    // The compute kernel and its scalar runtime args come from op_chain[0] alone, and dedicated kernels
+    // hard-code their op and never expand SFPU_OP_CHAIN_0, while those same ops emit an empty init/func
+    // into eltwise_sfpu_metal2.cpp. Either way, one of them in a longer chain is silently dropped. MAC_TSS is the
+    // exception only in first position: mac_tss_kernel.cpp expands the chain after filling the DST
+    // registers mac_tile reads, which eltwise_sfpu_metal2.cpp never fills. BITCAST runs on the generic kernel but
+    // emits no init/func: the factory reinterprets the input CB only when it is op_chain[0], while the output
+    // dtype comes from op_chain.back(), so it is only correct on its own.
+    if (args.op_chain.size() > 1) {
+        for (size_t i = 0; i < args.op_chain.size(); ++i) {
+            const auto type = args.op_chain[i].type();
+            const bool leading_mac = i == 0 && type == operations::unary::UnaryOpType::MAC_TSS;
+            const bool chainable = type != operations::unary::UnaryOpType::BITCAST &&
+                                   !utils::uses_dedicated_compute_kernel(type, input_tensor.dtype());
+            TT_FATAL(
+                leading_mac || type != operations::unary::UnaryOpType::BITCAST,
+                "Unary: BITCAST cannot share a chain with other ops (chain has {} ops)",
+                args.op_chain.size());
+            TT_FATAL(
+                leading_mac || chainable,
+                "Unary: {} uses a dedicated compute kernel and must be {} in the chain (chain has {} ops)",
+                type,
+                type == operations::unary::UnaryOpType::MAC_TSS ? "the first op" : "the only op",
+                args.op_chain.size());
+        }
+    }
 
     for (const auto& op : args.op_chain) {
         if (op.type() == operations::unary::UnaryOpType::LGAMMA) {
@@ -365,7 +393,9 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         distribution_key(
             output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr, "output"),
         src_shard_vol,
-        dst_shard_vol);
+        dst_shard_vol,
+        // The DRAM read flow selects kernel defines, dataflow buffers and semaphores.
+        get_dram_read_plan(attributes.op_chain, input_tensor, output_spec, attributes.worker_grid).flow);
 }
 
 bool UnaryDeviceOperation::skip_launch(
@@ -395,7 +425,7 @@ Tensor unary(
         optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : (output_memory_config);
 
     auto worker_grid = ttnn::operations::unary::get_worker_grid(
-        input, optional_output_tensor, std::optional<MemoryConfig>(output_memory_config), sub_core_grids);
+        op_chain, input, optional_output_tensor, std::optional<MemoryConfig>(output_memory_config), sub_core_grids);
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .op_chain = op_chain,

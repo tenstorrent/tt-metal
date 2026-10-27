@@ -245,11 +245,13 @@ def test_mpwi_general(device, ttnn_dtype, sharding_scheme, input_spec):
 @pytest.mark.parametrize(
     "input_spec",
     [
-        [1, 32, 384, 384, 3, 3, 1, 1, 1, 1, 1, 1, False],
-        [1, 48, 350, 350, 5, 5, 1, 1, 2, 2, 1, 1, False],
-        [1, 64, 350, 350, 6, 6, 1, 1, 3, 3, 1, 1, False],
-        [3, 32, 300, 300, 7, 7, 1, 1, 3, 3, 1, 1, False],
-        [2, 48, 300, 300, 9, 9, 2, 2, 4, 4, 1, 1, False],
+        # H*W = 264*264 = 69696 > 65535, so indices use UINT32 (see get_index_data_type in pool_utils.cpp).
+        # Larger shapes are in tests/ttnn/nightly/unit_tests/operations/pool/test_max_pool2d_sweeps_mpwi.py
+        [1, 32, 264, 264, 3, 3, 1, 1, 1, 1, 1, 1, False],
+        [1, 48, 264, 264, 5, 5, 2, 2, 2, 2, 1, 1, False],
+        [1, 64, 264, 264, 6, 6, 2, 2, 3, 3, 1, 1, False],
+        [3, 32, 264, 264, 7, 7, 2, 2, 3, 3, 1, 1, False],
+        [1, 48, 264, 264, 9, 9, 2, 2, 4, 4, 1, 1, False],
     ],
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
