@@ -1,16 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// PLE conv reader, one core per column block of T tiles (tiles first..first+T-1 of every tensor): nine bf16 TILE
-// [1,1,4,640] tensors into CBs 0-8 in order: conv[0], conv[3], conv[6], normalized, taps 0-3, gated.  Then, with
-// SHIFT, the chain's nine in-place state copies (conv[k] <- conv[k+1] for k = 0..7, conv[8] <- normalized): every
-// input the compute needs is already in its CBs, so the state rows may be overwritten.
-// Compile-time args: 0 T, 1 SHIFT, 2 INJECT, then TensorAccessorArgs for conv[0], conv[3], conv[6], normalized,
-// taps 0-3, gated, conv[1], conv[2], conv[4], conv[5], conv[7], conv[8], and the branch-major residual [1,4,1,640]
-// (sixteen, chained; the six state rows only for the shift, the residual only with INJECT: its four block tiles
-// b * 20 + first go to CB 19).  Runtime args: the sixteen buffer addresses in that order,
-// 16 the first tile of this core's column block, 17 the first tap tile of the block (the column within the lane's
-// 20-tile row-block: the taps are one [1,1,4,640] per tap for every lane; the 1-row form passes the same as 16).
+// PLE conv reader, one core per column block of tiles_per_core tiles (tiles first..first+tiles_per_core-1 of every
+// tensor): nine bf16 TILE [1,1,4,640] tensors into CBs 0-8 in order: conv[0], conv[3], conv[6], normalized, taps 0-3,
+// gated.  Then, with shift, the chain's nine in-place state copies (conv[k] <- conv[k+1] for k = 0..7, conv[8] <-
+// normalized): every input the compute needs is already in its CBs, so the state rows may be overwritten.
+// Compile-time args: 0 tiles_per_core (the builder's per_core), 1 shift, 2 inject, then TensorAccessorArgs for
+// conv[0], conv[3], conv[6], normalized, taps 0-3, gated, conv[1], conv[2], conv[4], conv[5], conv[7], conv[8], and
+// the branch-major residual [1,4,1,640] (sixteen, chained; the six state rows only for the shift, the residual only
+// with inject: its four block tiles b * 20 + first go to CB 19).  Runtime args: the sixteen buffer addresses in that
+// order, 16 the first tile of this core's column block, 17 the first tap tile of the block (the column within the
+// lane's 20-tile row-block: the taps are one [1,1,4,640] per tap for every lane; the 1-row form passes the same as 16).
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -18,108 +18,121 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
-constexpr uint32_t T = get_compile_time_arg_val(0);
-constexpr uint32_t SHIFT = get_compile_time_arg_val(1);
-constexpr uint32_t INJECT = get_compile_time_arg_val(2);
-constexpr uint32_t BLOCK_TILES = 20;  // tiles per residual branch block
-constexpr uint32_t BF16_TILE = 2048;
-constexpr uint32_t c_stage = 17;
+constexpr uint32_t tiles_per_core = get_compile_time_arg_val(0);
+constexpr uint32_t shift = get_compile_time_arg_val(1);
+constexpr uint32_t inject = get_compile_time_arg_val(2);
+constexpr uint32_t branch_tiles = 20;  // tiles per residual branch block
+constexpr uint32_t bf16_tile_bytes = 2048;
+constexpr uint32_t cb_stage = 17;
 
-template <typename Acc>
-FORCE_INLINE void stream(Noc& noc, const Acc& acc, uint32_t cb, uint32_t first) {
-    DataflowBuffer dfb(cb);
-    dfb.reserve_back(T);
-    for (uint32_t t = 0; t < T; ++t) {
-        noc.async_read(acc, dfb, BF16_TILE, {.page_id = first + t, .offset_bytes = 0}, {.offset_bytes = t * BF16_TILE});
+template <typename Accessor>
+FORCE_INLINE void stream(Noc& noc, const Accessor& tensor, uint32_t cb_id, uint32_t first) {
+    DataflowBuffer buffer(cb_id);
+    buffer.reserve_back(tiles_per_core);
+    for (uint32_t t = 0; t < tiles_per_core; ++t) {
+        noc.async_read(
+            tensor,
+            buffer,
+            bf16_tile_bytes,
+            {.page_id = first + t, .offset_bytes = 0},
+            {.offset_bytes = t * bf16_tile_bytes});
     }
     noc.async_read_barrier();
-    dfb.push_back(T);
+    buffer.push_back(tiles_per_core);
 }
 
 template <typename Src, typename Dst>
 FORCE_INLINE void shift_row(Noc& noc, const Src& src, const Dst& dst, uint32_t first) {
-    DataflowBuffer stage(c_stage);
-    stage.reserve_back(T);
-    for (uint32_t t = 0; t < T; ++t) {
+    DataflowBuffer stage(cb_stage);
+    stage.reserve_back(tiles_per_core);
+    for (uint32_t t = 0; t < tiles_per_core; ++t) {
         noc.async_read(
-            src, stage, BF16_TILE, {.page_id = first + t, .offset_bytes = 0}, {.offset_bytes = t * BF16_TILE});
+            src,
+            stage,
+            bf16_tile_bytes,
+            {.page_id = first + t, .offset_bytes = 0},
+            {.offset_bytes = t * bf16_tile_bytes});
     }
     noc.async_read_barrier();
-    stage.push_back(T);
-    stage.wait_front(T);
-    for (uint32_t t = 0; t < T; ++t) {
+    stage.push_back(tiles_per_core);
+    stage.wait_front(tiles_per_core);
+    for (uint32_t t = 0; t < tiles_per_core; ++t) {
         noc.async_write(
-            stage, dst, BF16_TILE, {.offset_bytes = t * BF16_TILE}, {.page_id = first + t, .offset_bytes = 0});
+            stage,
+            dst,
+            bf16_tile_bytes,
+            {.offset_bytes = t * bf16_tile_bytes},
+            {.page_id = first + t, .offset_bytes = 0});
     }
     noc.async_write_barrier();
-    stage.pop_front(T);
+    stage.pop_front(tiles_per_core);
 }
 
 void kernel_main() {
-    constexpr auto a0 = TensorAccessorArgs<3>();
-    constexpr auto a1 = TensorAccessorArgs<a0.next_compile_time_args_offset()>();
-    constexpr auto a2 = TensorAccessorArgs<a1.next_compile_time_args_offset()>();
-    constexpr auto a3 = TensorAccessorArgs<a2.next_compile_time_args_offset()>();
-    constexpr auto a4 = TensorAccessorArgs<a3.next_compile_time_args_offset()>();
-    constexpr auto a5 = TensorAccessorArgs<a4.next_compile_time_args_offset()>();
-    constexpr auto a6 = TensorAccessorArgs<a5.next_compile_time_args_offset()>();
-    constexpr auto a7 = TensorAccessorArgs<a6.next_compile_time_args_offset()>();
-    constexpr auto a8 = TensorAccessorArgs<a7.next_compile_time_args_offset()>();
-    constexpr auto a9 = TensorAccessorArgs<a8.next_compile_time_args_offset()>();
-    constexpr auto a10 = TensorAccessorArgs<a9.next_compile_time_args_offset()>();
-    constexpr auto a11 = TensorAccessorArgs<a10.next_compile_time_args_offset()>();
-    constexpr auto a12 = TensorAccessorArgs<a11.next_compile_time_args_offset()>();
-    constexpr auto a13 = TensorAccessorArgs<a12.next_compile_time_args_offset()>();
-    constexpr auto a14 = TensorAccessorArgs<a13.next_compile_time_args_offset()>();
-    constexpr auto a15 = TensorAccessorArgs<a14.next_compile_time_args_offset()>();
+    constexpr auto conv0_args = TensorAccessorArgs<3>();
+    constexpr auto conv3_args = TensorAccessorArgs<conv0_args.next_compile_time_args_offset()>();
+    constexpr auto conv6_args = TensorAccessorArgs<conv3_args.next_compile_time_args_offset()>();
+    constexpr auto normalized_args = TensorAccessorArgs<conv6_args.next_compile_time_args_offset()>();
+    constexpr auto tap0_args = TensorAccessorArgs<normalized_args.next_compile_time_args_offset()>();
+    constexpr auto tap1_args = TensorAccessorArgs<tap0_args.next_compile_time_args_offset()>();
+    constexpr auto tap2_args = TensorAccessorArgs<tap1_args.next_compile_time_args_offset()>();
+    constexpr auto tap3_args = TensorAccessorArgs<tap2_args.next_compile_time_args_offset()>();
+    constexpr auto gated_args = TensorAccessorArgs<tap3_args.next_compile_time_args_offset()>();
+    constexpr auto conv1_args = TensorAccessorArgs<gated_args.next_compile_time_args_offset()>();
+    constexpr auto conv2_args = TensorAccessorArgs<conv1_args.next_compile_time_args_offset()>();
+    constexpr auto conv4_args = TensorAccessorArgs<conv2_args.next_compile_time_args_offset()>();
+    constexpr auto conv5_args = TensorAccessorArgs<conv4_args.next_compile_time_args_offset()>();
+    constexpr auto conv7_args = TensorAccessorArgs<conv5_args.next_compile_time_args_offset()>();
+    constexpr auto conv8_args = TensorAccessorArgs<conv7_args.next_compile_time_args_offset()>();
+    constexpr auto residual_args = TensorAccessorArgs<conv8_args.next_compile_time_args_offset()>();
     const uint32_t first = get_arg_val<uint32_t>(16);
     const uint32_t tap_first = get_arg_val<uint32_t>(17);
     Noc noc;
-    const auto c0 = TensorAccessor(a0, get_arg_val<uint32_t>(0));
-    const auto c3 = TensorAccessor(a1, get_arg_val<uint32_t>(1));
-    const auto c6 = TensorAccessor(a2, get_arg_val<uint32_t>(2));
-    const auto n = TensorAccessor(a3, get_arg_val<uint32_t>(3));
+    const auto conv0 = TensorAccessor(conv0_args, get_arg_val<uint32_t>(0));
+    const auto conv3 = TensorAccessor(conv3_args, get_arg_val<uint32_t>(1));
+    const auto conv6 = TensorAccessor(conv6_args, get_arg_val<uint32_t>(2));
+    const auto normalized = TensorAccessor(normalized_args, get_arg_val<uint32_t>(3));
     {
-        stream(noc, c0, 0, first);
-        stream(noc, c3, 1, first);
-        stream(noc, c6, 2, first);
-        stream(noc, n, 3, first);
-        stream(noc, TensorAccessor(a4, get_arg_val<uint32_t>(4)), 4, tap_first);
-        stream(noc, TensorAccessor(a5, get_arg_val<uint32_t>(5)), 5, tap_first);
-        stream(noc, TensorAccessor(a6, get_arg_val<uint32_t>(6)), 6, tap_first);
-        stream(noc, TensorAccessor(a7, get_arg_val<uint32_t>(7)), 7, tap_first);
-        stream(noc, TensorAccessor(a8, get_arg_val<uint32_t>(8)), 8, first);
+        stream(noc, conv0, 0, first);
+        stream(noc, conv3, 1, first);
+        stream(noc, conv6, 2, first);
+        stream(noc, normalized, 3, first);
+        stream(noc, TensorAccessor(tap0_args, get_arg_val<uint32_t>(4)), 4, tap_first);
+        stream(noc, TensorAccessor(tap1_args, get_arg_val<uint32_t>(5)), 5, tap_first);
+        stream(noc, TensorAccessor(tap2_args, get_arg_val<uint32_t>(6)), 6, tap_first);
+        stream(noc, TensorAccessor(tap3_args, get_arg_val<uint32_t>(7)), 7, tap_first);
+        stream(noc, TensorAccessor(gated_args, get_arg_val<uint32_t>(8)), 8, first);
     }
-    if constexpr (INJECT) {
-        const auto residual = TensorAccessor(a15, get_arg_val<uint32_t>(15));
-        DataflowBuffer resid(19);
-        resid.reserve_back(4);
+    if constexpr (inject) {
+        const auto residual = TensorAccessor(residual_args, get_arg_val<uint32_t>(15));
+        DataflowBuffer residual_tiles(19);
+        residual_tiles.reserve_back(4);
         for (uint32_t b = 0; b < 4; ++b) {
             noc.async_read(
                 residual,
-                resid,
-                BF16_TILE,
-                {.page_id = b * BLOCK_TILES + first, .offset_bytes = 0},
-                {.offset_bytes = b * BF16_TILE});
+                residual_tiles,
+                bf16_tile_bytes,
+                {.page_id = b * branch_tiles + first, .offset_bytes = 0},
+                {.offset_bytes = b * bf16_tile_bytes});
         }
         noc.async_read_barrier();
-        resid.push_back(4);
+        residual_tiles.push_back(4);
     }
-    if constexpr (SHIFT) {
-        const auto c1 = TensorAccessor(a9, get_arg_val<uint32_t>(9));
-        const auto c2 = TensorAccessor(a10, get_arg_val<uint32_t>(10));
-        const auto c4 = TensorAccessor(a11, get_arg_val<uint32_t>(11));
-        const auto c5 = TensorAccessor(a12, get_arg_val<uint32_t>(12));
-        const auto c7 = TensorAccessor(a13, get_arg_val<uint32_t>(13));
-        const auto c8 = TensorAccessor(a14, get_arg_val<uint32_t>(14));
-        shift_row(noc, c1, c0, first);
-        shift_row(noc, c2, c1, first);
-        shift_row(noc, c3, c2, first);
-        shift_row(noc, c4, c3, first);
-        shift_row(noc, c5, c4, first);
-        shift_row(noc, c6, c5, first);
-        shift_row(noc, c7, c6, first);
-        shift_row(noc, c8, c7, first);
-        shift_row(noc, n, c8, first);
+    if constexpr (shift) {
+        const auto conv1 = TensorAccessor(conv1_args, get_arg_val<uint32_t>(9));
+        const auto conv2 = TensorAccessor(conv2_args, get_arg_val<uint32_t>(10));
+        const auto conv4 = TensorAccessor(conv4_args, get_arg_val<uint32_t>(11));
+        const auto conv5 = TensorAccessor(conv5_args, get_arg_val<uint32_t>(12));
+        const auto conv7 = TensorAccessor(conv7_args, get_arg_val<uint32_t>(13));
+        const auto conv8 = TensorAccessor(conv8_args, get_arg_val<uint32_t>(14));
+        shift_row(noc, conv1, conv0, first);
+        shift_row(noc, conv2, conv1, first);
+        shift_row(noc, conv3, conv2, first);
+        shift_row(noc, conv4, conv3, first);
+        shift_row(noc, conv5, conv4, first);
+        shift_row(noc, conv6, conv5, first);
+        shift_row(noc, conv7, conv6, first);
+        shift_row(noc, conv8, conv7, first);
+        shift_row(noc, normalized, conv8, first);
     }
 }

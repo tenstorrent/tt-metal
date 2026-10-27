@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// PLE group norm, one row-block of Wt tiles on one core: gr_read's norm_compute.cpp unit (rmsnorm_post_allgather's
-// stats reduce, + eps, rsqrt, x * rsqrt), packed fp32 as the op's fp32-dest intermediates are, then the op's
-// FUSE_GAMMA stage: mul_tiles_bcast_rows with the fp32 gamma through SrcB (its row 0 over every row), packed bf16.
-// CBs: 0 x (bf16, Wt), 1 stats (bf16, S), 2 scaler (bf16 or fp32, 1), 3 eps (bf16, 1), 4 gamma (fp32, Wt),
-// 5 var (fp32, 1), 6 rsqrt (fp32, 1), 7 unit (fp32, Wt), 16 normalized (bf16, Wt).
-// Compile-time args: 0 Wt, 1 S (stats tiles), 2 blk (tiles per block, divides Wt), 3 the output cb.
+// PLE group norm, one row-block of local_tiles tiles on one core: gr_read's norm_compute.cpp unit
+// (rmsnorm_post_allgather's stats reduce, + eps, rsqrt, x * rsqrt), packed fp32 as the op's fp32-dest intermediates
+// are, then the op's FUSE_GAMMA stage: mul_tiles_bcast_rows with the fp32 gamma through SrcB (its row 0 over every
+// row), packed bf16. CBs: 0 x (bf16, local_tiles), 1 stats (bf16, stats_tiles), 2 scaler (bf16 or fp32, 1), 3 eps
+// (bf16, 1), 4 gamma (fp32, local_tiles), 5 variance (fp32, 1), 6 rsqrt (fp32, 1), 7 unit (fp32, local_tiles), 16
+// normalized (bf16, local_tiles). Compile-time args: 0 local_tiles (the builder's LOCAL_TILES), 1 stats_tiles
+// (STATS_TILES), 2 tiles_per_block (divides local_tiles), 3 the output cb.
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
@@ -23,100 +24,102 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
-ALWI void ACQ() {
+// Each pass's dest handshake in one call: the math TRISC acquires and the pack TRISC waits; then the math TRISC
+// commits and the pack TRISC releases.
+ALWI void tile_regs_acquire_wait() {
     tile_regs_acquire();
     tile_regs_wait();
 }
-ALWI void REL() {
+ALWI void tile_regs_commit_release() {
     tile_regs_commit();
     tile_regs_release();
 }
 
 void kernel_main() {
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t S = get_compile_time_arg_val(1);
-    constexpr uint32_t blk = get_compile_time_arg_val(2);
-    constexpr uint32_t c_res = 0;
-    constexpr uint32_t c_stats = 1;
-    constexpr uint32_t c_scaler = 2;
-    constexpr uint32_t c_eps = 3;
-    constexpr uint32_t c_gamma = 4;
-    constexpr uint32_t c_var = 5;
-    constexpr uint32_t c_recip = 6;
-    constexpr uint32_t c_unit = 7;
-    constexpr uint32_t c_out = get_compile_time_arg_val(3);
+    constexpr uint32_t local_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t stats_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t tiles_per_block = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_input = 0;
+    constexpr uint32_t cb_stats = 1;
+    constexpr uint32_t cb_scaler = 2;
+    constexpr uint32_t cb_eps = 3;
+    constexpr uint32_t cb_gamma = 4;
+    constexpr uint32_t cb_variance = 5;
+    constexpr uint32_t cb_rsqrt = 6;
+    constexpr uint32_t cb_unit = 7;
+    constexpr uint32_t cb_out = get_compile_time_arg_val(3);
 
-    compute_kernel_hw_startup(c_res, c_res, c_var);
-    DataflowBuffer res(c_res);
-    DataflowBuffer scaler(c_scaler);
-    DataflowBuffer eps(c_eps);
-    DataflowBuffer gamma(c_gamma);
-    DataflowBuffer var(c_var);
-    DataflowBuffer recip(c_recip);
-    DataflowBuffer unit(c_unit);
-    DataflowBuffer out(c_out);
+    compute_kernel_hw_startup(cb_input, cb_input, cb_variance);
+    DataflowBuffer input(cb_input);
+    DataflowBuffer scaler(cb_scaler);
+    DataflowBuffer eps(cb_eps);
+    DataflowBuffer gamma(cb_gamma);
+    DataflowBuffer variance(cb_variance);
+    DataflowBuffer inverse_root(cb_rsqrt);
+    DataflowBuffer unit(cb_unit);
+    DataflowBuffer out(cb_out);
 
     {
         scaler.wait_front(1);
         eps.wait_front(1);
 
-        compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, c_stats, c_scaler, c_var>(
-            compute_kernel_lib::ReduceInputBlockShape::row(S));
+        compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_stats, cb_scaler, cb_variance>(
+            compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles));
 
-        var.wait_front(1);
-        recip.reserve_back(1);
-        reconfig_data_format(c_var, c_eps);
-        pack_reconfig_data_format(c_recip);
-        add_init(c_var, c_eps);
-        ACQ();
-        add_tiles(c_var, c_eps, 0, 0, 0);
+        variance.wait_front(1);
+        inverse_root.reserve_back(1);
+        reconfig_data_format(cb_variance, cb_eps);
+        pack_reconfig_data_format(cb_rsqrt);
+        add_init(cb_variance, cb_eps);
+        tile_regs_acquire_wait();
+        add_tiles(cb_variance, cb_eps, 0, 0, 0);
         rsqrt_tile_init();
         rsqrt_tile(0);
-        pack_tile(0, c_recip);
-        REL();
-        recip.push_back(1);
-        var.pop_front(1);
+        pack_tile(0, cb_rsqrt);
+        tile_regs_commit_release();
+        inverse_root.push_back(1);
+        variance.pop_front(1);
     }
 
     {
-        reconfig_data_format(c_res, c_recip);
-        pack_reconfig_data_format(c_unit);
-        mul_bcast_cols_init(c_res, c_recip);
-        recip.wait_front(1);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            res.wait_front(blk);
-            unit.reserve_back(blk);
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; ++wtr) {
-                mul_tiles_bcast_cols(c_res, c_recip, wtr, 0, wtr);
-                pack_tile(wtr, c_unit);
+        reconfig_data_format(cb_input, cb_rsqrt);
+        pack_reconfig_data_format(cb_unit);
+        mul_bcast_cols_init(cb_input, cb_rsqrt);
+        inverse_root.wait_front(1);
+        for (uint32_t block_start = 0; block_start < local_tiles; block_start += tiles_per_block) {
+            input.wait_front(tiles_per_block);
+            unit.reserve_back(tiles_per_block);
+            tile_regs_acquire_wait();
+            for (uint32_t t = 0; t < tiles_per_block; ++t) {
+                mul_tiles_bcast_cols(cb_input, cb_rsqrt, t, 0, t);
+                pack_tile(t, cb_unit);
             }
-            REL();
-            unit.push_back(blk);
-            res.pop_front(blk);
+            tile_regs_commit_release();
+            unit.push_back(tiles_per_block);
+            input.pop_front(tiles_per_block);
         }
-        recip.pop_front(1);
+        inverse_root.pop_front(1);
     }
 
     {
         // the chain's FUSE_GAMMA stage: unit (bf16, SrcA) x gamma (fp32, SrcB) on the FPU, gamma's row 0 broadcast
-        unit.wait_front(Wt);
-        gamma.wait_front(Wt);
-        reconfig_data_format(c_unit, c_gamma);
-        pack_reconfig_data_format(c_out);
-        mul_bcast_rows_init(c_unit, c_gamma);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            out.reserve_back(blk);
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; ++wtr) {
-                mul_tiles_bcast_rows(c_unit, c_gamma, wt + wtr, wt + wtr, wtr);
-                pack_tile(wtr, c_out);
+        unit.wait_front(local_tiles);
+        gamma.wait_front(local_tiles);
+        reconfig_data_format(cb_unit, cb_gamma);
+        pack_reconfig_data_format(cb_out);
+        mul_bcast_rows_init(cb_unit, cb_gamma);
+        for (uint32_t block_start = 0; block_start < local_tiles; block_start += tiles_per_block) {
+            out.reserve_back(tiles_per_block);
+            tile_regs_acquire_wait();
+            for (uint32_t t = 0; t < tiles_per_block; ++t) {
+                mul_tiles_bcast_rows(cb_unit, cb_gamma, block_start + t, block_start + t, t);
+                pack_tile(t, cb_out);
             }
-            REL();
-            out.push_back(blk);
+            tile_regs_commit_release();
+            out.push_back(tiles_per_block);
         }
-        unit.pop_front(Wt);
-        gamma.pop_front(Wt);
+        unit.pop_front(local_tiles);
+        gamma.pop_front(local_tiles);
         scaler.pop_front(1);
         eps.pop_front(1);
     }
