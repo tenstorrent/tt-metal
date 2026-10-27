@@ -41,13 +41,18 @@ try:
 except ImportError:  # loaded via importlib.spec_from_file_location
     from models.demos.laguna.tt.model import MODEL_ID, LagunaModel
 
-try:  # tt-lang is optional: without it the sampler keeps the ttnn FillPad + Pad before top-k
-    from .ttl_logits_pad import logits_pad
-except ImportError:
+# tt-lang is optional: without it the sampler keeps the ttnn FillPad + Pad before top-k. Off by default
+# (TT_LAGUNA_TTL_PAD=1 turns it on): tt-lang 1.0.1 emits #include "tools/profiler/kernel_profiler.hpp", which
+# tt-metal moved to api/debug/kernel_profiler.hpp, so its kernels no longer compile against this tree.
+logits_pad = None
+if __import__("os").environ.get("TT_LAGUNA_TTL_PAD", "0") == "1":
     try:
-        from models.demos.laguna.tt.ttl_logits_pad import logits_pad
+        from .ttl_logits_pad import logits_pad
     except ImportError:
-        logits_pad = None
+        try:
+            from models.demos.laguna.tt.ttl_logits_pad import logits_pad
+        except ImportError:
+            logits_pad = None
 
 
 class _LagunaSampling1D(Sampling1D):
