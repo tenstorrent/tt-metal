@@ -481,7 +481,9 @@ _lock_device() {
 
     LOCK_WAIT_INTERVAL=20
     LOCK_WAIT_TOTAL=0
-    while ! flock -w "$LOCK_WAIT_INTERVAL" 9; do
+    # Each retry opens the lock file again: a warm process (scripts/safe_pytest_warm.py) that
+    # started after this wait began learns from that open that someone wants the device.
+    while ! { exec 9>"$LOCK_FILE"; flock -w "$LOCK_WAIT_INTERVAL" 9; }; do
         LOCK_WAIT_TOTAL=$((LOCK_WAIT_TOTAL + LOCK_WAIT_INTERVAL))
         TS="[$(date '+%Y-%m-%d %H:%M:%S')]"
         HOLDER_PID=$(_find_lock_holder "$LOCK_FILE")
@@ -822,25 +824,17 @@ _run_logged() {
 }
 
 # --- Warm process helpers ---
-# The checkout's warm process: its pid file, else its command line. A zombie counts as gone (a
-# container's pid 1 may never reap the double-forked process).
-_warm_pid() {
-    local pid
-    pid=$(cat "$WARM_PID_FILE" 2>/dev/null)
-    if [[ -z "$pid" ]] || ! tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q "safe_pytest_warm.py worker"; then
-        pid=$(pgrep -f -- "safe_pytest_warm.py worker --repo $REPO_DIR" | head -1)
-    fi
-    echo "$pid"
-}
+# A zombie counts as gone (a container's pid 1 may never reap the double-forked process).
 _alive() {
     [[ -n "$1" && -d /proc/$1 ]] && [[ "$(ps -o stat= -p "$1" 2>/dev/null)" != Z* ]]
 }
-# Ask the warm process to close the device and exit, then wait until it is gone. After 60 s
-# (a device close stuck after a hang) it is killed; the device is then dirty and gets reset.
+# Ask the warm process with pid $1 (and no other: a sibling call may have started a newer one)
+# to close the device and exit, then wait until it is gone. After 60 s (a device close stuck
+# after a hang) it is killed; the device is then dirty and gets reset.
 _stop_warm() {
-    python3 "$WARM_PY" stop --repo "$REPO_DIR" >/dev/null 2>&1 || true
-    local pid _i
-    pid=$(_warm_pid)
+    local pid=$1 _i
+    [[ -n "$pid" ]] || return 0
+    python3 "$WARM_PY" stop --repo "$REPO_DIR" --pid "$pid" >/dev/null 2>&1 || true
     for _i in $(seq 600); do
         _alive "$pid" || return 0
         sleep 0.1
@@ -851,17 +845,14 @@ _stop_warm() {
     while _alive "$pid"; do sleep 0.1; done
 }
 # Before this call touches the dirty flag or resets the device, it must hold the lock and the
-# warm process must be gone. A call that started the warm process shares its lock already.
+# warm process that ran its session must be gone. A call that started the warm process shares
+# its lock already. (A device close that leaves Ethernet cores stuck is reset by the warm process
+# itself, while it still holds the lock.)
 _own_device() {
     [[ "$WARM" == attach || "$WARM" == spawn ]] || return 0
     [[ "${WARM_OWNED:-false}" == true ]] && return 0
-    _stop_warm
+    _stop_warm "$WARM_SERVED_PID"
     [[ "$WARM" == attach ]] && _lock_device
-    # The warm process closed the device; teardown messages went to its log, not to this call.
-    if tail -n 400 "$WARM_LOG" 2>/dev/null | grep -aqE \
-        "Skipping RISC reset on device [0-9]+ during teardown|Timed out while waiting for active ethernet core"; then
-        WARM_ETH_STUCK=true
-    fi
     [[ "${WARM_KILLED:-false}" == true ]] && touch "$DIRTY_FLAG"
     WARM_OWNED=true
 }
@@ -871,11 +862,13 @@ export SAFE_PYTEST_LAUNCH_MS="$TT_TIMING_PYTEST_LAUNCH_MS"
 if [[ "$WARM" == attach || "$WARM" == spawn ]]; then
     # The same command with the warm client in place of `pytest`; env assignments before it stay
     # and reach the warm session through the client's environment.
+    WARM_SERVED_FILE="/tmp/safe-pytest-warm-served-$$.pid"
+    rm -f "$WARM_SERVED_FILE"
     WARM_CMD=()
     _spliced=false
     for _a in "${PYTEST_CMD[@]}"; do
         if [[ "$_spliced" == false && "$_a" == pytest ]]; then
-            WARM_CMD+=(python3 "$WARM_PY" run --repo "$REPO_DIR")
+            WARM_CMD+=(python3 "$WARM_PY" run --repo "$REPO_DIR" --pid-out "$WARM_SERVED_FILE")
             [[ "$WARM" == spawn ]] && WARM_CMD+=(--wait-start 180 "$WARM_PID_FILE")
             WARM_CMD+=(--)
             _spliced=true
@@ -886,17 +879,26 @@ if [[ "$WARM" == attach || "$WARM" == spawn ]]; then
     if [[ "$WARM" == spawn ]]; then
         # This call holds the lock: start the warm process. It inherits fd 9, so the lock stays
         # held after this script exits, for as long as the warm process keeps the device.
+        # --since-ms: anyone who opens the lock file after this call took the lock wants it.
         rm -f "$WARM_PID_FILE"
-        setsid -f bash -c 'echo $$ > "$1"; exec python3 "$2" worker --repo "$3" --lock-fd 9' _ \
-            "$WARM_PID_FILE" "$WARM_PY" "$REPO_DIR" </dev/null >>"$WARM_LOG" 2>&1
+        setsid -f bash -c 'echo $$ > "$1"; exec python3 "$2" worker --repo "$3" --lock-fd 9 --since-ms "$4"' _ \
+            "$WARM_PID_FILE" "$WARM_PY" "$REPO_DIR" "$TT_TIMING_LOCK_ACQUIRED_MS" </dev/null >>"$WARM_LOG" 2>&1
     fi
     _run_logged "${WARM_CMD[@]}"
+    WARM_SERVED_PID=$(cat "$WARM_SERVED_FILE" 2>/dev/null)
+    rm -f "$WARM_SERVED_FILE"
     if [[ $EXIT_CODE -eq 75 ]]; then
         # Nothing of this call ran in the warm process (refused, gone, or never came up). Make
-        # sure it is gone, take the lock, and run cold like a plain call.
+        # sure the one this call started (if any) is gone, take the lock, and run cold.
         echo "SAFE_PYTEST: warm process unavailable; running cold"
         if [[ "$WARM" == spawn ]]; then
-            _stop_warm
+            _spawned=""
+            for _i in $(seq 50); do
+                _spawned=$(cat "$WARM_PID_FILE" 2>/dev/null)
+                [[ -n "$_spawned" ]] && break
+                sleep 0.1
+            done
+            _stop_warm "$_spawned"
         else
             _lock_device
         fi
@@ -977,7 +979,6 @@ if [[ "$SIM_MODE" == false ]] && grep -aqE \
     "$PYTEST_STDOUT_LOG" 2>/dev/null; then
     ETH_STUCK=true
 fi
-[[ "${WARM_ETH_STUCK:-false}" == true ]] && ETH_STUCK=true
 
 # Clear the dirty flag, resetting first if the run left Ethernet cores stuck.
 _clear_dirty_flag() {

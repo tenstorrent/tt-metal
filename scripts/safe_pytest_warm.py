@@ -10,16 +10,19 @@ pytest session in-process. It saves the per-call interpreter start, imports, dev
 interpreter exit (~3 s of a ~4 s single-test call on wormhole).
 
 Subcommands (run_safe_pytest.sh drives them; see its "Warm process" section):
-  worker --repo DIR --lock-fd N    the long-lived process. Started by a run_safe_pytest.sh call that
-                                   holds the device lock; it inherits that lock fd and keeps the
-                                   lock for as long as it keeps the device open.
-  run    --repo DIR [--wait-start SECONDS PIDFILE] -- ARGS...
+  worker --repo DIR --lock-fd N [--since-ms MS]
+                                   the long-lived process. Started by a run_safe_pytest.sh call that
+                                   holds the device lock (taken at epoch MS); it inherits that lock
+                                   fd and keeps the lock for as long as it keeps the device open.
+  run    --repo DIR [--wait-start SECONDS PIDFILE] [--pid-out F] -- ARGS...
                                    run one pytest session (ARGS as for `pytest`) in DIR's worker,
-                                   with this process's environment, cwd, stdout and stderr.
+                                   with this process's environment, cwd, stdout and stderr; F gets
+                                   the pid of the worker that ran it.
                                    Exit code: pytest's, or 75 (not run: no worker, or it refused)
                                    or 70 (the worker died during the run).
   ping   --repo DIR                exit 0 if DIR's worker is up, else 75.
-  stop   --repo DIR                ask DIR's worker to close the device and exit.
+  stop   --repo DIR [--pid P]      ask DIR's worker (only if its pid is P) to close the device
+                                   and exit.
 
 State carried from one call to the next, and how it is handled:
   - kernel binaries: the in-process JIT build cache keys a kernel by its source path, not its
@@ -42,9 +45,14 @@ State carried from one call to the next, and how it is handled:
     SAFE_PYTEST_WARM_MAX_RUNS sessions, SAFE_PYTEST_WARM_MAX_AGE_S seconds, or past
     SAFE_PYTEST_WARM_MAX_RSS_GB of memory.
   - other users of the device: the worker holds the device lock while it is up. It watches the
-    lock file with inotify; as soon as anyone else opens it (every runner does, right before it
-    waits on the lock), the worker closes the device and exits, at once when idle or right after
-    the session in progress. It also exits after SAFE_PYTEST_WARM_IDLE_S seconds without a call.
+    lock file with inotify, and its mtime against the time the spawning call took the lock (for
+    runners that started waiting before the worker existed); as soon as anyone else opens it
+    (every runner does, right before it waits on the lock; run_safe_pytest.sh again on each
+    20 s retry), the worker closes the device and exits, at once when idle or right after the
+    session in progress, and leaves a mark that keeps the next lock winner from starting a new
+    worker for 120 s. It also exits after SAFE_PYTEST_WARM_IDLE_S seconds without a call.
+  - device close: if closing the device logs Ethernet cores stuck outside base firmware, the
+    worker resets the device (tt-smi -r) before it lets go of the lock.
 """
 
 from __future__ import annotations
@@ -119,15 +127,8 @@ def _recv(sock: socket.socket, want_fds: int = 0):
 # Client side (cheap: no torch/ttnn import)
 
 
-def _alive(pid_file: str | None) -> bool:
-    """False once the worker named in pid_file has died or is a zombie (True while unknown)."""
-    if not pid_file:
-        return True
-    try:
-        with open(pid_file) as f:
-            pid = int(f.read().strip())
-    except (OSError, ValueError):
-        return True
+def _pid_alive(pid: int) -> bool:
+    """False once pid has exited or is a zombie."""
     try:
         with open(f"/proc/{pid}/stat") as f:
             return f.read().rpartition(")")[2].split()[0] != "Z"
@@ -136,7 +137,11 @@ def _alive(pid_file: str | None) -> bool:
 
 
 def _connect(repo: str, wait_s: float = 0.0, pid_file: str | None = None):
+    """Connect to repo's worker, waiting up to wait_s for one that is starting. With pid_file
+    (written by the spawning call just before the worker starts), stop waiting as soon as that
+    worker is gone."""
     deadline = time.time() + wait_s
+    pid = None
     while True:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
@@ -144,12 +149,26 @@ def _connect(repo: str, wait_s: float = 0.0, pid_file: str | None = None):
             return sock
         except OSError:
             sock.close()
-            if time.time() >= deadline or not _alive(pid_file):
+            if pid is None and pid_file:
+                try:
+                    with open(pid_file) as f:
+                        pid = int(f.read().strip())
+                except (OSError, ValueError):
+                    pass
+            if time.time() >= deadline or (pid is not None and not _pid_alive(pid)):
                 return None
             time.sleep(0.1)
 
 
-def client(op: str, repo: str, args: list[str], wait_s: float, pid_file: str | None = None) -> int:
+def client(
+    op: str,
+    repo: str,
+    args: list[str],
+    wait_s: float = 0.0,
+    pid_file: str | None = None,
+    pid_out: str | None = None,
+    stop_pid: int | None = None,
+) -> int:
     sock = _connect(repo, wait_s, pid_file)
     if sock is None:
         return EX_NOT_RUN
@@ -160,10 +179,14 @@ def client(op: str, repo: str, args: list[str], wait_s: float, pid_file: str | N
                 req = {"op": "run", "args": args, "env": dict(os.environ), "cwd": os.getcwd()}
                 _send(sock, req, fds=(1, 2))
             else:
-                _send(sock, {"op": op})
+                _send(sock, {"op": op, "pid": stop_pid})
             reply, _ = _recv(sock)
             if reply is not None and reply.get("status") == "started":
                 started = True
+                if pid_out:
+                    # The caller stops exactly this worker later, never a newer one.
+                    with open(pid_out, "w") as f:
+                        f.write(str(reply.get("pid", "")))
                 reply, _ = _recv(sock)
     except OSError:
         # The worker went away (it may exit with this connection still queued).
@@ -182,9 +205,11 @@ def client(op: str, repo: str, args: list[str], wait_s: float, pid_file: str | N
 
 
 class Worker:
-    def __init__(self, repo: str, lock_fd: int):
+    def __init__(self, repo: str, lock_fd: int, since_ms: int | None = None):
         self.repo = os.path.realpath(repo)
         self.lock_fd = lock_fd
+        self.since_ms = since_ms
+        self.lock_path = os.readlink(f"/proc/self/fd/{lock_fd}")
         self.started = time.time()
         self.runs = 0
         # Children (pytest subprocesses, the dispatch-timeout triage command) must not inherit the
@@ -447,10 +472,21 @@ class Worker:
         fd = libc.inotify_init1(in_nonblock | in_cloexec)
         if fd < 0:
             raise OSError(ctypes.get_errno(), "inotify_init1")
-        path = os.readlink(f"/proc/self/fd/{self.lock_fd}").encode()
-        if libc.inotify_add_watch(fd, path, in_open | in_delete_self | in_move_self) < 0:
+        if libc.inotify_add_watch(fd, self.lock_path.encode(), in_open | in_delete_self | in_move_self) < 0:
             raise OSError(ctypes.get_errno(), "inotify_add_watch")
         return fd
+
+    def _lock_file_touched(self) -> bool:
+        """Did anyone open the lock file for writing since the spawning call took the lock? That
+        covers runners that started waiting before this process (and its inotify watch) existed:
+        run_safe_pytest.sh, tt-probe.sh and eval_test_runner.sh all open it with `exec 9>`, and
+        the truncation updates its mtime."""
+        if self.since_ms is None:
+            return False
+        try:
+            return os.stat(self.lock_path).st_mtime_ns // 1_000_000 > self.since_ms
+        except OSError:
+            return True
 
     def serve(self) -> None:
         import select
@@ -468,7 +504,7 @@ class Worker:
         try:
             while True:
                 ready, _, _ = select.select([lock_watch, listener], [], [], 0.5)
-                if lock_watch in ready:
+                if lock_watch in ready or self._lock_file_touched():
                     # Checked first: a waiter that queued during the last session goes ahead of
                     # this checkout's next call. The mark keeps the next lock winner from
                     # starting a new warm process before that waiter got its turn.
@@ -505,8 +541,10 @@ class Worker:
             _send(conn, {"status": "ok"})
             return True
         if op == "stop":
-            _send(conn, {"status": "ok"})
-            return False
+            # A stop names the worker it means: an older worker's caller must not stop this one.
+            mine = req.get("pid") in (None, os.getpid())
+            _send(conn, {"status": "ok" if mine else "not-me"})
+            return not mine
         if op != "run" or len(fds) != 2:
             for fd in fds:
                 os.close(fd)
@@ -519,7 +557,7 @@ class Worker:
             _send(conn, {"status": "refused", "reason": reason})
             print(f"warm worker: refused ({reason}), exiting", flush=True)
             return False
-        _send(conn, {"status": "started"})
+        _send(conn, {"status": "started", "pid": os.getpid()})
         # This process holds the lock, so it owns the dirty flag: set while a session runs, so a
         # runner that comes after a crash resets the device; cleared after a session that passed.
         # After any other result the caller takes the device over and decides (reset or clear).
@@ -538,12 +576,50 @@ class Worker:
             print(f"warm worker: session exit {code}, exiting", flush=True)
         return keep
 
+    def _closed_with_stuck_ethernet(self, log_offset: int | None) -> bool:
+        """Did closing the device just now log Ethernet cores that did not return to base
+        firmware? (run_safe_pytest.sh resets the device for that after a cold run.)"""
+        if log_offset is None:
+            return False
+        import re
+
+        try:
+            with open("/proc/self/fd/1", "rb") as f:
+                f.seek(log_offset)
+                text = f.read().decode(errors="replace")
+        except OSError:
+            return False
+        # Same patterns as run_safe_pytest.sh's ETH_STUCK check.
+        return bool(
+            re.search(
+                r"Skipping RISC reset on device \d+ during teardown|Timed out while waiting for active ethernet core",
+                text,
+            )
+        )
+
     def shutdown(self) -> None:
         import gc
+        import subprocess
 
+        sys.stdout.flush()
+        try:
+            log_offset = os.lseek(1, 0, os.SEEK_END)
+        except OSError:
+            log_offset = None
         dr = sys.modules.get("tests.plugins.device_reuse")
         if dr is not None:
             dr.release()
+        sys.stdout.flush()
+        if self._closed_with_stuck_ethernet(log_offset):
+            # Still holding the lock: reset here, before anyone else gets the device.
+            print("warm worker: Ethernet cores stuck after closing the device; resetting", flush=True)
+            try:
+                ok = subprocess.run(["tt-smi", "-r"], timeout=300).returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                ok = False
+            if not ok:
+                with open(DIRTY_FLAG, "a"):
+                    pass
         os.close(self.lock_fd)
         # Let interpreter shutdown free what gc.freeze() pinned, or nanobind reports it as leaked.
         gc.unfreeze()
@@ -554,25 +630,39 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     op, repo, rest = argv[0], argv[2], argv[3:]
+    # Options up to `--` (run passes everything after it to pytest).
+    opts = {}
+    while rest and rest[0] != "--":
+        name = rest.pop(0)
+        nargs = 2 if name == "--wait-start" else 1
+        if not name.startswith("--") or len(rest) < nargs:
+            print(__doc__, file=sys.stderr)
+            return 2
+        opts[name] = rest[:nargs] if nargs > 1 else rest[0]
+        del rest[:nargs]
+    if rest[:1] == ["--"]:
+        rest = rest[1:]
     if op == "worker":
-        if rest[:1] != ["--lock-fd"] or len(rest) < 2:
+        if "--lock-fd" not in opts:
             print("worker needs --lock-fd N", file=sys.stderr)
             return 2
-        worker = Worker(repo, int(rest[1]))
+        since = opts.get("--since-ms")
+        worker = Worker(repo, int(opts["--lock-fd"]), int(since) if since else None)
         try:
             worker.serve()
         finally:
             worker.shutdown()
         return 0
-    if op in ("ping", "stop"):
-        return client(op, repo, [], wait_s=0.0)
+    if op == "ping":
+        return client("ping", repo, [])
+    if op == "stop":
+        pid = opts.get("--pid")
+        return client("stop", repo, [], stop_pid=int(pid) if pid else None)
     if op == "run":
         wait_s, pid_file = 0.0, None
-        if rest[:1] == ["--wait-start"]:
-            wait_s, pid_file, rest = float(rest[1]), rest[2], rest[3:]
-        if rest[:1] == ["--"]:
-            rest = rest[1:]
-        return client("run", repo, rest, wait_s, pid_file)
+        if "--wait-start" in opts:
+            wait_s, pid_file = float(opts["--wait-start"][0]), opts["--wait-start"][1]
+        return client("run", repo, rest, wait_s, pid_file, pid_out=opts.get("--pid-out"))
     print(__doc__, file=sys.stderr)
     return 2
 
