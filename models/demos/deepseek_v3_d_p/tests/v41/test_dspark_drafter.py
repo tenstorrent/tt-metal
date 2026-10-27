@@ -2,17 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The DSpark drafter on the mesh (``tt/v41/dspark_drafter.py``) against the vendored reference (speculative decode device gate).
+"""The DSpark drafter on the mesh (``tt/v41/dspark_drafter.py``) against the vendored reference (speculative
+decode device gate).
 
-The reference is ``real_spec`` with the backbone of layers 20, 36-39 synthetic and the three ``mtp.*`` units from the
-checkpoint (as ``test_dspark.py``'s ``real_ckpt``), greedy. It prefills ``V41_DSD_PROMPT`` tokens of real text and seeds
-its rings (``forward_spec`` at start_pos 0); the device drafter is built from the checkpoint through the loader
-(the routed experts converted into the drafter's own cache directory on the first run) with the reference's tied
-embedding / head, and takes the reference's rings. Then, for ``V41_DSD_STEPS`` positions, both sides run one draft
-call on the reference's tap of the position, teacher-forced on the text's next token, and the test compares: stage
-0's ``main_x`` and every stage's ring write (bit-exact rate and PCC), every stage's output streams on the block's
+The reference is ``real_spec`` with the backbone of layers 20, 36-39 synthetic and the three ``mtp.*`` units
+from the
+checkpoint (as ``test_dspark.py``'s ``real_ckpt``), greedy. It prefills ``V41_DSD_PROMPT`` tokens of real text
+and seeds
+its rings (``forward_spec`` at start_pos 0); the device drafter is built from the checkpoint through the
+loader
+(the routed experts converted into the drafter's own cache directory on the first run) with the reference's
+tied
+embedding / head, and takes the reference's rings. Then, for ``V41_DSD_STEPS`` positions, both sides run one
+draft
+call on the reference's tap of the position, teacher-forced on the text's next token, and the test compares:
+stage
+0's ``main_x`` and every stage's ring write (bit-exact rate and PCC), every stage's output streams on the
+block's
 rows (PCC), the five rows' logits after the Markov loop (PCC) and the drafted ids (exact matches), plus the
-determinism of a repeated call. It reports the draft call's wall time (eager; the Markov loop on the host and the
+determinism of a repeated call. It reports the draft call's wall time (eager; the Markov loop on the host and
+the
 logits readback apart) and the DRAM a chip before / after the drafter: ``V41_DSD_OUT`` takes the JSON record.
 """
 
@@ -30,7 +39,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import galaxy_meshes
 from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import WEIGHT_CACHE, routed_expert_dtype
-from models.demos.deepseek_v3_d_p.tt.v41.dspark_drafter import RING, ROWS, TtDSparkDrafter
+from models.demos.deepseek_v3_d_p.tt.v41.dspark_drafter import DSPARK_MARKOV, RING, ROWS, TtDSparkDrafter
 from models.demos.deepseek_v3_d_p.tt.v41.head import TtV41Embedding
 from models.demos.deepseek_v3_d_p.tt.v41.weights import resolve_checkpoint
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -41,7 +50,8 @@ TRACE_REGION = 256 * 1024**2
 
 MAIN_X_PCC = 0.999
 RING_PCC = 0.998
-# the stages' streams and the logits against the bf16 reference with bfp8 / bfp4 routed experts (measured: stage 2 at 0.95 to 0.97 with bfp4, the logits 0.98 to 0.9999; the drafted ids agree)
+# the stages' streams and the logits against the bf16 reference with bfp8 / bfp4 routed experts (measured:
+# stage 2 at 0.95 to 0.97 with bfp4, the logits 0.98 to 0.9999; the drafted ids agree)
 STREAM_PCC = {"BFLOAT8_B": 0.97, "BFLOAT4_B": 0.94}
 LOGITS_PCC = 0.97
 
@@ -51,7 +61,8 @@ def _pcc(a, b) -> float:
 
 
 def _dram(mesh_device) -> dict:
-    """A chip's DRAM: bytes allocated, bytes free (the live margin) and the largest free block, from the allocator."""
+    """A chip's DRAM: bytes allocated, bytes free (the live margin) and the largest free block, from the
+    allocator."""
     try:
         view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
         banks = int(view.num_banks)
@@ -71,7 +82,8 @@ def _first(t) -> torch.Tensor:
 
 
 def _streams_to_host(t, mesh_device, hc: int, hidden: int) -> torch.Tensor:
-    """Device streams [1, 1, ROWS, hc * hidden/tp] fp32 per chip (chip t: its hidden slice of every copy) -> [ROWS,
+    """Device streams [1, 1, ROWS, hc * hidden/tp] fp32 per chip (chip t: its hidden slice of every copy) ->
+    [ROWS,
     hc, hidden] from mesh row 0."""
     sp, tp = tuple(mesh_device.shape)
     shards = ttnn.get_device_tensors(t)
@@ -109,7 +121,8 @@ def test_dspark_drafter(mesh_device, device_params):
     model.temperature = 0.0
     for block in model.mtp:
         block.temperature = 0.0
-    # the tied tables go to the device in bf16: hold the reference to the same values (a synthetic unit's are fp32)
+    # the tied tables go to the device in bf16: hold the reference to the same values (a synthetic unit's are
+    # fp32)
     model.head.weight.data = model.head.weight.data.to(torch.bfloat16).float()
     model.embed.weight.data = model.embed.weight.data.to(torch.bfloat16).to(model.embed.weight.dtype)
     record["reference_build_s"] = round(time.time() - t0, 1)
@@ -183,7 +196,12 @@ def test_dspark_drafter(mesh_device, device_params):
 
         ttnn.synchronize_device(mesh_device)
         t0 = time.time()
-        logits_dev, main_x = drafter.draft(inputs, on_stage=on_stage)
+        if DSPARK_MARKOV == "device":
+            ids_dev, logits_dev, main_x = drafter.draft_ids(inputs, on_stage=on_stage)
+            device_ids = [int(v) for v in ttnn.to_torch(ttnn.get_device_tensors(ids_dev)[0]).flatten()[:5]]
+        else:
+            logits_dev, main_x = drafter.draft(inputs, on_stage=on_stage)
+            device_ids = None
         rows = drafter.logits_rows(logits_dev)
         wall = time.time() - t0
         t0 = time.time()
@@ -206,6 +224,8 @@ def test_dspark_drafter(mesh_device, device_params):
             dev_ids = out[1:].tolist()
             exact[f"{tag}_ids"] = sum(a == b for a, b in zip(ref_ids, dev_ids)) / len(ref_ids)
             exact[f"{tag}_first_id"] = float(ref_ids[0] == dev_ids[0])
+            if device_ids is not None:  # the in-graph Markov loop against the host one (bf16 candidates: ties)
+                exact[f"{tag}_device_loop_ids"] = sum(a == b for a, b in zip(device_ids, dev_ids)) / len(dev_ids)
         else:
             ref_ids, dev_ids = [], []
         entry = {
@@ -216,6 +236,7 @@ def test_dspark_drafter(mesh_device, device_params):
             "markov_host_s": round(markov_s, 4),
             "ref_ids": ref_ids,
             "dev_ids": dev_ids,
+            "device_loop_ids": device_ids,
         }
         per_step.append(entry)
         logger.info(f"drafter step {json.dumps(entry)}")
@@ -243,7 +264,18 @@ def test_dspark_drafter(mesh_device, device_params):
         t2 = time.time()
         drafter.markov_loop(tok, rows)
         t3 = time.time()
-        walls.append({"device_wall_ms": (t1 - t0) * 1e3, "readback_ms": (t2 - t1) * 1e3, "markov_ms": (t3 - t2) * 1e3})
+        entry = {"device_wall_ms": (t1 - t0) * 1e3, "readback_ms": (t2 - t1) * 1e3, "markov_ms": (t3 - t2) * 1e3}
+        if DSPARK_MARKOV == "device":
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.time()
+            ids_dev, logits_dev, _ = drafter.draft_ids(inputs)
+            ttnn.synchronize_device(mesh_device)
+            t1 = time.time()
+            ttnn.to_torch(ttnn.get_device_tensors(ids_dev)[0])
+            t2 = time.time()
+            ttnn.deallocate(logits_dev)
+            entry["device_loop_wall_ms"], entry["device_loop_readback_ms"] = (t1 - t0) * 1e3, (t2 - t1) * 1e3
+        walls.append(entry)
     record["timed"] = [{k: round(v, 3) for k, v in w.items()} for w in walls]
     record["draft_device_wall_ms_min"] = round(min(w["device_wall_ms"] for w in walls), 3)
     record["draft_device_wall_ms_median"] = round(sorted(w["device_wall_ms"] for w in walls)[len(walls) // 2], 3)
@@ -265,7 +297,11 @@ def test_dspark_drafter(mesh_device, device_params):
         bar = (
             MAIN_X_PCC
             if key.endswith("main_x")
-            else RING_PCC if "_ring" in key else LOGITS_PCC if key.endswith("logits") else STREAM_PCC[dtype.name]
+            else RING_PCC
+            if "_ring" in key
+            else LOGITS_PCC
+            if key.endswith("logits")
+            else STREAM_PCC[dtype.name]
         )
         assert value >= bar, (key, value, bar)
     assert exact["deterministic"], "two draft calls on the same inputs differ"

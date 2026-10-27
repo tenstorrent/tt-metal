@@ -205,10 +205,8 @@ def test_v41_verify_rows(mesh_device, device_params):
             if tap_dev is not None:
                 ttnn.deallocate(tap_dev)
             t1 = time.time()
-            rows = drafter.run()
+            drafts = drafter.run(tok)[:k]
             t2 = time.time()
-            out, _ = drafter.markov_loop(tok, rows)
-            drafts = out[1 : 1 + k].tolist()
             t3 = time.time()
             block = [tok] + drafts
             argmax = decoder.decode({0: block})[0]
@@ -231,7 +229,7 @@ def test_v41_verify_rows(mesh_device, device_params):
                 "draft_s": round(t2 - t1, 4),
                 "draft_mode": drafter.last.get("mode"),
                 "draft_device_s": drafter.last.get("device_s"),
-                "markov_s": round(t3 - t2, 4),
+                "draft_read_s": drafter.last.get("read_s"),
                 "verify_s": round(t4 - t3, 4),
                 "verify_mode": decoder.last.get("mode"),
                 "verify_device_s": decoder.last.get("device_s"),

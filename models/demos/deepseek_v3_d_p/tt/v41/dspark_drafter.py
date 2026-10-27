@@ -83,6 +83,11 @@ INDEX_WIDTH = -(-(RING + DSPARK_BLOCK_SIZE) // TOPK_ALIGN) * TOPK_ALIGN  # 160: 
 # decode routing kernels were written for the backbone's 384 experts); the default follows tt/v41/decode.py
 DSPARK_MOE = os.environ.get("V41_DSPARK_MOE", "decode")
 assert DSPARK_MOE in ("decode", "prefill"), DSPARK_MOE
+# V41_DSPARK_MARKOV=host: the Markov loop on the host from the five logits rows (the reference's fp32 arithmetic);
+# device (default): in the graph, each row's bias from the Markov tables on device and its argmax through the
+# sampler's top-32-per-chip path (bf16 candidates, as the target's own argmax)
+DSPARK_MARKOV = os.environ.get("V41_DSPARK_MARKOV", "device")
+assert DSPARK_MARKOV in ("device", "host"), DSPARK_MARKOV
 
 
 class DSparkMoeConfig:
@@ -269,6 +274,7 @@ class TtDSparkDrafter:
                     self.head.norm = _norm(mesh_device, config, weights["norm"])
                 else:
                     self.head = TtV41Head(mesh_device, config, weights["norm"], head_weight)
+                self._markov_device_tables(weights["markov"])
             self.build_s[f"build{k}"] = round(time.time() - t0, 1)
         t0 = time.time()
         self.seeder = TtV41DSpark(mesh_device, config, seeding_weights(ckpt, config))
@@ -276,6 +282,94 @@ class TtDSparkDrafter:
         pre = torch.zeros(1, 1, ROWS, config.HC_MULT)
         pre[..., 0] = 1.0
         self.pre_mix = self._replicated(pre, ttnn.float32)
+
+    def _markov_device_tables(self, markov: dict) -> None:
+        """The Markov tables on device (``V41_DSPARK_MARKOV=device``): ``embed`` ``[vocab, 256]`` bf16 row-major
+        replicated (one ``ttnn.embedding`` of a token), ``head`` transposed ``[1, 1, 256, vocab / tp]`` bf16 tiled,
+        column-parallel over TP as the tied head; the row masks, the vocabulary offsets and the sampler's constants
+        (top-1: the argmax) of the in-graph loop (``_markov_device``)."""
+        mesh, shape = self.mesh_device, tuple(self.mesh_device.shape)
+        vocab = self.config.VOCAB_SIZE
+        self.markov_embed = ttnn.from_torch(
+            markov["embed"].detach().to(torch.bfloat16),
+            device=mesh,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        self.markov_head_t = ttnn.from_torch(
+            markov["head"].detach().to(torch.bfloat16).T.contiguous()[None, None],
+            device=mesh,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, shape, dims=(None, 3)),
+        )
+        self.row_masks = []
+        for i in range(DSPARK_BLOCK_SIZE):
+            m = torch.zeros(1, 1, ROWS, 1)
+            m[0, 0, i, 0] = 1.0
+            self.row_masks.append(self._replicated(m, ttnn.float32))
+        per_chip = vocab // self.tp
+        offsets = torch.arange(self.tp, dtype=torch.int32).view(self.tp, 1, 1, 1).expand(self.tp, 1, ROWS, 32)
+        self.vocab_offsets = ttnn.from_torch(
+            (offsets * per_chip).contiguous(),
+            device=mesh,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, shape, dims=(None, 0)),
+        )
+        rm = ttnn.ROW_MAJOR_LAYOUT
+        self.sample_k = self._replicated(torch.ones(ROWS, dtype=torch.int32), ttnn.uint32, rm)
+        self.sample_p = self._replicated(torch.zeros(ROWS), ttnn.bfloat16, rm)
+        self.sample_temp = self._replicated(torch.ones(ROWS), ttnn.bfloat16, rm)
+        self.seeded = False
+        self.markov_compute = ttnn.init_device_compute_kernel_config(
+            mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
+        )
+
+    def _seed_sampler(self) -> None:
+        if self.seeded:
+            return
+        mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        ttnn.manual_seed(
+            seeds=ttnn.from_torch(
+                torch.randint(1, 2**31 - 1, (ROWS,), dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                mesh_mapper=mapper,
+            ),
+            user_ids=ttnn.from_torch(
+                torch.arange(ROWS, dtype=torch.int32), device=self.mesh_device, dtype=ttnn.uint32, mesh_mapper=mapper
+            ),
+        )
+        self.seeded = True
+
+    def _argmax_rows(self, logits):
+        """Every row's argmax over the full vocabulary from ``logits`` [1, 1, ROWS, vocab / tp] fp32 per chip (not
+        consumed): the sampler's path (top-32 bf16 per chip, gathered over TP, top-1) -> [1, 1, 1, ROWS] uint32."""
+        ccl = self.stages[0].attn.ccl
+        values, indices = ttnn.topk(ttnn.typecast(logits, ttnn.bfloat16), 32, dim=-1, largest=True, sorted=True)
+        indices = ttnn.add(ttnn.typecast(indices, ttnn.int32), self.vocab_offsets)
+        values = ccl.tp_all_gather(values, dim=3)
+        indices = ttnn.to_layout(ccl.tp_all_gather(indices, dim=3), ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.sampling(values, indices, self.sample_k, self.sample_p, self.sample_temp)
+
+    def _markov_device(self, logits, token):
+        """The reference's ``forward_head`` loop in the graph: row ``i``'s logits plus ``markov_head(out[i])``,
+        ``out[i + 1]`` its argmax, ``out[0]`` the block's token (``token`` [1, 1, 1] uint32 on device) -> the five
+        drafts ``[1, 1, 1, block]`` uint32 row-major."""
+        self._seed_sampler()
+        tok = ttnn.concat([token] * ROWS, dim=2)  # [1, 1, ROWS]: the embedding takes a tile of ids
+        drafts = []
+        for i in range(DSPARK_BLOCK_SIZE):
+            e = ttnn.reshape(ttnn.embedding(tok, self.markov_embed, layout=ttnn.TILE_LAYOUT), (1, 1, ROWS, -1))
+            bias = ttnn.matmul(e, self.markov_head_t, dtype=ttnn.float32, compute_kernel_config=self.markov_compute)
+            logits = ttnn.add(logits, ttnn.multiply(bias, self.row_masks[i]))
+            ids = self._argmax_rows(logits)  # row i's argmax is final; the later rows lack their bias yet
+            nxt = ttnn.slice(ids, [0, 0, 0, i], [1, 1, 1, i + 1])
+            drafts.append(nxt)
+            tok = ttnn.concat([ttnn.reshape(nxt, (1, 1, 1))] * ROWS, dim=2)
+        return ttnn.concat(drafts, dim=3)
 
     def _replicated(self, host: torch.Tensor, dtype, layout=ttnn.TILE_LAYOUT, device=True):
         return ttnn.from_torch(
@@ -364,6 +458,24 @@ class TtDSparkDrafter:
         if tap is not None:
             ttnn.copy(tap, self.buffers["tap"])
 
+    def _graph(self):
+        """The draft call's graph on the buffers -> the device tensor read after it: the five drafts
+        (``DSPARK_MARKOV=device``) or the five logits rows (host loop)."""
+        if DSPARK_MARKOV == "device":
+            ids, logits, _ = self.draft_ids(self.buffers)
+            ttnn.deallocate(logits)
+            return ids
+        logits, _ = self.draft(self.buffers)
+        return self.head.scored_rows(logits, 0, DSPARK_BLOCK_SIZE)
+
+    def _read(self, out, token: int) -> list[int]:
+        """The graph's output tensor -> the five drafts (the host loop on the logits rows in host mode)."""
+        if DSPARK_MARKOV == "device":
+            return [int(v) for v in ttnn.to_torch(ttnn.get_device_tensors(out)[0]).flatten()[:DSPARK_BLOCK_SIZE]]
+        rows = self.head._tile_to_host(out, 0)
+        ids, _ = self.markov_loop(token, rows)
+        return ids[1:].tolist()
+
     def _capture(self):
         controller = SubDeviceTraceController(self.mesh_device)
         for stage in self.stages:
@@ -371,17 +483,17 @@ class TtDSparkDrafter:
         ttnn.synchronize_device(self.mesh_device)
         controller.begin_capture()
         try:
-            logits, _ = self.draft(self.buffers)
-            rows = self.head.scored_rows(logits, 0, DSPARK_BLOCK_SIZE)
+            out = self._graph()
         finally:
             controller.end_capture()
             for stage in self.stages:
                 stage.ffn.set_trace_controller(None)
-        return controller, rows
+        return controller, out
 
-    def run(self) -> torch.Tensor:
-        """One draft call on the staged buffers -> the block's logits rows ``[block, vocab]`` fp32 on the host:
-        eager, or (``trace``) captured after ``warmup`` eager calls and replayed. ``last`` keeps the mode and times."""
+    def run(self, token: int) -> list[int]:
+        """One draft call on the staged buffers -> the five drafts (``token`` the block's first token, for the
+        host loop): eager, or (``trace``) captured after ``warmup`` eager calls and replayed. ``last`` keeps the
+        mode and times (``device_s``: the call to a synchronize; ``read_s``: the readback and any host loop)."""
         t0 = time.time()
         if not self.trace:
             mode = "eager"
@@ -393,24 +505,23 @@ class TtDSparkDrafter:
             mode = "eager"
         if mode == "eager":
             self.eager_count += 1
-            logits, _ = self.draft(self.buffers)
-            rows_dev = self.head.scored_rows(logits, 0, DSPARK_BLOCK_SIZE)
+            out = self._graph()
             ttnn.synchronize_device(self.mesh_device)
             t1 = time.time()
-            rows = self.head._tile_to_host(rows_dev, 0)
-            ttnn.deallocate(rows_dev)
+            drafts = self._read(out, token)
+            ttnn.deallocate(out)
         else:
             if mode == "capture":
                 self.capture = self._capture()
-            controller, rows_dev = self.capture
+            controller, out = self.capture
             ttnn.synchronize_device(self.mesh_device)
             t0 = time.time()
             controller.replay(blocking=False)
             ttnn.synchronize_device(self.mesh_device)
             t1 = time.time()
-            rows = self.head._tile_to_host(rows_dev, 0)
+            drafts = self._read(out, token)
         self.last = {"mode": mode, "device_s": round(t1 - t0, 4), "read_s": round(time.time() - t1, 4)}
-        return rows
+        return drafts
 
     def release(self) -> None:
         if self.capture is not None:
@@ -479,6 +590,13 @@ class TtDSparkDrafter:
         final = self.forward_block(inputs, on_stage)
         logits, _ = self.head(final, 0)
         return logits, main_x
+
+    def draft_ids(self, inputs: dict, on_stage=None):
+        """``draft`` followed by the device Markov loop -> (the five drafts [1, 1, 1, block] uint32 on device, the
+        logits tile before the biases, main_x)."""
+        logits, main_x = self.draft(inputs, on_stage)
+        token = ttnn.slice(inputs["token"], [0, 0, 0], [1, 1, 1])
+        return self._markov_device(logits, token), logits, main_x
 
     def logits_rows(self, logits, rows: int = DSPARK_BLOCK_SIZE) -> torch.Tensor:
         """The block's first ``rows`` rows of the logits tile on the host, ``[rows, vocab]`` fp32 (``scored_rows``:
