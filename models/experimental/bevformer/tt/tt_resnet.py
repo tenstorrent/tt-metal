@@ -490,22 +490,41 @@ class TTCameraBottleneck:
     # Weight tiles a linear multicasts per inner block: every core holds that block, in0_block_w by
     # the whole output width, which for layer4's 2048-channel outputs would outgrow L1.
     LINEAR_WEIGHT_BLOCK_TILES = 128
+    # Inner blocks wider than this measured no faster.
+    LINEAR_MAX_IN0_BLOCK_W = 16
+    # Bytes per core for the partial sums of an output block, kept while the inner dimension takes
+    # more than one block; layer3's conv3 runs beside the DCN's tensors.
+    LINEAR_PARTIALS_BYTES = 256 * 1024
 
     def _linear(self, conv, params, activation):
-        """A 1x1 conv as a linear on the block's shards: each core multiplies its own rows, its inner
-        dimension in the widest blocks whose weights fit LINEAR_WEIGHT_BLOCK_TILES, with the weights
-        multicast."""
+        """A 1x1 conv as a linear on the block's shards: each core multiplies its rows in as few
+        output blocks as its partial sums allow, so each weight block it receives serves those rows;
+        one tile row at a time, it would take the weights again per row. The inner dimension goes in
+        the widest blocks, up to LINEAR_MAX_IN0_BLOCK_W, whose weights fit
+        LINEAR_WEIGHT_BLOCK_TILES, with the weights multicast."""
         in_t, out_t = conv.in_channels // ttnn.TILE_SIZE, conv.out_channels // ttnn.TILE_SIZE
         max_subblock = 4 if self.fp32_acc else 8
         in0_block_w = max(
-            w for w in range(1, in_t + 1) if in_t % w == 0 and w * out_t <= self.LINEAR_WEIGHT_BLOCK_TILES
+            w
+            for w in range(1, min(in_t, self.LINEAR_MAX_IN0_BLOCK_W) + 1)
+            if in_t % w == 0 and w * out_t <= self.LINEAR_WEIGHT_BLOCK_TILES
         )
+        partial_tile_bytes = 4096 if self.fp32_acc else 2048
+        out_block_h = max(
+            h
+            for h in range(1, self.shard_tiles + 1)
+            if self.shard_tiles % h == 0
+            and (in0_block_w == in_t or h * out_t * partial_tile_bytes <= self.LINEAR_PARTIALS_BYTES)
+        )
+        # The widest subblock that tiles the output block, then as tall as the rest of the limit allows.
+        subblock_w = max(w for w in range(1, max_subblock + 1) if out_t % w == 0)
+        subblock_h = max(h for h in range(1, max_subblock // subblock_w + 1) if out_block_h % h == 0)
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(self.grid.x, self.grid.y),
             in0_block_w=in0_block_w,
-            out_subblock_h=1,
-            out_subblock_w=max(w for w in range(1, max_subblock + 1) if out_t % w == 0),
-            out_block_h=1,
+            out_subblock_h=subblock_h,
+            out_subblock_w=subblock_w,
+            out_block_h=out_block_h,
             out_block_w=out_t,
             per_core_M=self.shard_tiles,
             per_core_N=out_t,
