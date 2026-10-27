@@ -295,3 +295,163 @@ def test_a_volatile_cache_key_does_not_change_a_calls_signature():
     c = next(iter(FC._CALLS.values()))
     assert c["sig_full"] != c["sig"]
     FC._CALLS.clear()
+
+
+def _fake_runner(outcomes: dict[str, str], rc: int = 0):
+    """A run_safe_pytest stand-in: writes the junit report pytest would, {node id: passed|failed|error|skipped|absent}."""
+
+    def run(cmd, env):
+        xml = next(c.split("=", 1)[1] for c in cmd if c.startswith("--junitxml="))
+        cases = []
+        for n in [c for c in cmd if "::" in c]:
+            kind = outcomes.get(n, "passed")
+            if kind == "absent":  # (the group died before reporting it)
+                continue
+            f, *rest = n.split("::")
+            cls = ".".join(["ttnn.ttnn.bringup.x.tests." + f.rsplit("/", 1)[-1][:-3], *rest[:-1]])
+            body = {"failed": "<failure message='boom'/>", "error": "<error message='setup'/>",
+                    "skipped": "<skipped message='needs 8 cards'/>"}.get(kind, "")  # fmt: skip
+            cases.append(f'<testcase classname="{cls}" name="{rest[-1]}">{body}</testcase>')
+        open(xml, "w").write(f"<testsuites><testsuite>{''.join(cases)}</testsuite></testsuites>")
+        return rc
+
+    return run
+
+
+def test_every_model_case_is_counted_and_a_fork_without_cases_does_not_stop_the_others(monkeypatch, tmp_path):
+    """F198: O.1 used to return before running anything when one fork had no case file, and folded skips into passes."""
+    from models.demos.common.bringup.testing import fork_tests as FT
+
+    nodes = {
+        "a": ["p/test_a.py::test_x[c1]", "p/test_a.py::test_x[c2]", "p/test_a.py::T::test_y"],
+        "b": ["p/test_b.py::test_z[c1]", "p/test_b.py::test_z[c2]"],
+    }
+    grouper = lambda f: ({(2, 2): nodes[f]}, ["ERROR p/test_bad.py - ImportError"] if f == "b" else [])  # noqa: E731
+    out = {
+        "p/test_a.py::test_x[c2]": "skipped",
+        "p/test_a.py::T::test_y": "failed",
+        "p/test_b.py::test_z[c2]": "absent",
+    }
+    real = fork_cases.FORKS
+    fake = tmp_path / "forks"
+    for f in ("a", "b"):
+        (fake / f / "tests").mkdir(parents=True)
+        (fake / f / "tests" / "test_x.py").write_text("")
+    (fake / "c" / "tests").mkdir(parents=True)  # a fork the model calls, with no case file
+    monkeypatch.setattr(fork_cases, "FORKS", fake)
+    monkeypatch.setattr("models.demos.common.bringup.testing.cards.visible_devices", lambda mesh: "0,1,2,3")
+    t = fork_cases.run_tests(["a", "b", "c"], runner=_fake_runner(out), grouper=grouper)
+    monkeypatch.setattr(fork_cases, "FORKS", real)
+    assert (t["a"]["passed"], t["a"]["failed"], t["a"]["skipped"]) == (1, 1, 1)
+    assert "skipped: p/test_a.py::test_x[c2]: needs 8 cards" in t["a"]["problems"]
+    assert (t["b"]["passed"], t["b"]["not_run"], t["b"]["collect_errors"]) == (1, 1, 1)
+    assert t["c"]["collect_errors"] == 1 and "no tests/test_*.py" in t["c"]["problems"][0]
+    st = fork_cases.tally_stats(t)
+    assert st == {"fork_tests_passed": 2, "fork_tests_failed": 4, "fork_tests_skipped": 1, "fork_tests_not_run": 3}
+    assert FT.bad(FT.empty_tally()) == 0
+
+
+def test_a_test_file_that_does_not_import_is_a_collection_error(tmp_path, monkeypatch):
+    from models.demos.common.bringup.testing import fork_tests as FT
+
+    good, broken = tmp_path / "test_good.py", tmp_path / "test_broken.py"
+    good.write_text("def test_ok():\n    pass\n")
+    broken.write_text("import no_such_module_anywhere\n\ndef test_never():\n    pass\n")
+    monkeypatch.setattr(FT, "REPO", tmp_path)
+    nodes, errors = FT.collect([str(good), str(broken)])
+    assert [n.rsplit("::", 1)[-1] for n in nodes] == ["test_ok"]
+    assert errors and "test_broken.py" in errors[0]
+    assert FT.collect([str(tmp_path / "test_empty.py")])[1]  # nothing collected is an error too
+
+
+def test_junit_names_match_node_ids_with_and_without_classes():
+    from models.demos.common.bringup.testing.fork_tests import same_test
+
+    assert same_test("a/b/test_x.py::test_y[p-1]", "a.b.test_x::test_y[p-1]")
+    assert same_test("a/b/test_x.py::C::test_y", "a.b.test_x.C::test_y")
+    assert not same_test("a/b/test_x.py::test_y", "a.b.test_z::test_y")
+    assert not same_test("a/b/test_x.py::test_y[1]", "a.b.test_x::test_y[10]")
+
+
+def test_a_source_test_failing_at_baseline_too_is_still_a_failure(capsys):
+    """F198: the source check used to fail only on regressions, so tests failing on the original and the fork (or a
+    selection that never produced a result) were accepted for good."""
+    from models.demos.common.bringup.testing.fork_source import report
+
+    base = {
+        "a": {"original": "passed", "fork": "passed"},
+        "b": {"original": "failed", "fork": "failed"},
+        "c": {"original": "passed", "fork": "passed"},
+        "d": {"original": "skipped", "fork": "skipped"},
+        "x::<no results>": {"original": "failed", "fork": "failed"},
+    }
+    fork = {"a": "passed", "b": "failed", "c": "failed", "d": "skipped", "x::<no results>": "failed", "e": "failed"}
+    assert report(base, fork, "f") == 4
+    out = capsys.readouterr().out
+    assert "FAIL b: failed, failing at baseline too (original failed)" in out
+    assert "FAIL c: failed, regression (passed at baseline)" in out and "FAIL e: failed, new test" in out
+    assert "skipped d" in out and "passed 1, failing 4, skipped 1" in out
+    assert report({"a": base["a"]}, {"a": "passed"}, "f") == 0
+
+
+def test_a_group_lost_to_a_box_error_runs_once_more(monkeypatch):
+    """F198: one dead Ethernet core left a device open and 175 all-gather tests errored at setup, reported as results."""
+    from models.demos.common.bringup.testing import fork_tests as FT
+
+    nodes = ["p/test_a.py::test_x[1]", "p/test_a.py::test_x[2]"]
+    calls = []
+    good = _fake_runner({})
+
+    def runner(cmd, env):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return _fake_runner({n: "error" for n in nodes}, rc=1)(cmd, env)
+        return good(cmd, env)
+
+    monkeypatch.setattr("models.demos.common.bringup.testing.cards.visible_devices", lambda mesh: None)
+    t = FT.run(["a"], runner=runner, grouper=lambda f: ({None: nodes}, []))["a"]
+    assert len(calls) == 2 and t["passed"] == 2 and t["error"] == 0
+    assert any("box error" in p for p in t["problems"])
+    assert not FT.box_error(1, {"x": ("failed", "")}) and FT.box_error(1, {}) and not FT.box_error(0, {})
+
+
+def test_the_fork_suite_counts_every_part_and_only_the_owner_waives(monkeypatch):
+    """F199: the closing all-fork run; a failure passes only through an owner waiver, reported as WAIVED."""
+    from models.demos.common.bringup.testing import fork_suite as FS
+    from models.demos.common.bringup.testing import fork_tests as FT
+
+    def tally(**kw):
+        t = FT.empty_tally()
+        for k, v in kw.items():
+            if k == "problems":
+                t["problems"] = list(v)
+            else:
+                t[k] = v
+        return t
+
+    parts = {
+        "unit": lambda f: tally(
+            passed=5, failed=1, skipped=2, problems=["failed: u.py::t_bad: boom", "skipped: u.py::s"]
+        ),
+        "source": lambda f: tally(passed=3, collect_errors=1, problems=["collection error: x::<no results>"]),
+    }
+    res = FS.run_suite(["a"], {"u.py::t_bad": "owner: known upstream bug #1"}, parts=parts)
+    assert res["a"]["unit"]["failed"] == 0 and res["a"]["unit"]["waived"] == 1
+    assert res["a"]["unit"]["problems"][0].startswith("WAIVED failed: u.py::t_bad")
+    assert FS.totals(res) == {
+        "fork_suite_failed": 1,
+        "fork_suite_passed": 8,
+        "fork_suite_skipped": 2,
+        "fork_suite_waived": 1,
+    }
+    res = FS.run_suite(["a"], {}, parts=parts)
+    assert FS.totals(res)["fork_suite_failed"] == 2
+
+
+def test_the_skills_name_the_strict_fork_rule():
+    from models.demos.common.bringup.core.spec import FRAMEWORK
+
+    for f in ("skill/rebase-bringup/SKILL.md", "skill/bringup/SKILL.md", "skill/bringup-fork-op/SKILL.md"):
+        text = (FRAMEWORK / f).read_text()
+        assert "fork_suite" in text or "F.1" in text, f
+        assert "must match the baseline" not in text, f

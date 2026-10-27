@@ -22,6 +22,11 @@ branch, `git fetch` it, and check that no agent session is working in it.
 - Old base: `$G merge-base <branch> <old llk_helper_library>`; new base: the target (`origin/llk_helper_library`).
 - Build the branch as it is and measure one model's full set (step 7's recipe) into a scratch results dir: committed
   `results/*.json` may predate earlier rebases, so they are only a coarse reference.
+- Every fork's every test, strictly: `python -m models.demos.common.bringup.testing.fork_suite` (F199: unit suites
+  with their perf files, every model's cases, the original ops' tests; every test counted, every skip with its
+  reason; about an hour on a 2x2). Show the owner the full list of failures and skips before rebasing. A failure is
+  not "known" because it is in this list: each one is fixed (before or after the rebase, the owner's call) or waived
+  by the owner (`tests.fork_waivers` in the model spec, reported WAIVED).
 
 ## 2. Rebase
 - Partial clone (`remote.origin.partialclonefilter` set): prefetch the blobs once, or every commit fetches on its own
@@ -65,13 +70,17 @@ parity builder alike, with the same topology / semaphore ids where possible; the
 (`tests/unit/test_*cpp_parity*`) must pass. Record each port in the fork's CHANGELOG.
 
 ## 5. Fork tests
-- Every fork's unit suite (`ttnn/ttnn/bringup/<fork>/tests/unit`, perf tests excluded) and model cases
-  (`tests/test_*.py`): fix tests that read old internals (wire layouts, removed fields).
+- `python -m models.demos.common.bringup.testing.fork_suite` (step 1's run, after the rebase): every fork's unit
+  suite (perf files included), model cases and original-op tests. Fix tests that read old internals (wire layouts,
+  removed fields). Done when it reports fork_suite_failed == 0; a failure is never accepted because step 1 had it
+  too (owner, 2026-10-27), only fixed or owner-waived. Compare its skips with step 1's: a new skip is a finding.
 - Call signatures (`sig`) in `tests/cases.py` and the models' `results/fork_calls.json` change when a shared config
   type gains fields or the models' tensors change placement. Re-key them, and check the new signatures against a fresh
   capture of a model on this box, never only by recomputing.
 - Re-record the source-test baselines: `python -m models.demos.common.bringup.testing.fork_source --fork <f> --record`;
-  explain count changes (upstream pruned or added tests) and any case the original passes and the fork fails.
+  explain count changes (upstream pruned or added tests). Any case the fork does not pass is a failure to fix (or to
+  filter out of the entry's `k` with the reason, when the fork can never pass it by design), whatever the original
+  does.
 
 ## 6. Commit
 One commit per concern (fork syncs; API ports; test updates; baselines), formatted (`pre-commit run --files ...` until

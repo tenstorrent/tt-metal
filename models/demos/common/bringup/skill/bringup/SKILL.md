@@ -166,6 +166,11 @@ Gate rules (hard, owner 2026-10-22, F169):
    segment, an unchanged tree is not measured again, a timeout or box error is retried once, a framework error stops
    for you, a pause stops every agent loop. Anything else that wastes time is a framework bug to fix the same hour.
 
+Fork tests (owner, 2026-10-27, F198 / F199): transparency on what works and what does not. A failing fork test is
+never "known" or "pre-existing": report every failing and every skipped test (with its reason) to the owner, fix it or
+let the owner waive it (`tests.fork_waivers`). The full strict run of every fork's every test is task F.1, the run's
+last task (`testing/fork_suite.py`, about an hour on a 2x2), and the rebase skill's baseline; not on every fork change.
+
 Watch the orchestrator log for gate results, attempts, stops and problems. After every gate, re-export and republish
 the dashboards.
 

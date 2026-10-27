@@ -17,7 +17,8 @@ Task ids by pipeline step:
     L.<rung>         ladder rung on device                               (integrate)
     K.1              serving contract through the engine API             (contract)
     X.1 profile      X.2 opportunity list                                (perf)
-    Z.1              settings audit: every switch in tt/settings.py      (settings, last)
+    Z.1              settings audit: every switch in tt/settings.py      (settings)
+    F.1              every forked op's every test, strictly (F199)       (optests, last)
 The plan agent may add, split or annotate tasks (e.g. a hooks-only task, a model-level embedding task) before the
 plan is approved; the generator only writes the skeleton.
 """
@@ -630,7 +631,14 @@ def integrate(spec, add, golden_task: dict, last_swaps: list[str], impl_paths: l
         ["X.3"],
         f"BRINGUP_CAPTURE_FORKS={calls} BRINGUP_RUNG={cap['name']} {SAFE} --no-precompile{capture}"
         f" && {PY}.testing.fork_cases --capture {calls} --run-tests --lint",
-        {"forks_used": ">= 0", "fork_calls_uncovered": "== 0", "fork_tests_failed": "== 0", "fork_cases_lint": "== 0"},
+        {
+            "forks_used": ">= 0",
+            "fork_calls_uncovered": "== 0",
+            "fork_tests_failed": "== 0",
+            "fork_cases_lint": "== 0",
+            "fork_tests_passed": ">= 0",  # (F198: shown in the gate output, with the skips)
+            "fork_tests_skipped": ">= 0",
+        },
         role="optests",
         paths=["ttnn/ttnn/bringup"],
         device=True,
@@ -647,6 +655,24 @@ def integrate(spec, add, golden_task: dict, last_swaps: list[str], impl_paths: l
         {"settings_violations": "== 0"} | E2E,
         device=True,
         role="settings",
+    )
+    # F199 (owner, 2026-10-27): once the run is complete, every fork's every test (unit, model cases, source), strictly:
+    # a failing test is fixed or owner-waived (tests.fork_waivers), never accepted because it failed before
+    add(
+        "F.1",
+        "Every forked op's tests, strictly: unit suites, every model's cases, the original ops' tests",
+        "optests",
+        ["Z.1"],
+        f"{PY}.testing.fork_suite",  # (the gate's BRINGUP_SPEC gives the waivers)
+        {
+            "fork_suite_failed": "== 0",
+            "fork_suite_passed": ">= 0",
+            "fork_suite_skipped": ">= 0",
+            "fork_suite_waived": ">= 0",
+        },
+        role="optests",
+        paths=["ttnn/ttnn/bringup"],
+        device=True,
     )
 
 

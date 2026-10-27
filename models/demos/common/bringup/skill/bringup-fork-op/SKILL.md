@@ -86,8 +86,10 @@ test layernorm), so pick a reasonable set, not an exhaustive one:
    foreground, so when the selection is long, record one entry at a time (`--record --entry N`; the results merge into
    the baseline). The swap also hands the fork the source op's golden function, because upstream tests take their
    reference from `ttnn.get_golden_function(<source op>)`. The two should agree right
-   after forking. Every case the original passes and the fork does not is a gap: fix it, or explain it in the
-   changelog. Commit the manifest and the baseline.
+   after forking. Every case the fork does not pass is a failure, also when the original fails it too (F198, owner
+   2026-10-27): fix it, or, when the fork can never pass it by design (its change), filter it out of the entry's `k`
+   with the reason in the manifest's comment. A selection that produces no results (a collection error) is a failure.
+   Commit the manifest and the baseline.
 
 The same applies to an AI-generated drop-in (a new op that replaces an existing one, such as `ttnn.bringup.rms_norm`
 for `ttnn.rms_norm`): the replaced op's tests are its source tests.
@@ -121,9 +123,13 @@ existing fork, whether it is a new feature, a new argument, a new output or a bu
    - the fork's unit suite (`tests/unit/`, if it has one);
    - the source-test check, `python -m models.demos.common.bringup.testing.fork_source --fork <fork>`;
    - every model's cases, `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/<fork>/tests/test_*.py`.
-   The results must match the baseline, and `fork_source` must report no regressions. Where the fork has a
+   Every test must pass. A failing test is never accepted because it failed before (owner, 2026-10-27: "same
+   failures as the baseline" let 12 crashing tests stand for 16 days): fix it, or stop and show the owner, who alone
+   may waive it (`tests.fork_waivers`). List every skip with its reason in your report; a skip that is not "this
+   box has too few chips" is a finding. `fork_source` fails on any test the fork does not pass. Where the fork has a
    program-level check (a parity or descriptor test), it must show the option-off program is unchanged. If step 5
-   finds a regression, fix it, go back to step 3 for the fix, then repeat step 5.
+   finds a failure, fix it, go back to step 3 for the fix, then repeat step 5. (Every fork's every test runs once more,
+   strictly, at the end of the run: task F.1, `testing/fork_suite.py`.)
 6. **Record it.** Add a `CHANGELOG.md` entry (below), and update the `README.md` and the `INDEX.md` entry.
 
 A bug fix that has to change the default behaviour is the one exception to step 2. Say so in the changelog, and

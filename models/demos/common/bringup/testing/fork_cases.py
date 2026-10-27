@@ -11,9 +11,12 @@
   least ``model`` and ``sig``: the model that made the call, and the captured signature the case reproduces.
 - Uncovered: a call this model makes that no case of its fork carries (same model, same sig).
 - ``--run-tests``: runs the tests of every fork the model uses through ``fork_tests.py`` (each case's mesh on the cards
-  of this box that form it), every model's cases included (the top-level tests/test_*.py; a fork's own unit suite in tests/unit/ is not run).
-Records forks_used, fork_calls, fork_calls_uncovered and fork_tests_failed (a gate wants 0 of each of the last two)
-and prints what is missing.
+  of this box that form it), every model's cases included (the top-level tests/test_*.py; a fork's own unit suite in
+  tests/unit/ is not run). F198: a fork without a case file counts as failed and the others still run; every test is
+  counted (passed / failed / errors / skipped with its reason / not run) and listed per fork.
+Records forks_used, fork_calls, fork_calls_uncovered, fork_tests_failed (failed + errors + not run + collection errors +
+forks with no case file), fork_tests_passed, fork_tests_skipped and fork_tests_not_run (a gate wants 0 uncovered and 0
+failed) and prints what is missing.
 
 F139 (owner rules, as F80 per step): a math case's limit is never a number read off the device's own error.
 ``noise_limit(fn_ref, inputs, dtypes)`` gives it: the torch reference at the op's real input formats (bf16 / bfp8 /
@@ -141,20 +144,32 @@ def check(capture: Path | list[Path], model: str) -> tuple[dict, dict[str, list[
     return {"stats": stats, "forks": sorted(by_fork)}, missing
 
 
-def run_tests(forks: list[str]) -> int:
-    """The model-case tests of each fork: the top-level tests/test_*.py (an op's own unit suite in tests/unit/ is not
-    part of the pass)."""
-    files = {f: sorted((FORKS / f / "tests").glob("test_*.py")) for f in forks}
-    missing = sorted(f for f, v in files.items() if not v)
-    if missing:
-        print(f"forks without tests/test_*.py: {missing}")
-        return 1
-    if not any(files.values()):
-        return 0
-    # Grouped by each case's mesh and run on the cards of this box that form it (fork_tests.py / cards.py).
-    from models.demos.common.bringup.testing.fork_tests import run
+def run_tests(forks: list[str], runner=None, grouper=None) -> dict[str, dict]:
+    """The model-case tests of each fork (the top-level tests/test_*.py; an op's own unit suite in tests/unit/ is not
+    part of the pass), grouped by each case's mesh and run on the cards of this box that form it (fork_tests.py /
+    cards.py). F198: a fork with no case file is a failure of its own, and every other fork still runs; the tally
+    counts each test (fork_tests.run)."""
+    from models.demos.common.bringup.testing import fork_tests as FT
 
-    return run(sorted(files))
+    no_cases = [f for f in forks if not list((FORKS / f / "tests").glob("test_*.py"))]
+    tallies = FT.run([f for f in forks if f not in no_cases], runner=runner, grouper=grouper)
+    for f in no_cases:
+        t = tallies[f] = FT.empty_tally()
+        t["collect_errors"] = 1
+        t["problems"].append("no tests/test_*.py: the model's calls to this fork are never run")
+    return dict(sorted(tallies.items()))
+
+
+def tally_stats(tallies: dict[str, dict]) -> dict:
+    from models.demos.common.bringup.testing import fork_tests as FT
+
+    tot = lambda k: sum(t[k] for t in tallies.values())  # noqa: E731
+    return {
+        "fork_tests_passed": tot("passed"),
+        "fork_tests_failed": sum(FT.bad(t) for t in tallies.values()),
+        "fork_tests_skipped": tot("skipped"),
+        "fork_tests_not_run": tot("not_run") + tot("collect_errors"),
+    }
 
 
 def main(argv=None) -> int:
@@ -189,8 +204,14 @@ def main(argv=None) -> int:
             print(f"FAIL case lint: {e}")
         stats["fork_cases_lint"] = len(bad)
     if a.run_tests and res["forks"]:
-        failed = int(run_tests(res["forks"]) != 0)
-    stats["fork_tests_failed"] = failed
+        from models.demos.common.bringup.testing.fork_tests import report
+
+        tallies = run_tests(res["forks"])
+        report(tallies)
+        stats.update(tally_stats(tallies))
+        failed = stats["fork_tests_failed"]
+    else:
+        stats["fork_tests_failed"] = 0
     if spec is not None:
         from models.demos.common.bringup.core import metrics
 

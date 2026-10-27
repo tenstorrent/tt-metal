@@ -146,7 +146,7 @@ def test_ledger_generator(fx):
     assert [t["id"] for t in generate(s, early=True)["tasks"]] == ids[:8]
     assert [i for i in ids if i.startswith("C.")] == [f"C.blk.{st.name}" for st in Reference().block_graph(0)]
     assert [i for i in ids if i.startswith("S.")] == [f"S.blk.{n:02d}" for n in range(1, 7)]
-    assert ids[-9:] == ["L.s256", "L.s512", "L.last", "K.1", "X.1", "X.2", "X.3", "O.1", "Z.1"]
+    assert ids[-10:] == ["L.s256", "L.s512", "L.last", "K.1", "X.1", "X.2", "X.3", "O.1", "Z.1", "F.1"]
     z = next(t for t in out["tasks"] if t["id"] == "Z.1")
     assert z["role"] == "settings" and z["deps"] == ["O.1"] and "settings_lint" in z["gate"]["cmd"]
     o1 = next(t for t in out["tasks"] if t["id"] == "O.1")
