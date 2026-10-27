@@ -96,6 +96,7 @@ pytest models/tt_dit/tests/models/flux2_klein/test_pipeline_flux2_klein.py -k te
 pytest models/tt_dit/tests/models/flux2_klein/test_prompt_encoder_flux2_klein.py \
     -k "test_tokenize_matches_reference or test_config_and_sizes or test_reduced_depth_config"
 pytest models/tt_dit/tests/models/flux2_klein/test_vae_flux2_klein.py -k "test_unpack_matches_pipeline or test_plain_grid_rule"
+pytest models/tt_dit/tests/models/flux2_klein/test_vae_routing_flux2_klein.py   # which decoder each API canvas takes
 ```
 
 Device rows run on the 4x8 ring (`bh_4x8_ring`), parametrized over `size` and `layout`:
@@ -128,6 +129,39 @@ pipeline test renders with the golden's recorded text (`text_override`) and comp
 (PSNR >= 30 dB for distilled), the final state to the golden's (pcc / rel_rmse band 0.99 / 0.15 distilled, 0.97 /
 0.25 base) and every teacher-forced step velocity (pcc >= 0.995). Host arithmetic (noise, ids, schedule, Euler
 update, packing) is compared bit for bit. The thresholds are only ever tightened.
+
+## API canvases
+
+The tt-media-server image API (PR #5466) asks for 14 canvases: 1024x1024 and 2048x2048, and the 16:9, 4:3 and 3:2
+aspects in both orientations at about 1 MP and 4 MP (1376x768, 1184x896, 1248x832, 2752x1536, 2368x1792, 2496x1664 and
+their transposes). All 14, with 0 and with 4 reference images, render on one Galaxy with the default SP8 x TP4 layout,
+at the exact width x height, in one process (peak DRAM 9.1 GB per chip; distilled 4B, 4 steps, warm, eager):
+
+| canvas | VAE decoder | end to end, 0 refs | 4 refs | decode |
+|---|---|---|---|---|
+| 1024x1024 | H8 | 0.63 s | 1.77 s | 0.10 s |
+| other ~1 MP canvases | replicated | 0.91-1.00 s | 1.99-2.05 s | 0.33-0.39 s |
+| 2048x2048, 2752x1536, 2368x1792 | H8 | 0.91-0.95 s | 2.31-2.34 s | 0.30-0.33 s |
+| 1536x2752, 1792x2368, 2496x1664, 1664x2496 | replicated | 2.16-2.27 s | 3.53-3.64 s | 1.53-1.66 s |
+
+The DiT costs the same at every aspect (96-108 ms per step at about 4K image tokens, 105-111 at about 16K); the
+spread is the VAE decoder. The H-partitioned decoder (`Flux2KleinVaeDecode.partitioned`) splits the latent rows 8
+ways over mesh axis 1 and the channels 4 ways over axis 0, and needs every decoder level to hold a whole number of
+32-row tiles per device (`h_partition_tile_aligned`: `dit_fused_distributed_groupnorm` has no row mask). Every
+portrait canvas and 1376x768, 1184x896, 1248x832 and 2496x1664 fail that and take the replicated fallback (the whole
+image on every column of the mesh, channels TP4), which uses its own conv slicing (`klein_replicated_decoder_slices`)
+and frees its CCL buffers after each eager decode.
+
+Open items:
+
+- **Fallback decode speed.** Padding the latent height to a tile-aligned split (as the Wan / QwenImage / LTX VAEs do
+  with `conv_pad_height` and `logical_h`) would put all 14 canvases on the H-partitioned decoder; the FLUX.2 VAE's
+  GroupNorm averages over the whole image, so the distributed group norm must count only the real rows first.
+- **Fidelity gate.** Against the CPU diffusers golden of the same seed, prompt and initial noise (seed 123), image PSNR
+  is 24.3 dB at 1024x1024, 22.1 dB at 1376x768 and 768x1376, 19.3 dB at 2752x1536; teacher-forced velocity pcc is
+  0.997-0.999 at every canvas and the Euler update is bit-exact, so the free-running gap is the last of the four
+  steps amplifying small state differences (wide 2K renders sometimes repeat the subject). A FLUX.2-specific image
+  gate is still to be set; the pipeline test's 30 dB floor is for its own golden case.
 
 ## Code flow
 

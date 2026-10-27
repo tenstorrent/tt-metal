@@ -52,7 +52,13 @@ from ...models.vae.vae_flux2 import Flux2VaeDecoder
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache
-from .packing import FLUX2_KLEIN_LATENT_CHANNELS, FLUX2_KLEIN_PATCH, FLUX2_KLEIN_VAE_CHANNELS, latent_shape
+from .packing import (
+    FLUX2_KLEIN_LATENT_CHANNELS,
+    FLUX2_KLEIN_PATCH,
+    FLUX2_KLEIN_TILE,
+    FLUX2_KLEIN_VAE_CHANNELS,
+    latent_shape,
+)
 
 VAE_SUBFOLDER = "vae"
 VAE_WEIGHTS_FILE = "diffusion_pytorch_model.safetensors"
@@ -150,6 +156,22 @@ def klein_downsample_slices(height: int, width: int) -> dict[tuple[int, int, int
     return out
 
 
+def h_partition_tile_aligned(height: int, width: int, h_factor: int) -> bool:
+    """True when every DECODER level of a ``height x width`` image (``/8``, ``/4``, ``/2``, full) holds a whole number
+    of 32-row tiles per device under an H split of ``h_factor``: ``(H_level / h_factor) * W_level % 32 == 0``. The
+    H-partitioned decoder's ``DistributedGroupNorm`` runs ``dit_fused_distributed_groupnorm`` on the per-device
+    ``[1, 1, H_level / F * W_level, C]`` rows, which TT_FATALs on padded rows
+    (``dit_fused_distributed_groupnorm_device_operation.cpp:65``). Whole-image alignment (the policy's ``canvas_size``
+    check) does not imply it: 1376x768 has 96 x 172 latent-level rows (16512 = 516 tiles) but 12 x 172 = 2064 per
+    device on H8; 1184x896 gives 14 x 148 = 2072, 2496x1664 26 x 312 = 8112."""
+    h, w = int(height) // FLUX2_KLEIN_VAE_SCALE, int(width) // FLUX2_KLEIN_VAE_SCALE
+    for _ in range(4):
+        if h % h_factor or (h // h_factor) * w % FLUX2_KLEIN_TILE:
+            return False
+        h, w = 2 * h, 2 * w
+    return True
+
+
 def partitioned_conv_rows(level_height: int, h_factor: int, halo: int = 1) -> int:
     """Rows of a conv's per-device input at a level of ``level_height`` rows under an H split of ``h_factor``: the
     device's share plus the ``neighbor_pad`` halo (``halo`` rows per side); the full height when not split."""
@@ -239,17 +261,53 @@ def _unaligned_slice_count(rows: int, width: int, cin: int, cout: int, tensor_pa
     return min(count, cap)
 
 
+def klein_replicated_decoder_slices(height: int, width: int, *, tp_factor: int) -> dict[tuple[int, int, int, int], int]:
+    """``(h_level, w_level, cin, cout) -> num_slices`` for every conv of the replicated-rows FALLBACK decoder (no H
+    split; a canvas the H-partitioned decoder cannot take, :meth:`Flux2KleinVaeDecode.partitioned`), by the same
+    ``FLUX2_KLEIN_VAE_SLICE_MODE`` rule as the H-partitioned decoder: ``auto`` (default) -> 0 = ttnn's auto slicer
+    (conv config tensors in DRAM), ``aligned`` -> ``decoder_slice_count``, ``explicit`` -> the unaligned budget count.
+    The fixed ``KLEIN_CONV_SLICES_PER_LEVEL`` counts (the shipped 1024x1024 ones) run the full-image decoder out of
+    L1 on the API canvases: 1248x832 / 832x1248 at the full-resolution upsampler conv (``(832, 1248, 256, 256)``,
+    16 slices, 1146880 B per bank of 1013376 free), 2496x1664 at ``(1248, 832, 256, 256)`` (4 slices), 1536x2752 at
+    ``(1376, 768, 512, 512)``, 1792x2368 at ``(2368, 1792, 256, 256)``."""
+    mode = _slice_mode()
+    out, h, w = {}, int(height), int(width)
+    for level in KLEIN_DECODER_CONVS_PER_LEVEL:
+        for cin, cout, tensor_parallel in level:
+            if mode == "auto":
+                count = 0
+            elif mode == "aligned":
+                count = decoder_slice_count(h, w, cin, cout, tensor_parallel, tp_factor)
+            else:
+                count = _unaligned_slice_count(h, w, cin, cout, tensor_parallel, tp_factor)
+            out[(h, w, cin, cout)] = count
+        h, w = downsample_extent(h), downsample_extent(w)
+    return out
+
+
 def register_klein_conv_slices(
-    mesh_shape: tuple[int, int], height: int, width: int, *, h_factor: int = 1, tp_factor: int = 1
+    mesh_shape: tuple[int, int],
+    height: int,
+    width: int,
+    *,
+    h_factor: int = 1,
+    tp_factor: int = 1,
+    replicated_fallback: bool = False,
 ) -> None:
     """Make ``Conv2d.slice_params[mesh_shape]`` know the Klein VAE shapes of a ``height x width`` image: the
     full-image keys (encoder, replicated decoder) and, for ``h_factor > 1``, the per-device keys of the
     H-partitioned decoder (``klein_partitioned_decoder_slices``). Idempotent; existing entries are never
-    overwritten, so the shipped counts win where both exist."""
-    key = (tuple(mesh_shape), int(height), int(width), int(h_factor), int(tp_factor))
+    overwritten, so the shipped counts win where both exist; except ``replicated_fallback`` (the no-H fallback decoder
+    of an H-split mesh), whose ``klein_replicated_decoder_slices`` counts replace any non-shipped entry of the same key.
+    """
+    key = (tuple(mesh_shape), int(height), int(width), int(h_factor), int(tp_factor), bool(replicated_fallback))
     if key in _registered_conv_slices:
         return
     table = Conv2d.slice_params.setdefault(tuple(mesh_shape), dict(Conv2d.slice_default))
+    if replicated_fallback:  # before the fixed full-image counts, and over them: they run the fallback out of L1
+        for shape, slices in klein_replicated_decoder_slices(height, width, tp_factor=tp_factor).items():
+            if shape not in Conv2d.slice_default:
+                table[shape] = slices
     for shape, slices in klein_conv_slices(height, width).items():
         table.setdefault(shape, slices)
     for shape, slices in klein_partitioned_decoder_slices(
@@ -436,9 +494,12 @@ class Flux2KleinVaeDecode:
         return self._h_factor
 
     def partitioned(self, height: int, width: int) -> bool:
-        """True when ``height x width`` decodes on the H-partitioned decoder (``h % h_factor == 0``)."""
+        """True when ``height x width`` decodes on the H-partitioned decoder: ``h % h_factor == 0`` and every decoder
+        level tile-aligned per device (:func:`h_partition_tile_aligned`); otherwise the replicated-rows fallback."""
         h, _ = latent_shape(height, width)
-        return h % self._h_factor == 0
+        return h % self._h_factor == 0 and (
+            self._h_factor <= 1 or h_partition_tile_aligned(height, width, self._h_factor)
+        )
 
     def _fallback_decoder(self) -> Flux2VaeDecoder:
         if self._fallback is None:
@@ -486,6 +547,7 @@ class Flux2KleinVaeDecode:
             width,
             h_factor=self._h_factor if partitioned else 1,
             tp_factor=tp_factor,
+            replicated_fallback=not partitioned and self._h_factor > 1,
         )
         decoder = self._decoder if partitioned else self._fallback_decoder()
         rows = self.gather_real_rows(state, num_image_rows=num_image_rows)
@@ -503,7 +565,20 @@ class Flux2KleinVaeDecode:
                 release_module_trace(decoder)  # one trace per decoder, keyed by size (Flux2 precedent)
             self._traced_size[key] = (height, width)
         replay = traced and _trace_captured(decoder)
-        out = decoder.forward(z, traced=traced)
+        if not partitioned and not traced and self._vae_ccl is not None:
+            # The replicated fallback decodes FULL-image activations per device, and the CCL manager's ping-pong
+            # buffers (the VAE attention linears' persistent all-gather / reduce-scatter outputs) are keyed by shape
+            # and never evicted: ~1 GB per chip per 1K canvas, ~4 GB per 2K canvas, so a process serving the API
+            # canvases ran out of DRAM (1792x2368 after 18 shapes: "Not enough space to allocate 543162368 B DRAM
+            # buffer"). Eager only: free the pairs this decode added (``transient_ping_pong_buffers``), keeping the
+            # output alive through a copy taken before they are freed.
+            with self._vae_ccl.transient_ping_pong_buffers():
+                produced = decoder.forward(z, traced=False)
+                out = ttnn.clone(produced)
+            if produced.is_allocated():
+                ttnn.deallocate(produced)
+        else:
+            out = decoder.forward(z, traced=traced)
         if not traced or replay:
             # Eager: ``z`` is a plain intermediate. Traced REPLAY: the tracer copied ``z`` into the captured input
             # buffer (``utils/tracing.py`` ``_update_input``: ``ttnn.copy`` when the addresses differ), so this fresh
@@ -549,8 +624,10 @@ __all__ = [
     "build_flux2_klein_vae_decoder",
     "conv_slice_cap",
     "downsample_extent",
+    "h_partition_tile_aligned",
     "klein_conv_slices",
     "klein_downsample_slices",
+    "klein_replicated_decoder_slices",
     "load_flux2_klein_vae_weights",
     "load_vae_torch_state",
     "plain_group_norm_grid",
