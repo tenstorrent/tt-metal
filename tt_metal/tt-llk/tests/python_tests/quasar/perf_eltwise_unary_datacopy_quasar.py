@@ -16,20 +16,20 @@ from quasar.test_eltwise_unary_datacopy_quasar import (
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=PERF_DATACOPY_COMBINATIONS,
+    data_copy_type_dest_acc_formats_dims_dest_sync_dest_indices=PERF_DATACOPY_COMBINATIONS,
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_eltwise_unary_datacopy_quasar(
     perf_report,
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
+    data_copy_type_dest_acc_formats_dims_dest_sync_dest_indices,
     run_types,
     loop_factor,
     is_perf,
 ):
     run_eltwise_unary_datacopy(
-        formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
+        data_copy_type_dest_acc_formats_dims_dest_sync_dest_indices,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

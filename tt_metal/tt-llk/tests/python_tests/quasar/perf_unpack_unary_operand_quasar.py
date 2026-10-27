@@ -15,20 +15,20 @@ from quasar.test_unpack_unary_operand_quasar import (
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose_unpack_sel_dims=PERF_UNPACK_UNARY_OPERAND_COMBINATIONS,
+    unpack_sel_dest_acc_formats_sync_transpose_dims=PERF_UNPACK_UNARY_OPERAND_COMBINATIONS,
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_unpack_unary_operand_quasar(
     perf_report,
-    formats_dest_acc_sync_transpose_unpack_sel_dims,
+    unpack_sel_dest_acc_formats_sync_transpose_dims,
     run_types,
     loop_factor,
     is_perf,
 ):
     run_unpack_unary_operand(
-        formats_dest_acc_sync_transpose_unpack_sel_dims,
+        unpack_sel_dest_acc_formats_sync_transpose_dims,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,
