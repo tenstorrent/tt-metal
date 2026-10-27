@@ -561,7 +561,9 @@ class KdaDecode:
         cores = rect_core_ranges(core_of)  # 1-3 rectangles instead of one range per core: < 1 us of dispatch
 
         t32, t16 = TILE * TILE * 4, TILE * TILE * 2
-        cb = self.CB
+        cb = (
+            self.CB_FUSED if self.fused else self.CB
+        )  # the fused variant names slot 28 "loop" (2026-10-27 8x4 KeyError)
         cbs = [
             self._cb(cb[name], dt, t32 if dt == ttnn.float32 else t16, pages, cores)
             for name, dt, pages in self.cb_plan(parts)
