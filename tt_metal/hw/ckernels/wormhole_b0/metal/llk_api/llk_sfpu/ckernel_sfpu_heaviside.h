@@ -8,42 +8,46 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
-#include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpi.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-inline void heaviside_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void heaviside_init() {
+    // The row's last SFPSTORE steps dest by the two counter rows one SFPU row covers, so the
+    // body needs no TTINCRWC. The unary SFPU addr_mod base maps the body's ADDR_MOD_2 onto
+    // physical slot 6 (the typecast / square convention).
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_heaviside(std::uint32_t value) {
-    vFloat s = Converter::as_float(value);
+    // heaviside(v) = `value` at v == 0 (either zero), 0.0 for a set sign bit, 1.0 otherwise.
+    //
+    // Raw SFPU body, 7 instructions per row. The sfpi form (copysgn + add, then an
+    // sfpi::abs(v) == 0 arm) costs 11: SFPABS + SFPSETCC for the zero test, two SFPMOVs to
+    // merge the arms, and a RISC loop. Here the row is three stores of constants under
+    // nested predicates: `value` to every lane; then SFPLZ with NOSGN|CC_NE0 enables the lanes
+    // with (bits & 0x7fffffff) != 0 -- the same |v| != 0 test as before, so -0.0 keeps `value`
+    // -- which take 1.0; then SFPSETCC LT0 narrows the enable to the lanes whose sign bit is
+    // set (SFPSETCC only writes the flags of enabled lanes), which take 0.0. Both forms
+    // dispatch on the sign bit rather than a float compare, so NaN lands where it did:
+    // a NaN with a clear sign bit is 1.0, with a set one 0.0.
+    _sfpu_load_imm32_(p_sfpu::LREG4, value);
 
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-
-        // copysgn(0.5, v) + 0.5 is 1.0 for a clear sign bit and 0.0 for a set one, which
-        // reproduces the v<0 and v>0 arms in two unpredicated slots. Only exact zero is
-        // left to branch on, so the three-way chain's SFPPUSHC/SFPPOPC pair disappears.
-        //
-        // NaN is unchanged by this. Both forms dispatch on the sign bit -- SFPSETCC tests
-        // it -- and a NaN reaching this kernel over the bf16 path has its sign bit clear,
-        // so it takes the positive arm and yields 1.0 either way. Measured on device
-        // before and after the rewrite; see test_vif_equiv_sweep's _NONFINITE_EXPECTED,
-        // where the NaN column equals the +inf column for every one of these kernels.
-        // (torch returns NaN here instead; neither the old nor the new kernel does, and
-        // this rewrite does not change that.)
-        vFloat r = sfpi::copysgn(vFloat(0.5f), v) + 0.5f;
-        // SFPSETCC is unspecified for -0.0 (VectorUnit.md), so a bare v == 0.0f can miss it.
-        v_if(sfpi::abs(v) == 0.0f) { r = s; }
-        v_endif;
-
-        dst_reg[0] = r;
-
-        dst_reg++;
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);     // every lane: value
+        TTI_SFPLZ(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);  // |v| != 0
+        TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);  //   -> 1.0
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);            //   and sign bit set
+        TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);  //   -> 0.0; steps dest
+        TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
     }
 }
 
