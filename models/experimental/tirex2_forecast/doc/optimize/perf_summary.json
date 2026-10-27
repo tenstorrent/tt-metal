@@ -1,0 +1,150 @@
+{
+  "workload": {
+    "profile": "forecast_forward (tta_sign_flip=False, pad_context=True)",
+    "target": "paper:accuracy",
+    "series": 1024,
+    "context": 2048,
+    "horizon": 64,
+    "tokens": 285,
+    "pad_cut": 192,
+    "guards": [
+      "long_context:accuracy (32 x 8192 -> 928)",
+      "multivariate:accuracy (128 groups x 8 x 2048 -> 64)",
+      "paper:performance"
+    ],
+    "precision_performance": "not shipped (D4/v1.12): paper 872.8 vs 894.7 ms accuracy = -2.4 %, under the 5 % bar; kept as a non-ship regression guard"
+  },
+  "chip": "blackhole p150a, ttq part 1 (13EF8C237BE3)",
+  "final": {
+    "decision": "accuracy is the shipping precision",
+    "commit": "723f5b586a3 (tt/ = 5955bd0e378)",
+    "bench": "doc/optimize/final/bench_long_723f5b5.json (job 900, --kind long, tirex2_base, git_dirty false)",
+    "check_gates": "0 failures vs fixed ref iter_01/r1_1/b2b_base.json",
+    "device_ms": {
+      "paper-accuracy": 894.7,
+      "long_context-accuracy": 66.7,
+      "multivariate-accuracy": 2337.0
+    },
+    "steady_wall_ms": {
+      "paper-accuracy": 1291.4,
+      "long_context-accuracy": 73.9,
+      "multivariate-accuracy": 2752.6
+    },
+    "informational_performance_device_ms": {
+      "paper": 872.8,
+      "long_context": 64.7,
+      "multivariate": 2186.8
+    },
+    "speedup_vs_cpu_accuracy": {
+      "paper": 320.1,
+      "long_context": 143.4,
+      "multivariate": 256.9
+    },
+    "pcc_paper_accuracy": {
+      "pcc_normalized": 0.999974,
+      "pcc_final": 0.999991
+    },
+    "sign_flip_e2e": "test_sign_flip_16 q_full pcc 0.999999 (floor 0.99), median |err|/scale 3.1e-2 (job 900)",
+    "pcc_suite": "49/49 under TT_METAL_WATCHER=10, watcher.log 0 errors (job 901); suite + test_check_gates 54 passed at 5955bd0e378 (job 899)"
+  },
+  "rounds": [
+    {
+      "round": 0,
+      "paper_accuracy_device_ms": 3871.2,
+      "long_context_device_ms": 371,
+      "multivariate_device_ms": 10990,
+      "paper_performance_device_ms": 3792,
+      "note": "op-level sLSTM loop, stock ops"
+    },
+    {
+      "round": 1,
+      "paper_accuracy_device_ms": 1002.0,
+      "long_context_device_ms": 320.7,
+      "multivariate_device_ms": 3707.0,
+      "paper_performance_device_ms": 979.6,
+      "commit": "69f1e618874",
+      "jobs": [
+        854,
+        859
+      ]
+    },
+    {
+      "round": 2,
+      "paper_accuracy_device_ms": 914.3,
+      "long_context_device_ms": 68.2,
+      "multivariate_device_ms": 2407.1,
+      "paper_performance_device_ms": 892.7,
+      "commit": "7cda792fec3",
+      "jobs": [
+        890,
+        891
+      ]
+    },
+    {
+      "round": 3,
+      "paper_accuracy_device_ms": 894.4,
+      "long_context_device_ms": 66.8,
+      "multivariate_device_ms": 2336.8,
+      "paper_performance_device_ms": 873.0,
+      "commit": "5955bd0e378",
+      "jobs": [
+        898,
+        899
+      ],
+      "note": "-2.2 %, under the 5 % exit line: stop"
+    }
+  ],
+  "total_improvement": {
+    "paper-accuracy": "3871.2 -> 894.7 ms (-76.9 %)",
+    "long_context-accuracy": "371 -> 66.7 ms (-82.0 %)",
+    "multivariate-accuracy": "10990 -> 2337.0 ms (-78.7 %)",
+    "paper-performance": "3792 -> 872.8 ms (-77.0 %)"
+  },
+  "accepted": {
+    "R1-1": "constant left-pad skip, cached fp32 pad states (-49.2 %)",
+    "R1-2a+b": "flatten B into M for dense linears + fused SwiGLU minimal_matmul (-41.9 %)",
+    "R1-2d": "fp32 W_in gate bias inside the matmul (-3.6 % paper; +4.7 % multivariate, D6 c)",
+    "R1-2f": "minimal_matmul blocks per role (-6.8 %)",
+    "R1-2f'": "FFN w_down minimal_matmul blocks (-2.5 %)",
+    "R2-3 v2": "sLSTM head norm as layer_norm on a row-flattened view (-5.2 %)",
+    "R2-2b+c": "sLSTM step activations fused into binary ops, log/relu_min as op activations (-2.5 %, -1.3 %)",
+    "R2-4": "time-major residual stream through variate mixer to next sLSTM (multivariate)",
+    "R2-1": "fused sLSTM step kernel ops/slstm_step (39.6 us/step) where the loop starts from zero state (long_context -79 %, multivariate)",
+    "R3-2+R3-3a": "exp fused into mLSTM chunkwise subtracts; one stacked gate linear (-2.3 %)",
+    "R3-4": "variate block keeps o + f (multivariate -1.2 %)"
+  },
+  "rejected": {
+    "R1-3": "read-out cut, -1.2 % (< 2 %)",
+    "R1-4a": "mLSTM g_last as sum(lf), -0.6 %",
+    "R1-2e": "packed qkvo, saves <= 0.2 ms x 6 before slices (sweep job 802)",
+    "R2-3 v1": "layer_norm on [..,4,128] view, +24.9 % (4-row tile padding)",
+    "R2-5": "separate fp32 bias add again, +4.5 %",
+    "R2-2a": "addcmul variant, accuracy drift",
+    "R3-5": "ys in place: slice_write bf16 row-major only"
+  },
+  "named_limitations": [
+    "R3-1 (fused kernel on paper, est. -25 %) not integrated: slstm_steps has no init-state input for the post-pad-cut start; requested in KERNEL.md 2026-10-26 18:43, unanswered",
+    "performance precision does not reach the 5 % bar over accuracy, so it does not ship"
+  ],
+  "configs": {
+    "precision_accuracy": "bf16 weights/activations, HiFi2+ matmuls with fp32 dest acc; recurrent states and exponential gating fp32",
+    "dense_linears": "minimal_matmul with per-role blocks (iter_01 sweeps), B flattened into M, fused SwiGLU FFN",
+    "slstm": "ops/slstm_step generic_op kernel for zero-init loops; op-level fused-activation loop after the pad cut",
+    "mlstm": "chunkwise (chunk 64), exp fused into subtracts, stacked gate linear",
+    "trace": "traced forward replay"
+  },
+  "not_applicable": {
+    "decode / paged KV-cache / decode trace": "single-pass encoder-style forecaster, no autoregressive decode",
+    "LM head / sampling": "quantile head, no vocab",
+    "vLLM / serving": "not a serving stage",
+    "multi-device topology": "single chip by contract",
+    "datatype-sweep": "precision policy fixed by the contract and D4",
+    "qualitative-check": "replaced by the contract's quantile metrics on realistic bench inputs"
+  },
+  "evidence": {
+    "candidates": "doc/optimize/candidates.md",
+    "rounds": "doc/optimize/iter_00..iter_03",
+    "final": "doc/optimize/final/",
+    "kernel": "fleet/tirex2/KERNEL.md"
+  }
+}

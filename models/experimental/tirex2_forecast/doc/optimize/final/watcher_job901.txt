@@ -1,0 +1,2 @@
+======================== 49 passed in 603.59s (0:10:03) ========================
+TT_METAL_WATCHER=10; watcher.log error/assert/hang lines: 0

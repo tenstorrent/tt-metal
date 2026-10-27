@@ -1,0 +1,3 @@
+models/experimental/tirex2_forecast/tests/pcc/test_model.py::test_sign_flip_16 [PCC] model16.q_full: pcc 0.999999 max rel err 2.674e-03 (floor 0.99)
+[PCC] model16.q_full.median: worst |err| / scale 3.113e-02
+======================== 7 passed in 178.22s (0:02:58) =========================
