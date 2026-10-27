@@ -33,6 +33,7 @@ from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import galaxy_meshes
 from models.demos.deepseek_v3_d_p.tests.v41.test_v41_depth import _dram_bytes, parse_layers
 from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import weight_cache_dir
 from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT
+from models.demos.deepseek_v3_d_p.tt.v41.dspark_weights import seeding_weights
 from models.demos.deepseek_v3_d_p.tt.v41.engram_checkpoint import build_engram_modules
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer, V41GenericPrefillTrace
 from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_dense, resolve_checkpoint
@@ -99,6 +100,8 @@ def _snapshot(mesh_device, logits, state, total: int) -> dict:
     for source, carry in state.compressor_carry.items():
         for i, t in enumerate(carry or ()):
             out[f"compressor_carry[{source}][{i}]"] = down(t)
+    for k, t in enumerate(state.dspark_rings or ()):
+        out[f"dspark_ring[{k}]"] = down(t)
     return out
 
 
@@ -152,6 +155,9 @@ def test_v41_prefill_generic(mesh_device, device_params, monkeypatch):
     t0 = time.time()
     engram, engram_hash = build_engram_modules(mesh_device, C, ckpt, layers, tokenizer)
     top = ckpt.read(["embed.weight", "norm.weight", "head.weight"])
+    # V41_GENERIC_DSPARK=1: the DSpark seeding in every chunk (the drafter's seven seeding tensors from the
+    # checkpoint; needs the tap layers 37-39); the rings join the compared state
+    dspark = os.environ.get("V41_GENERIC_DSPARK", "0") == "1"
     model = TtV41Transformer(
         mesh_device,
         C,
@@ -165,9 +171,11 @@ def test_v41_prefill_generic(mesh_device, device_params, monkeypatch):
         engram=engram,
         engram_hash=engram_hash,
         weight_cache_path=root,
+        dspark_weights=seeding_weights(ckpt, C) if dspark else None,
     )
     report = {
         "exact_width": exact_width,
+        "dspark": dspark,
         "layers": layers,
         "tokens": total,
         "max_seq": max_seq,

@@ -340,7 +340,6 @@ class TtV41Transformer(LightweightModule):
     def _new_state(self, generic: bool = False) -> V41PrefillState:
         """``generic``: a state whose chunk graphs are position-generic (``V41GenericPrefillTrace``); its chunk
         inputs are host-filled per chunk (``_run`` does it), so the untraced prefill runs through it as well."""
-        assert not (generic and self.dspark is not None), "generic prefill does not seed DSpark rings"
         state = V41PrefillState(
             self.mesh_device,
             self.config,
@@ -350,6 +349,7 @@ class TtV41Transformer(LightweightModule):
             kv_format=self.kv_format,
             generic=generic,
             tiled_index_k=generic and prefill_mask_once(),
+            dspark=self.dspark is not None,
         )
         if self.dspark is not None:
             state.dspark_rings = self.dspark.new_rings()
@@ -476,7 +476,7 @@ class TtV41Transformer(LightweightModule):
         end = total if end is None else end
         assert start < end <= total and (end == total or end % self.chunk == 0), (start, end, total)
         assert state.start == start, f"the state is at {state.start}, the chunk loop starts at {start}"
-        if self.dspark is not None and "dspark_rope" not in buffers:
+        if self.dspark is not None and not state.generic and "dspark_rope" not in buffers:
             buffers["dspark_rope"] = [
                 self.dspark.seed_rope(s, min(self.chunk, total - s)) for s in range(0, total, self.chunk)
             ]
@@ -500,7 +500,12 @@ class TtV41Transformer(LightweightModule):
             if state.generic:
                 state.tables.prepare_chunk(host.start, host.length, host.tables)
             t["stage"] = t.get("stage", 0.0) + time.perf_counter() - t0
-            rope = buffers["dspark_rope"][c] if self.dspark is not None else None
+            if self.dspark is None:
+                rope = None
+            elif state.generic:  # the seed rows' pair is a host-filled chunk input (prepare_chunk, this chunk)
+                rope = state.tables.dspark_rope(host.length)
+            else:
+                rope = buffers["dspark_rope"][c]
             forward = lambda: self._chunk_forward(
                 state, host, token_ids, engram_inputs, request.image_features, rope, request.first_scored, on_block
             )
@@ -579,7 +584,7 @@ class TtV41Transformer(LightweightModule):
         request = self._request(tokens, logit_positions, token_types, image_features)
         # ``TT_V41_PREFILL_GENERIC=1``: the position-generic graphs untraced (what ``V41GenericPrefillTrace`` replays),
         # so accuracy tests measure the served graph
-        state = self._new_state(generic=prefill_generic() and token_types is None and self.dspark is None)
+        state = self._new_state(generic=prefill_generic() and token_types is None)
         scored = self._run(request, state, {}, lambda c, forward: forward(), on_block)
         return self._logits(scored), state
 
@@ -749,7 +754,6 @@ class V41GenericPrefillTrace:
 
     def __init__(self, model: TtV41Transformer, state: V41PrefillState, buffers: dict | None = None, warmup: int = 2):
         assert state.generic, "a generic state (new_state(generic=True))"
-        assert model.dspark is None, "generic prefill does not seed DSpark rings"
         self.model, self.state, self.chunk = model, state, model.chunk
         self.buffers = {} if buffers is None else buffers
         self.controllers: dict = {}  # bucket (full chunks) or (bucket, valid length) (final chunks) -> capture

@@ -37,6 +37,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import fabric_num_links
 from models.demos.deepseek_v3_d_p.tt.v41.layout import SP_AXIS, V41MeshLayout
+from models.demos.deepseek_v3_d_p.tt.v41.dspark import seed_rows
 from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCacheFormat,
@@ -152,11 +153,23 @@ class V41ChunkTables:
     (``mask``) instead of relying on the score kernel's start-relative causal window. No position tables are
     kept on the device (0.67 GB per state at 1M)."""
 
-    def __init__(self, mesh_device, config, max_seq_len: int, chunk: int, layers: list[int], generic: bool = False):
+    def __init__(
+        self,
+        mesh_device,
+        config,
+        max_seq_len: int,
+        chunk: int,
+        layers: list[int],
+        generic: bool = False,
+        dspark: bool = False,
+    ):
+        """``dspark`` (generic only): keep the DSpark seeding's RoPE pair as a per-chunk host-filled input
+        (``dspark_rope``), so the generic chunk graph seeds the rings (speculative decode)."""
         self.mesh_device, self.config = mesh_device, config
         self.sp, self.tp = tuple(mesh_device.shape)
         self.max_seq_len, self.chunk = max_seq_len, chunk
         self.generic = generic
+        self.dspark = dspark and generic
         self.ratios = ratios = {config.compress_ratio(l) for l in layers}
         self.kinds = kinds = {(r > 0, 1) for r in ratios} | {(True, r) for r in ratios if r > 1}
         window = config.SLIDING_WINDOW
@@ -208,6 +221,16 @@ class V41ChunkTables:
             for r in ratios
             if r > 0
         }
+        # the DSpark seed rows' fp32 RoPE pair (``TtV41DSpark.seed_rope``: the rows [a, b) of the chunk's last
+        # ``window`` valid positions, <= window + 32 rows; the chunk's start is the only position input the seeding
+        # has), host-filled per chunk as the bf16 tables are; ``dspark_rope`` slices the chunk's rows
+        self._dspark_rope = (
+            tuple(
+                self._replicated(torch.zeros(1, 1, self.config.SLIDING_WINDOW + 32, 64), ttnn.float32) for _ in range(2)
+            )
+            if self.dspark
+            else None
+        )
         self._query_rows = rows
         self._chunk_start = None
         self._host_cache: dict[int, list] = {}
@@ -292,7 +315,29 @@ class V41ChunkTables:
         for r, buffer in self._row_index.items():
             rows = torch.arange(chunk // r, dtype=torch.int32) + start // r
             pairs.append((self._host_replicated(rows.view(1, 1, 1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), buffer))
+        if self._dspark_rope is not None:
+            pairs += self._dspark_rope_host(start, chunk)
         return pairs
+
+    def _dspark_rope_host(self, start: int, length: int) -> list[tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """The seed rows' cos / sin of the chunk at ``start`` with ``length`` valid tokens (``TtV41DSpark.seed_rope``'s
+        values, fp32, padded with zero rows to the buffer), each with its buffer."""
+        _, a, b = seed_rows(length, self.config.SLIDING_WINDOW)
+        rows = self._dspark_rope[0].shape[2]
+        pairs = []
+        for host, buffer in zip(cos_sin(self.config, False, torch.arange(start + a, start + b)), self._dspark_rope):
+            padded = torch.zeros(1, 1, rows, host.shape[3])
+            padded[:, :, : b - a] = host
+            pairs.append((self._host_replicated(padded, ttnn.float32), buffer))
+        return pairs
+
+    def dspark_rope(self, length: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """The chunk's seed rows' RoPE pair (``[1, 1, b - a, 64]`` fp32 replicated, what ``TtV41DSpark.seed`` takes)
+        for ``length`` valid tokens, sliced from the host-filled buffers (``prepare_chunk`` filled them for this
+        chunk's start and length)."""
+        assert self._dspark_rope is not None, "the tables were built without DSpark"
+        _, a, b = seed_rows(length, self.config.SLIDING_WINDOW)
+        return tuple(ttnn.slice(t, [0, 0, 0, 0], [1, 1, b - a, t.shape[3]]) for t in self._dspark_rope)
 
     def prepare_chunk(self, start: int, length: int, host: list | None = None) -> None:
         """Host-fill the chunk's input buffers: RoPE rows, the pin page, the visible counts, the row indices. Runs
@@ -301,6 +346,9 @@ class V41ChunkTables:
         assert self.generic
         for tensor, buffer in self.prepare_chunk_host(start) if host is None else host:
             ttnn.copy_host_to_device_tensor(tensor, buffer)
+        if self._dspark_rope is not None and length != self.chunk:  # a partial final chunk: its own seed rows
+            for tensor, buffer in self._dspark_rope_host(start, length):
+                ttnn.copy_host_to_device_tensor(tensor, buffer)
         self._chunk_start = start
 
     def _host_replicated(self, host, dtype, layout=ttnn.TILE_LAYOUT):
@@ -461,6 +509,7 @@ class V41PrefillState:
         kv_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         generic: bool = False,
         tiled_index_k: bool = False,
+        dspark: bool = False,
     ):
         """``generic``: position-generic chunk graphs (``V41ChunkTables`` generic mode; ``V41GenericPrefillTrace``):
         the cache writes scatter by an uploaded row index instead of a start-dependent slice. ``tiled_index_k``
@@ -468,7 +517,8 @@ class V41PrefillState:
         its rows (``index_k_tiled``), written by ``write_compressed`` beside the row-major rows, so an index source's
         score kernel reads a tile-aligned prefix of it (one slice) instead of slicing, tilizing and padding the
         row-major rows at every chunk. The row-major cache stays the one the candidate scorer
-        and the decode join read."""
+        and the decode join read. ``dspark`` (generic only): the tables keep the DSpark seed rows' RoPE pair as a
+        host-filled chunk input, so a generic chunk graph seeds the rings (``V41ChunkTables.dspark_rope``)."""
         assert kv_format in self.FORMATS, f"V4.1 KV format must be one of {self.FORMATS}, got {kv_format}"
         self.mesh_device = mesh_device
         self.config = config
@@ -476,7 +526,9 @@ class V41PrefillState:
         self.geometry = V41CacheGeometry(config, max_seq_len, chunk, layout.sp)
         layout.check_chunk(chunk)
         self.layers = list(layers)
-        self.tables = V41ChunkTables(mesh_device, config, max_seq_len, chunk, self.layers, generic=generic)
+        self.tables = V41ChunkTables(
+            mesh_device, config, max_seq_len, chunk, self.layers, generic=generic, dspark=dspark
+        )
         self.generic = generic
         self.start = 0
         self.compressed_kv_format = kv_format

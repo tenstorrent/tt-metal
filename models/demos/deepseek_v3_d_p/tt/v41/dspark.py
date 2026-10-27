@@ -45,6 +45,14 @@ SP_AXIS = 0
 TILE = 32
 
 
+def seed_rows(length: int, window: int) -> tuple[int, int, int]:
+    """(lo, a, b): the real positions [lo, length) a chunk with ``length`` valid tokens seeds and the tile-aligned
+    rows [a, b) around them (at most window + 32 rows). The generic chunk tables use the same arithmetic for the
+    seed rows' RoPE buffer (``V41ChunkTables.dspark_rope``)."""
+    lo = max(0, length - window)
+    return lo, lo // TILE * TILE, -(-length // TILE) * TILE
+
+
 class TtV41DSpark(LightweightModule):
     def __init__(self, mesh_device, config, weights: dict):
         """``weights`` (torch, checkpoint ``[out, in]`` orientation, FP8 tensors dequantized): ``main_proj``
@@ -108,8 +116,7 @@ class TtV41DSpark(LightweightModule):
     # --- D1 --------------------------------------------------------------------------------------------------
     def _seed_rows(self, length: int) -> tuple[int, int, int]:
         """(lo, a, b): the real positions [lo, length) a chunk seeds and the tile-aligned rows [a, b) around them."""
-        lo = max(0, length - self.window)
-        return lo, lo // TILE * TILE, -(-length // TILE) * TILE
+        return seed_rows(length, self.window)
 
     def project(self, taps: list, length: int):
         """``taps`` (one per target layer, in order) of a chunk with ``length`` valid tokens -> (main_x, a):
