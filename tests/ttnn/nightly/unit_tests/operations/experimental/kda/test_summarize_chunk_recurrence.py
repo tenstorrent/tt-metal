@@ -63,7 +63,7 @@ _REGRESSION_CASE = _PerformanceCase(
     batch_heads=8,
     num_chunks=4,
     dim=32,
-    expected_duration_ns={True: 15_585, False: 14_440},
+    expected_duration_ns={True: 14_850, False: 13_874},
 )
 # Kimi-K3 on Galaxy SP8xTP4: one device's 640 tokens of 24 heads.
 _PRODUCTION_CASE = _PerformanceCase(
@@ -71,7 +71,7 @@ _PRODUCTION_CASE = _PerformanceCase(
     batch_heads=24,
     num_chunks=20,
     dim=128,
-    expected_duration_ns={True: 132_317, False: 123_524},
+    expected_duration_ns={True: 124_210, False: 115_140},
 )
 # Both performance cases write head and tail slots, as the sequence-parallel grouped summary does.
 _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
