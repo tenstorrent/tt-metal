@@ -309,10 +309,9 @@ public:
         wake();
     }
 
-    // Enters the kernel only if the worker is parked.
     void wake() noexcept {
         if (parked_.load(std::memory_order_seq_cst) != 0 && parked_.exchange(0, std::memory_order_seq_cst) != 0) {
-            futex_wake_one(parked_);
+            futex_wake_one(parked_);  // syscall only when parked
         }
     }
 
