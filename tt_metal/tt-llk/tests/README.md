@@ -79,12 +79,8 @@ full guide including log levels, output destinations, and pytest-xdist behaviour
 ## SFPU accuracy
 
 Each SFPU op declares how closely its output must match its golden, in
-`python_tests/helpers/sfpu_accuracy_budget.yaml`. Most enrolled unary ops are gated by
-`python_tests/test_unary_sfpu_ulp.py`, which feeds every normal bfloat16 and float16
-value and zero, and a stride of float32, against the declared step budget. The
-exceptions, the signbit, isinf/isnan and threshold-family predicates, are gated on their
-functional drivers' hand-built stimuli instead. Only the formats the SFPU computes in
-(Float16_b, Float16, Float32) carry a budget; a block float keeps its tolerance.
-
-See [SFPU_ULP.md](SFPU_ULP.md) for how to enrol an op, what the sweep feeds and
-masks, and the rules the table enforces.
+`python_tests/helpers/sfpu_accuracy_budget.yaml`: a tolerance, or a step budget. Most
+unary step budgets are measured by `python_tests/test_unary_sfpu_ulp.py` over every
+normal 16-bit value and a stride of float32; the binary, ternary and scalar rows, and
+the `Signbit`, isinf/isnan and threshold-family rows, over their own drivers' stimuli.
+See [SFPU_ULP.md](SFPU_ULP.md) for how to enrol an op and the rules it enforces.

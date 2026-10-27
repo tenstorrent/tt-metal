@@ -14,6 +14,10 @@ import _ttml as cpp
 _NUMPY_DTYPES = {ttnn.DataType.FLOAT32: np.float32, ttnn.DataType.BFLOAT16: ml_dtypes.bfloat16}
 
 
+class ShapeMismatchError(ValueError):
+    """``assign_numpy`` was given an array that does not land at the tensor's per-device shape."""
+
+
 def assign_numpy(tensor, array: np.ndarray, *, layout=ttnn.Layout.TILE, mapper=None) -> None:
     """Load ``array`` into ``tensor`` in the dtype ``tensor`` is stored in.
 
@@ -21,6 +25,9 @@ def assign_numpy(tensor, array: np.ndarray, *, layout=ttnn.Layout.TILE, mapper=N
     values rounded with ml_dtypes. An array with fewer dimensions than ``tensor`` gets leading unit ones: a 2D weight
     loads into a 4D parameter as ``[1, 1, rows, cols]``, and an array of the tensor's rank keeps its shape. ``mapper``
     distributes the array as in ``Tensor.from_numpy``.
+
+    Loading values never resizes the tensor: an array that, once distributed, would not land at the tensor's
+    per-device shape raises ``ShapeMismatchError`` and leaves the tensor untouched.
     """
     dtype = tensor.dtype()
     if dtype not in _NUMPY_DTYPES:
@@ -28,4 +35,10 @@ def assign_numpy(tensor, array: np.ndarray, *, layout=ttnn.Layout.TILE, mapper=N
     # from_numpy reads the buffer in C order and rejects read-only arrays; copy only when the array is neither.
     values = np.require(array, dtype=_NUMPY_DTYPES[dtype], requirements=["C", "W"])
     values = values.reshape((1,) * max(0, tensor.get_rank() - values.ndim) + values.shape)
-    tensor.assign(cpp.autograd.Tensor.from_numpy(values, layout=layout, new_type=dtype, mapper=mapper))
+    loaded = cpp.autograd.Tensor.from_numpy(values, layout=layout, new_type=dtype, mapper=mapper)
+    if tuple(loaded.shape()) != tuple(tensor.shape()):
+        raise ShapeMismatchError(
+            f"assign_numpy: an array of shape {tuple(array.shape)} lands at {tuple(loaded.shape())} per device, but "
+            f"the tensor is {tuple(tensor.shape())} per device"
+        )
+    tensor.assign(loaded)

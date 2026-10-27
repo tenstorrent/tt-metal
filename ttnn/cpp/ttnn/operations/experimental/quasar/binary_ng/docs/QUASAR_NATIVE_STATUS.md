@@ -17,6 +17,60 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-10-19, part 3 — the tests follow the hardware: the arch from the device, the FPU add's two roundings
+
+## 1. TL;DR
+
+- **Three test issues from the ttsim team, none in the factory** (#62286, #62287, #62289; each reproduces with
+  `TTNN_QSR_NATIVE=0`). ttsim v1.13.0 checks its FPU and SFPU math against the hardware design, so its numbers are
+  the hardware's, and craq-sim has to follow it. tt-metal's own Quasar merge gate runs ttsim too.
+- **The arch comes from the device** (#62286). The tests read `ARCH_NAME` and `CHIP_ARCH`. Without them, the native
+  tests skipped, the fallback control failed, and the two router tests that must skip on Quasar ran and failed
+  (9 cases). Production's `is_quasar()` reads `ttnn.get_arch_name()`, which says `quasar` under both simulators.
+- **The FPU rounds a bf16 add twice** (#62289). It aligns the operand with the smaller exponent with 7 bits below the
+  ULP, rounds it half away from zero, and rounds the sum to nearest even: about 1 element in 80,000 is 1 ULP from
+  torch. craq-sim rounds once. The oracle accepts either rounding, element by element; the rest stays exact.
+- **Two SFPU bounds follow ttsim** (#62287): bf16 SIGMOID after a multiply 5 ULP (was 4), fp32 divide 2 (was 1).
+- **TODO, blocked on craq-sim#516**: craq-sim rounds the bf16 FPU add once. When it rounds twice,
+  `_FPU_ADD_ROUNDINGS` keeps only `_fpu_add_bf16`, and the oracle is the hardware's rule alone.
+- **TODO, blocked on craq-sim#517**: craq-sim's bf16 SIGMOID and SILU differ from ttsim on about 6% of the elements
+  (tip `1bfae892`). The bounds are ttsim's, so no test waits on it. When it closes, run the activation tests on
+  craq-sim and confirm that its largest distances equal ttsim's.
+
+---
+
+## 2. Changes
+
+- **Arch** (`binary_ng_quasar_test_utils.py`): `_on_quasar()` is gone, and the four files that used it call
+  production's `is_quasar()`. `test_fallback_factory_is_engaged` no longer checks the environment against the
+  device. The run instructions in five file headers no longer set `ARCH_NAME` and `CHIP_ARCH`.
+- **Oracle**: `_fpu_add_bf16` models the FPU add, and `_FPU_ADD_ROUNDINGS` holds it beside the single rounding. The
+  native module's add and subtract goldens use both, in the parent and in both child scripts, and so does every
+  activation chained on them.
+- **Bounds** (`_ULP`, `_ACT_ULP`): SIGMOID 5 and divide 2, and the comments say where each bound was measured.
+- **Docs**: design §6.1 (the two roundings) and the fp32 paragraph after it.
+
+---
+
+## 3. Verification
+
+- **Before, on ttsim**: main's eight binary_ng files gave 28 failures without `ARCH_NAME` and 160 with it.
+- **ttsim v1.13.0, without `ARCH_NAME`, as its CI runs**: the native module 170 passed, 1 skipped, 2 strict expected
+  failures, and 1 failure, `IL1.IL1.B12`: there the device profiler's parser aborts on unpaired TRISC1 zone markers,
+  on ttsim only. The other files fail only the activation-format file's 10 BFP8 and BFP4 cases.
+- **craq-sim `b9d8e2f4`, without `ARCH_NAME`, one file per process**: the native module 171 passed, 1 skipped, 2
+  strict expected failures, as before; no-broadcast 104 passed and 2 strict expected failures; bcast 134 and scalar
+  27 passed, with the router tests skipped; resnet_add 10, descriptor_cache_hit 4; the activation formats 112 passed
+  and the 10 BFP failures. The composite file stops at SFPSHFT2, which this build lacks; craq-sim `1bfae892` runs it
+  (14 passed).
+- **`TTNN_QSR_NATIVE=0`**: the fallback control passes on both simulators, and 173 tests skip.
+- **Real Wormhole**: the eight files 701 passed, 183 skipped.
+- **The model**: `_fpu_add_bf16` equals ttsim on 21M elements (four operand families, add and subtract), and craq-sim
+  equals the single rounding on all of them; no element matches neither rounding on either target. The two
+  batching-defect tests still find exactly their predicted wrong tiles.
+
+---
+
 # ► Week of 2026-10-19, part 2 — the native factory is the default on Quasar
 
 ## 1. TL;DR

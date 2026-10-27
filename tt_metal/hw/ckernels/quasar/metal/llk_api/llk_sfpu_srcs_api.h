@@ -11,6 +11,7 @@
 #include "llk_bfd_alloc.h"
 #include "llk_defs.h"
 #include "llk_math_eltwise_sfpu_common.h"
+#include "llk_sfpu/ckernel_sfpu_srcs.h"
 #include "llk_srcs.h"
 
 // SrcS SFPU pipeline: UNP_S -> SrcS -> SFPU -> PACK1 -> L1, on the ISOLATE_SFPU TRISC.
@@ -22,9 +23,6 @@
 // slice instead deadlocks the instruction buffer at 16 slices (32-bit SrcS). Binary has to issue
 // per slice (auto-loop cannot alternate descriptors, tt-llk #1635) so it bakes both ids into a MOP.
 // Either way this is one UNP_S engine with two table rows, not UNP_A+UNP_B.
-//
-// TODO(#52522): integrate the SFPLOADMACRO fast path (merged on main) into the wrapper. Only
-// per-slice ops are supported for now.
 
 // Allocates and programs the PACK1 buffer descriptor viewing the L1 output as SrcS slices.
 // Internal helper for llk_sfpu_srcs_{unary,binary}_init. Do not call standalone.
@@ -58,7 +56,6 @@ inline ckernel::TensorShape llk_sfpu_srcs_slice_shape_impl(const std::uint32_t y
  * @param l1_out_addr_16B: L1 output address (16B units).
  * @param pack_S_src_format: SrcS source format for the packer.
  * @param pack_S_dst_format: L1 output format.
- * @param implied_math_format: When false, disables implied SrcS math format for this TRISC.
  */
 template <std::uint8_t INSTRN_COUNT = 1>
 inline void llk_sfpu_srcs_unary_init(
@@ -67,8 +64,7 @@ inline void llk_sfpu_srcs_unary_init(
     const DataFormat unpack_S_dst_format,
     const std::uint32_t l1_out_addr_16B,
     const DataFormat pack_S_src_format,
-    const DataFormat pack_S_dst_format,
-    const bool implied_math_format) {
+    const DataFormat pack_S_dst_format) {
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
     const ckernel::TensorShape srcs_shape =
         llk_sfpu_srcs_slice_shape_impl(ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode));
@@ -77,8 +73,6 @@ inline void llk_sfpu_srcs_unary_init(
         srcs_shape, l1_in_addr_16B, static_cast<std::uint32_t>(unpack_S_src_format));
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
     llk_sfpu_srcs_configure_pack_impl(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
-
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::TRISC_ID] = !implied_math_format;
 
     _llk_unpack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
     _llk_pack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
@@ -90,8 +84,8 @@ inline void llk_sfpu_srcs_unary_init(
  *
  * Like llk_sfpu_srcs_unary_init, for ops with two inputs sharing formats. Both inputs use the
  * single UNP_S engine (two BFD table rows). The unpack auto-loop cannot alternate descriptors
- * (tt-llk #1635), so ids are baked into a two-instruction MOP and llk_sfpu_srcs_binary runs that
- * MOP per slice.
+ * (tt-llk #1635), so ids are baked into a two-instruction MOP that SfpuSrcsBinaryOp::run issues
+ * per slice.
  *
  * @tparam INSTRN_COUNT: Pack instructions per SrcS auto-loop (see llk_srcs.h).
  * @param l1_in0_addr_16B: L1 first input address (16B units).
@@ -101,7 +95,6 @@ inline void llk_sfpu_srcs_unary_init(
  * @param l1_out_addr_16B: L1 output address (16B units).
  * @param pack_S_src_format: SrcS source format for the packer.
  * @param pack_S_dst_format: L1 output format.
- * @param implied_math_format: When false, disables implied SrcS math format for this TRISC.
  */
 template <std::uint8_t INSTRN_COUNT = 1>
 inline void llk_sfpu_srcs_binary_init(
@@ -111,8 +104,7 @@ inline void llk_sfpu_srcs_binary_init(
     const DataFormat unpack_S_dst_format,
     const std::uint32_t l1_out_addr_16B,
     const DataFormat pack_S_src_format,
-    const DataFormat pack_S_dst_format,
-    const bool implied_math_format) {
+    const DataFormat pack_S_dst_format) {
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
     const ckernel::TensorShape srcs_shape =
         llk_sfpu_srcs_slice_shape_impl(ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode));
@@ -124,36 +116,18 @@ inline void llk_sfpu_srcs_binary_init(
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
     llk_sfpu_srcs_configure_pack_impl(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
 
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::TRISC_ID] = !implied_math_format;
-
-    _llk_unpack_srcs_config_<1, 1>();
+    _llk_unpack_srcs_config_<1 /*INSTRN_COUNT*/, 1 /*INSTRN_LOOP_COUNT*/>();
     _llk_unpack_srcs_binary_mop_config_(bfd_a, bfd_b);
     _llk_pack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
     _llk_math_eltwise_sfpu_init_();
 }
 
-/**
- * @brief Run a unary SFPU op over num_tiles tiles on the SrcS path.
- *
- * Per tile: unpack to SrcS, pack from SrcS, then per slice invoke @p sfpu_op and clear the SrcS
- * valids. The load/store base addresses and per-slice row count are computed here and passed to
- * @p sfpu_op, so the op carries no SrcS bookkeeping.
- *
- * @tparam INSTRN_COUNT: Must match the value passed to llk_sfpu_srcs_unary_init.
- * @tparam SfpuOp: Callable sfpu_op(int load_base_addr, int store_base_addr, int num_sfpu_iterations).
- * @param num_tiles: Number of 32x32 tiles to process.
- * @param unpack_S_dst_format: SrcS format used to derive geometry.
- * @param sfpu_op: Per-slice SFPU computation.
- */
-template <std::uint8_t INSTRN_COUNT = 1, typename SfpuOp>
-inline void llk_sfpu_srcs_unary(const std::uint32_t num_tiles, const DataFormat unpack_S_dst_format, SfpuOp&& sfpu_op) {
+// Internal: per-tile unpack/pack and per-slice walk for the unary SrcS path.
+template <std::uint8_t INSTRN_COUNT, bool CLEAR_VALIDS, typename PerSlice>
+inline void llk_sfpu_srcs_unary_impl(
+    const std::uint32_t num_tiles, const DataFormat unpack_S_dst_format, PerSlice&& per_slice) {
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
-    const std::uint32_t ydim = ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode);
     const std::uint32_t slice_count = ckernel::trisc::srcs_dims::slice_count(srcs_32bit_mode);
-
-    const int num_sfpu_iterations = static_cast<int>(ydim >> 1);  // SFP_ROWS == 2
-    const int load_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR;
-    const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * static_cast<int>(ydim);
 
     const std::uint8_t bfd_unpack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice0>();
     const std::uint8_t bfd_pack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>();
@@ -165,36 +139,22 @@ inline void llk_sfpu_srcs_unary(const std::uint32_t num_tiles, const DataFormat 
         _llk_pack_srcs_<INSTRN_COUNT>(bfd_pack, i * slice_count);  // Sets dvalid for SFPU to write
 
         for (std::uint32_t slice = 0; slice < slice_count; slice++) {
-            sfpu_op(load_base_addr, store_base_addr, num_sfpu_iterations);
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();  // Clears dvalid for SFPU read and write
+            per_slice();
+            if constexpr (CLEAR_VALIDS) {
+                _llk_math_eltwise_sfpu_srcs_clear_vlds_<
+                    true /*SRCS_RD_DONE*/,
+                    true /*SRCS_WR_DONE*/>();  // Clears dvalid for SFPU read and write
+            }
         }
     }
 }
 
-/**
- * @brief Run a binary SFPU op over num_tiles tiles on the SrcS path.
- *
- * Per tile: pack from SrcS, then per slice unpack one slice of each input, invoke @p sfpu_op and
- * clear the SrcS valids. Simple direct-issue variant; the pipelined preload + replay variant
- * stays kernel-local (see tt-llk #1635).
- *
- * @tparam INSTRN_COUNT: Must match the value passed to llk_sfpu_srcs_binary_init.
- * @tparam SfpuOp: Callable sfpu_op(int in0_base_addr, int in1_base_addr, int store_base_addr, int num_sfpu_iterations).
- * @param num_tiles: Number of 32x32 tiles to process.
- * @param unpack_S_dst_format: SrcS format used to derive geometry.
- * @param sfpu_op: Per-slice SFPU computation.
- */
-template <std::uint8_t INSTRN_COUNT = 1, typename SfpuOp>
-inline void llk_sfpu_srcs_binary(
-    const std::uint32_t num_tiles, const DataFormat unpack_S_dst_format, SfpuOp&& sfpu_op) {
+// Internal: per-tile pack and per-slice unpack/walk for the binary SrcS path.
+template <std::uint8_t INSTRN_COUNT, bool CLEAR_VALIDS, typename PerSlice>
+inline void llk_sfpu_srcs_binary_impl(
+    const std::uint32_t num_tiles, const DataFormat unpack_S_dst_format, PerSlice&& per_slice) {
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
-    const std::uint32_t ydim = ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode);
     const std::uint32_t slice_count = ckernel::trisc::srcs_dims::slice_count(srcs_32bit_mode);
-
-    const int num_sfpu_iterations = static_cast<int>(ydim >> 1);  // SFP_ROWS == 2
-    const int in0_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR;
-    const int in1_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + static_cast<int>(ydim);
-    const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * static_cast<int>(ydim);
 
     const std::uint8_t bfd_pack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>();
 
@@ -206,8 +166,58 @@ inline void llk_sfpu_srcs_binary(
 
         for (std::uint32_t slice = 0; slice < slice_count; slice++) {
             _llk_unpack_srcs_binary_();
-            sfpu_op(in0_base_addr, in1_base_addr, store_base_addr, num_sfpu_iterations);
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();  // Clears dvalid for SFPU read and write
+            per_slice();
+            if constexpr (CLEAR_VALIDS) {
+                _llk_math_eltwise_sfpu_srcs_clear_vlds_<
+                    true /*SRCS_RD_DONE*/,
+                    true /*SRCS_WR_DONE*/>();  // Clears dvalid for SFPU read and write
+            }
         }
     }
 }
+
+namespace ckernel::sfpu {
+
+// Op::init_op() runs after the SFPU init so its state (e.g. the LoadMacro replay) is not reset.
+template <typename Op>
+template <std::uint8_t INSTRN_COUNT>
+inline void SfpuSrcsUnaryOp<Op>::init(
+    const std::uint32_t l1_in_addr_16B,
+    const DataFormat l1_in_format,
+    const std::uint32_t l1_out_addr_16B,
+    const DataFormat l1_out_format) {
+    constexpr DataFormat srcs_format = Op::Layout::format;
+    llk_sfpu_srcs_unary_init<INSTRN_COUNT>(
+        l1_in_addr_16B, l1_in_format, srcs_format, l1_out_addr_16B, srcs_format, l1_out_format);
+    Op::init_op();
+}
+
+template <typename Op>
+template <std::uint8_t INSTRN_COUNT>
+inline void SfpuSrcsUnaryOp<Op>::run(const std::uint32_t num_tiles) {
+    llk_sfpu_srcs_unary_impl<INSTRN_COUNT, !Op::hw_clears_valids>(
+        num_tiles, Op::Layout::format, [] { Op::calculate(); });
+}
+
+template <typename Op>
+template <std::uint8_t INSTRN_COUNT>
+inline void SfpuSrcsBinaryOp<Op>::init(
+    const std::uint32_t l1_in0_addr_16B,
+    const std::uint32_t l1_in1_addr_16B,
+    const DataFormat l1_in_format,
+    const std::uint32_t l1_out_addr_16B,
+    const DataFormat l1_out_format) {
+    constexpr DataFormat srcs_format = Op::Layout::format;
+    llk_sfpu_srcs_binary_init<INSTRN_COUNT>(
+        l1_in0_addr_16B, l1_in1_addr_16B, l1_in_format, srcs_format, l1_out_addr_16B, srcs_format, l1_out_format);
+    Op::init_op();
+}
+
+template <typename Op>
+template <std::uint8_t INSTRN_COUNT>
+inline void SfpuSrcsBinaryOp<Op>::run(const std::uint32_t num_tiles) {
+    llk_sfpu_srcs_binary_impl<INSTRN_COUNT, !Op::hw_clears_valids>(
+        num_tiles, Op::Layout::format, [] { Op::calculate(); });
+}
+
+}  // namespace ckernel::sfpu

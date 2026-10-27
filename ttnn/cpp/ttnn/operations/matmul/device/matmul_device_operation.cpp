@@ -1601,8 +1601,8 @@ void validate_matmul_multicore_config(
         attributes.output_mem_config.memory_layout());
 }
 
-// DRAMSharded config: in0 width-sharded in L1, in1 width-sharded in DRAM; height must
-// be a single tile (M == 1) and K/shard dims divide in0_block_w.
+// DRAMSharded config: in0 width-sharded in L1, in1 width-sharded in DRAM. Each activation
+// shard spans all M tile rows; the multicast path also requires compatible K/shard block widths.
 void validate_matmul_dram_sharded_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1641,14 +1641,19 @@ void validate_matmul_dram_sharded_config(
         "{}: Input A shard orientation must be ROW_MAJOR, got: {}",
         config_name,
         input_tensor_a.shard_spec().value().orientation);
-    const auto M = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
+    // Width shards hold the flattened batch and M dimensions, as in the factory and
+    // output specification. Every row uses the same weight matrix.
+    TT_FATAL(
+        get_batch_size(input_tensor_b.padded_shape()) == 1,
+        "{}: input B must contain one weight matrix; use the batched DRAM-sharded config for per-batch weights",
+        config_name);
+    const auto M = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/true);
     const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
     uint32_t per_core_M = program_config.per_core_M;
     auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
-    // No padding
+    // Each width shard spans all padded row tiles.
     TT_FATAL(M == per_core_M, "{}: M ({}) must equal per_core_M ({})", config_name, M, per_core_M);
-    TT_FATAL(M == 1, "{}: currently only support in0 tensor height of tile height", config_name);
     TT_FATAL(
         per_core_M == (shard_shape[0] / in0_tile.get_height()),
         "{}: per_core_M ({}) must equal shard_shape[0] / in0_tile.get_height() ({})",
@@ -2482,6 +2487,14 @@ void validate_matmul_mcast1d_config(
             config_name,
             input_tensor_b.memory_config().memory_layout());
     }
+    // With a sharded output, the in0 and in1 multicast programs (mcast_in0 true or false) use the core's output shard
+    // as the output buffer, which holds the output of one batch. gather_in0 uses different kernels, which this check
+    // does not cover.
+    if (!program_config.gather_in0) {
+        const uint32_t B = program_config.fuse_batch ? 1u : get_batch_size(a_shape_padded);
+        operations::matmul::utilities::validate_block_sharded_output_batch(
+            attributes.output_mem_config.is_sharded(), B, program_config.per_core_M, program_config.per_core_N);
+    }
 }
 
 // Shared Mcast2D/Mcast1D preamble — the fuse_batch gate. Fused batch requires B batch==1,
@@ -3217,7 +3230,9 @@ MatmulParams create_matmul_attributes(
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // When inputs are FLOAT32 (which drives fp32_dest_acc_en=True by default), use HiFi3 on Wormhole B0.
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    math_fidelity = are_inputs_32F ? (is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4) : math_fidelity;
+    math_fidelity = are_inputs_32F
+                        ? (is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4)
+                        : math_fidelity;
 
     bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(
         input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b, parameters.program_config));

@@ -109,7 +109,8 @@ ReduceScatterDirectGeometry reduce_scatter_direct_geometry(
 
     const uint32_t single_tile_bytes = input_tensor.buffer()->page_size();
     const uint32_t interm_tiles_per_packet =
-        static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes()) / single_tile_bytes;
+        static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*input_tensor.device())) /
+        single_tile_bytes;
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4u : 8u;
     const uint32_t tile_granularity = std::min(4u * std::min(4u, interm_tiles_per_packet), max_dst_size);
 

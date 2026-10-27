@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <utility>
 
@@ -3774,6 +3775,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     }
 
     if (output_is_sharded) {
+        // The in1 writer pops batch * out_shard_tiles tiles in one wait_front/pop_front call, which takes a uint16_t.
+        TT_FATAL(
+            in0_B * out_shard_tiles <= std::numeric_limits<uint16_t>::max(),
+            "matmul_multicore_reuse_mcast_1d: a sharded output of {} tiles per core exceeds the maximum of {} "
+            "supported by this program factory",
+            in0_B * out_shard_tiles,
+            std::numeric_limits<uint16_t>::max());
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
     }
 
@@ -4333,6 +4341,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                     {"in1_mcast_num_cores", 0u},
                     {"KtNt", K * N},
                     {"batch", in0_B},
+                    {"out_block_num_tiles", out_block_tiles},
                     {"bcast_B", static_cast<uint32_t>(bcast_batch)},
                     {"batchB", use_sparsity ? sparsity->batchB : 0u},
                     {"out_tensor_stride_w", 1u},
@@ -5573,6 +5582,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
         }
     }
     if (output_is_sharded) {
+        // The in1 writer pops batch * out_shard_tiles tiles in one wait_front/pop_front call, which takes a uint16_t.
+        TT_FATAL(
+            in0_B * out_shard_tiles <= std::numeric_limits<uint16_t>::max(),
+            "matmul_multicore_reuse_mcast_1d: a sharded output of {} tiles per core exceeds the maximum of {} "
+            "supported by this program factory",
+            in0_B * out_shard_tiles,
+            std::numeric_limits<uint16_t>::max());
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
     }
@@ -5896,6 +5912,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
                     {"in1_mcast_num_cores", in1_mcast_receiver_num_cores - 1},
                     {"KtNt", K * N},
                     {"batch", reuse_in0_in_dfb ? in1_B : in0_B},
+                    {"out_block_num_tiles", out_block_tiles},
                     {"bcast_B", static_cast<uint32_t>(bcast_batch)},
                     {"batchB", 0u},
                     {"out_tensor_stride_w", 1u},
@@ -5989,6 +6006,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
                     {"num_blocks_w_dim", out_num_blocks_x},
                     {"num_blocks_h_dim", out_num_blocks_y},
                     {"batch", reuse_in0_in_dfb ? in1_B : in0_B},
+                    {"out_block_num_tiles", out_block_tiles},
                     {"out_tensor_stride_w", 1u},
                     {"out_tensor_stride_h", N},
                     {"out_tensor_next_subblock_stride_w", out_subblock_w},

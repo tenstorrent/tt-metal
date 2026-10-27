@@ -69,6 +69,16 @@ def quasar_forks_enabled() -> bool:
     return ttnn.get_arch_name() == "quasar"
 
 
+def is_quasar() -> bool:
+    return ttnn.get_arch_name() == "quasar"
+
+
+def skip_bfp_on_quasar() -> None:
+    """Quasar has no Bfp formats (bfloat8_b / bfloat4_b): skip a case that casts to one rather than fail it."""
+    if is_quasar():
+        pytest.skip("Quasar has no Bfp formats (bfloat8_b / bfloat4_b)")
+
+
 def op(name: str):
     """``ttnn.<name>`` or its ``ttnn.experimental.quasar`` fork (see the note above)."""
     assert name in _QUASAR_FORKED_OPS, name
