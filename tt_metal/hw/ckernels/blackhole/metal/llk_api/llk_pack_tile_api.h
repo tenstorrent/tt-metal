@@ -161,9 +161,36 @@ inline void llk_matmul_pack(
 
 // Matmul output blocks take llk_pack_block where the tt-llk sweep reads it faster: DestSync full (the pack is not hidden behind
 // the math there, also at LoFi with several K tiles), and half sync at LoFi with one K tile; a static math throttle of 4 or more at half sync keeps the per-tile pack (math bounds the block).
-template <MathFidelity math_fidelity, std::uint32_t kt_per_section, std::uint32_t output, int throttle_level = 0>
+// in_format, block_rt and block_ct are optional keys of the caller (Invalid and 0 keep the rule above): the operand format and the output block
+// shape of the half sync cells where the block pack reads faster than the per-tile one.
+template <
+    MathFidelity math_fidelity,
+    std::uint32_t kt_per_section,
+    std::uint32_t output,
+    int throttle_level = 0,
+    DataFormat in_format = DataFormat::Invalid,
+    std::uint32_t block_rt = 0,
+    std::uint32_t block_ct = 0>
 constexpr bool llk_matmul_block_pack() {
-    if constexpr (math_fidelity == MathFidelity::LoFi && kt_per_section > 1 && DST_SYNC_MODE != DstSync::SyncFull) {
+    constexpr bool keyed = in_format != DataFormat::Invalid && block_rt != 0 && block_ct != 0;
+    constexpr DataFormat out_format = static_cast<DataFormat>(pack_dst_format[output]);
+    if constexpr (
+        keyed && DST_SYNC_MODE != DstSync::SyncFull && throttle_level == 0 &&
+        (in_format == DataFormat::Float16_b || in_format == DataFormat::Float32) && kt_per_section == 1 && math_fidelity == MathFidelity::HiFi2 &&
+        out_format != DataFormat::Float32 && pack_tile_num_faces[output] == 4 && pack_tile_face_r_dim[output] == FACE_R_DIM &&
+        pack_partial_face[output] == 0 && block_rt * block_ct == 2) {
+        return true;
+    } else if constexpr (
+        keyed && DST_SYNC_MODE != DstSync::SyncFull && throttle_level == 0 && in_format == DataFormat::Float32 &&
+        math_fidelity == MathFidelity::HiFi2 && out_format == DataFormat::Bfp8_b && pack_tile_num_faces[output] == 4 &&
+        pack_tile_face_r_dim[output] == FACE_R_DIM && pack_partial_face[output] == 0 && block_rt == 1 && block_ct >= 5) {
+        return true;
+    } else if constexpr (
+        keyed && DST_SYNC_MODE != DstSync::SyncFull && throttle_level == 0 && in_format == DataFormat::Float16_b &&
+        math_fidelity == MathFidelity::LoFi && kt_per_section == 1 && out_format == DataFormat::Float32 &&
+        (pack_tile_num_faces[output] != 4 || pack_tile_face_r_dim[output] != FACE_R_DIM || pack_partial_face[output] != 0) && block_ct >= 4) {
+        return true;
+    } else if constexpr (math_fidelity == MathFidelity::LoFi && kt_per_section > 1 && DST_SYNC_MODE != DstSync::SyncFull) {
         return false;
     } else if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
         return true;
@@ -172,7 +199,7 @@ constexpr bool llk_matmul_block_pack() {
     } else {
         constexpr bool small_tile = pack_tile_num_faces[output] != 4 || pack_tile_face_r_dim[output] != FACE_R_DIM ||
                                     pack_partial_face[output] != 0;
-        constexpr bool float32_out = static_cast<DataFormat>(pack_dst_format[output]) == DataFormat::Float32;
+        constexpr bool float32_out = out_format == DataFormat::Float32;
         // HiFi2 with one K tile: the per-tile pack is on the critical path for small tiles and Float32 outputs
         constexpr bool hifi2_one_k = math_fidelity == MathFidelity::HiFi2 && kt_per_section == 1 && (small_tile || float32_out);
         return (math_fidelity == MathFidelity::LoFi || hifi2_one_k) && !(small_tile && float32_out);
