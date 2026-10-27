@@ -64,6 +64,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
 )
 from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import ENGRAM_WKV_GCB, O_B_GCB, SHARED_DOWN_GCB
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_table_nbytes
+from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages
 from models.experimental.deepseek_v4_flash.tt.common import _profile
@@ -74,7 +75,6 @@ from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import (
     Q_A_GCB,
 )
 from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import round_context
-from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import (
     DeepseekV4WeightLoader,
@@ -184,7 +184,7 @@ def _construct_model(
         use_prefetcher=use_prefetcher,
         layer_submesh_ids=layer_submesh_ids,
     )
-    lm_head = Linear(
+    lm_head = DeepSeekV41LMHead(
         dequantized(loader, "lm_head.weight", translate=True),
         model.last_device,
         top_cache.file("lm_head") if top_cache else None,

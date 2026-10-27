@@ -906,6 +906,20 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         # The 6-expert path is the only one that can fuse the shared expert into the op.
         self.parallel = _fused_parallel(self.top_k, device, self.intermediate)
         self.hidden = config.hidden_size
+        # Under TP on the 6-expert path the op leaves its partial L1 width-sharded on group 0's down cores,
+        # (0..1, 0..7) column-major, the order the writer assigns their D/16 output slices. That is the input
+        # width_sharded_all_reduce takes, so the partial skips the DRAM round trip. ``None`` keeps DRAM.
+        self.output_memory_config = None
+        if self.parallel and self.tp_size > 1 and FUSE_SHARED_EXPERT:
+            self.output_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, _FUSED_GRID_Y - 1))}),
+                    [1, self.hidden // _FUSED_DOWN_CORES_PER_EXPERT],
+                    ttnn.ShardOrientation.COL_MAJOR,
+                ),
+            )
         self.limit = config.swiglu_limit
         # Applied inside the op on the sparse path, where the weights are derived here
         # rather than handed over pre-normalized.
@@ -1058,6 +1072,7 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             shared_gate_up_weights=None if shared is None else shared.gate_up,
             shared_down_weights=None if shared is None else shared.down,
             shared_swiglu_limit=None if shared is None else shared.swiglu_limit,
+            memory_config=self.output_memory_config,
         )  # [1, 1, D]
         return ttnn.reshape(out, [1, 1, 1, self.hidden])
 
@@ -1246,7 +1261,14 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             routed = self.experts.decode_static(x_flat, routing)  # [1, 1, 1, D]
             shared = self.shared_experts(x_flat)  # [1, 1, B, D]
             combined = ttnn.add(routed, shared)
-        combined = ttnn.to_memory_config(combined, ttnn.DRAM_MEMORY_CONFIG)
-        if self.tp_size > 1:
-            combined = _tp_all_reduce(combined, self.device)
+        if self.experts.output_memory_config is not None:
+            partial = combined
+            combined = ttnn.experimental.deepseek.width_sharded_all_reduce(
+                partial, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY
+            )
+            ttnn.deallocate(partial)
+        else:
+            combined = ttnn.to_memory_config(combined, ttnn.DRAM_MEMORY_CONFIG)
+            if self.tp_size > 1:
+                combined = _tp_all_reduce(combined, self.device)
         return ttnn.reshape(combined, [b, 1, 1, h])

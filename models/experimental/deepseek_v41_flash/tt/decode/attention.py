@@ -528,6 +528,8 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         # A source's new entry reaches the compressed KV through its own select.
         assert self.is_index_source or not self.is_kv_source
         if self.is_kv_source:
+            # On kv's B cores (its ring's receivers under the prefetcher), which the decode
+            # all-gather replica of the tokens already covers.
             self.comp_kv_proj = LinearDecode(
                 weights["compressor.wkv.weight"],
                 device,
@@ -536,6 +538,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 **DECODE_LAYOUTS["compressor.wkv"],
                 use_rm_hs=True,
                 dram_sharded_weight=True,
+                b_core_grid=self.kv_proj.b_core_grid(),
             )
             self.comp_gate_proj = (
                 LinearDecode(
@@ -546,6 +549,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                     **DECODE_LAYOUTS["compressor.wgate"],
                     use_rm_hs=True,
                     dram_sharded_weight=True,
+                    b_core_grid=self.kv_proj.b_core_grid(),
                 )
                 if self.compress_ratio > 1
                 else None

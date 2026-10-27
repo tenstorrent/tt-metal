@@ -53,6 +53,7 @@ from loguru import logger
 from models.experimental.deepseek_v41_flash.tt.config import decoder_layer_weights, dequantized, expert_provider
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import EngramHostLookup
+from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.prefill.attention import (
     PrefillShared,
     PrefillStaticShared,
@@ -62,7 +63,6 @@ from models.experimental.deepseek_v41_flash.tt.prefill.attention import (
 from models.experimental.deepseek_v41_flash.tt.prefill.decoder_layer import DeepSeekV41PrefillDecoderLayer
 from models.experimental.deepseek_v41_flash.tt.vision import extend_embedding, image_mask
 from models.experimental.deepseek_v4_flash.tt.common import CCL_TOPOLOGY, _HIFI4, _trace_capture_guard
-from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import (
     _OUT_SOCKET_CORE,
     _PKT_SOCKET_CORE,
@@ -126,7 +126,7 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
         engram_lookup: Optional[EngramHostLookup] = None,
         experts: Optional[Sequence[DeepSeekV41PreloadedExperts]] = None,
         embedding_weight: Optional[ttnn.Tensor] = None,
-        lm_head: Optional[Linear] = None,
+        lm_head: Optional[DeepSeekV41LMHead] = None,
         kv_only: bool = False,
         bounded_replay: bool = False,
         image_rows: int = 0,
@@ -240,7 +240,7 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
             self.lm_head = (
                 lm_head
                 if lm_head is not None
-                else Linear(
+                else DeepSeekV41LMHead(
                     dequantized(loader, "lm_head.weight", translate=True),
                     self.head_device,
                     cache.file("lm_head.prefill"),

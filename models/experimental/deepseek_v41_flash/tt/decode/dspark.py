@@ -516,8 +516,9 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
 class DeepSeekV41DSpark(DeepSeekV4Module):
     """The three DSpark stages plus ``main_proj``, the head and the per-round inputs, on ``device``.
 
-    ``lm_head`` is the decode model's tied head (a :class:`~models.experimental.deepseek_v4_flash.tt.layers.Linear`
-    on the same ``device``), ``rope_main`` the sliding ``(cos_half, sin_half)`` ``[max_seq, Rd / 2]`` tables.
+    ``lm_head`` is the decode model's tied head (a :class:`~..lm_head.DeepSeekV41LMHead`, or any callable
+    returning the replicated ``[.., V]`` logits, on the same ``device``), ``rope_main`` the sliding
+    ``(cos_half, sin_half)`` ``[max_seq, Rd / 2]`` tables.
     ``main_rows`` is how many verified rows one :meth:`write_main` takes and ``stash_rows`` the depth of
     :attr:`stash`, the ring the decode model writes each step's target-layer means into at
     ``pos % stash_rows`` (per target, ``[1, 1, stash_rows, STASH_PIECE]`` column pieces).
