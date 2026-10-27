@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/waypoint.h"
 #include "internal/risc_attribs.h"
 #include "noc_overlay_parameters.h"
 
@@ -80,4 +81,12 @@ FORCE_INLINE void fabric_credit_counter_add_with_state(
         /*update_addr_hi=*/false,
         /*update_val=*/false,
         InlineWriteDst::REG>(0, counter.reg_addr, cmd_buf, noc);
+}
+
+// A producer connecting to a router found @p router_credit_mode (EDMChannelWorkerLocationInfo::credit_mode) differ from
+// its own: the router would poll a credit nobody writes. Never returns; the waypoint names the hang for the watcher.
+[[noreturn]] inline void fabric_credit_mode_mismatch(uint32_t /*router_credit_mode*/) {
+    WAYPOINT("FCMM");
+    while (true) {
+    }
 }
