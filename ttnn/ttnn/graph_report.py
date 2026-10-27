@@ -1290,6 +1290,12 @@ def import_graph(
     operation_counter = 1
     tensor_ids_seen = set()
     active_buffers = []
+    # The tensor most recently seen at each device address, so a buffer_deallocate is credited to the tensor living
+    # there now, not to whichever one first used the address. Keyed by (address, buffer_type) because DRAM and L1
+    # addresses overlap; buffer_type is None for tensors whose capture didn't record it. The plain address map
+    # serves deallocations that don't carry a buffer type.
+    tensor_at_address_and_type: dict[tuple[int, Optional[int]], int] = {}
+    tensor_at_address: dict[int, int] = {}
     current_op_nodes = []
     op_nesting_depth = 0
     # Counts only non-filtered, non-nested ops so filtered wrappers are transparent
@@ -1714,7 +1720,11 @@ def import_graph(
             tensor_id = params.get("tensor_id", "")
             if tensor_id and tensor_id not in tensor_ids_seen:
                 tensor_ids_seen.add(tensor_id)
-                tensors_batch.append(_tensor_row_from_params(tensor_id, params, rank))
+                tensor_row = _tensor_row_from_params(tensor_id, params, rank)
+                tensors_batch.append(tensor_row)
+                if tensor_row.address is not None:
+                    tensor_at_address_and_type[(tensor_row.address, tensor_row.buffer_type)] = _tid_int(tensor_id)
+                    tensor_at_address[tensor_row.address] = _tid_int(tensor_id)
 
                 device_tensors_str = params.get("device_tensors")
                 if device_tensors_str:
@@ -1752,12 +1762,16 @@ def import_graph(
         elif node_type == "buffer_deallocate":
             # Resolve address: prefer direct param, fall back to connected buffer_allocate
             dealloc_address = None
+            dealloc_buffer_type = None
             if "address" in params:
                 dealloc_address = int(params["address"])
+                dealloc_buffer_type = _int_param(params, "buffer_type")
             else:
                 for conn_id in node.get("connections", []):
                     if conn_id < len(graph) and graph[conn_id].get("node_type") == "buffer_allocate":
-                        dealloc_address = int(graph[conn_id].get("params", {}).get("address", 0))
+                        alloc_params = graph[conn_id].get("params", {})
+                        dealloc_address = int(alloc_params.get("address", 0))
+                        dealloc_buffer_type = _int_param(alloc_params, "buffer_type")
                         break
             if dealloc_address is not None:
                 active_buffers = [b for b in active_buffers if b[1] != dealloc_address]
@@ -1765,10 +1779,12 @@ def import_graph(
             # Find the tensor that owns the deallocated address
             dealloc_tensor_id = None
             if dealloc_address is not None:
-                for t in tensors_batch:
-                    if t.address == dealloc_address:
-                        dealloc_tensor_id = _tid_int(t.tensor_id)
-                        break
+                if dealloc_buffer_type is None:
+                    dealloc_tensor_id = tensor_at_address.get(dealloc_address)
+                else:
+                    dealloc_tensor_id = tensor_at_address_and_type.get((dealloc_address, dealloc_buffer_type))
+                    if dealloc_tensor_id is None:
+                        dealloc_tensor_id = tensor_at_address_and_type.get((dealloc_address, None))
 
             if not function_stack:
                 # Synthesize a deallocate operation if not inside a function_start/end pair

@@ -491,6 +491,91 @@ class TestImportReportMultiFileOperationIds:
         assert cursor.fetchall() == [(1, 0), (stride + 1, 0), (1, 1)]
 
 
+_L1 = 1
+_DRAM = 0
+
+
+class TestDeallocateTensorLookup:
+    """A top-level buffer_deallocate becomes a ttnn::deallocate operation whose input is the tensor living at the freed
+    address when it is freed."""
+
+    @staticmethod
+    def _graph(events):
+        """Graph of ("tensor", tensor_id, address, buffer_type) and ("dealloc", address, buffer_type) events, in order.
+        A buffer_type of None leaves it out of the node, as older captures did."""
+        nodes = []
+        for i, event in enumerate(events, start=1):
+            if event[0] == "tensor":
+                _, tensor_id, address, buffer_type = event
+                params = {"tensor_id": str(tensor_id), "address": str(address), "storage_type": "DEVICE"}
+                node_type = "tensor"
+            else:
+                _, address, buffer_type = event
+                params = {"address": str(address)}
+                node_type = "buffer_deallocate"
+            if buffer_type is not None:
+                params["buffer_type"] = str(buffer_type)
+            nodes.append({"counter": i, "node_type": node_type, "params": params, "connections": []})
+        end = len(events) + 1
+        return [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, end]},
+            *nodes,
+            {"counter": end, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+    @classmethod
+    def _deallocated_tensor_ids(cls, events, tmp_path):
+        """The input tensor of each ttnn::deallocate operation, in operation order (None for one with no input)."""
+        conn, cursor = _import_to_db(_make_report(cls._graph(events)), tmp_path)
+        try:
+            cursor.execute(
+                """SELECT it.tensor_id FROM operations o
+                   LEFT JOIN input_tensors it ON it.operation_id = o.operation_id AND it.rank = o.rank
+                   WHERE o.name = 'ttnn::deallocate' ORDER BY o.operation_id"""
+            )
+            return [tensor_id for (tensor_id,) in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def test_reused_address_is_credited_to_the_tensor_living_there(self, tmp_path):
+        """Tensor 2 reuses tensor 1's freed address; freeing it again must not be credited to tensor 1."""
+        events = [
+            ("tensor", 1, 4096, _L1),
+            ("dealloc", 4096, _L1),
+            ("tensor", 2, 4096, _L1),
+            ("dealloc", 4096, _L1),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, 2]
+
+    def test_dram_and_l1_tensors_at_the_same_address_are_told_apart(self, tmp_path):
+        events = [
+            ("tensor", 1, 8192, _L1),
+            ("tensor", 2, 8192, _DRAM),
+            ("dealloc", 8192, _L1),
+            ("dealloc", 8192, _DRAM),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, 2]
+
+    def test_deallocate_without_buffer_type_takes_the_latest_tensor_at_the_address(self, tmp_path):
+        events = [
+            ("tensor", 1, 4096, _L1),
+            ("dealloc", 4096, _L1),
+            ("tensor", 2, 4096, _L1),
+            ("dealloc", 4096, None),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, 2]
+
+    def test_tensor_without_buffer_type_still_matches_a_typed_deallocate(self, tmp_path):
+        """Captures that predate the tensor's buffer_type still credit the deallocation."""
+        events = [("tensor", 1, 4096, None), ("dealloc", 4096, _L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1]
+
+    def test_address_with_no_tensor_has_no_input(self, tmp_path):
+        """A scratch buffer that no tensor node ever named: the operation is kept, with no input tensor."""
+        events = [("tensor", 1, 4096, _L1), ("dealloc", 12288, _L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [None]
+
+
 @pytest.fixture
 def single_relu_python_io():
     """python_io sidecar for single_relu_mock_graph with a minimal stack trace.
