@@ -330,7 +330,9 @@ def one_copy_config(dense: bool, stream: bool, prefill_mode: str | None = None, 
 
 # regions path: gathered tokens per kernel call (bounds the [T*k + E_local*32, H] bf16 region buffer: 1.09 GB for a 16 K
 # chunk, which does not fit next to the 1 M caches; the expert weights are re-read once per sub-chunk)
-REGIONS_T = int(os.environ.get("GLM53_REGIONS_T", "4096"))
+REGIONS_T = int(
+    os.environ.get("GLM53_REGIONS_T", "2048")
+)  # 2048 since 2026-10-27: the README long rows ran 2048 and the served 1 M path needs the 0.4 GB the 4096 sub-chunk buffers cost
 # GLM53_REGIONS_KEEP_STACKED=1: keep the stacked (block / stream / dense) expert tensors next to the regions path's
 # per-expert lists, so decode (T <= 32) keeps the stream custom op (75 ms vs 219 ms per step on the 8x4 through the
 # regions kernel at 1 user/row) at the cost of a second copy of the expert weights (9.5 GB per chip in bfp8 on the
