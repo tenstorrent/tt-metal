@@ -45,6 +45,16 @@ MTP_CACHE_MARGIN = 32  # MTP positions beyond max_seq_len (the draft chain rows:
 DRAFTER_STATE_INTERNAL = "internal"
 HIDDEN_HANDOFF_ON_DEVICE = "on_device"
 SPEC_REQUIREMENT_DEVICE_PROPOSE = "device_propose"
+# GLM53_VLLM_SPEC_ALLOC_CHECK=1 (debug, default off): after every speculative step / proposal / prompt fill the
+# adapter compares the DRAM allocator's footprint with the one taken right after the captures and refuses a growth
+# (a device tensor allocated under live traces survives into the next replay, which clobbers it: the discipline
+# GLMMesh.allocations_frozen states). One host-side allocator query per device per step.
+ALLOC_CHECK_ENV = "GLM53_VLLM_SPEC_ALLOC_CHECK"
+
+
+def alloc_check_enabled(env=None) -> bool:
+    env = os.environ if env is None else env
+    return _flag(env, ALLOC_CHECK_ENV, "0")
 
 
 # ------------------------------------------------------------------------------------------------- knobs

@@ -170,11 +170,20 @@ def _ttnn():
 
 
 def _spec_upload(mesh, t: torch.Tensor, dtype, layout, rows_dim: int | None = None):
-    """``spec_decode._upload`` (a persistent device tensor from host values, ``rows_dim`` split over the mesh rows),
-    imported on first device use; the host test substitutes a recorder."""
+    """``spec_decode._upload`` (a persistent device tensor from host values, ``rows_dim`` split over the mesh rows): a
+    device ALLOCATION, legal before the first trace capture only (``GLMMesh.allocations_frozen``). Imported on first
+    device use; the host test substitutes a recorder."""
     from models.demos.glm53_flash.tt.spec_decode import _upload
 
     return _upload(mesh, t, dtype, layout, rows_dim)
+
+
+def _spec_refresh(mesh, t: torch.Tensor, dst, rows_dim: int | None = None) -> None:
+    """``spec_decode._refresh``: host values into the EXISTING device tensor ``dst`` (``copy_host_to_device_tensor``,
+    no allocation): the only way a per-step / per-prompt value reaches the device once traces exist."""
+    from models.demos.glm53_flash.tt.spec_decode import _refresh
+
+    _refresh(mesh, t, dst, rows_dim)
 
 
 def _mesh_shape_from_env() -> tuple[int, int]:
@@ -374,6 +383,50 @@ class GLM53SpecEngine:
             lambda: model.mesh.upload(vs.pad_mask_ones_host(self.hidden_size), ttnn.bfloat16),
         )
         self.warmed_fill_lengths: list[int] = []
+        # the prompt fill's per-length persistent inputs (allocated by ``warmup_prefill_fill`` before any capture,
+        # refreshed in place per chunk): the next-token row [1,1,1,T] uint32 and the row mask [1,1,T,32] bf16
+        self.fill_ids: dict[int, Any] = {}
+        self.fill_mask: dict[int, Any] = {}
+
+    # ---- the allocation discipline
+    def frozen(self) -> bool:
+        """True once any trace was captured on the mesh: no device allocation may outlive the next replay."""
+        return bool(self.model.mesh.allocations_frozen[0])
+
+    def dram_allocated(self) -> int:
+        """The DRAM allocator's allocated bytes per bank (a host-side query, no device op): the footprint fingerprint
+        the adapter compares across speculative steps (``GLM53_VLLM_SPEC_ALLOC_CHECK``), which must not change
+        between two steps (a per-step allocation that survives a replay is what a replay corrupts)."""
+        ttnn = _ttnn()
+        mv = ttnn.device.get_memory_view(self.model.device, ttnn.BufferType.DRAM)
+        return int(mv.total_bytes_allocated_per_bank)
+
+    def _fill_buffers(self, T: int):
+        """The persistent fill inputs of the padded length ``T``: allocated on first use BEFORE the freeze
+        (``warmup_prefill_fill``), refused after it (a length the warm-up did not cover would allocate under live
+        traces: fix the warm-up set, ``vllm_spec.mtp_fill_lengths``)."""
+        T = int(T)
+        if T not in self.fill_ids:
+            if self.frozen():
+                raise RuntimeError(
+                    f"MTP prompt fill at T={T}: no persistent inputs for this chunk length and traces exist (warmed: "
+                    f"{self.warmed_fill_lengths}); allocating now would be clobbered by the next replay. Add the "
+                    "length to the warm-up set (vllm_spec.mtp_fill_lengths)"
+                )
+            ttnn = _ttnn()
+            mesh = self.model.mesh
+            rows = 3 if mesh.rows > 1 else None
+            self.fill_ids[T] = _spec_upload(
+                mesh,
+                torch.full((1, 1, 1, T), self.pad_token_id, dtype=torch.int32),
+                ttnn.uint32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                rows,
+            )
+            self.fill_mask[T] = _spec_upload(
+                mesh, vs.pad_row_mask_host(T, T), ttnn.bfloat16, ttnn.TILE_LAYOUT, 2 if mesh.rows > 1 else None
+            )
+        return self.fill_ids[T], self.fill_mask[T]
 
     # ---- warm-up / capture (the adapter's boot order: every eager run before every capture)
     def warmup_plain(self, ids: torch.Tensor, positions: list[int]) -> None:
@@ -436,23 +489,25 @@ class GLM53SpecEngine:
             start=int(start),
             pad_token_id=self.pad_token_id,
         )
-        rows_dim = 3 if mesh.rows > 1 else None
-        ids_dev = _spec_upload(mesh, plan.next_ids, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rows_dim)
+        # the persistent per-length inputs (no allocation under live traces), refreshed in place for this chunk
+        ids_dev, mask = self._fill_buffers(plan.t_pad)
+        _spec_refresh(mesh, plan.next_ids, ids_dev, 3 if mesh.rows > 1 else None)
         h = self.model.head.collapse(streams)  # this row's slab [1,1,T_loc,H] fp32
         hidden = self.model.head.norm(h)  # bf16: the LM-head input of every prompt row
         if h is not streams:
             ttnn.deallocate(h)
         if plan.masked:
             # one exact 0/1 matmul (HiFi4, fp32 accumulation) + where: the rows past seq_len become 0 whatever they
-            # held (NaN included), the real rows are copied bit for bit (``TtMoE._mask_pad_rows``)
-            mask = _spec_upload(mesh, plan.row_mask, ttnn.bfloat16, ttnn.TILE_LAYOUT, 2 if mesh.rows > 1 else None)
+            # held (NaN included), the real rows are copied bit for bit (``TtMoE._mask_pad_rows``); the matmul's
+            # and where's outputs are this call's transients, freed before any replay
+            _spec_refresh(mesh, plan.row_mask, mask, 2 if mesh.rows > 1 else None)
             full = ttnn.matmul(mask, self.mask_ones, dtype=ttnn.bfloat16, compute_kernel_config=self.mtp.norm_compute)
             clean = ttnn.where(full, hidden, 0.0)
-            for t in (full, mask, hidden):
+            for t in (full, hidden):
                 ttnn.deallocate(t)
             hidden = clean
         out = self.mtp.prefill_cache(ids_dev, hidden, user=user, seq_len=plan.seq_len, start=plan.start)
-        for t in (out, hidden, ids_dev):
+        for t in (out, hidden):
             ttnn.deallocate(t)
 
     def warmup_prefill_fill(self, lengths: Sequence[int]) -> None:
@@ -473,6 +528,7 @@ class GLM53SpecEngine:
                 continue
             t_loc = T // mesh.rows
             seq_len = T - TILE if T > TILE else T  # rows past seq_len: the mask path compiles too
+            self._fill_buffers(T)  # the length's persistent inputs, allocated here (before any capture)
             streams = ttnn.zeros(
                 (1, 1, t_loc, 4 * self.hidden_size),
                 dtype=ttnn.float32,
@@ -568,6 +624,11 @@ class GLM53FlashForCausalLM:
         self._spec_last: vs.PlainRecord | None = None  # the last ordinary step of a speculating launch
         self._spec_stats = vs.SpecServingStats()
         self._spec_narrow_warned = False
+        # GLM53_VLLM_SPEC_ALLOC_CHECK: the DRAM footprint right after the captures; every later speculative call must
+        # leave it unchanged (``_spec_alloc_check``)
+        self._spec_alloc_checking = spec is not None and vs.alloc_check_enabled()
+        self._spec_alloc_baseline: int | None = None
+
         self.slots = SlotTable(geometry)
         self.blocks = LogicalBlockTable(geometry)
         self.prefill_planner = PrefillPlanner(geometry, traced_available=self._has_prefill_trace)
@@ -604,6 +665,20 @@ class GLM53FlashForCausalLM:
         # site must leave it unchanged (``_apc_alloc_check``, the served-spec audit's GLM53_VLLM_SPEC_ALLOC_CHECK shape)
         self._apc_alloc_checking = self.apc is not None and self.apc.entries > 0 and _env_flag(APC_ALLOC_CHECK_ENV, "0")
         self._apc_alloc_baseline: int | None = None
+
+    def _spec_alloc_check(self, where: str) -> None:
+        """The allocation discipline under live traces (``GLMMesh.allocations_frozen``): with the knob on, the
+        allocator's footprint must equal the post-capture baseline after every speculative call (a persistent
+        allocation made under live traces is clobbered by the next replay; a transient must have been freed)."""
+        if not self._spec_alloc_checking or self._spec_alloc_baseline is None:
+            return
+        now = self.spec.dram_allocated()
+        if now != self._spec_alloc_baseline:
+            raise RuntimeError(
+                f"GLM53 vLLM spec: the DRAM footprint changed after {where}: {now} vs {self._spec_alloc_baseline} "
+                "bytes per bank at the captures (a device tensor allocated under live traces: the next replay "
+                "clobbers it)"
+            )
 
     # ================================================================================= construction
     @classmethod
@@ -1141,6 +1216,12 @@ class GLM53FlashForCausalLM:
                     f"GLM53 vLLM APC: {APC_ALLOC_CHECK_ENV}=1: DRAM footprint baseline {self._apc_alloc_baseline} bytes "
                     "per bank after the decode capture; every prefix-cache call site is checked against it"
                 )
+            if self._spec_alloc_checking:
+                self._spec_alloc_baseline = self.spec.dram_allocated()
+                logger.info(
+                    f"GLM53 vLLM spec: {vs.ALLOC_CHECK_ENV}=1: DRAM footprint baseline {self._spec_alloc_baseline} bytes "
+                    "per bank after the captures; every speculative call is checked against it"
+                )
         self.tt_supported_decode_batch_sizes = (self.geometry.request_capacity,)
         self._decode_warmup_complete = True
         self._seal_program_cache()
@@ -1543,6 +1624,7 @@ class GLM53FlashForCausalLM:
             first = int(self.model.first_token(res))
             if self.spec is not None:  # the drafter's cache rows of the prompt, from the trace's streams
                 self.spec.prefill_fill(ids, first, res.streams, user, 0, int(ids.numel()))
+                self._spec_alloc_check("the traced prefill's MTP fill")
             logits = self._traced_last_logits(res) if want_logits else None
             if on_chunk is not None:
                 on_chunk(plan.end, traced=True)
@@ -1561,6 +1643,7 @@ class GLM53FlashForCausalLM:
                 # guess of the next chunk's first token, which the plugin never hands this call)
                 first_c = int(self.model.first_token(out[1], out[2]))
                 self.spec.prefill_fill(chunk_ids, first_c, out[0], user, s0, e - s0)
+                self._spec_alloc_check(f"the eager chunk [{s0}, {e})'s MTP fill")
             if on_chunk is not None:
                 on_chunk(e)
             if mem_log:
@@ -1751,6 +1834,7 @@ class GLM53FlashForCausalLM:
                 self._free(logits_dev)
                 self._free(ids_dev)
             self._perf(t0, len(live))
+            self._spec_alloc_check("the ordinary step")
             return self.process_decode_output_host(out, is_tokens=is_tokens)
         if transient:
             out = self._read(out)
@@ -1958,6 +2042,7 @@ class GLM53FlashForCausalLM:
             raise
         self._pending_moves = applied_moves or None
         self._perf(t0, len(live))
+        self._spec_alloc_check("the verify step")
         return out
 
     def propose_draft_tokens(
@@ -2045,6 +2130,7 @@ class GLM53FlashForCausalLM:
             out_ids[i, :n] = drafts[read_index[i], :n].to(torch.int32)
             out_valid[i] = n
         self._spec_stats.propose_s += time.perf_counter() - t0
+        self._spec_alloc_check("the proposal (commit + draft chain)")
         return types["DraftOutput"](draft_token_ids=out_ids, num_valid=out_valid)
 
     def read_decode_output(self, tt_out, async_read: bool = False, sample_rows=None):

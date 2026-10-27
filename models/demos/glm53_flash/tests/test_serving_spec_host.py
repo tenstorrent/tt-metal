@@ -181,6 +181,12 @@ class _FakeSpecEngine:
         self.calls.append(("warmup_prefill_fill", tuple(int(T) for T in lengths)))
         self.warmed_fill_lengths = list(lengths)
 
+    # the allocation discipline: a constant footprint unless a test bumps it
+    allocated = 1000
+
+    def dram_allocated(self):
+        return self.allocated
+
 
 def _spec_adapter(rows=2, cols=4, users_per_row=4, max_seq_len=65536, K=3, warm=True, max_dense_pos=None):
     model = _FakeMeshModel(rows, cols, users_per_row, max_seq_len)
@@ -464,11 +470,13 @@ class _Rec:
 
 
 def test_prefill_fill_device_call_sequence(monkeypatch):
-    """``GLM53SpecEngine.prefill_fill`` with ttnn and the upload stubbed: the ids upload is the plan's ``[1,1,1,t_pad]``
-    uint32 row sharded on its last dim, the hidden is ``head.norm(head.collapse(streams))``, a chunk with rows past
-    seq_len uploads the ``[1,1,t_pad,32]`` mask row sharded on dim 2, expands it with the ones row and zeroes the
-    hidden through ``where`` (no mask when the chunk fills every row), ``mtp.prefill_cache`` gets ``user`` /
-    ``seq_len`` / ``start``, and every transient is deallocated."""
+    """``GLM53SpecEngine.prefill_fill`` with ttnn, the upload and the in-place refresh stubbed: the per-length inputs
+    (the ``[1,1,1,t_pad]`` uint32 ids row sharded on its last dim, the ``[1,1,t_pad,32]`` bf16 mask row sharded on
+    dim 2) are ALLOCATED once per length (``_fill_buffers``, the warm-up) and REFRESHED in place per chunk; the hidden
+    is ``head.norm(head.collapse(streams))``, a chunk with rows past seq_len expands the mask with the ones row and
+    zeroes the hidden through ``where`` (no mask refresh when the chunk fills every row), ``mtp.prefill_cache`` gets
+    ``user`` / ``seq_len`` / ``start``, every transient is deallocated and the persistent inputs never are; once the
+    mesh is frozen (a trace exists) an unwarmed length is refused instead of allocated."""
     from models.demos.glm53_flash.tt import generator_vllm as gv
 
     events = []
@@ -493,11 +501,18 @@ def test_prefill_fill_device_call_sequence(monkeypatch):
             return _Rec("clean", a.shape, a.dtype)
 
     def upload(mesh, t, dtype, layout, rows_dim=None):
+        assert not mesh.allocations_frozen[0], "a device allocation under live traces"
         events.append(("upload", tuple(t.shape), str(t.dtype), dtype, layout, rows_dim))
         return _Rec("ids" if layout == "RM" else "mask", t.shape, dtype, t.clone())
 
+    def refresh(mesh, t, dst, rows_dim=None):
+        assert tuple(t.shape) == dst.shape, (tuple(t.shape), dst.shape)
+        events.append(("refresh", dst.tag, tuple(t.shape), str(t.dtype), rows_dim))
+        dst.extra = t.clone()
+
     monkeypatch.setattr(gv, "_ttnn", lambda: _Ttnn)
     monkeypatch.setattr(gv, "_spec_upload", upload)
+    monkeypatch.setattr(gv, "_spec_refresh", refresh)
 
     class _Head:
         def collapse(self, s):
@@ -515,58 +530,104 @@ def test_prefill_fill_device_call_sequence(monkeypatch):
             events.append(("prefill_cache", ids.tag, hidden.tag, user, seq_len, start))
             return _Rec("out", hidden.shape)
 
+    mesh = SimpleNamespace(rows=2, allocations_frozen=[False])
     eng = gv.GLM53SpecEngine.__new__(gv.GLM53SpecEngine)
-    eng.model = SimpleNamespace(mesh=SimpleNamespace(rows=2), head=_Head())
+    eng.model = SimpleNamespace(mesh=mesh, head=_Head())
     eng.mtp = _Mtp()
     eng.pad_token_id = PAD
     eng.mask_ones = _Rec("ones", (1, 1, 32, 4096), "bf16")
-    # the traced form: a 32-token prompt, T=128 streams (64-row slabs)
+    eng.fill_ids, eng.fill_mask, eng.warmed_fill_lengths = {}, {}, []
+    # the traced form: a 32-token prompt, T=128 streams (64-row slabs); the first call at T=128 allocates the length's
+    # two persistent inputs, then refreshes them
     eng.prefill_fill(torch.arange(100, 132), 999, _Rec("streams", (1, 1, 64, 16384), "f32"), 2, 0, 32)
     kinds = [e[0] for e in events]
-    assert kinds == ["upload", "collapse", "norm", "upload", "matmul", "where", "prefill_cache"]
-    up_ids, up_mask = events[0], events[3]
-    assert up_ids[1:] == ((1, 1, 1, 128), "torch.int32", "u32", "RM", 3)
-    assert up_mask[1:] == ((1, 1, 128, 32), "torch.bfloat16", "bf16", "TILE", 2)
-    assert events[4] == ("matmul", "mask", "ones", "bf16", "hifi4-fp32") and events[5] == (
+    assert kinds == ["upload", "upload", "refresh", "collapse", "norm", "refresh", "matmul", "where", "prefill_cache"]
+    assert events[0][1:] == ((1, 1, 1, 128), "torch.int32", "u32", "RM", 3)
+    assert events[1][1:] == ((1, 1, 128, 32), "torch.bfloat16", "bf16", "TILE", 2)
+    assert events[2] == ("refresh", "ids", (1, 1, 1, 128), "torch.int32", 3)
+    assert events[5] == ("refresh", "mask", (1, 1, 128, 32), "torch.bfloat16", 2)
+    assert events[6] == ("matmul", "mask", "ones", "bf16", "hifi4-fp32") and events[7] == (
         "where",
         "full",
         "hidden",
         0.0,
     )
-    assert events[6] == ("prefill_cache", "ids", "clean", 2, 32, 0)
-    assert sorted(freed) == sorted(["h", "full", "mask", "hidden", "out", "clean", "ids"])
-    # the eager form on one mesh row with every row real: no mask, no where; the ids are not row sharded
+    assert events[8] == ("prefill_cache", "ids", "clean", 2, 32, 0)
+    assert sorted(freed) == sorted(["h", "full", "hidden", "out", "clean"])  # never the persistent ids / mask
+    assert eng.fill_ids[128].extra.reshape(-1)[:33].tolist() == list(range(101, 132)) + [999, PAD]
+    assert eng.fill_mask[128].extra[0, 0, :, 0].tolist() == [1.0] * 32 + [0.0] * 96
+    # a second chunk at the same length: refreshes only, no allocation (the frozen mesh accepts it)
     events.clear()
     freed.clear()
-    eng.model = SimpleNamespace(mesh=SimpleNamespace(rows=1), head=_Head())
+    mesh.allocations_frozen[0] = True
+    eng.prefill_fill(torch.arange(40), 7, _Rec("streams", (1, 1, 64, 16384), "f32"), 1, 0, 40)
+    assert [e[0] for e in events] == ["refresh", "collapse", "norm", "refresh", "matmul", "where", "prefill_cache"]
+    assert events[-1] == ("prefill_cache", "ids", "clean", 1, 40, 0)
+    assert eng.fill_mask[128].extra[0, 0, :, 0].tolist() == [1.0] * 40 + [0.0] * 88
+    # an unwarmed length under live traces is refused before any device op; unfrozen it would allocate
+    events.clear()
+    with expect_error(RuntimeError, "no persistent inputs"):
+        eng.prefill_fill(torch.arange(200), 7, _Rec("streams", (1, 1, 128, 16384), "f32"), 0, 0, 200)
+    assert events == []
+    mesh.allocations_frozen[0] = False
+    eng.prefill_fill(torch.arange(200), 7, _Rec("streams", (1, 1, 128, 16384), "f32"), 0, 0, 200)
+    assert [e[0] for e in events][:2] == ["upload", "upload"] and set(eng.fill_ids) == {128, 256}
+    # the eager form on one mesh row with every row real: no mask refresh, no where; the ids are not row sharded
+    events.clear()
+    freed.clear()
+    eng.model = SimpleNamespace(mesh=SimpleNamespace(rows=1, allocations_frozen=[False]), head=_Head())
     eng.prefill_fill(torch.arange(256), 5, _Rec("streams", (1, 1, 256, 16384), "f32"), 0, 16384, 256)
-    assert [e[0] for e in events] == ["upload", "collapse", "norm", "prefill_cache"]
-    assert events[0][1:] == ((1, 1, 1, 256), "torch.int32", "u32", "RM", None)
+    assert [e[0] for e in events] == ["refresh", "collapse", "norm", "prefill_cache"]
+    assert events[0] == ("refresh", "ids", (1, 1, 1, 256), "torch.int32", None)
     assert events[3] == ("prefill_cache", "ids", "hidden", 0, 256, 16384)
-    assert sorted(freed) == sorted(["h", "hidden", "out", "ids"])
+    assert sorted(freed) == sorted(["h", "hidden", "out"])
     assert "ttnn" not in sys.modules
 
 
-def test_prefill_fills_the_drafter_per_chunk():
-    """Every device chunk of a prompt fills the MTP rows [start, start + len) with the chunk's own chunk-end token
-    as the last row's next token; the traced prefill fills once from the trace's streams."""
-    a, m, eng = _spec_adapter()
-    eng.calls.clear()
-    L = 16384 * 2 + 100
+def test_no_adapter_allocation_after_the_captures(monkeypatch):
+    """The allocation discipline under live traces: once the adapter captured its traces, neither the adapter nor
+    its engine may allocate a device tensor (``_spec_upload``); every per-step / per-prompt value goes through an
+    in-place refresh. The upload is made to raise after the captures and the whole served flow (chunked and traced
+    prefills, ordinary steps, verifies, proposals, the one-column fallback) runs through; with
+    ``GLM53_VLLM_SPEC_ALLOC_CHECK=1`` the adapter compares the allocator's footprint with its post-capture baseline
+    after every speculative call and refuses a growth."""
+    from models.demos.glm53_flash.tt import generator_vllm as gv
+
+    monkeypatch.setenv(vs.ALLOC_CHECK_ENV, "1")
+    a, m, eng = _spec_adapter(K=3)
+    assert a._spec_alloc_checking and a._spec_alloc_baseline == eng.allocated
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a device allocation after the captures")
+
+    monkeypatch.setattr(gv, "_spec_upload", refuse)
+    # a chunked eager prefill (two device chunks) beyond the dense range: plain steps only, no allocation
+    runner = SpecRunnerSim(a, 3, wire=4)
+    L = 16384 + 100
     ids = (torch.arange(L) % 60).to(torch.int32).reshape(1, L)
     out, _ = a.prefill_forward(
         ids, prompt_lens=[L], start_pos=torch.tensor([0]), empty_slots=[0], sampling_params=greedy_params(1)
     )
-    fills = [c for c in eng.calls if c[0] == "prefill_fill"]
-    user = a.slots.physical(0).user
-    assert [(c[1], c[2], c[3]) for c in fills] == [(user, 0, 16384), (user, 16384, 16384), (user, 32768, 100)]
-    assert fills[-1][4] == int(out[0, 0])  # the last chunk's next token = the prompt's first generated token
-    assert eng.state_pos[user] == L
-    eng.calls.clear()
-    first, n = _prefill(a, 1, 300)  # within a captured traced length: one fill from the trace's streams
-    fills = [c for c in eng.calls if c[0] == "prefill_fill"]
-    assert fills == [("prefill_fill", a.slots.physical(1).user, 0, 300, first)]
-    assert [c[0] for c in m.calls if c[0].startswith("prefill")][-1] == "prefill_traced"
+    runner.add(0, int(out[0, 0]), L)
+    got = runner.run(4)
+    assert len(got[0]) == 4 and all(s.kind == "plain" for s in runner.log)
+    # two traced prefills inside the dense range: verifies and proposals, still no allocation
+    runner = SpecRunnerSim(a, 3, wire=4)
+    first, p = _prefill(a, 1, 300)
+    runner.add(1, first, p)
+    first2, p2 = _prefill(a, 2, 100)
+    runner.add(2, first2, p2)
+    got = runner.run(12)
+    assert got[1] == _plain_chain(first, p, 12) and got[2] == _plain_chain(first2, p2, 12)
+    assert any(s.kind == "verify" for s in runner.log)
+    # the footprint check: a persistent allocation (the fake's footprint grows) is refused at the next spec call
+    first3, p3 = _prefill(a, 3, 64)
+    runner = SpecRunnerSim(a, 3, wire=4)
+    runner.add(3, first3, p3)
+    runner.step()
+    eng.allocated += 4096
+    with expect_error(RuntimeError, "footprint changed"):
+        runner.step()
 
 
 def test_spec_loop_is_lossless_through_the_adapter():

@@ -19,7 +19,10 @@ both loops are logged (a reduced model: a plumbing number).
 
 from __future__ import annotations
 
+import contextlib
 import os
+import sys
+import tempfile
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -74,6 +77,7 @@ def _build(mesh_device, monkeypatch):
     monkeypatch.setenv("GLM53_PARTITION_USERS", "0")  # the speculative verify is wired for replicated caches only
     monkeypatch.setenv("GLM53_VLLM_WARMUP_PREFILL", "128")
     monkeypatch.setenv("GLM53_MESH_SHAPE", ",".join(str(v) for v in MESH))
+    monkeypatch.setenv(vs.ALLOC_CHECK_ENV, "1")  # the adapter refuses a DRAM footprint change after any spec call
     cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
     hf_config = SimpleNamespace(_name_or_path=str(snapshot))
     t0 = time.perf_counter()
@@ -90,7 +94,34 @@ def _build(mesh_device, monkeypatch):
     a.warmup_model_prefill(enable_trace=True, can_sample_on_device=True)
     a.warmup_model_decode(enable_trace=True, max_batch_size=n, num_blocks=1, can_sample_on_device=True)
     logger.info(f"warm-up + captures (prefill traces, P, V, C, D, D0) in {time.perf_counter() - t0:.0f} s")
+    assert a._spec_alloc_baseline is not None and a._spec_alloc_baseline == a.spec.dram_allocated()
+    logger.info(f"DRAM footprint after the captures: {a._spec_alloc_baseline} bytes per bank (the loop's invariant)")
     return a, cfg, snapshot
+
+
+ACTIVE_TRACE_WARNING = "Allocating device buffers is potentially unsafe due to the existence of an active trace"
+
+
+@contextlib.contextmanager
+def _stderr_to_file():
+    """Capture fd 2 (tt-metal's C++ logger writes there, not through Python) into a temp file, independently of
+    pytest's capture setting, and replay it to the real stderr afterwards so the run log keeps it. Yields a list
+    that receives the captured text on exit."""
+    out: list[str] = []
+    saved = os.dup(2)
+    with tempfile.TemporaryFile(mode="w+b") as f:
+        sys.stderr.flush()
+        os.dup2(f.fileno(), 2)
+        try:
+            yield out
+        finally:
+            sys.stderr.flush()
+            os.dup2(saved, 2)
+            os.close(saved)
+            f.seek(0)
+            text = f.read().decode("utf-8", errors="replace")
+            out.append(text)
+            os.write(2, text.encode("utf-8"))
 
 
 def _prefill(a, slot: int, ids: torch.Tensor) -> tuple[int, int]:
@@ -106,8 +137,9 @@ def _prefill(a, slot: int, ids: torch.Tensor) -> tuple[int, int]:
 
 
 def _reference(a, prompts: dict[int, torch.Tensor], n: int) -> tuple[dict[int, list[int]], dict[int, list[float]]]:
-    """The adapter's ordinary decode (host logits) for ``n`` tokens per slot: the tokens and the top-2 logit gaps."""
-    a.model.reset_kda_states()
+    """The adapter's ordinary decode (host logits) for ``n`` tokens per slot: the tokens and the top-2 logit gaps.
+    No ``reset_kda_states`` between rounds: a start-0 prefill (traced or eager) starts the slot from the zero KDA
+    state, and a mid-serving reset allocates under live traces (the plain serving path never does it)."""
     anchors, toks, gaps = {}, {}, {}
     for slot, ids in prompts.items():
         first, p = _prefill(a, slot, ids)
@@ -168,19 +200,25 @@ def test_served_spec_loop_matches_the_plain_decode(mesh_device, monkeypatch):
     ref, gaps, plain_s = _reference(a, prompts, N_TOKENS)
     logger.info(f"plain reference: {N_TOKENS} steps x {len(prompts)} slots in {plain_s:.2f} s")
 
-    # ---- the served speculative loop (device greedy sampling), the runner's calls
-    a.model.reset_kda_states()
-    runner = SpecRunnerSim(a, K, wire=wire)
-    for slot, ids in prompts.items():
-        first, p = _prefill(a, slot, ids)
-        runner.add(slot, first, p)
-    t0 = time.perf_counter()
-    runner.step()  # the first step after the prefills: an ordinary decode, every row proposes
-    runner.drop_drafts(2)  # a dropped proposal: slot 2 rides the next verify with num_valid 0 (a mixed block)
-    log = runner.step()
-    assert log.kind == "verify" and log.num_valid.get(2) == 0 and log.counts.get(2) == 1
-    got = runner.run(N_TOKENS)
-    spec_s = time.perf_counter() - t0
+    assert a.spec.dram_allocated() == a._spec_alloc_baseline, "the reference round changed the DRAM footprint"
+
+    # ---- the served speculative loop (device greedy sampling), the runner's calls; fd 2 captured: the Metal
+    # "active trace" allocation warning (allocator.cpp: emitted at most once per process, at the FIRST allocation
+    # while any trace exists, i.e. during the second prefill capture of every multi-trace flow) must not fire here
+    with _stderr_to_file() as captured:
+        runner = SpecRunnerSim(a, K, wire=wire)
+        for slot, ids in prompts.items():
+            first, p = _prefill(a, slot, ids)
+            runner.add(slot, first, p)
+        t0 = time.perf_counter()
+        runner.step()  # the first step after the prefills: an ordinary decode, every row proposes
+        runner.drop_drafts(2)  # a dropped proposal: slot 2 rides the next verify with num_valid 0 (a mixed block)
+        log = runner.step()
+        assert log.kind == "verify" and log.num_valid.get(2) == 0 and log.counts.get(2) == 1
+        got = runner.run(N_TOKENS)
+        spec_s = time.perf_counter() - t0
+    assert ACTIVE_TRACE_WARNING not in captured[0], "a device allocation under live traces during the spec loop"
+    assert a.spec.dram_allocated() == a._spec_alloc_baseline, "the spec loop changed the DRAM footprint"
     _compare("served spec loop", got, ref, gaps)
     verifies = [s for s in runner.log if s.kind == "verify"]
     full = [s for s in verifies if s.width > 1]
@@ -205,13 +243,11 @@ def test_served_spec_loop_matches_the_plain_decode(mesh_device, monkeypatch):
     )
 
     # ---- a verify the step cannot run: a prompt beyond the dense bound arrives while slot 0's proposal is outstanding
-    a.model.reset_kda_states()
     bound = a.spec_policy.max_dense_pos - K  # the last anchor the verify may start at
     long_n = bound + 1
     assert long_n + 2 < MAX_SEQ_LEN
     prompts2 = {0: prompts[0], 1: _prompt_ids(cfg, snapshot, long_n)}
     ref2, gaps2, _ = _reference(a, prompts2, 2)
-    a.model.reset_kda_states()
     runner = SpecRunnerSim(a, K, wire=wire)
     first0, p0 = _prefill(a, 0, prompts2[0])
     runner.add(0, first0, p0)
@@ -225,10 +261,10 @@ def test_served_spec_loop_matches_the_plain_decode(mesh_device, monkeypatch):
     assert a._spec_stats.fallbacks == fallbacks + 1 and runner.slots[0].drafts == [] and runner.slots[1].drafts == []
     got2 = runner.run(2)
     _compare("one-column verify", got2, ref2, gaps2)
+    assert a.spec.dram_allocated() == a._spec_alloc_baseline
 
     # ---- the eager chunk form: the same prompts prefilled with enable_trace=False (the eager prefill pads them to
     # the 256 bucket: 128-row slabs, 96-224 rows past seq_len) and the loop against the traced-form reference
-    a.model.reset_kda_states()
     runner = SpecRunnerSim(a, K, wire=wire)
     for slot in (0, 1):
         ids = prompts[slot]
@@ -246,4 +282,6 @@ def test_served_spec_loop_matches_the_plain_decode(mesh_device, monkeypatch):
     _compare("eager-form prefill", got3, ref, gaps)
     logger.info(f"MTP prompt fill warmed at {a.spec.warmed_fill_lengths} before the captures")
     assert set(a.spec.warmed_fill_lengths) >= set(a.model.trace_prefill_lengths()), "every traced length must be warmed"
+    assert set(a.spec.fill_ids) == set(a.spec.warmed_fill_lengths), "one persistent fill input set per warmed length"
+    assert a.spec.dram_allocated() == a._spec_alloc_baseline, "the eager-form round changed the DRAM footprint"
     a.release_persistent_capture()
