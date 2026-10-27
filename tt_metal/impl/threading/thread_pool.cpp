@@ -270,16 +270,14 @@ class ParallelJob;
 // across threads.
 class NumaAwareExecutor {
 public:
-    // `index` is the executor's place in its pool; `published` is the pool's published parallel_for job, a slot of
-    // `jobs`.
     NumaAwareExecutor(
         ContextId context_id,
         uint32_t physical_device_id,
         Completion& completion,
-        uint32_t index,
-        const std::atomic<uint64_t>& published,
-        const std::unique_ptr<ParallelJob>* jobs) :
-        completion_(completion), index_(index), published_(published), jobs_(jobs) {
+        uint32_t index_in_pool,
+        const std::atomic<uint64_t>& pool_published_job,
+        const std::unique_ptr<ParallelJob>* pool_jobs) :
+        completion_(completion), index_(index_in_pool), pool_published_job_(pool_published_job), pool_jobs_(pool_jobs) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() { worker_loop(); });
@@ -329,7 +327,7 @@ private:
     // Takes part in the job `published` names, if that is still the job's current use.
     void join(uint64_t published) noexcept;
 
-    bool has_work() const { return !tasks_.empty() || published_.load(std::memory_order_seq_cst) != seen_; }
+    bool has_work() const { return !tasks_.empty() || pool_published_job_.load(std::memory_order_seq_cst) != seen_; }
 
     // Spins briefly, then parks until a producer publishes work or the executor shuts down.
     void wait_for_work() {
@@ -350,8 +348,8 @@ private:
     alignas(64) std::atomic<uint32_t> parked_ = 0;
     std::atomic<bool> shutdown_ = false;
     alignas(64) uint32_t index_ = 0;
-    const std::atomic<uint64_t>& published_;
-    const std::unique_ptr<ParallelJob>* jobs_ = nullptr;
+    const std::atomic<uint64_t>& pool_published_job_;
+    const std::unique_ptr<ParallelJob>* pool_jobs_ = nullptr;
     uint64_t seen_ = 0;  // The published word this worker last acted on; worker thread only.
     std::exception_ptr stored_exception_;
 };
@@ -541,7 +539,7 @@ private:
 };
 
 inline void NumaAwareExecutor::join(uint64_t published) noexcept {
-    auto* job = jobs_[published & 0xffffffffULL].get();
+    auto* job = pool_jobs_[published & 0xffffffffULL].get();
     if (job->hold(static_cast<uint32_t>(published >> 32))) {
         job->participate(this);
     }
@@ -563,7 +561,7 @@ inline void NumaAwareExecutor::worker_loop() {
             completion_.done();
             continue;
         }
-        if (const uint64_t published = published_.load(std::memory_order_acquire); published != seen_) {
+        if (const uint64_t published = pool_published_job_.load(std::memory_order_acquire); published != seen_) {
             seen_ = published;
             join(published);
             continue;
