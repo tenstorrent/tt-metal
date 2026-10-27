@@ -23,55 +23,64 @@
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg(args::num_tiles);
 
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // typically 1
+    constexpr uint32_t num_tiles_per_cycle = get_arg(args::num_tiles_per_cycle);  // typically 1
 
-    // Pre-CBs for inputs A, B, C and output CB
-    DataflowBuffer dfb_out(tt::CBIndex::c_3);
+    // Pre-DFBs for inputs A, B, C and output DFB
+    DataflowBuffer dfb_out(dfb::out);
+    // eff_a, eff_b and eff_c name the DFB the op reads each input from: its row-broadcast staging DFB when that
+    // input is broadcast, and the input DFB itself otherwise.
 #if BCAST_A
-    DataflowBuffer dfb_pre_a(tt::CBIndex::c_0);
-    DataflowBuffer dfb_bcast_a(tt::CBIndex::c_4);
+    DataflowBuffer dfb_pre_a(dfb::in_a);
+    DataflowBuffer dfb_bcast_a(dfb::bcast_a);
     DataflowBuffer dfb_eff_a = dfb_bcast_a;
+    constexpr auto eff_a = dfb::bcast_a;
 #else
-    DataflowBuffer dfb_eff_a(tt::CBIndex::c_0);
+    DataflowBuffer dfb_eff_a(dfb::in_a);
+    constexpr auto eff_a = dfb::in_a;
 #endif
 #if BCAST_B
-    DataflowBuffer dfb_pre_b(tt::CBIndex::c_1);
-    DataflowBuffer dfb_bcast_b(tt::CBIndex::c_5);
+    DataflowBuffer dfb_pre_b(dfb::in_b);
+    DataflowBuffer dfb_bcast_b(dfb::bcast_b);
     DataflowBuffer dfb_eff_b = dfb_bcast_b;
+    constexpr auto eff_b = dfb::bcast_b;
 #else
-    DataflowBuffer dfb_eff_b(tt::CBIndex::c_1);
+    DataflowBuffer dfb_eff_b(dfb::in_b);
+    constexpr auto eff_b = dfb::in_b;
 #endif
 #if BCAST_C
-    DataflowBuffer dfb_pre_c(tt::CBIndex::c_2);
-    DataflowBuffer dfb_bcast_c(tt::CBIndex::c_6);
+    DataflowBuffer dfb_pre_c(dfb::in_c);
+    DataflowBuffer dfb_bcast_c(dfb::bcast_c);
     DataflowBuffer dfb_eff_c = dfb_bcast_c;
+    constexpr auto eff_c = dfb::bcast_c;
 #else
-    DataflowBuffer dfb_eff_c(tt::CBIndex::c_2);
+    DataflowBuffer dfb_eff_c(dfb::in_c);
+    constexpr auto eff_c = dfb::in_c;
 #endif
 
     // Initialize pack/format for SFPU-style ternary kernels (matches existing ternary SFPU kernels)
-    compute_kernel_hw_startup(dfb_eff_a.get_id(), dfb_out.get_id());
-    copy_init(dfb_eff_a.get_id());
+    compute_kernel_hw_startup(eff_a, dfb::out);
+    copy_init(eff_a);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
 #if BCAST_A
         {
             dfb_pre_a.wait_front(num_tiles_per_cycle);
             dfb_bcast_a.reserve_back(num_tiles_per_cycle);
-            reconfig_data_format(dfb_pre_a.get_id(), dfb_pre_a.get_id());
-            pack_reconfig_data_format(dfb_bcast_a.get_id());
-            unary_bcast_init<BroadcastType::ROW>(dfb_pre_a.get_id());
+            reconfig_data_format(dfb::in_a, dfb::in_a);
+            pack_reconfig_data_format(dfb::bcast_a);
+            unary_bcast_init<BroadcastType::ROW>(dfb::in_a);
 
             tile_regs_acquire();
-            unary_bcast<BroadcastType::ROW>(dfb_pre_a.get_id(), 0, 0);
+            unary_bcast<BroadcastType::ROW>(dfb::in_a, 0, 0);
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile(0, dfb_bcast_a.get_id());
+            pack_tile(0, dfb::bcast_a);
             dfb_bcast_a.push_back(num_tiles_per_cycle);
             tile_regs_release();
 
@@ -83,16 +92,16 @@ void kernel_main() {
         {
             dfb_pre_b.wait_front(num_tiles_per_cycle);
             dfb_bcast_b.reserve_back(num_tiles_per_cycle);
-            reconfig_data_format(dfb_pre_b.get_id(), dfb_pre_b.get_id());
-            pack_reconfig_data_format(dfb_bcast_b.get_id());
-            unary_bcast_init<BroadcastType::ROW>(dfb_pre_b.get_id());
+            reconfig_data_format(dfb::in_b, dfb::in_b);
+            pack_reconfig_data_format(dfb::bcast_b);
+            unary_bcast_init<BroadcastType::ROW>(dfb::in_b);
 
             tile_regs_acquire();
-            unary_bcast<BroadcastType::ROW>(dfb_pre_b.get_id(), 0, 0);
+            unary_bcast<BroadcastType::ROW>(dfb::in_b, 0, 0);
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile(0, dfb_bcast_b.get_id());
+            pack_tile(0, dfb::bcast_b);
             dfb_bcast_b.push_back(num_tiles_per_cycle);
             tile_regs_release();
 
@@ -104,16 +113,16 @@ void kernel_main() {
         {
             dfb_pre_c.wait_front(num_tiles_per_cycle);
             dfb_bcast_c.reserve_back(num_tiles_per_cycle);
-            reconfig_data_format(dfb_pre_c.get_id(), dfb_pre_c.get_id());
-            pack_reconfig_data_format(dfb_bcast_c.get_id());
-            unary_bcast_init<BroadcastType::ROW>(dfb_pre_c.get_id());
+            reconfig_data_format(dfb::in_c, dfb::in_c);
+            pack_reconfig_data_format(dfb::bcast_c);
+            unary_bcast_init<BroadcastType::ROW>(dfb::in_c);
 
             tile_regs_acquire();
-            unary_bcast<BroadcastType::ROW>(dfb_pre_c.get_id(), 0, 0);
+            unary_bcast<BroadcastType::ROW>(dfb::in_c, 0, 0);
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile(0, dfb_bcast_c.get_id());
+            pack_tile(0, dfb::bcast_c);
             dfb_bcast_c.push_back(num_tiles_per_cycle);
             tile_regs_release();
 
@@ -125,7 +134,7 @@ void kernel_main() {
         // Reserve output when ready to write.
         dfb_out.reserve_back(num_tiles_per_cycle);
 
-        // Ensure fronts are ready for whichever CBs we will read from
+        // Ensure fronts are ready for whichever DFBs we will read from
         dfb_eff_a.wait_front(num_tiles_per_cycle);
         dfb_eff_b.wait_front(num_tiles_per_cycle);
         dfb_eff_c.wait_front(num_tiles_per_cycle);
@@ -133,14 +142,14 @@ void kernel_main() {
         tile_regs_acquire();
 
         // Load A -> DST[0], B -> DST[1], C -> DST[2]
-        copy_init(dfb_eff_a.get_id());
-        copy_tile(dfb_eff_a.get_id(), 0, 0);
+        copy_init(eff_a);
+        copy_tile(eff_a, 0, 0);
 
-        copy_init(dfb_eff_b.get_id());
-        copy_tile(dfb_eff_b.get_id(), 0, 1);
+        copy_init(eff_b);
+        copy_tile(eff_b, 0, 1);
 
-        copy_init(dfb_eff_c.get_id());
-        copy_tile(dfb_eff_c.get_id(), 0, 2);
+        copy_init(eff_c);
+        copy_tile(eff_c, 0, 2);
 
         // Execute configured ternary SFPU op
         TERNARY_SFPU_OP_INIT();
@@ -150,7 +159,7 @@ void kernel_main() {
         tile_regs_wait();
 
         // Write out result
-        pack_tile(0, dfb_out.get_id());
+        pack_tile(0, dfb::out);
         tile_regs_release();
 
         dfb_out.push_back(num_tiles_per_cycle);

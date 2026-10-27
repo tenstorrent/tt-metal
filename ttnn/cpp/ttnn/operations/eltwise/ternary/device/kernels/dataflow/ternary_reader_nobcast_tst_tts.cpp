@@ -7,20 +7,15 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t src2_addr = get_arg_val<uint32_t>(2);
-    uint32_t num_tiles = get_arg_val<uint32_t>(3);
-    uint32_t start_id = get_arg_val<uint32_t>(4);
-
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t start_id = get_arg(args::start_id);
 
     Noc noc;
-    DataflowBuffer dfb0(cb_id_in0);
-    DataflowBuffer dfb1(cb_id_in1);
+    DataflowBuffer dfb0(dfb::in_a);
+    DataflowBuffer dfb1(dfb::in_b);
 
 #if SRC_SHARDED_A
     dfb0.reserve_back(num_tiles);
@@ -31,16 +26,13 @@ void kernel_main() {
     dfb1.push_back(num_tiles);
 #endif
 #if !SRC_SHARDED_A || !SRC_SHARDED_B
-    constexpr auto src0_args = TensorAccessorArgs<2, 0>();
-    constexpr auto src1_args =
-        TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
 #if !SRC_SHARDED_A
     const uint32_t tile_bytes_0 = dfb0.get_entry_size();
-    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    const auto s0 = TensorAccessor(tensor::in_a);
 #endif
 #if !SRC_SHARDED_B
     const uint32_t tile_bytes_1 = dfb1.get_entry_size();
-    const auto s1 = TensorAccessor(src1_args, src1_addr);
+    const auto s1 = TensorAccessor(tensor::in_b);
 #endif
 
     constexpr uint32_t onetile = 1;

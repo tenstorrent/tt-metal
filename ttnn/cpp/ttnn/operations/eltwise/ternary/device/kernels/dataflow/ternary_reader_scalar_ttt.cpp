@@ -6,89 +6,73 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
-    // Standard first 5 arguments (same as ternary_reader_nosubtilebcast_ttt.cpp)
-    const uint32_t src0_addr = get_arg_val<uint32_t>(0);  // predicate address
-    const uint32_t src1_addr = get_arg_val<uint32_t>(1);  // true tensor address
-    const uint32_t src2_addr = get_arg_val<uint32_t>(2);  // false tensor address
-    const uint32_t num_tiles = get_arg_val<uint32_t>(3);  // num_tiles_per_core
-    const uint32_t start_id = get_arg_val<uint32_t>(4);   // start_tile_id
+    // Standard first 2 arguments (same as ternary_reader_nosubtilebcast_ttt.cpp)
+    const uint32_t num_tiles = get_arg(args::num_tiles);  // num_tiles_per_core
+    const uint32_t start_id = get_arg(args::start_id);    // start_tile_id
 
-    // Additional arguments for column broadcast (args 5-26)
-    const uint32_t nD_stride = get_arg_val<uint32_t>(5);
-    const uint32_t d_stride = get_arg_val<uint32_t>(6);
-    const uint32_t n_stride = get_arg_val<uint32_t>(7);
-    const uint32_t c_stride = get_arg_val<uint32_t>(8);
-    const uint32_t D = get_arg_val<uint32_t>(9);
-    const uint32_t N = get_arg_val<uint32_t>(10);
-    const uint32_t C = get_arg_val<uint32_t>(11);
-    const uint32_t Ht = get_arg_val<uint32_t>(12);
-    const uint32_t Wt = get_arg_val<uint32_t>(13);
-    const uint32_t cND = get_arg_val<uint32_t>(14);  // collapsed dims > 5
-    const uint32_t true_nD_stride = get_arg_val<uint32_t>(15);
-    const uint32_t true_d_stride = get_arg_val<uint32_t>(16);
-    const uint32_t true_n_stride = get_arg_val<uint32_t>(17);
-    const uint32_t true_c_stride = get_arg_val<uint32_t>(18);
-    const uint32_t true_num_tiles = get_arg_val<uint32_t>(19);
-    const uint32_t false_nD_stride = get_arg_val<uint32_t>(20);
-    const uint32_t false_d_stride = get_arg_val<uint32_t>(21);
-    const uint32_t false_n_stride = get_arg_val<uint32_t>(22);
-    const uint32_t false_c_stride = get_arg_val<uint32_t>(23);
-    const uint32_t false_num_tiles = get_arg_val<uint32_t>(24);
-    const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
-    const uint32_t src_num_tiles = get_arg_val<uint32_t>(26);  // moved to end
+    // Additional arguments for column broadcast
+    const uint32_t nD_stride = get_arg(args::nD_stride);
+    const uint32_t d_stride = get_arg(args::d_stride);
+    const uint32_t n_stride = get_arg(args::n_stride);
+    const uint32_t c_stride = get_arg(args::c_stride);
+    const uint32_t D = get_arg(args::D);
+    const uint32_t N = get_arg(args::N);
+    const uint32_t C = get_arg(args::C);
+    const uint32_t Ht = get_arg(args::Ht);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t cND = get_arg(args::cND);  // collapsed dims > 5
+    const uint32_t true_nD_stride = get_arg(args::nD_stride_b);
+    const uint32_t true_d_stride = get_arg(args::d_stride_b);
+    const uint32_t true_n_stride = get_arg(args::n_stride_b);
+    const uint32_t true_c_stride = get_arg(args::c_stride_b);
+    const uint32_t true_num_tiles = get_arg(args::src_num_tiles_b);
+    const uint32_t false_nD_stride = get_arg(args::nD_stride_c);
+    const uint32_t false_d_stride = get_arg(args::d_stride_c);
+    const uint32_t false_n_stride = get_arg(args::n_stride_c);
+    const uint32_t false_c_stride = get_arg(args::c_stride_c);
+    const uint32_t false_num_tiles = get_arg(args::src_num_tiles_c);
+    const uint32_t dst_shard_width = get_arg(args::dst_shard_width);
+    const uint32_t src_num_tiles = get_arg(args::src_num_tiles);  // moved to end
 
     // For compatibility, map to old variable names
-    const uint32_t src_addr = src0_addr;       // predicate address
-    const uint32_t true_addr = src1_addr;      // true tensor address
-    const uint32_t false_addr = src2_addr;     // false tensor address
     const uint32_t start_tile_id = start_id;   // start tile id
     const uint32_t dst_num_tiles = num_tiles;  // num tiles per core
 
-    constexpr auto predicate_cb = get_compile_time_arg_val(0);
-    constexpr auto true_cb = get_compile_time_arg_val(1);
-    constexpr auto false_cb = get_compile_time_arg_val(2);
-
-    // Compile-time args layout mirrors no-bcast reader: 3 CB ids, then 3 TensorAccessorArgs blocks
-    constexpr auto src0_args = TensorAccessorArgs<3, 0>();
-    constexpr auto src1_args =
-        TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
-    constexpr auto src2_args =
-        TensorAccessorArgs<src1_args.next_compile_time_args_offset(), src1_args.next_common_runtime_args_offset()>();
-
     Noc noc;
-    CircularBuffer cb_pred(predicate_cb);
-    CircularBuffer cb_true(true_cb);
-    CircularBuffer cb_false(false_cb);
+    DataflowBuffer dfb_pred(dfb::in_a);
+    DataflowBuffer dfb_true(dfb::in_b);
+    DataflowBuffer dfb_false(dfb::in_c);
 
 #if SRC_SHARDED_A
-    cb_pred.reserve_back(src_num_tiles);
-    cb_pred.push_back(src_num_tiles);
+    dfb_pred.reserve_back(src_num_tiles);
+    dfb_pred.push_back(src_num_tiles);
 #else
-    const uint32_t src0_tile_bytes = cb_pred.get_tile_size();
-    const auto s0 = TensorAccessor(src0_args, src_addr);
+    const uint32_t src0_tile_bytes = dfb_pred.get_tile_size();
+    const auto s0 = TensorAccessor(tensor::in_a);
 #endif
 #if SRC_SHARDED_B
-    cb_true.reserve_back(true_num_tiles);
-    cb_true.push_back(true_num_tiles);
+    dfb_true.reserve_back(true_num_tiles);
+    dfb_true.push_back(true_num_tiles);
 #else
-    const uint32_t src1_tile_bytes = cb_true.get_tile_size();
-    const auto s1 = TensorAccessor(src1_args, true_addr);
+    const uint32_t src1_tile_bytes = dfb_true.get_tile_size();
+    const auto s1 = TensorAccessor(tensor::in_b);
 #endif
 #if SRC_SHARDED_C
-    cb_false.reserve_back(false_num_tiles);
-    cb_false.push_back(false_num_tiles);
+    dfb_false.reserve_back(false_num_tiles);
+    dfb_false.push_back(false_num_tiles);
 #else
-    const uint32_t src2_tile_bytes = cb_false.get_tile_size();
-    const auto s2 = TensorAccessor(src2_args, false_addr);
+    const uint32_t src2_tile_bytes = dfb_false.get_tile_size();
+    const auto s2 = TensorAccessor(tensor::in_c);
 #endif
 
     constexpr uint32_t onetile = 1;
-    constexpr bool has_sharding = get_compile_time_arg_val(src2_args.next_compile_time_args_offset()) == 1;
+    constexpr bool has_sharding = get_arg(args::has_sharding) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;
@@ -144,69 +128,69 @@ void kernel_main() {
                 for (uint32_t c = start_c; c < C && num_tiles_read < dst_num_tiles; ++c, start_th = 0) {
                     // for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
 #if SRC_BCAST_A
-                    cb_pred.reserve_back(onetile);
+                    dfb_pred.reserve_back(onetile);
 #if !SRC_SHARDED_A
-                    noc.async_read(s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                    noc.async_read(s0, dfb_pred, src0_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                     noc.async_read_barrier();
 #endif
-                    FILL_TILE_WITH_FIRST_ELEMENT(cb_pred.get_write_ptr());
-                    cb_pred.push_back(onetile);
+                    FILL_TILE_WITH_FIRST_ELEMENT(dfb_pred.get_write_ptr());
+                    dfb_pred.push_back(onetile);
 #endif
 #if SRC_BCAST_B
-                    cb_true.reserve_back(onetile);
+                    dfb_true.reserve_back(onetile);
 #if !SRC_SHARDED_B
-                    noc.async_read(s1, cb_true, src1_tile_bytes, {.page_id = true_tile_offset}, {.offset_bytes = 0});
+                    noc.async_read(s1, dfb_true, src1_tile_bytes, {.page_id = true_tile_offset}, {.offset_bytes = 0});
                     noc.async_read_barrier();
 #endif
-                    FILL_TILE_WITH_FIRST_ELEMENT_B(cb_true.get_write_ptr());
-                    cb_true.push_back(onetile);
+                    FILL_TILE_WITH_FIRST_ELEMENT_B(dfb_true.get_write_ptr());
+                    dfb_true.push_back(onetile);
 #endif
 
                     // False tensor broadcast (same as true tensor)
 #if SRC_BCAST_C
-                    cb_false.reserve_back(onetile);
+                    dfb_false.reserve_back(onetile);
 #if !SRC_SHARDED_C
-                    noc.async_read(s2, cb_false, src2_tile_bytes, {.page_id = false_tile_offset}, {.offset_bytes = 0});
+                    noc.async_read(s2, dfb_false, src2_tile_bytes, {.page_id = false_tile_offset}, {.offset_bytes = 0});
                     noc.async_read_barrier();
 #endif
-                    FILL_TILE_WITH_FIRST_ELEMENT_C(cb_false.get_write_ptr());
-                    cb_false.push_back(onetile);
+                    FILL_TILE_WITH_FIRST_ELEMENT_C(dfb_false.get_write_ptr());
+                    dfb_false.push_back(onetile);
 #endif
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
 #if !SRC_BCAST_A
-                            cb_pred.reserve_back(onetile);
+                            dfb_pred.reserve_back(onetile);
 #if !SRC_SHARDED_A
                             noc.async_read(
-                                s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
+                                s0, dfb_pred, src0_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
                             noc.async_read_barrier();
 #endif
-                            cb_pred.push_back(onetile);
+                            dfb_pred.push_back(onetile);
 #endif
 #if !SRC_BCAST_B
-                            cb_true.reserve_back(onetile);
+                            dfb_true.reserve_back(onetile);
 #if !SRC_SHARDED_B
                             noc.async_read(
-                                s1, cb_true, src1_tile_bytes, {.page_id = true_tile_offset + tw}, {.offset_bytes = 0});
+                                s1, dfb_true, src1_tile_bytes, {.page_id = true_tile_offset + tw}, {.offset_bytes = 0});
                             noc.async_read_barrier();
 #endif
-                            cb_true.push_back(onetile);
+                            dfb_true.push_back(onetile);
 #endif
 
                             // False tensor non-broadcast (same as true tensor)
 #if !SRC_BCAST_C
-                            cb_false.reserve_back(onetile);
+                            dfb_false.reserve_back(onetile);
 #if !SRC_SHARDED_C
                             noc.async_read(
                                 s2,
-                                cb_false,
+                                dfb_false,
                                 src2_tile_bytes,
                                 {.page_id = false_tile_offset + tw},
                                 {.offset_bytes = 0});
                             noc.async_read_barrier();
 #endif
-                            cb_false.push_back(onetile);
+                            dfb_false.push_back(onetile);
 #endif
                         }
                         // next row of tiles should start at the first column for non-sharded case

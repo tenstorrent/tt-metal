@@ -8,32 +8,30 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t start_tile_id = get_arg_val<uint32_t>(2);
+    const uint32_t dst_num_tiles = get_arg(args::num_tiles);
+    const uint32_t start_tile_id = get_arg(args::start_id);
     // Additional arguments for width sharding support
-    const uint32_t dst_shard_width = get_arg_val<uint32_t>(3);
-    const uint32_t D = get_arg_val<uint32_t>(4);
-    const uint32_t N = get_arg_val<uint32_t>(5);
-    const uint32_t C = get_arg_val<uint32_t>(6);
-    const uint32_t Ht = get_arg_val<uint32_t>(7);
-    const uint32_t Wt = get_arg_val<uint32_t>(8);
-    const uint32_t cND = get_arg_val<uint32_t>(9);
-
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1, 0>();
+    const uint32_t dst_shard_width = get_arg(args::dst_shard_width);
+    const uint32_t D = get_arg(args::D);
+    const uint32_t N = get_arg(args::N);
+    const uint32_t C = get_arg(args::C);
+    const uint32_t Ht = get_arg(args::Ht);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t cND = get_arg(args::cND);
 
     Noc noc;
-    DataflowBuffer dfb_out(cb_id_out);
 
 #if !DST_SHARDED
+    // out and the output tensor are bound to the writer only when the output is not natively sharded.
+    DataflowBuffer dfb_out(dfb::out);
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = dfb_out.get_entry_size();
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::out);
 
-    constexpr bool has_sharding = get_compile_time_arg_val(dst_args.next_compile_time_args_offset()) == 1;
+    constexpr bool has_sharding = get_arg(args::has_sharding) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;

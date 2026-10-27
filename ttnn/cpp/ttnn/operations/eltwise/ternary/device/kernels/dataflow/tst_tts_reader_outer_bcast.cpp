@@ -8,57 +8,47 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // Standard first 5 arguments
-    const uint32_t src0_addr = get_arg_val<uint32_t>(0);      // predicate address
-    const uint32_t src1_addr = get_arg_val<uint32_t>(1);      // true_value tensor address or false_value tensor address
-    const uint32_t src2_addr = get_arg_val<uint32_t>(2);      // none
-    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(3);  // num_tiles_per_core
-    const uint32_t start_tile_id = get_arg_val<uint32_t>(4);  // start_tile_id
+    // Standard first 2 arguments
+    const uint32_t dst_num_tiles = get_arg(args::num_tiles);  // num_tiles_per_core
+    const uint32_t start_tile_id = get_arg(args::start_id);   // start_tile_id
 
-    // Additional arguments for broadcast (args 5-26)
-    const uint32_t nD_stride = get_arg_val<uint32_t>(5);
-    const uint32_t d_stride = get_arg_val<uint32_t>(6);
-    const uint32_t n_stride = get_arg_val<uint32_t>(7);
-    const uint32_t c_stride = get_arg_val<uint32_t>(8);
-    const uint32_t D = get_arg_val<uint32_t>(9);
-    const uint32_t N = get_arg_val<uint32_t>(10);
-    const uint32_t C = get_arg_val<uint32_t>(11);
-    const uint32_t Ht = get_arg_val<uint32_t>(12);
-    const uint32_t Wt = get_arg_val<uint32_t>(13);
-    const uint32_t cND = get_arg_val<uint32_t>(14);  // collapsed dims > 5
-    const uint32_t nD_stride_b = get_arg_val<uint32_t>(15);
-    const uint32_t d_stride_b = get_arg_val<uint32_t>(16);
-    const uint32_t n_stride_b = get_arg_val<uint32_t>(17);
-    const uint32_t c_stride_b = get_arg_val<uint32_t>(18);
-    const uint32_t srcB_num_tiles = get_arg_val<uint32_t>(19);
-    const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
-    const uint32_t srcA_num_tiles = get_arg_val<uint32_t>(26);  // moved to end
-
-    constexpr auto predicate_cb = get_compile_time_arg_val(0);
-    constexpr auto src_b_cb = get_compile_time_arg_val(1);  // TTS: true_value is src_b; TST: false_value is src_b
-
-    // Compile-time args layout mirrors no-bcast reader: 2 CB ids, then 2 TensorAccessorArgs blocks
-    constexpr auto src0_args = TensorAccessorArgs<2, 0>();
-    constexpr auto src1_args =
-        TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
+    // Additional arguments for broadcast
+    const uint32_t nD_stride = get_arg(args::nD_stride);
+    const uint32_t d_stride = get_arg(args::d_stride);
+    const uint32_t n_stride = get_arg(args::n_stride);
+    const uint32_t c_stride = get_arg(args::c_stride);
+    const uint32_t D = get_arg(args::D);
+    const uint32_t N = get_arg(args::N);
+    const uint32_t C = get_arg(args::C);
+    const uint32_t Ht = get_arg(args::Ht);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t cND = get_arg(args::cND);  // collapsed dims > 5
+    const uint32_t nD_stride_b = get_arg(args::nD_stride_b);
+    const uint32_t d_stride_b = get_arg(args::d_stride_b);
+    const uint32_t n_stride_b = get_arg(args::n_stride_b);
+    const uint32_t c_stride_b = get_arg(args::c_stride_b);
+    const uint32_t srcB_num_tiles = get_arg(args::src_num_tiles_b);
+    const uint32_t dst_shard_width = get_arg(args::dst_shard_width);
+    const uint32_t srcA_num_tiles = get_arg(args::src_num_tiles);  // moved to end
 
     Noc noc;
-    DataflowBuffer dfb_pred(predicate_cb);
-    DataflowBuffer dfb_b(src_b_cb);
+    DataflowBuffer dfb_pred(dfb::in_a);
+    DataflowBuffer dfb_b(dfb::in_b);  // TTS: true_value is src_b; TST: false_value is src_b
 
 #if !SRC_SHARDED_A
     const uint32_t src0_tile_bytes = dfb_pred.get_entry_size();
-    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    const auto s0 = TensorAccessor(tensor::in_a);
 #endif
 #if !SRC_SHARDED_B
     const uint32_t src1_tile_bytes = dfb_b.get_entry_size();
-    const auto s1 = TensorAccessor(src1_args, src1_addr);
+    const auto s1 = TensorAccessor(tensor::in_b);
 #endif
 
     constexpr uint32_t onetile = 1;
-    constexpr bool has_sharding = get_compile_time_arg_val(src1_args.next_compile_time_args_offset()) == 1;
+    constexpr bool has_sharding = get_arg(args::has_sharding) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;

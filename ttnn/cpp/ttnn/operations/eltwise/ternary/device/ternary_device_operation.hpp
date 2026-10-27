@@ -9,10 +9,9 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::operations::ternary {
 
@@ -47,17 +46,16 @@ struct TernaryDeviceOperation {
     };
 
     struct TernaryProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
 
-        // Cache-hit re-apply of ALL per-core runtime args, IN PLACE on the cached program -- no
-        // descriptor rebuild and no kernel recompile, but the work split and every shape-dependent
-        // arg is re-derived for the current tensors, via the same shared builder
-        // create_descriptor() uses.
-        static void override_runtime_arguments(
-            tt::tt_metal::Program& program,
+        // Cache-hit re-apply of ALL per-core runtime args and every tensor argument to the cached
+        // program -- no spec rebuild and no kernel recompile, but the work split and every
+        // shape-dependent arg is re-derived for the current tensors, via the same shared builder
+        // create_program_artifacts() uses.
+        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output,

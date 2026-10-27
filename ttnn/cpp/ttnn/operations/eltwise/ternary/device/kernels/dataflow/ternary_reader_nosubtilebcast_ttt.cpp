@@ -8,78 +8,64 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    const uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    const uint32_t src2_addr = get_arg_val<uint32_t>(2);
-    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(3);
-    const uint32_t start_tile_id = get_arg_val<uint32_t>(4);
+    const uint32_t dst_num_tiles = get_arg(args::num_tiles);
+    const uint32_t start_tile_id = get_arg(args::start_id);
     // Strides and dimensions
-    const uint32_t nD_stride = get_arg_val<uint32_t>(5);
-    const uint32_t d_stride = get_arg_val<uint32_t>(6);
-    const uint32_t n_stride = get_arg_val<uint32_t>(7);
-    const uint32_t c_stride = get_arg_val<uint32_t>(8);
-    const uint32_t D = get_arg_val<uint32_t>(9);
-    const uint32_t N = get_arg_val<uint32_t>(10);
-    const uint32_t C = get_arg_val<uint32_t>(11);
-    const uint32_t Ht = get_arg_val<uint32_t>(12);
-    const uint32_t Wt = get_arg_val<uint32_t>(13);
-    const uint32_t cND = get_arg_val<uint32_t>(14);
-    const uint32_t nD_stride_b = get_arg_val<uint32_t>(15);
-    const uint32_t d_stride_b = get_arg_val<uint32_t>(16);
-    const uint32_t n_stride_b = get_arg_val<uint32_t>(17);
-    const uint32_t c_stride_b = get_arg_val<uint32_t>(18);
-    const uint32_t src1_num_tiles = get_arg_val<uint32_t>(19);
-    const uint32_t nD_stride_c = get_arg_val<uint32_t>(20);
-    const uint32_t d_stride_c = get_arg_val<uint32_t>(21);
-    const uint32_t n_stride_c = get_arg_val<uint32_t>(22);
-    const uint32_t c_stride_c = get_arg_val<uint32_t>(23);
-    const uint32_t src2_num_tiles = get_arg_val<uint32_t>(24);
-    const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
-    const uint32_t src0_num_tiles = get_arg_val<uint32_t>(26);
-
-    // CB IDs from compile-time args (indices 0, 1, 2) - unified layout
-    constexpr auto cb_id_src0 = get_compile_time_arg_val(0);
-    constexpr auto cb_id_src1 = get_compile_time_arg_val(1);
-    constexpr auto cb_id_src2 = get_compile_time_arg_val(2);
-
-    // TensorAccessorArgs start at index 3 (after CB IDs) - unified layout
-    constexpr auto src0_args = TensorAccessorArgs<3, 0>();
-    constexpr auto src1_args =
-        TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
-    constexpr auto src2_args =
-        TensorAccessorArgs<src1_args.next_compile_time_args_offset(), src1_args.next_common_runtime_args_offset()>();
+    const uint32_t nD_stride = get_arg(args::nD_stride);
+    const uint32_t d_stride = get_arg(args::d_stride);
+    const uint32_t n_stride = get_arg(args::n_stride);
+    const uint32_t c_stride = get_arg(args::c_stride);
+    const uint32_t D = get_arg(args::D);
+    const uint32_t N = get_arg(args::N);
+    const uint32_t C = get_arg(args::C);
+    const uint32_t Ht = get_arg(args::Ht);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t cND = get_arg(args::cND);
+    const uint32_t nD_stride_b = get_arg(args::nD_stride_b);
+    const uint32_t d_stride_b = get_arg(args::d_stride_b);
+    const uint32_t n_stride_b = get_arg(args::n_stride_b);
+    const uint32_t c_stride_b = get_arg(args::c_stride_b);
+    const uint32_t src1_num_tiles = get_arg(args::src_num_tiles_b);
+    const uint32_t nD_stride_c = get_arg(args::nD_stride_c);
+    const uint32_t d_stride_c = get_arg(args::d_stride_c);
+    const uint32_t n_stride_c = get_arg(args::n_stride_c);
+    const uint32_t c_stride_c = get_arg(args::c_stride_c);
+    const uint32_t src2_num_tiles = get_arg(args::src_num_tiles_c);
+    const uint32_t dst_shard_width = get_arg(args::dst_shard_width);
+    const uint32_t src0_num_tiles = get_arg(args::src_num_tiles);
 
     Noc noc;
-    DataflowBuffer dfb0(cb_id_src0);
-    DataflowBuffer dfb1(cb_id_src1);
-    DataflowBuffer dfb2(cb_id_src2);
+    DataflowBuffer dfb0(dfb::in_a);
+    DataflowBuffer dfb1(dfb::in_b);
+    DataflowBuffer dfb2(dfb::in_c);
 
 #if SRC_SHARDED_A
     dfb0.reserve_back(src0_num_tiles);
     dfb0.push_back(src0_num_tiles);
 #else
     const uint32_t src0_tile_bytes = dfb0.get_entry_size();
-    const auto src0 = TensorAccessor(src0_args, src0_addr);
+    const auto src0 = TensorAccessor(tensor::in_a);
 #endif
 #if SRC_SHARDED_B
     dfb1.reserve_back(src1_num_tiles);
     dfb1.push_back(src1_num_tiles);
 #else
     const uint32_t src1_tile_bytes = dfb1.get_entry_size();
-    const auto src1 = TensorAccessor(src1_args, src1_addr);
+    const auto src1 = TensorAccessor(tensor::in_b);
 #endif
 #if SRC_SHARDED_C
     dfb2.reserve_back(src2_num_tiles);
     dfb2.push_back(src2_num_tiles);
 #else
     const uint32_t src2_tile_bytes = dfb2.get_entry_size();
-    const auto src2 = TensorAccessor(src2_args, src2_addr);
+    const auto src2 = TensorAccessor(tensor::in_c);
 #endif
 #if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C
     constexpr uint32_t onetile = 1;
-    constexpr bool has_sharding = get_compile_time_arg_val(src2_args.next_compile_time_args_offset()) == 1;
+    constexpr bool has_sharding = get_arg(args::has_sharding) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;

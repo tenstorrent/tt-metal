@@ -11,32 +11,26 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_copy_init.hpp"
 
-// Operands in c_0's formats share its copy init, which leaves the SFPU state the op init set, so the inits run once.
+// Operands in in_a's formats share its copy init, which leaves the SFPU state the op init set, so the inits run once.
 #if !defined(ARCH_QUASAR) && (defined(TRISC_UNPACK) || defined(TRISC_MATH))
-constexpr bool init_once = unpack_src_format[tt::CBIndex::c_0] == static_cast<std::uint32_t>(DataFormat::Float16_b) &&
-                           copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
+constexpr bool init_once = unpack_src_format[dfb::in_a] == static_cast<std::uint32_t>(DataFormat::Float16_b) &&
+                           copy_init_shared_with_c0<dfb::in_b>() && copy_init_shared_with_c0<dfb::in_c>();
 #else
 constexpr bool init_once = false;
 #endif
 
-ALWI void process_tile(
-    uint32_t predicate_cb_id,
-    uint32_t true_cb_id,
-    uint32_t false_cb_id,
-    uint32_t cb_out_id,
-    uint32_t freq,
-    uint32_t tile_start,
-    uint32_t num_tiles_per_cycle) {
+ALWI void process_tile(uint32_t freq, uint32_t tile_start, uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
 
-    DataflowBuffer predicate_dfb(predicate_cb_id);
-    DataflowBuffer true_dfb(true_cb_id);
-    DataflowBuffer false_dfb(false_cb_id);
-    DataflowBuffer dfb_out(cb_out_id);
+    DataflowBuffer predicate_dfb(dfb::in_a);
+    DataflowBuffer true_dfb(dfb::in_b);
+    DataflowBuffer false_dfb(dfb::in_c);
+    DataflowBuffer dfb_out(dfb::out);
 
-    // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
+    // 3-tensor broadcast-aware synchronization - wait for broadcast DFBs outside loop
 #if BCAST_A
     predicate_dfb.wait_front(num_tiles_per_cycle);  // predicate_dfb is broadcast
 #endif
@@ -48,7 +42,7 @@ ALWI void process_tile(
 #endif
 
     for (uint32_t j = tile_start; j < freq; ++j) {
-        // Wait for non-broadcast CBs inside loop
+        // Wait for non-broadcast DFBs inside loop
 #if !BCAST_A
         predicate_dfb.wait_front(num_tiles_per_cycle);
 #endif
@@ -65,17 +59,17 @@ ALWI void process_tile(
 
         // Copy all 3 inputs to destination registers.
         // copy_init does not reconfigure the unpacker data format, and the operands may differ in dtype.
-        reconfig_data_format_srca(false_dfb.get_id(), predicate_dfb.get_id());
-        copy_init_unless<init_once>(predicate_dfb.get_id());
-        copy_tile(predicate_dfb.get_id(), 0, 0);  // predicate to reg 0, 3, 6, ...
+        reconfig_data_format_srca(dfb::in_c, dfb::in_a);
+        copy_init_unless<init_once>(dfb::in_a);
+        copy_tile(dfb::in_a, 0, 0);  // predicate to reg 0, 3, 6, ...
 
-        reconfig_data_format_srca(predicate_dfb.get_id(), true_dfb.get_id());
-        copy_init_unless<init_once>(true_dfb.get_id());
-        copy_tile(true_dfb.get_id(), 0, 1);  // true to reg 1, 4, 7, ...
+        reconfig_data_format_srca(dfb::in_a, dfb::in_b);
+        copy_init_unless<init_once>(dfb::in_b);
+        copy_tile(dfb::in_b, 0, 1);  // true to reg 1, 4, 7, ...
 
-        reconfig_data_format_srca(true_dfb.get_id(), false_dfb.get_id());
-        copy_init_unless<init_once>(false_dfb.get_id());
-        copy_tile(false_dfb.get_id(), 0, 2);  // false to reg 2, 5, 8, ...
+        reconfig_data_format_srca(dfb::in_b, dfb::in_c);
+        copy_init_unless<init_once>(dfb::in_c);
+        copy_tile(dfb::in_c, 0, 2);  // false to reg 2, 5, 8, ...
 
         // Perform the ternary operation
         if constexpr (!init_once) {
@@ -87,12 +81,12 @@ ALWI void process_tile(
 
         tile_regs_wait();
 
-        pack_tile(0, dfb_out.get_id());  // result is stored in predicate register
+        pack_tile(0, dfb::out);  // result is stored in predicate register
         tile_regs_release();
 
         dfb_out.push_back(num_tiles_per_cycle);
 
-        // Pop non-broadcast CBs inside loop
+        // Pop non-broadcast DFBs inside loop
 #if !BCAST_A
         predicate_dfb.pop_front(num_tiles_per_cycle);
 #endif
@@ -104,7 +98,7 @@ ALWI void process_tile(
 #endif
     }
 
-    // Pop broadcast CBs outside loop
+    // Pop broadcast DFBs outside loop
 #if BCAST_A
     predicate_dfb.pop_front(num_tiles_per_cycle);
 #endif
@@ -117,23 +111,18 @@ ALWI void process_tile(
 }
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    uint32_t tile_freq = get_arg_val<uint32_t>(1);
-    uint32_t tile_start = get_arg_val<uint32_t>(2);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t tile_freq = get_arg(args::tile_freq);
+    uint32_t tile_start = get_arg(args::tile_start);
 
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
+    constexpr uint32_t num_tiles_per_cycle = get_arg(args::num_tiles_per_cycle);
 
     if (num_tiles == 0) {
         return;
     }
 
-    constexpr auto predicate_cb_id = tt::CBIndex::c_0;
-    constexpr auto true_cb_id = tt::CBIndex::c_1;
-    constexpr auto false_cb_id = tt::CBIndex::c_2;
-    constexpr auto cb_out_id = tt::CBIndex::c_3;
-
-    compute_kernel_hw_startup(predicate_cb_id, cb_out_id);
-    copy_init(predicate_cb_id);
+    compute_kernel_hw_startup(dfb::in_a, dfb::out);
+    copy_init(dfb::in_a);
     if constexpr (init_once) {
         TERNARY_SFPU_OP_INIT();
     }
@@ -142,11 +131,10 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(predicate_cb_id, true_cb_id, false_cb_id, cb_out_id, tile_freq, tile_start, num_tiles_per_cycle);
+        process_tile(tile_freq, tile_start, num_tiles_per_cycle);
     }
 
     if (remaining_iterations > 0) {
-        process_tile(
-            predicate_cb_id, true_cb_id, false_cb_id, cb_out_id, remaining_iterations, tile_start, num_tiles_per_cycle);
+        process_tile(remaining_iterations, tile_start, num_tiles_per_cycle);
     }
 }

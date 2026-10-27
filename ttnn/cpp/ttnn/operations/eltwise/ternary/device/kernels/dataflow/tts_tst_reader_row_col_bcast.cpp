@@ -5,52 +5,43 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t src2_addr = get_arg_val<uint32_t>(2);
-    uint32_t num_tiles = get_arg_val<uint32_t>(3);
-    uint32_t start_id = get_arg_val<uint32_t>(4);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t start_id = get_arg(args::start_id);
 
-    const uint32_t nD_stride = get_arg_val<uint32_t>(5);
-    const uint32_t d_stride = get_arg_val<uint32_t>(6);
-    const uint32_t n_stride = get_arg_val<uint32_t>(7);
-    const uint32_t c_stride = get_arg_val<uint32_t>(8);
-    const uint32_t D = get_arg_val<uint32_t>(9);
-    const uint32_t N = get_arg_val<uint32_t>(10);
-    const uint32_t C = get_arg_val<uint32_t>(11);
-    const uint32_t Ht = get_arg_val<uint32_t>(12);
-    const uint32_t Wt = get_arg_val<uint32_t>(13);
-    const uint32_t cND = get_arg_val<uint32_t>(14);
-    const uint32_t tensor_nD_stride = get_arg_val<uint32_t>(15);
-    const uint32_t tensor_d_stride = get_arg_val<uint32_t>(16);
-    const uint32_t tensor_n_stride = get_arg_val<uint32_t>(17);
-    const uint32_t tensor_c_stride = get_arg_val<uint32_t>(18);
-    const uint32_t tensor_num_tiles = get_arg_val<uint32_t>(19);
-    const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
-    const uint32_t src_num_tiles = get_arg_val<uint32_t>(26);
-
-    constexpr auto predicate_cb = get_compile_time_arg_val(0);
-    constexpr auto tensor_cb = get_compile_time_arg_val(1);
+    const uint32_t nD_stride = get_arg(args::nD_stride);
+    const uint32_t d_stride = get_arg(args::d_stride);
+    const uint32_t n_stride = get_arg(args::n_stride);
+    const uint32_t c_stride = get_arg(args::c_stride);
+    const uint32_t D = get_arg(args::D);
+    const uint32_t N = get_arg(args::N);
+    const uint32_t C = get_arg(args::C);
+    const uint32_t Ht = get_arg(args::Ht);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t cND = get_arg(args::cND);
+    const uint32_t tensor_nD_stride = get_arg(args::nD_stride_b);
+    const uint32_t tensor_d_stride = get_arg(args::d_stride_b);
+    const uint32_t tensor_n_stride = get_arg(args::n_stride_b);
+    const uint32_t tensor_c_stride = get_arg(args::c_stride_b);
+    const uint32_t tensor_num_tiles = get_arg(args::src_num_tiles_b);
+    const uint32_t dst_shard_width = get_arg(args::dst_shard_width);
+    const uint32_t src_num_tiles = get_arg(args::src_num_tiles);
 
 #define SRC_BCAST_CB1 (SRC_BCAST_B || SRC_BCAST_C)
 
-    constexpr auto src0_args = TensorAccessorArgs<2, 0>();
-    constexpr auto src1_args =
-        TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
-
     Noc noc;
-    CircularBuffer cb_pred(predicate_cb);
-    CircularBuffer cb_tensor(tensor_cb);
+    DataflowBuffer dfb_pred(dfb::in_a);
+    DataflowBuffer dfb_tensor(dfb::in_b);
 
-    const uint32_t src0_tile_bytes = cb_pred.get_tile_size();
-    const uint32_t src1_tile_bytes = cb_tensor.get_tile_size();
-    const auto s0 = TensorAccessor(src0_args, src0_addr);
-    const auto s1 = TensorAccessor(src1_args, src1_addr);
+    const uint32_t src0_tile_bytes = dfb_pred.get_tile_size();
+    const uint32_t src1_tile_bytes = dfb_tensor.get_tile_size();
+    const auto s0 = TensorAccessor(tensor::in_a);
+    const auto s1 = TensorAccessor(tensor::in_b);
 
     constexpr uint32_t onetile = 1;
     const uint32_t HtWt = Ht * Wt;
@@ -96,66 +87,66 @@ void kernel_main() {
                 for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th) {
 #if SRC_BCAST_A
-                        cb_pred.reserve_back(onetile);
+                        dfb_pred.reserve_back(onetile);
 #if SRC_SCALAR_A
-                        noc.async_read(s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                        noc.async_read(s0, dfb_pred, src0_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
 #else
                         noc.async_read(
-                            s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset + th}, {.offset_bytes = 0});
+                            s0, dfb_pred, src0_tile_bytes, {.page_id = tile_offset + th}, {.offset_bytes = 0});
 #endif
                         noc.async_read_barrier();
 #if SRC_SCALAR_A
-                        FILL_TILE_WITH_FIRST_ELEMENT(cb_pred.get_write_ptr());
+                        FILL_TILE_WITH_FIRST_ELEMENT(dfb_pred.get_write_ptr());
 #else
-                        FILL_TILE_WITH_FIRST_COLUMN(cb_pred.get_write_ptr());
+                        FILL_TILE_WITH_FIRST_COLUMN(dfb_pred.get_write_ptr());
 #endif
-                        cb_pred.push_back(onetile);
+                        dfb_pred.push_back(onetile);
 #endif
 
 #if SRC_BCAST_CB1
-                        cb_tensor.reserve_back(onetile);
+                        dfb_tensor.reserve_back(onetile);
 #if SRC_SCALAR_CB1
                         noc.async_read(
-                            s1, cb_tensor, src1_tile_bytes, {.page_id = tensor_tile_offset}, {.offset_bytes = 0});
+                            s1, dfb_tensor, src1_tile_bytes, {.page_id = tensor_tile_offset}, {.offset_bytes = 0});
 #else
                         noc.async_read(
-                            s1, cb_tensor, src1_tile_bytes, {.page_id = tensor_tile_offset + th}, {.offset_bytes = 0});
+                            s1, dfb_tensor, src1_tile_bytes, {.page_id = tensor_tile_offset + th}, {.offset_bytes = 0});
 #endif
                         noc.async_read_barrier();
 #if SRC_SCALAR_CB1
-                        FILL_TILE_WITH_FIRST_ELEMENT_B(cb_tensor.get_write_ptr());
+                        FILL_TILE_WITH_FIRST_ELEMENT_B(dfb_tensor.get_write_ptr());
 #else
-                        FILL_TILE_WITH_FIRST_COLUMN_B(cb_tensor.get_write_ptr());
+                        FILL_TILE_WITH_FIRST_COLUMN_B(dfb_tensor.get_write_ptr());
 #endif
-                        cb_tensor.push_back(onetile);
+                        dfb_tensor.push_back(onetile);
 #endif
 
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < num_tiles;
                              ++tw, ++num_tiles_read) {
 #if !SRC_BCAST_A
-                            cb_pred.reserve_back(onetile);
+                            dfb_pred.reserve_back(onetile);
                             noc.async_read(
-                                s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
+                                s0, dfb_pred, src0_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
                             noc.async_read_barrier();
 #if SRC_ROW_BCAST_A
-                            FILL_TILE_WITH_FIRST_ROW(cb_pred.get_write_ptr());
+                            FILL_TILE_WITH_FIRST_ROW(dfb_pred.get_write_ptr());
 #endif
-                            cb_pred.push_back(onetile);
+                            dfb_pred.push_back(onetile);
 #endif
 
 #if !SRC_BCAST_CB1
-                            cb_tensor.reserve_back(onetile);
+                            dfb_tensor.reserve_back(onetile);
                             noc.async_read(
                                 s1,
-                                cb_tensor,
+                                dfb_tensor,
                                 src1_tile_bytes,
                                 {.page_id = tensor_tile_offset + tw},
                                 {.offset_bytes = 0});
                             noc.async_read_barrier();
 #if SRC_ROW_BCAST_CB1
-                            FILL_TILE_WITH_FIRST_ROW_B(cb_tensor.get_write_ptr());
+                            FILL_TILE_WITH_FIRST_ROW_B(dfb_tensor.get_write_ptr());
 #endif
-                            cb_tensor.push_back(onetile);
+                            dfb_tensor.push_back(onetile);
 #endif
                         }
                         if (dst_shard_width == 0) {

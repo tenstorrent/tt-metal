@@ -10,24 +10,17 @@
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/add_int_sfpu.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
-ALWI void process_tile(
-    tt::CBIndex cb_in0_id,
-    tt::CBIndex cb_in1_id,
-    tt::CBIndex cb_in2_id,
-    tt::CBIndex cb_out_id,
-    uint32_t freq,
-    uint32_t tile_start,
-    uint32_t num_tiles_per_cycle,
-    uint32_t scalar_arg) {
+ALWI void process_tile(uint32_t freq, uint32_t tile_start, uint32_t num_tiles_per_cycle, uint32_t scalar_arg) {
     using namespace ckernel;
 
-    DataflowBuffer dfb_in0(cb_in0_id);
-    DataflowBuffer dfb_in1(cb_in1_id);
-    DataflowBuffer dfb_in2(cb_in2_id);
-    DataflowBuffer dfb_out(cb_out_id);
+    DataflowBuffer dfb_in0(dfb::in_a);  // input_a
+    DataflowBuffer dfb_in1(dfb::in_b);  // input_b
+    DataflowBuffer dfb_in2(dfb::in_c);  // input_c
+    DataflowBuffer dfb_out(dfb::out);   // output
 
-    // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
+    // 3-tensor broadcast-aware synchronization - wait for broadcast DFBs outside loop
 #if BCAST_A
     dfb_in0.wait_front(num_tiles_per_cycle);  // input_a is broadcast
 #endif
@@ -39,7 +32,7 @@ ALWI void process_tile(
 #endif
 
     for (uint32_t j = tile_start; j < freq; ++j) {
-        // Wait for non-broadcast CBs inside loop
+        // Wait for non-broadcast DFBs inside loop
 #if !BCAST_A
         dfb_in0.wait_front(num_tiles_per_cycle);
 #endif
@@ -55,14 +48,14 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // Load all three inputs into DST registers
-        copy_init(dfb_in0.get_id());
-        copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
+        copy_init(dfb::in_a);
+        copy_tile(dfb::in_a, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_init(dfb_in1.get_id());
-        copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
+        copy_init(dfb::in_b);
+        copy_tile(dfb::in_b, 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_init(dfb_in2.get_id());
-        copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
+        copy_init(dfb::in_c);
+        copy_tile(dfb::in_c, 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
         fill_tile_init();
         fill_tile_int<ADDCMUL_DATA_FORMAT>(3, scalar_arg);
@@ -78,13 +71,13 @@ ALWI void process_tile(
         tile_regs_wait();
 
         // Pack the result from DST[0] to output
-        pack_tile(0, dfb_out.get_id());
+        pack_tile(0, dfb::out);
 
         tile_regs_release();
 
         dfb_out.push_back(num_tiles_per_cycle);
 
-        // Pop non-broadcast CBs inside loop
+        // Pop non-broadcast DFBs inside loop
 #if !BCAST_A
         dfb_in0.pop_front(num_tiles_per_cycle);
 #endif
@@ -96,7 +89,7 @@ ALWI void process_tile(
 #endif
     }
 
-    // Pop broadcast CBs outside loop
+    // Pop broadcast DFBs outside loop
 #if BCAST_A
     dfb_in0.pop_front(num_tiles_per_cycle);
 #endif
@@ -109,42 +102,28 @@ ALWI void process_tile(
 }
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    uint32_t tile_freq = get_arg_val<uint32_t>(1);
-    uint32_t tile_start = get_arg_val<uint32_t>(2);
-    uint32_t scalar_arg = get_arg_val<uint32_t>(3);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t tile_freq = get_arg(args::tile_freq);
+    uint32_t tile_start = get_arg(args::tile_start);
+    uint32_t scalar_arg = get_arg(args::scalar_arg);
 
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
+    constexpr uint32_t num_tiles_per_cycle = get_arg(args::num_tiles_per_cycle);
 
     if (num_tiles == 0) {
         return;
     }
 
-    constexpr auto cb_in0_id = tt::CBIndex::c_0;  // input_a
-    constexpr auto cb_in1_id = tt::CBIndex::c_1;  // input_b
-    constexpr auto cb_in2_id = tt::CBIndex::c_2;  // input_c
-    constexpr auto cb_out_id = tt::CBIndex::c_3;  // output
-
-    compute_kernel_hw_startup(cb_in0_id, cb_out_id);
-    copy_init(cb_in0_id);
+    compute_kernel_hw_startup(dfb::in_a, dfb::out);
+    copy_init(dfb::in_a);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(
-            cb_in0_id, cb_in1_id, cb_in2_id, cb_out_id, tile_freq, tile_start, num_tiles_per_cycle, scalar_arg);
+        process_tile(tile_freq, tile_start, num_tiles_per_cycle, scalar_arg);
     }
 
     if (remaining_iterations > 0) {
-        process_tile(
-            cb_in0_id,
-            cb_in1_id,
-            cb_in2_id,
-            cb_out_id,
-            remaining_iterations,
-            tile_start,
-            num_tiles_per_cycle,
-            scalar_arg);
+        process_tile(remaining_iterations, tile_start, num_tiles_per_cycle, scalar_arg);
     }
 }
