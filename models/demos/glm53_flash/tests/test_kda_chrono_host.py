@@ -86,3 +86,25 @@ def test_chrono_pair_must_exist_before_the_freeze(monkeypatch):
     except RuntimeError:
         raised = True
     assert raised and mesh.uploads == []
+
+
+def test_eager_pad_length_buckets():
+    from models.demos.glm53_flash.tt.mesh_model import DEFAULT_PREFILL_BUCKETS, eager_pad_length, prefill_buckets
+
+    unit = 256  # 32 * 8 rows
+    assert eager_pad_length(128, unit, DEFAULT_PREFILL_BUCKETS) == 2048
+    assert eager_pad_length(2048, unit, DEFAULT_PREFILL_BUCKETS) == 2048
+    assert eager_pad_length(2049, unit, DEFAULT_PREFILL_BUCKETS) == 4096
+    assert eager_pad_length(4097, unit, DEFAULT_PREFILL_BUCKETS) == 16384  # no 8192 bucket (1024-row slab L1 clash)
+    assert eager_pad_length(16362, unit, DEFAULT_PREFILL_BUCKETS) == 16384
+    assert eager_pad_length(16385, unit, DEFAULT_PREFILL_BUCKETS) == 16640  # above the largest bucket: the ceiling
+    assert eager_pad_length(300, unit, ()) == 512  # no buckets: the row-unit ceiling
+    assert prefill_buckets({"GLM53_PREFILL_BUCKETS": "0"}) == ()
+    assert prefill_buckets({"GLM53_PREFILL_BUCKETS": "4096,2048"}) == (2048, 4096)
+    assert prefill_buckets({}) == DEFAULT_PREFILL_BUCKETS
+    raised = False
+    try:
+        eager_pad_length(100, unit, (1000,))
+    except ValueError:
+        raised = True
+    assert raised

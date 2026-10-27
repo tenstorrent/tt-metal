@@ -34,6 +34,40 @@ from models.demos.glm53_flash.tt.trace_prefill import (
     supported_prefill_lengths,
 )
 
+PREFILL_BUCKETS_ENV = "GLM53_PREFILL_BUCKETS"
+# 8192 is deliberately absent: a 1024-row slab per chip (8192 tokens on the 8 rows) puts the KDA sequence-parallel
+# scan's static dataflow buffers (~1005 KiB per core, slab-independent) and the prefill's L1-resident chunk terms
+# (~608 KiB per core at 1024 rows) over the 1.5 MiB L1 ("Statically allocated dataflow buffers ... clash with L1
+# buffers"); slabs <= 512 rows fit and slabs >= ~1216 rows spill the terms to DRAM (the 16384 chunk path).
+DEFAULT_PREFILL_BUCKETS = (2048, 4096, 16384)
+
+
+def prefill_buckets(env=None) -> tuple[int, ...]:
+    """``GLM53_PREFILL_BUCKETS``: the eager prefill's padded chunk lengths (default 2048,4096,16384; ``0`` = pad
+    to the row unit only, the pre-2026-10-27 behaviour)."""
+    env = os.environ if env is None else env
+    raw = env.get(PREFILL_BUCKETS_ENV, "")
+    if raw.strip() == "0":
+        return ()
+    if not raw.strip():
+        return DEFAULT_PREFILL_BUCKETS
+    return tuple(sorted(int(v) for v in raw.split(",") if v.strip()))
+
+
+def eager_pad_length(seq_len: int, unit: int, buckets: tuple[int, ...] | None = None) -> int:
+    """Padded length of an eager prefill chunk of ``seq_len`` tokens: the row unit's ceiling, raised to the smallest
+    bucket that holds it (a bucket must be a multiple of ``unit``; above the largest bucket the ceiling stands).
+    Every bucket is warmed at boot (the serving warm-up ladder), so a prompt's odd tail chunk never builds a new
+    per-length ttKDA prefill layer after the trace captures (buffers allocated then are clobbered by replays: the
+    2026-10-27 served hang) and never compiles at request time. The kernels clip to the valid ``seq_len``."""
+    T = -(-int(seq_len) // unit) * unit
+    for b in prefill_buckets() if buckets is None else buckets:
+        if b % unit:
+            raise ValueError(f"prefill bucket {b} is not a multiple of the row unit {unit}")
+        if T <= b:
+            return b
+    return T
+
 
 class GLM53MeshModel:
     # the attached MTP drafter (``attach_mtp``; ``tt/mtp.py`` ``TtMTPBlock``) and its own level-1 positions
@@ -186,7 +220,7 @@ class GLM53MeshModel:
         prompt's)."""
         S = int(prompt_ids.numel())
         unit = 32 * self.mesh.rows
-        T_pad = -(-S // unit) * unit
+        T_pad = eager_pad_length(S, unit)
         host = self.embedding.tokens_to_host(prompt_ids, pad_to=T_pad)  # [1,1,1,T_pad]
         if self.mesh.rows > 1:
             ids_dev = self.mesh.upload(host, ttnn.uint32, rows=3, layout=ttnn.ROW_MAJOR_LAYOUT)
