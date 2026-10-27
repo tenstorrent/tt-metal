@@ -239,12 +239,14 @@ class GLMMesh:
 
     def to_host(self, x: ttnn.Tensor, *, rows: int | None = None, cols: int | None = None) -> torch.Tensor:
         """Host tensor: chip shards concatenated on ``rows`` / ``cols`` (``None`` = take the first
-        replica on that axis). Equal replicas are the caller's assertion, not checked here."""
-        shards = [ttnn.to_torch(d) for d in self.device_tensors(x)]
-        grid = [[shards[r * self.cols + c] for c in range(self.cols)] for r in range(self.rows)]
-        row_parts = []
-        for r in range(self.rows):
-            row_parts.append(torch.cat(grid[r], dim=cols) if cols is not None else grid[r][0])
+        replica on that axis). Equal replicas are the caller's assertion, not checked here. Only the
+        shards the result uses are read: the first column of every row when ``cols`` is None, row 0
+        only when ``rows`` is None (a per-row result on the 8x4 is 8 chip reads, not 32)."""
+        devs = self.device_tensors(x)
+        rr = range(self.rows) if rows is not None else range(1)
+        cc = range(self.cols) if cols is not None else range(1)
+        read = {(r, c): ttnn.to_torch(devs[r * self.cols + c]) for r in rr for c in cc}
+        row_parts = [torch.cat([read[(r, c)] for c in cc], dim=cols) if cols is not None else read[(r, 0)] for r in rr]
         return torch.cat(row_parts, dim=rows) if rows is not None else row_parts[0]
 
     # ------------------------------------------------------------------ collectives

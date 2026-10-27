@@ -34,10 +34,11 @@ Contract mapping (the plugin's names on the left):
   rows (``prompt_lens < num_tokens``) emit nothing.
 * ``decode_forward(tokens, start_pos, page_table, kv_cache, enable_trace, read_from_device, sampling_params,
   slot_remap, reload_inputs, ...)`` (``decode_input_update_contract = 1``): the plugin's ``[B_pad, 1]``
-  rows are permuted onto the physical user slots (``SlotTable``), uploaded with ``load_ids`` /
-  ``set_positions``, the captured decode step replayed, and the greedy ids / logits read back and
-  un-permuted (``read_decode_output`` / ``process_decode_output_host``). Idle slots are parked at
-  ``(pad_token, position 0)``.
+  rows are permuted onto the physical user slots (``SlotTable``), uploaded with ``load_decode_inputs``
+  (``load_ids`` + ``set_positions``; with ``GLM53_DECODE_PACKED_INPUTS=1`` one packed host->device copy per
+  step and one chip read per mesh row for the ids, ``tt/packed_inputs.py``), the captured decode step
+  replayed, and the greedy ids / logits read back and un-permuted (``read_decode_output`` /
+  ``process_decode_output_host``). Idle slots are parked at ``(pad_token, position 0)``.
 * ``release_request(slot)`` / ``note_state_slots_moved(moves)``: slot ownership follows the plugin's logical
   slot through the adapter's indirection table; device state never moves.
 * ``get_kv_cache_spec`` / ``allocate_kv_cache`` / ``get_max_tokens_all_users``: vLLM's block pool is logical
@@ -832,8 +833,14 @@ class GLM53FlashForCausalLM:
                 )
             ids_feed, pos_feed = self.slots.device_feed(feed_tokens, feed_positions)
             t0 = time.perf_counter()
-            self.model.load_ids(torch.tensor(ids_feed, dtype=torch.long))
-            self.model.set_positions(pos_feed)
+            # one call per step: with GLM53_DECODE_PACKED_INPUTS=1 the mesh model uploads ONE packed tensor (ids +
+            # positions + sparse metadata, tt/packed_inputs.py) instead of the per-field refreshes
+            load = getattr(self.model, "load_decode_inputs", None)
+            if load is not None:
+                load(torch.tensor(ids_feed, dtype=torch.long), pos_feed)
+            else:
+                self.model.load_ids(torch.tensor(ids_feed, dtype=torch.long))
+                self.model.set_positions(pos_feed)
             set_active = getattr(self.model, "set_active_slots", None)
             if set_active is not None:  # future device hook: freeze idle / mid-prefill slots inside the traced step
                 active = [False] * self.geometry.physical_slots
