@@ -266,7 +266,7 @@ function FlowCompare() {
           PROPOSED
         </text>
         <SvgBox x={xs[0]} y={170} w={bw} h={46} title="MGD + pipeline" sub="stages, shapes, edges" kind="new" />
-        <SvgBox x={xs[1]} y={170} w={bw} h={46} title="Topology mapper" sub="carve + resolve per seating" kind="new" />
+        <SvgBox x={xs[1]} y={170} w={bw} h={46} title="Topology mapper" sub="footprint solve + resolver per seating" kind="new" />
         <SvgBox x={xs[2]} y={170} w={bw} h={46} title="Control plane" sub="binds the links it needs" kind="new" />
         <SvgBox x={xs[3]} y={170} w={bw} h={46} title="blaze carve + resolve" sub="unchanged" />
         <SvgBox x={xs[4]} y={170} w={bw} h={46} title="pipeline builds" sub="a placement is known to exist" kind="reuse" />
@@ -553,7 +553,7 @@ const CASES: Record<
     strict: { ok: true, why: "Slices form the cycle a0 > a1 > b1 > b0 > a0. plan_ring_carve finds it and the resolver lays the ring on it." },
     relaxed: {
       ok: true,
-      why: "Same as all STRICT: an all-fabric cycle exists, so the planner cuts nothing to host.",
+      why: "Same as all STRICT: an all-fabric cycle exists, so the soft edge is matched and nothing goes to host.",
       labels: { a0: "s0", a1: "s1", b0: "s3", b1: "s2" },
     },
   },
@@ -565,11 +565,11 @@ const CASES: Record<
     ],
     strict: {
       ok: false,
-      why: "Adjacency is a1-a0, a0-b0, b0-b1: a path, not a cycle. Planned carve fails with no-cycle-of-length-4; per-rank tiling fails in the resolver (s3 > s0 has no link).",
+      why: "Adjacency is a1-a0, a0-b0, b0-b1: a path, not a cycle. The footprint solve finds no 4-cycle carve (blaze's planner: no-cycle-of-length-4).",
     },
     relaxed: {
       ok: true,
-      why: "plan_ring_placement lays s0..s3 along the fabric path a1 > a0 > b0 > b1 and moves only the loopback s3 > s0 onto host. Allowed: it is RELAXED and not stage 0's outgoing edge.",
+      why: "With s3 > s0 a soft edge, the solve maps s0..s3 along the fabric path a1 > a0 > b0 > b1 and leaves only the loopback to host, the same cut blaze's plan_ring_placement makes. Allowed: it is RELAXED and not stage 0's outgoing edge.",
       labels: { a0: "s1", a1: "s0", b0: "s2", b1: "s3" },
       host: true,
     },
@@ -663,8 +663,8 @@ function LoopFlow() {
   const steps: Array<{ title: string; sub: string; kind: BoxKind }> = [
     { title: "1. SAT seating", sub: "placement_session_->next()", kind: "existing" },
     { title: "2. intra-mesh completion", sub: "complete_intra_mesh_for_placement", kind: "existing" },
-    { title: "C1. build the physical pipeline graph", sub: "candidates, host slices, adjacency, carve paths -> slots  [P5 P6 P7 P8]", kind: "new" },
-    { title: "C2. pipeline solve", sub: "resolver: pipeline graph onto a C1 graph; R within demand  [P4 P8 P9]", kind: "reuse" },
+    { title: "C1. build the physical pipeline graph", sub: "one position graph per seating + footprint constraints  [P5 P6 P7 P8]", kind: "new" },
+    { title: "C2. pipeline solve", sub: "one solve, one carve; resolver check; R = exact channels; R within demand  [P5 P8 P9]", kind: "reuse" },
     { title: "C3. on success: emit + publish R", sub: "get_pipeline_required_links(); control plane binds R first  [P9 P12]", kind: "new" },
   ];
   const y = (i: number) => 14 + i * (bh + gap);
@@ -700,21 +700,10 @@ function LoopFlow() {
         <text x={bx - 56} y={y(1) + bh / 2 + 29} textAnchor="end" fontSize={10.5} fill={t.text.tertiary}>
           (today)
         </text>
-        {/* C2 fails on one graph: next C1 graph */}
-        <path
-          d={`M ${bx} ${y(3) + bh / 2} L ${bx - 24} ${y(3) + bh / 2} L ${bx - 24} ${y(2) + bh / 2} L ${bx} ${y(2) + bh / 2}`}
-          fill="none"
-          stroke={t.stroke.primary}
-          strokeDasharray="4 3"
-          markerEnd="url(#lf-arrow)"
-        />
-        <text x={bx - 30} y={y(3) + bh / 2 + 16} textAnchor="end" fontSize={10.5} fill={t.text.tertiary}>
-          next carve path or cycle
-        </text>
-        {/* every graph fails: C4 */}
+        {/* any C2 failure: C4 */}
         <line x1={bx + bw} y1={y(3) + bh / 2} x2={c4x} y2={y(3) + bh / 2} stroke={t.category.red} strokeDasharray="4 3" markerEnd="url(#lf-red)" />
         <text x={bx + bw + 6} y={y(3) + bh / 2 - 6} fontSize={10.5} fill={t.category.red}>
-          all fail
+          no carve, resolver or demand fails
         </text>
         <SvgBox x={c4x} y={c4y} w={c4w} h={c4h} title="C4. on failure" sub="constraints for the next solve  [P8 P15]" kind="fail" />
         {/* C4 move 1: exit-node retry, back to intra-mesh */}
@@ -1001,7 +990,7 @@ function PhaseStrip() {
     { title: "Phase 1a", sub: "assign_z pairs on Z", kind: "existing" },
     { title: "Phase 1b", sub: "other pairs on NESW", kind: "existing" },
     { title: "Phase 2", sub: "NESW overflow on Z", kind: "existing" },
-    { title: "Fill order", sub: "tier, then slice-pair spread", kind: "muted" },
+    { title: "Fill order", sub: "today's order", kind: "muted" },
   ];
   const bw = 150;
   const gap = 22;
@@ -1054,7 +1043,7 @@ function MergeDiagram() {
 type Pr = {
   id: string;
   title: string;
-  milestone: "M1 Format" | "M2 Shared code" | "M3 Tier C (STRICT)" | "M4 Pruning" | "M5 RELAXED (later)";
+  milestone: "M1 Format" | "M2 Shared code" | "M3 Tier C (STRICT)" | "M4 Pruning" | "M5 Later";
   size: "S" | "M" | "L";
   deps: string[];
   goal: string;
@@ -1077,11 +1066,13 @@ const PRS: Pr[] = [
       "tt_metal/fabric/protobuf/mesh_graph_descriptor.proto",
       "tt_metal/fabric/mesh_graph_descriptor.cpp",
       "tt_metal/api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp",
+      "tt_metal/api/tt-metalium/experimental/fabric/pipeline_graph.hpp (new)",
     ],
     steps: [
       "Add messages PipelineDescriptor, PipelineStage, PipelineEdge; field 6 on MeshGraphDescriptor. Every edge is STRICT: PipelineEdge has no policy field, and field 3 is reserved for it (P14).",
       "Add validate_pipeline_descriptors to static_validate, after validate_pinnings.",
       "Add accessors has_pipeline_descriptors() and pipeline_descriptors().",
+      "PipelineStageKey, PipelineStageSpec (key, label, shape), PipelineEdgeSpec (src/dst index) and PipelineGraph (name, stages, edges) live on MeshGraphDescriptor. pipeline_graphs() is the conversion Tier A validates.",
     ],
     code: [
       {
@@ -1154,8 +1145,7 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
             }
         }
         // NOTE: no stage-topology check. In-degree, out-degree, number of roots, and whether a
-        // branch is a chain are all accepted. Once the MGD identifies the router, this can
-        // constrain the graph to blaze's shape (one root, chains, at most two branches).
+        // branch is a chain are all accepted.
     }
 }`,
       },
@@ -1226,9 +1216,10 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
     deps: ["P1", "P2"],
     goal: "Reject pipelines impossible on every mapping of the MGD, before SAT runs. Never pick a split.",
     files: [
-      "tt_metal/fabric/pipeline_feasibility.cpp (new)",
-      "tt_metal/fabric/pipeline_feasibility.hpp (new)",
+      "tt_metal/fabric/pipeline_builder.cpp",
+      "tt_metal/api/tt-metalium/experimental/fabric/pipeline_builder.hpp",
       "tt_metal/fabric/mesh_graph_descriptor.cpp",
+      "tt_metal/api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp",
     ],
     steps: [
       "Binding set per stage: meshes whose slice tiles the stage shape exactly and that fit it. The slice is device_topology / host_topology; host_topology.dims is the rank grid already on the descriptor (DeclaredTopology::host_dims). No stage is required to be one slice: the descriptor does not say which stage owns host I/O.",
@@ -1237,6 +1228,8 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
       "Segment carve at each leaf, per mesh: uint64 slice masks, rectangles placed largest first then along edges, no overlap, every edge inside the mesh joins touching rectangles. Memoised on (mesh descriptor, sorted stage ids), failures included.",
       "No node budget: both searches end in pass or proved impossible, never UNDECIDED. Fail fast instead: an odd grid holds no ring, and a fully used mesh entered and left through fixed slices gets the exact O(1) Hamiltonian-path test (Itai-Papadimitriou-Szwarcfiter) before any search.",
       "Save PipelineMappingConstraints (binding sets; k_AB, min crossings per mesh, boundary slices per mesh pair), exposed as MeshGraphDescriptor::pipeline_mapping_constraints(). No projection list: any carve Tier C finds already passes Tier B's rules, so a stored list could never reject anything. The Plan 1 facts need every projection and carve, so they come from an optional \"find all\" run of the same searches with a smaller budget (10^5); skipped or over budget, they are the defaults k = 0 and every slice a boundary slice. init_from_parts reads them; it does not run the check.",
+      "No new files: Tier B is one entry point, detail::check_pipeline_feasibility(descriptor), in pipeline_builder.cpp next to the resolver; its searches are helpers in that file's anonymous namespace. PipelineStageKey and PipelineMappingConstraints go in pipeline_builder.hpp, because the descriptor's accessor returns them.",
+      "Includes: mesh_graph.hpp includes mesh_graph_descriptor.hpp, so the descriptor header cannot include pipeline_builder.hpp. It forward-declares PipelineMappingConstraints and holds it in a unique_ptr (the destructor is already out of line); mesh_graph_descriptor.cpp includes pipeline_builder.hpp.",
       "Run at the end of every MeshGraphDescriptor constructor, after populate(). Loading a part checks that part (before merge). merge() constructs a new descriptor, so the merged meshes and all pipelines are checked again (after merge).",
     ],
     code: [
@@ -1251,45 +1244,63 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
 +    // wait for MeshGraph. Every construction runs it: each part before merge, and
 +    // the descriptor merge() returns.
 +    if (proto_->pipeline_descriptors_size() > 0) {
-+        pipeline_feasibility_ = std::make_unique<PipelineFeasibility>(*this);
++        pipeline_mapping_constraints_ =
++            std::make_unique<const PipelineMappingConstraints>(detail::check_pipeline_feasibility(*this));
 +    }`,
       },
       {
-        path: "tt_metal/fabric/pipeline_feasibility.hpp  (new)",
-        mode: "new",
+        path: "tt_metal/api/tt-metalium/experimental/fabric/pipeline_builder.hpp",
+        mode: "diff",
         language: "cpp",
         src: `
-// MGD types only: the MGD library does not include topology_solver.hpp.
-struct PipelineStageKey { std::string pipeline; std::string stage; auto operator<=>(const PipelineStageKey&) const = default; };
+     const std::map<std::string, uint32_t>& node_pipeline_core_counts = {},
+     std::optional<uint32_t> pipeline_core_count = std::nullopt);
 
-// Facts true for every surviving projection and every carve, so constraints built from them are safe.
-struct PipelineMappingConstraints {
-    std::map<PipelineStageKey, std::set<MeshId>> binding_sets;
-    bool enumerated = false;                                            // false: "find all" skipped or over budget,
-                                                                        // so k = 0 and every slice a boundary
-    std::map<std::pair<MeshId, MeshId>, std::uint32_t> min_crossings;   // k_AB, min over projections
-    std::map<MeshId, std::uint32_t> min_crossings_out;                  // per mesh, min over projections
-    std::map<std::pair<MeshId, MeshId>, std::set<MeshHostRankId>> boundary_slices;   // union
-};
-
-class PipelineFeasibility {
-public:
-    explicit PipelineFeasibility(const MeshGraphDescriptor& descriptor);
-    const PipelineMappingConstraints& mapping_constraints() const;
-
-    // Facts that hold for every surviving projection (Plan 1 reads these).
-    std::size_t min_crossings(MeshId a, MeshId b) const;            // k_AB; every edge counts
-    const std::set<SliceKey>& boundary_slices(MeshId mesh) const;  // union over projections
-
-    // Tier C exact check, filled in by P8.
-    PipelineCheck check(const AssignedMeshes& seating, const TopologyMappingResult& full,
-                        const tt::tt_metal::PhysicalSystemDescriptor& psd) const;
-
-private:
-    std::map<std::string, std::vector<MeshId>> binding_sets_;
-    std::map<std::pair<MeshId, MeshId>, std::size_t> min_crossings_;
-    std::map<MeshId, std::set<SliceKey>> boundary_slices_;
-};`,
++// ------------------------------------------------------------------
++// Pipeline feasibility (Tier B, run by the MeshGraphDescriptor constructor)
++// ------------------------------------------------------------------
++
++struct PipelineStageKey {
++    std::string pipeline;  // PipelineDescriptor.name
++    std::string stage;     // PipelineStage.id
++    auto operator<=>(const PipelineStageKey&) const = default;
++};
++
++// Facts true for every surviving projection and every carve, so constraints built from them are safe.
++struct PipelineMappingConstraints {
++    std::map<PipelineStageKey, std::set<MeshId>> binding_sets;
++    bool enumerated = false;                                            // false: "find all" skipped or over budget,
++                                                                        // so k = 0 and every slice a boundary
++    std::map<std::pair<MeshId, MeshId>, std::uint32_t> min_crossings;   // k_AB, min over projections
++    std::map<MeshId, std::uint32_t> min_crossings_out;                  // per mesh, min over projections
++    std::map<std::pair<MeshId, MeshId>, std::set<MeshHostRankId>> boundary_slices;   // union
++};
++
+ // Internal placement types and helpers.
+ namespace detail {
+ ...
++// Tier B. Throws, naming the pipeline and the rule, when no mapping of the descriptor can hold it.
++PipelineMappingConstraints check_pipeline_feasibility(const MeshGraphDescriptor& descriptor);
++
+ }  // namespace detail`,
+      },
+      {
+        path: "tt_metal/api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp",
+        mode: "diff",
+        language: "cpp",
+        src: `
++struct PipelineMappingConstraints;  // pipeline_builder.hpp (which includes this header through mesh_graph.hpp)
++
+ class MeshGraphDescriptor {
+ public:
+     ...
++    bool has_pipeline_descriptors() const;
++    const PipelineMappingConstraints* pipeline_mapping_constraints() const;  // null without pipelines
+     ...
+ private:
+     ...
++    std::unique_ptr<const PipelineMappingConstraints> pipeline_mapping_constraints_;
+ };`,
       },
     ],
     tests: [
@@ -1302,288 +1313,414 @@ private:
     behaviour: "An impossible pipeline fails when its MeshGraphDescriptor is constructed, before MeshGraph and before SAT.",
   },
   {
-    id: "P4",
-    title: "Resolver: structured failure + pure link core",
+    id: "P5",
+    title: "Carve as a footprint mapping: one position graph, one solve, existing solver API only",
     milestone: "M2 Shared code",
     size: "M",
     deps: [],
-    goal: "Let Tier C call the existing resolver without a control plane and learn why it failed.",
-    files: ["tt_metal/fabric/pipeline_builder.cpp", "tt_metal/api/tt-metalium/experimental/fabric/pipeline_builder.hpp"],
+    goal: "Decide the carve, the stage order and the crossings in one solve on the seating's one position graph, through the topology solver's SAT engine. Returns one carve or none; the caller (P8) checks that one carve. Replaces the planner port (planner + resolver placed 0 of 132 carve-requiring cases; footprint + resolver decided 127). No topology solver changes: everything is built from today's MappingConstraints and session API, and topology_solver_sat.cpp gets no pipeline or session code.",
+    files: [
+      "tt_metal/fabric/pipeline_builder.cpp",
+      "tt_metal/api/tt-metalium/experimental/fabric/pipeline_builder.hpp",
+      "tests/tt_metal/tt_fabric/fabric_router/test_pipeline_builder.cpp",
+    ],
     steps: [
-      "Add try_resolve_graph_layout_with_connections returning a result or a PipelineLayoutFailure; the throwing version wraps it, message unchanged.",
-      "Split discover_submesh_links into a pure core that takes a link query callback. Tier D passes the control-plane query it uses today; Tier C passes candidate links.",
+      "No new files. FootprintProblem, build_footprint_problem and solve_footprint are file-local in pipeline_builder.cpp, the only file that includes topology_solver.hpp for them. pipeline_builder.hpp gets the pipeline-only types (SliceGrid, SliceRect, Carve) and one detail entry point, solve_pipeline_footprint(slices, pipelines, conflict_cap) -> std::optional<Carve>, which builds the problem and solves once; the CPU tests call it.",
+      "Position graph (C1): for each distinct stage shape and each mesh, every rectangle of host slices the shape fills; an edge between two disjoint positions that border each other, by grid adjacency or by an inter-mesh cable (P7). Keep, per edge, the links behind it and their ExitNodeConnections.",
+      "Constraints: add_required_constraint(stage, positions the stage fits on its own): its shape, at least as many core slots on the position's chips as the stage has endpoints, and for stage 0 room for host I/O. These are the only failures that depend on one stage and one position, so they are filtered here, before the solve, and never need to be learned from the resolver; add_resource_constraint(position -> covered slices).",
+      "Pre-checks before the solve: area, lattice count, and the colour and segment test on tight 1-cable meshes; cable pairs the segment test rules out are dropped from the graph.",
+      "Resource completeness with the existing API: when the stage areas add up to exactly the slice count, add_cardinality_constraint(pairs, 1) per slice over every (stage, position) pair whose position covers it. With min_count 1 the encoder emits one plain clause, the same clause as the experiment (report 5.4: 66 s to 0.59 s, 170 s to 0.32 s).",
+      "One solve: a TopologyMappingEnumerationSession with the SAT engine (Auto picks it), built with conflict_cap as the bound (deterministic), and one next(). solve_topology_mapping is the same solve but fixes the cap at the SAT default (300,000 conflicts). A capped solve reads as no carve with today's API (open question 13).",
+      "One carve, no loop: on every benchmark case the resolver accepted the first carve (101 of 101). If a real MGD needs a second carve, the same session gives it with exclude_mapping(carve) and next(), still the existing API (open question 24).",
     ],
     code: [
       {
-        path: "tt_metal/api/tt-metalium/experimental/fabric/pipeline_builder.hpp",
+        path: "tt_metal/api/tt-metalium/experimental/fabric/pipeline_builder.hpp  (detail, P5)",
         mode: "diff",
         language: "cpp",
         src: `
- using DirectLinks = std::map<ConnectionKey, std::vector<LinkPair>>;
-
-+struct PipelineLayoutFailure {
-+    enum class Kind { NoSubmeshAssignment, CoreCapacity, NoLinkForEdge, InvalidGraph };
-+    Kind kind;
-+    std::optional<std::string> stage;                               // failing node, if known
-+    std::optional<std::pair<std::string, std::string>> edge;        // failing edge, if known
-+    std::string message;                                            // today's exception text
-+};
+ namespace detail {
+ ...
++// One carve: a rectangle of host slices per stage, in global stage order.
++struct Carve { std::vector<SliceRect> rects; };
 +
-+std::variant<GraphLayoutResult, PipelineLayoutFailure> try_resolve_graph_layout_with_connections(
-+    const std::vector<std::string>& nodes,
-+    const std::vector<EdgeInputTuple>& edges,
-+    const std::vector<std::vector<ChipTuple>>& submesh_chips,
-+    const std::map<std::string, uint32_t>& node_chip_counts,
-+    const std::map<std::string, uint32_t>& node_pipeline_core_counts,
-+    uint32_t pipeline_core_count,
-+    const DirectLinks* direct_links);
-+
-+// Pure core of discover_submesh_links: is chip a linked to chip b, and in which direction.
-+using ChipLinkQuery = std::function<std::optional<RoutingDirection>(FabricNodeId a, FabricNodeId b)>;
-+DirectLinks discover_submesh_links(const std::vector<std::vector<ChipTuple>>& submesh_chips, const ChipLinkQuery& linked);
-+
- // CPU tests can supply discovered links; nullptr uses the control plane.
- GraphLayoutResult resolve_graph_layout_with_connections(`,
++// The footprint solve on its own, for Tier C and the CPU tests. Pipeline types only:
++// the position graph and the solver stay in pipeline_builder.cpp. Empty: no carve (or the cap was hit).
++std::optional<Carve> solve_pipeline_footprint(
++    const SliceGrid& slices, const std::vector<PipelineGraph>& pipelines, int conflict_cap);
+ }  // namespace detail`,
       },
-    ],
-    tests: [
-      "Existing resolver tests unchanged (the throwing API keeps its messages).",
-      "New CPU tests: each failure kind on a crafted DirectLinks map.",
-      "discover_submesh_links with a control-plane callback equals today's output on recorded topologies.",
-    ],
-    behaviour: "None for blaze.",
-  },
-  {
-    id: "P5",
-    title: "Carve planner C++ port",
-    milestone: "M2 Shared code",
-    size: "L",
-    deps: [],
-    goal: "Second copy of blaze's pure planning core in tt-metal; same verdicts on the same inputs.",
-    files: [
-      "tt_metal/fabric/carve_planner.cpp (new)",
-      "tt_metal/api/tt-metalium/experimental/fabric/carve_planner.hpp (new)",
-      "tests/tt_metal/tt_fabric/pipeline/carve_goldens/*.json (new)",
-      "tt-blaze: scripts/dump_carve_goldens.py (new, test-only)",
-    ],
-    steps: [
-      "Port HostSlice, CarveSlot, plan_ring_carve, plan_fork_carve, fork_structure, validate_carve_plan, keeping blaze's sort keys.",
-      "One deliberate difference: fork_structure and plan_fork_carve accept a dead-end branch and plan it as an open path, like a host return. Blaze rejects it, so its goldens are hand-written, not dumped.",
-      "Expose a cycle iterator: Tier C keeps trying cycles until one resolves; blaze stops at the first.",
-      "budget-exhausted returns Unknown, which Tier C treats as accept.",
-      "Golden parity: a blaze script dumps (slices, adjacency, shapes) -> verdict + phase; a gtest replays them against the port.",
-    ],
-    code: [
       {
-        path: "tt_metal/api/tt-metalium/experimental/fabric/carve_planner.hpp  (new)",
+        path: "tt_metal/fabric/pipeline_builder.cpp  (anonymous namespace, P5)",
         mode: "new",
         language: "cpp",
         src: `
-namespace tt::tt_fabric::detail {
+// C1: one position graph per seating. Stage k may take any position of its shape; chosen positions
+// may not share a slice; a pipeline edge must land on two positions that border each other.
+FootprintProblem build_footprint_problem(const SliceGrid& slices, const PipelineGraph& pipeline) {
+    FootprintProblem fp;
+    for (const Shape& shape : pipeline.distinct_shapes()) {
+        for (const Rect& r : slices.positions(shape)) {                      // per mesh, in slices
+            fp.covers[fp.add_position(r)] = slices.covered(r);
+        }
+    }
+    for (Pos p : fp.positions()) {
+        for (Pos q : fp.positions_after(p)) {
+            if (disjoint(fp.covers[p], fp.covers[q]) && slices.border(fp.covers[p], fp.covers[q])) {
+                fp.add_edge(p, q, slices.links_between(fp.covers[p], fp.covers[q]));  // grid links or cables
+            }
+        }
+    }
+    for (const auto& [src, dst] : pipeline.fabric_edges()) {
+        fp.target_adj[src].push_back(dst);
+        fp.target_adj[dst].push_back(src);
+    }
+    for (const auto& stage : pipeline.stages()) {
+        fp.constraints.add_required_constraint(stage.id, fp.positions_that_fit(stage));  // shape, core slots, host I/O
+    }
+    fp.constraints.add_resource_constraint<uint32_t>(fp.covers);
+    return fp;
+}
 
-struct HostSlice {
-    uint32_t mesh_id, row0, col0, nrows, ncols;
-    auto key() const { return std::tie(mesh_id, row0, col0); }   // geometry key, as in blaze
-};
-struct CarveSlot { uint32_t mesh_id; std::array<uint32_t, 2> shape, offset; };
-using SliceAdjacency = std::set<std::pair<HostSlice, HostSlice>>;  // unordered pairs
+// Tight carve: every slice must be covered. Existing API: at least one (stage, position) covering it.
+void add_resource_completeness(FootprintProblem& fp, const PipelineGraph& pipeline) {
+    if (pipeline.total_slices() != fp.slice_count()) {
+        return;                                                              // spare slices: not tight
+    }
+    for (Slice s : fp.slices()) {
+        CardinalityPairSet covering;
+        for (Pos p : fp.positions_covering(s)) {
+            for (StageId k : fp.stages_allowed_on(p)) {
+                covering.insert({k, p});
+            }
+        }
+        fp.constraints.add_cardinality_constraint(covering, /*min_count=*/1);   // one clause
+    }
+}
 
-enum class CarvePhase { InputInfeasible, NoCycleOfLength, NoAlignment, BudgetExhausted };
-struct CarveFailure { CarvePhase phase; std::string reason; };
-
-// Calls on_plan for each aligned plan in blaze's order (fewest mesh crossings, then slice keys)
-// until it returns true. Returns the failure when no plan was accepted.
-std::optional<CarveFailure> for_each_ring_carve(
-    const std::vector<HostSlice>& slices, const SliceAdjacency& adjacency,
-    const std::vector<std::array<uint32_t, 2>>& stage_shapes,
-    const std::map<uint32_t, std::array<uint32_t, 2>>& mesh_shapes,
-    const std::function<bool(const std::vector<CarveSlot>&)>& on_plan);
-
-std::optional<CarveFailure> for_each_fork_carve(/* same shape, router + branches */);
-ForkStructure fork_structure(const proto::PipelineDescriptor& pipeline);
-
-}  // namespace tt::tt_fabric::detail`,
+// C2: one solve, one carve. The caller checks it; there is no second carve.
+std::optional<Carve> solve_footprint(const FootprintProblem& fp, int conflict_cap) {
+    TopologyMappingEnumerationSession<StageId, Pos> session(
+        AdjacencyGraph<StageId>(fp.target_adj), AdjacencyGraph<Pos>(fp.global_adj), fp.constraints,
+        ConnectionValidationMode::STRICT, /*quiet_mode=*/true, TopologyMappingSolverEngine::Auto,
+        /*unique_shapes=*/false, conflict_cap);
+    const auto m = session.next();
+    if (!m.success) {
+        return std::nullopt;                                                 // C4 runs (a capped solve too)
+    }
+    return fp.to_carve(m.target_to_global);
+}`,
       },
       {
-        path: "tests/tt_metal/tt_fabric/pipeline/test_carve_planner_parity.cpp  (new)",
+        path: "tests/tt_metal/tt_fabric/fabric_router/test_pipeline_builder.cpp  (CPU, beside PipelineBuilderMockTest)",
         mode: "new",
         language: "cpp",
         src: `
-TEST_P(CarvePlannerParity, SameVerdictAsBlaze) {
-    const CarveGolden g = load_golden(GetParam());            // dumped by tt-blaze dump_carve_goldens.py
-    std::optional<std::vector<CarveSlot>> first;
-    const auto failure = detail::for_each_ring_carve(
-        g.slices, g.adjacency, g.stage_shapes, g.mesh_shapes, [&](const auto& plan) {
-            first = plan;
-            return true;                                      // blaze semantics: stop at the first plan
-        });
-    EXPECT_EQ(failure.has_value(), !g.accepted);
-    if (failure) { EXPECT_EQ(failure->phase, g.phase); }
-    if (first && g.plan) { EXPECT_EQ(*first, *g.plan); }      // optional: same first plan
+TEST_P(PipelineBuilderFootprintTest, MatchesBruteForceAndVerifies) {
+    const FootprintCase c = GetParam();
+    const auto carve = detail::solve_pipeline_footprint(c.slices, c.pipelines, kCap);
+    EXPECT_EQ(carve.has_value(), brute_force_carve_exists(c));            // small cases only
+    if (carve) {
+        EXPECT_TRUE(is_valid_carve(c, *carve));                            // own shape, disjoint, every edge touching
+    }
+}
+
+TEST(PipelineBuilderFootprintTest, StageThatCannotFitIsFilteredBeforeTheSolve) {
+    const auto c = reject_demo_case();       // stage 0's host I/O cannot fit on A0
+    const auto carve = detail::solve_pipeline_footprint(c.slices, c.pipelines, kCap);
+    ASSERT_TRUE(carve.has_value());
+    EXPECT_NE(carve->rects[c.stage0].covers, c.a0);   // s0 is never put on A0
 }`,
       },
     ],
     tests: [
-      "Goldens: ring, heterogeneous, joint stage, fork with fabric and host returns, every failure phase.",
-      "Goldens on one galaxy with 4x1 rank columns (carver example F): 4x2 stages on odd columns, a 4x2 group on the C7-C0 wrap rejected, a 6-slice ring rejected with achievable [8].",
-      "Determinism: same input twice gives the same plan sequence.",
+      "The rings blaze's planner rejects (4x4 with 13 slices, 4x6, 4x8): accepted, carve verified.",
+      "mixed4 from the doc: (P,R) accept; (P,Q) and Case B reject.",
+      "Counting and area failures (5x5 with five 2x2, 6x6 with area 37) rejected by the pre-check before the solve.",
+      "A fork (one stage with two returning branches) and two meshes joined by cables.",
+      "Brute-force agreement on every case with at most 8 stages; prototype: pipeline_placement_experiments/topo/carve_footprint_bench.cpp.",
+      "Position filter: a stage never lands on a position it cannot fit; verdicts with and without the filter are equal on every case.",
+      "First carve passes the resolver on every benchmark case (the 101 of footprint_then_resolver), so one carve per seating loses nothing there.",
+      "Resource completeness as cardinality constraints: same verdicts as without on every designed, repo, ring and mixed-cable case, and the tight-case speed-up of report 5.4 (the same clause as the in-solver experiment).",
+      "No change to topology_solver_sat.cpp or topology_solver.hpp in this PR.",
+    ],
+    behaviour: "None. Library only. Tier C may accept carves blaze's planner rejects (open question 8).",
+  },
+  {
+    id: "P6",
+    title: "Resolver inputs from a carve",
+    milestone: "M2 Shared code",
+    size: "S",
+    deps: [],
+    goal: "Pure C++ that turns the chosen rectangles (one slot per stage) into the resolver's submesh_chips and direct_links, with slot-local coordinates and the reverse map C2 needs to record R. Replaces the old tiling and slot-pick helpers: the footprint solve picks the slots.",
+    files: [
+      "tt_metal/fabric/pipeline_builder.cpp",
+      "tt_metal/api/tt-metalium/experimental/fabric/pipeline_builder.hpp",
+      "tests/tt_metal/tt_fabric/fabric_router/test_pipeline_builder.cpp",
+    ],
+    steps: [
+      "slots_to_submesh_chips(rects, fabric_node_to_asic): (mesh_id, chip_id, row, col) per chip, (row, col) relative to the slot origin, recomputed when a slot spans several host slices.",
+      "links_to_direct_links(slots, links): every link between two slots under {i, j} and mirrored under {j, i}; links inside one slot dropped; each list ordered by chip id (by tier once P16 lands).",
+      "Keep (slot, row, col) -> FabricNodeId so a resolved edge maps back to two chips, then to the ExitNodeConnection recorded in R.",
+      "Stage inputs (nodes, edges with the loopback marked, node_chip_counts, blaze's default core counts) built once per MGD.",
+    ],
+    code: [
+      {
+        path: "tt_metal/api/tt-metalium/experimental/fabric/pipeline_builder.hpp  (detail, beside DirectLinks)",
+        mode: "new",
+        language: "cpp",
+        src: `
+struct CarveSlots {
+    std::vector<SubmeshChips> submesh_chips;                         // one per stage, slot-local (row, col)
+    std::map<std::tuple<std::size_t, int, int>, FabricNodeId> back;  // (slot, row, col) -> chip, for R
+};
+CarveSlots slots_to_submesh_chips(const std::vector<SliceRect>& rects,
+                                  const std::map<FabricNodeId, AsicID>& fabric_node_to_asic);
+DirectLinks links_to_direct_links(const CarveSlots& slots, const PositionEdgeLinks& links);`,
+      },
+    ],
+    tests: [
+      "mixed4 on (P, R), carve of example A: four stage slots with 8, 16, 16, 8 chips; direct_links has the A2-B2 and A0-B0 pairs both ways.",
+      "A slot spanning two host slices gets slot-local (row, col) starting at (0, 0).",
+      "Every resolved edge maps back to a FabricNodeId pair with a cable from inter_mesh_cables (P7).",
     ],
     behaviour: "None. Library only.",
   },
   {
-    id: "P6",
-    title: "Slot builders",
-    milestone: "M2 Shared code",
-    size: "S",
-    deps: [],
-    goal: "Pure C++ for row-major tiling, a rank's slot pick, and joint-stage collapse, shared with MeshDevice.",
-    files: [
-      "tt_metal/fabric/carve_planner.cpp",
-      "tt_metal/distributed/mesh_device.cpp",
-    ],
-    steps: [
-      "tile_row_major(mesh_shape, tile_shape): offsets in create_submeshes order, same divisibility TT_FATAL.",
-      "MeshDeviceImpl::create_submeshes calls it, so the order cannot drift.",
-      "pick_rank_slot: first tile whose (0,0) chip is local, else the first tile with any local chip.",
-      "collapse_joint_stages: identical chip sets merge, ordered by first rank.",
-      "Tile-shape candidates per mesh: stage shapes that divide the mesh, plus the slice shape.",
-    ],
-    code: [
-      {
-        path: "tt_metal/distributed/mesh_device.cpp  (MeshDeviceImpl::create_submeshes)",
-        mode: "diff",
-        language: "cpp",
-        src: `
- std::vector<std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_submeshes(
-     const std::shared_ptr<MeshDevice>& parent_mesh, const MeshShape& submesh_shape) {
--    // Calculate how many submeshes fit in each dimension.
--    ttsl::SmallVector<uint32_t> steps;
--    for (size_t dim = 0; dim < shape().dims(); dim++) {
--        TT_FATAL(shape()[dim] % submesh_shape[dim] == 0, ...);
--        steps.push_back(shape()[dim] / submesh_shape[dim]);
--    }
--    std::vector<std::shared_ptr<MeshDevice>> submeshes;
--    for (const auto& step_position : MeshCoordinateRange(MeshShape(steps))) { ... }
-+    // Shared with the topology mapper's tiling path, so both stamp tiles in the same order.
-+    std::vector<std::shared_ptr<MeshDevice>> submeshes;
-+    for (const MeshCoordinate& offset : tt::tt_fabric::detail::tile_row_major(shape(), submesh_shape)) {
-+        submeshes.push_back(create_submesh(parent_mesh, submesh_shape, offset));
-+    }
-     return submeshes;
- }`,
-      },
-    ],
-    tests: [
-      "tile_row_major matches the old create_submeshes order for every shape in the blaze sweep.",
-      "pick_rank_slot on a 2x2 tile over a 4x2 slice keeps the first tile only (edge case from the doc).",
-    ],
-    behaviour: "None (refactor).",
-  },
-  {
     id: "P7",
-    title: "Inter-mesh candidates from the policy plan (part 9)",
+    title: "Inter-mesh cables from the PSD (C1)",
     milestone: "M2 Shared code",
     size: "S",
     deps: [],
-    goal: "C1 and the control plane read one candidate table: the inter-mesh policy plan's collect_inter_mesh_candidates. This PR wires it into the mapper; if part 9 has not landed, it adds an interim pure helper with the same signature.",
-    files: ["tt_metal/fabric/inter_mesh_candidates.cpp (policy plan, part 9)", "tt_metal/fabric/topology_mapper_utils.cpp"],
+    goal: "C1 needs, per seating, the cables between two mapped meshes. This PR reads them straight from the PSD with existing calls, as ExitNodeConnections, so R and the pairing share one hash. No dependency on the inter-mesh policy plan; switching to its candidate table (part 9) is P16, later.",
+    files: ["tt_metal/fabric/pipeline_builder.cpp"],
     steps: [
-      "Depends on the inter-mesh policy plan's part 9 (candidate table) and its demand table (get_inter_mesh_channel_demand). No own gather in this design.",
-      "Make collect_inter_mesh_candidates callable per seating from MultiMeshSolutionEnumerator::next, with the same InterMeshCandidateOptions as the final call.",
-      "Interim only, if part 9 is not in yet: factor gather_intermesh_cables_for_exit_nodes into a pure helper with collect_inter_mesh_candidates's signature, so the later swap is mechanical.",
+      "File-local inter_mesh_cables(psd, fabric_node_to_asic, mesh_a, mesh_b): for each ASIC mapped onto mesh_a, psd.get_asic_neighbors + get_eth_connections to ASICs mapped onto mesh_b, one ExitNodeConnection per ETH channel, sorted by (src chip, src chan).",
+      "Keep today's gather rules that need no cluster: both ends mapped onto the two meshes; for a device-level connection only requested exit nodes; one destination chip per (source chip, neighbour mesh), else the pair has no cable for C1.",
+      "Not filtered in this PR: cable type (no PortTypeRules yet) and link state (rank 0's PSD has none). A required channel on a down link fails the check after the broadcast on every rank (open question 20) until P16.",
+      "Called per seating from check_pipeline_seating, after intra-mesh success. No control-plane change: the gather stays as it is.",
     ],
     code: [
       {
-        path: "tt-metalium/experimental/fabric/inter_mesh_candidates.hpp  (policy plan, part 9)",
+        path: "tt_metal/fabric/pipeline_builder.cpp  (file-local)",
         mode: "plain",
         language: "cpp",
         src: `
-// Pure: no cluster, no MPI. Links up, allowed cable types, mapped meshes, requested exit nodes.
-InterMeshCandidates collect_inter_mesh_candidates(
-    const MeshGraph& mesh_graph,
+// Pure: PSD + mapping only. Same struct as the PSD's exit-node table, so std::hash matches the pairing's.
+std::vector<tt::tt_metal::ExitNodeConnection> inter_mesh_cables(
     const tt::tt_metal::PhysicalSystemDescriptor& psd,
     const std::map<FabricNodeId, tt::tt_metal::AsicID>& fabric_node_to_asic,
-    const InterMeshCandidateOptions& options);`,
+    MeshId mesh_a, MeshId mesh_b);`,
       },
     ],
     tests: [
-      "Per-seating call on a recorded PSD returns the same table as the final call for the emitted seating.",
-      "Interim helper only: AnnotatedIntermeshConnections byte-identical before and after on SC16 revAB/revC and single galaxy.",
+      "On SC16 revAB/revC and single-galaxy PSD fixtures: the hashes equal the connection_hashes today's gather produces for the same mapping, on every boundary.",
+      "Device-level connection: only requested exit nodes; a source chip cabled to two chips of one neighbour mesh gives no cable.",
     ],
-    behaviour: "None.",
+    behaviour: "None. Library only.",
   },
   {
     id: "P8",
     title: "Tier C exact check (STRICT): C1, C2 and seating exclusion (C4)",
     milestone: "M3 Tier C (STRICT)",
     size: "L",
-    deps: ["P3", "P4", "P5", "P6", "P7"],
-    goal: "Check every candidate seating with the builder's own code; reject only when every carve path fails.",
+    deps: ["P3", "P5", "P6", "P7"],
+    goal: "Check every candidate seating: one position graph, one carve, the resolver on that carve, R and the demand check. Any failure rejects the seating (C4). The mapper call, the check and the saved mapping are all in this PR.",
     files: [
-      "tt_metal/fabric/pipeline_feasibility.cpp",
+      "tt_metal/fabric/pipeline_builder.cpp",
+      "tt_metal/api/tt-metalium/experimental/fabric/pipeline_builder.hpp",
       "tt_metal/fabric/topology_mapper_utils.cpp",
+      "tt_metal/api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp",
+      "tt_metal/api/tt-metalium/experimental/fabric/pipeline_mapping.hpp (new)",
+      "tt_metal/fabric/topology_mapper.cpp",
       "tools/scaleout/src/generate_rank_bindings.cpp",
     ],
     steps: [
-      "PipelineFeasibility::check: candidates -> slices -> carve paths -> resolver.",
-      "allowed_paths follows blaze's multi_mesh rule: one mesh with every stage on one rank gets single-mesh tiling; one mesh with a joint stage (e.g. 4x2 stages on 4x1 rank columns), or several meshes, gets the planned carve, then per-rank tiling.",
+      "Input: TopologyMappingConfig::pipelines (std::vector<PipelineGraph>); empty means off. TopologyMapper fills it with build_pipeline_graphs(mesh_graph_.get_mesh_graph_descriptor()) unless the kill switch is set; generate_rank_bindings fills it from the merged parts.",
+      "Tier C sits beside Tier B in pipeline_builder.cpp: two entry points in pipeline_builder.hpp's detail namespace, build_pipeline_problem and check_pipeline_seating, with the pre-checks and R recording as file-local helpers. The header forward-declares PipelineProblem, PlacedMesh, TopologyMappingResult and PhysicalSystemDescriptor, so the ttnn and nanobind files that include it pull in no mapper or solver headers.",
+      "The enumerator constructor builds a PipelineProblem once from config.pipelines (detail::build_pipeline_problem), held as unique_ptr<const PipelineProblem> beside placement_session_: global stage indices, the STRICT target graph, chip counts and core demand, Tier B binding sets.",
+      "Output: TopologyMappingResult::pipeline (PipelineMappingResult: per pipeline the stage slots (mesh, chip rectangle, host ranks, host I/O chips) and edge layouts (exit, entry, crossing), plus idle host ranks); pipeline stats on TopologyMappingStats. split_mapping_to_local_parts remaps it per part.",
+      "TopologyMapper stores mapping_result.pipeline on rank 0 (pipeline_mapping_, get_pipeline_mapping()). R is copied to pipeline_required_links_ and broadcast with the chip info, because every rank checks it after the pairing (P9); the rest of the pipeline mapping stays on rank 0.",
+      "detail::check_pipeline_seating: candidates -> slices -> pre-checks (area, lattice, colour) -> one position graph (P5) -> one solve_footprint -> the resolver on that carve (a throw is the reason) -> R as exact channels -> demand.",
+      "One carve per seating: no carve (a capped solve included), a resolver throw or R over demand fails the seating with that reason, and C4 runs. No second carve (open question 24).",
       "Hook into MultiMeshSolutionEnumerator::next() after intra-mesh success; on reject call exclude_mapping(seating) (seat set), never add_forbidden_constraint.",
       "Turn unique_shapes off when a pipeline is present (runtime overloads and --all-solutions).",
       "failure_stage pipeline_carve / pipeline_layout; cap rejections per run (kMaxPipelineRejections, proposed 256, overridable for sweeps) and report the last reason.",
       "Feedback is whole-seating exclusion only; the seat-pair clause and per-seat forbid wait for attributed failures (P13).",
       "Record pipeline rejections per run in the placement stats (seatings tried before the first accept), so the sweep and CI show whether P10 is needed.",
-      "Several pipelines: place each on the slices the earlier ones left free, trying every order of the pipelines; resolve each as its own graph; accept only if all fit.",
+      "Several pipelines: one target graph with one component per pipeline in the same solve; the resource constraint keeps them on disjoint slices; one resolver call per pipeline.",
     ],
     code: [
       {
-        path: "tt_metal/fabric/topology_mapper_utils.cpp  (MultiMeshSolutionEnumerator::next)",
+        path: "tt_metal/fabric/topology_mapper.cpp  (TopologyMapper::build_mapping, rank 0: the call, and where the mapping is saved)",
         mode: "diff",
         language: "cpp",
         src: `
++        config.pipelines = build_pipeline_graphs(mesh_graph_descriptor);     // empty without pipelines
+         const auto mapping_result = pgd.has_value()
+                                         ? map_multi_mesh_to_physical(physical_system_descriptor_, *pgd, mesh_graph_descriptor,
+                                                                      config, pinnings_by_mesh, asic_ranks, fabric_ranks)
+                                         : map_multi_mesh_to_physical(physical_system_descriptor_, mesh_graph_descriptor,
+                                                                      config, pinnings_by_mesh, asic_ranks, fabric_ranks);
+         TT_FATAL(mapping_result.success, "Graph specified in MGD could not fit in the discovered physical topology. {}. ...",
+                  mapping_result.error_message);
+         for (const auto& [fabric_node, asic] : mapping_result.fabric_node_to_physical) { ... }   // today
++        pipeline_mapping_ = mapping_result.pipeline;                         // saved on rank 0
++        if (pipeline_mapping_) pipeline_required_links_ = pipeline_mapping_->required_links;  // R: broadcast with the chip info
+         if (!generate_mapping_locally_) {
+             broadcast_chip_info_to_hosts(all_host_ranks, -1);
+         }`,
+      },
+      {
+        path: "topology_mapper_utils.hpp and topology_mapper.hpp  (where it is saved)",
+        mode: "diff",
+        language: "cpp",
+        src: `
+ struct TopologyMappingConfig {
+     ...
++    std::vector<PipelineGraph> pipelines;                  // input; empty: no pipeline code runs
+ };
+
+ struct TopologyMappingResult {
+     bool success = false;
+     std::string error_message;
+     TopologyMappingStats stats;
+     std::map<FabricNodeId, PhysicalNodeId> fabric_node_to_physical;
+     std::map<PhysicalNodeId, FabricNodeId> physical_to_fabric_node;
++    std::optional<PipelineMappingResult> pipeline;         // output: stage slots, edge layouts, R, idle ranks
+ };
+
+ class MultiMeshSolutionEnumerator {
+     ...
+     std::unique_ptr<SatPlacementEnumerationSession> placement_session_;
++    std::unique_ptr<const detail::PipelineProblem> pipeline_;   // null without pipelines
++    std::size_t pipeline_rejections_ = 0;
+ };
+
+ class TopologyMapper {
+     ...
++    const std::optional<PipelineMappingResult>& get_pipeline_mapping() const { return pipeline_mapping_; }
++    const std::vector<tt::tt_metal::ExitNodeConnection>& get_pipeline_required_links() const { return pipeline_required_links_; }  // every rank
+ private:
++    std::optional<PipelineMappingResult> pipeline_mapping_;            // rank 0, from mapping_result.pipeline
++    std::vector<tt::tt_metal::ExitNodeConnection> pipeline_required_links_;  // every rank: rank 0's R, broadcast
+ };`,
+      },
+      {
+        path: "tt_metal/fabric/topology_mapper_utils.cpp  (MultiMeshSolutionEnumerator: constructor and next)",
+        mode: "diff",
+        language: "cpp",
+        src: `
+ // constructor, after init_from_parts
++    if (!config_.pipelines.empty()) {
++        pipeline_ = detail::build_pipeline_problem(config_.pipelines, merged_descriptor);   // once per run
++    }
+
+ // next()
+     while (true) {
+         AssignedMeshes seating = placement_session_->next();
+         if (seating.empty()) {
+             return give_up();
+         }
+         TopologyMappingResult full = complete_intra_mesh_for_placement(identity, logical_, physical, ...);
          if (placement_stats_ != nullptr) {
              apply_placement_stats(full.stats, *placement_stats_);
          }
          if (full.success) {
 +            if (pipeline_ != nullptr) {
-+                PipelineCheck check = pipeline_->check(seating, full, *physical_system_descriptor_);
-+                if (!check.accepted) {
++                PipelineMappingResult mapping;
++                const PipelineCheck check =
++                    detail::check_pipeline_seating(*pipeline_, seating, full, *physical_system_descriptor_, mapping);
++                if (!check.accepted) {                                    // C4: this set of seats fails
 +                    full.success = false;
 +                    full.stats.failure_stage = check.failure_stage;   // pipeline_carve | pipeline_layout | pipeline_binding
 +                    full.error_message = check.reason;
 +                    last_failed_ = full;
-+                    // The failure is about this set of seats, not about one mesh on one seat.
 +                    if (++pipeline_rejections_ > kMaxPipelineRejections ||
 +                        !placement_session_->exclude_mapping(seating)) {
 +                        return give_up();
 +                    }
 +                    continue;
 +                }
-+                full.pipeline_plan = std::move(check.plan);
++                full.pipeline = std::move(mapping);                       // saved in the result
 +            }
              ++emitted_;
-             return split_mapping_to_local_parts(full, per_part_local_to_global_mesh_ids_);
-         }`,
+             return split_mapping_to_local_parts(full, per_part_local_to_global_mesh_ids_);   // remaps pipeline too
+         }
+         // intra-mesh failure: add_forbidden_constraint(failed seat), as today
+     }`,
       },
       {
-        path: "tt_metal/fabric/pipeline_feasibility.cpp  (PipelineFeasibility::check)",
+        path: "tt_metal/api/tt-metalium/experimental/fabric/pipeline_builder.hpp  (detail, Tier C)",
+        mode: "diff",
+        language: "cpp",
+        src: `
++struct PlacedMesh;                 // physical_grouping_descriptor.hpp
++struct TopologyMappingResult;      // topology_mapper_utils.hpp
++struct PipelineGraph;              // pipeline_graph.hpp (P1)
++struct PipelineMappingResult;      // pipeline_mapping.hpp, which includes this header for PipelineStageKey
++
+ namespace detail {
+ ...
++struct PipelineProblem;            // pipeline_builder.cpp: stage indices, target graph, demand, binding sets
++
++struct PipelineCheck {
++    bool accepted = false;
++    std::string failure_stage;     // pipeline_carve | pipeline_layout | pipeline_binding
++    std::string reason;
++};
++
++// Tier C, built once per enumerator from TopologyMappingConfig::pipelines.
++std::unique_ptr<const PipelineProblem> build_pipeline_problem(
++    const std::vector<PipelineGraph>& pipelines, const MeshGraphDescriptor& descriptor);
++
++// Tier C, per seating: C1, then one carve (C2); a reject leaves C4 to the caller.
++// Fills mapping only when the check accepts.
++PipelineCheck check_pipeline_seating(
++    const PipelineProblem& problem,
++    const std::vector<PlacedMesh>& seating,
++    const TopologyMappingResult& full,
++    const tt::tt_metal::PhysicalSystemDescriptor& psd,
++    PipelineMappingResult& mapping);
+ }  // namespace detail`,
+      },
+      {
+        path: "tt_metal/fabric/pipeline_builder.cpp  (detail::check_pipeline_seating: one carve)",
         mode: "new",
         language: "cpp",
         src: `
-PipelineCheck PipelineFeasibility::check(
-    const AssignedMeshes& seating, const TopologyMappingResult& full, const PhysicalSystemDescriptor& psd) const {
-    const auto cands  = collect_inter_mesh_candidates(mesh_graph_, psd, full.fabric_node_to_asic, candidate_options_);  // P7
-    const auto slices = host_slices(mesh_graph_);                       // get_coord_range per (mesh, host rank)
-    const auto links  = routed_links(mesh_graph_, full, cands);         // intra-mesh topology + candidates
-
-    PipelineCheck last = PipelineCheck::reject("pipeline_carve", "no carve path applies");
-    // A joint stage takes the planned carve even on one mesh, as blaze's multi_mesh flag does.
-    for (const CarvePath path : allowed_paths(pipeline_, mesh_graph_)) {   // planned | tiling | single mesh
-        auto attempt = try_path(path, slices, links);                       // slots -> subs -> resolver (P4-P6)
-        if (!attempt.accepted) { last = attempt; continue; }                // reject only if every path fails
-        attempt.required_links = crossing_links(attempt.layout, links);     // R, used by P9
-        return attempt;
+PipelineCheck detail::check_pipeline_seating(
+    const PipelineProblem& problem,
+    const std::vector<PlacedMesh>& seating,
+    const TopologyMappingResult& full,
+    const tt::tt_metal::PhysicalSystemDescriptor& psd,
+    PipelineMappingResult& mapping) {
+    const SeatingTables t = build_seating_tables(problem, seating, full, psd);   // C1: candidates (P7), slices, links
+    if (auto pre = pre_checks(problem, t)) {                                     // area, lattice, colour and segment
+        return PipelineCheck::reject("pipeline_layout", pre->reason);
     }
-    return last;
+    const FootprintProblem fp = build_footprint_problem(problem, t);             // one position graph (P5)
+    if (fp.stage_without_position()) {
+        return PipelineCheck::reject("pipeline_carve", fp.missing_position_reason());
+    }
+    const std::optional<Carve> carve = solve_footprint(fp, kPipelineConflictCap);  // the one solve
+    if (!carve) {
+        return PipelineCheck::reject("pipeline_carve", "no carve on this seating (or the conflict cap was hit)");
+    }
+    GraphLayoutResult layout;
+    try {
+        layout = resolve_graph_layout_with_connections(t.nodes, t.edges, t.submesh_chips(*carve), t.chip_counts,
+                                                       t.core_counts, std::nullopt, &t.direct_links(*carve));
+    } catch (const std::runtime_error& e) {
+        return PipelineCheck::reject("pipeline_layout", e.what());                  // no layout on this carve
+    }
+    // IMPORTANT: R is the exact channel of every crossing, so phase 0 binds the cable the check used.
+    std::vector<ExitNodeConnection> R = record_required_links(layout, t);       // PSD entries; lowest tier, then src_chan
+    if (auto over = problem.demand.first_over_budget(R)) {                       // P9
+        return PipelineCheck::reject("pipeline_binding", over->reason);
+    }
+    mapping = to_pipeline_mapping(problem, *carve, layout, std::move(R));       // slots, edges, R, idle ranks
+    return PipelineCheck::accept();
 }`,
       },
       {
@@ -1628,34 +1765,33 @@ PipelineCheck PipelineFeasibility::check(
     milestone: "M3 Tier C (STRICT)",
     size: "M",
     deps: ["P7", "P8"],
-    goal: "Record the links the accepted layout crosses on (R), check they fit each connection's demand, and have the control plane bind them first.",
+    goal: "Record the exact channel every crossing of the accepted layout uses (R), check R fits each connection's demand, and have the control plane bind exactly those channels first. IMPORTANT: R is channels, not mesh pairs or chip pairs.",
     files: [
-      "tt_metal/api/tt-metalium/experimental/fabric/pipeline_required_links.hpp (new)",
-      "tt_metal/fabric/pipeline_feasibility.cpp",
+      "tt_metal/fabric/pipeline_builder.cpp",
       "tt_metal/fabric/topology_mapper.cpp",
       "tt_metal/fabric/control_plane.cpp",
     ],
     steps: [
-      "R from the layout's resolved_edges: one (exit chip, entry chip) link per crossing edge, keyed by mesh pair; stored on the TopologyMapper as get_pipeline_required_links().",
-      "Budget check in check(): links in R per pair <= strict + relaxed from get_inter_mesh_channel_demand; over budget fails the path with pipeline_binding.",
-      "PortDescriptor gains required (next to the policy plan's tier); to_port_descriptor_table sets it.",
-      "Phase 0 in pair_logical_intermesh_ports: place every required link (Z rule of its pair, best-tier channel) before phase 1a, counted against the budget; failure is a TT_FATAL naming the link and pipeline edge.",
-      "Fill after phase 0: (tier, slice-pair round-robin, chip id) with a pipeline; the policy plan's (tier, chip id) without.",
+      "IMPORTANT: R from the layout's resolved_edges, one channel per crossing edge (loopback included, deduplicated): the PSD ExitNodeConnection between the exit and entry ASIC from inter_mesh_cables (lowest src_chan; best tier first after P16), stored as is, with connection_hash = std::hash<ExitNodeConnection> of it (covers both ASICs, both channels, is_local and port_type, the same from either end). Not every bound link: intra-mesh edges are not in it, and the pairing fills the rest of the MGD count after phase 0.",
+      "Budget check in check_pipeline_seating, right after R is recorded: channels in R per pair <= strict + relaxed from get_inter_mesh_channel_demand; over budget fails the seating (pipeline_binding, the mesh pair in the reason) and C4 runs.",
+      "No PortDescriptor change: each rank sends rank 0 a proto with only hash, src chip and dst chip, and only rank 0 has R. Rank 0 passes R's hashes to pair_logical_intermesh_ports(port_descriptors, required_hashes).",
+      "Broadcast R with the chip info (TopologyMapper), so validate_requested_intermesh_connections can check on every rank that every hash in R is in the broadcast AnnotatedIntermeshConnections.",
+      "Phase 0 in pair_logical_intermesh_ports: for each link (chip pair) holding a required hash, move the required hashes to the front before has_budget_after_trim (today's trim keeps the lowest hash values and could drop the required channel), place it with its boundary's Z rule, count it against the budget. Never TT_FATAL on rank 0: the other ranks are already waiting in recv for the broadcast. Unplaced required channels fail the check after the broadcast, on every rank together (pipeline_binding).",
+      "Fill after phase 0: today's order.",
       "Single host: phase 0 in generate_intermesh_connections_on_local_host, or a warning until it lands.",
       "No rerun over the bound links: once R is bound, the witness layout is valid over the bound set.",
     ],
     code: [
       {
-        path: "tt_metal/fabric/pipeline_feasibility.cpp  (inside check, after a path succeeds)",
+        path: "tt_metal/fabric/pipeline_builder.cpp  (check_pipeline_seating, after R is recorded)",
         mode: "diff",
         language: "cpp",
         src: `
-         attempt.required_links = crossing_links(attempt.layout, links);     // R
-+        if (auto over = first_pair_over_budget(attempt.required_links, mesh_graph_)) {   // strict + relaxed
-+            last = PipelineCheck::reject("pipeline_binding", over->message());
-+            continue;                                                        // try the next carve path
+         std::vector<ExitNodeConnection> R = record_required_links(layout, t);
++        if (auto over = problem.demand.first_over_budget(R)) {               // strict + relaxed per pair
++            return PipelineCheck::reject("pipeline_binding", over->reason);  // the seating fails: C4
 +        }
-         return attempt;`,
+         mapping = to_pipeline_mapping(problem, *carve, layout, std::move(R));`,
       },
       {
         path: "tt_metal/fabric/control_plane.cpp  (pair_logical_intermesh_ports)",
@@ -1663,16 +1799,18 @@ PipelineCheck PipelineFeasibility::check(
         language: "cpp",
         src: `
 +    // Phase 0: links the pipeline layout depends on go first, so the fill cannot strand them.
++    // No throw here: rank 0 must still broadcast; the check after the broadcast fails on every rank.
 +    for (auto& [boundary, link] : order) {
-+        if (!link->has_required_channel()) {
-+            continue;
++        auto& h = link->connection_hashes;
++        const auto first_free = std::stable_partition(h.begin(), h.end(), [&](std::size_t x) { return required_hashes.contains(x); });
++        if (first_free == h.begin()) {
++            continue;                                              // no required channel on this chip pair
 +        }
-+        const bool placed = has_budget_after_trim(boundary, *link) &&
-+                            (is_marked_z(boundary) ? place_link(*link, /*want_z=*/true)
-+                                                   : (place_link(*link, /*want_z=*/false) || place_link(*link, /*want_z=*/true)));
-+        TT_FATAL(placed, "pipeline_binding: cannot bind required link {} -> {} ({})",
-+                 link->src_node, link->dst_node, link->required_by);
-+        account_placed(boundary, *link);
++        if (has_budget_after_trim(boundary, *link) &&               // trims from the back: required hashes stay
++            (is_marked_z(boundary) ? place_link(*link, /*want_z=*/true)
++                                   : (place_link(*link, /*want_z=*/false) || place_link(*link, /*want_z=*/true)))) {
++            account_placed(boundary, *link);
++        }
 +    }
 +
      // Phase 1a: assign_z (marked) boundaries claim the Z lane; they are excluded from the NESW phases below.
@@ -1680,23 +1818,38 @@ PipelineCheck PipelineFeasibility::check(
          if (!is_marked_z(boundary) || link->placed) {`,
       },
       {
-        path: "tt_metal/fabric/control_plane.cpp  (generate_intermesh_connectivity, multi-host branch from the policy plan)",
+        path: "tt_metal/fabric/control_plane.cpp  (convert_port_descriptors_to_intermesh_connections, multi-host)",
         mode: "diff",
         language: "cpp",
         src: `
-     const auto& candidates = topology_mapper_->get_inter_mesh_candidates();
-     check_one_dst_chip_per_src_chip(candidates);
--    auto port_descriptors = candidates.to_port_descriptor_table();
-+    auto port_descriptors = to_port_descriptor_table(candidates, topology_mapper_->get_pipeline_required_links());
-     paired = pair_logical_intermesh_ports(port_descriptors);`,
+     this->forward_descriptors_to_controller(port_descriptors, my_rank, my_host);   // every rank -> rank 0
+     AnnotatedIntermeshConnections intermesh_connections;
+     if (my_rank == 0) {
+-        intermesh_connections = this->pair_logical_intermesh_ports(port_descriptors);
++        intermesh_connections = this->pair_logical_intermesh_ports(
++            port_descriptors, required_hashes(topology_mapper_->get_pipeline_required_links()));
+     }
+     this->forward_intermesh_connections_from_controller(intermesh_connections);   // rank 0 -> every rank
+     // each rank: hash -> its own ETH channel and peer from its PSD copy (cable_lookup), as today
+
+ // validate_requested_intermesh_connections, every rank, same broadcast list
++    for (const auto& r : topology_mapper_->get_pipeline_required_links()) {
++        TT_FATAL(contains_hash(intermesh_connections, std::hash<tt::tt_metal::ExitNodeConnection>{}(r)),
++                 "pipeline_binding: required channel {} chan {} -> {} chan {} was not bound",
++                 get_fabric_node_id_from_asic_id(r.src_exit_node), r.eth_conn.src_chan,
++                 get_fabric_node_id_from_asic_id(r.dst_exit_node), r.eth_conn.dst_chan);
++    }`,
       },
     ],
     tests: [
       "RELAXED count 2 with four candidates where the lowest chip ids share a slice pair: today Case B, after P9 Case A.",
       "count 1 with a ring across two meshes: R needs 2, rejected with pipeline_binding.",
-      "R empty (no pipeline): AnnotatedIntermeshConnections byte-identical to the policy plan's output.",
-      "Multi-host: R identical on every rank; validate_requested_intermesh_connections passes everywhere.",
-      "Phase 0 cannot place a link (exit chip already facing a third mesh): init fails naming the link and stage edge.",
+      "R empty (no pipeline): AnnotatedIntermeshConnections byte-identical to today.",
+      "Multi-host: R broadcast with the chip info is identical on every rank; validate_requested_intermesh_connections passes everywhere.",
+      "Each R channel's connection_hash equals std::hash<ExitNodeConnection> of the PSD entry gathered on both endpoint ranks, and appears in the broadcast list; every rank resolves it to the recorded src_chan / dst_chan.",
+      "A chip pair with 2 channels and budget 1, required channel has the higher hash: phase 0 binds the required one (today's trim would keep the other).",
+      "Phase 0 cannot place a link (exit chip already facing a third mesh): no hang; every rank fails the check together, naming the channel and its two chips.",
+      "A required channel whose link is down: not gathered, so every rank fails the check together (open question 20).",
     ],
     behaviour: "With a pipeline, the bound cables can differ from today's lowest-id choice.",
   },
@@ -1708,14 +1861,12 @@ PipelineCheck PipelineFeasibility::check(
     deps: ["P8"],
     goal: "Before excluding a seating, retry its intra-mesh solve with the failing exit-node slice signature blocked, so a seating is rejected only when its other layouts fail too.",
     files: [
-      "tt_metal/api/tt-metalium/experimental/fabric/topology_solver.hpp",
-      "tt_metal/fabric/topology_solver_sat.cpp",
       "tt_metal/fabric/topology_mapper_utils.cpp",
     ],
     steps: [
       "On a C2 failure, record sig(m) for each mesh on a crossed boundary: cabled exit ASIC -> host slice of the fabric node on it.",
       "Skip when hard rank bindings or MGD pins fix every ASIC in sig(m) under its slice.",
-      "MappingConstraints::add_forbidden_joint_placement(groups): indicator y(a, S) <-> OR x[f, a] over S's fabric nodes; one clause OR NOT y.",
+      "Block with the existing API: the retry builds a fresh intra-mesh solve, so add add_cardinality_constraint(pairs, 1) over every (fabric node f, exit ASIC a) with f outside the slice a sat under last time (at least one exit ASIC moves slice). No new solver API.",
       "Re-solve one mesh at a time with the others fixed; blocks live for that retry only.",
       "Back to C1 with the new layout; at most kMaxLayoutRetries (proposed 4) per seating, then exclude_mapping(seating).",
       "Count retries and retry successes in the placement stats.",
@@ -1726,7 +1877,8 @@ PipelineCheck PipelineFeasibility::check(
         mode: "diff",
         language: "cpp",
         src: `
-                 PipelineCheck check = pipeline_->check(seating, full, *physical_system_descriptor_);
+                 PipelineCheck check =
+                     detail::check_pipeline_seating(*pipeline_, seating, full, *physical_system_descriptor_, mapping);
 +                for (int retry = 0; !check.accepted && retry < kMaxLayoutRetries; ++retry) {
 +                    auto blocks = slice_signature_blocks(check, full, mesh_graph_);   // empty when fixed by bindings
 +                    if (blocks.empty()) {
@@ -1737,7 +1889,7 @@ PipelineCheck PipelineFeasibility::check(
 +                        break;
 +                    }
 +                    full = std::move(again);
-+                    check = pipeline_->check(seating, full, *physical_system_descriptor_);
++                    check = detail::check_pipeline_seating(*pipeline_, seating, full, *physical_system_descriptor_, mapping);
 +                }
                  if (!check.accepted) {`,
       },
@@ -1746,7 +1898,7 @@ PipelineCheck PipelineFeasibility::check(
       "A seating whose first layout puts both cable ends under one slice and a second layout splits them: accepted after one retry (host-to-rank free).",
       "The same seating with every host rank bound: no retry, excluded as in P8.",
       "Retry cap: a seating with no working layout is excluded after kMaxLayoutRetries.",
-      "SAT and DFS backends agree on add_forbidden_joint_placement on random small instances.",
+      "The block admits exactly the layouts whose signature differs (brute force on small meshes).",
     ],
     behaviour: "Some seatings rejected by P8 are accepted with another layout; offline generate_rank_bindings finds more mappings.",
   },
@@ -1756,74 +1908,93 @@ PipelineCheck PipelineFeasibility::check(
     milestone: "M4 Pruning",
     size: "M",
     deps: ["P3", "P8"],
-    goal: "Later, optional speed-up, added only if P8's measured rejection counts call for it. Turn Tier B's PipelineMappingConstraints into the MappingConstraints the mapper already solves with, and drop seat pairs that cannot carry the pipeline under any split or layout. Start with the footprint-level k_AB seat-graph edge drop.",
+    goal: "Later, optional speed-up, added only if P8's measured rejection counts call for it. Add a generic ExtraMappingConstraints to TopologyMappingConfig so a caller can pass extra hard constraints into the SAT placement and intra-mesh solves; the mapper applies them at its existing build points and knows nothing about pipelines. TopologyMapper fills them from Tier B's PipelineMappingConstraints. Start with the seat-pair (k_AB) drop.",
     files: [
-      "tt_metal/fabric/pipeline_mapping_constraints.cpp (new)",
-      "tt_metal/fabric/pipeline_mapping_constraints.hpp (new)",
+      "tt_metal/api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp",
       "tt_metal/fabric/physical_grouping_descriptor_matching.cpp",
       "tt_metal/fabric/topology_mapper_utils.cpp",
+      "tt_metal/fabric/pipeline_builder.cpp",
+      "tt_metal/fabric/topology_mapper.cpp",
     ],
     steps: [
-      "stage_to_mesh_constraints(pmc) -> MappingConstraints<PipelineStageKey, MeshId>: each stage required onto its binding set. A report, not a solve (many stages share a mesh).",
-      "apply_pipeline_seat_constraints(pmc, pools, psd, c) on MappingConstraints<MeshId, const Candidate*>, called in build_sat_placement_constraints next to apply_extra_constraints: forbid seats of mesh m with fewer than min_crossings_out(m) cables leaving the footprint.",
-      "apply_pipeline_exit_constraints(pmc, mesh_graph, m, n, ...) on MappingConstraints<FabricNodeId, PhysicalNodeId>, called in add_exit_node_constraints after the existing one: at least ceil(k(m, n) / links per exit ASIC) of the chips in boundary_slices(m, n) on ASICs cabled toward n's seat.",
-      "Seat graph: for mesh pairs with k_AB > 0, drop the edge between two seats with fewer than k_AB candidate links between their footprints.",
+      "API: ExtraMappingConstraints { allow_seat, allow_seat_pair, intra_mesh } on TopologyMappingConfig, in public types only (MeshId, PhysicalNodeId sets, MappingConstraints<FabricNodeId, PhysicalNodeId>). Empty by default: today's behaviour.",
+      "SAT placement: MultiMeshSolutionEnumerator passes them to SatPlacementEnumerationSession. allow_seat runs in apply_extra_constraints (forbid the seats where it is false), so it is rebuilt with the session; allow_seat_pair runs in build_sat_placement_seat_graph, and a canonical seat pair is dropped only when it is false for every mesh pair that visits it.",
+      "Intra-mesh: complete_intra_mesh_for_placement calls intra_mesh after add_exit_node_constraints, with the seated ASICs of every mesh; a returned message fails that mesh with failure_stage extra_constraints, like the exit-node failure today.",
+      "Pipeline: detail::pipeline_extra_constraints(pmc, psd) in pipeline_builder.cpp builds the three callbacks from Tier B (seat: min_crossings_out; pair: k_AB candidate links; intra-mesh: ceil(k / links per exit ASIC) boundary chips on ASICs cabled toward n). TopologyMapper::build_mapping sets config.extra_constraints next to config.pipelines.",
+      "stage_to_mesh_constraints(pmc) stays a report in pipeline_builder.cpp, not a solve (many stages share a mesh).",
       "Slice-level form (bipartite matching on distinct boundary slices) only where hard pinnings fix the layout.",
       "Single seat: remove only when it fails under every projection and layout.",
-      "Shared seat pairs with different k: fall back to the exact check for those pairs.",
       "k_AB counts every crossing (P3), because every edge is STRICT. P14 changes it to skip RELAXED crossings."
     ],
     code: [
       {
-        path: "tt_metal/fabric/physical_grouping_descriptor_matching.cpp  (build_sat_placement_seat_graph)",
+        path: "tt-metalium/experimental/fabric/topology_mapper_utils.hpp",
         mode: "new",
         language: "cpp",
         src: `
-// pipeline_mapping_constraints.cpp: seat level, a unary forbid per mesh.
-bool apply_pipeline_seat_constraints(const PipelineMappingConstraints& pmc, const CandidatePools& pools,
-                                     const PhysicalSystemDescriptor& psd,
-                                     MappingConstraints<MeshId, const Candidate*>& constraints) {
-    for (const auto& [mesh, k] : pmc.min_crossings_out) {
-        std::set<const Candidate*> too_few;
-        for (const Candidate& seat : pools.at(mesh)->candidates()) {
-            if (cables_leaving(seat, psd) < k) { too_few.insert(&seat); }
-        }
-        if (!too_few.empty() && !constraints.add_forbidden_constraint(mesh, too_few)) { return false; }
-    }
-    return true;
-}
+// topology_mapper_utils.hpp: generic, no pipeline types. Callers (TopologyMapper) fill it; empty = today.
+struct ExtraMappingConstraints {
+    using Asics = std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>;
+    // SAT placement, unary: false forbids mesh on a seat with these ASICs.
+    std::function<bool(MeshId mesh, const Asics& seat)> allow_seat;
+    // SAT placement, pair: false drops the seat-graph edge between two seats of connected meshes.
+    std::function<bool(MeshId a, const Asics& seat_a, MeshId b, const Asics& seat_b)> allow_seat_pair;
+    // Intra-mesh: add hard constraints to mesh's solve once the seating is fixed, after rank, exit-node
+    // and MGD-pin constraints. A returned message fails that mesh (failure_stage "extra_constraints").
+    std::function<std::optional<std::string>(
+        MeshId mesh,
+        const std::map<MeshId, std::set<tt::tt_metal::experimental::PhysicalNodeId>>& seated_asics,
+        MappingConstraints<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId>& constraints)> intra_mesh;
+};
 
-// pipeline_mapping_constraints.cpp: intra-mesh level, inside add_exit_node_constraints.
-std::optional<std::string> apply_pipeline_exit_constraints(
-    const PipelineMappingConstraints& pmc, const MeshGraph& mesh_graph, MeshId m, MeshId n,
-    const std::set<PhysicalNodeId>& exit_asics_toward_n, std::uint32_t links_per_exit_asic,
-    MappingConstraints<FabricNodeId, PhysicalNodeId>& constraints) {
-    const auto k = pmc.min_crossings.contains({m, n}) ? pmc.min_crossings.at({m, n}) : 0u;
-    if (k == 0) { return std::nullopt; }
-    std::set<FabricNodeId> boundary_chips;
-    for (MeshHostRankId rank : pmc.boundary_slices.at({m, n})) {
-        for (const auto& coord : mesh_graph.get_coord_range(m, rank)) { boundary_chips.insert(chip_at(mesh_graph, m, coord)); }
-    }
-    const std::uint32_t min_count = (k + links_per_exit_asic - 1) / links_per_exit_asic;
-    if (!constraints.add_cardinality_constraint(boundary_chips, exit_asics_toward_n, min_count)) {
-        return fmt::format("pipeline needs {} crossing(s) from mesh {}'s boundary slices toward mesh {}", k, m.get(), n.get());
-    }
-    return std::nullopt;
-}
-
-// Plan 1, footprint level. Sound for every projection: k_AB is the minimum over all of them.
-if (pipeline != nullptr) {
-    const std::size_t k = pipeline->min_crossings(mesh_a, mesh_b);
-    if (k > 0 && candidate_links_between(seat_a.asics, seat_b.asics, psd) < k) {
-        continue;   // no seat-graph edge: this pair cannot carry the pipeline's crossings
+struct TopologyMappingConfig {
+    // ...existing fields...
+    ExtraMappingConstraints extra_constraints;
+};`,
+      },
+      {
+        path: "where the mapper applies them",
+        mode: "new",
+        language: "cpp",
+        src: `
+// physical_grouping_descriptor_matching.cpp: the session takes them from the enumerator's config.
+//   allow_seat:      in apply_extra_constraints, add_forbidden_constraint(mesh, {seats where false}); rebuilt with the session.
+//   allow_seat_pair: in build_sat_placement_seat_graph, skip a canonical seat pair only when it is false for
+//                    every mesh pair that visits it (footprints are shared across meshes).
+// topology_mapper_utils.cpp, complete_intra_mesh_for_placement, after add_exit_node_constraints:
+if (config.extra_constraints.intra_mesh) {
+    if (auto failure = config.extra_constraints.intra_mesh(logical_mesh_id, seated_asics, intra_mesh_constraints)) {
+        record_failing_meshes(result, logical_mesh_id, physical_mesh_id);
+        set_mapping_failure(result, "extra_constraints", *failure);
+        return result;
     }
 }`,
       },
+      {
+        path: "tt_metal/fabric/pipeline_builder.cpp, topology_mapper.cpp  (the pipeline fills them)",
+        mode: "diff",
+        language: "cpp",
+        src: `
+// pipeline_builder.cpp: P10 fills the generic hooks from Tier B; the mapper never sees pipeline types.
+ExtraMappingConstraints detail::pipeline_extra_constraints(const PipelineMappingConstraints& pmc,
+                                                           const PhysicalSystemDescriptor& psd);
+//   allow_seat:      cables_leaving(seat, psd) >= pmc.min_crossings_out(mesh)
+//   allow_seat_pair: k = pmc.min_crossings(a, b); k == 0 || candidate_links_between(seat_a, seat_b, psd) >= k
+//   intra_mesh:      per neighbour n with k(m, n) > 0, add_cardinality_constraint(boundary chips of
+//                    boundary_slices(m, n), ASICs cabled toward seated_asics[n], ceil(k / links per exit ASIC))
+
+// topology_mapper.cpp, build_mapping, next to config.pipelines:
++   if (const auto* pmc = mesh_graph_descriptor.pipeline_mapping_constraints()) {
++       config.extra_constraints = detail::pipeline_extra_constraints(*pmc, physical_system_descriptor_);
++   }`,
+      },
     ],
     tests: [
-      "Pruning never removes a seating P8 would accept (property test over the sweep MGDs), for the seat, exit and seat-graph constraints alike.",
-      "pod8: M0's exit helper narrows exit chips toward M1 to A0 and A3 (16 of 32), k = 2; with M0's layout pinned so that its cables land on A1 and A2, M0's intra-mesh solve is infeasible.",
-      "A \"find all\" run over its budget (or skipped) gives k = 0 and adds no constraint.",
+      "Empty ExtraMappingConstraints: every mapper golden unchanged.",
+      "Generic: allow_seat false for one seat never yields it; allow_seat_pair false for one pair never yields both; intra_mesh returning a message fails that mesh with extra_constraints. Each survives a session rebuild (pool growth, add_forbidden_constraint).",
+      "Pruning never removes a seating P8 would accept (property test over the sweep MGDs), for the seat, pair and intra-mesh hooks alike.",
+      "pod8: the intra-mesh hook narrows M0's exit chips toward M1 to A0 and A3 (16 of 32), k = 2; with M0's layout pinned so that its cables land on A1 and A2, M0's intra-mesh solve is infeasible.",
+      "A \"find all\" run over its budget (or skipped) gives k = 0: pipeline_extra_constraints returns empty hooks.",
       "Seatings tried before the first accept drop on mesh4x4_stage4x2 and superpod cases.",
     ],
     behaviour: "Faster; same accepted set.",
@@ -1831,44 +2002,47 @@ if (pipeline != nullptr) {
   {
     id: "P11",
     title: "RELAXED edges: host cuts in Tier C",
-    milestone: "M5 RELAXED (later)",
+    milestone: "M5 Later",
     size: "L",
     deps: ["P5", "P8", "P14"],
-    goal: "After P14 lets the format say RELAXED. Plan host cuts on the RELAXED edges, then carve or uniform-shape tiling, then one resolve per fabric chain. Until this lands, P14 should keep Tier C rejecting a pipeline with a RELAXED edge rather than accepting it unchecked.",
+    goal: "After P14 lets the format say RELAXED. RELAXED pipeline edges become soft target edges in the same footprint solve (set_allow_unmatched_target_edges, #56762), so the solve picks the carve and the host cuts together; then one resolver call per fabric chain. No port of the host-cut planner. Until this lands, P14 has Tier C check RELAXED edges as STRICT (sound, but it misses seatings that need a host hop).",
     files: [
-      "tt_metal/fabric/carve_planner.cpp",
-      "tt_metal/fabric/pipeline_feasibility.cpp",
+      "tt_metal/fabric/pipeline_builder.cpp",
       "tt-blaze: pipeline_builder/graph.py, host_edge_planner.py, blaze/models/cli_options.py",
     ],
     steps: [
-      "Port plan_ring_placement and plan_fork_placement (host_edge_planner.py), taking the set of edges they may cut = the RELAXED edges; ForkShapeUnsupported falls back to the all-STRICT paths.",
-      "Carry the planned cuts over host; carve from the plan or tile by the uniform stage shape.",
-      "Resolve each fabric chain separately, with blaze's pool rule and greedy order.",
-      "Remove P14's 'reject RELAXED in Tier C' guard.",
+      "In build_footprint_problem, mark edges with needs_fabric = false soft (allow unmatched). P14 already keeps stage 0's outgoing edge as needs_fabric, as blaze never cuts it.",
+      "An unmatched soft edge in the mapping is a host cut; drop it from the resolver's edges.",
+      "Resolve each fabric chain separately (blaze's _resolve_chains_separately), and record R only for matched crossings.",
+      "Preference for fewest cuts and blaze's tie-breaks: open question 16.",
+      "Drop P14's RELAXED-as-STRICT warning: Tier C now treats edges with needs_fabric = false as soft.",
       "tt-blaze, same change: Edge gets a policy (STRICT | RELAXED); _group_walk skips alignments that cut a STRICT edge instead of only '0 in cuts'; the fork planner cuts only RELAXED returns; --pipeline-builder flexible becomes a shortcut that marks every edge RELAXED.",
     ],
     code: [
       {
-        path: "tt_metal/fabric/pipeline_feasibility.cpp  (try_path, host cuts)",
+        path: "tt_metal/fabric/pipeline_builder.cpp  (build_footprint_problem, soft RELAXED edges)",
         mode: "new",
         language: "cpp",
         src: `
-case CarvePath::HostCuts: {
-    const auto cuttable = pipeline_->relaxed_edges();   // the planners still skip s0's outgoing and router -> branch edges
-    auto plan = pipeline_->is_fork() ? detail::plan_fork_placement(slices, adjacency, cuttable, ...)
-                                      : detail::plan_ring_placement(slices, adjacency, stage_shapes, cuttable);
-    if (plan.fork_shape_unsupported) { return try_strict_paths(slices, links); }   // blaze resolves as declared
-    if (!plan.ok) { return PipelineCheck::reject("pipeline_carve", plan.reason); }  // ring: blaze raises too
-    auto subs = plan.carve ? submeshes_from_slots(*plan.carve)
-                           : tile_uniform(stage_shape_if_uniform());                // blaze sets submesh_shape
-    return resolve_each_chain(fabric_chains(edges_minus(plan.host_edges)), subs, links);
+// build_footprint_problem: RELAXED edges may stay unmatched (carried over host).
+for (const auto& e : pipeline.edges()) {
+    const bool hard = e.needs_fabric;   // P14: STRICT, or RELAXED out of stage 0
+    hard ? target.add_edge(e.src, e.dst) : target.add_soft_edge(e.src, e.dst);
+}
+
+// check_pipeline_seating: unmatched soft edges are host cuts; resolve each fabric chain on its own.
+const auto host_edges = unmatched_soft_edges(m);
+for (const auto& chain : fabric_chains(edges_minus(pipeline.edges(), host_edges))) {
+    auto layout = resolve_chain(chain, slots_of(m), links);
+    if (!layout) { return reject(m, layout.error()); }
+    record_required_links(*layout, R);        // matched crossings only
 }`,
       },
     ],
     tests: [
       "Case B and Case C accepted with s3 -> s0 RELAXED, loopback on host; still rejected with every edge STRICT.",
       "mixed4 on (P, Q) with s3 -> s0 RELAXED: cover 1 skipped (it cuts STRICT s1 -> s2), cover 2 accepted.",
-      "Golden parity against host_edge_planner for rings and forks.",
+      "Agreement with host_edge_planner on rings and forks: same accept or reject, same number of host cuts.",
     ],
     behaviour: "Pipelines with RELAXED edges are checked and can be accepted with host hops.",
   },
@@ -1881,7 +2055,7 @@ case CarvePath::HostCuts: {
     goal: "Record each rank's stage in rank_bindings.yaml. Not consumed yet.",
     files: ["tools/scaleout/src/generate_rank_bindings.cpp"],
     steps: [
-      "For each rank: its mesh and host rank give its slice, then its slot, then its stage id (or idle).",
+      "Read TopologyMappingResult::pipeline from the enumerator: each PipelineStageSlot's host_ranks get its stage id; idle_host_ranks get idle.",
       "Co-owners of a joint stage get the same id.",
     ],
     code: [
@@ -1903,39 +2077,228 @@ rank_bindings:
   },
   {
     id: "P13",
-    title: "Later: seat-pair nogoods + spread fill",
+    title: "Later: seat-pair nogoods",
     milestone: "M4 Pruning",
     size: "M",
-    deps: ["P8", "P9"],
-    goal: "Stronger feedback to SAT, and spare bound links that add slice adjacency.",
-    files: ["tt_metal/fabric/topology_solver_sat.cpp", "tt_metal/fabric/intermesh_binding.cpp"],
-    steps: [
-      "New clause 'not (any mesh on seat_a and any mesh on seat_b)', keyed on seat identity including orientation.",
-      "Use it only when a failure is proven for every carve over that pair.",
-      "Fill order round-robin over slice pairs, only with a pipeline descriptor (keeps goldens).",
+    deps: ["P3", "P8", "P9", "P15"],
+    goal: "When a rejected seating is provably the fault of two meshes' seats, block that seat pair for every seating, not just the one seating P8 excludes. No solver change: the clause is one existing cardinality constraint.",
+    files: [
+      "tt_metal/api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp",
+      "tt_metal/fabric/physical_grouping_descriptor_matching.cpp",
+      "tt_metal/fabric/topology_mapper_utils.cpp",
+      "tt_metal/fabric/pipeline_builder.cpp",
     ],
-    code: [],
-    tests: ["Seat-pair clause blocks exactly the seatings that use both seats.", "Spread fill: bound links cover more distinct slice pairs."],
-    behaviour: "Fewer wasted seatings; with a pipeline, spare links spread.",
+    steps: [
+      "Session API: add_seat_pair_nogood(mesh_a, seat_a, mesh_b, seat_b) on SatPlacementEnumerationSession, built like add_forbidden_constraint: store in extra_nogoods_, trial-rebuild (pop and return false if no seating is left), then invalidate_pending_solve(). Seatings already yielded stay blocked through excluded_seat_maps().",
+      "Encoding in apply_extra_constraints: 'mesh_a not on seat_a OR mesh_b not on seat_b' as add_cardinality_constraint(pairs, 1), where pairs is mesh_a's other seats plus mesh_b's other seats from get_valid_mappings. Exact because each mesh takes exactly one seat. Seats compare by ASIC set, because the domains hold canonical (footprint-shared) candidates.",
+      "Twins: apply each nogood to every (x, y) in twin group(mesh_a) x twin group(mesh_b), x != y. The twin windowing in build_sat_placement_constraints keeps one representative per orbit; blocking one twin alone could cut the only representative of a working orbit. Factor the twin grouping into sat_placement_twin_groups so both use one definition.",
+      "Why per mesh pair, not 'any mesh on seat_a and any mesh on seat_b': two other meshes on those seats carry different stages and cables, so the proof does not cover them.",
+      "Why the ASIC set and not orientation: every producer below reads only orientation-free facts (footprints, cable counts, slice-level geometry under a hard-fixed signature). A future producer that reads chip positions must key on the canonical candidate instead.",
+      "PipelineCheck gains seat_pair_proofs (mesh pairs). The P8 loop turns each into add_seat_pair_nogood before counting the rejection; false from the session ends the run with the existing could-not-fit error.",
+      "Producer 1, before C1: cables between the two seats < Tier B's k_AB (a minimum over every projection). Redundant once P10's allow_seat_pair is in, and kept as the fallback when P10 is off.",
+      "Producer 2, a C2 pre-check failure on mesh m, only when all three hold: the verdict holds for every projection; m's only MGD neighbour is n, so all of m's cables land on n's seat; and m's slice signature is fixed by hard constraints (P15's skip test). Resolver failures never produce a proof: one resolver run is one carve.",
+      "Stats: pipeline_seat_pair_nogoods next to pipeline_rejections, so the sweep shows how much each producer prunes.",
+    ],
+    code: [
+      {
+        path: "tt_metal/api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp",
+        mode: "diff",
+        language: "cpp",
+        src: `
+ // physical_grouping_descriptor.hpp, SatPlacementEnumerationSession
+     bool add_required_constraint(const PlacedMesh& placed);
+     bool exclude_mapping(const AssignedMeshes& assigned);
++    // Block mesh_a on a seat with seat_a's ASICs together with mesh_b on a seat with seat_b's,
++    // and the same for every twin of either mesh (the meshes the symmetry break treats as
++    // interchangeable). The rest of a seating is free. Hard on every solve-ladder rung; kept
++    // across rebuilds like extra_forbidden_ / extra_required_. False: no seating is left.
++    bool add_seat_pair_nogood(
++        MeshId mesh_a, const std::unordered_set<PhysicalNodeId>& seat_a,
++        MeshId mesh_b, const std::unordered_set<PhysicalNodeId>& seat_b);
+ private:
++    struct SeatPairNogood {
++        MeshId mesh_a;
++        std::unordered_set<PhysicalNodeId> seat_a;
++        MeshId mesh_b;
++        std::unordered_set<PhysicalNodeId> seat_b;
++    };
++    std::vector<SeatPairNogood> extra_nogoods_;
+`,
+      },
+      {
+        path: "tt_metal/fabric/physical_grouping_descriptor_matching.cpp",
+        mode: "diff",
+        language: "cpp",
+        src: `
+ // physical_grouping_descriptor_matching.cpp
++bool SatPlacementEnumerationSession::add_seat_pair_nogood(
++    MeshId mesh_a, const std::unordered_set<PhysicalNodeId>& seat_a,
++    MeshId mesh_b, const std::unordered_set<PhysicalNodeId>& seat_b) {
++    extra_nogoods_.push_back({mesh_a, seat_a, mesh_b, seat_b});
++    if (!ready_) {
++        return true;
++    }
++    MappingConstraints<GlobalMeshId, const Candidate*> trial;
++    if (build_sat_placement_constraints(*pools_, *physical_system_descriptor_, mesh_level_graph_, trial) &&
++        !apply_extra_constraints(trial)) {
++        extra_nogoods_.pop_back();
++        return false;
++    }
++    invalidate_pending_solve();   // re-encode with the clause; yielded seatings stay blocked (excluded_seat_maps)
++    return true;
++}
+
+ bool SatPlacementEnumerationSession::apply_extra_constraints(
+     MappingConstraints<GlobalMeshId, const Candidate*>& constraints) const {
+     ...existing forbidden / required loops...
++    // "x not on seat_a OR y not on seat_b". The solver takes positive literals only, and each mesh
++    // takes exactly one seat, so "x on any seat but seat_a" is "x not on seat_a": one cardinality
++    // constraint with min_count 1 over x's other seats and y's other seats. No solver change.
++    for (const SeatPairNogood& ng : extra_nogoods_) {
++        for (const GlobalMeshId x : twins_of(ng.mesh_a)) {
++            for (const GlobalMeshId y : twins_of(ng.mesh_b)) {
++                if (x == y) {
++                    continue;
++                }
++                MappingConstraints<GlobalMeshId, const Candidate*>::CardinalityPairSet pairs;
++                bool x_can_take_a = false;
++                bool y_can_take_b = false;
++                for (const Candidate* seat : constraints.get_valid_mappings(x)) {   // canonical seats, set by build
++                    if (same_footprint(*seat, ng.seat_a)) { x_can_take_a = true; } else { pairs.insert({x, seat}); }
++                }
++                for (const Candidate* seat : constraints.get_valid_mappings(y)) {
++                    if (same_footprint(*seat, ng.seat_b)) { y_can_take_b = true; } else { pairs.insert({y, seat}); }
++                }
++                if (!x_can_take_a || !y_can_take_b) {
++                    continue;   // this combination cannot occur: nothing to block
++                }
++                if (!constraints.add_cardinality_constraint(pairs, 1)) {
++                    return false;
++                }
++            }
++        }
++    }
+     return true;
+ }
+
++// twins_of(m): m plus the meshes in its twin group (same pool class, same mesh-graph neighbours,
++// mutually non-adjacent). build_sat_placement_constraints windows each twin group's seats; a nogood
++// on one twin alone would break that symmetry and could cut the representative of a working orbit.
++// The grouping it does today moves into sat_placement_twin_groups(pools, mesh_level_graph), used by both.
+`,
+      },
+      {
+        path: "tt_metal/fabric/topology_mapper_utils.cpp",
+        mode: "diff",
+        language: "cpp",
+        src: `
+ // topology_mapper_utils.cpp, MultiMeshSolutionEnumerator::next, the pipeline branch (P8)
+                if (!check.accepted) {                                         // C4
+                    full.success = false;
+                    full.stats.failure_stage = check.failure_stage;
+                    full.error_message = check.reason;
+                    last_failed_ = full;
++                   for (const auto& [mesh_a, mesh_b] : check.seat_pair_proofs) {
++                       if (!placement_session_->add_seat_pair_nogood(
++                               mesh_a, seat_asics(seating, mesh_a), mesh_b, seat_asics(seating, mesh_b))) {
++                           return give_up();
++                       }
++                       ++placement_stats_->pipeline_seat_pair_nogoods;
++                   }
+                    if (++pipeline_rejections_ > kMaxPipelineRejections) {
+                        return give_up();
+                    }
+                    continue;
+                }
+
+ // pipeline_builder.hpp
+ struct PipelineCheck {
+     bool accepted = false;
+     std::string failure_stage;
+     std::string reason;
++    // Mesh pairs whose two seats in this seating fail for every other seat of every other mesh.
++    std::vector<std::pair<MeshId, MeshId>> seat_pair_proofs;
+ };
+`,
+      },
+      {
+        path: "tt_metal/fabric/pipeline_builder.cpp",
+        mode: "diff",
+        language: "cpp",
+        src: `
+ // pipeline_builder.cpp, detail::check_pipeline_seating
+ // A producer may add a proof only when its verdict reads nothing but the two seats' footprints,
+ // layouts fixed by hard constraints, and Tier B facts (true in every projection). Each one below
+ // reads only orientation-free facts, so matching seats by ASIC set (as seats_matching does) is sound.
+
++    // 1. Before C1: fewer cables between the two seats than Tier B's minimum crossings (k_AB, a
++    //    minimum over every projection). Never fires once P10's allow_seat_pair is in.
++    for (const auto& [pair, k] : problem.mapping_constraints().min_crossings) {
++        const std::size_t cables =
++            cables_between(seat_asics(seating, pair.first), seat_asics(seating, pair.second), psd);
++        if (k > 0 && cables < k) {
++            PipelineCheck check = reject("pipeline_seat_pair",
++                fmt::format("meshes {} and {}: {} cable(s) between their seats, the pipeline crosses at least {}",
++                            *pair.first, *pair.second, cables, k));
++            check.seat_pair_proofs.push_back(pair);
++            return check;
++        }
++    }
+
+     const SeatingTables t = build_seating_tables(problem, seating, full, psd);   // C1
+     if (auto pre = pre_checks(problem, t)) {
++        // 2. C2 pre-check: mesh m's segment test failed for every projection Tier B allows, m's only
++        //    MGD neighbour is n (so all of m's cables go to n's seat), and m's slice signature is fixed
++        //    by hard constraints (P15's skip test). Then no other seat of any other mesh changes it.
++        if (pre->mesh.has_value() && pre->every_projection) {
++            const MeshId m = *pre->mesh;
++            if (const auto n = only_mgd_neighbour(problem, m); n.has_value() && slice_signature_fixed(full, m)) {
++                check.seat_pair_proofs.push_back({m, *n});
++            }
++        }
+         return reject(pre->stage, pre->reason, ...);
+     }
+`,
+      },
+    ],
+    tests: [
+      "Session: a nogood on (M0 -> P, M1 -> Q) blocks every seating with both, offers every other one (brute-force compare on a 3-mesh, 4-seat PSD), and survives a rebuild after a pool growth.",
+      "Session: a nogood that leaves no seating returns false and is popped; the session still enumerates as before.",
+      "Twins: ALL_TO_ALL of identical meshes with twin windowing on. A nogood on M0 also blocks its twins; the set of accepted seatings equals the brute-force set (no working orbit lost).",
+      "Soft seams: the nogood still holds on the soft-seam rung of the solve ladder.",
+      "Producer 1: seats with 1 cable between them and k_AB = 2 -> one nogood; with P10 off, no later seating puts that mesh pair on those seats.",
+      "Producer 2: pod8 with every host bound: (P, U) fails on M1's corners -> nogood (M1 on U, M0 on P); unbound hosts -> no proof, P8 exclusion only.",
+      "Soundness sweep: on every sweep MGD, the first accepted seating and its R are the same with and without P13; only the rejection count drops.",
+    ],
+    behaviour: "Fewer wasted seatings when a failure is provably about two seats. Only the SAT placement changes; the control plane and the binding are untouched. Without a pipeline nothing changes.",
   },
   {
     id: "P14",
     title: "RELAXED edges: schema + Tier B + Plan 1",
-    milestone: "M5 RELAXED (later)",
+    milestone: "M5 Later",
     size: "M",
-    deps: ["P1", "P3", "P10"],
-    goal: "Let a pipeline edge say RELAXED (may go over host MPI). Descriptor-only tiers stop counting RELAXED edges; Tier C still rejects them until P11.",
+    deps: ["P1", "P3"],
+    goal: "Let a pipeline edge say policy: RELAXED (may go over host MPI). Tier B, and the constraints P10 passes from the MGD into the first solve, stop counting edges that may go over host. Tier C keeps checking every edge as fabric until P11, which is sound: it never accepts a seating it cannot build.",
     files: [
       "tt_metal/fabric/protobuf/mesh_graph_descriptor.proto",
-      "tt_metal/fabric/pipeline_feasibility.cpp",
+      "tt_metal/fabric/mesh_graph_descriptor.cpp",
+      "tt_metal/api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp",
+      "tt_metal/fabric/pipeline_graph.cpp",
+      "tt_metal/api/tt-metalium/experimental/fabric/pipeline_graph.hpp",
+      "tt_metal/fabric/pipeline_builder.cpp",
       "tt_metal/fabric/topology_mapper_utils.cpp",
+      "tests/tt_metal/tt_fabric/fabric_router/test_mesh_graph_descriptor.cpp",
     ],
     steps: [
-      "Proto: add enum EdgePolicy { STRICT = 0; RELAXED = 1; } and un-reserve PipelineEdge field 3 as EdgePolicy policy = 3. STRICT is 0, so every first-version file keeps its meaning.",
-      "Tier A: nothing new; RELAXED is allowed on any edge.",
-      "Tier B: skip RELAXED edges in the crossing rule (no cap, no channel) and in the carve adjacency rule; a RELAXED return counts 1 toward a router's degree.",
-      "Plan 1: k_AB and boundary slices count STRICT crossings only; every edge RELAXED gives k_AB = 0.",
-      "Tier C: add has_relaxed_edge(); reject such a pipeline with failure_stage pipeline_relaxed_unsupported until P11.",
+      "Proto: un-reserve PipelineEdge field 3 as optional Policy policy = 3, reusing the enum Channels.policy already uses (INVALID_POLICY, STRICT, RELAXED). No new enum. Omitted means STRICT, so every first-version file keeps its meaning; the textproto spelling is the same as on channels.",
+      "Parser: drop the special case that rejects policy on an edge (PipelineEdgePolicyErrorCollector's warning check and its TT_FATAL); keep the first-error collector.",
+      "Tier A: reject an explicit INVALID_POLICY. Nothing else: RELAXED is allowed on any edge.",
+      "Descriptor data: PipelineDescriptorData::Edge gains bool relaxed (the header only forward-declares proto::Policy). populate_pipeline_descriptors sets it.",
+      "Pipeline graph: PipelineEdgeSpec gains relaxed and needs_fabric. needs_fabric = STRICT, or RELAXED out of stage 0, which blaze's host-cut planner never cuts. One rule, computed once in convert_pipeline, read by Tier B, Plan 1 and later Tier C (P11).",
+      "Tier B: build nbrs and the per-mesh edge lists from needs_fabric edges only, so the crossing rule, the channel count, the look-ahead and the carve adjacency all skip host-capable edges.",
+      "Plan 1 and P10: min_crossings (k_AB), min_crossings_out and boundary_slices come from the same filtered search, so P10's ExtraMappingConstraints hooks (the MGD's constraints passed into the first solve) need no code change; they just prune less. Every host-capable edge RELAXED gives k = 0 on those pairs.",
+      "Tier C until P11: no change to the check; every edge stays a fabric edge. build_pipeline_problem logs one warning per pipeline with RELAXED edges, and a failed run says RELAXED edges were checked as STRICT.",
+      "Merge (1.5): nothing to do; the field rides in the proto that merge() copies.",
     ],
     code: [
       {
@@ -1943,26 +2306,182 @@ rank_bindings:
         mode: "diff",
         language: "proto",
         src: `
-+enum EdgePolicy {
-+    STRICT = 0;     // must ride a fabric link
-+    RELAXED = 1;    // fabric if the placement allows; otherwise host MPI (D2H -> MPI -> H2D)
-+}
-+
+ // Every edge rides a fabric link. There is no policy field yet: PipelineEdge
+ // field 3 is reserved for one. A textproto that writes \`policy\` on an edge
+ // does not parse.
+-//
++// An edge may set policy: RELAXED to say it may go over host MPI when the
++// placement has no fabric link for it. Omitted means STRICT.
++//
+ ...
  message PipelineEdge {
-     string src = 1;
+     ...
      string dst = 2;
+
+-    // Edge policy, added later. Every edge is STRICT until then.
 -    reserved 3;
-+    EdgePolicy policy = 3;   // default STRICT; RELAXED allowed on any edge
++    // Optional; omitted is STRICT (same enum and default as Channels.policy).
++    // STRICT: the edge rides a fabric link. RELAXED: fabric where the placement
++    // allows, otherwise host MPI. INVALID_POLICY is rejected.
++    optional Policy policy = 3;
  }`,
+      },
+      {
+        path: "tt_metal/fabric/mesh_graph_descriptor.cpp / .hpp",
+        mode: "diff",
+        language: "cpp",
+        src: `
+ // mesh_graph_descriptor.cpp: the policy field exists now, so the parser no longer
+ // special-cases it. The collector keeps only the first parse error.
+-// Other unknown fields stay legal (MGD textprotos rely on that). \`policy\` on a pipeline
+-// edge is not: the field does not exist yet, and ignoring it would look like RELAXED.
+-class PipelineEdgePolicyErrorCollector : public google::protobuf::io::ErrorCollector {
++class FirstErrorCollector : public google::protobuf::io::ErrorCollector {
+     ...
+-    void AddWarning(int, ColumnNumber, const std::string& message) override {
+-        if (message.find("PipelineEdge") != npos && message.find("\"policy\"") != npos) { rejected_policy_ = true; }
+-    }
++    void AddWarning(int, ColumnNumber, const std::string&) override {}
+     ...
+ };
+ ...
+-    TT_FATAL(
+-        !collector.rejected_policy(),
+-        "Failed to parse MeshGraphDescriptor textproto: pipeline edge has no field \"policy\"; every edge is STRICT");
+
+ // validate_pipeline_descriptors (Tier A), in the edge loop:
+             if (edge.src() == edge.dst()) {
+                 error_messages.push_back(fmt::format("pipeline '{}': self-edge on '{}'", pipeline.name(), edge.src()));
+             }
++            if (edge.has_policy() && edge.policy() == proto::Policy::INVALID_POLICY) {
++                error_messages.push_back(fmt::format(
++                    "pipeline '{}': edge {} -> {} has policy INVALID_POLICY", pipeline.name(), edge.src(), edge.dst()));
++            }
+
+ // populate_pipeline_descriptors:
+-            record.edges.push_back(PipelineDescriptorData::Edge{.src = edge.src(), .dst = edge.dst()});
++            record.edges.push_back(PipelineDescriptorData::Edge{
++                .src = edge.src(),
++                .dst = edge.dst(),
++                .relaxed = edge.has_policy() && edge.policy() == proto::Policy::RELAXED});
+
+ // mesh_graph_descriptor.hpp (proto::Policy is only forward-declared there, so a bool):
+-// Edges stay directional pairs of stage ids. There is no policy: every edge is STRICT.
++// Edges stay directional pairs of stage ids. relaxed is policy: RELAXED; omitted is STRICT.
+ struct PipelineDescriptorData {
+     struct Edge {
+         std::string src;
+         std::string dst;
++        bool relaxed = false;
+     };`,
+      },
+      {
+        path: "tt_metal/fabric/pipeline_graph.hpp / .cpp",
+        mode: "diff",
+        language: "cpp",
+        src: `
+ // pipeline_graph.hpp
+ struct PipelineEdgeSpec {
+     std::size_t src = 0;
+     std::size_t dst = 0;
+     bool is_loopback = false;
++    bool relaxed = false;        // policy: RELAXED in the MGD
++    // STRICT, or RELAXED out of stage 0: blaze's host-cut planner never cuts that
++    // (_group_walk skips cuts at stage 0). The one rule Tier B, Plan 1 and (P11) Tier C all read.
++    bool needs_fabric = true;
+ };
+
+ // pipeline_graph.cpp, convert_pipeline
+-        graph.edges.push_back(PipelineEdgeSpec{.src = src->second, .dst = dst->second, .is_loopback = false});
++        graph.edges.push_back(
++            PipelineEdgeSpec{.src = src->second, .dst = dst->second, .is_loopback = false, .relaxed = edge.relaxed});
+     }
+
+     mark_loopbacks(graph);
++    for (PipelineEdgeSpec& edge : graph.edges) {
++        edge.needs_fabric = !edge.relaxed || edge.src == graph.stage0;
++    }
+     return graph;`,
+      },
+      {
+        path: "tt_metal/fabric/pipeline_builder.cpp  (Tier B, P3)",
+        mode: "diff",
+        language: "cpp",
+        src: `
+ // pipeline_builder.cpp, check_pipeline_feasibility (Tier B, P3): inputs built once.
+ // Every rule reads nbrs and the per-mesh edge lists, so one filter here covers the crossing rule,
+ // the channel count, the look-ahead, the carve adjacency and every PipelineMappingConstraints fact.
+ for (const PipelineGraph& graph : graphs) {
+     for (const PipelineEdgeSpec& e : graph.edges) {
++        if (!e.needs_fabric) {
++            continue;   // may go over host: no crossing, no channel, no adjacency, not in k_AB
++        }
+         nbrs[stage_of(graph, e.src)].push_back(stage_of(graph, e.dst));
+         nbrs[stage_of(graph, e.dst)].push_back(stage_of(graph, e.src));
+     }
+ }
+
+ // P10 (if landed) needs no change: pipeline_extra_constraints reads min_crossings, min_crossings_out and
+ // boundary_slices, which are now computed over needs_fabric edges only, so the constraints passed from
+ // the MGD into the first solve shrink with them. Every edge RELAXED (except stage 0's outgoing edge) gives k = 0.`,
+      },
+      {
+        path: "tt_metal/fabric/pipeline_builder.cpp, topology_mapper_utils.cpp  (Tier C until P11)",
+        mode: "diff",
+        language: "cpp",
+        src: `
+ // pipeline_builder.cpp, build_pipeline_problem (P8), once per run.
+ // Until P11, Tier C checks every edge as a fabric edge. Sound: an accepted seating carries
+ // every edge on fabric, so it is buildable; it can miss seatings that need a host hop.
++    for (const PipelineGraph& graph : pipelines) {
++        const auto relaxed = std::count_if(graph.edges.begin(), graph.edges.end(),
++                                           [](const PipelineEdgeSpec& e) { return e.relaxed; });
++        if (relaxed > 0) {
++            log_warning(tt::LogFabric,
++                        "pipeline '{}': {} RELAXED edge(s) are checked as STRICT until host cuts are supported",
++                        graph.name, relaxed);
++            problem.relaxed_checked_as_strict = true;
++        }
++    }
+
+ // MultiMeshSolutionEnumerator::next, give_up(): say why a RELAXED pipeline found nothing.
++    if (pipeline_ != nullptr && pipeline_->relaxed_checked_as_strict) {
++        last_failed_->error_message += " (RELAXED pipeline edges are checked as STRICT until host cuts are supported)";
++    }`,
       },
     ],
     tests: [
-      "Every P1-P10 golden parses unchanged and gives the same Tier B result.",
-      "mixed4 with no MGD connection: s1 -> s2 and s3 -> s0 RELAXED passes Tier B; only s3 -> s0 RELAXED still rejects.",
-      "mesh4x4_stage4x2 with s3 -> s0 RELAXED: k(M0, M1) = 1. Every edge RELAXED: k_AB = 0, no crossing-based rejects.",
-      "A pipeline with a RELAXED edge is rejected by Tier C with pipeline_relaxed_unsupported (until P11).",
+      "EdgePolicyDoesNotParse becomes EdgePolicyParses: policy RELAXED stores relaxed = true; STRICT and omitted store false. policy: INVALID_POLICY is rejected by Tier A, naming the edge.",
+      "UnknownFieldElsewhereStillParses and ShippedMeshGraphDescriptorsStillParse unchanged; every P1-P10 golden gives the same Tier B result.",
+      "Pipeline graph: ring with s3 -> s0 RELAXED: needs_fabric false. s0 -> s1 RELAXED: needs_fabric true (stage 0).",
+      "Tier B: mixed4 with no MGD connection: s1 -> s2 and s3 -> s0 RELAXED passes; only s3 -> s0 RELAXED still rejects.",
+      "Plan 1: mesh4x4_stage4x2 with s3 -> s0 RELAXED gives k(M0, M1) = 1; every cuttable edge RELAXED gives k = 0, and P10's hooks add nothing for that pair.",
+      "Tier C: a RELAXED pipeline accepts exactly the seatings the all-STRICT copy accepts, and logs the warning once.",
+      "Merge: a part with a RELAXED edge keeps it after merge().",
     ],
-    behaviour: "Files can say RELAXED; Tiers A and B accept more; Tier C refuses RELAXED until P11.",
+    behaviour: "Files can say RELAXED. Tiers A and B, and P10's pruning, accept more; Tier C still requires fabric for every edge until P11.",
+  },
+  {
+    id: "P16",
+    title: "C1 on the policy plan's candidate table (part 9)",
+    milestone: "M5 Later",
+    size: "S",
+    deps: ["P7", "P9"],
+    goal: "Next step, after the inter-mesh policy plan's part 9 lands. Replace P7's PSD read with collect_inter_mesh_candidates, so C1 and the control plane read one table: links that are up, on allowed cable types, ordered by tier.",
+    files: ["tt_metal/fabric/pipeline_builder.cpp", "tt_metal/fabric/topology_mapper_utils.cpp"],
+    steps: [
+      "Depends on the policy plan's part 9 (candidate table, down-link hashes in the chip info, PortTypeRules).",
+      "Call collect_inter_mesh_candidates(mesh_graph, psd, full.fabric_node_to_asic, options) per seating from MultiMeshSolutionEnumerator::next, with the same InterMeshCandidateOptions as the final call; delete inter_mesh_cables.",
+      "Pick R's channel by best tier, then lowest src_chan; order DirectLinks by tier, then chip id.",
+      "Phase 0 in the pairing takes the candidate table's PortDescriptorTable (rank 0, no gather); the check after the broadcast stays.",
+      "Close open question 20: down links never reach C1.",
+    ],
+    code: [],
+    tests: [
+      "No cable data and no down links: same R and same AnnotatedIntermeshConnections as with P7.",
+      "A disallowed cable type or a down link between two stages is never in R; the seating uses another cable or is rejected.",
+    ],
+    behaviour: "C1 skips down links and disallowed cable types; R prefers better tiers.",
   },
 ];
 
@@ -1971,7 +2490,7 @@ const MILESTONES: Array<{ id: Pr["milestone"]; text: string }> = [
   { id: "M2 Shared code", text: "Libraries Tier C needs, each landing with no behaviour change." },
   { id: "M3 Tier C (STRICT)", text: "The mapper only emits seatings the pipeline builds on, and binds the cables it relied on." },
   { id: "M4 Pruning", text: "Speed-ups. Not needed for correctness." },
-  { id: "M5 RELAXED (later)", text: "Not in the first version. Adds edge policy to the schema, then host cuts in Tier C. M1-M4 are complete without it: every edge is STRICT." },
+  { id: "M5 Later", text: "Not in the first version. RELAXED: edge policy in the schema, then host cuts in Tier C. Candidate table: C1 switches from its own PSD read (P7) to the policy plan's collect_inter_mesh_candidates (part 9). M1-M4 are complete without it: every edge is STRICT, C1 reads the PSD." },
 ];
 
 // ---------------------------------------------------------------------------
@@ -2115,9 +2634,9 @@ function PlanTab() {
   return (
     <Stack gap={20}>
       <Stack gap={6}>
-        <H2>Fourteen PRs: STRICT in M1-M4, RELAXED later in M5</H2>
+        <H2>Fifteen PRs: STRICT in M1-M4; RELAXED and the policy plan's candidate table later in M5</H2>
         <Text tone="secondary">
-          The first version is STRICT only: every pipeline edge rides fabric, and M1-M4 need nothing from M5. Arrows are
+          The first version is STRICT only: every pipeline edge rides fabric, C1 reads inter-mesh cables from the PSD itself, and M1-M4 need nothing from M5. Arrows are
           hard dependencies. M2 PRs are independent of each other and of M1, so they can land in parallel. Every PR
           is written out below with its steps, code and tests; click a box to jump to it.
         </Text>
@@ -2674,14 +3193,14 @@ function DescriptorExamples() {
           ["pod8", "pass", "a ring of 8; loopback s7 > s0"],
           ["mixed4 + edge s1 > s1", "reject", "self-edge"],
           ["mixed4 with s0 > s1 repeated", "pass", "two channels on that hop; the builder reads one link per edge"],
-          ["dflash: router > target0..37 > router, router > draft0..10 > router", "pass", "one router, two chain branches, both return to it on fabric"],
-          ["s0 > s1, s0 > s2, s1 > s0; s2 has no out-edge", "pass", "a fork whose branch s2 dead-ends, which is allowed; blaze rejects it today (TODO)"],
-          ["a router with three branches", "pass", "NOTE: Tier A does not limit stage topology. Blaze's fork runtime still builds exactly two"],
-          ["a branch stage with out-degree 2", "pass", "NOTE: Tier A does not limit stage topology. Once the MGD names the router, only that stage may split"],
-          ["two stages with in-degree 0", "pass", "NOTE: Tier A does not limit stage topology. Once the MGD names the router, a fork has exactly one"],
+          ["dflash: router > target0..37 > router, router > draft0..10 > router", "pass", "ids unique, edges name declared stages, shapes positive"],
+          ["s0 > s1, s0 > s2, s1 > s0; s2 has no out-edge", "pass", "a branch may dead-end; Tier A does not limit stage topology"],
+          ["a stage with three outgoing branches", "pass", "Tier A does not limit stage topology"],
+          ["a branch stage with out-degree 2", "pass", "Tier A does not limit stage topology"],
+          ["two stages with in-degree 0", "pass", "Tier A does not limit stage topology"],
           ["mixed4 with policy: RELAXED on s3 > s0", "reject", "no policy field in the first version: does not parse. RELAXED (later): passes"],
           ["RELAXED (later): mixed4 with s0 > s1 RELAXED", "pass", "allowed; Tier C's planner still never cuts stage 0's outgoing edge"],
-          ["RELAXED (later): dflash with router > draft0 RELAXED", "pass", "allowed; Tier C still needs a fabric link from the router to a branch head"],
+          ["RELAXED (later): dflash with router > draft0 RELAXED", "pass", "any edge may be RELAXED"],
           ["mixed4 plus a copy named mixed4_b", "pass here", "each is checked on its own; Tier B checks them together"],
           ["mixed4 plus a copy also named mixed4", "reject", "pipeline names must be unique"],
           ["a stage [2, 4] where every slice is 4x2", "pass here", "no transpose, so Tier B finds no mesh it binds to"],
@@ -2749,7 +3268,7 @@ function DescriptorExamples() {
         every pipeline at once, because pipelines share slices and channels.
       </Text>
       <Grid columns={fit(420)} gap={16} align="start">
-        <CodeCard path="PipelineFeasibility: the search" mode="plain" language="text" src={TIER_B_SEARCH} />
+        <CodeCard path="detail::check_pipeline_feasibility (pipeline_builder.cpp): the search" mode="plain" language="text" src={TIER_B_SEARCH} />
         <Stack gap={10}>
           <Table
             headers={["", "STRICT edge (first version)", "RELAXED edge (later)"]}
@@ -2786,15 +3305,15 @@ function DescriptorExamples() {
         Tier B saves what it found as PipelineMappingConstraints on the descriptor: binding sets, k_AB and the minimum
         crossings per mesh, and the boundary slices per mesh pair. No projection list is stored. Every fact holds for every
         surviving projection and carve, so constraints built from it never drop a buildable seating. The MGD library stores plain MGD
-        types; helpers beside the topology mapper turn them into the MappingConstraints objects it already solves with (P10).
+        types; pipeline_builder turns them into the mapper's generic ExtraMappingConstraints hooks, which TopologyMapper passes in through TopologyMappingConfig (P10).
       </Text>
       <Table
         headers={["Helper", "Fills", "Adds"]}
         rows={[
-          ["stage_to_mesh_constraints", "MappingConstraints<PipelineStageKey, MeshId>", "required: stage to its binding set (report, not a solve)"],
-          ["apply_pipeline_seat_constraints", "MappingConstraints<MeshId, const Candidate*> (SAT seating)", "forbidden: seats of m with fewer than min_crossings_out(m) cables leaving the footprint"],
-          ["apply_pipeline_exit_constraints", "MappingConstraints<FabricNodeId, PhysicalNodeId> (intra-mesh)", "cardinality: at least k(m, n) cables, by links per ASIC, from chips in boundary_slices(m, n) toward n"],
-          ["(seat graph, Plan 1)", "build_sat_placement_seat_graph", "pair condition, so not a MappingConstraints entry: no edge between seats with fewer than k_AB links"],
+          ["stage_to_mesh_constraints (report)", "MappingConstraints<PipelineStageKey, MeshId>", "required: stage to its binding set (not a solve)"],
+          ["ExtraMappingConstraints::allow_seat", "SAT seating, in apply_extra_constraints", "forbidden: seats of m with fewer than min_crossings_out(m) cables leaving the footprint"],
+          ["ExtraMappingConstraints::allow_seat_pair", "SAT seating, in build_sat_placement_seat_graph", "no edge between seats with fewer than k_AB links (Plan 1)"],
+          ["ExtraMappingConstraints::intra_mesh", "intra-mesh, after add_exit_node_constraints", "cardinality: at least ceil(k(m, n) / links per ASIC) chips of boundary_slices(m, n) on ASICs cabled toward n"],
         ]}
       />
       <Text tone="secondary">
@@ -2907,22 +3426,6 @@ error     no-alignment: found 1 cycle(s) of the right length (6 slices) but
             cycle's same-mesh run lengths: [3, 3]
             stage shapes: ['4x2', '4x2', '4x8']`;
 
-const CARVE_E = `
-fork      router R 4x2; branch X = three 4x2 stages, returns over fabric
-                        branch Y = one 4x2 stage, returns over host
-need_edges  = 2 (X) + 1 (Y) = 3      need_slices = 1 + 3 + 1 = 5
-candidates  slices with >= 3 neighbours: A2, B2      try A2
-order       fabric branches first, shortest first; then host branches
-X           _cycles_through(A2, length 4) on free slices: A2 A3 B3 B2
-            walks [A3 B3 B2] and [B2 B3 A3]; take the first
-            X0 A3, X1 B3, X2 B2, return B2 -> A2 over the cable
-Y           A2's free neighbours: {A1}; _path_of_length(A1, 1) = [A1]
-            Y0 A1, return over host
-plan        R A2 | X A3 B3 B2 | Y A1 | fillers A0 B0 B1
-
-if Y also returned over fabric: need_edges 4, best any slice has is 3
-  -> no slice has the 4 fabric neighbours this fork needs`;
-
 const CARVE_F = `
 galaxy    one 4x8 mesh, host_topology [1, 8], both axes RING
           ranks own 4x1 columns C0..C7; slice graph is one 8-cycle
@@ -3025,7 +3528,7 @@ function MapperExamples() {
       <Table
         headers={["Pipeline", "Seating (M0, M1)", "Cables land on", "Tier C", "Why"]}
         rows={[
-          ["mixed4", "(P, Q)", "A0-B0, A3-B3", "reject", "one loop of 8 slices, the ring needs exactly 6; every tiling fails"],
+          ["mixed4", "(P, Q)", "A0-B0, A3-B3", "reject", "one loop of 8 slices, the ring needs exactly 6: the footprint solve finds no carve"],
           ["mixed4", "(P, R)", "A0-B0, A2-B2", "accept", "a 6-slice loop exists and the stages align onto it"],
           ["RELAXED (later): mixed4 with s3 > s0 RELAXED", "(P, Q)", "A0-B0, A3-B3", "accept", "one fabric path covers 6 slices; the RELAXED loopback goes over host"],
           ["pod8", "(P, U)", "A3-T0, A0-T3", "reject", "opposite corners of M1: no path through M1's tiles joins them"],
@@ -3034,7 +3537,12 @@ function MapperExamples() {
         rowTone={["danger", "success", "success", "danger", "success"]}
       />
 
-      <H2>How the carve planner works</H2>
+      <H2>Blaze&apos;s carve planner (runtime reference, not ported)</H2>
+      <Callout tone="info" title="Tier C does not port this">
+        The footprint solve decides the carve, stage order and crossings in one solve (C2). Planner + resolver placed 0 of
+        132 carve-requiring benchmark cases; footprint + resolver decided 127. The planner is kept here because blaze still
+        runs it at runtime, and Tier C should agree with it on whether a carve exists (open question 8).
+      </Callout>
       <Text tone="secondary">
         plan_ring_carve works on whole host slices, because _collect_submeshes needs every rank's chips in exactly one slot.
         Every rank runs it alone and must reach the same plan, so slices are ordered by geometry, never by rank.
@@ -3166,28 +3674,6 @@ function MapperExamples() {
         <CodeCard path="plan_ring_carve, a 4x8 stage" mode="plain" language="text" src={CARVE_D} />
       </Grid>
 
-      <H3>E. A fork (plan_fork_carve)</H3>
-      <Grid columns={fit(380)} gap={20} align="start">
-        <SliceMap
-          stages={[
-            { mesh: 0, from: 2, to: 2, label: "R" },
-            { mesh: 0, from: 3, to: 3, label: "X0" },
-            { mesh: 1, from: 3, to: 3, label: "X1" },
-            { mesh: 1, from: 2, to: 2, label: "X2" },
-            { mesh: 0, from: 1, to: 1, label: "Y0" },
-            { mesh: 0, from: 0, to: 0, label: "idle", idle: true },
-            { mesh: 1, from: 0, to: 1, label: "idle", idle: true },
-          ]}
-          cables={[
-            { a: 0, b: 0, kind: "unused" },
-            { a: 2, b: 2, kind: "required" },
-            { a: 3, b: 3, kind: "required" },
-          ]}
-          host={{ from: [0, 1], to: [0, 2], label: "Y0 > R over host" }}
-        />
-        <CodeCard path="plan_fork_carve, router plus two branches" mode="plain" language="text" src={CARVE_E} />
-      </Grid>
-
       <H3>F. Stages wider than a rank, on one mesh</H3>
       <Text tone="secondary">
         A separate setup, galaxy4x1, as in blaze's single_bh_galaxy_4x1_slices MGD. Each rank owns a full-height 4x1 column,
@@ -3266,11 +3752,15 @@ function MapperExamples() {
           ["mixed4 with s0 4x4", "0", "input-infeasible: one rank must drive stage 0"],
           ["only one cable, A0-B0", "2", "leaf pruning removes every slice"],
           ["an open chain, no loopback", "before 0", "plan_carve refuses; give it a submesh_shape"],
-          ["a huge fabric", "3", "budget-exhausted; Tier C treats it as unknown and accepts"],
+          ["a huge fabric", "3", "budget-exhausted (every 8x8 or larger grid in the benchmark); the footprint decides these in seconds"],
         ]}
       />
 
-      <H2>Examples: carve paths</H2>
+      <H2>Examples: blaze&apos;s runtime carve paths</H2>
+      <Text tone="secondary">
+        What blaze does at runtime on the running examples. Tier C does not try these paths; its one position graph covers
+        all of them (except a stage smaller than a host slice, open question 15).
+      </Text>
       <Grid columns={fit(420)} gap={20} align="start">
         <CodeCard path="slots to submeshes (planned carve, mixed4 on (P, R))" mode="plain" language="text" src={COLLECT} />
         <Stack gap={8}>
@@ -3313,7 +3803,6 @@ function MapperExamples() {
           ["a cover whose only alignment cuts s0 > s1", "skipped, even if s0 > s1 is declared RELAXED: stage 0's outgoing edge stays on fabric"],
           ["a joint between chains inside a 4x4 stage", "skipped: a wide stage cannot be split by a host hop"],
           ["pod8 with a RELAXED edge", "HostEdgePlanError (slices not uniform), not caught: reject"],
-          ["a fork with a two-slice router", "ForkShapeUnsupported: use the all-STRICT paths"],
           ["all fabric already, single-slice stages", "no plan; the resolver places it as for an all-STRICT pipeline"],
           ["every edge RELAXED", "cover 1's cut is allowed too; cover 2 still wins, because it cuts the loopback"],
         ]}
@@ -3389,7 +3878,6 @@ function MapperExamples() {
         rows={[
           ["mixed4 tiled 4x2 on both meshes", "s1 finds nothing with 16 chips"],
           ["mixed4 tiled 4x4 on both meshes", "s0 finds nothing with 8 chips"],
-          ["a 1x2 router as stage 0 with 3 edges", "3 + 2 = 5 links against 2 chips x 2 = 4 slots"],
           ["a ring stage on A3 or B3 in mixed4 on (P, R)", "one neighbouring submesh: skipped before any link search"],
           ["harness core-pool overrides", "not in the MGD; Tier C can accept what runtime rejects"],
         ]}
@@ -3523,10 +4011,9 @@ function BindingExamples() {
       <Table
         headers={["Binding edge case", "What happens"]}
         rows={[
-          ["count 3, spare on A0-B0 only", "R takes two, the fill takes the spare; spread order changes nothing"],
-          ["count 3, spare on A3-B3", "the spread fill takes A3-B3 first: a new slice pair, more cycles for blaze (example C)"],
+          ["count 3", "R takes two, the fill takes one spare in today's order"],
           ["count 1", "R needs 2 links: over budget, the seating is rejected (Tier B already rejects this MGD)"],
-          ["phase 0 cannot place a cable in R", "first version: control-plane init fails naming the link; with part 11, the mapper rejects the seating"],
+          ["phase 0 cannot place a cable in R", "first version: the check after the broadcast fails on every rank, naming the channel; with part 11, the mapper rejects the seating"],
           ["STRICT device-level connections with pins on A0 and A3", "the candidates are the pinned cables; mixed4 rejects (example B); nothing to choose"],
         ]}
       />
@@ -3564,11 +4051,12 @@ function OverviewTab() {
         </Callout>
         <Callout tone="warning" title="Never eliminate early">
           Tiers A and B and Plan 1 reject only what is impossible for every stage-to-mesh split and every chip layout. Tier C
-          rejects only when every carve path fails.
+          is the one exception, by choice: it checks one carve per seating, so a seating whose first carve fails the resolver
+          is rejected even if another carve would pass. No benchmark case did (101 of 101 first carves passed; open question 24).
         </Callout>
         <Callout tone="neutral" title="Use the builder's code">
-          Reuse the C++ resolver as-is, port the carve planner, share the inter-mesh binding rule with the control plane. One
-          rule per language, parity-tested.
+          Reuse the C++ resolver as-is for every layout rule. The carve comes from the footprint solve; blaze&apos;s planner stays
+          the runtime reference. C1 reads inter-mesh cables from the PSD (P7); the policy plan's shared candidate table is a later step (P16).
         </Callout>
       </Grid>
       <RunningExamples />
@@ -3704,8 +4192,8 @@ stages { id: "s8" shape { dims: [ 1, 2 ] } }
           Not in the first version: every edge is STRICT and there is no policy field. This is the design for M5 (P14, P11).
         </Callout>
         <Text tone="secondary">
-          Each edge says whether it must ride the fabric; the words match channels policy. STRICT is the default (enum value
-          0): an edge with no policy is STRICT, and only edges marked policy: RELAXED may go over host. Every edge STRICT is blaze's
+          Each edge says whether it must ride the fabric; the words match channels policy. STRICT is the default (the field is optional, as on
+          channels): an edge with no policy is STRICT, and only edges marked policy: RELAXED may go over host. Every edge STRICT is blaze's
           placement="strict" and every edge RELAXED is placement="flexible"; a mix, such as a STRICT ring whose only RELAXED edge
           is the loopback, is what neither mode can say. There is no HOST value: an edge that always goes over host needs no
           link, so to the mapper it is RELAXED. Blaze's Edge carries the same policy, so the MGD and the runtime graph agree.
@@ -3716,10 +4204,7 @@ stages { id: "s8" shape { dims: [ 1, 2 ] } }
             mode="plain"
             language="protobuf"
             src={`
-enum EdgePolicy {
-  STRICT = 0;    // must ride a fabric link (default)
-  RELAXED = 1;   // fabric if the placement allows, else host MPI
-}
+// PipelineEdge: optional Policy policy = 3 (the enum channels uses); omitted = STRICT
 
 edges { src: "s0" dst: "s1" }                    # STRICT
 edges { src: "s1" dst: "s2" }                    # STRICT
@@ -3732,20 +4217,18 @@ edges { src: "s3" dst: "s0" policy: RELAXED }    # may go over host`}
               ["Tier B crossing rules", "rides a declared connection, within its channels", "left out"],
               ["Plan 1 k_AB", "counted", "not counted"],
               ["Tier C", "a fabric link in the layout", "the host-cut planner may cut it; each fabric chain resolved alone"],
-              ["Fork router degree", "STRICT return: 2 router neighbours", "RELAXED return or dead end: 1"],
             ]}
           />
         </Grid>
         <Callout tone="neutral" title="RELAXED is allowed on every edge">
           An MGD stage does not have to map onto a blaze stage yet, so the MGD does not restrict where RELAXED goes. Tier B and
-          Plan 1 leave every RELAXED crossing out. Tier C mirrors blaze's host-cut planner, which never cuts two edges, so a
-          RELAXED one still needs a fabric link: stage 0's outgoing edge (_group_walk skips 0 in cuts; stage 0's rank drives
-          inference and cannot pump), and the router's edge into each branch (_find_branches asserts a fabric neighbour; the
-          router sends through its d2d_exchange). A branch's return to the router may go over host.
+          Plan 1 leave every RELAXED crossing out. Tier C mirrors blaze's host-cut planner, which never cuts stage 0's
+          outgoing edge, so a RELAXED one there still needs a fabric link (_group_walk skips 0 in cuts; stage 0's rank drives
+          inference and cannot pump).
         </Callout>
         <Callout tone="info" title="Note: rules that might be good to add">
           Once MGD stages map onto blaze stages, Tier A could reject RELAXED where blaze can never carry the edge over host:
-          stage 0's outgoing edge, a router's edge into a branch, and any edge of an open chain (graph.py raises "host edges are
+          stage 0's outgoing edge, and any edge of an open chain (graph.py raises "host edges are
           only supported on a looped-back ring"). Tier B and Plan 1 would then count those edges as STRICT, which prunes more.
         </Callout>
       </Stack>
@@ -3795,16 +4278,12 @@ edges { src: "s3" dst: "s0" policy: RELAXED }    # may go over host`}
           Every edge is STRICT in the first version. RELAXED (later): any edge may be RELAXED; Tier A will not restrict where.
         </Text>
         <Callout tone="info" title="NOTE: Tier A does not limit stage topology">
-          In-degree, out-degree, how many stages have in-degree 0, and whether a branch is a chain are all accepted. The MGD
-          does not identify which stage is the router yet. Once it does, the graph can be constrained to blaze's shape: one
-          router, each branch a chain, and at most two branches (_find_branches builds exactly two; fork_structure accepts
-          any number). Until then a graph blaze cannot build still passes Tier A and fails at build time.
+          In-degree, out-degree, how many stages have in-degree 0, and whether a branch is a chain are all accepted. A graph
+          blaze cannot build still passes Tier A and fails at build time.
         </Callout>
         <Callout tone="warning" title="Dead-end branches are allowed">
-          A branch may end without returning to the router. Tier B and the carve planner place it like a host-return branch:
-          an open path from a router neighbour, using 1 router neighbour instead of 2. TODO (blaze): fork_structure and
-          _find_branches both reject a branch with no return today, so until they accept it such a descriptor passes Tiers A
-          to C and fails at build time.
+          A branch may end without an edge back. Tier A accepts that. A graph blaze cannot build still passes Tier A and
+          fails at build time.
         </Callout>
       </Stack>
 
@@ -3836,15 +4315,15 @@ function MapperTab() {
         <Table
           headers={["Step", "Does", "Outputs", "First version", "Later (optional)"]}
           rows={[
-            ["C1. Build the physical pipeline graph", "candidates, host slices, adjacency, carve paths -> slots", "one chip-level graph per carve path and cycle", "every STRICT carve path (P5, P6, P7, P8)", "host-cut path for RELAXED edges (P11)"],
-            ["C2. Pipeline solve", "the resolver solves the pipeline graph onto a C1 graph", "layout and R within each demand, or a reason", "resolver, demand check, tight-mesh segment test and colour pruning; no node budget (P4, P8, P9)", "per-pair link budget inside the resolver"],
+            ["C1. Build the physical pipeline graph", "candidates, host slices, adjacency -> one position graph and its constraints", "one position graph per seating, with chip-level link tables", "every STRICT edge (P5, P6, P7, P8)", "RELAXED edges as soft edges in the same solve (P11)"],
+            ["C2. Pipeline solve", "footprint solve picks the carve, stage order and crossings; the resolver checks chip collisions; R recorded as exact channels", "carve, layout and R within each demand, or a reason", "one solve on the existing API (completeness as cardinality constraints, conflict_cap); pre-checks; the resolver on that one carve; any failure fails the seating; per-stage misfits filtered in C1 (P5, P8, P9)", "the demand as a crossing cap inside the encoding"],
             ["C3. On success", "emit the mapping and publish R", "mapping, plan, get_pipeline_required_links()", "phase 0 and fill in the control plane (P9)", "phase 0 in the mapper (policy plan part 11)"],
             ["C4. On failure", "constraints for the next solve", "exit-node retry, then exclude_mapping(seating)", "seating exclusion, unique_shapes off, cap (P8); exit-node retry (P15)", "seat-pair clauses (P13); constraints before the first solve (P10)"],
           ]}
         />
         <Callout tone="info" title="Rule: do not commit to a carve before it is needed">
           A different intra-mesh layout or a different set of bound cables can make a different carve work. So C1 builds
-          its graphs over every cable that could be bound, not a binding fixed in advance, and the binding follows the solve (R is
+          its one position graph over every cable that could be bound, not a binding fixed in advance, and the binding follows the solve (R is
           bound first). A constraint C4 derives from a failure only steers that seating's retry. Anything added before the
           intra-mesh or master solve may only state what every carve agrees on (minimum crossings, union of boundary slices). A
           reject constrains the seat set, never one mesh on one seat.
@@ -3858,13 +4337,13 @@ function MapperTab() {
       </Stack>
       <Grid columns={fit(380)} gap={20} align="start">
         <BindingPiece
-          title="New: candidates per seating"
+          title="New: inter-mesh cables per seating"
           tag="C1: P7, P8"
-          what="C1 reads its inter-mesh cables from the policy plan's candidate table, so it sees exactly what the pairing may bind: links that are up, on allowed cable types, between the two mapped meshes, on requested exit nodes when the connection is device-level."
+          what="C1 reads the cables between two mapped meshes straight from the PSD (inter_mesh_cables, P7), as ExitNodeConnections: both ends mapped onto the two meshes, requested exit nodes when the connection is device-level, one destination chip per source chip. Cable type and link state are not filtered yet; that comes with the policy plan's candidate table (P16, later)."
           todo={[
-            "After intra-mesh success, call collect_inter_mesh_candidates(mesh_graph, psd, full.fabric_node_to_asic, options) with the same options as the final call (down-link hashes, PortTypeRules).",
-            "Build the resolver's DirectLinks from it: one LinkPair per candidate link, ordered by best tier then chip id, so the first-found layout crosses on the best cables.",
-            "Keep the table with the accepted seating; the control plane uses the same one (part 9).",
+            "After intra-mesh success, call inter_mesh_cables(psd, full.fabric_node_to_asic, a, b) for each mesh pair the MGD connects.",
+            "Per position-graph edge, keep the links behind it and each inter-mesh link's ExitNodeConnections; C2 builds DirectLinks from them for the chosen rectangles, ordered by chip id.",
+            "Later (P16): swap in collect_inter_mesh_candidates, shared with the control plane, with tiers and down links.",
           ]}
         />
         <BindingPiece
@@ -3874,35 +4353,117 @@ function MapperTab() {
           todo={[
             "Budget: links in R on a pair <= strict + relaxed; R uses the STRICT part first, then RELAXED.",
             "RELAXED and BEST_EFFORT pairs with no link in R keep the policy plan's rules, zero-link included; pairs with links in R need them.",
-            "Check in C2 after the resolver; over budget fails that graph with pipeline_binding and C2 moves to the next C1 graph.",
-            "If it fires in practice: an optional per-mesh-pair link budget in LinkSearch (default none, so Tier D is unchanged).",
+            "Check in C2 as soon as R is recorded. Over budget fails the seating (pipeline_binding, the mesh pair in the reason), and C4 runs.",
+            "If it fires in practice: a per-mesh-pair crossing cap inside the footprint encoding, so over-demand carves are never offered.",
           ]}
         />
       </Grid>
       <Stack gap={8}>
-        <H2>C2 cost: the resolver on layouts that do not exist</H2>
+        <H2>C2: one solve, one check, one C1 graph</H2>
+        <Text tone="secondary">
+          There is one position graph and one carve per seating. C2 solves once: the carve is one rectangle per stage, the
+          stage order and the crossings. The resolver checks that carve for chip collisions; R is recorded as exact channels
+          and checked against each connection&apos;s demand. Any failure fails the seating and C4 runs; C2 never asks for a
+          second carve.
+        </Text>
         <Table
-          headers={["Case (rings of single-slot stages, 4x2-chip slots)", "Layout exists?", "Resolver", "Plain CaDiCaL", "Segment test"]}
+          headers={["Part", "What it does"]}
           rows={[
-            ["one 4x8 grid, 32 stages", "yes", "0.7 ms", "5 ms", "passes, resolver runs"],
-            ["one 8x8 grid, 64 stages", "yes", "4.4 ms", "35 ms", "passes, resolver runs"],
-            ["odd 5x5 grid, 25 stages", "no", "2.5 s", "2 ms", "rejects: odd grid, no ring"],
-            ["two 4x4 meshes, 32 stages, cables on same-colour slices", "no", "3.4 s", "3.0 s", "rejects: same-colour ends"],
-            ["two 4x8 meshes, 64 stages, same", "no", "over 120 s", "over 230 s", "rejects: same-colour ends"],
+            ["Pre-checks", "area, lattice count, colour and segment test on tight 1-cable meshes; ruled-out cables never enter the position graph"],
+            ["Solve", "target = pipeline, global = position graph; required: stage to positions of its shape; resource: position to covered slices; Auto = SAT"],
+            ["Solver changes", "none: required, resource and cardinality constraints, one session next() under conflict_cap; topology_solver_sat.cpp gets no pipeline or session code"],
+            ["Check", "resolver once, on one submesh per chosen rectangle; chip counts force its placement, so its link step is the chip-collision check"],
+            ["R", "from the resolver's resolved_edges, mapped to the exact candidate channel (IMPORTANT, below)"],
+            ["Cap hit", "reads as no carve with today's API; the seating fails and C4 runs (open question 13)"],
+          ]}
+        />
+        <Callout tone="warning" title="IMPORTANT: record the exact channel each crossing uses, and bind that channel">
+          The mapping only says two rectangles touch through some cable; with several cables between them it does not pick
+          one. The resolver&apos;s link step does, and resolved_edges gives the exit and entry chip. C2 maps that chip pair to its
+          PSD ExitNodeConnection (lowest tier, then lowest source ETH channel) and appends it to R as is; its
+          std::hash&lt;ExitNodeConnection&gt; is the hash the pairing and its broadcast use. C3 publishes it through get_pipeline_required_links(),
+          and phase 0 of pair_logical_intermesh_ports binds exactly those channels before any other. Binding another channel,
+          even between the same two slices, can move an endpoint onto a chip the runtime&apos;s resolver rejects. A recorded
+          channel that cannot be bound is a hard error naming the pipeline edge, never a silent substitute.
+        </Callout>
+        <H2>When C2 fails</H2>
+        <Table
+          headers={["Failure", "Found by", "Result"]}
+          rows={[
+            ["stage s cannot fit on position p on its own (endpoints exceed p's core slots; stage 0's host I/O does not fit)", "C1, before the solve", "p left out of s's required positions; never offered"],
+            ["a pre-check fails", "before the solve", "seating fails: C4, with the mesh and reason"],
+            ["no carve (or the conflict cap hit)", "the solve", "seating fails: C4"],
+            ["the resolver throws on the carve", "the check", "seating fails: C4, the message is the reason"],
+            ["R over demand on (A, B)", "demand check", "seating fails: C4, pipeline_binding and the pair"],
           ]}
         />
         <Text tone="secondary">
-          Rule: fail fast, no node budget. Every C2 run ends in a layout or a proof, and a slower average is fine. Neither
-          solver proves the failures fast on its own; the exact segment test does. When a mesh is fully used, the pipeline
-          runs through it between two cable chips, and on a full rectangular grid that path has an O(1) existence test
-          (Itai-Papadimitriou-Szwarcfiter: colours plus a few cases on grids 1 to 3 wide). The resolver applies the same
-          test in remaining_stages_can_connect once a mesh's free slots exactly match its unplaced stages.
+          Why one carve is enough: the resolver accepted the first carve on all 101 benchmark cases
+          (results/rerun_2026-10-27/footprint_then_resolver, at most 4 ms each). The one case built to fail it
+          (chip_level/reject_demo) has no passing carve at all. The cost: a seating can be lost when another carve on it would
+          pass. If a real MGD hits that, the same session gives a second carve with exclude_mapping(carve) and next(), still the
+          existing API (open question 24).
         </Text>
+        <H2>Speed: blaze&apos;s carve planner + resolver against footprint + resolver</H2>
+        <Table
+          headers={["Group (60 s cap)", "Cases", "Planner + resolver: placed", "Footprint + resolver: decided", "Resolver after footprint, worst"]}
+          rows={[
+            ["original carve cases", "17", "0 (17 budget-exhausted)", "16", "0.029 s"],
+            ["heterogeneous sweep, 60 to 95% fill", "30", "0 (30 budget-exhausted)", "30", "0.001 s"],
+            ["single mesh, no 1x1 stages", "45", "0 (stage-0 rule; off: 2)", "43", "0.029 s"],
+            ["heterogeneous multi-mesh", "12", "0 (stage-0 rule; off: 0)", "12", "0.001 s"],
+            ["multi-mesh, no 1x1 stages", "28", "0 (stage-0 rule; off: 0)", "26", "0.036 s"],
+            ["all", "132", "0", "127", "0.036 s"],
+          ]}
+        />
+        <Table
+          headers={["Case (seconds, carve + resolver)", "Planner + resolver", "Footprint + resolver"]}
+          rows={[
+            ["4x4: 1x1, 3x 2x2, 1x1", "0.000 + 0.000", "0.000 + 0.000"],
+            ["4x8: 1x1, 2x4, 2x4, 2x2, 1x1", "0.009 + 0.000", "0.001 + 0.000"],
+            ["4x8 ring of 32 x 1x1", "0.038 + 0.001", "0.004 + 0.001"],
+            ["4x8 ring of 16 x 1x2 (planner stage-0 rule off)", "0.036 + 0.000", "0.002 + 0.000"],
+            ["4x4: 1x1, 3x 2x2 (feasible)", "wrong reject: no-cycle-of-length-13", "0.000 + 0.000"],
+            ["4x6 and 4x8: 1x1, 2x2 ring, 1x1 (feasible)", "wrong reject: no-alignment", "0.001 + 0.000"],
+            ["8x8 fill: 1x1, 15x 2x2, 3x 1x1", "budget exhausted", "0.026 + 0.000"],
+            ["16x16: 1x1, 62x 2x2, 1x1", "budget exhausted", "0.13 + 0.004"],
+            ["random 8x8, 30 stages", "budget exhausted", "0.60 + 0.001"],
+            ["random 8x16, 37 stages", "budget exhausted", "5.6 + 0.001"],
+            ["4 meshes of 4x8, 1 cable per pair, ring of 112 x 1x1", "budget exhausted", "9.9 + 0.020"],
+            ["7x7: 1x1, 10x 2x2 (infeasible)", "budget exhausted, no verdict", "no, 2.1"],
+            ["5x5 ring of 25 x 1x1 (odd, infeasible)", "budget exhausted, no verdict", "no, 0.003"],
+          ]}
+        />
+        <Callout tone="info" title="Use footprint + resolver">
+          The planner only completes on small rings of columns, where both take milliseconds. On grid-shaped meshes it has no
+          degree-2 chains to contract, so its cycle search runs out of budget on every 8x8 or larger grid and every multi-mesh
+          case; its stage-0 rule rejects every case without a 1x1 stage, and its grouping wrongly rejects 16 cases the
+          footprint carves in milliseconds. In the footprint path the carve is the whole cost: the resolver checks every
+          carve in at most 36 ms.
+        </Callout>
+        <Text size="small" tone="tertiary">
+          Planner: blaze&apos;s plan_ring_carve ported to C++ (topo/carve_planner_port.hpp, blaze&apos;s 200k-expansion and 64-cycle
+          budgets). Footprint: with resource completeness. Source: REPORT.md section 5.3 and
+          results/rerun_2026-10-27/carve_comparison.md, one machine.
+        </Text>
+        <H2>The check: resolver inputs</H2>
+        <Table
+          headers={["Resolver argument", "What C2 builds for the chosen rectangles", "Rule it enforces"]}
+          rows={[
+            ["nodes", "every stage name, isolated stages included", "every edge endpoint listed, no duplicates"],
+            ["edges", "(src, dst, is_loopback); Tier A's conversion marks one loopback per cycle", "non-loopback edges form a DAG"],
+            ["submesh_chips", "per rectangle: (mesh_id, chip_id, row, col)", "(row, col) slot-local, from the rectangle's own origin"],
+            ["node_chip_counts", "rows x cols of each stage's shape", "forces each stage onto its own rectangle"],
+            ["node_pipeline_core_counts", "blaze's _pipeline_core_defaults, or empty", "empty: 1 slot per chip on 8+ chips, 2 on smaller"],
+            ["direct_links", "per ordered rectangle pair, every candidate LinkPair between them", "directed per key: insert both {i, j} and {j, i}"],
+          ]}
+        />
         <Text tone="secondary">
-          Not covered: a fully used mesh with dead slots (Hamiltonian path is NP-complete with holes). None in the repo today.
-          Proposed fallback is a hard fail after 10 s naming the mesh, never an undecided pass (open question 13).
+          Fail fast: every C2 run ends in a carve or a proof. The tight 1-cable cases a solver is worst at are decided by the
+          segment test before the solve (Itai-Papadimitriou-Szwarcfiter: colours plus a few cases on grids 1 to 3 wide). Not
+          covered: tight meshes with dead slices, and tight multi-mesh rings with several cables per pair; there the
+          session&apos;s conflict_cap bounds the solve, and a capped solve reads as no mapping with today&apos;s API (open question 13).
         </Text>
-        <Text size="small" tone="tertiary">Source: standalone benchmark of resolve_pipeline_placement copied verbatim; CaDiCaL encoding of stage-to-slot placement only.</Text>
       </Stack>
 
       <Stack gap={10}>
@@ -3925,26 +4486,23 @@ function MapperTab() {
       </Stack>
 
       <Stack gap={10}>
-        <H2>Carve paths (step 5)</H2>
+        <H2>Blaze&apos;s carve paths and the one position graph</H2>
         <Text tone="secondary">
-          Blaze turns meshes into submeshes in one of these ways. Tier C tries every path blaze has for the MGD and accepts if
-          any succeeds.
+          Blaze turns meshes into submeshes in one of these ways. Tier C does not try them one by one: C1 builds one position
+          graph per seating (every rectangle each stage shape fills), which covers all of them, and C2 solves it once.
         </Text>
         <CarvePaths />
         <Table
-          headers={["MGD", "every edge STRICT (first version)", "some edge RELAXED (later)"]}
+          headers={["MGD", "Blaze at runtime", "Tier C, every edge STRICT", "Tier C, some edge RELAXED (later)"]}
           rows={[
-            ["one mesh, every stage on one rank", "single-mesh tiling", "single-mesh tiling"],
-            [
-              "one mesh with a joint stage, or several meshes",
-              "planned carve, then per-rank tiling",
-              "host cuts on the RELAXED edges, then the plan's carve or tiling; a fork the planner cannot handle falls back to the all-STRICT paths",
-            ],
+            ["one mesh, every stage on one rank", "single-mesh tiling", "one footprint solve", "same, RELAXED edges soft"],
+            ["one mesh with a joint stage, or several meshes", "planned carve (or per-rank tiling with submesh_shape)", "one footprint solve", "same, RELAXED edges soft"],
+            ["a stage smaller than a host slice", "per-rank tiling, first tile", "not modelled; Tier B rejects", "same (open question 15)"],
           ]}
         />
         <Text size="small" tone="tertiary">
           Blaze's multi_mesh flag is set for more than one mesh or any stage spanning several ranks, so a galaxy with 4x1 rank
-          columns and 4x2 stages takes the planned carve (carver example F).
+          columns and 4x2 stages takes blaze's planned carve (3.2, example F).
         </Text>
       </Stack>
 
@@ -3953,13 +4511,12 @@ function MapperTab() {
         <Table
           headers={["Piece", "Today", "Plan", "PR"]}
           rows={[
-            ["Graph-layout resolver", "resolve_graph_layout_with_connections (C++)", "use as-is, add structured failure", "P4"],
-            ["Submesh links", "discover_submesh_links (C++, asks the control plane)", "pure core + link callback", "P4"],
+            ["Graph-layout resolver", "resolve_graph_layout_with_connections (C++)", "use as-is; a throw rejects the carve", "P8"],
+            ["Submesh links", "discover_submesh_links (C++, asks the control plane)", "not needed: C2 supplies direct_links", "-"],
             ["Host-rank chip ranges", "MeshGraph::get_coord_range, coordinate_to_chip", "use as-is", "P8"],
-            ["Row-major tiling", "MeshDeviceImpl::create_submeshes (needs a device)", "shared pure helper", "P6"],
-            ["Carve planner", "carve_planner.py", "C++ port, golden parity", "P5"],
-            ["Slot pick + joint collapse", "_collect_submeshes (Python)", "rebuild, small", "P6"],
-            ["Host-cut planner (RELAXED, later)", "host_edge_planner.py", "C++ port; cuts only RELAXED edges", "P11"],
+            ["Carve planner", "carve_planner.py", "replaced by the footprint solve (not ported)", "P5"],
+            ["Slots from the carve", "_collect_submeshes (Python)", "rebuild, small: one slot per chosen rectangle", "P6"],
+            ["Host-cut planner (RELAXED, later)", "host_edge_planner.py", "replaced by soft edges in the same solve", "P11"],
             ["Per-chain resolve (RELAXED, later)", "_resolve_chains_separately (Python)", "loop over the resolver", "P11"],
             ["Inter-mesh binding", "pair_logical_intermesh_ports (control plane)", "pure helpers, shared", "P7"],
           ]}
@@ -3967,16 +4524,18 @@ function MapperTab() {
       </Stack>
 
       <Stack gap={8}>
-        <H2>Carve planner behaviour the port must keep (or change on purpose)</H2>
+        <H2>Where blaze&apos;s planner and the footprint differ</H2>
         <Table
-          headers={["Behaviour in blaze", "Tier C does"]}
+          headers={["Behaviour in blaze's planner", "Footprint solve in Tier C"]}
           rows={[
-            ["Returns the first aligned cycle; never retries if the resolver then fails", "tries further cycles until one resolves (existence). Gap noted, open question 8"],
-            ["budget-exhausted after 200,000 expansions", "treats it as unknown: accept and let blaze decide"],
-            ["Adjacency: one confirmed link makes two slices adjacent", "same; the resolver gives the exact answer"],
+            ["Returns the first aligned cycle; never retries if the resolver then fails", "the same: one carve, checked once (open question 24)"],
+            ["Stage 0 exactly one slice", "stage 0 on any position with room for host I/O (open question 14)"],
+            ["First-fit grouping: no-alignment on 16 feasible benchmark cases", "exact"],
+            ["budget-exhausted after 200,000 expansions (every 8x8+ grid)", "SAT with resource completeness (cardinality constraints) and conflict_cap"],
+            ["Adjacency: one confirmed link makes two slices adjacent", "same, from the candidate links; R records the exact channel"],
             ["Stage rectangle must equal the declared (rows, cols)", "same, no transpose"],
-            ["Unused slices become idle filler slots; plan must cover every chip", "same"],
-            ["crc32 digest exchanged across ranks", "not needed: Tier C plans centrally"],
+            ["Unused slices become idle filler slots", "same"],
+            ["crc32 digest exchanged across ranks", "not needed: the mapper solves centrally"],
           ]}
         />
       </Stack>
@@ -3997,22 +4556,21 @@ function MapperTab() {
             ["schema pipeline_descriptors (1.3)", "MGD proto", "absent field; existing textprotos parse unchanged"],
             ["merge (1.5)", "MeshGraphDescriptor::merge", "merged proto byte-identical to today's"],
             ["Tier A (2.1)", "MGD constructor", "loops over zero pipelines"],
-            ["Tier B (2.2)", "MGD constructor", "PipelineFeasibility not built; pipeline_mapping_constraints() is null"],
+            ["Tier B (2.2)", "MGD constructor", "check_pipeline_feasibility not called; pipeline_mapping_constraints() is null"],
             ["stage-to-mesh, seat and exit helpers (2.2, 4.3)", "mapper helpers", "return without adding a constraint"],
             ["seat-graph edge drop for k_AB (4.3)", "build_sat_placement_seat_graph", "today's saturated_link_count edges"],
             ["unique_shapes (4.3)", "map_multi_mesh_to_physical, generate_rank_bindings --all-solutions", "true, as today"],
             ["exact check and SAT feedback (4, 4.3)", "MultiMeshSolutionEnumerator::next", "today's loop; no pipeline_* failure stage"],
             ["required links R and budget check (4.2)", "mapper", "R empty; no budget check"],
             ["phase 0 (4.2)", "pair_logical_intermesh_ports", "no required channel: today's phases"],
-            ["spread fill (4.2)", "fill order", "the policy plan's (tier, chip id) order"],
-            ["single-host phase 0 (4.2)", "generate_intermesh_connections_on_local_host", "nothing required: today's greedy, with the policy plan's table filter"],
+            ["single-host phase 0 (4.2)", "generate_intermesh_connections_on_local_host", "nothing required: today's greedy"],
             ["stage plan in rank bindings (4.4)", "generate_rank_bindings", "no stage fields written"],
           ]}
         />
         <Text tone="secondary">
-          Not gated, so it must be a pure refactor: the candidate table (policy plan, part 9) runs for every MGD, and that plan's
-          parity tests show identical AnnotatedIntermeshConnections. If P7 needs the interim gather helper, it lands on its own
-          with the same goldens before any pipeline logic uses it.
+          Nothing here changes the control plane&apos;s gather: P7 only reads the PSD inside the mapper, and only for MGDs with
+          a pipeline. Moving to the policy plan&apos;s candidate table (P16, later) is that plan&apos;s refactor, with its own parity
+          tests.
         </Text>
         <Text tone="secondary">
           Kill switch (proposed): TT_METAL_FABRIC_IGNORE_PIPELINE_DESCRIPTORS=1 in rtoptions makes the mapper treat the descriptor
@@ -4023,7 +4581,7 @@ function MapperTab() {
           headers={["Test", "Expect"]}
           rows={[
             ["every MGD in the repo (none has pipelines today), single-host and multi-host", "mapping, rank bindings and AnnotatedIntermeshConnections match main exactly"],
-            ["counter or test-only hook, no descriptor", "no PipelineFeasibility, no extra SAT clauses, no exact-check calls"],
+            ["counter or test-only hook, no descriptor", "no check_pipeline_feasibility or check_pipeline_seating call, no extra SAT clauses"],
             ["pipeline MGD with the kill switch", "same mapping as that MGD with pipeline_descriptors removed"],
           ]}
         />
@@ -4038,8 +4596,8 @@ const PIPELINE_GATE = `
 bool has_pipeline_descriptors() const;                                  // proto_->pipeline_descriptors_size() > 0
 const PipelineMappingConstraints* pipeline_mapping_constraints() const; // null when off
 
-// TopologyMapper, set once in the constructor from mesh_graph_.get_mesh_graph_descriptor()
-const PipelineFeasibility* pipeline_ = nullptr;                          // null when off`;
+// MultiMeshSolutionEnumerator, built once in the constructor from config.pipelines
+std::unique_ptr<const detail::PipelineProblem> pipeline_;              // null when off`;
 
 function SatTab() {
   return (
@@ -4056,7 +4614,7 @@ function SatTab() {
           rows={[
             ["1. Exit-node retry", "the same seating", "intra-mesh block on the exit-node slice signature, then back to C1", "first version (P15), at most 4 per seating"],
             ["2. Exclude the seating", "the SAT placement", "exclude_mapping(seating), then the next seating", "first version (P8)"],
-            ["later: seat-pair clause", "the SAT placement", "not seat_a and seat_b together, when proven for every carve", "P13"],
+            ["later: seat-pair nogood", "the SAT placement", "add_seat_pair_nogood: not mesh_a on seat_a with mesh_b on seat_b (and twins), when proven for every carve", "P13"],
             ["later: before the first solve", "every seating", "exit-node and seat constraints every carve agrees on", "P10, only if measured"],
           ]}
         />
@@ -4067,7 +4625,7 @@ function SatTab() {
             what="A C2 failure is exact for the layout, not the seating: another layout puts the cabled ASICs under other host slices. Record each boundary mesh's slice signature (cabled exit ASIC -> slice) and re-solve that mesh's intra-mesh problem with the signature blocked, keeping the other meshes fixed."
             todo={[
               "Skip when hard rank bindings or MGD pins fix every cabled ASIC's slice (runtime with every host bound): the signature cannot change.",
-              "New MappingConstraints API add_forbidden_joint_placement: one indicator per (ASIC, slice), one clause that not all repeat.",
+              "Block with an existing cardinality constraint on the fresh intra-mesh solve: at least one exit ASIC moves to another slice. No new solver API.",
               "Blocks are per retry, not kept: once another mesh's layout changes, an old signature may work again.",
               "At most kMaxLayoutRetries (proposed 4) per seating, then move 2.",
             ]}
@@ -4077,13 +4635,13 @@ function SatTab() {
             tag="P10"
             what="Before C1, on every seating, steer the intra-mesh solve's exit nodes, only with what every carve agrees on (Tier B's minimum k and union of boundary slices); k = 0 adds nothing."
             todo={[
-              "apply_pipeline_exit_constraints: at least ceil(k / links per exit ASIC) nodes of boundary_slices(m, n) on ASICs cabled toward n.",
+              "Through the generic ExtraMappingConstraints::intra_mesh hook: at least ceil(k / links per exit ASIC) nodes of boundary_slices(m, n) on ASICs cabled toward n.",
               "Only if P8's rejection counts call for it.",
             ]}
           />
         </Grid>
         <Callout tone="info" title="Decision">
-          First version: Plan 2 (P8) and the exit-node retry (P15). After intra-mesh success, run C1 and C2; when every graph fails and the exit-node retry (P15) cannot help, exclude_mapping(seating)
+          First version: Plan 2 (P8) and the exit-node retry (P15). After intra-mesh success, run C1 and C2 (one carve); when C2 fails and the exit-node retry (P15) cannot help, exclude_mapping(seating)
           blocks that seat set in the live master session and the loop draws the next seating. Plan 1 (P10) is a later,
           optional speed-up, added only if the measured rejection counts call for it. It must never remove a seating Plan 2
           would accept, so it changes speed, not answers.
@@ -4092,7 +4650,7 @@ function SatTab() {
           headers={["", "Option 1: pipeline in the SAT solve", "Option 2: check each seating, feed back"]}
           rows={[
             ["Solves", "one", "one master session; each rejected seating is blocked in place, no re-encode"],
-            ["Exact?", "no: only necessary conditions fit at seat level", "yes: the builder's carve planner and resolver on the real layout"],
+            ["Exact?", "no: only necessary conditions fit at seat level", "yes: the footprint solve and the builder's resolver on the real layout"],
             ["New code", "seat-graph edge drop, seat and exit constraints (P10)", "the check plus one exclude_mapping call in the existing loop (P8)"],
             ["Cost", "a larger master encoding", "one intra-mesh solve and one check per rejected seating"],
           ]}
@@ -4125,7 +4683,7 @@ function SatTab() {
             headers={["Failure attributed to", "Feedback"]}
             rows={[
               ["the seating as a whole (default)", "exclude_mapping(seating): block this seat set"],
-              ["one seat pair, proven for every carve", "seat-pair clause (new API, P13)"],
+              ["two meshes' seats, proven for every carve", "add_seat_pair_nogood (P13)"],
               ["a seat no carve can use in any seating", "forbid that seat for every mesh"],
               ["never", "add_forbidden_constraint(mesh on seat)"],
             ]}
@@ -4181,19 +4739,20 @@ function BindingPiece(props: { title: string; tag: string; what: string; todo: s
 }
 
 const REQUIRED_LINKS_SRC = `
-// tt-metalium/experimental/fabric/pipeline_required_links.hpp (new)
-struct PipelineRequiredLink {
-    FabricNodeId src;  // exit node on the source mesh
-    FabricNodeId dst;  // entry node on the destination mesh
-    std::string pipeline, src_stage, dst_stage;  // for logs and failure messages
-};
-// Keyed by (lower mesh id, higher mesh id); both directions of an edge fold into one pair.
-using PipelineRequiredLinks = std::map<std::pair<MeshId, MeshId>, std::vector<PipelineRequiredLink>>;
+// No new type: R is the PSD's own ExitNodeConnection entries, one per crossing.
+// ExitNodeConnection = {src_exit_node, dst_exit_node (AsicID), eth_conn {src_chan, dst_chan, is_local, port_type}};
+// std::hash<ExitNodeConnection> is the connection_hash the pairing and the broadcast use.
+// FabricNodeIds come from the mapping; the pipeline edge is in PipelineEdgeLayout.
 
-const PipelineRequiredLinks& TopologyMapper::get_pipeline_required_links() const;
+// PipelineMappingResult
+std::vector<tt::tt_metal::ExitNodeConnection> required_links;   // R
 
-// Marks the channels of each required link, so the pairing binds them first.
-PortDescriptorTable to_port_descriptor_table(const InterMeshCandidates&, const PipelineRequiredLinks&);`;
+// TopologyMapper, every rank (broadcast with the chip info via exit_node_connection_to_proto)
+const std::vector<tt::tt_metal::ExitNodeConnection>& get_pipeline_required_links() const;
+
+// Rank 0 only: phase 0 binds these hashes first. No PortDescriptor change.
+AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(
+    const PortDescriptorTable& port_descriptors, const std::unordered_set<std::size_t>& required_hashes);`;
 
 function BindingTab() {
   return (
@@ -4211,7 +4770,7 @@ function BindingTab() {
           rows={[
             ["Required links R", "mapper, from C2's layout", "when C2 accepts", "new"],
             ["Phase 0 in the pairing", "control plane, pair_logical_intermesh_ports on rank 0", "control-plane init", "new"],
-            ["Fill order", "same", "after phase 0", "reused tier order, plus a new spread order"],
+            ["Fill order", "same", "after phase 0", "reused: today's order"],
             ["Single host", "generate_intermesh_connections_on_local_host", "control-plane init", "new"],
             ["Phase 0 inside the mapper", "mapper, resolve_inter_mesh_binding", "before emit", "later, with policy plan part 11"],
           ]}
@@ -4236,33 +4795,32 @@ function BindingTab() {
         <BindingCompare />
       </Stack>
       <Stack gap={8}>
-        <H2>Taken from the inter-mesh policy plan</H2>
+        <H2>Taken from the inter-mesh policy plan (later, P16)</H2>
         <Table
           headers={["Piece", "Policy plan part", "Used here for"]}
           rows={[
             ["get_inter_mesh_channel_demand(a, b): {strict, relaxed}", "3, 5", "the budget R must fit; Tier B's cap(A, B)"],
-            ["collect_inter_mesh_candidates(mesh_graph, psd, fabric_node_to_asic, options)", "9", "C1's candidate cables, once per seating"],
+            ["collect_inter_mesh_candidates(mesh_graph, psd, fabric_node_to_asic, options)", "9", "P16: replaces P7's inter_mesh_cables, once per seating"],
             ["cable-type filter and tier (PortTypeRules)", "6", "disallowed cables never reach C1; better tiers tried first"],
             ["PortDescriptor::tier and the tier sort in the pairing", "9", "the fill order after R"],
             ["resolve_inter_mesh_binding in the mapper (stretch)", "11", "later: phase 0 checked before the mapping is emitted"],
           ]}
         />
         <Text size="small" tone="tertiary">
-          Order of work: the policy PR and its part 9 land first, then P9 here. If P9 must go first, P7 lands an interim pure
-          gather helper with collect_inter_mesh_candidates&apos;s signature (question 10).
+          Order of work: this design does not wait for part 9. P7 reads the PSD itself and P9 binds R on today&apos;s gather;
+          P16 switches C1 to the candidate table once part 9 lands (question 10).
         </Text>
       </Stack>
       <Divider />
       <BindingPiece
         title="New: the required links R, and where they live"
         tag="P9"
-        what="R is, for each crossing edge in the layout's resolved_edges, the link it uses: exit chip on the source mesh, entry chip on the destination mesh. Not in the MGD (it depends on the seating and layout; pinning it would fix a carve before the solve), not in rank_bindings.yaml for the first version (the runtime mapper recomputes it). It is a mapper output, and a required flag on its channels in the table handed to the pairing."
+        what="R is, for each crossing edge in the layout's resolved_edges, the one ETH channel it uses: the PSD's ExitNodeConnection and its hash, the same hash the pairing and the broadcast use. It is not every bound link (intra-mesh edges are not in it; the pairing fills the rest of the count). Not in the MGD (it depends on the seating and layout), not in rank_bindings.yaml for the first version. It is a mapper output, broadcast with the chip info and passed to the pairing on rank 0 as a set of hashes."
         code={REQUIRED_LINKS_SRC}
         todo={[
           "Fill R at the end of C2 from the accepted layout; store it on the TopologyMapper with the mapping. Empty without a pipeline.",
-          "Add required to PortDescriptor, next to the policy plan's tier; set it in to_port_descriptor_table.",
-          "Write required_by: <pipeline>/<src_stage> -> <dst_stage> in inter_mesh_candidates.yaml.",
-          "Multi-host: rank 0 holds the table and runs the pairing; R is identical on every rank, only rank 0 consumes it.",
+          "Pass R's hashes to pair_logical_intermesh_ports on rank 0. No PortDescriptor change: other ranks' tables reach rank 0 as proto with only hash, src chip and dst chip.",
+          "Multi-host: gather on every rank, pair on rank 0, broadcast (mesh, port_id) pairs with the hash, each rank maps the hash to its ETH channel from its PSD. Every rank then checks that each hash in R was bound.",
         ]}
       />
       <Stack gap={8}>
@@ -4272,24 +4830,24 @@ function BindingTab() {
         </Row>
         <PhaseStrip />
         <Text tone="secondary">
-          Phase 0 takes every link with a required channel, places it with its pair&apos;s Z rule on its best-tier channel, and
-          counts it against the budget. Today&apos;s work-list then fills the rest. With no required links the output is
-          byte-identical to today. If phase 0 cannot place a link (direction owned toward another mesh, Z-ness, one peer per
-          direction, no ports), the first version fails at control-plane init naming the link and pipeline edge; it is rare,
-          since R is at most the requested count.
+          Phase 0 takes every chip pair holding a required hash, moves those hashes to the front so the budget trim keeps
+          them, places the link with its pair&apos;s Z rule and counts it against the budget. Today&apos;s work-list then fills
+          the rest. With no required links the output is byte-identical to today. Phase 0 never throws on rank 0 (the other
+          ranks are waiting for the broadcast); a required channel that was not placed, or not gathered because its link is
+          down, fails the check after the broadcast on every rank together, naming the channel and its two chips.
         </Text>
       </Stack>
       <Grid columns={fit(340)} gap={20} align="start">
         <BindingPiece
           title="New: fill order"
           tag="P9"
-          what="After phase 0, the policy plan's order: best cable tier first. With a pipeline, ties within a tier go to spread: round-robin over host-slice pairs, then chip id. Without a pipeline: (tier, chip id), so goldens do not move."
-          todo={["Sort key (tier, slice-pair round-robin, chip id) only with a pipeline descriptor (question 9)."]}
+          what="After phase 0, the remaining budget is filled in today's order, with or without a pipeline, so goldens do not move. Best cable tier first once the policy plan lands."
+          todo={["Tier first once the policy plan lands."]}
         />
         <BindingPiece
           title="New: single host"
           tag="P9"
-          what="generate_intermesh_connections_on_local_host is a separate greedy pass. The policy plan already filters it by the candidate table; it also needs phase 0."
+          what="generate_intermesh_connections_on_local_host is a separate greedy pass. It needs phase 0 (and, once the policy plan lands, its candidate-table filter)."
           todo={[
             "Place R first, then today's greedy; or route single host through the pairing (moves single-host goldens).",
             "Until then, warn that R is not guaranteed to be bound on single host.",
@@ -4314,7 +4872,7 @@ function BindingTab() {
             headers={["Step", "Where", "Ranks"]}
             rows={[
               ["Seating, carve, layout, R, budget check", "TopologyMapper (Tier C)", "all, identical"],
-              ["Candidate table", "TopologyMapper (policy plan, part 9)", "rank 0"],
+              ["Inter-mesh cables (C1)", "TopologyMapper, from the PSD (P7; part 9 table in P16)", "rank 0"],
               ["Phase 0, then fill", "ControlPlane, pairing", "rank 0"],
               ["Broadcast connections", "ControlPlane", "rank 0 to all"],
               ["validate_requested_intermesh_connections", "ControlPlane", "all"],
@@ -4324,8 +4882,9 @@ function BindingTab() {
         <Stack gap={8}>
           <H3>Gaps</H3>
           <Text tone="secondary">
-            At runtime the candidate table leaves out down links, so R never holds one. Offline runs (factory PSD) see every
-            cable as up, so the offline answer can be optimistic; the runtime mapper moves to another seating. STRICT
+            Until P16, C1 reads the PSD on rank 0, which has no link state, so R can name a down channel; the check after the
+            broadcast then fails on every rank (question 20). With the policy plan&apos;s candidate table (P16) down links are left
+            out at runtime. Offline runs (factory PSD) see every cable as up, so the offline answer can be optimistic. STRICT
             device-level connections pin exit chips, so there is nothing to choose; Tier C checks against the pins.
           </Text>
         </Stack>
@@ -4356,17 +4915,30 @@ function QuestionsTab() {
         <Table
           headers={["#", "Question"]}
           rows={[
-            ["1", "Adjacency parity: do bound inter-mesh plus routed intra-mesh links match get_forwarding_direction-confirmed neighbours?"],
+            ["1", "Adjacency parity: do candidate inter-mesh links (then R) plus routed intra-mesh links match get_forwarding_direction-confirmed neighbours of the bound links?"],
             ["2", "How many projections survive Tier B on heterogeneous and fork pipelines? Many survivors weaken Plan 1. Ship the optional \"find all\" run in the first version, or save the defaults until a sweep shows Plan 1 would cut many seatings?"],
             ["3", "Shared seat pairs that need different k: handle generally or reject until needed?"],
             ["4", "Seat-pair nogood API: when is a failure provably about one pair of seats?"],
             ["5", "Cost of unique_shapes off on large symmetric machines."],
             ["6", "Key name for the rank-binding env override (TT_PIPELINE_STAGE?)."],
             ["7", "Per-stage core counts in PipelineStage, or accept the gap."],
-            ["8", "Teach blaze to retry the next cycle, or have Tier C check only blaze's first cycle once the plan is consumed?"],
-            ["9", "Spread fill only with a pipeline, or everywhere after goldens are regenerated? Should spread ever outrank cable tier?"],
-            ["10", "Wait for the policy plan's part 9 before P9, or land an interim pure gather helper first?"],
-            ["11", "Phase 0 failure before part 11: fail at control-plane init (proposed), or add a cheap mapper-side check first?"],
+            ["8", "Agreement with blaze's planner: blaze calls the same C++ footprint solve, blaze's planner learns to retry, or Tier C restricts itself to what blaze builds (14, 15)?"],
+            ["9", "Dropped: no spread fill. Spare links after phase 0 keep today's order; the pipeline only needs R."],
+            ["10", "Decided: do not wait for part 9. P7 reads the PSD; P16 (later) switches to the candidate table. Does P16 need to land before the first pipeline model ships?"],
+            ["11", "Phase 0 failure before part 11: fail at control-plane init on every rank via the check after the broadcast (proposed), or add a cheap mapper-side check first?"],
+            ["12", "Exit-node retry: is kMaxLayoutRetries = 4 right, and is the slice signature the right granularity?"],
+            ["13", "C2 bound: conflict_cap is deterministic, but a capped solve reads as no carve and C4 excludes the seating. Accept that, or add a one-field stopped flag to MappingResult (the only solver change left)?"],
+            ["14", "Stage 0 on one slice: restrict stage 0's positions in C1 while blaze's planner keeps that rule?"],
+            ["15", "Stage smaller than a host slice: model sub-slice positions (first tile only, like blaze) or keep Tier B's reject?"],
+            ["16", "RELAXED as soft edges: does the solver's soft-edge mode give fewest cuts first and blaze's tie-breaks, or is an objective needed?"],
+            ["17", "C1 position filter (shape, core slots, stage 0 host I/O) must match the resolver's per-stage rules; stricter removes carves that would pass, looser only adds rejects."],
+            ["18", "Demand inside the encoding: a per-mesh-pair cap on crossing edges if the demand check fires often."],
+            ["19", "Resource completeness off the tight case: are carves with a few spare slices slow, and does a relaxed form help?"],
+            ["20", "A recorded channel that is down: the PSD on rank 0 has no link state, but each rank's gather drops down links, so R can name one the pairing never sees. Fail on every rank (proposed) or rerun Tier C without it?"],
+            ["21", "Broadcasting: R goes out with the chip info (every rank checks it); the rest of the pipeline mapping stays on rank 0 until another rank consumes it. With generate_mapping_locally_ every rank maps on its own allowlist, so R can differ: take rank 0's, or disallow pipelines there?"],
+            ["22", "Total time per mapping: conflict cap x exit-node retries x rejected seatings can reach hours. Add an overall cap on the pipeline loop, or rely on the rejection cap?"],
+            ["23", "Pipelines across parts: name the far end of a cross-part edge as (part index, local FabricNodeId), or return the pipeline mapping once per run?"],
+            ["24", "One carve per seating: a seating is lost if its first carve fails but another would pass (101 of 101 first carves passed). Keep one, or allow a few more (exclude_mapping(carve), next()) before failing the seating?"],
           ]}
         />
       </Stack>

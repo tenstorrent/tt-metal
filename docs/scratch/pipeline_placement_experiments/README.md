@@ -239,74 +239,33 @@ Python DFS had carved. `CARVE_CONFLICT_CAP=2000000000` runs the solve through
 integration must treat budget exhaustion as unknown, which today needs the session API or a new
 flag on `MappingResult`.
 
-**Which is best** (the 2026-10-27 rerun, `results/rerun_2026-10-27/`, budget removed, 60 s cap;
-600 s results in brackets). Seconds:
+**Which is best: blaze's carve planner + resolver against footprint + resolver** (the
+2026-10-27 rerun, report section 5.3, `results/rerun_2026-10-27/carve_comparison.md`; 132
+carve-requiring cases on one machine, 60 s cap). The planner is blaze's `plan_ring_carve` ported
+to C++ (`topo/carve_planner_port.hpp`, blaze's 200k-expansion and 64-cycle budgets); the
+footprint runs with resource completeness (report 5.4).
 
-| Case | Best Python carve | Resolver | Per-slice SAT | Footprint SAT | Footprint DFS |
-|---|---|---|---|---|---|
-| 8x8 fill, 15x 2x2 | 4.0 | – | – | **0.22** | 0.59 |
-| 16x16, 62x 2x2 | 3.4 | – | – | **0.13** | cap |
-| 8x16 fill, 14x 2x4 | cap | – | – | **2.8** | cap |
-| random 8x16, 37 stages | cap [183] | – | – | **5.6** | 25 |
-| random 8x8, 29 stages | **0.6** (`dfs2`) | – | – | cap [63] | cap |
-| repo grids | – | – | – | **≤ 0.02** | ≤ 4.4 |
-| sweep, 60 to 95% fill | ≤ 0.02 (`dfs2`) | – | – | ≤ 0.03; 8x16 at 95%: 9 to 14 | caps on 3 |
-| heterogeneous, 4 meshes, 28 to 34 stages | – | – | – | **0.13 to 2.2** | caps on 5 of 6 |
-| 2 meshes, 4 cables/pair, ring of 64 | – | 0.2 to 1.1 | 0.4 to 0.5 | **0.015** | 0.09 to 0.44 |
-| 4 meshes, 4 cables/pair, ring of 128, seeds 0 / 1 | – | cap | 3.0 / **22** | **0.071** / cap [66] | cap |
-| 4 meshes, 4 cables/pair, chain of 128 | – | cap | **7.4** | cap [170] | cap |
-| 1-cable rings, fully used (infeasible) | – | cap | cap | cap [cap] | cap |
+| Group | Cases | Planner + resolver: placed | Footprint + resolver: decided | Resolver after footprint, worst |
+|---|---|---|---|---|
+| original carve cases | 17 | 0 (17 budget-exhausted) | 16 | 0.029 s |
+| heterogeneous sweep | 30 | 0 (30 budget-exhausted) | 30 | 0.001 s |
+| single mesh, no 1x1 stages | 45 | 0 (stage-0 rule; off: 2) | 43 | 0.029 s |
+| heterogeneous multi-mesh | 12 | 0 | 12 | 0.001 s |
+| multi-mesh, no 1x1 stages | 28 | 0 | 26 | 0.036 s |
+| **all** | **132** | **0** | **127** | **0.036 s** |
 
-The footprint SAT is the one to use: fastest on every designed, repo-shaped, heterogeneous and
-partly used multi-mesh case. Three things go with it. First, the colour test
-(`multi2_colour.txt`, `multi3_colour.txt`) proves every capped 1-cable case infeasible, and no
-solver does, so it runs before the solve. Second, an exhausted conflict budget has to come back as
-"undecided", never "reject"; today it is reported as "no mapping", so this needs a flag on
-`MappingResult` (design doc P5). Third, the resolver runs afterwards for
-links and core slots; at slot level it and the topology solver are both fast
-(`resolver_slots2_60s.txt`, `topo_slots2_60s_sat_unlimited.txt`). `dfs2` remains faster on
-random tight single-mesh fills, so it is the candidate second engine if such fills occur. The
-design doc, section 4.2 "Which approach is fastest", has the full table.
-
-## 6. 2026-10-27: verification, sweeps, no 1x1, the carve-requiring comparison
-
-Report section 5. New files under `topo/` and `results/rerun_2026-10-27/`:
-
-| File | What |
-|---|---|
-| `topo/carve_planner_port.hpp` | C++ port of tt-blaze's ring carve planner (`plan_ring_carve`), same algorithm and budgets |
-| `topo/resolver_same_cases.cpp` modes `planner`, `plan` | planner then resolver on its slots (`CARVE_CASES=<casedefs>`, `PLANNER_PLAN_OUT`, `PLANNER_ALLOW_WIDE_STAGE0=1`); resolver on a carve's slots (`CARVE_PLAN=<plan>`) |
-| `topo/topo_solver_bench.cpp` mode `plan`, `TOPO_ENGINES`, `TOPO_CONFLICT_CAP` | topology solver on a carve's slots; Auto column; unlimited SAT budget; DFS limit as `lim` |
-| `topo/carve_footprint_bench.cpp` modes `multi3`, `multi4`, `hetero`, `rings`, `file`; `CARVE_CONFLICT_CAP`, `CARVE_ENGINES`, `CARVE_ONLY`, `CARVE_PLAN_OUT`, `CARVE_CASE_OUT` | the wider groups; carve export for the resolver; case export for the planner harness |
-| `topo/carve_sweep_cases.txt`, `topo/carve_min2_cases.txt`, `topo/carve_tight_cases.txt` | the heterogeneous, no-1x1 and tight single-mesh case lists (format of `carve_encoding_cases.txt`; Python reads them with `carve_bench_encodings.py file`) |
-| `topo/multi_colour_test.py` | exact feasibility of the tight 1-cable multi-mesh cases by the colour test |
-| `topo/case_catalogue.py`, `topo/carve_comparison.py` | the two generated tables in the results directory |
-| `topo/resource_completeness.patch` | the env-gated encoder change (`TT_TOPOLOGY_SAT_RESOURCE_COMPLETENESS=1`), not applied to the tree by the commit |
-| `CARVE_CHIP_LEVEL=1`, `topo/reject_demo.cases`, mode `casefile` | the chip-level footprint (carve plus every endpoint and host chip in one solve; report 5.5) and the case where the slice-level carve is rejected by the resolver |
-
-Every harness re-checks every returned solution (`BAD` on failure), every SAT run has the conflict
-budget removed, and a DFS call-limit failure prints as `lim`. To reproduce the carve-requiring
-comparison from a tt-metal checkout with `libcadical.a` in a build:
-
-```bash
-cd docs/scratch/pipeline_placement_experiments && export TT_METAL_HOME=$PWD/../../..
-B=$TT_METAL_HOME/build_RelWithDebInfo
-topo/make_topo_bench.sh $B .out/fp carve_footprint_bench.cpp; topo/make_topo_bench.sh $B .out/topo
-g++ -O2 -std=c++20 -I .out/resolver -I topo -o .out/res topo/resolver_same_cases.cpp   # after ./run_experiments.sh resolver (extracts search_body.inc)
-export CARVE_ENGINES=auto CARVE_CONFLICT_CAP=2000000000 TOPO_ENGINES=auto TOPO_CONFLICT_CAP=2000000000 TOPO_TIMEOUT=60
-CARVE_CASES=topo/carve_min2_cases.txt CARVE_CASE_OUT=min2.cases CARVE_PLAN_OUT=min2.plan .out/fp file   # footprint carve
-CARVE_PLAN=min2.plan .out/res plan                                                                     # resolver on its slots
-CARVE_CASES=min2.cases .out/res planner                                                                # blaze planner port, then resolver
-TT_TOPOLOGY_SAT_RESOURCE_COMPLETENESS=1 ...                                                             # with the patch applied
-```
+Where the planner does complete (small rings of columns) both take milliseconds, for example
+4x8 ring of 32 one-slice stages: 0.038 + 0.001 s against 0.004 + 0.001 s. Use footprint +
+resolver; the per-case table is in the design doc, 4.2 "Speed".
 
 ## What the experiments suggest
 
 - **Tier B:** binding, capacity and a connectivity walk; no search. Placement stays in Tier C.
 - **Carve:** search stage rectangles directly rather than slice cycles, as a footprint mapping
-  through tt-metal's topology solver with the SAT engine (section 5), with an exhausted conflict
-  budget reported as undecided. Run the cheap exact pre-checks (area, lattice, colour) before the solve.
-  A port of `dfs2` is the fallback for random tight single-mesh fills.
+  through tt-metal's topology solver with the SAT engine (section 5), with resource
+  completeness and a deadline that fails the seating rather than passing it. Run the cheap exact
+  pre-checks (area, lattice, colour) before the solve. The resolver then checks the carve and
+  records the exact channel of every crossing.
 - **Resolver:** keep its DFS; add the colour pre-check for fully used meshes between fixed cable
   slots.
 - **Blaze:** its planner rejects carves that exist; tt-blaze

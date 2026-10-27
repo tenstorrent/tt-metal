@@ -14,18 +14,12 @@
 // BRUTE_MAX_STAGES stages the yes/no answer is also checked against a brute-force search.
 //
 // Each solve runs in a forked child killed after TOPO_TIMEOUT seconds (default 20).
-// Usage: carve_footprint_bench [quick|repo|multi|hetero|multi4|all|rings|multi2|multi3|file]
+// Usage: carve_footprint_bench [quick|repo|multi|all|multi2|file]
 //   multi2: the single-slice rings and chains over 2 to 8 meshes of 32 ranks (multi2_cases.hpp), the same
 //           instances as topo_solver_bench multi2 and resolver_same_cases multi2.
 //   file:   cases from CARVE_CASES (one per line: name<TAB>R<TAB>C<TAB>h w;h w;...), a ring over one mesh;
 //           carve_bench_encodings.py QUICK exported this way gives the same instances as its tables.
-//   CARVE_ONLY=substring runs only the cases whose name contains it.
-//   CARVE_CHIP_LEVEL=1 solves at chip level (carve plus endpoint and host chips; see timed_chip).
 //   CARVE_ENGINES=sat,dfs limits the engines run (auto always picks SAT here, so it is redundant).
-//   CARVE_CONFLICT_CAP=n runs every engine through TopologyMappingEnumerationSession with that per-solve
-//           conflict budget. Without it solve_topology_mapping's SAT engine stops at its default cap
-//           (kDefaultConflictCap, 300k) and reports a budget-exhausted solve as 'no', so a 'no' on a hard
-//           case is undecided, not a proof. With a cap of 2e9 a 'no' inside TOPO_TIMEOUT is a real UNSAT.
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -209,45 +203,8 @@ bool positions_touch(const Instance& in, Pos p, Pos q) {
     return false;
 }
 
-// Which declared cable (index into cs.cables) joins slices a and b, or -1.
-int cable_between(const Case& cs, const Instance& in, uint32_t a, uint32_t b) {
-    std::vector<uint32_t> base;
-    uint32_t n = 0;
-    for (auto [R, C] : cs.meshes) {
-        base.push_back(n);
-        n += R * C;
-    }
-    auto sid = [&](int m, int r, int c) { return base[m] + uint32_t(r * cs.meshes[m].second + c); };
-    for (size_t i = 0; i < cs.cables.size(); ++i) {
-        const auto& cb = cs.cables[i];
-        const uint32_t x = sid(cb.mesh_a, cb.row_a, cb.col_a), y = sid(cb.mesh_b, cb.row_b, cb.col_b);
-        if ((x == a && y == b) || (x == b && y == a)) {
-            return int(i);
-        }
-    }
-    (void)in;
-    return -1;
-}
-
-// Is slice a next to slice b inside one mesh by a plain grid step (Manhattan distance 1, no wrap)?
-bool grid_step(const Case& cs, uint32_t a, uint32_t b) {
-    uint32_t n = 0;
-    for (auto [R, C] : cs.meshes) {
-        if (a >= n && a < n + R * C && b >= n && b < n + R * C) {
-            const int ra = (a - n) / C, ca = (a - n) % C, rb = (b - n) / C, cb = (b - n) % C;
-            return std::abs(ra - rb) + std::abs(ca - cb) == 1;
-        }
-        n += R * C;
-    }
-    return false;
-}
-
-// Independent check of a returned carve: own shape, disjoint, every edge touching, and every touch
-// either a grid step inside one mesh or one of the declared cables (the logical topology; a physical
-// link that is not declared can never be used because the global graph never contains it, and this
-// check makes that explicit). crossings_out gets the declared cables the carve crosses on.
-std::string verify(
-    const Case& cs, const Instance& in, const std::map<Stage, Pos>& plan, std::vector<int>* crossings_out = nullptr) {
+// Independent check of a returned carve: own shape, disjoint, every edge touching.
+std::string verify(const Case& cs, const Instance& in, const std::map<Stage, Pos>& plan) {
     if (plan.size() != cs.shapes.size()) {
         return "wrong stage count";
     }
@@ -265,29 +222,6 @@ std::string verify(
     for (auto [a, b] : cs.edges) {
         if (!positions_touch(in, plan.at(a), plan.at(b))) {
             return "edge " + std::to_string(a) + "-" + std::to_string(b) + " does not touch";
-        }
-        // every touching slice pair must be a grid step or a declared cable
-        bool any_grid = false;
-        int any_cable = -1;
-        for (uint32_t sa : in.covers[plan.at(a)]) {
-            for (uint32_t sb : in.covers[plan.at(b)]) {
-                if (std::find(in.nbrs[sa].begin(), in.nbrs[sa].end(), sb) == in.nbrs[sa].end()) {
-                    continue;
-                }
-                if (grid_step(cs, sa, sb)) {
-                    any_grid = true;
-                } else {
-                    const int c = cable_between(cs, in, sa, sb);
-                    if (c < 0) {
-                        return "edge " + std::to_string(a) + "-" + std::to_string(b) +
-                               " uses a link that is neither a grid step nor a declared cable";
-                    }
-                    any_cable = c;
-                }
-            }
-        }
-        if (!any_grid && any_cable >= 0 && crossings_out != nullptr) {
-            crossings_out->push_back(any_cable);
         }
     }
     return "";
@@ -359,37 +293,19 @@ Outcome timed(const Case& cs, TopologyMappingSolverEngine engine, int cap_s) {
             covers[p] = in.covers[p];
         }
         constraints.add_resource_constraint<uint32_t>(covers);
-        const char* cap_env = std::getenv("CARVE_CONFLICT_CAP");
         const auto t0 = std::chrono::steady_clock::now();
-        MappingResult<Stage, Pos> res;
-        // DFS has no conflict budget and only the direct call reports stats.dfs_calls (needed for "lim").
-        if (cap_env != nullptr && engine != TopologyMappingSolverEngine::Dfs) {
-            TopologyMappingEnumerationSession<Stage, Pos> session(
-                AdjacencyGraph<Stage>(in.target_adj),
-                AdjacencyGraph<Pos>(in.global_adj),
-                constraints,
-                ConnectionValidationMode::STRICT,
-                /*quiet_mode=*/true,
-                engine,
-                /*unique_shapes=*/false,
-                std::atoi(cap_env));
-            res = session.next();
-        } else {
-            res = solve_topology_mapping(
-                AdjacencyGraph<Stage>(in.target_adj),
-                AdjacencyGraph<Pos>(in.global_adj),
-                constraints,
-                ConnectionValidationMode::STRICT,
-                /*quiet_mode=*/true,
-                engine);
-        }
+        auto res = solve_topology_mapping(
+            AdjacencyGraph<Stage>(in.target_adj),
+            AdjacencyGraph<Pos>(in.global_adj),
+            constraints,
+            ConnectionValidationMode::STRICT,
+            /*quiet_mode=*/true,
+            engine);
         const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-        // The DFS engine gives up after 10 million calls and reports failure: print that as "lim", undecided.
-        std::string verdict = res.success ? "yes" : (res.stats.dfs_calls >= 10000000 ? "lim" : "no");
+        std::string verdict = res.success ? "yes" : "no";
         std::string plan;
         if (res.success) {
-            std::vector<int> crossings;
-            const std::string bad = verify(cs, in, res.target_to_global, &crossings);
+            const std::string bad = verify(cs, in, res.target_to_global);
             if (!bad.empty()) {
                 verdict = "BAD";
                 plan = bad;
@@ -401,281 +317,15 @@ Outcome timed(const Case& cs, TopologyMappingSolverEngine engine, int cap_s) {
                         b, sizeof b, "%s%dx%d@m%d(%d,%d)", plan.empty() ? "" : " ", r.h, r.w, r.mesh, r.r0, r.c0);
                     plan += b;
                 }
-                plan += " | crossings:";
-                for (int c : crossings) {
-                    const auto& cb = cs.cables[c];
-                    char b[64];
-                    std::snprintf(
-                        b,
-                        sizeof b,
-                        " m%d(%d,%d)-m%d(%d,%d)",
-                        cb.mesh_a,
-                        cb.row_a,
-                        cb.col_a,
-                        cb.mesh_b,
-                        cb.row_b,
-                        cb.col_b);
-                    plan += b;
-                }
-                if (crossings.empty()) {
-                    plan += " none (single mesh)";
-                }
             }
         }
-        char buf[8192];
+        char buf[1024];
         std::snprintf(buf, sizeof buf, "%s %.6f %d %s", verdict.c_str(), s, res.stats.used_sat ? 1 : 0, plan.c_str());
         (void)!write(fd[1], buf, std::strlen(buf) + 1);
         _exit(0);
     }
     close(fd[1]);
-    char buf[8192] = {0};
-    const ssize_t got = read(fd[0], buf, sizeof buf - 1);
-    close(fd[0]);
-    int status = 0;
-    waitpid(pid, &status, 0);
-    if (got <= 0) {
-        return {"cap", double(cap_s)};
-    }
-    Outcome o;
-    char verdict[8] = {0};
-    int used_sat = 0, consumed = 0;
-    std::sscanf(buf, "%7s %lf %d %n", verdict, &o.seconds, &used_sat, &consumed);
-    o.verdict = verdict;
-    o.used_sat = used_sat != 0;
-    o.plan = buf + consumed;
-    return o;
-}
-
-// ---------------------------------------------------------------------------------------------------
-// Chip-level footprint (CARVE_CHIP_LEVEL=1): the carve AND the resolver's job in one solve, so the mapper
-// would not need the resolver afterwards. Every host slice is a 4x2-chip submesh as in resolver_same_cases:
-// horizontally adjacent slices share 4 links (chip (r,1) to (r,0)), vertically adjacent ones 2 ((3,c) to
-// (0,c)), a cable is one link between chip (0,0) of each slice. Global graph: the positions as before, plus
-// one node per CHIP; a position is adjacent to the chips inside it, chips are adjacent where a physical link
-// joins them. Target graph: the stages as before, plus two ENDPOINT nodes per pipeline edge (the exit chip in
-// the source stage and the entry chip in the destination stage, adjacent to their stage and to each other)
-// and two host endpoints on stage 0 (H2D entry, D2H exit). Endpoint nodes may only take chip nodes, stages
-// only positions of their shape. Injectivity then gives one pipeline endpoint per chip, which is the
-// resolver's default capacity on submeshes of 8 or more chips, so a solution is a carve PLUS the exit/entry
-// chip of every edge and the host chips of stage 0: everything resolve_graph_layout decides.
-struct ChipInstance {
-    Instance in;
-    uint32_t n_chips = 0, chip_base = 0;
-    size_t n_edges = 0;
-    AdjacencyGraph<Pos>::AdjacencyMap global_adj;
-    AdjacencyGraph<Stage>::AdjacencyMap target_adj;
-    std::set<Pos> chip_nodes;
-    std::vector<std::vector<uint32_t>> chip_links;  // chip -> physically linked chips
-};
-
-ChipInstance build_chip(const Case& cs) {
-    ChipInstance ci;
-    ci.in = build(cs);
-    const uint32_t n_slices = uint32_t(ci.in.nbrs.size());
-    ci.chip_base = uint32_t(ci.in.rects.size());
-    ci.n_chips = n_slices * 8;
-    ci.chip_links.assign(ci.n_chips, {});
-    std::vector<uint32_t> base;
-    uint32_t acc = 0;
-    for (auto [R, C] : cs.meshes) {
-        base.push_back(acc);
-        acc += R * C;
-    }
-    auto sid = [&](int m, int r, int c) { return base[m] + uint32_t(r * cs.meshes[m].second + c); };
-    auto chip = [&](uint32_t slice, int rr, int cc) { return slice * 8 + uint32_t(rr * 2 + cc); };
-    auto link = [&](uint32_t a, uint32_t b) {
-        ci.chip_links[a].push_back(b);
-        ci.chip_links[b].push_back(a);
-    };
-    for (size_t m = 0; m < cs.meshes.size(); ++m) {
-        const auto [R, C] = cs.meshes[m];
-        for (int r = 0; r < R; ++r) {
-            for (int c = 0; c < C; ++c) {
-                if (c + 1 < C) {
-                    for (int rr = 0; rr < 4; ++rr) {
-                        link(chip(sid(m, r, c), rr, 1), chip(sid(m, r, c + 1), rr, 0));
-                    }
-                }
-                if (r + 1 < R) {
-                    for (int cc = 0; cc < 2; ++cc) {
-                        link(chip(sid(m, r, c), 3, cc), chip(sid(m, r + 1, c), 0, cc));
-                    }
-                }
-            }
-        }
-    }
-    for (const auto& cb : cs.cables) {
-        link(chip(sid(cb.mesh_a, cb.row_a, cb.col_a), 0, 0), chip(sid(cb.mesh_b, cb.row_b, cb.col_b), 0, 0));
-    }
-    // global graph: positions (as before) + chips
-    ci.global_adj = ci.in.global_adj;
-    for (uint32_t c = 0; c < ci.n_chips; ++c) {
-        const Pos g = ci.chip_base + c;
-        ci.chip_nodes.insert(g);
-        auto& v = ci.global_adj[g];
-        for (uint32_t d : ci.chip_links[c]) {
-            v.push_back(ci.chip_base + d);
-        }
-    }
-    for (Pos p = 0; p < ci.in.rects.size(); ++p) {
-        for (uint32_t sl : ci.in.covers[p]) {
-            for (int k = 0; k < 8; ++k) {
-                const Pos g = ci.chip_base + sl * 8 + k;
-                ci.global_adj[p].push_back(g);
-                ci.global_adj[g].push_back(p);
-            }
-        }
-    }
-    // target graph: stages + 2 endpoints per edge + 2 host endpoints on stage 0
-    ci.target_adj = ci.in.target_adj;
-    const Stage n = Stage(cs.shapes.size());
-    ci.n_edges = cs.edges.size();
-    auto tlink = [&](Stage a, Stage b) {
-        ci.target_adj[a].push_back(b);
-        ci.target_adj[b].push_back(a);
-    };
-    for (size_t e = 0; e < cs.edges.size(); ++e) {
-        const Stage x = n + Stage(2 * e), y = n + Stage(2 * e + 1);
-        ci.target_adj[x];
-        ci.target_adj[y];
-        tlink(cs.edges[e].first, x);
-        tlink(cs.edges[e].second, y);
-        tlink(x, y);
-    }
-    const Stage hin = n + Stage(2 * cs.edges.size()), hout = hin + 1;
-    ci.target_adj[hin];
-    ci.target_adj[hout];
-    tlink(0, hin);
-    tlink(0, hout);
-    return ci;
-}
-
-Outcome timed_chip(const Case& cs, TopologyMappingSolverEngine engine, int cap_s) {
-    int fd[2];
-    if (pipe(fd) != 0) {
-        return {"err"};
-    }
-    const pid_t pid = fork();
-    if (pid == 0) {
-        close(fd[0]);
-        alarm(cap_s);
-        const ChipInstance ci = build_chip(cs);
-        const Stage n = Stage(cs.shapes.size());
-        MappingConstraints<Stage, Pos> constraints;
-        for (Stage k = 0; k < n; ++k) {
-            const std::set<Pos> allowed(ci.in.of_stage[k].begin(), ci.in.of_stage[k].end());
-            constraints.add_required_constraint(k, allowed);
-        }
-        for (Stage t = n; t < n + Stage(2 * ci.n_edges + 2); ++t) {
-            constraints.add_required_constraint(t, ci.chip_nodes);
-        }
-        std::map<Pos, std::vector<uint32_t>> covers;
-        for (Pos p = 0; p < ci.in.rects.size(); ++p) {
-            covers[p] = ci.in.covers[p];
-        }
-        constraints.add_resource_constraint<uint32_t>(covers);
-        const char* cap_env = std::getenv("CARVE_CONFLICT_CAP");
-        const auto t0 = std::chrono::steady_clock::now();
-        MappingResult<Stage, Pos> res;
-        if (cap_env != nullptr && engine != TopologyMappingSolverEngine::Dfs) {
-            TopologyMappingEnumerationSession<Stage, Pos> session(
-                AdjacencyGraph<Stage>(ci.target_adj),
-                AdjacencyGraph<Pos>(ci.global_adj),
-                constraints,
-                ConnectionValidationMode::STRICT,
-                /*quiet_mode=*/true,
-                engine,
-                /*unique_shapes=*/false,
-                std::atoi(cap_env));
-            res = session.next();
-        } else {
-            res = solve_topology_mapping(
-                AdjacencyGraph<Stage>(ci.target_adj),
-                AdjacencyGraph<Pos>(ci.global_adj),
-                constraints,
-                ConnectionValidationMode::STRICT,
-                /*quiet_mode=*/true,
-                engine);
-        }
-        const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-        std::string verdict = res.success ? "yes" : (res.stats.dfs_calls >= 10000000 ? "lim" : "no");
-        std::string plan;
-        if (res.success) {
-            // the carve part, checked as before
-            std::map<Stage, Pos> stage_plan;
-            for (Stage k = 0; k < n; ++k) {
-                stage_plan[k] = res.target_to_global.at(k);
-            }
-            std::vector<int> crossings;
-            std::string bad = verify(cs, ci.in, stage_plan, &crossings);
-            // the endpoint part: every endpoint on a chip inside its stage, each edge's two chips physically
-            // linked, no chip used twice
-            std::set<Pos> used_chips;
-            auto chip_in = [&](Pos g, Stage k) {
-                const uint32_t slice = (g - ci.chip_base) / 8;
-                const auto& cov = ci.in.covers[stage_plan[k]];
-                return g >= ci.chip_base && std::find(cov.begin(), cov.end(), slice) != cov.end();
-            };
-            for (size_t e = 0; bad.empty() && e < ci.n_edges; ++e) {
-                const Pos gx = res.target_to_global.at(n + Stage(2 * e)),
-                          gy = res.target_to_global.at(n + Stage(2 * e + 1));
-                if (!chip_in(gx, cs.edges[e].first) || !chip_in(gy, cs.edges[e].second)) {
-                    bad = "endpoint outside its stage";
-                } else if (
-                    std::find(
-                        ci.chip_links[gx - ci.chip_base].begin(),
-                        ci.chip_links[gx - ci.chip_base].end(),
-                        gy - ci.chip_base) == ci.chip_links[gx - ci.chip_base].end()) {
-                    bad = "edge endpoints not physically linked";
-                } else if (!used_chips.insert(gx).second || !used_chips.insert(gy).second) {
-                    bad = "chip used by two endpoints";
-                }
-            }
-            for (Stage h = n + Stage(2 * ci.n_edges); bad.empty() && h < n + Stage(2 * ci.n_edges + 2); ++h) {
-                const Pos g = res.target_to_global.at(h);
-                if (!chip_in(g, 0)) {
-                    bad = "host endpoint outside stage 0";
-                } else if (!used_chips.insert(g).second) {
-                    bad = "host endpoint on a used chip";
-                }
-            }
-            if (!bad.empty()) {
-                verdict = "BAD";
-                plan = bad;
-            } else {
-                for (const auto& [k, p] : stage_plan) {
-                    const Rect& r = ci.in.rects[p];
-                    char b[64];
-                    std::snprintf(
-                        b, sizeof b, "%s%dx%d@m%d(%d,%d)", plan.empty() ? "" : " ", r.h, r.w, r.mesh, r.r0, r.c0);
-                    plan += b;
-                }
-                plan += " | crossings:";
-                for (int c : crossings) {
-                    const auto& cb = cs.cables[c];
-                    char b[64];
-                    std::snprintf(
-                        b,
-                        sizeof b,
-                        " m%d(%d,%d)-m%d(%d,%d)",
-                        cb.mesh_a,
-                        cb.row_a,
-                        cb.col_a,
-                        cb.mesh_b,
-                        cb.row_b,
-                        cb.col_b);
-                    plan += b;
-                }
-                plan += " | endpoints and host chips chosen, " + std::to_string(used_chips.size()) + " distinct chips";
-            }
-        }
-        char buf[8192];
-        std::snprintf(buf, sizeof buf, "%s %.6f %d %s", verdict.c_str(), s, res.stats.used_sat ? 1 : 0, plan.c_str());
-        (void)!write(fd[1], buf, std::strlen(buf) + 1);
-        _exit(0);
-    }
-    close(fd[1]);
-    char buf[8192] = {0};
+    char buf[1024] = {0};
     const ssize_t got = read(fd[0], buf, sizeof buf - 1);
     close(fd[0]);
     int status = 0;
@@ -709,20 +359,13 @@ void run(const Case& cs, int cap_s, bool show_plan) {
     const char* only = std::getenv("CARVE_ENGINES");
     auto wanted = [&](const char* e) { return only == nullptr || std::string(only).find(e) != std::string::npos; };
     const Outcome skipped{"-"};
-    const bool chip_level = std::getenv("CARVE_CHIP_LEVEL") != nullptr;
-    auto solve = [&](TopologyMappingSolverEngine e) {
-        return chip_level ? timed_chip(cs, e, cap_s) : timed(cs, e, cap_s);
-    };
-    const Outcome a = wanted("auto") ? solve(TopologyMappingSolverEngine::Auto) : skipped;
-    const Outcome s = wanted("sat") ? solve(TopologyMappingSolverEngine::Sat) : skipped;
-    const Outcome d = wanted("dfs") ? solve(TopologyMappingSolverEngine::Dfs) : skipped;
-    if (chip_level) {
-        brute = brute + "(slice)";  // the chip-level answer can legitimately be "no" where the slice-level one is "yes"
-    }
+    const Outcome a = wanted("auto") ? timed(cs, TopologyMappingSolverEngine::Auto, cap_s) : skipped;
+    const Outcome s = wanted("sat") ? timed(cs, TopologyMappingSolverEngine::Sat, cap_s) : skipped;
+    const Outcome d = wanted("dfs") ? timed(cs, TopologyMappingSolverEngine::Dfs, cap_s) : skipped;
     bool mismatch = false;
     for (const Outcome* o : {&a, &s, &d}) {
         mismatch |= o->verdict == "BAD";
-        mismatch |= !chip_level && brute != "-" && (o->verdict == "yes" || o->verdict == "no") && o->verdict != brute;
+        mismatch |= brute != "-" && (o->verdict == "yes" || o->verdict == "no") && o->verdict != brute;
     }
     std::printf(
         "%-48s %3d/%-3d %4zu pos | brute %-3s | auto(%s) %-3s %8.3fs | sat %-3s %8.3fs | dfs %-3s %8.3fs%s\n",
@@ -739,59 +382,8 @@ void run(const Case& cs, int cap_s, bool show_plan) {
         d.verdict.c_str(),
         d.seconds,
         mismatch ? "  <-- MISMATCH" : "");
-    const Outcome* solved = !a.plan.empty() ? &a : !s.plan.empty() ? &s : !d.plan.empty() ? &d : nullptr;
-    if (show_plan && solved != nullptr) {
-        std::printf("    plan: %s\n", solved->plan.c_str());
-    }
-    // CARVE_PLAN_OUT=file: append the carve as slots for topo/resolver_same_cases.cpp mode "plan"
-    // (name, meshes, cables, one rect per stage in stage order, ring|chain). Rings and chains only.
-    if (const char* out = std::getenv("CARVE_PLAN_OUT");
-        out != nullptr && solved != nullptr && solved->verdict == "yes") {
-        const size_t n = cs.shapes.size();
-        bool chain = cs.edges.size() + 1 == n, ring = cs.edges.size() == n;
-        for (size_t i = 0; i < cs.edges.size() && (chain || ring); ++i) {
-            const auto [x, y] = cs.edges[i];
-            ring &= x == Stage(i) && y == Stage((i + 1) % n);
-            chain &= x == Stage(i) && y == Stage(i + 1);
-        }
-        if (ring || chain) {
-            if (FILE* f = std::fopen(out, "a")) {
-                std::fprintf(f, "%s\t", cs.name.c_str());
-                for (size_t m = 0; m < cs.meshes.size(); ++m) {
-                    std::fprintf(f, "%s%d %d", m ? ";" : "", cs.meshes[m].first, cs.meshes[m].second);
-                }
-                std::fprintf(f, "\t");
-                for (size_t i = 0; i < cs.cables.size(); ++i) {
-                    const auto& cb = cs.cables[i];
-                    std::fprintf(
-                        f,
-                        "%s%d %d %d %d %d %d",
-                        i ? ";" : "",
-                        cb.mesh_a,
-                        cb.row_a,
-                        cb.col_a,
-                        cb.mesh_b,
-                        cb.row_b,
-                        cb.col_b);
-                }
-                std::fprintf(f, "\t");
-                // plan tokens "hxw@m(r,c)" are printed in stage order (std::map<Stage, Pos>)
-                const std::string& pl = solved->plan;
-                size_t pos = 0;
-                bool first = true;
-                while (pos < pl.size() && pl.compare(pos, 2, " |") != 0) {
-                    int h, w, m, r, c, used = 0;
-                    if (std::sscanf(pl.c_str() + pos, " %dx%d@m%d(%d,%d)%n", &h, &w, &m, &r, &c, &used) != 5) {
-                        break;
-                    }
-                    std::fprintf(f, "%s%d %d %d %d %d", first ? "" : ";", m, r, c, h, w);
-                    first = false;
-                    pos += used;
-                }
-                std::fprintf(f, "\t%s\n", ring ? "ring" : "chain");
-                std::fclose(f);
-            }
-        }
+    if (show_plan && !a.plan.empty()) {
+        std::printf("    auto plan: %s\n", a.plan.c_str());
     }
     std::fflush(stdout);
 }
@@ -877,49 +469,8 @@ int main(int argc, char** argv) {
         cases.push_back(grid_ring("8x8: 1x1, 14x 2x2, 1x1", 8, 8, cat({{S1}, rep(B, 14), {S1}})));
     }
 
-    // The single-slice ring instances of topo_solver_bench.cpp (groups all and multi), so the three engines
-    // can be compared on the same table: rings of 1x1 stages on one grid, and across two meshes joined by
-    // two cables at given slices (good cables vs same-colour cables).
-    if (mode == "rings") {
-        auto ring1 = [&](std::string name, int R, int C, int n) {
-            return grid_ring(std::move(name), R, C, rep(S1, n));
-        };
-        cases.push_back(ring1("4x8 ring of 32 x 1x1", 4, 8, 32));
-        cases.push_back(ring1("8x8 ring of 64 x 1x1", 8, 8, 64));
-        cases.push_back(ring1("8x16 ring of 128 x 1x1", 8, 16, 128));
-        cases.push_back(ring1("16x16 ring of 256 x 1x1", 16, 16, 256));
-        cases.push_back(ring1("5x5 ring of 25 x 1x1 (odd: none)", 5, 5, 25));
-        cases.push_back(ring1("7x7 ring of 49 x 1x1 (odd: none)", 7, 7, 49));
-        cases.push_back(ring1("8x8 ring of 60 x 1x1 (4 spare)", 8, 8, 60));
-        for (int g : {4, 8}) {
-            const std::string gs = std::to_string(g) + "x" + std::to_string(g);
-            // topo_solver_bench: cables between slice ids (0, n1) and (1, n1+1): slices (0,0)-(0,0) and (0,1)-(0,1)
-            Case ok{
-                "two " + gs + " meshes, cables (0,0),(0,1)",
-                {{g, g}, {g, g}},
-                {{0, 0, 0, 1, 0, 0}, {0, 0, 1, 1, 0, 1}},
-                rep(S1, 2 * g * g),
-                ring_edges(2 * g * g)};
-            cases.push_back(ok);
-            // same colour: slices 0 and g+1 -> (0,0) and (1,1)
-            Case bad{
-                "two " + gs + " meshes, cables same colour",
-                {{g, g}, {g, g}},
-                {{0, 0, 0, 1, 0, 0}, {0, 1, 1, 1, 1, 1}},
-                rep(S1, 2 * g * g),
-                ring_edges(2 * g * g)};
-            cases.push_back(bad);
-        }
-        // two 4x8 meshes, cables at slice 0 and slice 9 -> (0,0) and (1,1)
-        cases.push_back(Case{
-            "two 4x8 meshes, cables same colour",
-            {{4, 8}, {4, 8}},
-            {{0, 0, 0, 1, 0, 0}, {0, 1, 1, 1, 1, 1}},
-            rep(S1, 64),
-            ring_edges(64)});
-    }
-    if (mode == "multi2" || mode == "multi3") {
-        for (const auto& m : mode == "multi2" ? multi2_cases() : multi3_cases()) {
+    if (mode == "multi2") {
+        for (const auto& m : multi2_cases()) {
             Case c{
                 m.name,
                 {},
@@ -932,188 +483,6 @@ int main(int argc, char** argv) {
             for (const auto& cb : m.cables) {
                 c.cables.push_back({cb.mesh_a, cb.row_a, cb.col_a, cb.mesh_b, cb.row_b, cb.col_b});
             }
-            cases.push_back(c);
-        }
-    }
-    // Heterogeneous stages across meshes: rings of 2 or 4 meshes of 4x8 slices, k cables per adjacent
-    // pair (distinct rows, column 7 to column 0), stage shapes drawn from 1x1, 1x2, 2x1, 2x2, 2x2, 2x4 until
-    // 85% of the slices are covered. Only this encoding can express these; ground truth is a verified
-    // carve, or a "no" from the SAT engine with the conflict budget removed.
-    if (mode == "hetero" || mode == "all") {
-        auto lcg = [](uint32_t& s) {
-            s = s * 1664525u + 1013904223u;
-            return s >> 8;
-        };
-        const std::vector<Shape> pool = {S1, H, V, B, B, W};
-        for (int n : {2, 4}) {
-            for (int k : {2, 4}) {
-                for (uint32_t seed : {0u, 1u, 2u}) {
-                    uint32_t s = seed * 104729u + n * 17u + k;
-                    Case c;
-                    for (int m = 0; m < n; ++m) {
-                        c.meshes.push_back({4, 8});
-                    }
-                    for (int i = 0; i < n; ++i) {
-                        const int j = (i + 1) % n;
-                        std::vector<int> ra, rb;
-                        while ((int)ra.size() < k) {
-                            int r = lcg(s) % 4;
-                            if (std::find(ra.begin(), ra.end(), r) == ra.end()) {
-                                ra.push_back(r);
-                            }
-                        }
-                        while ((int)rb.size() < k) {
-                            int r = lcg(s) % 4;
-                            if (std::find(rb.begin(), rb.end(), r) == rb.end()) {
-                                rb.push_back(r);
-                            }
-                        }
-                        for (int t = 0; t < k; ++t) {
-                            c.cables.push_back({i, ra[t], 7, j, rb[t], 0});
-                        }
-                    }
-                    const int total = n * 32;
-                    int area = 0;
-                    while (area * 100 < 85 * total) {
-                        const Shape sh = pool[lcg(s) % pool.size()];
-                        if (area + sh.first * sh.second > total) {
-                            break;
-                        }
-                        c.shapes.push_back(sh);
-                        area += sh.first * sh.second;
-                    }
-                    c.edges = ring_edges(c.shapes.size());
-                    c.name = "hetero " + std::to_string(n) + " meshes 4x8, " + std::to_string(k) + " cables/pair, " +
-                             std::to_string(c.shapes.size()) + " stages " + std::to_string(area) + "/" +
-                             std::to_string(total) + ", seed " + std::to_string(seed);
-                    cases.push_back(c);
-                }
-            }
-        }
-    }
-    // No stage smaller than two slices: rings over 2, 4 or 8 meshes of 4x8 slices where every stage is a
-    // 1x2 domino (16 per mesh, tight), or the stages are drawn from 1x2, 2x1, 2x2, 2x4 to at least 90% of
-    // the slices. k cables per adjacent pair as in multi2. Footprint only (multi-slice stages).
-    if (mode == "multi4" || mode == "all") {
-        auto lcg = [](uint32_t& s) {
-            s = s * 1664525u + 1013904223u;
-            return s >> 8;
-        };
-        const std::vector<Shape> pool = {H, V, B, B, W};
-        for (const char* kind : {"domino", "mixed"}) {
-            for (int n : {2, 4, 8}) {
-                for (int k : {1, 2, 4}) {
-                    for (uint32_t seed : {0u, 1u}) {
-                        if (n == 8 && k != 4) {
-                            continue;
-                        }
-                        uint32_t s = seed * 7919u + n * 131u + k * 7u + (kind[0] == 'd' ? 0u : 1000u);
-                        Case c;
-                        for (int m = 0; m < n; ++m) {
-                            c.meshes.push_back({4, 8});
-                        }
-                        for (int i = 0; i < n; ++i) {
-                            const int j = (i + 1) % n;
-                            std::vector<int> ra, rb;
-                            while ((int)ra.size() < k) {
-                                int r = lcg(s) % 4;
-                                if (std::find(ra.begin(), ra.end(), r) == ra.end()) {
-                                    ra.push_back(r);
-                                }
-                            }
-                            while ((int)rb.size() < k) {
-                                int r = lcg(s) % 4;
-                                if (std::find(rb.begin(), rb.end(), r) == rb.end()) {
-                                    rb.push_back(r);
-                                }
-                            }
-                            for (int t = 0; t < k; ++t) {
-                                c.cables.push_back({i, ra[t], 7, j, rb[t], 0});
-                            }
-                        }
-                        const int total = n * 32;
-                        int area = 0;
-                        if (kind[0] == 'd') {
-                            c.shapes.assign(total / 2, H);
-                            area = total;
-                        } else {
-                            while (area * 100 < 90 * total) {
-                                const Shape sh = pool[lcg(s) % pool.size()];
-                                if (area + sh.first * sh.second > total) {
-                                    break;
-                                }
-                                c.shapes.push_back(sh);
-                                area += sh.first * sh.second;
-                            }
-                        }
-                        c.edges = ring_edges(c.shapes.size());
-                        c.name = std::string("no-1x1 ") + kind + " " + std::to_string(n) + " meshes 4x8, " +
-                                 std::to_string(k) + " cables/pair, " + std::to_string(c.shapes.size()) + " stages " +
-                                 std::to_string(area) + "/" + std::to_string(total) + ", seed " + std::to_string(seed);
-                        cases.push_back(c);
-                    }
-                }
-            }
-        }
-    }
-    // casefile: multi-mesh cases in the CARVE_CASE_OUT format (name, meshes, cables, shapes, ring|chain) from
-    // CARVE_CASES, so a hand-written multi-mesh instance can be run without a generator.
-    if (mode == "casefile") {
-        const char* path = std::getenv("CARVE_CASES");
-        if (path == nullptr) {
-            std::fprintf(stderr, "casefile mode needs CARVE_CASES=<path>\n");
-            return 1;
-        }
-        auto split = [](const std::string& str) {
-            std::vector<std::vector<int>> out;
-            size_t p = 0;
-            while (p < str.size()) {
-                const size_t e = str.find(';', p);
-                const std::string part = str.substr(p, e == std::string::npos ? std::string::npos : e - p);
-                std::vector<int> nums;
-                size_t q = 0;
-                while (q < part.size()) {
-                    int v = 0, used = 0;
-                    if (std::sscanf(part.c_str() + q, " %d%n", &v, &used) != 1) {
-                        break;
-                    }
-                    nums.push_back(v);
-                    q += used;
-                }
-                if (!nums.empty()) {
-                    out.push_back(nums);
-                }
-                p = e == std::string::npos ? str.size() : e + 1;
-            }
-            return out;
-        };
-        std::ifstream in(path);
-        std::string line;
-        while (std::getline(in, line)) {
-            std::vector<std::string> f;
-            size_t start = 0;
-            for (size_t t = line.find('\t');; t = line.find('\t', start)) {
-                f.push_back(line.substr(start, t == std::string::npos ? std::string::npos : t - start));
-                if (t == std::string::npos) {
-                    break;
-                }
-                start = t + 1;
-            }
-            if (f.size() != 5) {
-                continue;
-            }
-            Case c;
-            c.name = f[0];
-            for (const auto& m : split(f[1])) {
-                c.meshes.push_back({m[0], m[1]});
-            }
-            for (const auto& cb : split(f[2])) {
-                c.cables.push_back({cb[0], cb[1], cb[2], cb[3], cb[4], cb[5]});
-            }
-            for (const auto& sh : split(f[3])) {
-                c.shapes.push_back({sh[0], sh[1]});
-            }
-            c.edges = ring_edges(c.shapes.size(), f[4] == "ring");
             cases.push_back(c);
         }
     }
@@ -1160,57 +529,10 @@ int main(int argc, char** argv) {
 
     std::printf(
         "carve as footprint mapping (solve_topology_mapping): engines auto, sat, dfs; cap %d s per solve; "
-        "brute force on <= %zu stages; SAT conflict cap %s\n",
+        "brute force on <= %zu stages\n",
         cap_s,
-        BRUTE_MAX_STAGES,
-        std::getenv("CARVE_CONFLICT_CAP") ? std::getenv("CARVE_CONFLICT_CAP")
-                                          : "default 300k (a 'no' may be undecided)");
-    // CARVE_CASE_OUT=file: write every case of the selected group as one line
-    // (name, meshes "R C;...", cables "ma ra ca mb rb cb;...", shapes "h w;...", ring|chain|other) for the other
-    // harnesses (resolver_same_cases.cpp mode "planner": the carve planner port, then the resolver).
-    if (const char* out = std::getenv("CARVE_CASE_OUT")) {
-        if (FILE* f = std::fopen(out, "w")) {
-            for (const auto& cs : cases) {
-                const size_t n = cs.shapes.size();
-                bool chain = cs.edges.size() + 1 == n, ring = cs.edges.size() == n;
-                for (size_t i = 0; i < cs.edges.size() && (chain || ring); ++i) {
-                    const auto [x, y] = cs.edges[i];
-                    ring &= x == Stage(i) && y == Stage((i + 1) % n);
-                    chain &= x == Stage(i) && y == Stage(i + 1);
-                }
-                std::fprintf(f, "%s\t", cs.name.c_str());
-                for (size_t m = 0; m < cs.meshes.size(); ++m) {
-                    std::fprintf(f, "%s%d %d", m ? ";" : "", cs.meshes[m].first, cs.meshes[m].second);
-                }
-                std::fprintf(f, "\t");
-                for (size_t i = 0; i < cs.cables.size(); ++i) {
-                    const auto& cb = cs.cables[i];
-                    std::fprintf(
-                        f,
-                        "%s%d %d %d %d %d %d",
-                        i ? ";" : "",
-                        cb.mesh_a,
-                        cb.row_a,
-                        cb.col_a,
-                        cb.mesh_b,
-                        cb.row_b,
-                        cb.col_b);
-                }
-                std::fprintf(f, "\t");
-                for (size_t i = 0; i < n; ++i) {
-                    std::fprintf(f, "%s%d %d", i ? ";" : "", cs.shapes[i].first, cs.shapes[i].second);
-                }
-                std::fprintf(f, "\t%s\n", ring ? "ring" : chain ? "chain" : "other");
-            }
-            std::fclose(f);
-        }
-    }
-    // CARVE_ONLY=substring runs only the cases whose name contains it (for long reruns of a few cases).
-    const char* only_case = std::getenv("CARVE_ONLY");
+        BRUTE_MAX_STAGES);
     for (const auto& cs : cases) {
-        if (only_case != nullptr && cs.name.find(only_case) == std::string::npos) {
-            continue;
-        }
         run(cs, cap_s, show_plan);
     }
 }

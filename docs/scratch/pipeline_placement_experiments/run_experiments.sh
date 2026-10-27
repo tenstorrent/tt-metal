@@ -104,13 +104,8 @@ topo() {
 # Built like topo_solver_bench; leaves the topo group untouched so the two can be compared.
 carve_footprint() {
     local bdir="${TOPO_BUILD_DIR:-$TT_METAL_HOME/build_RelWithDebInfo}"
-    local group="${1:-quick}"  # quick | multi | repo | all | multi2 | file
-    # file: the carve_bench_encodings.py QUICK cases, exported once to topo/carve_encoding_cases.txt
-    # (regenerate with: cd carve && ../.out/venv/bin/python -c 'from carve_bench_encodings import QUICK;
-    #  [print(n, R, C, ";".join(f"{h} {w}" for h, w in s), sep="\t") for n, R, C, s in QUICK]').
-    # CARVE_CONFLICT_CAP=2000000000 removes the SAT conflict budget so a "no" is a proof (README 5).
-    export CARVE_CASES="${CARVE_CASES:-$HERE/topo/carve_encoding_cases.txt}"
-    log "carve as footprint mapping, group $group (${TOPO_TIMEOUT:-20} s cap per solve; engines ${CARVE_ENGINES:-auto,sat,dfs}; SAT budget ${CARVE_CONFLICT_CAP:-default})"
+    local group="${1:-quick}"  # quick | multi | repo | all
+    log "carve as footprint mapping, group $group (${TOPO_TIMEOUT:-20} s cap per solve)"
     "$HERE/topo/make_topo_bench.sh" "$bdir" "$OUT/carve_footprint_bench" carve_footprint_bench.cpp
     "$OUT/carve_footprint_bench" "$group" | grep -v "| info" | tee "$OUT/carve_footprint_$group.txt"
 }
