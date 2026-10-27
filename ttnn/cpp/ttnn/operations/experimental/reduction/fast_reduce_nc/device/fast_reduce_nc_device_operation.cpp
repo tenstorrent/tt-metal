@@ -50,20 +50,42 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     const auto& input = tensor_args.input;
     const auto& preallocated_output = tensor_args.preallocated_output;
 
-    // FLOAT32 is allowed so multi-stage Sum chains can carry FP32 between stages.
     operations::check_tensor(
-        input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32});
+        input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32, DataType::INT32});
     if (preallocated_output.has_value()) {
         operations::check_tensor(
             preallocated_output.value(),
             "FastReduceNC",
             "output",
-            {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32});
+            {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32, DataType::INT32});
         TT_FATAL(
             preallocated_output.value().logical_shape().rank() == input.logical_shape().rank(),
             "FastReduceNC preallocated output rank {} must match input rank {}",
             preallocated_output.value().logical_shape().rank(),
             input.logical_shape().rank());
+    }
+
+    const bool is_int32 = input.dtype() == DataType::INT32;
+    if (is_int32 || args.fp32_sfpu_accumulate) {
+        const auto arch = input.device()->arch();
+        TT_FATAL(
+            !args.fp32_sfpu_accumulate || input.dtype() == DataType::FLOAT32,
+            "FastReduceNC fp32_sfpu_accumulate requires FLOAT32 input, got {}",
+            input.dtype());
+        TT_FATAL(
+            arch != tt::ARCH::QUASAR,
+            "FastReduceNC SFPU accumulation (INT32, accurate FLOAT32) is not supported on Quasar");
+        TT_FATAL(
+            std::get<2>(ttnn::get_compute_kernel_config_args(arch, args.compute_kernel_config)),
+            "FastReduceNC {} accumulation on the SFPU requires fp32_dest_acc_en",
+            input.dtype());
+        TT_FATAL(!args.split_output_width.has_value(), "Split reduction does not support SFPU accumulation");
+    }
+    if (is_int32) {
+        const auto output_dtype = preallocated_output.has_value() ? preallocated_output->dtype()
+                                                                  : args.output_dtype.value_or(DataType::INT32);
+        TT_FATAL(
+            output_dtype == DataType::INT32, "FastReduceNC INT32 input requires an INT32 output, got {}", output_dtype);
     }
 
     CMAKE_UNIQUE_NAMESPACE::validate_split_output(args, tensor_args);
@@ -161,7 +183,8 @@ Tensor fast_reduce_nc(
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<DataType>& output_dtype) {
+    const std::optional<DataType>& output_dtype,
+    bool fp32_sfpu_accumulate) {
     using OperationType = ttnn::experimental::prim::FastReduceNCDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -169,7 +192,8 @@ Tensor fast_reduce_nc(
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
         .sub_core_grids = sub_core_grids,
-        .output_dtype = output_dtype};
+        .output_dtype = output_dtype,
+        .fp32_sfpu_accumulate = fp32_sfpu_accumulate};
     auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = output};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args).front();
