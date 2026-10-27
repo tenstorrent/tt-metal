@@ -375,3 +375,20 @@ check (F196 / F197); host times stay hidden until verified warm.
 - 20:15 runner smoke run 1 (20:01) hung: engine waited on /tt_prefill_layer_acks_<id> (pre-ring name) while the runner published /tt_prefill_layer_completions_<id>; runner idle waiting for the first chunk. Killed it. Framework fix ca3041407a8 (dgen_engine.ack_shm_name from the runner's scheduler_shm_name, driver default, selftest); one-line overseer edit in the model's test_runner_contract.py plan (uses D.ack_shm_name; uncommitted with the agent's contract edits, K.1 commits it). Re-running K.1#test_runner_smoke.
 - 20:31 K.1#test_runner_smoke run 2: tt-d-gen drove the prefill end to end (attached 12.3 s, ADMITTED slot 0, PREFILL_DONE 160 tokens, no errors), KV read-back of all 40 layers OK; then the stand-in decode HUNG on its first tail (32 tokens at start 128) in flat_routed_expert (se3_compute / se6_dcompute / se5_recv, triage generated/tt-triage/triage.txt). Box test after: PASS. Diagnostic (outside the gate, own results dir): same smoke with DS41_EXPERTS_PROGRAM_KEY=addresses (pre-FIX.5 key) to see whether FIX.5's patch path is involved.
 - 20:47 Diagnostic run 3 (EXPERTS_PROGRAM_KEY=addresses): prefill via tt-d-gen PASS again, decode HUNG again at 20:46:15 -> FIX.5 not the cause; the hang is flat_routed_expert on the decode tail input. HAND-OFF: HANDOFF_20261027_galaxy.md (this directory); node released; branch dnijemcevic/model_bringup_galaxy.
+
+## 2026-10-27 20:58 overseer session on bh-glx-110-c10u02 (slurm 158554), branch dnijemcevic/model_bringup_galaxy a681324c835
+- Node setup: tt-metal build (owner's build_node.sh) done 21:01:45, ttnn imports. Run dir restored: the 11:20 hand-off's
+  run1 (stamps, run.json, timeline) as base + node_handoff_20261027b's orchestrator.log, logs, briefs, K.1/FIX.5
+  transcripts (next K.1 attempt = 6); PAUSE dropped. Stamps are the 11:20 ones: K.1's kept units may re-run once.
+- Agent definitions were not linked on this node: ~/.claude/agents -> models/demos/common/bringup/agents/*.md.
+- 21:02 box test BLOCKED: /tmp/tt-device.lock (the pool's legacy interop lock) is a stale 0660 file of a previous user
+  (dlukic, 19:00), unopenable for us. Infra: this slurm job holds the node alone (squeue), so no legacy runner can
+  compete; /scratch/dnijemcevic/node_env.sh sets TTPOOL_LEGACY_LOCK/DIRTY to our own files (sourced by ~/.bashrc and
+  the launchers). 21:03 box test PASS (30.8 s, box_node.log).
+- Expert weight cache: copied by the owner from b06u08 (same commit, same mesh): DONE 21:02, 285 GB, 120 files.
+  (My own parallel rsync of it was stopped at once when the owner said so; its 24 KB partial removed so the owner's
+  move into tt_cache could not land inside it.)
+- hf_full: hf_dl.py with all 48 shards (no ignore patterns), tmux hfdl, started 20:59.
+- tt-d-gen: the dgen-build agent could not clone (no GitHub credentials on this node: no gh login, no registered key).
+  b06u08's checkout is a9701ce6675 = origin main (ls-remote from b06u08 21:01), so its checkout + build tree are
+  copied to the same paths (copy_dgen.sh); a later tt-d-gen update needs `gh auth login` here.
