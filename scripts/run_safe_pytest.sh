@@ -122,23 +122,44 @@ TT_TIMING_PRECOMPILE_PROGRAMS=-1
 # in-process during collect). On-disk JIT cache hits are included -- the runtime does not report
 # hit vs miss -- so precompile_s, not this count, is the cost signal. -1 = unknown.
 TT_TIMING_PRECOMPILE_BUILT=-1
+# Per-phase split of run_ms, so the fixed cost of every invocation can be told apart from the
+# tests. The wrapper measures its own share around the pytest process:
+#   phase_pre_ms    lock acquired -> pytest launched (venv activation, tool checks, reset)
+#   phase_pytest_ms pytest launched -> pytest exited
+#   phase_post_ms   pytest exited -> script exit (result handling, reset after a hang)
+# and tests/plugins/phase_timing.py splits phase_pytest_ms (startup, conftest, collection,
+# device open/close, test loop) into TT_TIMING_PHASES, a ready-made JSON fragment.
+# -1 = the run ended before that point. The plugin's phase_* fields are absent when pytest died
+# before writing them (hang, kill) and -1 where it could not see them (see the plugin docstring).
+TT_TIMING_PYTEST_LAUNCH_MS=0
+TT_TIMING_PYTEST_END_MS=0
+TT_TIMING_PHASES=""
+PHASES_FILE="/tmp/safe-pytest-phases-$$.json"
 
 _emit_device_timing() {
     local ec=$?
     if [[ -n "${TT_DEVICE_TIMING_LOG:-}" && "$TT_TIMING_LOCK_ACQUIRED_MS" -ne 0 ]]; then
-        local end_ms wait_ms run_ms log_dir esc_path
+        local end_ms wait_ms run_ms log_dir esc_path pre_ms=-1 pytest_ms=-1 post_ms=-1
         end_ms=$(date +%s%3N)
         wait_ms=$(( TT_TIMING_LOCK_ACQUIRED_MS - TT_TIMING_ENTRY_MS ))
         run_ms=$(( end_ms - TT_TIMING_LOCK_ACQUIRED_MS ))
+        if [[ "$TT_TIMING_PYTEST_LAUNCH_MS" -ne 0 ]]; then
+            pre_ms=$(( TT_TIMING_PYTEST_LAUNCH_MS - TT_TIMING_LOCK_ACQUIRED_MS ))
+            if [[ "$TT_TIMING_PYTEST_END_MS" -ne 0 ]]; then
+                pytest_ms=$(( TT_TIMING_PYTEST_END_MS - TT_TIMING_PYTEST_LAUNCH_MS ))
+                post_ms=$(( end_ms - TT_TIMING_PYTEST_END_MS ))
+            fi
+        fi
         log_dir="$(dirname "$TT_DEVICE_TIMING_LOG")"
         [[ -n "$log_dir" ]] && mkdir -p "$log_dir" 2>/dev/null
         # JSON-escape test_path: backslash first, then double-quote.
         esc_path="${TT_TIMING_TEST_PATH//\\/\\\\}"
         esc_path="${esc_path//\"/\\\"}"
-        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d,"precompile_mode":"%s","precompile_reason":"%s","precompile_s":%d,"precompile_programs":%d,"precompile_built":%d}\n' \
+        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d,"precompile_mode":"%s","precompile_reason":"%s","precompile_s":%d,"precompile_programs":%d,"precompile_built":%d,"phase_pre_ms":%d,"phase_pytest_ms":%d,"phase_post_ms":%d%s}\n' \
             "$TT_TIMING_SOURCE" "$$" "$TT_TIMING_ENTRY_MS" "$wait_ms" "$run_ms" "$esc_path" "$ec" \
             "$TT_TIMING_PRECOMPILE_MODE" "$TT_TIMING_PRECOMPILE_REASON" "$TT_TIMING_PRECOMPILE_S" \
             "$TT_TIMING_PRECOMPILE_PROGRAMS" "$TT_TIMING_PRECOMPILE_BUILT" \
+            "$pre_ms" "$pytest_ms" "$post_ms" "${TT_TIMING_PHASES:+,$TT_TIMING_PHASES}" \
             >> "$TT_DEVICE_TIMING_LOG" 2>/dev/null || true
     fi
     return $ec
@@ -649,6 +670,14 @@ if [[ "$PRECOMPILE" == true ]]; then
 else
     echo "PRECOMPILE: off (${TT_TIMING_PRECOMPILE_REASON}) — kernels compile on demand" >&2
 fi
+# Phase timings (see TT_TIMING_PHASES above). Only when a timing log is being kept. Like the
+# precompile plugin, it is imported as `tests.plugins.*`, so the repo root goes first on PYTHONPATH.
+if [[ -n "${TT_DEVICE_TIMING_LOG:-}" ]]; then
+    rm -f "$PHASES_FILE"
+    export SAFE_PYTEST_PHASES_FILE="$PHASES_FILE"
+    export PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}"
+    PYTEST_CMD+=(-p tests.plugins.phase_timing)
+fi
 # -x: stop on first failure (avoids running tests after a hang bricks the device)
 # --run-all: skip -x to get full pass/fail counts (for eval scoring)
 if [[ "$FAIL_FAST" == true ]]; then
@@ -711,12 +740,26 @@ trap '_signal_cleanup INT'  SIGINT
 # grep for the libttsim watchdog message after a sim hang. Process substitution
 # leaves $! pointing at pytest itself (not tee), so the signal trap still kills
 # the right process tree.
+TT_TIMING_PYTEST_LAUNCH_MS=$(date +%s%3N)
+export SAFE_PYTEST_LAUNCH_MS="$TT_TIMING_PYTEST_LAUNCH_MS"
 "${PYTEST_CMD[@]}" > >(tee "$PYTEST_STDOUT_LOG") 2>&1 &
 CHILD_PID=$!
 wait "$CHILD_PID"
 EXIT_CODE=$?
+TT_TIMING_PYTEST_END_MS=$(date +%s%3N)
 wait 2>/dev/null  # let tee flush before we grep
 CHILD_PID=
+
+# Splice the plugin's fragment into the timing record, only if it is exactly the shape the plugin
+# writes ("phase_x_ms":N,...), so a truncated file can never break the JSON line.
+_phases_re='^"phase_[a-z_]+":-?[0-9]+(,"phase_[a-z_]+":-?[0-9]+)*$'
+if [[ -s "$PHASES_FILE" ]]; then
+    _phases=$(<"$PHASES_FILE")
+    if [[ "$_phases" =~ $_phases_re ]]; then
+        TT_TIMING_PHASES="$_phases"
+    fi
+fi
+rm -f "$PHASES_FILE"
 
 echo "========================================"
 
