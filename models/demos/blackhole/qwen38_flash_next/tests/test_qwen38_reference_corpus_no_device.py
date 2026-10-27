@@ -475,3 +475,35 @@ def test_the_committed_corpus_verifies_and_has_the_planned_shape():
     by_id = {item.item_id: item for item in items}
     assert by_id["book-moby-dick"].token_ids == by_id["long-moby-dick-8192"].token_ids[: corpus.BOOK_TOKENS]
     assert by_id["long-moby-dick-8192"].token_ids == by_id["long-moby-dick-32704"].token_ids[:8192]
+
+
+def test_freeze_reproduces_the_committed_items_its_repository_inputs_determine(checkpoint_dir, tmp_path):
+    """freeze on the repository's acceptance records and tale, a stand-in novel and stand-in eval items: the acceptance,
+    served and tale items and the system prompt are the committed corpus's."""
+
+    start, end = corpus.MOBY_DICK_START[0], corpus.MOBY_DICK_END
+    novel = tmp_path / "moby-dick.txt"
+    novel.write_text(f"{start}\n{start}\n{'Call me Ishmael. ' * 12_000}\n{end}\n", encoding="utf-8")
+    evals = tmp_path / "eval"
+    evals.mkdir()
+    for name, key, id_key in (("gsm8k", "question", "item_id"), ("humaneval", "prompt", "task_id")):
+        rows = [json.dumps({key: f"stand-in {name} item {i}", id_key: f"{name}/{i}"}) for i in range(2)]
+        (evals / f"{name}.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    manifest = corpus.freeze_corpus(
+        checkpoint=checkpoint_dir,
+        acceptance_records=corpus.ACCEPTANCE_RECORDS,
+        tale_path=corpus.TALE_OF_TWO_CITIES,
+        moby_dick_path=novel,
+        eval_items_dir=evals,
+        out_dir=tmp_path / "corpus",
+    )
+
+    committed_manifest, committed = corpus.load_corpus()
+    assert manifest["provenance"]["system_prompt"] == committed_manifest["provenance"]["system_prompt"]
+    fresh = {item.item_id: item for item in corpus.load_corpus(tmp_path / "corpus")[1]}
+    determined = [
+        item for item in committed if item.part in ("acceptance", "served") or item.item_id == "book-tale-of-two-cities"
+    ]
+    assert len(determined) == 29
+    assert [fresh[item.item_id] for item in determined] == determined

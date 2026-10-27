@@ -150,6 +150,7 @@ TOOL_BASH = {
         },
     },
 }
+CHAT_SYSTEM_PROMPT = "You are a helpful assistant."
 HERMES_SYSTEM_PROMPT = (
     "You are Hermes, an autonomous coding agent working in a terminal.  You have tools; call one whenever a step "
     "needs it, read the result, and continue until the task is done.  Keep replies short and factual.  Never invent "
@@ -423,14 +424,13 @@ def freeze_corpus(
     from models.demos.blackhole.qwen38_flash_next.chat import PINNED_TOKENIZER_ARTIFACTS, Qwen38OfficialChatTemplate
     from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_protocol as protocol
     from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_server import load_acceptance_records
-    from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import SYSTEM_PROMPT
 
     tokenizer = Qwen38OfficialChatTemplate(checkpoint).tokenizer
     items: list[CorpusItem] = []
 
     def render(messages, tools, flags) -> tuple[int, ...]:
         if messages[0]["role"] != "system":
-            messages = [{"role": "system", "content": SYSTEM_PROMPT}, *messages]
+            messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}, *messages]
         return tuple(protocol.render_prompt(tokenizer, list(messages), list(tools), **flags))
 
     # acceptance: the records' prompt ids, whose transcript must re-render to the same ids (the extraction is exact)
@@ -544,7 +544,7 @@ def freeze_corpus(
     provenance = {
         "tokenizer": {name: PINNED_TOKENIZER_ARTIFACTS[name] for name in ("tokenizer.json", "chat_template.jinja")},
         "acceptance_records": {record["prompt"]: record["sha256"] for record in records},
-        "system_prompt": SYSTEM_PROMPT,
+        "system_prompt": CHAT_SYSTEM_PROMPT,
         "eval_templates": {"gsm8k": GSM8K_TEMPLATE, "humaneval": HUMANEVAL_TEMPLATE},
         "long_windows": "the 32 positions before the bridge at depths 2048 and 8192 and at the item's end",
     }
