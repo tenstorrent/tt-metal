@@ -99,21 +99,15 @@ int generate_unique_mesh_id() {
     return next_id++;
 }
 
-// All physical devices must belong to the same context ID. Workers stay awake for `spin` after their last work.
+// All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_default_thread_pool(
-    ContextId context_id,
-    const std::vector<Device*>& physical_devices,
-    std::chrono::microseconds spin = std::chrono::microseconds(0)) {
+    ContextId context_id, const std::vector<Device*>& physical_devices) {
     // Bind the thread-pool to the physical devices being used.
     if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool(context_id);
     }
-    return create_device_bound_thread_pool(context_id, physical_devices, spin);
+    return create_device_bound_thread_pool(context_id, physical_devices);
 }
-
-// Dispatch fan-outs come back to back (each enqueue fans out to every device), so its workers stay awake between
-// them instead of being woken each time. The reader pool parks: its CPUs are then free for the threads it serves.
-constexpr auto DISPATCH_POOL_SPIN = std::chrono::microseconds(250);
 
 // Helper function to verify all devices in the MeshDevice have the same value
 template <typename F>
@@ -382,8 +376,7 @@ MeshDeviceImpl::MeshDeviceImpl(
     mesh_id_(generate_unique_mesh_id()),
     view_(std::move(mesh_device_view)),
     parent_mesh_(std::move(parent_mesh)),
-    dispatch_thread_pool_(
-        create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()), DISPATCH_POOL_SPIN)),
+    dispatch_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     local_devices_ = view_->impl().get_devices();

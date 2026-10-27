@@ -173,25 +173,6 @@ bool spin_until(Ready ready) {
     return false;
 }
 
-// Polls for up to `window`. The pauses between polls leave most of the core to its SMT sibling, which often runs
-// the thread the poll is waiting for.
-template <typename Ready>
-bool spin_for(std::chrono::nanoseconds window, Ready ready) {
-    constexpr uint32_t POLLS_PER_CLOCK_READ = 32, PAUSES_PER_POLL = 8;
-    const auto deadline = std::chrono::steady_clock::now() + window;
-    do {
-        for (uint32_t i = 0; i < POLLS_PER_CLOCK_READ; i++) {
-            if (ready()) {
-                return true;
-            }
-            for (uint32_t pause = 0; pause < PAUSES_PER_POLL; pause++) {
-                ttsl::pause();
-            }
-        }
-    } while (std::chrono::steady_clock::now() < deadline);
-    return false;
-}
-
 // Tasks in flight across all workers of a pool, so that joining waits on one counter.
 class Completion {
 public:
@@ -290,23 +271,15 @@ class ParallelJob;
 class NumaAwareExecutor {
 public:
     // `index` is the executor's place in its pool; `published` is the pool's published parallel_for job, a slot of
-    // `jobs`. After its last task or call, the worker stays awake for `spin` before it parks, unless `park_after`
-    // names the job it last saw.
+    // `jobs`.
     NumaAwareExecutor(
         ContextId context_id,
         uint32_t physical_device_id,
         Completion& completion,
         uint32_t index,
         const std::atomic<uint64_t>& published,
-        const std::atomic<uint64_t>& park_after,
-        const std::unique_ptr<ParallelJob>* jobs,
-        std::chrono::nanoseconds spin) :
-        completion_(completion),
-        index_(index),
-        published_(published),
-        park_after_(park_after),
-        jobs_(jobs),
-        spin_(spin) {
+        const std::unique_ptr<ParallelJob>* jobs) :
+        completion_(completion), index_(index), published_(published), jobs_(jobs) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() { worker_loop(); });
@@ -358,18 +331,9 @@ private:
 
     bool has_work() const { return !tasks_.empty() || published_.load(std::memory_order_seq_cst) != seen_; }
 
-    // Stays awake for the spin window so back-to-back work is picked up without entering the kernel, then parks
-    // until a producer publishes work or the executor shuts down.
+    // Spins briefly, then parks until a producer publishes work or the executor shuts down.
     void wait_for_work() {
         if (spin_until([this] { return has_work(); })) {
-            return;
-        }
-        // Stop spinning once the pool asks its workers to park after the job this one last saw.
-        auto park_requested = [this] { return park_after_.load(std::memory_order_relaxed) == seen_; };
-        if (spin_.count() > 0 && !park_requested() &&
-            spin_for(
-                spin_, [&] { return has_work() || shutdown_.load(std::memory_order_relaxed) || park_requested(); }) &&
-            !park_requested()) {
             return;
         }
         // seq_cst pairs with wake(): either the producer sees the worker parked, or the worker sees the work.
@@ -387,9 +351,7 @@ private:
     std::atomic<bool> shutdown_ = false;
     alignas(64) uint32_t index_ = 0;
     const std::atomic<uint64_t>& published_;
-    const std::atomic<uint64_t>& park_after_;
     const std::unique_ptr<ParallelJob>* jobs_ = nullptr;
-    std::chrono::nanoseconds spin_{0};
     uint64_t seen_ = 0;  // The published word this worker last acted on; worker thread only.
     std::exception_ptr stored_exception_;
 };
@@ -644,16 +606,13 @@ public:
     // Constructor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
     // guaranteed to be bound to a CPU core on a NUMA Node "closest" to that device.
     // All physical devices must belong to the same context ID.
-    DeviceBoundThreadPool(
-        ContextId context_id,
-        const std::vector<tt::tt_metal::Device*>& physical_devices,
-        std::chrono::nanoseconds spin = std::chrono::nanoseconds(0)) :
+    DeviceBoundThreadPool(ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices) :
         num_workers_(physical_devices.size()) {
         allocate_jobs();
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
-                context_id, physical_devices[i]->id(), completion_, i, published_, park_after_, jobs_.data(), spin));
+                context_id, physical_devices[i]->id(), completion_, i, published_, jobs_.data()));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
             map_device(physical_devices[i]->id(), i);
         }
@@ -665,8 +624,8 @@ public:
         workers_.reserve(thread_count);
 
         for (uint32_t i = 0; i < thread_count; i++) {
-            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
-                context_id, i, completion_, i, published_, park_after_, jobs_.data(), std::chrono::nanoseconds(0)));
+            workers_.emplace_back(
+                std::make_unique<NumaAwareExecutor>(context_id, i, completion_, i, published_, jobs_.data()));
             phys_device_to_thread_id_[i] = i;
             map_device(i, i);
         }
@@ -738,10 +697,6 @@ public:
         }
     }
 
-    void park_workers() override {
-        park_after_.store(published_.load(std::memory_order_relaxed), std::memory_order_relaxed);
-    }
-
     void wait() override {
         thread_idx_.store(0, std::memory_order_relaxed);  // Reset thread_idx for next call without Device ID specified.
         completion_.wait();
@@ -808,8 +763,6 @@ private:
     std::atomic<uint32_t> last_job_ = 0;
     // The job of the current parallel_for, (generation << 32) | slot; every worker watches it.
     alignas(64) std::atomic<uint64_t> published_ = 0;
-    // The published word after which idle workers park instead of spinning (park_workers).
-    alignas(64) std::atomic<uint64_t> park_after_ = UINT64_MAX;
     // Worker by physical device id (ParallelJob::NONE if none).
     std::vector<uint32_t> worker_of_device_;
     // Executors backing this pool.
@@ -843,11 +796,6 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices) {
     return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices);
-}
-
-std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
-    ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices, std::chrono::microseconds spin) {
-    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices, spin);
 }
 
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId /*context_id*/) {
