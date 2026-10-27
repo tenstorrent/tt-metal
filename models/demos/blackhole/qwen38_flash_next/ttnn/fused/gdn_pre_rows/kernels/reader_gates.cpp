@@ -10,6 +10,8 @@
 // 1 constants addresses, 2 units, then (tile row, kind) pairs.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 namespace {
@@ -29,15 +31,20 @@ void kernel_main() {
 
     const auto projected = TensorAccessor(projected_args, projected_addr);
     const auto constants = TensorAccessor(constants_args, constants_addr);
+    const Noc noc;
 
     {
-        cb_reserve_back(cb_const, constant_tiles);
-        const uint32_t l1 = get_write_ptr(cb_const);
+        CircularBuffer(cb_const).reserve_back(constant_tiles);
         for (uint32_t t = 0; t < constant_tiles; ++t) {
-            noc_async_read_page(t, constants, l1 + t * fp32_tile_bytes);
+            noc.async_read(
+                constants,
+                CircularBuffer(cb_const),
+                constants.get_aligned_page_size(),
+                {.page_id = t},
+                {.offset_bytes = t * fp32_tile_bytes});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_const, constant_tiles);
+        noc.async_read_barrier();
+        CircularBuffer(cb_const).push_back(constant_tiles);
     }
 
     for (uint32_t unit = 0; unit < units; ++unit) {
@@ -45,21 +52,34 @@ void kernel_main() {
         const uint32_t kind = get_arg_val<uint32_t>(arg++);
         const uint32_t base = chunk * projection_tiles;
         if (kind == 0) {
-            cb_reserve_back(cb_ab, 2);
-            const uint32_t l1 = get_write_ptr(cb_ab);
-            noc_async_read_page(base + a_tile, projected, l1);
-            noc_async_read_page(base + b_tile, projected, l1 + bf16_tile_bytes);
-            noc_async_read_barrier();
-            cb_push_back(cb_ab, 2);
+            CircularBuffer(cb_ab).reserve_back(2);
+            noc.async_read(
+                projected,
+                CircularBuffer(cb_ab),
+                projected.get_aligned_page_size(),
+                {.page_id = base + a_tile},
+                {.offset_bytes = 0});
+            noc.async_read(
+                projected,
+                CircularBuffer(cb_ab),
+                projected.get_aligned_page_size(),
+                {.page_id = base + b_tile},
+                {.offset_bytes = bf16_tile_bytes});
+            noc.async_read_barrier();
+            CircularBuffer(cb_ab).push_back(2);
         } else {
             const uint32_t head = kind - 1;
-            cb_reserve_back(cb_z, head_tiles);
-            const uint32_t l1 = get_write_ptr(cb_z);
+            CircularBuffer(cb_z).reserve_back(head_tiles);
             for (uint32_t d = 0; d < head_tiles; ++d) {
-                noc_async_read_page(base + z_tile0 + head * head_tiles + d, projected, l1 + d * bf16_tile_bytes);
+                noc.async_read(
+                    projected,
+                    CircularBuffer(cb_z),
+                    projected.get_aligned_page_size(),
+                    {.page_id = base + z_tile0 + head * head_tiles + d},
+                    {.offset_bytes = d * bf16_tile_bytes});
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_z, head_tiles);
+            noc.async_read_barrier();
+            CircularBuffer(cb_z).push_back(head_tiles);
         }
     }
 }

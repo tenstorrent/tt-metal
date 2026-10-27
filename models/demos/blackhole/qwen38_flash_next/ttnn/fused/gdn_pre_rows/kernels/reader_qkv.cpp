@@ -15,6 +15,9 @@
 // (group, tile row) pairs.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 namespace {
@@ -37,28 +40,32 @@ constexpr uint32_t group_first_tile(uint32_t group) {
                                  : v_tile0 + (group - qk_groups) * head_tiles;
 }
 
-// The chain's row_mask_bf16_col tile for one tile row: 1.0 in column 0 of the rows below `rows`, zero elsewhere
-// (the tile's other columns are the tensor's own padding and the column broadcast never reads them).
-void build_row_mask(uint32_t cb, uint32_t keep) {
-    cb_reserve_back(cb, 1);
-    const uint32_t l1 = get_write_ptr(cb);
-    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
+// The chain's row_mask_bf16_col tile for one tile row: 1.0 in column 0 of its first `keep` rows (those below `rows`),
+// zero elsewhere (the tile's other columns are the tensor's own padding and the column broadcast never reads them).
+void build_row_mask(uint32_t cb_id, uint32_t keep) {
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(1);
+    const uint32_t mask_l1 = cb.get_write_ptr();
+    const CoreLocalMem<volatile uint32_t> words(mask_l1);
     for (uint32_t k = 0; k < bf16_tile_bytes / 4; ++k) {
         words[k] = 0;
     }
-    volatile tt_l1_ptr uint16_t* elements = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1);
+    const CoreLocalMem<volatile uint16_t> elements(mask_l1);
     for (uint32_t row = 0; row < keep; ++row) {
         elements[face_element(row, 0)] = bf16_one_bits;
     }
-    cb_push_back(cb, 1);
+    cb.push_back(1);
 }
 
+// One page of `tensor` into one reserved page of `cb`, landed and pushed.
 template <typename Accessor>
-void read_one(uint32_t cb, const Accessor& tensor, uint32_t page) {
-    cb_reserve_back(cb, 1);
-    noc_async_read_page(page, tensor, get_write_ptr(cb));
-    noc_async_read_barrier();
-    cb_push_back(cb, 1);
+void read_one(uint32_t cb_id, const Accessor& tensor, uint32_t page) {
+    const Noc noc;
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(1);
+    noc.async_read(tensor, cb, tensor.get_aligned_page_size(), {.page_id = page}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    cb.push_back(1);
 }
 }  // namespace
 
@@ -93,61 +100,97 @@ void kernel_main() {
     const auto tap2 = TensorAccessor(tap2_args, tap2_addr);
     const auto tap3 = TensorAccessor(tap3_args, tap3_addr);
     const auto selects = TensorAccessor(selects_args, selects_addr);
-    const auto k = TensorAccessor(scalars_args, scalars_addr);
+    const auto scalars = TensorAccessor(scalars_args, scalars_addr);
+    const Noc noc;
 
     {  // the constants, once: nine selection tiles then the three small tiles, each into its own CB
-        cb_reserve_back(cb_sel, select_tiles);
-        const uint32_t l1 = get_write_ptr(cb_sel);
+        CircularBuffer(cb_sel).reserve_back(select_tiles);
         for (uint32_t t = 0; t < select_tiles; ++t) {
-            noc_async_read_page(t, selects, l1 + t * bf16_tile_bytes);
+            noc.async_read(
+                selects,
+                CircularBuffer(cb_sel),
+                selects.get_aligned_page_size(),
+                {.page_id = t},
+                {.offset_bytes = t * bf16_tile_bytes});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_sel, select_tiles);
-        read_one(cb_scaler, k, reduce_scaler_page);
-        read_one(cb_eps, k, eps_page);
-        read_one(cb_scale, k, scale_page);
+        noc.async_read_barrier();
+        CircularBuffer(cb_sel).push_back(select_tiles);
+        read_one(cb_scaler, scalars, reduce_scaler_page);
+        read_one(cb_eps, scalars, eps_page);
+        read_one(cb_scale, scalars, scale_page);
     }
 
     uint32_t previous_group = 0xFFFFFFFFu;
     for (uint32_t unit = 0; unit < units; ++unit) {
         const uint32_t group = get_arg_val<uint32_t>(arg++);
         const uint32_t chunk = get_arg_val<uint32_t>(arg++);
-        const uint32_t first = group_first_tile(group);
+        const uint32_t first_tile = group_first_tile(group);
         const bool fresh = group != previous_group;
         previous_group = group;
 
         if (fresh) {
             // the group's tap weights: tap t's column tile d at cb_tap index 4 d + t
-            cb_reserve_back(cb_tap, conv_taps * head_tiles);
-            const uint32_t tl1 = get_write_ptr(cb_tap);
+            CircularBuffer(cb_tap).reserve_back(conv_taps * head_tiles);
             for (uint32_t d = 0; d < head_tiles; ++d) {
-                noc_async_read_page(first + d, tap0, tl1 + (head_tiles * d + 0) * bf16_tile_bytes);
-                noc_async_read_page(first + d, tap1, tl1 + (head_tiles * d + 1) * bf16_tile_bytes);
-                noc_async_read_page(first + d, tap2, tl1 + (head_tiles * d + 2) * bf16_tile_bytes);
-                noc_async_read_page(first + d, tap3, tl1 + (head_tiles * d + 3) * bf16_tile_bytes);
+                noc.async_read(
+                    tap0,
+                    CircularBuffer(cb_tap),
+                    tap0.get_aligned_page_size(),
+                    {.page_id = first_tile + d},
+                    {.offset_bytes = (head_tiles * d + 0) * bf16_tile_bytes});
+                noc.async_read(
+                    tap1,
+                    CircularBuffer(cb_tap),
+                    tap1.get_aligned_page_size(),
+                    {.page_id = first_tile + d},
+                    {.offset_bytes = (head_tiles * d + 1) * bf16_tile_bytes});
+                noc.async_read(
+                    tap2,
+                    CircularBuffer(cb_tap),
+                    tap2.get_aligned_page_size(),
+                    {.page_id = first_tile + d},
+                    {.offset_bytes = (head_tiles * d + 2) * bf16_tile_bytes});
+                noc.async_read(
+                    tap3,
+                    CircularBuffer(cb_tap),
+                    tap3.get_aligned_page_size(),
+                    {.page_id = first_tile + d},
+                    {.offset_bytes = (head_tiles * d + 3) * bf16_tile_bytes});
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_tap, conv_taps * head_tiles);
+            noc.async_read_barrier();
+            CircularBuffer(cb_tap).push_back(conv_taps * head_tiles);
         }
 
         // One whole window per unit, pushed and popped as one block of window_tiles tiles on a CB of twice that many
         // pages, so the compute's read never straddles the buffer's end (cb_api.h's contract). The previous tile row is
         // re-read from DRAM rather than carried across the pop, the only way the window stays one contiguous block.
         {
-            cb_reserve_back(cb_in, window_tiles);
-            const uint32_t l1 = get_write_ptr(cb_in);
+            CircularBuffer(cb_in).reserve_back(window_tiles);
             for (uint32_t d = 0; d < head_tiles; ++d) {
                 if (chunk == 0) {
-                    noc_async_read_page(first + d, history, l1 + d * bf16_tile_bytes);
+                    noc.async_read(
+                        history,
+                        CircularBuffer(cb_in),
+                        history.get_aligned_page_size(),
+                        {.page_id = first_tile + d},
+                        {.offset_bytes = d * bf16_tile_bytes});
                 } else {
-                    noc_async_read_page(
-                        (chunk - 1) * projection_tiles + first + d, projected, l1 + d * bf16_tile_bytes);
+                    noc.async_read(
+                        projected,
+                        CircularBuffer(cb_in),
+                        projected.get_aligned_page_size(),
+                        {.page_id = (chunk - 1) * projection_tiles + first_tile + d},
+                        {.offset_bytes = d * bf16_tile_bytes});
                 }
-                noc_async_read_page(
-                    chunk * projection_tiles + first + d, projected, l1 + (head_tiles + d) * bf16_tile_bytes);
+                noc.async_read(
+                    projected,
+                    CircularBuffer(cb_in),
+                    projected.get_aligned_page_size(),
+                    {.page_id = chunk * projection_tiles + first_tile + d},
+                    {.offset_bytes = (head_tiles + d) * bf16_tile_bytes});
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_in, window_tiles);
+            noc.async_read_barrier();
+            CircularBuffer(cb_in).push_back(window_tiles);
         }
 
         if (group >= qk_groups) {  // a v group takes the chain's row-mask multiply, which is also its rows mask

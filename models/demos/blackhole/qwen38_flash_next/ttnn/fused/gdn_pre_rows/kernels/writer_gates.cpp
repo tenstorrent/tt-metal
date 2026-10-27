@@ -13,6 +13,9 @@
 // 2 sig addresses, 3 rows, 4 units, then (tile row, kind) pairs.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 namespace {
@@ -25,10 +28,10 @@ constexpr uint32_t face_element(uint32_t row, uint32_t col) {
     return ((row >> 4) * 2 + (col >> 4)) * face_elements + (row & 15) * face_columns + (col & 15);
 }
 
-void fill_words(uint32_t l1, uint32_t words, uint32_t value) {
-    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
+void fill_words(uint32_t l1_addr, uint32_t words, uint32_t value) {
+    CoreLocalMem<volatile uint32_t> dst(l1_addr);
     for (uint32_t k = 0; k < words; ++k) {
-        p[k] = value;
+        dst[k] = value;
     }
 }
 }  // namespace
@@ -49,11 +52,12 @@ void kernel_main() {
     const auto beta_c = TensorAccessor(beta_args, beta_addr);
     const auto g_c = TensorAccessor(g_args, g_addr);
     const auto sig = TensorAccessor(sig_args, sig_addr);
+    const Noc noc;
 
     const uint32_t last_chunk = (rows - 1) / tile_rows;
     const uint32_t partial = rows % tile_rows;
     // The column scratch: never pushed or popped, so its write pointer is stable for the whole kernel.
-    const uint32_t scratch = get_write_ptr(cb_col);
+    const uint32_t scratch = CircularBuffer(cb_col).get_write_ptr();
     fill_words(scratch, fp32_tile_bytes / 4, 0);
 
     for (uint32_t unit = 0; unit < units; ++unit) {
@@ -62,36 +66,41 @@ void kernel_main() {
         const uint32_t keep = chunk > last_chunk ? 0 : (chunk == last_chunk && partial != 0 ? partial : tile_rows);
 
         if (kind == 0) {
-            cb_wait_front(cb_beta, 1);
-            cb_wait_front(cb_g, 1);
-            const uint32_t sources[2] = {get_read_ptr(cb_beta), get_read_ptr(cb_g)};
-            volatile tt_l1_ptr uint32_t* column = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+            CircularBuffer(cb_beta).wait_front(1);
+            CircularBuffer(cb_g).wait_front(1);
+            const uint32_t sources[2] = {CircularBuffer(cb_beta).get_read_ptr(), CircularBuffer(cb_g).get_read_ptr()};
+            const CoreLocalMem<volatile uint32_t> column(scratch);
             for (uint32_t which = 0; which < 2; ++which) {
-                volatile tt_l1_ptr uint32_t* source = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sources[which]);
+                const CoreLocalMem<volatile uint32_t> source(sources[which]);
+                const auto& gate = which == 0 ? beta_c : g_c;
                 for (uint32_t head = 0; head < value_heads; ++head) {
                     for (uint32_t row = 0; row < keep; ++row) {
                         column[face_element(row, 0)] = source[face_element(row, head)];
                     }
                     const uint32_t page = head * chunks + chunk;
-                    noc_async_write_page(page, which == 0 ? beta_c : g_c, scratch);
-                    noc_async_write_barrier();
+                    noc.async_write(column, gate, gate.get_aligned_page_size(), {}, {.page_id = page});
+                    noc.async_write_barrier();
                     for (uint32_t row = 0; row < keep; ++row) {
                         column[face_element(row, 0)] = 0;
                     }
                 }
             }
-            cb_pop_front(cb_beta, 1);
-            cb_pop_front(cb_g, 1);
+            CircularBuffer(cb_beta).pop_front(1);
+            CircularBuffer(cb_g).pop_front(1);
         } else {
             const uint32_t head = kind - 1;
-            cb_wait_front(cb_sig, head_tiles);
+            CircularBuffer(cb_sig).wait_front(head_tiles);
             // sig carries no row mask: the chain's z sigmoid has none
-            const uint32_t l1 = get_read_ptr(cb_sig);
             for (uint32_t d = 0; d < head_tiles; ++d) {
-                noc_async_write_page(chunk * value_tiles + head * head_tiles + d, sig, l1 + d * bf16_tile_bytes);
+                noc.async_write(
+                    CircularBuffer(cb_sig),
+                    sig,
+                    sig.get_aligned_page_size(),
+                    {.offset_bytes = d * bf16_tile_bytes},
+                    {.page_id = chunk * value_tiles + head * head_tiles + d});
             }
-            noc_async_write_barrier();
-            cb_pop_front(cb_sig, head_tiles);
+            noc.async_write_barrier();
+            CircularBuffer(cb_sig).pop_front(head_tiles);
         }
     }
 }
