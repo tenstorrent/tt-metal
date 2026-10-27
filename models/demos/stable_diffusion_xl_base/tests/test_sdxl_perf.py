@@ -148,12 +148,17 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
-        "wormhole": 23_745_000,  # Average of 3 main CI runs (Jun 22, 2026); transformers 5.10.2 bump reduced CLIP encoder dispatch
-        "blackhole": 11_720_533,
+        # Mean of 3 main CI runs 2026-10-20..22 (19.25M-19.30M). #57208 runs tt_dit Linear inputs of up to 128 rows as
+        # a 1D mcast matmul; previous target 23.75M.
+        "wormhole": 19_270_000,
+        # Mean of bh_p150 main CI runs 2026-10-20..21 (9.465M, 9.469M) after #57208; previous target 11.72M.
+        "blackhole": 9_467_000,
     },
     "clip_encoder_2": {
-        "wormhole": 88_529_000,  # Average of 3 main CI runs (Jun 22, 2026)
-        "blackhole": 42_895_094,
+        # Mean of 3 main CI runs 2026-10-20..22 (63.57M-63.80M) after #57208; previous target 88.53M.
+        "wormhole": 63_681_000,
+        # Mean of bh_p150 main CI runs 2026-10-20..21 (35.22M, 35.24M) after #57208; previous target 42.90M.
+        "blackhole": 35_231_000,
     },
 }
 

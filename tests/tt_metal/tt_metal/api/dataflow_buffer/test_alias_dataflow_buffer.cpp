@@ -485,6 +485,7 @@ TEST_F(UnitMeshFixture, AliasDFBAddressEquality1Sx1S) {
 
     program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const uint32_t id_a = program.impl().get_dfb_handle("dfb_a");
@@ -718,6 +719,7 @@ TEST_F(UnitMeshFixture, AliasDFBAllocSecondarySkipped) {
 
     program.impl().set_dfb_alias(id_a, id_b);
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const uint32_t addr_a = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
@@ -749,6 +751,7 @@ TEST_F(UnitMeshFixture, AliasDFBAlloc3Way) {
     program.impl().set_dfb_alias(id_a, id_b);
     program.impl().set_dfb_alias(id_a, id_c);
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const uint32_t addr_a = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
@@ -780,6 +783,7 @@ TEST_F(UnitMeshFixture, AliasDFBAgreedGroupResize) {
     program.impl().set_dfb_alias(id_a, id_b);
 
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const uint32_t addr_a0 = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
@@ -794,6 +798,7 @@ TEST_F(UnitMeshFixture, AliasDFBAgreedGroupResize) {
         {.dfb_id = id_b, .entry_size = 1024u, .num_entries = 8u},  // 8192
     };
     EXPECT_NO_THROW(program.impl().apply_dfb_size_overrides(overrides));
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     auto dfb_a = program.impl().get_dataflow_buffer(id_a);
@@ -819,6 +824,7 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryAddressEquality) {
 
     program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     auto rtas = [&]() {

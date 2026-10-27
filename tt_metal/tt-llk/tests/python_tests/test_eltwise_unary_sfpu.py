@@ -10,28 +10,30 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import distinct_dest_accumulation_modes
-from helpers.data_format_inference import effective_dest_acc
+from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
-    TILE_DIMENSIONS,
     UnarySFPUGolden,
     get_golden_generator,
 )
 from helpers.llk_params import (
     ApproximationMode,
-    BlocksCalculationAlgorithm,
     DestAccumulation,
     FastMode,
+    FusedSort,
     MathOperation,
+    PerfRunType,
+    StableSort,
+    Transpose,
     format_dict,
 )
 from helpers.param_config import (
     build_param_id,
-    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
 )
-from helpers.sfpu_accuracy_budget import FLUSH_SUBNORMAL_OUTPUTS, accuracy_contract
+from helpers.perf.core import ALL_PERF_RUN_TYPES, create_test_or_perf_config
+from helpers.sfpu_accuracy_budget import accuracy_contract
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SHIFT_EDGE_AMOUNTS,
@@ -45,25 +47,39 @@ from helpers.sfpu_domains import (
     sfpu_unary_ops,
     specials_after_nan_sign_gate,
     specials_safe,
+    swept_unary_ops,
+    unpacks_to_dest,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import (
+    DistributionKind,
+    StimuliSpec,
+    calculate_tile_and_face_counts,
+    generate_stimuli,
+)
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
+    DEST_SYNC,
     FAST_MODE,
+    FUSED_SORT,
+    ITERATIONS,
+    LOOP_FACTOR,
     MATH_OP,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
+    NUM_FACES,
     SFPU_POLYGAMMA_ORDER,
     SFPU_RELU_MAX_THRESHOLD,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
+    STABLE_SORT,
     TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
     DestSync,
-    generate_input_dim,
 )
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
+from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS
 from helpers.utils import passed_test
 
 SUPPORTED_FAST_MODE_OPS = [
@@ -116,7 +132,7 @@ BROAD_SWEEP_OPS = [
 # ops sfpu_domains marks as deliberately unswept. Sorted so the parametrize ids are stable
 # across runs.
 STANDARD_SWEEP_OPS = sorted(
-    sfpu_unary_ops() - set(BROAD_SWEEP_OPS) - set(_UNARY_OPS_NOT_SWEPT),
+    swept_unary_ops() - set(BROAD_SWEEP_OPS),
     key=lambda op: op.name,
 )
 
@@ -301,6 +317,7 @@ _UNARY_SWEEP_ARGNAMES = (
 
 
 @pytest.mark.nightly
+@pytest.mark.parametrize("dest_sync", [DestSync.Half])
 @pytest.mark.parametrize(
     ",".join(_UNARY_SWEEP_ARGNAMES),
     UNARY_SWEEP_PARAMS,
@@ -313,6 +330,7 @@ def test_eltwise_unary_sfpu(
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
+    dest_sync: DestSync,
 ):
     """Every float unary SFPU op, over its registered domain.
 
@@ -334,6 +352,7 @@ def test_eltwise_unary_sfpu(
         mathop,
         fast_mode,
         input_dimensions,
+        dest_sync=dest_sync,
     )
 
 
@@ -345,9 +364,7 @@ def test_eltwise_unary_sfpu(
 # what varies is whether specials can be injected, which specials_safe() decides per
 # (input, output, dest_acc).
 
-_EDGE_SWEEP_OPS = sorted(
-    sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT), key=lambda o: o.name
-)
+_EDGE_SWEEP_OPS = sorted(swept_unary_ops(), key=lambda o: o.name)
 
 # What the cat-A/cat-D probes found on Wormhole, recorded as non-strict xfails so each case
 # still executes and reports XPASS if the behaviour changes.
@@ -515,47 +532,22 @@ def test_sqrt_custom_infinity_regression(request):
     src_A[0] = float("inf")
     src_A[1] = float("-inf")
     src_B = torch.zeros(num_elements, dtype=torch.float32)
-    tile_cnt = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=MathOperation.SqrtCustom),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
+    res = torch.tensor(
+        eltwise_unary_sfpu(
+            formats=formats,
+            dest_acc=dest_acc,
+            approx_mode=ApproximationMode.No,
+            mathop=MathOperation.SqrtCustom,
+            fast_mode=FastMode.No,
+            input_dimensions=input_dimensions,
+            src_A=src_A,
+            src_B=src_B,
+            unpack_to_dest=True,
+            check_golden=False,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
+        dtype=torch.float32,
     )
-
-    res = torch.tensor(configuration.run().result, dtype=torch.float32)
 
     assert res[0] == float("inf"), (
         f"sqrt_custom(+inf) returned {res[0]!r}, expected +inf. The non-finite guard in "
@@ -623,47 +615,22 @@ def test_sqrt_family_negative_zero_regression(
     # A negative that must stay NaN: catches the zero-magnitude arm being widened.
     src_A[2] = -1.0
     src_B = torch.zeros(num_elements, dtype=torch.float32)
-    tile_cnt = 1
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(approx_mode),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
+    res = torch.tensor(
+        eltwise_unary_sfpu(
+            formats=formats,
+            dest_acc=dest_acc,
+            approx_mode=approx_mode,
+            mathop=mathop,
+            fast_mode=FastMode.No,
+            input_dimensions=input_dimensions,
+            src_A=src_A,
+            src_B=src_B,
+            unpack_to_dest=True,
+            check_golden=False,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
+        dtype=torch.float32,
     )
-
-    res = torch.tensor(configuration.run().result, dtype=torch.float32)
     bits = res.view(torch.int32)
     op = mathop.name.lower()
 
@@ -727,7 +694,7 @@ def _int_unary_stimuli_spec(mathop):
     if not edges:
         raise AssertionError(
             f"{mathop.name} has no op_edge_points() entry, so the int sweep cannot probe "
-            "its comparison scalar — add one in sfpu_domains._OP_EDGE_POINTS"
+            "its comparison scalar — add one in sfpu_domains._OP_EDGES"
         )
     straddle = [float(v + d) for v in edges for d in (-1, 0, 1)]
     # Positive-only keeps signed and unsigned interpretations identical (safe under
@@ -870,7 +837,7 @@ def _relu_max_probe_spec(threshold, formats, dest_acc):
         values += [float("inf"), float("-inf"), float("nan"), _NEGATIVE_NAN]
     if negative_zero_delivered(formats.input_format, dest_acc):
         values.append(-0.0)
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
+    if unpacks_to_dest(formats.input_format, dest_acc):
         values += [
             _FP32_MIN_SUBNORMAL,
             -_FP32_MIN_SUBNORMAL,
@@ -910,6 +877,7 @@ def test_eltwise_unary_sfpu_relu_max_threshold(
         input_dimensions,
         spec_A=_relu_max_probe_spec(threshold, formats, dest_acc),
         relu_max_threshold=threshold,
+        return_golden=True,
     )
 
     torch_format = format_dict[formats.output_format]
@@ -1043,6 +1011,7 @@ def test_eltwise_unary_sfpu_polygamma_order(
         # and 1.4% for bfloat16, against 32.6 float32 ULP and 0.74 bfloat16 ULP above 2^-100.
         custom_rtol=0.05 if formats.output_format == DataFormat.Float32 else 0.02,
         polygamma_order=polygamma_order,
+        return_golden=True,
     )
 
 
@@ -1094,7 +1063,6 @@ def test_eltwise_unary_sfpu_signbit_int32():
     dest_acc = DestAccumulation.Yes
     input_dimensions = [64, 64]
     num_elements = input_dimensions[0] * input_dimensions[1]
-    tile_cnt = num_elements // (TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1])
     values = torch.tensor(_SIGNBIT_INT32_VALUES, dtype=torch.int32)
     src_A = values.repeat(num_elements // values.numel() + 1)[:num_elements]
 
@@ -1107,46 +1075,21 @@ def test_eltwise_unary_sfpu_signbit_int32():
         input_dimensions,
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=MathOperation.Signbit),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_A.clone(),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
-            twos_complement=True,
-        ),
+    res_from_L1 = eltwise_unary_sfpu(
+        formats=formats,
         dest_acc=dest_acc,
+        approx_mode=ApproximationMode.No,
+        mathop=MathOperation.Signbit,
+        fast_mode=FastMode.No,
+        input_dimensions=input_dimensions,
+        src_A=src_A,
+        src_B=src_A.clone(),
+        twos_complement=True,
         unpack_to_dest=True,
+        check_golden=False,
     )
 
-    res_tensor = torch.tensor(configuration.run().result, dtype=torch.int64)
+    res_tensor = torch.tensor(res_from_L1, dtype=torch.int64)
     golden = golden_tensor.to(torch.int64)
     assert res_tensor.shape == golden.shape, "Result and golden differ in length"
     mismatch = torch.nonzero(res_tensor != golden).flatten()
@@ -1297,7 +1240,7 @@ def _threshold_op_stimuli_spec(mathop):
     if threshold is None:
         raise AssertionError(
             f"{mathop.name} has no op_threshold() entry, so the threshold sweep cannot "
-            "land on its comparison threshold — add one in sfpu_domains._OP_COMPARISON_THRESHOLD"
+            "land on its comparison threshold — add one in sfpu_domains._OP_EDGES"
         )
 
     def dist(size, dtype, generator):
@@ -1344,13 +1287,14 @@ def test_eltwise_unary_sfpu_threshold(
 
 
 def eltwise_unary_sfpu(
-    test_name,
-    formats: list[InputOutputFormat],
-    dest_acc,
-    approx_mode,
-    mathop,
-    fast_mode: FastMode,
-    input_dimensions: list[int],
+    test_name="sources/eltwise_unary_sfpu_test.cpp",
+    formats: list[InputOutputFormat] | None = None,
+    dest_acc=None,
+    approx_mode=None,
+    mathop=None,
+    fast_mode: FastMode = FastMode.No,
+    input_dimensions: list[int] | None = None,
+    dest_sync: DestSync = DestSync.Half,
     spec_A=None,
     shift_amount=None,
     relu_min_int_threshold=None,
@@ -1358,79 +1302,255 @@ def eltwise_unary_sfpu(
     polygamma_order=None,
     twos_complement=False,
     gate_on_step_budget=False,
+    *,
+    clamp_negative=True,
+    iterations=32,
+    stable_sort=StableSort.No,
+    fused_sort=FusedSort.No,
+    loop_factor=1,
+    src_A=None,
+    src_B=None,
+    tile_cnt_A=None,
+    tile_cnt_B=None,
+    unpack_to_dest=None,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    collect_result=False,
+    check_golden=True,
+    return_golden=False,
+    custom_atol=None,
+    custom_rtol=None,
 ):
-    """*gate_on_step_budget* is for a caller whose hand-built stimulus the op's step
+    """Shared unary SFPU runner for functional, perf, and accuracy.
+
+    Stimuli come from the op's own domain unless *src_A* / *src_B* (with their tile
+    counts) are given. *unpack_to_dest* defaults to ``unpacks_to_dest(input, dest_acc)``.
+
+    *is_perf* runs every *run_types* entry under *perf_report* and returns ``None``,
+    unless *collect_result* also reads the L1_TO_L1 result back.
+
+    *check_golden=False* returns the raw L1 result without a golden check.
+    *return_golden* returns ``(res_tensor, golden_tensor)`` instead, for callers that
+    want a stricter gate than the op's tolerance; it needs *check_golden*.
+
+    *gate_on_step_budget* is for a caller whose hand-built stimulus the op's step
     budget was measured on (``MEASURED_ON_SWEEP`` in test_sfpu_accuracy_budget.py): it
-    gates on the whole contract rather than only its tolerance arm."""
+    gates on the whole contract rather than only its tolerance arm.
+
+    *custom_atol* / *custom_rtol* replace the contract's gate for a caller whose stimulus
+    needs a tolerance the op's registry row does not describe (the polygamma order sweep).
+    """
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
 
-    # The op's own signed domain, not generate_stimuli's positive-only format default, which
-    # would leave the x<0 branch, the knees and the saturation tails unreached. A KeyError
-    # means a new op arrived with no _OP_DOMAIN_REGISTRY entry -- register it. The domain has
-    # to hold for the whole pipeline, so for_op_pipeline resolves against both formats and the
-    # approximation mode and keeps the tightest result.
-    if spec_A is None:
-        spec_A = exclude_undefined(
-            mathop,
-            for_op_pipeline(
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if return_golden and not check_golden:
+        raise ValueError("return_golden needs check_golden=True")
+
+    need_stimuli = src_A is not None or not is_perf or collect_result or check_golden
+    if src_A is None and need_stimuli:
+        # The op's own signed domain, not generate_stimuli's positive-only format default,
+        # which would leave the x<0 branch, the knees and the saturation tails unreached.
+        if spec_A is None:
+            spec_A = exclude_undefined(
                 mathop,
-                formats.input_format,
-                formats.output_format,
-                approx_mode=approx_mode,
-            ).spec_A,
+                for_op_pipeline(
+                    mathop,
+                    formats.input_format,
+                    formats.output_format,
+                    approx_mode=approx_mode,
+                ).spec_A,
+            )
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=input_dimensions,
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=input_dimensions,
+            spec_A=spec_A,
+        )
+    elif src_A is not None:
+        computed_A, computed_B, _ = calculate_tile_and_face_counts(
+            input_dimensions,
+            input_dimensions,
+            face_r_dim=MAX_FACE_R_DIM,
+            num_faces=MAX_NUM_FACES,
+        )
+        if tile_cnt_A is None:
+            tile_cnt_A = computed_A
+        if tile_cnt_B is None:
+            tile_cnt_B = computed_B
+        if src_B is None:
+            src_B = torch.zeros_like(src_A)
+    else:
+        tile_cnt_A, tile_cnt_B, _ = calculate_tile_and_face_counts(
+            input_dimensions,
+            input_dimensions,
+            face_r_dim=MAX_FACE_R_DIM,
+            num_faces=MAX_NUM_FACES,
         )
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=spec_A,
-    )
+    golden_tensor = None
+    if check_golden:
+        generate_golden = get_golden_generator(UnarySFPUGolden)
+        golden_tensor = generate_golden(
+            mathop,
+            src_A,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            input_dimensions,
+            **({} if shift_amount is None else {"shift_amount": shift_amount}),
+            **(
+                {}
+                if relu_min_int_threshold is None
+                else {"relu_min_int_threshold": relu_min_int_threshold}
+            ),
+            **(
+                {}
+                if relu_max_threshold is None
+                else {"relu_max_threshold": relu_max_threshold}
+            ),
+            **({} if polygamma_order is None else {"polygamma_order": polygamma_order}),
+        )
 
-    generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
+    configuration = build_eltwise_unary_sfpu_config(
+        formats,
+        dest_acc,
+        approx_mode,
         mathop,
-        src_A,
+        input_dimensions,
+        src_A if need_stimuli else None,
+        src_B if need_stimuli else None,
+        tile_cnt_A,
+        tile_cnt_B,
+        test_name=test_name,
+        fast_mode=fast_mode,
+        dest_sync=dest_sync,
+        shift_amount=shift_amount,
+        relu_min_int_threshold=relu_min_int_threshold,
+        relu_max_threshold=relu_max_threshold,
+        polygamma_order=polygamma_order,
+        twos_complement=twos_complement,
+        clamp_negative=clamp_negative,
+        iterations=iterations,
+        stable_sort=stable_sort,
+        fused_sort=fused_sort,
+        loop_factor=loop_factor,
+        unpack_to_dest=unpack_to_dest,
+        is_perf=is_perf,
+        run_types=run_types,
+    )
+
+    if is_perf and not collect_result:
+        configuration.run(perf_report)
+        return None
+
+    if is_perf and collect_result:
+        configuration.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+        configuration.run(perf_report)
+        res_from_L1 = configuration.variant_stimuli.collect_results(
+            TestConfig.TENSIX_LOCATION
+        )
+    else:
+        res_from_L1 = configuration.run().result
+
+    if not check_golden:
+        return res_from_L1
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    torch_format = format_dict[formats.output_format]
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+
+    # Gate on the op's tolerance only: its step budgets were measured over the whole
+    # format, so only callers whose stimuli they were measured on opt into them.
+    contract = accuracy_contract(
+        mathop,
+        output_format=formats.output_format,
+        input_format=formats.input_format,
+        approx_mode=approx_mode,
+        dest_acc=dest_acc,
+        arch=TestConfig.CHIP_ARCH,
+    )
+    if custom_atol is not None or custom_rtol is not None:
+        gate_kwargs = {"custom_atol": custom_atol, "custom_rtol": custom_rtol}
+    elif gate_on_step_budget:
+        gate_kwargs = contract.passed_test_kwargs(
+            flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS
+        )
+    else:
+        gate_kwargs = contract.tolerance_kwargs()
+    assert passed_test(
+        golden_tensor,
+        res_tensor,
         formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-        **({} if shift_amount is None else {"shift_amount": shift_amount}),
-        **(
-            {}
-            if relu_min_int_threshold is None
-            else {"relu_min_int_threshold": relu_min_int_threshold}
-        ),
-        **(
-            {}
-            if relu_max_threshold is None
-            else {"relu_max_threshold": relu_max_threshold}
-        ),
-        **({} if polygamma_order is None else {"polygamma_order": polygamma_order}),
-    )
+        **gate_kwargs,
+    ), "Assert against golden failed"
+    if return_golden:
+        return res_tensor, golden_tensor
+    return res_from_L1
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
 
-    configuration = TestConfig(
-        test_name,
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(approx_mode),
-            FAST_MODE(fast_mode),
-            CLAMP_NEGATIVE(True),
+def build_eltwise_unary_sfpu_config(
+    formats,
+    dest_acc,
+    approx_mode,
+    mathop,
+    input_dimensions,
+    src_A,
+    src_B,
+    tile_cnt_A,
+    tile_cnt_B,
+    *,
+    test_name="sources/eltwise_unary_sfpu_test.cpp",
+    fast_mode=FastMode.No,
+    dest_sync=DestSync.Half,
+    shift_amount=None,
+    relu_min_int_threshold=None,
+    relu_max_threshold=None,
+    polygamma_order=None,
+    twos_complement=False,
+    clamp_negative=True,
+    iterations=32,
+    stable_sort=StableSort.No,
+    fused_sort=FusedSort.No,
+    loop_factor=1,
+    unpack_to_dest=None,
+    is_perf=False,
+    run_types=None,
+):
+    """The templates, runtimes and stimuli the shared unary kernel reads, as one config.
+
+    For callers that need the configuration itself (build-only, or asserting on how it
+    was built); everything else goes through eltwise_unary_sfpu. *src_A* / *src_B* may
+    be None for a perf run that writes no stimuli."""
+    if run_types is None:
+        run_types = ALL_PERF_RUN_TYPES if is_perf else [PerfRunType.L1_TO_L1]
+    _, _, faces_to_generate = calculate_tile_and_face_counts(
+        input_dimensions,
+        input_dimensions,
+        face_r_dim=MAX_FACE_R_DIM,
+        num_faces=MAX_NUM_FACES,
+    )
+    if unpack_to_dest is None:
+        unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
+
+    test_config_kwargs = {
+        "test_name": test_name,
+        "formats": formats,
+        "templates": [
             MATH_OP(mathop=mathop),
-            # Only emitted when swept: sfpu_operations.h keys off #ifdef, and every other
-            # unary test has to keep compiling without the macro.
+            APPROX_MODE(approx_mode),
+            ITERATIONS(iterations),
+            FAST_MODE(fast_mode),
+            STABLE_SORT(stable_sort),
+            FUSED_SORT(fused_sort),
+            CLAMP_NEGATIVE(clamp_negative),
+            DEST_SYNC(dest_sync),
             *([] if shift_amount is None else [SFPU_SHIFT_AMOUNT(shift_amount)]),
             *(
                 []
@@ -1448,12 +1568,14 @@ def eltwise_unary_sfpu(
                 else [SFPU_POLYGAMMA_ORDER(polygamma_order)]
             ),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            LOOP_FACTOR(loop_factor),
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -1464,56 +1586,15 @@ def eltwise_unary_sfpu(
             tile_count_res=tile_cnt_A,
             twos_complement=twos_complement,
         ),
-        dest_acc=dest_acc,
-        # dest_acc off: Float32 unpacks to 16-bit in src regs (later copied to dest for SFPU op)
-        unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        "dest_acc": dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+    }
+
+    return create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
-
-    res_from_L1 = configuration.run().result
-
-    # res_from_L1 = res_from_L1[:1024]
-    # golden_tensor = golden_tensor[:1024]
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
-    # The op's declared *tolerance*, resolved for this exact variant. This is where
-    # CUSTOM_TOLERANCES used to be read in the test bodies; keeping it in the driver
-    # means all eight call sites pick it up at once, and a change is a registry edit.
-    #
-    # Tolerance only by default. A step budget measured over every value the format has
-    # -- which is what the exhaustive sweep measures -- is much wider than one measured
-    # over this driver's sampled domain, so enforcing it here would replace a gate that
-    # binds with one that does not. The budgets are enforced where they were measured:
-    # the signbit, isinf/isnan and threshold sweeps' predicates were measured on these
-    # very stimuli, so those three pass gate_on_step_budget.
-    contract = accuracy_contract(
-        mathop,
-        output_format=formats.output_format,
-        input_format=formats.input_format,
-        approx_mode=approx_mode,
-        dest_acc=dest_acc,
-        arch=TestConfig.CHIP_ARCH,
-    )
-    assert passed_test(
-        golden_tensor,
-        res_tensor,
-        formats.output_format,
-        **(
-            contract.passed_test_kwargs(flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS)
-            if gate_on_step_budget
-            else contract.tolerance_kwargs()
-        ),
-    ), "Assert against golden failed"
-
-    # For callers that want a stricter gate than the op's tolerance (an exact-bits check on
-    # a probe table, say); the sweeps above ignore it.
-    return res_tensor, golden_tensor
 
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
@@ -1535,8 +1616,6 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     src_A[4] = -88.5
 
     src_B = torch.zeros(num_elements, dtype=torch.bfloat16)
-    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
-    tile_cnt_B = tile_cnt_A
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
     golden_tensor = generate_golden(
@@ -1548,45 +1627,18 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         input_dimensions,
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.Yes),
-            FAST_MODE(FastMode.Yes),
-            CLAMP_NEGATIVE(clamp_negative),
-            MATH_OP(mathop=MathOperation.Exp),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
+    res_from_L1 = eltwise_unary_sfpu(
+        formats=formats,
         dest_acc=dest_acc,
-        unpack_to_dest=False,
+        approx_mode=ApproximationMode.Yes,
+        mathop=MathOperation.Exp,
+        fast_mode=FastMode.Yes,
+        input_dimensions=input_dimensions,
+        src_A=src_A,
+        src_B=src_B,
+        clamp_negative=clamp_negative,
+        check_golden=False,
     )
-
-    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor

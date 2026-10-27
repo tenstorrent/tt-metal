@@ -26,8 +26,7 @@ x 4 tile-cols (16 tiles); [1,2,1,128] = 2 (N*C) batch/channel slabs x one (padde
 
 Run on the Quasar simulator:
     unset TT_METAL_DISABLE_SFPLOADMACRO
-    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
-        TT_METAL_SLOW_DISPATCH_MODE=1 \
+    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_bcast.py
 """
 import pytest
@@ -35,9 +34,12 @@ import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
     _run,
     _run_mixed,
+    _block_sharded_config,
     _height_sharded_config,
+    _dram_height_sharded_config,
     _width_sharded_config,
 )
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 
 # a is the full [H,W]; the other operand broadcasts. ROW_B: b has one (logical) row. ROW_A: a has one.
@@ -276,6 +278,47 @@ def test_bcast_mixed_layout(device, op_name, a_shape, b_shape, bcast, a_mem, b_m
     # always interleaved in each combo, so is_native_L1_sharding / borrow_shards stays false (see the
     # file-level comment above) and num_tiles_per_cycle stays 1 -- no risk of the bcast TT_FATAL.
     _run_mixed(device, op_name, a_mem, b_mem, out_mem, ttnn.bfloat16, shape=(a_shape, b_shape))
+
+
+# --- Descriptor-path native sharding router (#58407 item 15) --------------------------------------------
+# A sharded, non-broadcast `a` against an interleaved COL_B `b` with a sharded output reaches the descriptor
+# ProgramFactory (metal_v2 declines DRAM shards and non-bf16 broadcast), which borrows a and c as CBs when
+# is_native_L1_sharding holds. CBs can alias only L1, and per-core work comes from a's shard, so a DRAM shard
+# or an output shard spec that differs from a's must decline to the TensorAccessor path. The descriptor path
+# cannot run on Quasar.
+_COL_B_ROUTER_SHAPES = ([1, 1, 128, 128], [1, 1, 128, 1])
+_COL_B_ROUTER_L1 = _height_sharded_config([32, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}))
+# One shard spec, two layouts: HEIGHT puts the second [64, 128] shard on (1, 0), BLOCK on (0, 1).
+_COL_B_ROUTER_GRID_2X2 = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 1))})
+_COL_B_ROUTER_HEIGHT_2X2 = _height_sharded_config([64, 128], _COL_B_ROUTER_GRID_2X2)
+_COL_B_ROUTER_BLOCK_2X2 = _block_sharded_config([64, 128], _COL_B_ROUTER_GRID_2X2)
+_COL_B_ROUTER_DRAM = _dram_height_sharded_config([32, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}))
+
+
+@pytest.mark.skipif(is_quasar(), reason="these configs route to the descriptor path, which Quasar lacks")
+@pytest.mark.parametrize(
+    "dtype,a_mem,out_mem",
+    [
+        pytest.param(ttnn.float32, _COL_B_ROUTER_L1, _COL_B_ROUTER_L1, id="l1_same_spec"),
+        pytest.param(ttnn.bfloat16, _COL_B_ROUTER_DRAM, _COL_B_ROUTER_DRAM, id="dram_sharded"),
+        pytest.param(
+            ttnn.float32,
+            _COL_B_ROUTER_L1,
+            _height_sharded_config([64, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 0))})),
+            id="l1_output_on_other_grid",
+        ),
+        pytest.param(
+            ttnn.float32,
+            _COL_B_ROUTER_HEIGHT_2X2,
+            _COL_B_ROUTER_BLOCK_2X2,
+            id="same_shard_spec_different_layout",
+        ),
+    ],
+)
+def test_bcast_col_b_sharded_native_routing(device, dtype, a_mem, out_mem):
+    _run_mixed(
+        device, "add", a_mem, ttnn.DRAM_MEMORY_CONFIG, out_mem, dtype, shape=_COL_B_ROUTER_SHAPES, ulp_threshold=1
+    )
 
 
 # --- Activation fusion over subtile broadcast -------------------------------------------------------------
