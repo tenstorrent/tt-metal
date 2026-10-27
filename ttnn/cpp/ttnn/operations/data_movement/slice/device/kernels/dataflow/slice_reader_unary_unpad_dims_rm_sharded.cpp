@@ -32,13 +32,13 @@ void kernel_main() {
     const uint32_t chunk_base = num_cores_read * 3;
 
     Noc noc;
-    // This core's shard of the input and its shard of the output.
     const LocalTensorAccessor<uint32_t> src_shard(tensor::src);
     const LocalTensorAccessor<uint32_t> dst_shard(tensor::dst);
 
-    // Raw address needed: a sharded buffer sits at the same SRAM address on every core of its shard
-    // grid, so this core's input shard base is also the address of the input shard on each source core
-    // read below.
+    // Raw address needed: a sharded buffer starts at the same SRAM address on every core of its shard
+    // grid, so the input's base address locates the input shard on each source core read below. This
+    // core may lie outside the input's shard grid and hold no input shard; on such a core, src_shard is
+    // used only for its base address.
     const uint32_t l1_read_addr =
         static_cast<uint32_t>(local_mem::detail::AddressAccess::address(src_shard.local_mem()));
     // Byte offset into this core's output shard, which the rows fill front to back.

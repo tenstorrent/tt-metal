@@ -133,9 +133,8 @@ void kernel_main() {
             uint32_t last_dim = tensor_rank - 1;
             if (get_vararg(slice_starts_base + last_dim) != 0 || get_vararg(slice_steps_base + last_dim) != 1 ||
                 get_vararg(slice_ends_base + last_dim) != get_vararg(input_dims_base + last_dim)) {
-                // Need to reorganize the data in the buffer. The lock covers this core's stores to the
-                // entry: on Quasar it makes them reach SRAM before push_back hands the entry to the
-                // writer; on Wormhole and Blackhole it does nothing.
+                // Need to reorganize the data in the buffer. Hold a write lock while this core rewrites
+                // the entry, so its stores are visible before push_back hands the entry to the writer.
                 auto lock = dfb_out.scoped_write_lock(1);
                 auto src_ptr = lock.get_ptr<volatile uint8_t>();
                 auto dst_ptr = lock.get_ptr<volatile uint8_t>();

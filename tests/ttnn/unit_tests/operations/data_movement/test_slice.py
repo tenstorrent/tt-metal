@@ -678,6 +678,57 @@ def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, dtype,
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+def full_range_unsigned_tensor(dtype, shape):
+    """Random values over the whole range of the unsigned ttnn `dtype`, so the top bit is set in about half of
+    them."""
+    torch_dtype, num_bits = {ttnn.uint16: (torch.uint16, 16), ttnn.uint32: (torch.uint32, 32)}[dtype]
+    return torch.randint(0, 2**num_bits, shape, dtype=torch_dtype)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.uint32])
+@pytest.mark.parametrize(
+    "layout, shape, begins, ends, steps",
+    [
+        # TILE slice on tile boundaries: whole tiles are copied.
+        (ttnn.TILE_LAYOUT, [1, 2, 64, 64], [0, 1, 32, 0], [1, 2, 64, 64], [1, 1, 1, 1]),
+        # ROW_MAJOR slice that starts part way into each row.
+        (ttnn.ROW_MAJOR_LAYOUT, [2, 3, 40, 64], [0, 1, 4, 8], [2, 3, 20, 40], [1, 1, 1, 1]),
+        # ROW_MAJOR slices with a step, including along the last dimension, of rank 4 and of rank 5.
+        (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 18, 18], [0, 0, 2, 2], [1, 1, 18, 18], [1, 1, 2, 2]),
+        (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 3, 4, 32], [0, 0, 1, 0, 0], [1, 1, 3, 4, 32], [1, 1, 1, 1, 2]),
+    ],
+)
+def test_slice_unsigned_int(dtype, layout, shape, begins, ends, steps, device):
+    """Slicing copies elements without changing them, so an unsigned integer tensor must come back exactly
+    equal to the same slice taken in torch, in TILE and ROW_MAJOR layout and with or without a step."""
+    torch.manual_seed(2005)
+    torch_input = full_range_unsigned_tensor(dtype, shape)
+    torch_output = torch_input[tuple(slice(b, e, s) for b, e, s in zip(begins, ends, steps))]
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=dtype)
+    ttnn_output = ttnn.slice(ttnn_input, begins, ends, steps)
+
+    assert_equal(torch_output, ttnn.to_torch(ttnn_output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.uint32])
+def test_slice_tensor_args_unsigned_int(dtype, device):
+    """The form of slice that takes its start and end as device tensors also copies elements without changing
+    them, so an unsigned integer TILE tensor must come back exactly equal to the same slice taken in torch."""
+    torch.manual_seed(2005)
+    input_shape, dim, start, end = [1, 1, 128, 64], 2, [0, 0, 64, 0], [1, 1, 96, 64]
+    torch_input = full_range_unsigned_tensor(dtype, input_shape)
+    torch_output = torch_input[tuple(slice(b, e) for b, e in zip(start, end))]
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    ttnn_start = ttnn.from_torch(torch.tensor(start), device=device)
+    ttnn_end = ttnn.from_torch(torch.tensor(end), device=device)
+    num_devices = input_shape[dim] // (end[dim] - start[dim])
+    ttnn_output = ttnn.slice(ttnn_input, ttnn_start, ttnn_end, slice_dim=dim, num_devices=num_devices)
+
+    assert_equal(torch_output, ttnn.to_torch(ttnn_output))
+
+
 # these tests are copy and paste from the yolo customers #8920
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_slice_usecase1(layout, device):
@@ -1849,7 +1900,7 @@ def test_issue_47602_same_shape_reuses_cache_entry(device):
 def _run_slice_override_addr_change(device, layout, in_mem_config, out_mem_config, shape, slice_start, slice_end):
     """Cache-hit hook (override_runtime_arguments) correctness: buffer addresses are excluded from the
     slice hash, so a second identical-shape slice at a DIFFERENT input address must hit the cache and
-    still produce correct output (re-derived addresses / re-patched sharded CB bases), not stale data."""
+    still produce correct output (re-derived addresses / re-patched tensor binding addresses), not stale data."""
     torch.manual_seed(47828)
 
     def _make():
@@ -1896,8 +1947,8 @@ def test_slice_override_addr_change_interleaved(device, layout):
 
 
 def test_slice_override_addr_change_rm_height_sharded(device):
-    """override_runtime_arguments re-patches the sharded CB base addresses on a cache hit for the
-    CB-bound height-sharded RM factory (the factory the removed get_dynamic_runtime_args special-cased)."""
+    """override_runtime_arguments re-patches the input and output tensor binding addresses on a cache hit for
+    the height-sharded RM factory (the factory the removed get_dynamic_runtime_args special-cased)."""
     n, c, h, w = 16, 128, 128, 16
     num_cores_x, num_cores_y = 8, 7
     ncores = num_cores_x * num_cores_y
@@ -1936,7 +1987,7 @@ def test_slice_override_addr_change_rm_height_sharded(device):
 
 @pytest.mark.skip_post_commit  # host-timing perf regression guard; run in perf/nightly, not fast post-commit
 def test_slice_rm_height_sharded_override_cache_hit_is_o1(device):
-    """The height-sharded slice cache-hit must patch CB addresses in O(1), not rebuild all per-core
+    """The height-sharded slice cache-hit must patch tensor binding addresses in O(1), not rebuild all per-core
     args. A rebuild-on-hit is still a cache hit (entry count unchanged), so host dispatch time is the
     only signal: assert it does not scale with the core grid (~15x rebuild vs ~1x patch, min-of-N)."""
     import time
@@ -1981,7 +2032,8 @@ def test_slice_rm_height_sharded_override_cache_hit_is_o1(device):
     assert large_grid_us < small_grid_us * 4.0, (
         f"height-sharded slice cache-hit host dispatch scales with the core grid "
         f"({small_grid_us:.0f}us @1 core -> {large_grid_us:.0f}us @56 cores): override_runtime_arguments "
-        f"is rebuilding the full per-core descriptor on every hit instead of patching the 2 CB addresses in O(1)"
+        f"is rebuilding the full per-core descriptor on every hit instead of patching the 2 tensor binding addresses "
+        f"in O(1)"
     )
 
 
@@ -2024,7 +2076,7 @@ def _rm_height_sharded_slice(device, dtype, orientation, ncx, ncy, c, h_in, h_ou
     ids=["c1_1", "c1_4", "c1_56", "c4_1", "c4_4"],
 )
 def test_slice_rm_height_sharded_cache_hit_correctness(device, dtype, orientation, c, ncx, ncy):
-    """override_runtime_arguments patches only the two sharded CB addresses on a cache hit; its output
+    """override_runtime_arguments patches only the input and output tensor binding addresses on a cache hit; its output
     must stay correct across dtype / shard orientation / core grid / channels. Re-runs the slice on
     re-addressed inputs and again on the same tensor (a guaranteed hit), asserting output each time.
     (Entry count is not asserted: height-sharded output shard-spec auto-recompute makes hit-vs-rekey
@@ -2044,7 +2096,7 @@ def test_slice_rm_height_sharded_cache_hit_correctness(device, dtype, orientatio
         keep.append(tt)  # keep alive so the next input lands at a different address
         out = ttnn.slice(tt, (0, 0, 0, 0), end, memory_config=out_cfg)
         assert_equal(ref(t), torch_out(out))
-    # Same tensor again -> a cache hit, so this dispatch goes through the override CB-address patch.
+    # Same tensor again -> a cache hit, so this dispatch goes through the override address patch.
     t_last = ttnn.to_torch(ttnn.to_memory_config(tt, ttnn.L1_MEMORY_CONFIG))
     out_hit = ttnn.slice(tt, (0, 0, 0, 0), end, memory_config=out_cfg)
     assert_equal(ref(t_last), torch_out(out_hit))
@@ -2054,7 +2106,7 @@ def test_slice_override_alternating_factories_cache_hit(device):
     """Different dispatches of the same op can select different program factories. factory.index() is in
     compute_program_hash, so each factory is its own cache entry and the override re-selects the matching
     factory on every hit. Alternate cache hits on a height-sharded slice (SliceRmShardedProgramFactory ->
-    cheap 2-CB-address patch) and an interleaved slice (SliceRmProgramFactory -> full re-derive) and
+    cheap 2-address patch) and an interleaved slice (SliceRmProgramFactory -> full re-derive) and
     assert both stay correct: the override must route each hit to its own program, never cross-patch."""
 
     def torch_out_l1(out):

@@ -270,6 +270,13 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
 
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    // The reader reaches both shards through LocalTensorAccessor, which needs a tensor in SRAM.
+    TT_FATAL(
+        input.buffer()->is_l1() && output.buffer()->is_l1(),
+        "SliceRmShardedProgramFactory: input and output must both be in SRAM (BufferType::L1 or L1_SMALL), but "
+        "the input is {} and the output is {}.",
+        input.buffer()->buffer_type(),
+        output.buffer()->buffer_type());
 
     // Real per-row L1 stride is aligned_page_size(), not the compact payload (differs when W·E % 16 != 0).
     const uint32_t src_stride_bytes = input.buffer()->aligned_page_size();

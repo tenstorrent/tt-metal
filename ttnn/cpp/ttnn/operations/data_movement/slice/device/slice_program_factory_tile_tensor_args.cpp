@@ -60,8 +60,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
     };
     // The reader reads the start index tensor and then the end index tensor into this region, copying
     // the indices out after each read. It is private to the reader and carries nothing between kernels,
-    // so it is a scratchpad: a DFB that one data-movement kernel both fills and drains is not supported
-    // on Gen2.
+    // so it is a scratchpad.
     ScratchpadSpec tensor_scratch{
         .unique_id = TA_TENSOR,
         .size_per_node = single_tile_size,

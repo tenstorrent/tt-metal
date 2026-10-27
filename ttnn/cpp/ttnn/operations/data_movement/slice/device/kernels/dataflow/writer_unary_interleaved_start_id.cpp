@@ -23,10 +23,7 @@ void kernel_main() {
     Noc noc;
 
 #ifdef OUT_SHARDED
-    // Output is sharded in place; the wait is only a readiness handshake. Pop to
-    // leave the DFB balanced.
     dfb_out.wait_front(num_pages);
-    dfb_out.pop_front(num_pages);
 #else
 
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
