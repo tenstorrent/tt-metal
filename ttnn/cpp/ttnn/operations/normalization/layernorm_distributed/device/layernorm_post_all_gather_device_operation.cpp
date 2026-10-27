@@ -40,8 +40,9 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(a.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", a.layout());
     TT_FATAL(
-        a.dtype() == DataType::BFLOAT16 || a.dtype() == DataType::BFLOAT8_B || a.dtype() == DataType::FLOAT32,
-        "Input tensor must be BFLOAT16, BFLOAT8_B, or FLOAT32, got: {}",
+        a.dtype() == DataType::BFLOAT16 || a.dtype() == DataType::BFLOAT8_B || a.dtype() == DataType::FLOAT32 ||
+            is_mx(a.dtype()),
+        "Input tensor must be BFLOAT16, BFLOAT8_B, FLOAT32 or an MX format, got: {}",
         a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");

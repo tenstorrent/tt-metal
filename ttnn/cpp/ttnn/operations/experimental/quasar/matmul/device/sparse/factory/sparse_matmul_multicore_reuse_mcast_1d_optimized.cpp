@@ -89,13 +89,10 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     const auto in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     const auto in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
-    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on Blackhole's
-    // 64B alignment) are padded to it in DRAM. in0/in1 are interleaved here, so the reader copies
-    // tiles at the padded stride; the CBs must hold pages at the aligned stride and the unpacker
-    // walks tiles at the same stride. No-op when already aligned. Replaces the staging-CB workaround.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    const uint32_t in0_aligned_tile_size = tt::align(in0_single_tile_size, dram_alignment);
-    const uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
+    // Quasar: tiles sit in the ring at their own size (the shared mcast-1D readers lay them out at that stride);
+    // see the dense factories for why a DRAM-aligned stride breaks MX tiles.
+    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
+    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
 
     auto* const in0_buffer = a.buffer();

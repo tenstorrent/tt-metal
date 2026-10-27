@@ -136,10 +136,12 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         const bool is_int32_sfpu_reduce = tensor_args.dtype() == DataType::INT32 &&
                                           use_sfpu_reduce_path(tensor_args.dtype(), operation_attributes.math_op);
         // UINT32 is not accepted here. ttnn.sum/max/min convert UINT32 to INT32 before reaching this op.
+        // MX (Quasar): the unpacker expands MX tiles to Float16_b, the FPU reduces them like bf16, and the packer
+        // converts back for an MX output; the scaler ring stays Float16_b.
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
-                tensor_args.dtype() == DataType::BFLOAT8_B || is_int32_sfpu_reduce,
-            "Only FLOAT32, BFLOAT16 and BFLOAT8_B are supported for generic reduction "
+                tensor_args.dtype() == DataType::BFLOAT8_B || is_mx(tensor_args.dtype()) || is_int32_sfpu_reduce,
+            "Only FLOAT32, BFLOAT16, BFLOAT8_B and the MX formats are supported for generic reduction "
             "(INT32 is supported for MAX/MIN/SUM; ttnn.sum/max/min route UINT32 through INT32) - got {}.",
             tensor_args.dtype());
     }

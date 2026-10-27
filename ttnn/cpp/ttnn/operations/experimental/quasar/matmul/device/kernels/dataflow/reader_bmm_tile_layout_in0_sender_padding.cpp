@@ -110,12 +110,11 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
-    // interleaved in0 CB pages are sized to match (see the program factory). The NOC reads the
-    // unpadded tile of data into each padded slot, and tiles are laid out / multicast at the padded
-    // stride. No-op when already aligned. The sharded path keeps the natural (unpadded) stride.
-    constexpr uint32_t in0_aligned_tile_size_bytes =
-        (in0_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
+    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
+    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
+    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
+    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
+    constexpr uint32_t in0_aligned_tile_size_bytes = in0_single_tile_size_bytes;
 #ifdef IN0_SHARDED
     constexpr uint32_t in0_block_size_bytes = in0_block_num_tiles * in0_single_tile_size_bytes;
 #else

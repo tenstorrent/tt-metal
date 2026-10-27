@@ -72,12 +72,11 @@ void kernel_main() {
     cb_in1.push_back(in1_num_tiles);
 #else
     const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the in1
-    // CB pages are sized to match (see the program factory), so tiles are laid out in L1 at the
-    // padded stride while the NOC reads the unpadded tile of data into each padded slot. No-op when
-    // the tile size is already aligned.
-    const uint32_t in1_aligned_tile_size_bytes =
-        (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
+    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
+    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
+    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
+    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
+    const uint32_t in1_aligned_tile_size_bytes = in1_single_tile_size_bytes;
     const auto s1 = TensorAccessor(tensor::in1);
 #endif  // IN1_SHARDED
 

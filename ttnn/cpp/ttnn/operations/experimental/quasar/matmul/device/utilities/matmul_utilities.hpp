@@ -48,6 +48,12 @@ uint32_t estimate_interm_tile_size(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     tt::tt_metal::DataType output_dtype);
 
+// Format of the partial-sum (interm0) ring. Float32 with fp32 accumulation, Float16_b with packer L1
+// accumulation, else the output format -- except an MX output, which is kept in Float16_b: an MX partials ring
+// would re-quantize the running sum on every K block, and the reload path (copy_block of the partials into Dest)
+// has only been run with bf16 / fp32 partials.
+tt::DataFormat get_interm_data_format(bool packer_l1_acc_en, bool fp32_dest_acc_en, tt::DataFormat output_data_format);
+
 uint32_t get_max_l1_space(const ttnn::Tensor& input_tensor_a);
 
 bool is_input_batched(const ttnn::Shape& shape);

@@ -127,9 +127,8 @@ namespace reuse_mcast_optimized_helpers {
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = operations::experimental::quasar::matmul::utilities::get_interm_data_format(
+        packer_l1_acc_en, fp32_dest_acc_en, output_data_format);
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -145,17 +144,12 @@ namespace reuse_mcast_optimized_helpers {
     const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
-    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on
-    // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
-    // the padded stride, so the in0/in1/bias CBs must hold pages at the aligned stride and the
-    // reader/unpacker walk tiles at the same stride. No-op when already aligned (all bf16 tiles,
-    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded CBs are backed by the
-    // tensor buffer and keep their natural page size.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    uint32_t in0_aligned_tile_size =
-        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size =
-        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
+    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
+    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
+    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
+    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
+    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
 
     // A sharded output can share its region with the partials only when the core computes a single output
     // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
@@ -1632,9 +1626,8 @@ create_program_mcast_in0_in1(
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = operations::experimental::quasar::matmul::utilities::get_interm_data_format(
+        packer_l1_acc_en, fp32_dest_acc_en, output_data_format);
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -1675,17 +1668,12 @@ create_program_mcast_in0_in1(
     if (B * num_blocks > 1) {
         in0_CB_tiles *= operations::experimental::quasar::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on
-    // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
-    // the padded stride, so the in0/in1/bias CBs must hold pages at the aligned stride and the
-    // reader/unpacker walk tiles at the same stride. No-op when already aligned (all bf16 tiles,
-    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded CBs are backed by the
-    // tensor buffer and keep their natural page size.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    uint32_t in0_aligned_tile_size =
-        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size =
-        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
+    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
+    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
+    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
+    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
+    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
     uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
@@ -3366,9 +3354,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = operations::experimental::quasar::matmul::utilities::get_interm_data_format(
+        packer_l1_acc_en, fp32_dest_acc_en, output_data_format);
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -3384,11 +3371,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    uint32_t in0_aligned_tile_size =
-        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size =
-        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
+    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
+    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
+    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
+    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
+    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
 
     // A sharded output can share its region with the partials only when the core computes a single output
     // block: spill and reload advance the region's pointers by one block, which only wraps back to the start

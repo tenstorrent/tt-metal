@@ -48,7 +48,7 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
         args.memory_config.memory_layout());
     TT_FATAL(
         input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B ||
-            input.dtype() == DataType::FLOAT32,
+            input.dtype() == DataType::FLOAT32 || is_mx(input.dtype()),
         "Input data format not supported.");
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(input.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
