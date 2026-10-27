@@ -61,12 +61,14 @@ from ttml.trainers.grpo_trainer import (
     save_checkpoint,
 )
 from ttml.trainers.grpo_trainer import grpo_trainer as grpo_trainer_module
-from ttml.trainers.grpo_trainer.remote_rollout import mpi_rollout, sync_remote_rollout_batch_source
+from ttml.trainers.grpo_trainer.remote_rollout import mpi_rollout, rollout_queue, sync_remote_rollout_batch_source
+from ttml.trainers.grpo_trainer.remote_rollout.rollout_queue import RolloutQueue
 from ttml.trainers.grpo_trainer.remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
 from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK
 from ttml.trainers.grpo_trainer.rollout_batch_source import (
     InProcessRolloutBatchSource,
     RolloutBatchSource,
+    ScoredRolloutBatch,
     score_rollout,
     validate_rollout_batch,
 )
@@ -1355,6 +1357,67 @@ def test_sync_remote_source_rejects_a_stale_rollout_version(monkeypatch, expect_
     source.update_weights(None, 0)
     with expect_error(RuntimeError, "generated with weight_version -1, expected 0"):
         next(iter(source))
+
+
+class _LoopbackContext:
+    """One rank's end of an in-memory two-rank communicator."""
+
+    def __init__(self, rank, queues):
+        self._rank = rank
+        self._queues = queues
+
+    def send(self, data, dest, tag):
+        self._queues[(dest, tag)].put(bytes(data))
+
+    def recv(self, nbytes, source, tag):
+        data = self._queues[(self._rank, tag)].get(timeout=30)
+        assert len(data) == nbytes
+        return data
+
+
+def _scored_batch(version):
+    completions = [[7, 8], [9]]
+    return ScoredRolloutBatch(
+        rollout=RolloutBatch(
+            weight_version=version,
+            prompts=[[1], [1]],
+            completions=completions,
+            logprobs=np.full((2, 4), -0.5, dtype=np.float32),
+        ),
+        rewards=np.array([1.0, 0.5], dtype=np.float32),
+        reward_components={"length": np.array([2.0, 1.0], dtype=np.float32)},
+        generation_time_s=0.25,
+        reward_time_s=0.125,
+    )
+
+
+def test_rollout_queue_loopback(monkeypatch):
+    queues = collections.defaultdict(queue.Queue)
+    contexts = iter([_LoopbackContext(TTT_RANK, queues), _LoopbackContext(TTML_RANK, queues)])
+    monkeypatch.setattr(rollout_queue, "duplicate_distributed_context", lambda: next(contexts))
+    monkeypatch.setattr(rollout_queue, "exit_on_error", contextlib.nullcontext)
+    producer = RolloutQueue.producer(peer_rank=TTML_RANK, capacity=2)
+    consumer = RolloutQueue.consumer(peer_rank=TTT_RANK, capacity=2)
+    producer.connect()
+    consumer.connect()
+
+    sent = [_scored_batch(version) for version in range(3)]
+    for scored in sent:
+        producer.push(scored)
+    producer.close()
+    received = [consumer.pop() for _ in sent]
+    assert consumer.pop() is None
+    consumer.close()
+
+    for got, want in zip(received, sent):
+        assert got.rollout.weight_version == want.rollout.weight_version
+        assert got.rollout.prompts == want.rollout.prompts
+        assert got.rollout.completions == want.rollout.completions
+        assert got.rollout.logprobs.dtype == np.float32
+        np.testing.assert_array_equal(got.rollout.logprobs, want.rollout.logprobs)
+        np.testing.assert_array_equal(got.rewards, want.rewards)
+        np.testing.assert_array_equal(got.reward_components["length"], want.reward_components["length"])
+        assert (got.generation_time_s, got.reward_time_s) == (want.generation_time_s, want.reward_time_s)
 
 
 QWEN3_MODEL_ID = "Qwen/Qwen3-0.6B"
