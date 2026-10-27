@@ -209,6 +209,28 @@ class MuseLinear:
             )
         return self.linear(x, compute_kernel_config=self.decode_cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+    def split(self, x, chunks, decode=False):
+        """Output split into `chunks` equal column blocks. From 512 rows minimal_matmul_split writes the blocks
+        directly; other paths slice the full output."""
+        m = 1
+        for d in range(len(x.shape) - 1):
+            m *= int(x.shape[d])
+        if not decode and self.sharded and m >= 512:
+            return ttnn.experimental.minimal_matmul_split(
+                x,
+                self.weight,
+                chunks=chunks,
+                config=self._prefill_cfg(m),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.hifi_cfg,
+            )
+        out = self.decode(x) if decode else self(x)
+        s = out.shape
+        w = self.n // chunks
+        parts = [ttnn.slice(out, [0, 0, 0, i * w], [s[0], s[1], s[2], (i + 1) * w]) for i in range(chunks)]
+        ttnn.deallocate(out)
+        return parts
+
     def _prefill_cfg(self, m):
         """minimal_matmul blocks measured on QB2 (bf8 weights, HiFi2 fp32 acc)."""
         big = m >= 8192

@@ -65,11 +65,7 @@ class MuseGlimmerMLP:
     def _forward_chunk(self, x):
         decode = is_decode(x)
         silu = [ttnn.UnaryOpType.SILU]
-        gu = self.w_gate_up.decode(x) if decode else self.w_gate_up(x)
-        s = gu.shape
-        gate = ttnn.slice(gu, [0, 0, 0, 0], [s[0], s[1], s[2], self.i_pad])
-        up = ttnn.slice(gu, [0, 0, 0, self.i_pad], [s[0], s[1], s[2], 2 * self.i_pad])
-        ttnn.deallocate(gu)
+        gate, up = self.w_gate_up.split(x, 2, decode=decode)
         if decode:
             h = ttnn.mul(gate, up, input_tensor_a_activations=silu)
         else:
