@@ -7,12 +7,15 @@ from typing import Optional
 
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
+from models.demos.common.prefill.runners.kv_bank_alignment import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    check_kv_bank_aligned,
+)
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 
 # DRAM ND-shard geometry for the packed prefill KV cache — M3-local (decoupled from the DeepSeek substrate
 # so they can diverge). The sequence is tiled into NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK-token blocks that
 # round-robin across BH_NUM_DRAM_BANKS DRAM banks. The address-table builder must match both values.
-NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 BH_NUM_DRAM_BANKS = 8
 
 
@@ -62,6 +65,7 @@ def allocate_kv_caches(
     head_dim=128,
     cache_dtype=ttnn.bfloat8_b,
     index_k_tp_shard=None,
+    bank_aligned=False,
 ) -> MiniMaxKVCache:
     """Allocate the three external prefill KV caches (K, V, index_k). See :class:`MiniMaxKVCache`.
 
@@ -117,6 +121,8 @@ def allocate_kv_caches(
     )
 
     def _alloc(dtype=cache_dtype, rows=seq_local):
+        if bank_aligned:
+            check_kv_bank_aligned(max_seq_len, rows, BH_NUM_DRAM_BANKS)
         # Per-chip cache is one head ([.., 1, ..]); WHICH head a chip holds (or whether index_k is
         # replicated across cols) is decided at write time by how the input chunk is mesh-mapped, not
         # here. Every chip gets the same zeroed buffer, allocated and zeroed on device: a host tensor of

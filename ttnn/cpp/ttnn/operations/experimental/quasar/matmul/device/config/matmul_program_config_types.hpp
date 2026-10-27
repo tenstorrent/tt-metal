@@ -89,32 +89,43 @@ struct MatmulMultiCoreProgramConfig {
 
 // Placement-first config for the Quasar-native matmul (GH#41910): the caller names the clusters and
 // the C slice (in 32x32 tiles) each produces in one go; the factory assigns one batch's C slices to
-// `cores` as contiguous runs. Edge C slices are clipped on read/write, so any M / N works. Within a
-// cluster the C slice's subblocks are assigned round-robin to the compute threads (NEOs).
-// Limits: no bias/activation/untilize, 32x32 tiles only; sharded output needs batch 1 and one C slice per core.
+// `cores` as contiguous runs, or, when batches with their own B have too few C slices each, to groups of the cores
+// that each take a run of the batches. Edge C slices are clipped on read/write, so any M / N works. Within a
+// cluster the C slice's subblocks are assigned round-robin to the compute threads (NEOs). A bias row and the
+// activation are applied in DST before the final pack.
+// Batches of A that use one B are stacked into one [batch * M x N] GEMM.
+// A sharded C takes any placement (the writer reaches its shards through the tensor accessor); auto prefers placements
+// whose C slices are its shards. Limits: no untilize, 32x32 tiles only.
 struct MatmulUnifiedProgramConfig {
+    // Empty = auto placement: the cores, C slice and orientation are chosen by a cost estimate over the natural
+    // placements (the other fields are kept).
     tt::tt_metal::CoreRangeSet cores;
-    // C slice (in tiles) each core produces in one go. 0 = auto: the output shard when C is sharded, else the
-    // largest divisor piece of the core's share of C (M / N split over the bounding box of `cores`) that fits
-    // L1 (#57884).
-    std::size_t C_slice_M_tiles = 0;
-    std::size_t C_slice_N_tiles = 0;
+    // C slice (in tiles) each core produces in one go. Unset = auto: of a sharded C's shard shape and the C slices
+    // whose dims divide M / N split over the bounding box of `cores`, the one whose plan has the lowest estimated
+    // cycles (auto fields are chosen together, see plan_unified_matmul).
+    std::optional<std::size_t> C_slice_M_tiles;
+    std::optional<std::size_t> C_slice_N_tiles;
     // K tiles multiplied per accumulation step: one A slice and one B slice are resident in L1 at a time and
-    // the partial sums round-trip L1 between steps. Must divide K_tiles. 0 = auto: the largest divisor of
-    // K_tiles whose buffers fit L1, capped at 8 unless the C slice is 4 tiles or fewer (#57884).
-    std::size_t K_chunk_tiles = 0;
+    // the partial sums round-trip L1 between steps. Must divide K_tiles. Unset = auto (lowest estimated cycles).
+    std::optional<std::size_t> K_chunk_tiles;
     // Subblock: the C slice's tiles accumulated in DST at once; holds <= 8 tiles (4 with fp32
     // accumulation). Need not divide the C slice: it is padded up to subblock multiples and the
-    // overshoot is clipped on write. 0 for both = auto: max volume, least padding on ties; with several
-    // compute threads, least work on the busiest thread first.
-    std::size_t subblock_M_tiles = 0;
-    std::size_t subblock_N_tiles = 0;
+    // overshoot is clipped on write. Set both or neither; unset = auto (lowest estimated cycles).
+    std::optional<std::size_t> subblock_M_tiles;
+    std::optional<std::size_t> subblock_N_tiles;
     // Order `cores` are walked when handing out C slices: ROW_MAJOR x fastest, COL_MAJOR y fastest. A
-    // sharded C gets this shard orientation.
+    // sharded C allocated without a shard spec gets this shard orientation.
     tt::tt_metal::ShardOrientation orientation = tt::tt_metal::ShardOrientation::ROW_MAJOR;
-    // Compute threads per core (Quasar NEOs running the compute kernel); 1, 2 or 4. 0 = auto: 4 on Quasar,
+    // Compute threads per core (Quasar NEOs running the compute kernel); 1, 2 or 4. Unset = auto: 4 on Quasar,
     // 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
-    std::size_t num_compute_threads = 0;
+    std::optional<std::size_t> num_compute_threads;
+    // Groups the cores split into when batches have their own B: each group takes a run of the batches and splits every
+    // one of them over its cores like a single batch (1 = every core takes every batch). At most the batches and the
+    // cores. Unset = auto (lowest estimated cycles; more than one only when a batch has too few C slices for the
+    // cores).
+    std::optional<std::size_t> num_batch_groups;
+    // Applied to the finished sum in DST, after the bias, before the final pack.
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation = std::nullopt;
 };
 
 using MatmulProgramConfig = std::variant<

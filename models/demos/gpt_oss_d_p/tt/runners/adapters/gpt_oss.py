@@ -53,6 +53,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
     ttnn_cache_default = ""  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides (empty => no cache)
     prefill_trace_default = ""  # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
     default_gate_mode = "DEVICE_FP32"
+    verify_layer_completions = True
 
     # --- test metadata ---
     hf_repo_id = "openai/gpt-oss-120b"
@@ -123,6 +124,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
                     bounded_sliding_kv_cache=bounded,
                     chunk_sizes=(params.chunk_size,),
                     sliding_window=getattr(hf_config, "sliding_window", 128),
+                    bank_aligned=True,
                 )
             ]
         )
@@ -135,6 +137,10 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
         from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
+        expert_dtype = os.getenv("EXPERT_DTYPE", "bf4")
+        if expert_dtype not in ("bf4", "bf8"):
+            raise ValueError(f"EXPERT_DTYPE must be bf4 or bf8, got {expert_dtype!r}")
+        logger.info(f"GPT-OSS routed-expert weights: {expert_dtype}")
         runtime_config = TtPrefillRuntimeConfig(
             num_layers=params.num_layers,
             max_seq_len=params.max_seq_len,
@@ -145,7 +151,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             tp_axis=params.tp_axis,
             weight_cache_path=params.weight_cache_path,
             # Same knob as the standalone harness; the tilized cache files are keyed by dtype.
-            expert_weight_dtype=(ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b),
+            expert_weight_dtype=ttnn.bfloat8_b if expert_dtype == "bf8" else ttnn.bfloat4_b,
             owns_kv_cache=False,  # engine owns the cache (from allocate_kv_cache); passed into every call
             # PREFILL_TOPOLOGY=linear runs pods without torus wraparound (same knob as the harness).
             topology=(
@@ -165,6 +171,16 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             model_args = ModelArgs(mesh_device=mesh_device)
             logger.info("Loading real bf16 gpt-oss weights (slow: safetensors read)...")
             state_dict = ModelArgs.load_state_dict(model_args.weights_path)
+
+        # A reduced first-rank run must construct only the layers its KV cache
+        # holds. Model otherwise follows the checkpoint's full layer count.
+        if params.first_layer_idx == 0 and params.num_layers < hf_config.num_hidden_layers:
+            from copy import deepcopy
+
+            hf_config = deepcopy(hf_config)
+            hf_config.num_hidden_layers = params.num_layers
+            if getattr(hf_config, "layer_types", None) is not None:
+                hf_config.layer_types = hf_config.layer_types[: params.num_layers]
 
         return TtPrefillRuntime(
             mesh_device=mesh_device,

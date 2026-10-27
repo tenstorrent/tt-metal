@@ -1,13 +1,13 @@
-# Datacopy (unpack_to_dest), then UnarySfpu Exp calculates Exp for tile 0.
+# Datacopy to DEST, then Exp over four sections to reuse both destination banks.
 
 dest_acc: true
 
 operands:
   - name: "input_A"
-    dims: [32, 128]
+    dims: [128, 128]
     format: "Float32"
   - name: "datacopy_out"
-    dims: [32, 128]
+    dims: [128, 128]
     format: "Float32"
 
 operations:

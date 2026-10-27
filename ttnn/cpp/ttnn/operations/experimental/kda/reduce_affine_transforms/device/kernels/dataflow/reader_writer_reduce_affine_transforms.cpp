@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/packed_summary.hpp"
 
 #include <cstdint>
 
-#include "tt-metalium/constants.hpp"
+#include "api/tile_constants.h"
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -16,19 +17,6 @@
 #include "experimental/kernel_args.h"
 FORCE_INLINE uint32_t worker_x(uint32_t worker) { return get_common_vararg(2 * worker); }
 FORCE_INLINE uint32_t worker_y(uint32_t worker) { return get_common_vararg(2 * worker + 1); }
-
-template <typename Accessor, typename DFB>
-FORCE_INLINE void issue_tensor_block_read(
-    Noc& noc, const Accessor& accessor, DFB& buffer, uint32_t page, uint32_t tiles) {
-    for (uint32_t tile = 0; tile < tiles; tile++) {
-        noc.async_read(
-            accessor,
-            buffer,
-            buffer.get_entry_size(),
-            {.page_id = page + tile},
-            {.offset_bytes = tile * buffer.get_entry_size()});
-    }
-}
 
 template <typename ReadySem, typename SendA, typename SendB, typename RemoteA, typename RemoteB>
 FORCE_INLINE void send_affine_pair(
@@ -135,8 +123,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
 
-    const auto a_accessor = TensorAccessor(tensor::a);
-    const auto b_accessor = TensorAccessor(tensor::b);
+    const auto summaries_accessor = TensorAccessor(tensor::summaries);
     const auto output_a_accessor = TensorAccessor(tensor::output_a);
     const auto output_b_accessor = TensorAccessor(tensor::output_b);
     DataflowBuffer initial_a(dfb::initial_a);
@@ -183,8 +170,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
 
     initial_a.reserve_back(a_tiles);
     initial_b.reserve_back(b_tiles);
-    issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * a_tiles, a_tiles);
-    issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * b_tiles, b_tiles);
+    kda::read_summary_transform<Kt, Vt>(noc, summaries_accessor, initial_a, initial_b, worker_index);
     noc.async_read_barrier();
     initial_a.push_back(a_tiles);
     initial_b.push_back(b_tiles);

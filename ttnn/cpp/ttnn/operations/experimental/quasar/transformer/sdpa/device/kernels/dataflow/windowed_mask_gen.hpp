@@ -23,7 +23,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/scratchpad.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "dataflow_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp"
 
@@ -31,9 +31,9 @@
 // tile). A Float16_b tile is 4 row-major 16x16 faces of 2-byte elements, so this is a direct per-element
 // write of 0x0000. The windowed mask is always Float16_b (the streaming path does not decode block-float
 // masks, and the standard path decodes Float16_b fine).
-template <uint32_t tile_bytes>
+template <uint32_t tile_bytes, typename DFB>
 inline void fill_diag_subtile_zeros(
-    uint32_t dfb_id,
+    DFB& dfb,
     uint32_t tile_id,
     uint32_t row_start_idx,
     uint32_t row_end_idx,
@@ -41,7 +41,6 @@ inline void fill_diag_subtile_zeros(
     uint32_t col_end_idx) {
     constexpr uint32_t FH = tt::constants::FACE_HEIGHT;
     constexpr uint32_t FW = tt::constants::FACE_WIDTH;
-    DataflowBuffer dfb(dfb_id);
     uint32_t write_addr = dfb.get_write_ptr() + tile_id * tile_bytes;
     volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_addr);
     for (uint32_t r = row_start_idx; r < row_end_idx; ++r) {
@@ -60,9 +59,10 @@ inline void fill_diag_subtile_zeros(
 // this Q chunk's row range, so the result is independent of the order in which Q chunks are scheduled
 // (safe under the regular SDPA factory's global-Q scheduling, incl. zigzag). cu_window must already
 // hold the cu_window_seqlens tensor (loaded once by the caller).
-template <uint32_t mask_tile_bytes, uint32_t dfb_mask_in>
+template <uint32_t mask_tile_bytes, typename MaskDFB>
 inline void generate_windowed_mask_for_q_chunk(
     Noc& noc,
+    MaskDFB& dfb_mask,
     const Scratchpad<volatile uint32_t>& cu_window,
     uint32_t q_chunk,
     uint32_t Sq_chunk_t,
@@ -123,7 +123,6 @@ inline void generate_windowed_mask_for_q_chunk(
         k_num_chunks,
         tt::constants::TILE_HEIGHT);
     const uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-    DataflowBuffer dfb_mask(dfb_mask_in);
     uint32_t local_window_idx = start_window_idx;
     for (uint32_t k_chunk = k_range.k_lo; k_chunk < k_range.k_hi; ++k_chunk) {
         const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt);
@@ -152,7 +151,7 @@ inline void generate_windowed_mask_for_q_chunk(
                         // Barrier: later zero tiles are NoC-read copies of this one, and on Quasar the
                         // zero fill completes on iDMA (not the NoC read path), so it must land first. It
                         // also leaves zero mode before the writer's next async_write.
-                        fill_tile_zeros<mask_tile_bytes>(noc, dfb_mask_in, in_mask_tile_id);
+                        fill_tile_zeros<mask_tile_bytes>(noc, dfb_mask, in_mask_tile_id);
                     } else {
                         copy_tile<mask_tile_bytes>(
                             noc, mask_write_ptr_base, mask_write_ptr_base, zero_tile_idx, in_mask_tile_id);
@@ -166,7 +165,7 @@ inline void generate_windowed_mask_for_q_chunk(
                     copy_tile<mask_tile_bytes>(
                         noc, mask_write_ptr_base, mask_write_ptr_base, inf_tile_idx, in_mask_tile_id);
                 } else {
-                    fill_neginf_tile<mask_tile_bytes, quasar_mask_neg_bf16>(dfb_mask_in, in_mask_tile_id);
+                    fill_neginf_tile<mask_tile_bytes, quasar_mask_neg_bf16>(dfb_mask, in_mask_tile_id);
                 }
                 if (!found_mask_windows || k_end_idx <= window_low_idx || k_start_idx >= window_high_idx ||
                     window_low_idx >= window_high_idx) {
@@ -189,7 +188,7 @@ inline void generate_windowed_mask_for_q_chunk(
 
                     if (cqs < cqe && cks < cke) {
                         fill_diag_subtile_zeros<mask_tile_bytes>(
-                            dfb_mask_in,
+                            dfb_mask,
                             in_mask_tile_id,
                             cqs - q_start_idx,
                             cqe - q_start_idx,
@@ -221,9 +220,10 @@ inline void generate_windowed_mask_for_q_chunk(
 // kernel_main is not a template, so an `if constexpr` there does NOT discard its body — it would still
 // compile, constexpr-evaluating get_tile_size on a possibly-inactive DFB id. Inside this template,
 // `if constexpr (W)` discards properly, so non-windowed writer builds never touch the generator.
-template <bool W, uint32_t dfb_mask_in, typename CuWindow>
+template <bool W, uint32_t dfb_mask_in, typename CuWindow, typename MaskDFB>
 inline void windowed_generate_if_enabled(
     Noc& noc,
+    MaskDFB& dfb_mask,
     const CuWindow& cu_window,
     uint32_t q_chunk,
     uint32_t Sq_chunk_t,
@@ -235,8 +235,9 @@ inline void windowed_generate_if_enabled(
     uint32_t q_tok_offset) {
     if constexpr (W) {
         constexpr uint32_t mask_tile_bytes = get_tile_size(dfb_mask_in);
-        generate_windowed_mask_for_q_chunk<mask_tile_bytes, dfb_mask_in>(
+        generate_windowed_mask_for_q_chunk<mask_tile_bytes>(
             noc,
+            dfb_mask,
             cu_window,
             q_chunk,
             Sq_chunk_t,

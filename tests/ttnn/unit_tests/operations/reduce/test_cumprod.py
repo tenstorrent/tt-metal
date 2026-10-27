@@ -283,3 +283,155 @@ def test_cumprod_failing_cases(
     ttnn_preallocated_tensor = ttnn.zeros(output_shape, dtype=output_dtype, layout=ttnn.Layout.TILE, device=device)
     with expect_error(RuntimeError, error_msg):
         ttnn.cumprod(ttnn_input_tensor, memory_config=memory_config, dim=dim, out=ttnn_preallocated_tensor)
+
+
+def _cumprod_calltrace(input_tensor, **kwargs):
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        output_tensor = ttnn.cumprod(input_tensor, **kwargs)
+    finally:
+        captured_graph = ttnn.graph.end_graph_capture()
+    return output_tensor, ttnn.graph.extract_calltrace(captured_graph)
+
+
+def _skip_without_cumprod_tile(device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar has no cumprod_tile, so cumprod keeps the permuted path there")
+
+
+def _exact_cumprod_input(size, dim, torch_dtype):
+    # x[k] = +-2^(e[k] - e[k-1]) with random e in [-20, 20], so every prefix product is +-2^e[k]: exact in
+    # bf16 and fp32, and a wrong, missing or extra factor changes it. About a quarter of the rows get one zero.
+    e = torch.randint(-20, 21, size)
+    e_prev = torch.cat([torch.zeros_like(e.narrow(dim, 0, 1)), e.narrow(dim, 0, e.shape[dim] - 1)], dim)
+    sign = torch.randint(0, 2, size) * 2 - 1
+    x = sign * torch.exp2((e - e_prev).double())
+    x[torch.rand(size) < 0.25 / size[dim]] = 0
+    return x.to(torch_dtype)
+
+
+@pytest.mark.parametrize("torch_dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize(
+    "size, dim",
+    [
+        ([4096], 0),  # 1D
+        ([1, 4096], -1),
+        ([4096, 1], -2),
+        ([33, 35, 37], -1),
+        ([33, 35, 37], -2),
+        ([100, 64, 64], -1),  # both core groups
+        ([100, 64, 64], -2),
+        ([2, 3, 5, 33, 128], -1),
+    ],
+)
+def test_cumprod_tile_axis_runs_in_place(size, dim, torch_dtype, device):
+    """Forward bf16/fp32 cumprod along H or W scans the tiles in place (#24824) and is exact."""
+    _skip_without_cumprod_tile(device)
+    torch.manual_seed(29112024)
+    torch_input = _exact_cumprod_input(size, dim, torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    output_tensor, calltrace = _cumprod_calltrace(input_tensor, dim=dim)
+
+    assert "PermuteDeviceOperation" not in calltrace, calltrace
+    assert calltrace.count("tt::tt_metal::create_device_tensor") == 1, calltrace
+    expected = torch.cumprod(torch_input.double(), dim).to(torch_dtype)
+    assert torch.equal(ttnn.to_torch(output_tensor), expected)
+
+
+def _with_special_values(torch_input, dim):
+    # Puts 0, -0, +-inf, NaN, a huge and a tiny value each into scans of their own, at the first position and on
+    # both sides of each tile boundary (31/32 and 63/64), where the running product moves into the next tile.
+    moved = torch_input.movedim(dim, -1).contiguous()
+    scans = moved.view(-1, moved.shape[-1])
+    k = 0
+    for value in (0.0, -0.0, float("inf"), float("-inf"), float("nan"), 1e30, 1e-30):
+        for position in (0, 31, 32, 63, 64):
+            scans[k, position] = value
+            k += 1
+    return moved.movedim(-1, dim).contiguous()
+
+
+@pytest.mark.parametrize("values", ["near_one", "special"])
+@pytest.mark.parametrize("torch_dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_cumprod_tile_axis_matches_dim0_path(dim, torch_dtype, values, device):
+    """Same bits as the permuted path's kernel (dim 0 of a 4D tensor needs no permute), on full-precision inputs and
+    on special values. NaNs only have to be at the same places."""
+    _skip_without_cumprod_tile(device)
+    torch.manual_seed(29112024)
+    if values == "near_one":
+        torch_input = 1.0 + 0.01 * torch.randn([5, 70, 70])
+    else:
+        torch_input = _with_special_values(torch.empty([5, 70, 70]).uniform_(-3, 3), dim)
+    torch_input = torch_input.to(torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    moved = torch_input.movedim(dim, 0)
+    dim0_tensor = ttnn.from_torch(moved.unsqueeze(1).contiguous(), device=device, layout=ttnn.Layout.TILE)
+
+    tile_axis = ttnn.to_torch(ttnn.cumprod(input_tensor, dim=dim))
+    dim0 = ttnn.to_torch(ttnn.cumprod(dim0_tensor, dim=0)).squeeze(1).movedim(0, dim)
+
+    nan = torch.isnan(dim0)
+    assert torch.equal(torch.isnan(tile_axis), nan)
+    bits = torch.int16 if torch_dtype == torch.bfloat16 else torch.int32
+    assert torch.equal(tile_axis[~nan].view(bits), dim0[~nan].view(bits))
+
+
+def test_cumsum_cumprod_tile_axis_program_cache(device):
+    """Interleaved cumsum/cumprod over bf16/fp32 and H/W: one program per configuration, and cache hits on new input
+    buffers give exact results."""
+    _skip_without_cumprod_tile(device)
+    configs = [
+        ("cumsum", torch.bfloat16, -1),
+        ("cumprod", torch.bfloat16, -1),
+        ("cumsum", torch.bfloat16, -2),
+        ("cumprod", torch.bfloat16, -2),
+        ("cumprod", torch.float32, -1),
+        ("cumprod", torch.float32, -2),
+    ]
+    size = [2, 64, 96]
+    torch.manual_seed(29112024)
+    device.clear_program_cache()
+    inputs = []  # kept alive, so that every call reads a new input buffer
+    for repeat in range(2):
+        for op, torch_dtype, dim in configs:
+            if op == "cumsum":
+                torch_input = torch.randint(-2, 3, size).to(torch_dtype)  # the partial sums stay exact in bf16
+            else:
+                torch_input = _exact_cumprod_input(size, dim, torch_dtype)
+            inputs.append(ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE))
+            output = ttnn.to_torch(getattr(ttnn, op)(inputs[-1], dim=dim))
+            expected = getattr(torch, op)(torch_input.double(), dim).to(torch_dtype)
+            assert torch.equal(output, expected), (repeat, op, torch_dtype, dim)
+        assert device.num_program_cache_entries() == len(configs)
+
+
+@pytest.mark.parametrize(
+    "torch_dtype, reverse_order",
+    [
+        (torch.int32, False),
+        (torch.bfloat16, True),
+    ],
+)
+def test_cumprod_tile_axis_fallback_permutes(torch_dtype, reverse_order, device):
+    """int32 and reverse cumprod still take the permuted path, and stay correct."""
+    torch.manual_seed(29112024)
+    size, dim = [33, 35, 20], -1  # products of [-2, 2] over 20 steps are exact in bf16 and int32
+    torch_input = torch.randint(-2, 3, size, dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+
+    output_tensor, calltrace = _cumprod_calltrace(input_tensor, dim=dim, reverse_order=reverse_order)
+
+    assert "PermuteDeviceOperation" in calltrace, calltrace
+    expected = torch.cumprod(torch_input.flip(dim) if reverse_order else torch_input, dim)
+    expected = expected.flip(dim) if reverse_order else expected
+    assert torch.equal(ttnn.to_torch(output_tensor, dtype=torch_dtype), expected)
+
+
+def test_cumprod_host_input_raises(expect_error):
+    """A host tensor reaches the tile-axis check before any device check: it must raise, not crash."""
+    input_tensor = ttnn.from_torch(torch.ones(64, 64), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE)
+    with expect_error(RuntimeError, "is_device_tensor"):
+        ttnn.cumprod(input_tensor, dim=-1)

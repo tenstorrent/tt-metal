@@ -1250,7 +1250,7 @@ SenderSideResources build_sender_side(
 
         const auto sender_node = mesh->get_fabric_node_id(coord);
         const auto receiver_node = sender_socket.get_fabric_node_id(distributed::SocketEndpoint::RECEIVER, coord);
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(sender_node, receiver_node);
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, sender_node, receiver_node);
         TT_FATAL(!links.empty(), "D2DStreamService: no fabric link sender->receiver at coord {}", coord);
 
         // Lane count: one RISC + one link per lane, capped by config and by the
@@ -1410,7 +1410,7 @@ ReceiverSideResources build_receiver_side(
 
         const auto receiver_node = mesh->get_fabric_node_id(coord);
         const auto sender_node = receiver_socket.get_fabric_node_id(distributed::SocketEndpoint::SENDER, coord);
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(receiver_node, sender_node);
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, receiver_node, sender_node);
         TT_FATAL(!links.empty(), "D2DStreamService: no fabric link receiver->sender at coord {}", coord);
 
         // Sender lane count, derived identically to the sender (min(max_sender_lanes,

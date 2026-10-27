@@ -748,6 +748,18 @@ def test_assign_numpy_keeps_a_lower_rank_tensors_shape(shape):
     np.testing.assert_array_equal(tensor.to_numpy(precision=_NATIVE), values)
 
 
+def test_assign_numpy_refuses_an_array_of_another_shape(expect_error):
+    """Loading values never resizes a tensor: an array that would land at another shape is refused, the tensor kept."""
+    values = np.zeros((1, 1, 32, 32), dtype=np.float32)
+    tensor = ttml.autograd.Tensor.from_numpy(values, new_type=ttnn.DataType.FLOAT32)
+
+    with expect_error(ttml.autograd.ShapeMismatchError, r"lands at \(1, 1, 32, 64\) per device"):
+        ttml.autograd.assign_numpy(tensor, np.ones((32, 64), dtype=np.float32))
+
+    assert tuple(tensor.shape()) == (1, 1, 32, 32)
+    np.testing.assert_array_equal(tensor.to_numpy(precision=_NATIVE), values)
+
+
 def test_linear_layer_setstate_keeps_the_layer_dtype():
     """__setstate__ loads the weights in the dtype the layer stores them in: an fp32 layer gets the exact values."""
     layer = ttml.modules.LinearLayer(32, 32)
@@ -788,3 +800,20 @@ def test_to_numpy_reads_a_bf16_tensor_without_a_device_copy():
     assert array.dtype == np.float32
     np.testing.assert_array_equal(array, values.astype(ml_dtypes.bfloat16).astype(np.float32))
     assert usage.total_allocations - usage.total_deallocations == 0
+
+
+@pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
+def test_to_numpy_reads_a_host_tensor_whose_shape_is_not_tile_aligned(dtype):
+    """to_numpy() on the host copy of a tiled tensor whose shape does not fill its tiles returns the logical values: a
+    host tensor takes the same path as a device one (cpu() returns it as is, and the conversion to row major runs on
+    the host), so no device op is asked to read it."""
+    values = np.random.default_rng(1).standard_normal((1, 1, 37, 70)).astype(np.float32)
+    tensor = ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, dtype)
+    host = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).cpu()
+    assert host.storage_type() == ttnn.StorageType.HOST and host.get_layout() == ttnn.Layout.TILE
+
+    array = ttml.autograd.create_tensor(host, False).to_numpy()
+
+    expected = values.astype(ml_dtypes.bfloat16).astype(np.float32) if dtype == ttnn.DataType.BFLOAT16 else values
+    assert array.dtype == np.float32 and array.shape == values.shape
+    np.testing.assert_array_equal(array, expected)

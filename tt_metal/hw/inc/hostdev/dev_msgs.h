@@ -301,6 +301,8 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeEthDestL1AddrOverflow = 16,
     DebugSanitizeCBOutOfBounds = 17,
     DebugSanitizeNocInvalidTxnId = 18,
+    DebugSanitizeNocSharedCmdBuf = 19,
+    DebugSanitizeNocReadToRegAddr = 20,
 };
 
 struct debug_assert_msg_t {
@@ -353,6 +355,14 @@ struct debug_eth_link_t {
     volatile uint8_t link_down;
 };
 
+// The NoC command buffers each data movement RISC has programmed on one NOC since the current launch began,
+// a bit per command buffer. Kept by kernels built with DEDICATED_NOC_SHARED, the two dedicated-NOC kernels of
+// a core that share one NOC (DataMovement1XXConfig::dedicated_noc_sharing), which must keep to disjoint
+// command buffers; the NoC sanitizer flags one that both have used. BRISC firmware zeroes it per launch.
+struct debug_noc_cmd_buf_usage_msg_t {
+    volatile uint8_t by_risc[2];  // index 0: BRISC (DM0), 1: NCRISC (DM1)
+};
+
 enum watcher_enable_msg_t {
     WatcherDisabled = 2,
     WatcherEnabled = 3,
@@ -368,6 +378,7 @@ struct watcher_msg_t {
     std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
     struct debug_eth_link_t eth_status;
     uint8_t pad0;  // CODEGEN:skip
+    struct debug_noc_cmd_buf_usage_msg_t noc_cmd_buf_usage[MAX_NUM_NOCS_PER_CORE];
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
     struct debug_stack_usage_t stack_usage;
@@ -482,6 +493,9 @@ static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 // debug_ring_buf is a byte array reinterpreted as 4-byte fields, and on Blackhole its head is the
 // target of an atomic, which traps if misaligned.
 static_assert(offsetof(watcher_msg_t, debug_ring_buf) % sizeof(uint32_t) == 0);
+// BRISC firmware clears the command buffer usage record with one word store per launch.
+static_assert(offsetof(watcher_msg_t, noc_cmd_buf_usage) % sizeof(uint32_t) == 0);
+static_assert(sizeof(watcher_msg_t::noc_cmd_buf_usage) == sizeof(uint32_t));
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
 

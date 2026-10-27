@@ -67,8 +67,10 @@ tt::tt_metal::Program create_socket_forward_program(
 
     auto socket_aligned_page_size = tt::align(num_bytes, max_alignment);
 
-    auto bwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, upstream_fabric_node_id);
-    auto fwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, downstream_fabric_node_id);
+    auto bwd_link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, my_fabric_node_id, upstream_fabric_node_id);
+    auto fwd_link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, my_fabric_node_id, downstream_fabric_node_id);
     TT_FATAL(
         fwd_link_indices.size() > 1, "Single core multi link version of SocketForward only supports multiple links.");
     TT_FATAL(!bwd_link_indices.empty(), "No link indices found from downstream to upstream core in SocketForward.");

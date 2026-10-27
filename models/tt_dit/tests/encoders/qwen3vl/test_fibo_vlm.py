@@ -15,7 +15,7 @@ from loguru import logger
 from PIL import Image
 
 import ttnn
-from models.common.modules.tt_ccl import default_topology
+from models.common.tt_ccl import default_topology
 from models.tt_dit.encoders.qwen3vl.model_qwen3vl_v2 import mrope_position_ids
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager

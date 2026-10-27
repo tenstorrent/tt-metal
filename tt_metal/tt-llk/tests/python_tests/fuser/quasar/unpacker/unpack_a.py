@@ -18,27 +18,7 @@ from helpers.llk_params import (
 )
 
 
-def _uses_upk_to_dest_semaphores(config: GlobalConfig) -> bool:
-    from helpers.llk_params import PerfRunType
-
-    return not config.quasar_use_dvalid and config.perf_run_type in (
-        None,
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    )
-
-
-def upk_to_dest_math_ack() -> str:
-    return (
-        "_llk_sync_wait_<p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);\n"
-        "_llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);\n"
-    )
-
-
 def _unp_sel(compute_unit: FpuNode) -> str:
-    if compute_unit.unpack_to_dest.value:
-        return "p_unpacr::UNP_DEST"
     if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
         return "p_unpacr::UNP_B"
     return "p_unpacr::UNP_A"
@@ -47,7 +27,6 @@ def _unp_sel(compute_unit: FpuNode) -> str:
 class UnpackerA(Unpacker):
     granularity = InvocationGranularity.ROW
     golden_fn = staticmethod(unpack_a_golden)
-    supports_dest_offset = False
 
     per_block_init = True
 
@@ -61,6 +40,7 @@ class UnpackerA(Unpacker):
         return [
             "llk_unpack_common.h",
             "llk_unpack_unary_operand.h",
+            "llk_unpack_unary_operand_to_dest.h",
             "llk_math_common.h",
         ]
 
@@ -97,7 +77,7 @@ class UnpackerA(Unpacker):
         block: BlockData,
     ) -> str:
         if compute_unit.unpack_to_dest.value:
-            return upk_to_dest_math_ack()
+            return ""
         clear_a, clear_b, count = self._perf_valid_args(config, compute_unit, block)
         return f"_perf_math_loop_clear_valid<{clear_a}, {clear_b}>({count});\n"
 
@@ -122,12 +102,19 @@ class UnpackerA(Unpacker):
         per_tile = compute_unit.reuse_dest != EltwiseBinaryReuseDestType.NONE
         num_tiles = 1 if per_tile else block.block_cols
 
+        if compute_unit.unpack_to_dest.value:
+            init_call = "_llk_unpack_unary_operand_to_dest_init_(bfd_id);\n"
+        else:
+            init_call = (
+                f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}, {unpack_to_dest}>"
+                f"(bfd_id, {tensor_shape}, {num_tiles});\n"
+            )
+
         return (
             "{\n"
             + compute_unit.src_a.bfd_alloc_and_program(engine, result_name="bfd_id")
-            + f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}, {unpack_to_dest}>"
-            f"(bfd_id, {tensor_shape}, {num_tiles});\n"
-            "}\n"
+            + init_call
+            + "}\n"
         )
 
     def unpack(
@@ -137,6 +124,11 @@ class UnpackerA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        if compute_unit.unpack_to_dest.value:
+            return (
+                "_llk_unpack_unary_operand_to_dest_block_("
+                f"{block.tile_id_src_a}, {block.tile_id_dest}, {block.block_cols});\n"
+            )
         unp_sel = _unp_sel(compute_unit)
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value

@@ -55,6 +55,18 @@ class KimiK3Adapter(MLAPrefillAdapter):
     supports_tp_shard_kv = True
     tp_shard_kv_default = True
 
+    # RadixArk's Kimi-K3-DSpark: a DFlash-style drafter (num_target_layers=93) tapping 7/23/51/67/83.
+    # Its golden is keyed to prefill_trace_default's prompt, so the two move together.
+    supports_dflash = True
+    # Traced K3 serves one KDA slot (TtKimiK3Transformer.set_trace_controller), so multi-user DSpark is eager.
+    dflash_allows_eager = True
+    # The drafter partial is one more handoff plane (TtKimiK3Runtime._pack_activation), not a 2H width.
+    dflash_partial_separate_plane = True
+    dflash_model_default = "/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-DSpark"
+    dflash_golden_default = (
+        "/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/structured_kv"
+    )
+
     # --- test metadata ---
     hf_repo_id = "moonshotai/Kimi-K3"
     env_var = "KIMI_K3_HF_MODEL"
@@ -166,6 +178,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
                 num_layers=schedule.num_mla_layers,
                 num_users=params.num_users,
                 tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
+                bank_aligned=True,
             )
 
         # The KDA layers' migration state: one consolidated slab per state kind, sized to this rank's
@@ -337,6 +350,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
             is_last_rank=params.is_last_rank,
             kv_only_last_layer=params.kv_only_last_layer,
             dflash_enabled=params.dflash_enabled,
+            dflash_checkpoint_path=params.dflash_checkpoint_path,
             routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,

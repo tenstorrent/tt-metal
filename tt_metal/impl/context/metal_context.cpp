@@ -104,32 +104,12 @@ void validate_worker_l1_size(size_t& worker_l1_size, const Hal& hal) {
 }  // namespace
 
 ContextId extract_context_id(const IDevice* device) {
-    // get_mesh_device is not const
-    if (const_cast<IDevice*>(device)->get_mesh_device() != nullptr) {
-        const auto& mesh_device = const_cast<IDevice*>(device)->get_mesh_device();
-        return mesh_device->impl().get_context_id();
+    if (const auto* device_concrete = dynamic_cast<const Device*>(device)) {
+        return device_concrete->get_context_id();  // Its mesh's, without locking the mesh.
     }
-    // Must be a Device if not MeshDevice
-    const auto* device_concrete = dynamic_cast<const Device*>(device);
-    TT_ASSERT(device_concrete != nullptr, "Device is not a Device");
-    return device_concrete->get_context_id();
-}
-
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device) {
-    TT_ASSERT(mesh_device != nullptr, "MeshDevice is nullptr");
+    const auto mesh_device = const_cast<IDevice*>(device)->get_mesh_device();  // get_mesh_device is not const
+    TT_ASSERT(mesh_device != nullptr, "Device is neither a Device nor part of a MeshDevice");
     return mesh_device->impl().get_context_id();
-}
-
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device, const IDevice* device) {
-    ContextId context_id = DEFAULT_CONTEXT_ID;
-    if (mesh_device != nullptr) {
-        context_id = extract_context_id(mesh_device);
-    } else if (device != nullptr) {
-        context_id = extract_context_id(device);
-    } else {
-        TT_FATAL(false, "Both MeshDevice and Device are nullptr");
-    }
-    return context_id;
 }
 
 void MetalContext::initialize_device_manager(
@@ -302,6 +282,19 @@ void MetalContext::initialize(
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         !get_cluster().is_mock_or_emulated()) {
+        // Only Wormhole non-Galaxy clusters reach remote chips through UMD ethernet gateways.
+        if (tt_fabric::is_tt_fabric_config(get_fabric_config()) && get_cluster().arch() == tt::ARCH::WORMHOLE_B0 &&
+            !get_cluster().is_galaxy_cluster()) {
+            // The channel lookup reads the fabric routing tables. A control plane rebuilt after SetFabricConfig (e.g.
+            // by initialize_control_plane()) has none until DeviceManager configures fabric, so configure it here.
+            this->initialize_fabric_config();
+            // Pin UMD's remote-transfer cores here, before the watcher attaches and firmware launches: UMD does not
+            // lock its core list against concurrent remote transfers.
+            for (const auto& [mmio_chip, eth_chans] :
+                 tt_fabric::get_remote_transfer_dispatch_channels(this->get_control_plane(), get_cluster())) {
+                get_cluster().configure_ethernet_cores_for_remote_transfers(mmio_chip, eth_chans);
+            }
+        }
         get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), true);
     }
 
