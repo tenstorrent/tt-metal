@@ -5,20 +5,20 @@
 #pragma once
 
 // Packet builder: walk runs -> packets of <= cap bytes (packet_cap) and <= NOC_SCATTER_WRITE_MAX_CHUNKS segments, cut
-// on A. The reader builds each packet's record (the fabric's own scatter command) in its slot; the writer encodes it
-// into the slot's header with the official setters. Compiled on host by the kernel-lib sim.
+// on the unit. The reader builds each packet's record (the fabric's own scatter command) in its slot; the writer
+// encodes it into the slot's header with the official setters. Compiled on host by the kernel-lib sim.
 
 #include <cstdint>
 #include <new>
 
 #include "hostdev/fabric_edm_packet_header.hpp"
 
-#include "ag_walk.hpp"
+#include "ttnn/operations/ccl/all_gather/shared_with_host/all_gather_walk.hpp"
 
 namespace ag {
 
-// noc_address[0, chunk_count) are fabric-frame (ag_sync.hpp address rule); chunk_size[0, chunk_count - 1) (the last
-// chunk is the rest). chunk_count == 1 is a plain unicast write (the scatter setter needs >= 2 chunks).
+// noc_address[0, chunk_count) are fabric-frame (all_gather_sync.hpp address rule); chunk_size[0, chunk_count - 1) (the
+// last chunk is the rest). chunk_count == 1 is a plain unicast write (the scatter setter needs >= 2 chunks).
 struct PacketRecord {
     tt::tt_fabric::NocUnicastScatterCommandHeader cmd;
     uint16_t payload_bytes;

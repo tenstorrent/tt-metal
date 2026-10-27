@@ -145,6 +145,8 @@ target_link_libraries(
         test_common_libs
         TTNN::CPP
 )
+# test_all_gather_kernel_lib.cpp compiles the all_gather kernel library and the device TensorAccessor on host
+target_link_libraries(unit_tests_ttnn_ccl_lib PRIVATE Metalium::Metal::Hardware)
 tt_reuse_precompile_headers(unit_tests_ttnn_ccl_lib TTNN::TestPCH)
 
 add_executable(unit_tests_ttnn_ccl)

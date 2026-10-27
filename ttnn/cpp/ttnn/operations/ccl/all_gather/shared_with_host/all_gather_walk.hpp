@@ -5,8 +5,10 @@
 #pragma once
 
 // The all_gather page walk and slot layout. Plain arithmetic over accessor queries, with no device includes: the
-// host plan (walk_shape, slot_offsets) and the host sim (test_all_gather_kernel_lib.cpp) compile it as is.
+// host plan (walk_shape, slot_offsets), the kernels and the host sim (test_all_gather_kernel_lib.cpp) compile it as is.
 //
+// Symbols (WalkGeo field, and the private members of the classes below): A unit_bytes, Uo out_page_units, Ui
+// in_page_units, S stripe_units, N num_devices, E element_units, L the output's contiguous_page_stride().
 //   unit:    A bytes, the cut quantum. Local unit u is global unit g = (u / S) * N * S + stripe * S + u % S, which
 //            lives in output page g / Uo at byte (g % Uo) * A.
 //   element: what the walk steps over: E units, one output page (E == Uo) or one unit (E == 1).
@@ -29,19 +31,19 @@ namespace ag {
 
 // Output geometry; counts are in units of A bytes.
 struct WalkGeo {
-    uint32_t A;      // the cut quantum: a multiple of 16 and of every source's read alignment
-    uint32_t Uo;     // output page footprint, ceil(page content / A)
-    uint32_t S;      // units this device contributes to one output row
-    uint32_t N;      // devices
-    uint32_t E;      // units per walk element: Uo when S is whole output pages, else 1
-    uint32_t P_A;    // packet payload cap, a multiple of A
+    uint32_t unit_bytes;        // the cut quantum: a multiple of the NOC write alignment and every source's read one
+    uint32_t out_page_units;    // output page footprint, ceil(page content / unit_bytes)
+    uint32_t stripe_units;      // units this device contributes to one output row
+    uint32_t num_devices;       // devices in the collective
+    uint32_t element_units;     // units per walk element: out_page_units when a stripe row is whole pages, else 1
+    uint32_t max_packet_bytes;  // fabric packet payload limit, a multiple of unit_bytes
     bool dst_cross;  // an output page's footprint is its bank pitch, so a run may continue into the next page
 };
 
 struct WalkShape {
-    uint32_t lambda;  // element step inside a run
-    uint32_t h;       // column cap: elements per lane before the walk moves to the next lane
-    bool cross_row;   // runs continue across output rows
+    uint32_t lambda;         // element step inside a run
+    uint32_t column_height;  // elements per lane before the walk moves to the next lane
+    bool cross_row;          // runs continue across output rows
 };
 
 // L: the output's contiguous_page_stride(). Shared by the kernel walk and the host cost model.
@@ -53,46 +55,47 @@ struct WalkShape {
 // column is then capped at one row of its lane so that most columns are a single run. A column is at most a packet
 // (but at least one element).
 constexpr WalkShape walk_shape(const WalkGeo& g, uint32_t L) {
-    const bool pages = g.E == g.Uo;
-    const bool cross_row = pages && L % (g.N * (g.S / g.Uo)) == 0;
-    const uint32_t lambda = cross_row ? L / g.N : (pages ? L : 1);
-    uint32_t h = g.P_A / (g.E * g.A);
+    const bool pages = g.element_units == g.out_page_units;
+    const bool cross_row = pages && L % (g.num_devices * (g.stripe_units / g.out_page_units)) == 0;
+    const uint32_t lambda = cross_row ? L / g.num_devices : (pages ? L : 1);
+    uint32_t h = g.max_packet_bytes / (g.element_units * g.unit_bytes);
     if (pages && !cross_row) {
-        const uint32_t row_lane = (g.S / g.E + lambda - 1) / lambda;
+        const uint32_t row_lane = (g.stripe_units / g.element_units + lambda - 1) / lambda;
         h = std::min(h, row_lane);
     }
     return {lambda, std::max<uint32_t>(h, 1), cross_row};
 }
 
-// Segments one fabric scatter packet carries (NOC_SCATTER_WRITE_MAX_CHUNKS; ag_packet.hpp asserts they agree).
+// Segments one fabric scatter packet carries (NOC_SCATTER_WRITE_MAX_CHUNKS; all_gather_packet.hpp asserts they agree).
 inline constexpr uint32_t kSegmentsPerPacket = 4;
 
-// The packet builder's payload cap: P_A, or less where every segment is short, so a slot spends its L1 and its reads in
-// flight on more packets instead of on payload room no packet uses. A segment is a destination run (or runs that abut);
-// a run is at most one walk column (h elements), and with unit elements it also stops at the stripe-row end (S units),
-// where the other devices' stripes start. Runs abut only along a lane whose column is unclipped (h = P_A's worth), and
-// there kSegmentsPerPacket columns already exceed P_A. Correctness never depends on this bound: a packet that reaches
-// the cap just ends there.
+// The packet builder's payload cap: max_packet_bytes, or less where every segment is short, so a slot spends its L1 and
+// its reads in flight on more packets instead of on payload room no packet uses. A segment is a destination run (or
+// runs that abut); a run is at most one walk column (column_height elements), and with unit elements it also stops at
+// the stripe-row end (S units), where the other devices' stripes start. Runs abut only along a lane whose column is
+// unclipped (a whole packet's worth), and there kSegmentsPerPacket columns already exceed max_packet_bytes. Correctness
+// never depends on this bound: a packet that reaches the cap just ends there.
 constexpr uint32_t packet_cap(const WalkGeo& g, const WalkShape& s) {
-    uint64_t segment = uint64_t{s.h} * g.E * g.A;
-    if (g.E != g.Uo) {
-        segment = std::min<uint64_t>(segment, uint64_t{g.S} * g.A);
+    uint64_t segment = uint64_t{s.column_height} * g.element_units * g.unit_bytes;
+    if (g.element_units != g.out_page_units) {
+        segment = std::min<uint64_t>(segment, uint64_t{g.stripe_units} * g.unit_bytes);
     }
-    return static_cast<uint32_t>(std::min<uint64_t>(g.P_A, kSegmentsPerPacket * segment));
+    return static_cast<uint32_t>(std::min<uint64_t>(g.max_packet_bytes, kSegmentsPerPacket * segment));
 }
 
 // ---- slot layout (one CB page) ----
-// Here rather than in ag_packet.hpp because the host plan sizes slots and cannot include the fabric packet header.
+// Here rather than in all_gather_packet.hpp because the host plan sizes slots and cannot include the fabric packet
+// header.
 
 // Written by the reader after the slot's packets. units: A-units of one iteration. iter_end: this is the iteration's
-// last slot, so the writer signals after it (SignalCadence in ag_sync.hpp) without re-deriving the schedule.
+// last slot, so the writer signals after it (SignalCadence in all_gather_sync.hpp) without re-deriving the schedule.
 struct SlotInfo {
     uint16_t packets;
     uint16_t iter_end;
     uint32_t units;
 };
 
-// sizeof(ag::PacketRecord) (ag_packet.hpp asserts it). Spelled out so host code needs no fabric header.
+// sizeof(ag::PacketRecord) (all_gather_packet.hpp asserts it). Spelled out so host code needs no fabric header.
 inline constexpr uint32_t kPacketRecordBytes = 48;
 // Own-NOC start of each segment of a packet, for the reader's local copy (the record holds fabric-frame addresses).
 inline constexpr uint32_t kLocalAddrBytes = kSegmentsPerPacket * sizeof(uint64_t);
@@ -216,7 +219,7 @@ struct DstRun {
 };
 
 // The default destination address: the accessor's own, on the caller's NOC. Kernels pass ag::FabricFrameAddr
-// (ag_sync.hpp) so the address can go into a fabric header.
+// (all_gather_sync.hpp) so the address can go into a fabric header.
 struct AccessorAddr {
     template <class Acc>
     uint64_t operator()(const Acc& acc, uint32_t page, uint32_t offset) const {
@@ -231,16 +234,16 @@ public:
     Walk(const OutAcc& out, const WalkGeo& g, DstAddr addr = {}) :
         out_(out),
         addr_(addr),
-        A_(g.A),
-        Uo_(g.Uo),
-        S_(g.S),
-        N_(g.N),
-        E_(g.E),
+        A_(g.unit_bytes),
+        Uo_(g.out_page_units),
+        S_(g.stripe_units),
+        N_(g.num_devices),
+        E_(g.element_units),
         L_(out.contiguous_page_stride()),
         dst_cross_(g.dst_cross) {
         const WalkShape s = walk_shape(g, L_);
         lambda_ = s.lambda;
-        h_ = s.h;
+        h_ = s.column_height;
         cross_row_ = s.cross_row;
     }
 

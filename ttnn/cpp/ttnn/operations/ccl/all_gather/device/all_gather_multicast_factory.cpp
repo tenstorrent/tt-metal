@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "all_gather_plan.hpp"
-#include "all_gather_program.hpp"
+#include "all_gather_program_factory_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::ccl {
@@ -34,7 +34,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_program(
     const ttnn::MeshCoordinate& coord,
     const Tensor& input,
     const Tensor& output,
-    const plan_ns::AgPlan& plan,
+    const plan_ns::Plan& plan,
     uint32_t init_sem,
     uint32_t done_sem) {
     auto* mesh_device = input.device();
@@ -42,19 +42,20 @@ tt::tt_metal::ProgramDescriptor build_multicast_program(
     const auto src_node = mesh_device->get_fabric_node_id(coord);
     const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(params.fabric_config);
 
-    // Neighbors by logical direction (plan_ns::Dir): axis 1 runs E (forward) / W, axis 0 runs S (forward) / N. A
-    // 2-device axis is a line (both neighbors are the same device, one hop).
+    // Neighbors by logical direction (indexed by plan_ns::Dir): axis 1 runs E (forward) / W, axis 0 runs S (forward)
+    // / N. A 2-device axis is a line (both neighbors are the same device, one hop).
+    using plan_ns::Dir;
     std::array<std::optional<MeshCoordinate>, 4> neighbor{};
     std::array<bool, 2> axis_ring{};
-    std::array<uint32_t, 4> phys_dir = {plan_ns::kEast, plan_ns::kWest, plan_ns::kNorth, plan_ns::kSouth};
+    std::array<uint32_t, 4> phys_dir = {0, 1, 2, 3};  // logical -> physical direction slot; identity on 1D
     for (uint32_t a = 0; a < 2; ++a) {
         if (params.axis_num_devices[a] <= 1) {
             continue;
         }
         axis_ring[a] = tt::tt_fabric::is_ring_or_torus(params.axis_topology[a]) && params.axis_num_devices[a] > 2;
         const auto topology = axis_ring[a] ? params.axis_topology[a] : tt::tt_fabric::Topology::Linear;
-        const uint32_t fwd = a == 1 ? plan_ns::kEast : plan_ns::kSouth;
-        const uint32_t bwd = a == 1 ? plan_ns::kWest : plan_ns::kNorth;
+        const auto fwd = static_cast<size_t>(a == 1 ? Dir::East : Dir::South);
+        const auto bwd = static_cast<size_t>(a == 1 ? Dir::West : Dir::North);
         neighbor[fwd] = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input, coord, 1, topology, a);
         neighbor[bwd] = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input, coord, -1, topology, a);
     }
@@ -80,15 +81,16 @@ tt::tt_metal::ProgramDescriptor build_multicast_program(
     TT_FATAL(!routes.empty(), "all_gather multicast: device {} has no neighbor", dev);
     std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
     for (const auto& conn : routes) {
-        TT_FATAL(neighbor[conn.dir].has_value(), "all_gather multicast: no neighbor in direction {}", conn.dir);
-        dst_nodes.push_back(mesh_device->get_fabric_node_id(*neighbor[conn.dir]));
+        const auto& to = neighbor[static_cast<size_t>(conn.dir)];
+        TT_FATAL(to.has_value(), "all_gather multicast: no neighbor in direction {}", static_cast<uint32_t>(conn.dir));
+        dst_nodes.push_back(mesh_device->get_fabric_node_id(*to));
     }
 
     tt::tt_metal::ProgramDescriptor desc;
     const CoreRangeSet cores = prog::worker_cores(plan);
     desc.cbs.push_back(prog::slot_cb(plan, cores));
-    desc.kernels.push_back(prog::reader_kernel(plan, params.force, input, output, cores));
-    desc.kernels.push_back(prog::writer_kernel(plan, params.force, prog::kMulticastWriterKernel, cores, {}));
+    desc.kernels.push_back(prog::reader_kernel(plan, input, output, cores));
+    desc.kernels.push_back(prog::writer_kernel(plan, prog::kMulticastWriterKernel, cores, {}));
     tt::tt_metal::KernelHandle writer_handle = prog::kWriterIdx;  // the connection helper takes it by reference
 
     for (uint32_t link = 0; link < plan.mcast_cores.size(); ++link) {
@@ -133,9 +135,14 @@ tt::tt_metal::WorkloadDescriptor AllGatherMulticastFactory::create_workload_desc
     Tensor& output_tensor,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& input = tensor_args.input_tensor;
-    auto [plan, workload, init_sem, done_sem] = prog::start_workload(operation_attributes, input, output_tensor);
+    tt::tt_metal::WorkloadDescriptor workload;
+    const auto [plan, init_sem, done_sem] = prog::start_workload(operation_attributes, input, output_tensor, workload);
     log_debug(
-        tt::LogOp, "all_gather multicast: links={} k={} slot={} B", plan.choice.links, plan.choice.k, plan.slot_bytes);
+        tt::LogOp,
+        "all_gather multicast: links={} packets_per_slot={} slot={} B",
+        plan.choice.links,
+        plan.choice.packets_per_slot,
+        plan.slot_bytes);
 
     workload.programs.reserve(tensor_coords.coords().size());
     for (const auto& coord : tensor_coords.coords()) {
@@ -143,7 +150,7 @@ tt::tt_metal::WorkloadDescriptor AllGatherMulticastFactory::create_workload_desc
             {ttnn::MeshCoordinateRange(coord),
              build_multicast_program(operation_attributes, coord, input, output_tensor, plan, init_sem, done_sem)});
     }
-    return std::move(workload);
+    return workload;
 }
 
 }  // namespace ttnn::operations::ccl

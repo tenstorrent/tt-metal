@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // all_gather unicast writer: the slot consumer, one Mux V2 channel. Its one semaphore wait is init, before its first
-// send, after it has sent its own (ag_sync.hpp: deadlock freedom); otherwise its progress depends only on the CB, mux
-// credits and the mux handshakes.
+// send, after it has sent its own (all_gather_sync.hpp: deadlock freedom); otherwise its progress depends only on the
+// CB, mux credits and the mux handshakes.
 //
 // Per slot: wait -> encode each record into the slot's own header (the official setters) -> send header + payload
 // through the mux -> [data_valid at the cadence] -> flush -> pop. Headers live in the slot, so flush-before-pop is
@@ -20,9 +20,9 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 
-#include "ag_walk.hpp"
-#include "ag_packet.hpp"
-#include "ag_sync.hpp"
+#include "ttnn/operations/ccl/all_gather/shared_with_host/all_gather_walk.hpp"
+#include "all_gather_packet.hpp"
+#include "all_gather_sync.hpp"
 
 namespace fabric_api = tt::tt_fabric::linear::experimental;
 
@@ -42,17 +42,17 @@ FORCE_INLINE void set_route(volatile PACKET_HEADER_TYPE* hdr, uint16_t chip, uin
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t A = get_named_compile_time_arg_val("A");
-    constexpr uint32_t CAP = get_named_compile_time_arg_val("CAP");
-    constexpr uint32_t K = get_named_compile_time_arg_val("K");
-    constexpr uint32_t SLOT_BYTES = get_named_compile_time_arg_val("SLOT_BYTES");
-    constexpr uint32_t CB_ID = get_named_compile_time_arg_val("CB_ID");
-    constexpr uint32_t CB_SLOTS = get_named_compile_time_arg_val("CB_SLOTS");
-    constexpr uint32_t MUX_BUFS = get_named_compile_time_arg_val("MUX_BUFS");
-    constexpr uint32_t WDELAY = get_named_compile_time_arg_val("WDELAY");
+    constexpr uint32_t unit_bytes = get_named_compile_time_arg_val("unit_bytes");
+    constexpr uint32_t packet_cap = get_named_compile_time_arg_val("packet_cap");
+    constexpr uint32_t packets_per_slot = get_named_compile_time_arg_val("packets_per_slot");
+    constexpr uint32_t slot_bytes = get_named_compile_time_arg_val("slot_bytes");
+    constexpr uint32_t slot_cb = get_named_compile_time_arg_val("slot_cb");
+    constexpr uint32_t num_slots = get_named_compile_time_arg_val("num_slots");
+    constexpr uint32_t mux_buffers = get_named_compile_time_arg_val("mux_buffers");
 
-    constexpr ag::SlotLayout lay = ag::slot_offsets(K, A, sizeof(PACKET_HEADER_TYPE), CAP);
-    static_assert(lay.slot_bytes == SLOT_BYTES, "host and kernel disagree on the packet header size");
+    constexpr ag::SlotLayout lay =
+        ag::slot_offsets(packets_per_slot, unit_bytes, sizeof(PACKET_HEADER_TYPE), packet_cap);
+    static_assert(lay.slot_bytes == slot_bytes, "host and kernel disagree on the packet header size");
 
     size_t arg_idx = 0;
     const bool active = get_arg_val<uint32_t>(arg_idx++) != 0;
@@ -75,8 +75,8 @@ void kernel_main() {
     // an active writer always reaches close(): a mux hangs if any declared channel is never closed.
     if (active) {
         Noc noc;
-        CircularBuffer cb(CB_ID);
-        using Sender = tt::tt_fabric::FabricMuxV2Sender<false, MUX_BUFS>;
+        CircularBuffer cb(slot_cb);
+        using Sender = tt::tt_fabric::FabricMuxV2Sender<false, mux_buffers>;
         Sender sender = Sender::build_from_args(arg_idx);
         sender.open();
 
@@ -97,9 +97,9 @@ void kernel_main() {
             noc.async_writes_flushed();
         }
         // The header region of every slot is ours for the whole op (the reader never writes it), so each header gets
-        // its route once. The CB starts at its base, and its CB_SLOTS slots follow one another.
-        for (uint32_t s = 0, slot = cb.get_read_ptr(); s < CB_SLOTS; ++s, slot += SLOT_BYTES) {
-            for (uint32_t j = 0; j < K; ++j) {
+        // its route once. The CB starts at its base, and its num_slots slots follow one another.
+        for (uint32_t s = 0, slot = cb.get_read_ptr(); s < num_slots; ++s, slot += slot_bytes) {
+            for (uint32_t j = 0; j < packets_per_slot; ++j) {
                 auto* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(lay.header(slot, j));
                 fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(hdr, kHops);
                 set_route(hdr, dst_chip, dst_mesh);
@@ -144,7 +144,6 @@ void kernel_main() {
                 noc.async_writes_flushed();
                 cb.pop_front(1);
                 iter_end = info.iter_end != 0;
-                ag::test_delay<WDELAY>();
             }
         }
         noc.async_write_barrier();

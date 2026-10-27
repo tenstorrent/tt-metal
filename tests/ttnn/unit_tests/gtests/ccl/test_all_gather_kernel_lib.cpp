@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host byte-level sim of the all_gather kernel library (ag_walk.hpp, ag_packet.hpp, ag_sync.hpp) against the real
-// sharded TensorAccessor and the real fabric scatter command header. A reader model fills CB slots exactly as
-// ag_reader.cpp does (k packets per slot, records and payload in the slot), and a writer model decodes each record
-// and checks every delivered byte:
+// Host byte-level sim of the all_gather kernel library (all_gather_walk.hpp, all_gather_packet.hpp,
+// all_gather_sync.hpp) against the real sharded TensorAccessor and the real fabric scatter command header. A reader
+// model fills CB slots exactly as all_gather_reader.cpp does (k packets per slot, records and payload in the slot), and
+// a writer model decodes each record and checks every delivered byte:
 //   W  the walk is a bijection on the slice, resumes at any position, its order does not depend on the stripe,
 //      every run is linear at the destination and within the column cap, and mid-row slices walk whole rows;
 //   P  every packet is <= the packet cap (<= P_A) bytes and <= 4 segments, cuts on A, reads congruent with their
@@ -33,8 +33,8 @@
 #include <vector>
 
 // Pure headers first, before the macros the device accessor needs on host.
-#include "ttnn/operations/ccl/all_gather/device/kernels/ag_packet.hpp"
-#include "ttnn/operations/ccl/all_gather/device/kernels/ag_sync.hpp"
+#include "ttnn/operations/ccl/all_gather/device/kernels/all_gather_packet.hpp"
+#include "ttnn/operations/ccl/all_gather/device/kernels/all_gather_sync.hpp"
 
 // NOLINTBEGIN(bugprone-macro-parentheses)
 
@@ -198,6 +198,7 @@ constexpr uint32_t kPayloads[] = {4352, 7616, 15168};
 constexpr uint32_t kHeaderBytes[] = {
     sizeof(tt::tt_fabric::LowLatencyPacketHeader), sizeof(tt::tt_fabric::HybridMeshPacketHeader)};
 
+// Field names follow the symbols of all_gather_walk.hpp (A unit_bytes, P_A max_packet_bytes, ...).
 struct Case {
     uint32_t A, P_A, ri, ro;  // cut quantum, payload cap, source read alignments (input, output)
     uint32_t N, S, R, Ui, Uo, E, Pps;
@@ -223,7 +224,16 @@ void finish(Case& c, const char* kind) {
     c.desc = o.str();
 }
 
-ag::WalkGeo geo(const Case& c) { return {c.A, c.Uo, c.S, c.N, c.E, c.P_A, c.dst_cross}; }
+ag::WalkGeo geo(const Case& c) {
+    return {
+        .unit_bytes = c.A,
+        .out_page_units = c.Uo,
+        .stripe_units = c.S,
+        .num_devices = c.N,
+        .element_units = c.E,
+        .max_packet_bytes = c.P_A,
+        .dst_cross = c.dst_cross};
+}
 
 // Near-equal contiguous element ranges; parts > elements leaves empty slices, as the plan does.
 std::vector<std::pair<uint32_t, uint32_t>> make_slices(uint32_t elements, uint32_t parts) {
@@ -283,7 +293,7 @@ struct Stats {
     uint64_t runs = 0, units = 0, packets = 0, segments = 0, slots = 0, packet_bound = 0, passes = 0;
 };
 
-// One reader: a CB of two slots, one walk, one builder per source, as ag_reader.cpp holds them. Iterations run
+// One reader: a CB of two slots, one walk, one builder per source, as all_gather_reader.cpp holds them. Iterations run
 // back to back through the same objects, so builder state leaking across an iteration boundary would show.
 template <class Out, class In>
 class ReaderSim {
@@ -416,7 +426,7 @@ private:
         const ag::WalkShape shape = ag::walk_shape(geo(c_), out_.contiguous_page_stride());
         for (; run_seen_ < rwalk_.runs.size(); ++run_seen_) {
             const ag::DstRun& r = rwalk_.runs[run_seen_];
-            check(r.n >= 1 && r.n <= shape.h && r.lambda == shape.lambda, "run longer than the column cap");
+            check(r.n >= 1 && r.n <= shape.column_height && r.lambda == shape.lambda, "run longer than the column cap");
             for (uint32_t k = 0; k < r.n; ++k) {
                 const uint32_t l = r.l0 + k * r.lambda;
                 check(l >= e0_ && l < e0_ + ne_, "element outside the slice");
@@ -761,17 +771,17 @@ TEST(AllGatherKernelLib, MidRowSlice) {
 TEST(AllGatherKernelLib, WalkShape) {
     // 2 KB tiles, 10 pages per stripe-row, 8 banks: rows do not tile the banks, so runs stop at the row end.
     constexpr auto tile = ag::walk_shape({64, 32, 320, 8, 32, 15168, true}, 8);
-    static_assert(!tile.cross_row && tile.lambda == 8 && tile.h == 2);  // ceil(10 pages / 8 lanes)
+    static_assert(!tile.cross_row && tile.lambda == 8 && tile.column_height == 2);  // ceil(10 pages / 8 lanes)
     // One page per stripe-row: L / N rows apart is the next page of the same bank.
     constexpr auto narrow = ag::walk_shape({64, 17, 17, 8, 17, 15168, true}, 8);
-    static_assert(narrow.cross_row && narrow.lambda == 1 && narrow.h == 15168 / (17 * 64));
+    static_assert(narrow.cross_row && narrow.lambda == 1 && narrow.column_height == 15168 / (17 * 64));
     // Sub-page elements walk ascending units, capped at a packet.
     constexpr auto sub = ag::walk_shape({32, 4, 6, 4, 1, 7616, true}, 12);
-    static_assert(!sub.cross_row && sub.lambda == 1 && sub.h == 7616 / 32);
+    static_assert(!sub.cross_row && sub.lambda == 1 && sub.column_height == 7616 / 32);
     // A page bigger than the packet still walks one element per column.
     constexpr auto big = ag::walk_shape({64, 313, 313, 8, 313, 15168, true}, 8);
-    static_assert(big.h == 1);
-    // Packet cap: 4 segments of at most a column (h elements), or of a stripe row when elements are units.
+    static_assert(big.column_height == 1);
+    // Packet cap: 4 segments of at most a column (column_height elements), or of a stripe row when elements are units.
     static_assert(ag::packet_cap({64, 32, 320, 8, 32, 15168, true}, tile) == 15168);  // 4 x 2 tiles > P_A
     static_assert(ag::packet_cap({32, 4, 6, 4, 1, 7616, true}, sub) == 4 * 6 * 32);   // 4 stripe rows of 192 B
     static_assert(ag::packet_cap({64, 313, 313, 8, 313, 15168, true}, big) == 15168);

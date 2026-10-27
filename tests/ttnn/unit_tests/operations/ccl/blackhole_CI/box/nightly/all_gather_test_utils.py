@@ -4,10 +4,12 @@
 
 # Shared helpers for the BH box all_gather device tests (test_all_gather_matrix.py, test_all_gather_stress.py).
 #
-# Algorithms are forced through the TTNN_ALL_GATHER_FORCE override (grammar in all_gather_plan.hpp, parse_force):
-# "<auto|unicast|multicast|composite>[:key=value(,key=value)*]", keys n (unicast), links, rdelay, wdelay. Unset = auto.
+# The tests reach each algorithm only through public levers (LEVERS below): the fabric config and the sub_core_grids
+# argument. Which algorithm auto picks on the natural worker grid is pinned per case by the host gtest
+# AllGatherPlan.DeviceTestAlgorithms (tests/ttnn/unit_tests/gtests/ccl/test_all_gather_plan.cpp), so a retune of the
+# choice model cannot silently move a case off the algorithm it is meant to cover.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 import torch
@@ -15,18 +17,6 @@ import ttnn
 from loguru import logger
 
 from ttnn import ConcatMeshToTensor, ShardTensorToMesh
-
-FORCE_ENV = "TTNN_ALL_GATHER_FORCE"
-
-# Column id -> override value (None = unset, the production path).
-FORCE = {
-    "auto": None,
-    "uc_n1": "unicast:n=1",
-    "uc_n2": "unicast:n=2",
-    "uc_n3": "unicast:n=3",
-    "mc": "multicast",
-    "composite": "composite",
-}
 
 # BH's tuned fabric payload; 15232 B is the slower 4-slot router tier.
 PAYLOAD = 15168
@@ -54,25 +44,41 @@ def fabric_params(config, trace_region_size=None):
     return params
 
 
-def force_value(algo, rdelay=0, wdelay=0):
-    value = FORCE[algo]
-    opts = [f"{k}={v}" for k, v in (("rdelay", rdelay), ("wdelay", wdelay)) if v]
-    if opts:
-        assert value is not None and value != "composite", f"delays need a forced kernel algorithm, not {algo}"
-        value += ("," if ":" in value else ":") + ",".join(opts)
-    return value
-
-
-def set_force(monkeypatch, algo, rdelay=0, wdelay=0):
-    value = force_value(algo, rdelay, wdelay)
-    if value is None:
-        monkeypatch.delenv(FORCE_ENV, raising=False)
-    else:
-        monkeypatch.setenv(FORCE_ENV, value)
-
-
 def grid(x1, y1):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(x1, y1))})
+
+
+# sub_core_grids levers. Unicast places a mux and its workers on one core row per link-direction; multicast needs one
+# core per link.
+COLUMN = grid(0, 7)  # one core per row: unicast cannot place, multicast runs on 2 links at any size
+ONE_CORE = grid(0, 0)  # multicast on 1 link
+ROWS_OF_2 = grid(1, 3)  # 4 rows of mux + 1 worker: unicast with 1 worker per link-direction on 2 links
+ROWS_OF_3_X2 = grid(2, 1)  # 2 rows of mux + 2 workers: unicast with 2 workers on 1 link
+
+# lever id -> (fabric config, sub_core_grids). A case's own grid applies only where the lever sets none.
+#   line, ring    auto on the natural worker grid (the host gtest pins which algorithm that is, per case)
+#   *_mc          a one-column grid rules out unicast: multicast at any size
+#   *_mc_1link    a single core: multicast on one link
+#   ne            FABRIC_1D_NEIGHBOR_EXCHANGE routes one hop only, which rules out multicast: unicast at any size
+#   ne_n1         as ne, with one worker per link-direction
+#   ne_1link      as ne, with two workers on one link
+LEVERS = {
+    "line": (LINE, None),
+    "ring": (RING, None),
+    "line_mc": (LINE, COLUMN),
+    "ring_mc": (RING, COLUMN),
+    "line_mc_1link": (LINE, ONE_CORE),
+    "ring_mc_1link": (RING, ONE_CORE),
+    "ne": (NE, None),
+    "ne_n1": (NE, ROWS_OF_2),
+    "ne_1link": (NE, ROWS_OF_3_X2),
+}
+
+
+def with_lever(case, lever):
+    """The case under a lever's sub_core_grids (its own grid where the lever sets none)."""
+    lever_grid = LEVERS[lever][1]
+    return case if lever_grid is None else replace(case, grid=lever_grid)
 
 
 def _sharded(layout, buffer_type, shard_shape, num_cores):
@@ -113,7 +119,6 @@ class Case:
     mesh: tuple = (1, 8)
     cluster_axis: Optional[int] = None
     grid: object = None  # sub_core_grids
-    num_links: Optional[int] = None
 
 
 def submesh(mesh_device, mesh):
@@ -164,7 +169,6 @@ def gather(tt_in, c, out=None):
         memory_config=c.mem_out,
         output_tensor=out,
         sub_core_grids=c.grid,
-        num_links=c.num_links,
     )
 
 

@@ -22,7 +22,7 @@ set(TTNN_OP_CCL_SRCS
     all_gather/device/all_gather_device_operation.cpp
     all_gather/device/all_gather_multicast_factory.cpp
     all_gather/device/all_gather_plan.cpp
-    all_gather/device/all_gather_program.cpp
+    all_gather/device/all_gather_program_factory_common.cpp
     all_gather/device/all_gather_unicast_factory.cpp
     all_reduce/all_reduce.cpp
     all_to_all_combine/all_to_all_combine.cpp

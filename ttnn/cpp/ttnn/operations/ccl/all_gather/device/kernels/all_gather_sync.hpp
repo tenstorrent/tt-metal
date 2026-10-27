@@ -39,7 +39,7 @@
 
 #include <cstdint>
 
-#include "ag_walk.hpp"
+#include "ttnn/operations/ccl/all_gather/shared_with_host/all_gather_walk.hpp"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "api/dataflow/dataflow_api.h"
@@ -103,15 +103,6 @@ FORCE_INLINE void wait_and_consume(uint32_t sem_l1, uint32_t count) {
     }
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_l1), count);
     noc_semaphore_inc(get_noc_addr(sem_l1), uint32_t{0} - count);
-}
-
-// Test-only sync stress (TTNN_ALL_GATHER_FORCE rdelay / wdelay): spins roughly `cycles` cycles; nothing when 0.
-template <uint32_t cycles>
-FORCE_INLINE void test_delay() {
-    if constexpr (cycles != 0) {
-        for (volatile uint32_t spin = 0; spin < cycles; spin = spin + 1) {
-        }
-    }
 }
 
 #endif

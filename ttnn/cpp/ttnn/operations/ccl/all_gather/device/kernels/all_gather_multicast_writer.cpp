@@ -23,9 +23,9 @@ namespace fabric_api = tt::tt_fabric::mesh::experimental;
 namespace fabric_api = tt::tt_fabric::linear::experimental;
 #endif
 
-#include "ag_walk.hpp"
-#include "ag_packet.hpp"
-#include "ag_sync.hpp"
+#include "ttnn/operations/ccl/all_gather/shared_with_host/all_gather_walk.hpp"
+#include "all_gather_packet.hpp"
+#include "all_gather_sync.hpp"
 
 namespace {
 
@@ -87,15 +87,15 @@ FORCE_INLINE void scatter_write_set_state(tt::tt_fabric::RoutingPlaneConnectionM
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t A = get_named_compile_time_arg_val("A");
-    constexpr uint32_t CAP = get_named_compile_time_arg_val("CAP");
-    constexpr uint32_t K = get_named_compile_time_arg_val("K");
-    constexpr uint32_t SLOT_BYTES = get_named_compile_time_arg_val("SLOT_BYTES");
-    constexpr uint32_t CB_ID = get_named_compile_time_arg_val("CB_ID");
-    constexpr uint32_t WDELAY = get_named_compile_time_arg_val("WDELAY");
+    constexpr uint32_t unit_bytes = get_named_compile_time_arg_val("unit_bytes");
+    constexpr uint32_t packet_cap = get_named_compile_time_arg_val("packet_cap");
+    constexpr uint32_t packets_per_slot = get_named_compile_time_arg_val("packets_per_slot");
+    constexpr uint32_t slot_bytes = get_named_compile_time_arg_val("slot_bytes");
+    constexpr uint32_t slot_cb = get_named_compile_time_arg_val("slot_cb");
 
-    constexpr ag::SlotLayout lay = ag::slot_offsets(K, A, sizeof(PACKET_HEADER_TYPE), CAP);
-    static_assert(lay.slot_bytes == SLOT_BYTES, "host and kernel disagree on the packet header size");
+    constexpr ag::SlotLayout lay =
+        ag::slot_offsets(packets_per_slot, unit_bytes, sizeof(PACKET_HEADER_TYPE), packet_cap);
+    static_assert(lay.slot_bytes == slot_bytes, "host and kernel disagree on the packet header size");
 
     size_t arg_idx = 0;
     const uint32_t take = get_arg_val<uint32_t>(arg_idx++);
@@ -113,7 +113,7 @@ void kernel_main() {
     }
 
     Noc noc;
-    CircularBuffer cb(CB_ID);
+    CircularBuffer cb(slot_cb);
     tt::tt_fabric::RoutingPlaneConnectionManager mgr;
     tt::tt_fabric::common::experimental::open_connections(mgr, num_connections, arg_idx);
 
@@ -167,7 +167,6 @@ void kernel_main() {
         noc.async_writes_flushed();
         cb.pop_front(1);
         iter_end = info.iter_end != 0;
-        ag::test_delay<WDELAY>();
     }
 
     // After every data packet on the same routes, so each receiver's done count implies our data has landed. Sent

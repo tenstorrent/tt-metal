@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "all_gather_plan.hpp"
-#include "all_gather_program.hpp"
+#include "all_gather_program_factory_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
@@ -27,8 +27,8 @@ namespace prog = all_gather_program;
 // Per (link, direction) one Mux V2 owns the fabric connection to the neighbor and n workers feed it, one channel
 // each. A worker's reader fills slots (iteration 0 from the input, later iterations from the stripe upstream relayed
 // into our output, gated on data_valid); its writer encodes each slot's packets and sends them through the mux, then
-// signals data_valid on the downstream mirror worker. Core placement, slices, schedules and k all come from the plan,
-// so this factory only translates them into kernels and arguments.
+// signals data_valid on the downstream mirror worker. Core placement, slices, schedules and packets per slot all come
+// from the plan, so this factory only translates them into kernels and arguments.
 ////////////////////////////////////////////////////////////////
 
 tt::tt_metal::ProgramDescriptor build_unicast_program(
@@ -36,7 +36,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_program(
     const ttnn::MeshCoordinate& coord,
     const Tensor& input,
     const Tensor& output,
-    const plan_ns::AgPlan& plan,
+    const plan_ns::Plan& plan,
     const tt::tt_fabric::FabricMuxV2Config& mux_config,
     uint32_t init_sem,
     uint32_t data_sem) {
@@ -54,13 +54,12 @@ tt::tt_metal::ProgramDescriptor build_unicast_program(
     tt::tt_metal::ProgramDescriptor desc;
     const CoreRangeSet cores = prog::worker_cores(plan);
     desc.cbs.push_back(prog::slot_cb(plan, cores));
-    desc.kernels.push_back(prog::reader_kernel(plan, params.force, input, output, cores));
+    desc.kernels.push_back(prog::reader_kernel(plan, input, output, cores));
     desc.kernels.push_back(prog::writer_kernel(
         plan,
-        params.force,
         prog::kUnicastWriterKernel,
         cores,
-        {{"CB_SLOTS", plan_ns::kCbSlots}, {"MUX_BUFS", plan_ns::mux_buffers(plan.arch, plan.choice.n)}}));
+        {{"num_slots", plan_ns::kCbSlots}, {"mux_buffers", plan_ns::mux_buffers(plan.arch, plan.choice.workers)}}));
     const auto forwarder_noc = plan_ns::tuning(plan.arch).mux_forwarder_noc;
 
     for (const auto& group : plan.groups) {
@@ -89,7 +88,15 @@ tt::tt_metal::ProgramDescriptor build_unicast_program(
             });
         }
         // The init credit goes to the neighbor's opposite-direction worker w: the one that writes back into us.
-        const auto& partner_group = plan.groups.at((group.link * 2) + (1 - group.dir));
+        // place_unicast puts both directions of a link next to each other, each with the same workers.size().
+        const size_t partner_index = (group.link * 2) + (1 - group.dir);
+        TT_FATAL(
+            partner_index < plan.groups.size(), "all_gather: link {} has no direction {}", group.link, 1 - group.dir);
+        const auto& partner_group = plan.groups[partner_index];
+        TT_FATAL(
+            partner_group.workers.size() == group.workers.size(),
+            "all_gather: the two directions of link {} have different worker counts",
+            group.link);
 
         for (uint32_t w = 0; w < group.workers.size(); ++w) {
             const CoreCoord& core = group.workers[w];
@@ -99,7 +106,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_program(
             // Mirror addressing: core coordinates are the same on every device, so our own coordinates name the
             // downstream worker that receives data_valid.
             const CoreCoord mirror = mesh_device->worker_core_from_logical_core(core);
-            const CoreCoord partner = mesh_device->worker_core_from_logical_core(partner_group.workers.at(w));
+            const CoreCoord partner = mesh_device->worker_core_from_logical_core(partner_group.workers[w]);
             std::vector<uint32_t> writer_rt = {
                 active ? 1u : 0u,
                 ws.iters,
@@ -144,11 +151,12 @@ tt::tt_metal::WorkloadDescriptor AllGatherUnicastFactory::create_workload_descri
     Tensor& output_tensor,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& input = tensor_args.input_tensor;
-    auto [plan, workload, init_sem, data_sem] = prog::start_workload(operation_attributes, input, output_tensor);
-    const AgFacts& facts = operation_attributes.facts;
+    tt::tt_metal::WorkloadDescriptor workload;
+    const auto [plan, init_sem, data_sem] = prog::start_workload(operation_attributes, input, output_tensor, workload);
+    const plan_ns::Facts& facts = operation_attributes.facts;
 
     // The mux map runs up from the allocator base, below the L1_SMALL floor (legality checked that it fits).
-    const uint32_t n = plan.choice.n;
+    const uint32_t n = plan.choice.workers;
     const tt::tt_fabric::FabricMuxV2Config mux_config(
         *input.device(),
         static_cast<uint8_t>(n),
@@ -158,10 +166,11 @@ tt::tt_metal::WorkloadDescriptor AllGatherUnicastFactory::create_workload_descri
         facts.l1_small_floor);
     log_debug(
         tt::LogOp,
-        "all_gather unicast: n={} links={} k={} slot={} B; mux map [{:#x}, {:#x}) on each mux core",
+        "all_gather unicast: workers={} links={} packets_per_slot={} slot={} B; mux map [{:#x}, {:#x}) on each mux "
+        "core",
         n,
         plan.choice.links,
-        plan.choice.k,
+        plan.choice.packets_per_slot,
         plan.slot_bytes,
         facts.l1_base,
         mux_config.get_memory_map_end_address());
@@ -173,7 +182,7 @@ tt::tt_metal::WorkloadDescriptor AllGatherUnicastFactory::create_workload_descri
              build_unicast_program(
                  operation_attributes, coord, input, output_tensor, plan, mux_config, init_sem, data_sem)});
     }
-    return std::move(workload);
+    return workload;
 }
 
 }  // namespace ttnn::operations::ccl

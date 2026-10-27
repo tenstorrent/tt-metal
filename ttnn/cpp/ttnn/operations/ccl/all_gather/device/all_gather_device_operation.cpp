@@ -87,8 +87,8 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
     }
 
     // NOTE: implementation-specific constraints (alignment, tile padding on the gather dim, page-size ratios, L1 and
-    // cores) are not checked here: the plan's legality (all_gather_plan::make_plan_in / legality) decides them and
-    // all_gather() routes anything no native algorithm handles to composite.
+    // cores) are not checked here: the plan's legality (all_gather_plan::verdict) decides them and all_gather()
+    // routes anything no native algorithm handles to composite.
 }
 
 AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_output_specs(
@@ -218,10 +218,11 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
     const AllGatherParams& args, const AllGatherInputs& /*tensor_args*/) {
     // all_gather() planned the call (all_gather_plan::make_plan); the choice is part of the hashed params.
     switch (args.choice.algo) {
-        case AgAlgo::Unicast: return AllGatherUnicastFactory{};
-        case AgAlgo::Multicast: return AllGatherMulticastFactory{};
-        default: TT_THROW("all_gather: no native algorithm was planned ({})", static_cast<int>(args.choice.algo));
+        case all_gather_plan::Algo::Unicast: return AllGatherUnicastFactory{};
+        case all_gather_plan::Algo::Multicast: return AllGatherMulticastFactory{};
+        case all_gather_plan::Algo::Composite: TT_THROW("all_gather: composite has no device operation of its own");
     }
+    TT_THROW("Unreachable");
 }
 
 tt::tt_metal::TensorSpec compute_output_specs_helper(
@@ -249,8 +250,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<CoreRangeSet>& sub_core_grid,
-    const AgForce& force) {
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in AllGatherParams.
@@ -306,25 +306,26 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
         static_cast<int32_t>(logical_shape.get_normalized_index(dim)) - static_cast<int32_t>(logical_shape.rank());
 
     AllGatherParams params{
-        gather_dim_from_end,
-        compute_output_specs_helper(input_tensor, gather_dim_from_end, num_devices, output_memory_config),
-        cluster_axis,
-        fabric_config,
-        axis_topology,
-        axis_is_straight,
-        axis_num_devices,
-        axis_num_links,
-        num_devices,
-        subdevice_id,
-        sub_core_grid};
-    params.facts = all_gather_plan::make_facts(*mesh_device, subdevice_id, sub_core_grid);
-    params.force = force;
+        .dim_from_end = gather_dim_from_end,
+        .output_spec =
+            compute_output_specs_helper(input_tensor, gather_dim_from_end, num_devices, output_memory_config),
+        .cluster_axis = cluster_axis,
+        .fabric_config = fabric_config,
+        .axis_topology = axis_topology,
+        .axis_is_straight = axis_is_straight,
+        .axis_num_devices = axis_num_devices,
+        .axis_num_links = axis_num_links,
+        .num_devices = num_devices,
+        .subdevice_id = subdevice_id,
+        .sub_core_grid = sub_core_grid,
+        .facts = all_gather_plan::make_facts(*mesh_device, subdevice_id, sub_core_grid),
+    };
     return {
         std::move(params),
         AllGatherInputs{.input_tensor = input_tensor, .persistent_output_tensor = persistent_output_tensor}};
 }
 
-all_gather_plan::AgPlan plan_all_gather(AllGatherParams& params, const AllGatherInputs& inputs) {
+all_gather_plan::Plan plan_all_gather(AllGatherParams& params, const AllGatherInputs& inputs) {
     const auto& out_spec = inputs.persistent_output_tensor.has_value() ? inputs.persistent_output_tensor->tensor_spec()
                                                                        : params.output_spec;
     auto plan =
@@ -346,10 +347,10 @@ Tensor all_gather(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     auto [params, inputs] = ttnn::operations::ccl::all_gather_build_operation_args(
-        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis, subdevice_id, sub_core_grid, {});
+        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis, subdevice_id, sub_core_grid);
     const auto plan = ttnn::operations::ccl::plan_all_gather(params, inputs);
     TT_FATAL(
-        plan.choice.algo != ttnn::operations::ccl::AgAlgo::Composite,
+        plan.choice.algo != ttnn::operations::ccl::all_gather_plan::Algo::Composite,
         "prim::all_gather has no native algorithm for this input ({}); use ttnn::all_gather",
         plan.composite_reason);
     return ttnn::device_operation::launch<ttnn::operations::ccl::AllGatherDeviceOperation>(params, inputs);

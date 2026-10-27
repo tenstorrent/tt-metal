@@ -8,30 +8,9 @@
 #include "device/all_gather_plan.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
-#include <cstdlib>
 #include <string>
 
 namespace ttnn {
-
-namespace {
-
-using operations::ccl::AgAlgo;
-using operations::ccl::AgForce;
-namespace all_gather_plan = operations::ccl::all_gather_plan;
-
-// Test-only override of the plan (TTNN_ALL_GATHER_FORCE, grammar in all_gather_plan.hpp). The op's only environment
-// read; the parsed value is hashed in the params, so a changed override is a different cached program.
-AgForce read_force() {
-    const char* spec = std::getenv(all_gather_plan::kForceEnvVar);
-    if (spec == nullptr) {
-        return {};
-    }
-    const AgForce force = all_gather_plan::parse_force(spec);
-    log_warning(tt::LogOp, "{}='{}' overrides the all_gather plan (test-only)", all_gather_plan::kForceEnvVar, spec);
-    return force;
-}
-
-}  // namespace
 
 ttnn::Tensor all_gather(
     const ttnn::Tensor& input_tensor,
@@ -61,7 +40,7 @@ ttnn::Tensor all_gather(
             "topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores.");
     }
 
-    const AgForce force = read_force();
+    namespace all_gather_plan = operations::ccl::all_gather_plan;
     auto run_composite = [&](const std::string& reason) {
         log_info(tt::LogOp, "Using slower composite all_gather: {}", reason);
         return composite_common::composite_all_gather(
@@ -83,19 +62,14 @@ ttnn::Tensor all_gather(
     const int32_t dim_from_end =
         static_cast<int32_t>(logical_shape.get_normalized_index(dim)) - static_cast<int32_t>(logical_shape.rank());
     if (auto reason = all_gather_plan::gather_dim_padding_reason(input_tensor.tensor_spec(), dim_from_end)) {
-        TT_FATAL(
-            force.algo == AgAlgo::Auto || force.algo == AgAlgo::Composite,
-            "all_gather: {} forces a native algorithm, but {}",
-            all_gather_plan::kForceEnvVar,
-            *reason);
         return run_composite(*reason);
     }
 
     // Facts -> plan -> choice, once per call; the factories re-expand the hashed choice on a program-cache miss.
     auto [params, inputs] = operations::ccl::all_gather_build_operation_args(
-        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis, subdevice_id, sub_core_grid, force);
+        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis, subdevice_id, sub_core_grid);
     const auto plan = operations::ccl::plan_all_gather(params, inputs);
-    if (plan.choice.algo == AgAlgo::Composite) {
+    if (plan.choice.algo == all_gather_plan::Algo::Composite) {
         return run_composite(plan.composite_reason);
     }
     return ttnn::device_operation::launch<operations::ccl::AllGatherDeviceOperation>(params, inputs);

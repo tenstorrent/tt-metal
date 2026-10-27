@@ -18,49 +18,46 @@
 
 namespace ttnn::operations::ccl {
 
-// Native algorithm of one all_gather call. Auto appears only in AgForce (no override).
-enum class AgAlgo : uint8_t { Auto, Unicast, Multicast, Composite };
+namespace all_gather_plan {
 
-// Most unicast workers per link-direction. Measured on BH: n = 4 never beat n = 3 by more than 1%.
-inline constexpr uint32_t kAgMaxWorkers = 3;
+// Native algorithm of one all_gather call, or composite (all_broadcast + concat). Unicast and Multicast index the
+// per-algorithm arrays of the plan (all_gather_plan::algo_index).
+enum class Algo : uint8_t { Unicast, Multicast, Composite };
 
-// Test-only override parsed from TTNN_ALL_GATHER_FORCE (all_gather_plan::parse_force). Zero means "plan's choice".
-struct AgForce {
-    AgAlgo algo = AgAlgo::Auto;
-    uint8_t workers = 0;        // unicast workers per link-direction
-    uint8_t links = 0;          // links used
-    uint16_t reader_delay = 0;  // cycles a reader spins per slot (sync stress)
-    uint16_t writer_delay = 0;  // cycles a writer spins per slot (sync stress)
-};
+// Most unicast workers per link-direction. Measured on BH: 4 never beat 3 by more than 1%.
+inline constexpr uint32_t kMaxWorkers = 3;
 
-// What the plan decided, computed once per call in all_gather(); the factories re-expand it (all_gather_plan::expand).
-struct AgChoice {
-    AgAlgo algo = AgAlgo::Composite;
-    uint8_t n = 0;      // unicast workers per link-direction; 1 for multicast
-    uint8_t links = 0;  // links used
-    uint8_t k = 0;      // packets per slot
+// What the plan decided, once per call in all_gather(); the factories re-expand it (all_gather_plan::expand).
+struct Choice {
+    Algo algo = Algo::Composite;
+    uint32_t workers = 0;           // unicast workers per link-direction; 1 for multicast
+    uint32_t links = 0;             // links used
+    uint32_t packets_per_slot = 0;  // packets one CB slot carries
 
-    bool operator==(const AgChoice&) const = default;
+    bool operator==(const Choice&) const = default;
 };
 
 // Hardware, fabric and sub-device facts the plan depends on (all_gather_plan::make_facts). Stored in the hashed params
-// so a cached program never depends on state it did not hash; injectable in host tests.
-struct AgFacts {
+// so a cached program never depends on state it did not hash; host tests construct them directly.
+struct Facts {
     tt::ARCH arch = tt::ARCH::Invalid;
-    uint32_t payload = 0;        // fabric max packet payload, bytes
-    uint32_t header_bytes = 0;   // fabric packet header, bytes
-    uint32_t channel_bytes = 0;  // fabric channel buffer (header + payload), bytes
-    uint32_t dram_align = 0;     // DRAM read alignment, bytes
-    uint32_t l1_align = 0;       // L1 read alignment, bytes
-    uint32_t max_burst = 0;      // NOC_MAX_BURST_SIZE, bytes
+    uint32_t payload = 0;          // fabric max packet payload, bytes
+    uint32_t header_bytes = 0;     // fabric packet header, bytes
+    uint32_t channel_bytes = 0;    // fabric channel buffer (header + payload), bytes
+    uint32_t dram_align = 0;       // DRAM read alignment, bytes
+    uint32_t l1_align = 0;         // L1 read alignment, bytes
+    uint32_t noc_write_align = 0;  // NOC write alignment (L1 and DRAM), bytes
+    uint32_t max_burst = 0;        // NOC_MAX_BURST_SIZE, bytes
     uint32_t num_banks_dram = 0;
     uint32_t num_banks_l1 = 0;
     uint32_t l1_base = 0;           // unreserved L1 base: CBs and the mux map start here
     uint32_t l1_small_floor = 0;    // floor of L1_SMALL: the ceiling of the mux map and of the CB footprint
     uint32_t headers_per_risc = 0;  // fabric packet-header pool entries per data-movement RISC
-    std::array<uint32_t, kAgMaxWorkers> mux_map_end{};  // [n - 1]: exclusive end of a Mux V2 map with n channels
-    CoreRangeSet worker_cores;                          // sub-device worker cores, intersected with sub_core_grid
+    std::array<uint32_t, kMaxWorkers> mux_map_end{};  // [n - 1]: exclusive end of a Mux V2 map with n channels
+    CoreRangeSet worker_cores;                        // sub-device worker cores, intersected with sub_core_grid
 };
+
+}  // namespace all_gather_plan
 
 // The program-cache hash and the profiler's op metadata both come from attribute_names + attribute_values(), every
 // struct field must be added to both lists. Miss one and two different configs will share a cached program.
@@ -89,9 +86,8 @@ struct AllGatherParams {
 
     // Plan inputs and decision (all_gather_plan.hpp). Plain aggregates, so they hash and print field by field through
     // auto-reflection.
-    AgFacts facts;
-    AgForce force;
-    AgChoice choice;
+    all_gather_plan::Facts facts;
+    all_gather_plan::Choice choice;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim_from_end",
@@ -106,7 +102,6 @@ struct AllGatherParams {
         "subdevice_id",
         "sub_core_grid",
         "facts",
-        "force",
         "choice");
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -122,7 +117,6 @@ struct AllGatherParams {
             subdevice_id,
             sub_core_grid,
             facts,
-            force,
             choice);
     }
 
