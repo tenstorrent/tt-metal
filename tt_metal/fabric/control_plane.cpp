@@ -712,6 +712,20 @@ ControlPlane::ControlPlane(
 }
 
 void ControlPlane::validate_fabric_config_compatibility() {
+    // A DISABLED control plane runs no fabric, so there is nothing to cross-check between ranks. More
+    // importantly, DISABLED control planes are built at points that are NOT symmetric across ranks: the
+    // eager rebuild in MetalEnv::teardown_fabric_config() fires only on ranks whose control plane is
+    // currently null, so one rank may construct a placeholder DISABLED control plane while another, already
+    // holding a live one, does not. If every such construction took part in the all_gather below, a rank
+    // sitting on a DISABLED teardown build (STRICT, 0 routing planes) would be paired against a rank on a
+    // real build (e.g. RELAXED, 255 planes) and the mismatch check would fatal (control_plane.cpp:854) or,
+    // worse, the collective stream would skew and deadlock. Skipping the collective for DISABLED builds
+    // keeps only the real, symmetric fabric bring-ups in the all_gather, where every rank genuinely agrees.
+    if (this->config_.fabric_config == FabricConfig::DISABLED) {
+        this->validated_fabric_config_ = this->config_.fabric_config;
+        return;
+    }
+
     // Gather every rank's FabricConfigDescriptor (raw bytes; the sending rank is its index in the gather).
     const auto& distributed_context = this->distributed_context_.get();
     const auto world_size = static_cast<uint32_t>(*distributed_context.size());
