@@ -244,6 +244,7 @@ void py_module(nb::module_& m) {
                 // DistributedContext::send takes Span<std::byte> (non-const),
                 // but underlying MPI_Send treats it as readonly.
                 auto* ptr = reinterpret_cast<std::byte*>(const_cast<char*>(data.c_str()));
+                nb::gil_scoped_release release;
                 self.send(ttsl::Span<std::byte>(ptr, data.size()), DistRank{dest}, DistTag{tag});
             },
             nb::arg("data"),
@@ -253,12 +254,19 @@ void py_module(nb::module_& m) {
             "recv",
             [](DistributedContext& self, std::size_t nbytes, int source, int tag) -> nb::bytes {
                 std::vector<std::byte> buffer(nbytes);
-                self.recv(ttsl::Span<std::byte>(buffer.data(), buffer.size()), DistRank{source}, DistTag{tag});
+                {
+                    nb::gil_scoped_release release;
+                    self.recv(ttsl::Span<std::byte>(buffer.data(), buffer.size()), DistRank{source}, DistTag{tag});
+                }
                 return nb::bytes(reinterpret_cast<const char*>(buffer.data()), buffer.size());
             },
             nb::arg("nbytes"),
             nb::arg("source"),
             nb::arg("tag") = 0);
+        py_dist_ctx.def("duplicate", [](DistributedContext& self) -> std::shared_ptr<DistributedContext> {
+            nb::gil_scoped_release release;
+            return self.duplicate();
+        });
 
         // Bind SocketManager methods
         auto py_socket_manager =
