@@ -347,9 +347,9 @@ private:
     std::thread worker;
     alignas(64) std::atomic<uint32_t> parked_ = 0;
     std::atomic<bool> shutdown_ = false;
-    alignas(64) uint32_t index_ = 0;
+    alignas(64) const uint32_t index_;
     const std::atomic<uint64_t>& pool_published_job_;
-    const std::unique_ptr<ParallelJob>* pool_jobs_ = nullptr;
+    const std::unique_ptr<ParallelJob>* const pool_jobs_;
     uint64_t seen_ = 0;  // The published word this worker last acted on; worker thread only.
     std::exception_ptr stored_exception_;
 };
@@ -517,7 +517,7 @@ private:
     std::atomic<uint64_t> state_ = 0;
     uint32_t generation_ = 0;  // Of the current use, as published; set by the caller on acquire, read by holders.
     uint64_t use_ = 0;         // Counts the job's uses, for claims; set by the caller on acquire, read by holders.
-    uint32_t slot_ = 0;
+    const uint32_t slot_;
     // Valid until the caller returns, which happens only after every claimed call has finished.
     const std::function<void(size_t)>* fn_ = nullptr;
     std::vector<Claim> claims_;  // Indexed by participant.
@@ -755,7 +755,7 @@ private:
     // Declared before the executors so that it outlives them.
     Completion completion_;
     // Store the number of workers to repeated lookups
-    uint32_t num_workers_ = 0;
+    const uint32_t num_workers_;
     // parallel_for jobs, reused; declared before the executors, which refer to them.
     std::vector<std::unique_ptr<ParallelJob>> jobs_;
     std::atomic<uint32_t> last_job_ = 0;
