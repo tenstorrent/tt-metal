@@ -517,6 +517,40 @@ def test_chunked_mla_prefill_pair_split_multi_chunk_per_core(
     check_pair_split_lse_off(device, caches, q, starts[-1], seq, 0, program, fp32_acc)
 
 
+def grouped_program(device, chunk, heads, splits):
+    """The grouped-heads / K split chunked prefill program (MiMo's later chunks from 64K: attention.later_chunk_split)
+    on the full grid."""
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=chunk,
+        k_chunk_size=chunk,
+        exp_approx_mode=False,
+        q_heads_per_unit=heads,
+        k_splits=splits,
+    )
+
+
+@pytest.mark.parametrize("heads, splits", [(2, 1), (4, 1), (1, 3), (2, 15)], ids=["g2", "g4", "s3", "g2s15"])
+def test_chunked_mla_prefill_pair_split_grouped_ksplit(device, heads, splits, function_level_defaults, reset_seeds):
+    """The pair split on the grouped-heads / K split program (SDPAProgramConfig.q_heads_per_unit / k_splits): each
+    chip matches the pair-split reference, LSE included (with a K split the merge forms it from the pieces'
+    statistics), the merged pair equals full attention, every start shares the programs, and return_lse=False gives
+    the same output. At start 0 chip 1's first 64 rows see no key (output 0, lse -1e30) and most K slices are empty."""
+    seq, chunk, n = 512, 256, 3072
+    q = torch.randn(1, NH, n, DK)
+    caches = PairSplitCaches(device, n)
+    program = grouped_program(device, chunk, heads, splits)
+    programs = None
+    for start in (0, 256, n - seq):
+        for c, added in enumerate(check_pair_split_start(device, caches, q, start, seq, program, False)):
+            if programs is None:
+                programs = added
+            else:
+                assert added == 0, f"start {start} parity {c} added a program"
+    check_pair_split_lse_off(device, caches, q, 0, seq, 1, program, False)
+    check_pair_split_lse_off(device, caches, q, n - seq, seq, 0, program, False)
+
+
 def test_chunked_mla_prefill_pair_split_tight_page_table(device, function_level_defaults, reset_seeds, expect_error):
     """Pair split only reads the local keys below the chunk's end, (start + S) / 2 local tokens, which can be fewer
     than S: at start 0 with S = 2048 a 16-block table (1024 local tokens) is enough. A tight table gives the same

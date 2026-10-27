@@ -179,8 +179,9 @@ global KV head once per pair by splitting every block instead of the users:
   entry per 64 positions, the block on the chip that keeps them and the null block on the other (`kv.pair_fill_rows`,
   also for batched first chunks). A later chunk runs the group's 16 Q heads through pair-split
   `chunked_flash_mla_prefill(..., kv_pair_parity_tensor=<the chip's parity>, return_lse=True)` (it reads the chip's
-  local keys [0, (start + length) / 2), with the unsplit chunk's Q / K chunk sizes) and the same merge, instead of
-  zeroing the non-owner's rows. Chunk starts and later chunks' lengths are multiples of 128: a later chunk pads to at
+  local keys [0, (start + length) / 2) with an unsplit later chunk's program: from 64K the grouped / K split one, G 2
+  S 15, whose LSE the K split's merge forms from the pieces' statistics) and the same merge, in place of the head
+  split that `MIMO_KV_PAIR_SPLIT=0` runs (8 heads per chip over both copies: the same work). Chunk starts and later chunks' lengths are multiples of 128: a later chunk pads to at
   least 128 tokens, and `prefill_forward` moves a chunk start back to a 128-token block. vLLM's prefix-cache hits
   land on its scheduler block, lcm(64, 128) = 128, and the plugin's TTScheduler ends partial chunks on its 128-token
   grid (`prefill_chunk_alignment`), but a running request whose leftover step budget cannot reach the grid gets the
@@ -188,7 +189,8 @@ global KV head once per pair by splitting every block instead of the users:
   step do this). The moved-back chunk recomputes those positions, whose sliding windows reach up to 127 positions
   further back than vLLM keeps for the scheduled start; the SWA specs' longer window (`swa_spec_window`) keeps them
   (vLLM overwrites a spec's `extra_retained_tokens` from the speculative config, so the margin cannot go there).
-  `prefill_warmup_chunks(..., pair_split=True)` warms the later chunks at those starts and lengths.
+  `prefill_warmup_chunks(..., pair_split=True)` warms the later chunks at those starts and lengths, and each length
+  that takes the grouped / K split program once at 64K.
 - **Slot parity.** Every chip of the pair computes every slot, so a global layer no longer depends on a slot's parity
   in decode or in later prefill chunks.
 - The SWA layers' attention, the MTP and DFlash caches, the MTP history and the ring backfill are unchanged.

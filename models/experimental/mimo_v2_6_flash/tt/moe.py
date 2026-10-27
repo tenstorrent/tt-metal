@@ -43,6 +43,7 @@ from .moe_stream import (
     stick_buffer,
 )
 from .moe_prefill import PrefillExperts
+from .profiling import zone
 from .proj_stream import RouterScoreStream
 
 # Longest prefill chunk one MoE call takes; forward runs longer chunks in slices. The router's prefill program block
@@ -461,18 +462,21 @@ class TtMiMoMoE:
             out = self._partial(x, token_mask, decode)
         else:
             out = self._partial_slices(x, token_mask)
-        return self.plan.all_reduce(out)
+        with zone("all_reduce"):
+            return self.plan.all_reduce(out)
 
     def _partial(self, x, token_mask, decode=False):
         """This chip's share of the routed-expert output [1, 1, T, hidden], before the row all-reduce."""
-        logits = self._router_logits(x, prefill=not decode)
-        indices, weights = self._topk(logits)
-        logits.deallocate(True)
-        if token_mask is not None:
-            masked = ttnn.mul(weights, ttnn.typecast(token_mask, weights.dtype))
-            weights.deallocate(True)
-            weights = masked
-        out = self.prefill_experts(x, indices, weights)
+        with zone("router"):
+            logits = self._router_logits(x, prefill=not decode)
+            indices, weights = self._topk(logits)
+            logits.deallocate(True)
+            if token_mask is not None:
+                masked = ttnn.mul(weights, ttnn.typecast(token_mask, weights.dtype))
+                weights.deallocate(True)
+                weights = masked
+        with zone("experts"):
+            out = self.prefill_experts(x, indices, weights)
         indices.deallocate(True)
         weights.deallocate(True)
         return out
@@ -484,7 +488,7 @@ class TtMiMoMoE:
         slicing (MeshPlan.prefill_reduce)."""
         T, H = x.shape[-2], x.shape[-1]
         outs = []
-        for s in range(0, T, PREFILL_MAX_TOKENS):
+        for s in range(0, T, PREFILL_MAX_TOKENS):  # the slices' zones add up (router, experts)
             e = min(T, s + PREFILL_MAX_TOKENS)
             xs = ttnn.slice(x, [0, 0, s, 0], [1, 1, e, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ms = None

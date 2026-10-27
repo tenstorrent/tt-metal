@@ -29,6 +29,7 @@ import ttnn
 
 from .common import TILE
 from .moe_stream import is_dram_interleaved, noc_coords
+from .profiling import zone
 
 KERNEL_DIR = "models/experimental/mimo_v2_6_flash/tt/kernels/prefill"
 
@@ -363,6 +364,111 @@ class DevicePlan:
         return row_token, row_weight, row_dest, plan
 
 
+# DevicePlanSplit from this many tokens: 0.60 vs 1.55 ms at 4096, 0.34 vs 0.55 at 1056, 0.18 vs 0.14 at 32
+# (tests/perf/moe_plan_bench.py, device time on one row); the two cross near 210 tokens.
+SPLIT_PLAN_MIN_TOKENS = 256
+
+
+class DevicePlanSplit(DevicePlan):
+    """DevicePlan's plan in two programs, so no core reads all T x K pairs. plan_slice.cpp: core i counts tile rows
+    [i * TR / cores, (i + 1) * TR / cores) per expert and writes them sorted by expert. plan_gather.cpp: core i reads
+    every slice's counts and, from each slice, the records of its experts, and fills their rows (and core 0 the team
+    plan) as plan.cpp does. Same outputs as DevicePlan, bit for bit."""
+
+    def _kernel(self, name, ct, rt_of):
+        rt = ttnn.RuntimeArgs()
+        for i, core in enumerate(self.cores):
+            rt[core.x][core.y] = rt_of(i)
+        return ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/{name}",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=self.ranges,
+            compile_time_args=ct,
+            runtime_args=rt,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+            ),
+        )
+
+    def __call__(self, indices, weights):
+        moe, grouped = self.moe, self.grouped
+        T, K, E = indices.shape[-2], indices.shape[-1], moe.num_experts
+        assert indices.dtype == ttnn.uint32 and weights.dtype == ttnn.float32
+        for t in (indices, weights):
+            assert t.layout == ttnn.TILE_LAYOUT and is_dram_interleaved(t) and K <= 16
+        R, n = self.max_rows(T, K, E), len(self.cores)
+        rows_per_core = -(-(T // TILE) // n)
+        slice_pairs = rows_per_core * TILE * K
+        device = moe.plan.mesh_device
+
+        def empty(shape, dtype):
+            return ttnn.empty(
+                shape, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+
+        counts = empty([n, E], ttnn.uint32)
+        rtok, rdest = empty([n, slice_pairs], ttnn.uint32), empty([n, slice_pairs], ttnn.uint32)
+        rw = empty([n, slice_pairs], ttnn.bfloat16)
+        slice_kernel = self._kernel(
+            "plan_slice.cpp",
+            [T, K, E, n, slice_pairs, 0, 1, 2],
+            lambda i: [
+                indices.buffer_address(),
+                weights.buffer_address(),
+                counts.buffer_address(),
+                rtok.buffer_address(),
+                rw.buffer_address(),
+                rdest.buffer_address(),
+                i,
+            ],
+        )
+        slice_cbs = [
+            self._cb(0, rows_per_core * 2 * 4096),
+            self._cb(1, 2 * E * 4),
+            self._cb(2, slice_pairs * 10),
+        ]
+        ttnn.generic_op(
+            [indices, weights, counts, rtok, rw, rdest],
+            ttnn.ProgramDescriptor(kernels=[slice_kernel], cbs=slice_cbs, semaphores=[]),
+        )
+
+        row_token = empty([1, R], ttnn.uint32)
+        row_weight = empty([1, R], ttnn.bfloat16)
+        row_dest = empty([1, R], ttnn.uint32)
+        plan = empty([grouped.num_teams, grouped.PLAN_WORDS], ttnn.uint32)
+        gather_kernel = self._kernel(
+            "plan_gather.cpp",
+            [E, grouped.num_teams, grouped.PLAN_WORDS, R, n, slice_pairs, 0, 1, 2, 3, 4, 5, 6],
+            lambda i: [
+                counts.buffer_address(),
+                rtok.buffer_address(),
+                rw.buffer_address(),
+                rdest.buffer_address(),
+                row_token.buffer_address(),
+                row_weight.buffer_address(),
+                row_dest.buffer_address(),
+                plan.buffer_address(),
+                i,
+            ],
+        )
+        gather_cbs = [
+            self._cb(0, n * E * 4),
+            self._cb(1, (3 * E + 4) * 4),
+            self._cb(2, 3 * (slice_pairs + 16) * 4),
+            self._cb(3, R * 4),
+            self._cb(4, R * 2),
+            self._cb(5, R * 4),
+            self._cb(6, grouped.num_teams * grouped.PLAN_WORDS * 4),
+        ]
+        ttnn.generic_op(
+            [counts, rtok, rw, rdest, row_token, row_weight, row_dest, plan],
+            ttnn.ProgramDescriptor(kernels=[gather_kernel], cbs=gather_cbs, semaphores=[]),
+        )
+        for t in (counts, rtok, rw, rdest):
+            t.deallocate(True)
+        return row_token, row_weight, row_dest, plan
+
+
 class CombineK:
     """The k-major row-major expert output [K * T, H] -> sum over k -> [1, 1, T, H] bf16 tiles, on every core
     (tt/kernels/prefill/combine_*.cpp): per 32 tokens x BLOCK tile columns, the K row blocks summed in fp32, then
@@ -517,31 +623,35 @@ class PrefillExperts:
         grouped = self._grouped()
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (T, H))
         if grouped is not None:
-            if self.host_plan:
-                row_token, row_weight, row_dest, groups, _ = self.plan(indices, weights, T)
-                row_token_tt = self._upload(row_token.reshape(1, -1), ttnn.uint32)
-                row_weight_tt = self._upload(row_weight.reshape(1, -1).to(torch.bfloat16), ttnn.bfloat16)
-                row_dest_tt = self._upload(row_dest.to(torch.uint32).reshape(1, -1), ttnn.uint32)
-                plan = self._upload(grouped.plan(groups), ttnn.uint32)
-            else:
-                if self.device_plan is None:
-                    self.device_plan = DevicePlan(moe, grouped)
-                row_token_tt, row_weight_tt, row_dest_tt, plan = self.device_plan(indices, weights)
+            with zone("plan"):
+                if self.host_plan:
+                    row_token, row_weight, row_dest, groups, _ = self.plan(indices, weights, T)
+                    row_token_tt = self._upload(row_token.reshape(1, -1), ttnn.uint32)
+                    row_weight_tt = self._upload(row_weight.reshape(1, -1).to(torch.bfloat16), ttnn.bfloat16)
+                    row_dest_tt = self._upload(row_dest.to(torch.uint32).reshape(1, -1), ttnn.uint32)
+                    plan = self._upload(grouped.plan(groups), ttnn.uint32)
+                else:
+                    if self.device_plan is None:
+                        self.device_plan = {False: DevicePlan(moe, grouped), True: DevicePlanSplit(moe, grouped)}
+                    device_plan = self.device_plan[T >= SPLIT_PLAN_MIN_TOKENS]
+                    row_token_tt, row_weight_tt, row_dest_tt, plan = device_plan(indices, weights)
             # The team cores read their tokens' rows of x themselves and write every pair's output row into the
             # k-major [K * T, H]; CombineK sums over k.
-            y = ttnn.empty(
-                [K * T, H],
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=moe.plan.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            grouped(x_rm, row_token_tt, row_weight_tt, row_dest_tt, plan, y)
+            with zone("grouped_matmul"):
+                y = ttnn.empty(
+                    [K * T, H],
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=moe.plan.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                grouped(x_rm, row_token_tt, row_weight_tt, row_dest_tt, plan, y)
             for t in (x_rm, row_token_tt, row_weight_tt, row_dest_tt, plan):
                 t.deallocate(True)
             if self.combine is None:
                 self.combine = CombineK(moe, grouped.cores, grouped.ranges)
-            out = self.combine(y, T, K)
+            with zone("combine"):
+                out = self.combine(y, T, K)
             y.deallocate(True)
             return out
 

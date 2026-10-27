@@ -31,7 +31,7 @@ from ..reference.model import load_layer_weights
 from ..reference.mtp_backfill import HISTORY_ROWS
 from ..reference.spec_decode import SPEC_SLOTS, serial_positions
 from . import kv as kv_lib
-from .attention import TtMiMoAttention, page_table_width
+from .attention import GLOBAL_SDPA_MIN_START, TtMiMoAttention, later_chunk_split, page_table_width
 from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .device_sampler import DeviceSampler
@@ -40,6 +40,7 @@ from .moe import expert_quant
 from .moe_stream import ReduceExpand, fabric_row_gather, user_rows, zero_output
 from .mtp import TtMiMoMTP
 from .pair_split import PairSplit
+from .profiling import zone
 from .rope import MiMoRotarySetup, partial_rope_table
 from .dflash import TtDFlash
 from .spec_inputs import SpecInputs
@@ -71,6 +72,9 @@ def prefill_warmup_chunks(max_tokens, max_seq_len, block_size, window, pair_spli
     the start (TtMiMoAttention._prefill_sdpa_program, which global layers run chunked MLA prefill with). Only chunks
     that fit in the context are listed.
 
+    From GLOBAL_SDPA_MIN_START a global layer's later chunk can run the grouped / K split program and its merge
+    (attention.later_chunk_split): one start there per padded length that takes it.
+
     ``pair_split`` (the KV pair split): later chunks start on 2 * block_size and are padded to at least 128
     (``prefill_padded_len``); the global layers' pair-split chunked MLA prefill keys on the same SDPA chunk size."""
     align = 2 * block_size if pair_split else block_size  # a later chunk's start alignment
@@ -98,6 +102,10 @@ def prefill_warmup_chunks(max_tokens, max_seq_len, block_size, window, pair_spli
                 leads.add(lead)
                 chunks.add(chunk)
                 out.append((n, start))
+        start = pad_to(GLOBAL_SDPA_MIN_START, max(align, 256))
+        chunk = TtMiMoAttention._prefill_sdpa_program(None, padded, start).q_chunk_size
+        if start + n <= max_seq_len and later_chunk_split(chunk, start) is not None:
+            out.append((n, start))
     return out
 
 
@@ -140,10 +148,13 @@ class TtMiMoModel:
         kv_dtype=ttnn.bfloat8_b,
         logits_dtype=None,
         num_links=2,
+        replicate_global_kv=False,
         decode_users=None,
     ):
         """``ckpt`` may be None when ``cache_dir`` already holds every tensor (a later DP replica).
         ``max_prefill_chunk``: the default prefill chunk (a multiple of ``block_size``).
+        ``replicate_global_kv``: ``setup_kv_cache`` keeps every user's global-layer K / V on both chips of a pair, as
+        vLLM's caches do (twice the global KV memory), so a later prefill chunk splits its heads over the pair.
         ``logits_dtype``: fp32 keeps near-tied logits apart; in bf16 (a step of 0.125 at the usual top logit of
         16-32) they often tie exactly and the lowest token id wins. Default fp32 (MIMO_LOGITS_FP32=0: bf16).
         ``decode_users``: the decode users the caller will set up (setup_kv_cache / setup_vllm_kv_cache), known now so
@@ -261,6 +272,8 @@ class TtMiMoModel:
         self.swa_qkv = None
         # vLLM-owned KV (setup_vllm_kv_cache): each layer's KV cache group, and the host copy of every group's table.
         self.layer_groups = None
+        self.replicate_global_kv = replicate_global_kv
+        self.global_kv_both = False  # both chips of a global layer's pair keep every slot's K / V
         self.vllm_tables = None
         # The KV pair split (setup_vllm_kv_cache with pair_split; tt/pair_split.py): its PairSplit, and the KV cache
         # groups of the global layers, whose tables have one block per 2 * block_size positions.
@@ -341,19 +354,30 @@ class TtMiMoModel:
                 table, num_blocks = self.swa_table.host_table(self.plan.tp), self.swa_table.num_blocks
                 scratch = 0
             else:
-                table, num_blocks = kv_lib.page_tables(
-                    num_users, self.max_batch, max_blocks, self.plan.tp, layer.attn.rep
-                )
+                rep = 1 if self.replicate_global_kv else layer.attn.rep
+                table, num_blocks = kv_lib.page_tables(num_users, self.max_batch, max_blocks, self.plan.tp, rep)
                 # kv.page_tables adds one scratch block (the last) when a chip pair splits the users; with rep 1 every
                 # block is a user's, so nothing may land past the table.
-                scratch = num_blocks - 1 if layer.attn.rep > 1 else None
+                scratch = num_blocks - 1 if rep > 1 else None
+                if self.replicate_global_kv:  # a scratch block for a later chunk's context table past the width
+                    scratch, num_blocks = num_blocks, num_blocks + 1
             self.kv_caches.append(layer.attn.allocate_kv_cache(num_blocks, self.block_size, self.kv_dtype))
             tables.setdefault(layer.is_swa, table)
             self.table_scratch.setdefault(layer.is_swa, scratch)
         self.set_page_tables(tables)
         if self.swa_table is not None:
             self.swa_table.dirty = False
+        if self.replicate_global_kv:
+            self._keep_global_kv_on_both_chips()
         self._setup_fused_norms()
+
+    def _keep_global_kv_on_both_chips(self):
+        """Both chips of a global layer's pair keep every slot's K / V: decode writes it on both, and a later prefill
+        chunk splits the group's heads over the pair (TtMiMoAttention.keep_kv_on_both_chips)."""
+        self.global_kv_both = True
+        for layer in self.layers:
+            if layer.attn.split_users:
+                layer.attn.keep_kv_on_both_chips()
 
     def setup_vllm_kv_cache(self, num_users, kv_caches, layer_groups, table_width, pair_split=False):
         """Adopt KV caches and page tables that vLLM owns, for ``num_users`` users in decode slots [0, num_users).
@@ -369,7 +393,8 @@ class TtMiMoModel:
         the adapter's default): the global group's blocks hold 2 * block_size positions and each chip of the pair keeps
         its block_size halves (reference/kv_pair_split.py), every chip attends every slot over its own keys and the
         pair merges by LSE (tt/pair_split.py). Otherwise the pair keeps both copies of its KV head: decode writes every
-        slot's K / V on both chips (``pos_update``) and still splits the attention by slot."""
+        slot's K / V on both chips (``pos_update``) and still splits the attention by slot, and a later prefill chunk
+        splits the group's heads over the pair (_keep_global_kv_on_both_chips)."""
         assert num_users <= self.max_batch
         assert self.decode_users in (None, num_users), f"decode users already set to {self.decode_users}"
         assert self.decode_trace is None and self.kv_caches is None, "the KV cache is already set up"
@@ -396,6 +421,8 @@ class TtMiMoModel:
             for layer in self.layers:
                 if not layer.is_swa:
                     layer.attn.pair = self.pair
+        else:
+            self._keep_global_kv_on_both_chips()
         # A later chunk's context table through a pair-split global table: one block per 2 * block_size positions.
         self.pair_context_blocks = pad_to(-(-(self.max_seq_len + kv_lib.PREFILL_MAX_PAD) // (2 * self.block_size)), 8)
         # Per (group, slot): how far the host row was last written; entries past it are zero (set_vllm_page_tables).
@@ -633,11 +660,13 @@ class TtMiMoModel:
         return logits
 
     # ------------------------------------------------------------------ prefill
-    def _prefill_chunk(self, tokens, slot, start_pos, hidden, layers=None, draft_group=0):
+    def _prefill_chunk(self, tokens, slot, start_pos, hidden, layers=None, draft_group=0, after_layer=None):
         """One chunk (``tokens`` 1D torch) at ``start_pos`` through the layers ``layers`` (indices, default all);
         returns the last one's output [1, 1, padded, hidden] and appends (copy, real rows) of every layer's output to
         ``hidden`` when given. With the DFlash drafter the chunk's last rows also go into draft group ``draft_group``'s
-        context ring (TtDFlash.prefill_context; a warm-up through a subset of the layers runs the same programs)."""
+        context ring (TtDFlash.prefill_context; a warm-up through a subset of the layers runs the same programs).
+        ``after_layer(i)`` runs after layer ``i`` is enqueued (profiling: tests/perf/profile_prefill.py reads the
+        device profiler there)."""
         n = tokens.numel()
         padded = prefill_padded_len(n, start_pos, self.pair is not None)
         assert start_pos + n <= self.max_seq_len, f"chunk ends at {start_pos + n} > {self.max_seq_len}"
@@ -648,25 +677,30 @@ class TtMiMoModel:
         tables, start = self._prefill_tables(slot, start_pos, padded, layers)
         for setup in self.rope_setups.values():
             setup.begin_prefill_chunk()
-        x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
+        with zone("embed"):
+            x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
         dflash_acc = None
         with self._prefill_reduce(padded):
             for k, i in enumerate(layers):
-                y = self.layers[i].forward_prefill(
-                    x,
-                    slot,
-                    self._layer_page_table(i),
-                    self.kv_caches[i],
-                    real_len=n,
-                    start_pos=start_pos,
-                    tables=tables[self._table_key(i)],
-                )
+                layer = self.layers[i]
+                with zone(f"layer{i:02d}_{'swa' if layer.is_swa else 'global'}{'' if layer.is_moe else '_dense'}"):
+                    y = layer.forward_prefill(
+                        x,
+                        slot,
+                        self._layer_page_table(i),
+                        self.kv_caches[i],
+                        real_len=n,
+                        start_pos=start_pos,
+                        tables=tables[self._table_key(i)],
+                    )
                 x.deallocate(True)
                 x = y
                 if self.dflash is not None:
                     dflash_acc = self.dflash.prefill_tap(i, x, dflash_acc)
                 if hidden is not None:
                     hidden[k].append((ttnn.clone(x), n))
+                if after_layer is not None:
+                    after_layer(i)
         if self.dflash is not None:
             if dflash_acc is None:
                 dflash_acc = self.dflash.prefill_tap(self.dflash.tap_layers[0], x, None)
@@ -1125,8 +1159,8 @@ class TtMiMoModel:
             positions.update(pair_write=write, pair_sdpa=sdpa_pos)
             if serial_pos:
                 positions["pair_serial"] = serial
-        elif self.layer_groups is not None:
-            positions["pos_update"] = cur_pos_tt  # vLLM's blocks: both chips of a pair keep every slot's K / V
+        elif self.global_kv_both:
+            positions["pos_update"] = cur_pos_tt  # both chips of a pair keep every slot's K / V
         if serial_pos:
             positions["serial"] = serial_pos
         # Global layers' SDPA over the decode users' rows only (see attention._forward_decode_split): with fewer

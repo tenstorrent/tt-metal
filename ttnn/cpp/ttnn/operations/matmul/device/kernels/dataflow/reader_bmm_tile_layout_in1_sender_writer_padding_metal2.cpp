@@ -818,8 +818,11 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    const uint16_t out_num_tiles = static_cast<uint16_t>(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    // Compute pushes out_block_num_tiles tiles for each of the num_blocks_h_dim * num_blocks_w_dim output
+    // blocks per batch, so this kernel pops the same number.
+    constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);
+    const uint16_t out_num_tiles =
+        static_cast<uint16_t>(batch * num_blocks_h_dim * num_blocks_w_dim * out_block_num_tiles);
     dfb_out.wait_front(out_num_tiles);
     // Pop the same number of tiles that were waited for.
     dfb_out.pop_front(out_num_tiles);

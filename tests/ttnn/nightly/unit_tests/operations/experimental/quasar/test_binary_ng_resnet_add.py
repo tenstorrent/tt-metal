@@ -21,8 +21,7 @@ Run on Wormhole:
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_resnet_add.py
 
 Run on the Quasar simulator:
-    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
-        TT_METAL_SLOW_DISPATCH_MODE=1 \
+    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_resnet_add.py
 """
 

@@ -8,7 +8,7 @@ import torch
 
 from models.experimental.mimo_v2_6_flash.tests.common import pcc
 from models.experimental.mimo_v2_6_flash.tt import kv
-from models.experimental.mimo_v2_6_flash.tt.attention import TtMiMoAttention
+from models.experimental.mimo_v2_6_flash.tt.attention import GLOBAL_SDPA_MIN_START, TtMiMoAttention, later_chunk_split
 from models.experimental.mimo_v2_6_flash.tt.common import pad_to
 from models.experimental.mimo_v2_6_flash.tt.model import prefill_padded_len, prefill_warmup_chunks
 
@@ -55,6 +55,24 @@ def test_padding_is_a_bucket_and_tables_cover_it(n, chunk_size, start_pos):
         assert torch.equal(fill[0, 0, :real], table[0, 0, start // BLOCK : start // BLOCK + real])
         assert (fill[0, 0, real:] == -7).all()
         assert context_blocks * BLOCK >= start + padded
+
+
+@pytest.mark.parametrize("pair_split", [False, True], ids=["both_copies", "pair_split"])
+def test_warmup_runs_the_grouped_program(pair_split):
+    """From GLOBAL_SDPA_MIN_START a global layer's later chunk can take the grouped / K split program and its merge
+    (attention.later_chunk_split); the warmup runs each later padded length that takes it once there, so serving
+    compiles none of them between decode trace replays."""
+    max_tokens, max_seq = 4096 + 2 * BLOCK - 1, 1 << 20
+    listed = prefill_warmup_chunks(max_tokens, max_seq, BLOCK, WINDOW, pair_split=pair_split)
+    align = 2 * BLOCK if pair_split else BLOCK
+    warmed = {prefill_padded_len(n, s, pair_split) for n, s in listed if s >= GLOBAL_SDPA_MIN_START}
+    takes_it = set()
+    for n in range(1, max_tokens + 1):
+        padded = prefill_padded_len(n, align, pair_split)
+        start = pad_to(GLOBAL_SDPA_MIN_START, 256)
+        if later_chunk_split(TtMiMoAttention._prefill_sdpa_program(None, padded, start).q_chunk_size, start):
+            takes_it.add(padded)
+    assert warmed == takes_it
 
 
 def test_warmup_covers_every_chunk():

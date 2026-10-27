@@ -5,6 +5,7 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_interleaved_cb_ids.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/chunked_ksplit_plan.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -1365,11 +1366,19 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     TT_FATAL(num_cores > 0, "SDPA requires a non-empty core grid; got num_cores=0.");
 
+    // Chunked prefill only (validated): q_heads_per_unit Q heads share each K/V chunk read as one unit, and
+    // k_splits work items split each unit's keys (sdpa_grouped_v2). The scheduled space then counts work items.
+    const uint32_t q_heads_per_unit = program_config.has_value() ? program_config->q_heads_per_unit : 1;
+    const uint32_t chunked_k_splits = (program_config.has_value() && is_chunked) ? program_config->k_splits : 1;
+    const bool grouped_or_split = q_heads_per_unit > 1 || chunked_k_splits > 1;
+
     // Global Q scheduling is the single-chip default: distribute the flat B*NQH*q_num_chunks
     // Q-chunk space evenly across cores. Pair-distribute when causal + even q_num_chunks so every
     // core gets balanced light/heavy work after the shared zigzag remap (reader/writer/compute CT 32/20/29).
-    const uint32_t total_q_chunks = B * NQH * q_num_chunks;
-    const bool global_q_pair_distribute = use_causal_kernel && (q_num_chunks % 2 == 0);
+    const uint32_t total_q_chunks = B * (NQH / q_heads_per_unit) * q_num_chunks * chunked_k_splits;
+    // Not for grouped units: their K ranges are nearly equal at long contexts, and pairs would idle half the cores
+    // when there are fewer pairs than cores.
+    const bool global_q_pair_distribute = use_causal_kernel && (q_num_chunks % 2 == 0) && !grouped_or_split;
     uint32_t global_q_base_chunks_per_core = 0;
     uint32_t global_q_cores_doing_extra = 0;
     uint32_t global_q_extra_chunks_per_core = 0;
@@ -1383,10 +1392,17 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         global_q_cores_doing_extra = total_q_chunks % num_cores;
         global_q_extra_chunks_per_core = 1;
     }
+    // K split output planes (chunked_ksplit_plan.hpp); one plane, slot 0 everywhere otherwise.
+    ChunkedKSplitPlan ksplit_plan;
+    ksplit_plan.first_slot.assign(num_cores, 0);
+    if (chunked_k_splits > 1) {
+        ksplit_plan = chunked_ksplit_plan(total_q_chunks, chunked_k_splits, num_cores);
+    }
     const uint32_t max_global_q_chunks_per_core =
         global_q_base_chunks_per_core + (global_q_cores_doing_extra > 0 ? global_q_extra_chunks_per_core : 0);
 
-    const uint32_t q_buffer_factor = (max_global_q_chunks_per_core > 1) ? 2 : 1;
+    // Grouped heads keep one unit's Q resident (L1); the reader refills it while the unit's last outputs drain.
+    const uint32_t q_buffer_factor = (max_global_q_chunks_per_core > 1 && q_heads_per_unit == 1) ? 2 : 1;
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
@@ -1471,7 +1487,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t kv_slots =
         kv_chain_slots(kv_chain_mode, Sk_chunk_t, kv_chunk_bytes, other_cb_bytes_bound, l1_budget_bytes);
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
+    uint32_t q_tiles = q_heads_per_unit * Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * kv_slots;
     uint32_t v_tiles = Sk_chunk_t * vDHt * kv_slots;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -1882,6 +1898,38 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     if (pair_split) {
         cb_pair_zero = allocate_tile_cb(1, out_tile_size, out_df);
     }
+    if (grouped_or_split) {
+        // Heads 1..G-1 of a unit: their own ping-pong accumulators, six consecutive CBs each (out A/B, max A/B,
+        // sum A/B), as sdpa_grouped_v2 expects. qk and exp_max_diff are per K chunk and shared by the heads.
+        uint32_t acc_cb_base = next_cb_index;
+        for (uint32_t g = 1; g < q_heads_per_unit; ++g) {
+            allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+            allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+            allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+            allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+            allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
+            allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
+        }
+        uint32_t stats_cb = acc_cb_base;
+        if (chunked_k_splits > 1) {
+            // The output planes follow chunked_ksplit_plan's dealing, which must be the one used here.
+            for (uint32_t i = 0; i < num_cores; ++i) {
+                TT_FATAL(
+                    global_q_range_for_core(i) == chunked_ksplit_core_range(total_q_chunks, num_cores, i),
+                    "chunked K split: core {} work range differs from the plan's",
+                    i);
+            }
+            defines_map["SDPA_KSPLIT_PIECES"] = std::to_string(ksplit_plan.pieces);
+            // A whole head's [max, sum] tiles per Q row, so compute never waits on the writer for them.
+            stats_cb = allocate_tile_cb(2 * Sq_chunk_t, im_tile_size, im_df);
+            defines_map["SDPA_KSPLIT_FILL_CB"] = std::to_string(allocate_tile_cb(2, out_tile_size, out_df));
+        }
+        defines_map["SDPA_Q_HEADS_PER_UNIT"] = std::to_string(q_heads_per_unit);
+        defines_map["SDPA_K_SPLITS"] = std::to_string(chunked_k_splits);
+        defines_map["SDPA_ACC_CB_BASE"] = std::to_string(acc_cb_base);
+        defines_map["SDPA_STATS_CB"] = std::to_string(stats_cb);
+        defines = KernelDescriptor::Defines(defines_map.begin(), defines_map.end());
+    }
 
     const auto reader_cb_compile_time_args = cb_ids.reader_compile_time_args();
     const auto writer_cb_compile_time_args = cb_ids.writer_compile_time_args();
@@ -2140,6 +2188,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         writer_args.push_back(cu_window_seqlens_eles);    // 10: window count + 1
         writer_args.push_back(windowed_q_token_offset);   // 11: global origin of this Q shard (scalar)
         writer_args.push_back(windowed_q_offset_buffer);  // 12: same, per-device (nullptr => use 11)
+        // Grouped / K split (chunked, so never with the chain tail): the output plane of the core's first piece.
+        if (grouped_or_split) {
+            writer_args.push_back(ksplit_plan.first_slot[i]);  // 13
+        }
         // Causal chain tail, parsed by the writer at 13..15.
         if (kv_chain_mode >= 2) {
             writer_args.push_back(static_cast<uint32_t>(chain.participates));

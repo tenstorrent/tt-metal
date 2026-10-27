@@ -14,6 +14,7 @@ from .attention import TtMiMoAttention
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config
 from .moe import TtMiMoMoE
 from .moe_stream import ReduceExpand, is_dram_interleaved
+from .profiling import zone
 
 
 class TtRMSNorm:
@@ -129,21 +130,24 @@ class TtMiMoDenseMLP:
             act.deallocate(True)
             return self.plan.all_reduce(out)
         kw = dict(dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.config)
-        w_gate, w_up, w_down = (
-            ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG) for w in (self.w_gate, self.w_up, self.w_down)
-        )
-        gate = ttnn.linear(x, w_gate, **kw)
-        up = ttnn.linear(x, w_up, **kw)
-        act = ttnn.mul(
-            gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        gate.deallocate(True)
-        up.deallocate(True)
-        out = ttnn.linear(act, w_down, **kw)
+        with zone("weight_copies"):
+            w_gate, w_up, w_down = (
+                ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG) for w in (self.w_gate, self.w_up, self.w_down)
+            )
+        with zone("matmuls"):
+            gate = ttnn.linear(x, w_gate, **kw)
+            up = ttnn.linear(x, w_up, **kw)
+            act = ttnn.mul(
+                gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            gate.deallocate(True)
+            up.deallocate(True)
+            out = ttnn.linear(act, w_down, **kw)
         act.deallocate(True)
         for w in (w_gate, w_up, w_down):
             w.deallocate(True)
-        return self.plan.all_reduce(out)
+        with zone("all_reduce"):
+            return self.plan.all_reduce(out)
 
 
 class TtMiMoDecoderLayer:
@@ -241,21 +245,23 @@ class TtMiMoDecoderLayer:
     ):
         """One prefill chunk at ``start_pos``; ``tables``: this layer's kv.PrefillTables (see
         TtMiMoAttention.forward_prefill). ``users`` R > 1: the first chunks of R users, rows user after user."""
-        h = self.input_norm(x, prefill=True)
-        attn = self.attn.forward_prefill(
-            h,
-            user_id,
-            self._page_table(page_table),
-            kv_cache,
-            start_pos=start_pos,
-            real_len=real_len,
-            tables=tables,
-            users=users,
-        )
-        h.deallocate(True)
-        x2 = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        with zone("attn"):  # with its norm and residual add
+            h = self.input_norm(x, prefill=True)
+            attn = self.attn.forward_prefill(
+                h,
+                user_id,
+                self._page_table(page_table),
+                kv_cache,
+                start_pos=start_pos,
+                real_len=real_len,
+                tables=tables,
+                users=users,
+            )
+            h.deallocate(True)
+            x2 = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
-        y = self._ffn(x2, token_mask)
+        with zone("moe" if self.is_moe else "mlp"):  # with its norm and residual add
+            y = self._ffn(x2, token_mask)
         x2.deallocate(True)
         return y
 

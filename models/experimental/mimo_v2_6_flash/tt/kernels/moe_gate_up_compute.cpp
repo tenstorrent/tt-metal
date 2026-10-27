@@ -34,7 +34,8 @@ void kernel_main() {
     constexpr uint32_t block_tiles = block_k * ct;
     constexpr uint32_t kt = block_k * blocks_per_pair;
 
-    custom_mm_block_init<false, CustomMmDestLayout::DefaultSplitAcc>(cb_x, cb_w, cb_h, ct);
+    constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
+    custom_mm_block_init<false, dest_layout>(cb_x, cb_w, cb_h, ct);
     cb_wait_front(cb_x, kt);
     cb_wait_front(cb_route, 1);
 
@@ -47,12 +48,11 @@ void kernel_main() {
         tile_regs_acquire();
         for (uint32_t b = 0; b < blocks_per_pair - 1; b++) {
             cb_wait_front(cb_w, block_tiles);
-            custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, false>(cb_x, cb_w, b * block_k, 0, 0, block_k, ct);
+            custom_mm_block<dest_layout, false>(cb_x, cb_w, b * block_k, 0, 0, block_k, ct);
             cb_pop_front(cb_w, block_tiles);
         }
         cb_wait_front(cb_w, block_tiles);
-        custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
-            cb_x, cb_w, (blocks_per_pair - 1) * block_k, 0, 0, block_k, ct);
+        custom_mm_block<dest_layout>(cb_x, cb_w, (blocks_per_pair - 1) * block_k, 0, 0, block_k, ct);
         cb_pop_front(cb_w, block_tiles);
 
         // Only rows 0-3 are packed (tiny [4, 32] h tile): silu runs on rows 0-3 of faces 0 and 1 only (2 SFPU
@@ -72,7 +72,7 @@ void kernel_main() {
         cb_push_back(cb_h, 1);
 
         // The SFPU inits reprogram address modes the matmul relies on.
-        custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(cb_x, cb_w, cb_h, ct);
+        custom_mm_block_init_short<false, dest_layout>(cb_x, cb_w, cb_h, ct);
     }
 
     if constexpr (local_pairs >= num_pairs) {

@@ -153,6 +153,8 @@ class PrefillModelAdapter(ABC):
     supports_mtp: bool = False
     supports_tp_shard_kv: bool = False
     tp_shard_kv_default: bool = False
+    # Fail PCC verification unless the producer drained exactly one completion per layer per chunk.
+    verify_layer_completions: bool = False
 
     def fabric_payload_size(self) -> int:
         """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is

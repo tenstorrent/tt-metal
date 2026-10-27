@@ -20,6 +20,117 @@
 #ifdef SDPA_PAIR_SPLIT
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_pair_split.hpp"
 #endif
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/chunked_ksplit.hpp"
+
+// Chunked causal prefill with grouped Q heads and a K split (see sdpa_grouped_v2 in compute_streaming.hpp).
+#ifndef SDPA_Q_HEADS_PER_UNIT
+#define SDPA_Q_HEADS_PER_UNIT 1
+#endif
+#ifndef SDPA_K_SPLITS
+#define SDPA_K_SPLITS 1
+#endif
+
+#ifndef SDPA_KSPLIT_PIECES
+#define SDPA_KSPLIT_PIECES 1
+#endif
+
+// One piece of the grouped / K split path (chunked_piece_at): drain each head's normalized output (and, with a K
+// split, its [max, sum] stats tiles from the stats CB) into the piece's plane, or fill the plane for an empty piece.
+// The piece that ends the unit also fills the unit's unused planes after it. A filled plane has zero output and sum
+// and a -1e30 max, so the merge gives it no weight. head_done(g, plane_first_tile, row_start, row_count, non_empty)
+// runs after each head's writes (the pair split's rows without a local key, the LSE).
+template <
+    uint32_t k_splits,
+    uint32_t pieces,
+    uint32_t G,
+    uint32_t Sq_chunk_t,
+    uint32_t vDHt,
+    uint32_t out_cols_t,
+    typename Writer,
+    typename HeadDone>
+void write_grouped_piece(
+    Noc noc,
+    const Writer& out_writer,
+    const TensorTileShape& out_tile_shape,
+    uint32_t cb_out,
+    uint32_t B,
+    uint32_t nb,
+    uint32_t slot,
+    bool ends_unit,
+    uint32_t first_head,
+    uint32_t q_chunk,
+    uint32_t valid_Sqt,
+    uint32_t write_offset,
+    bool non_empty,
+    uint32_t tile_bytes,
+    uint32_t out_subblock_h,
+    uint32_t barrier_threshold,
+    const HeadDone& head_done) {
+    const uint32_t row_start = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
+    const uint32_t row_count = std::min(row_start + Sq_chunk_t, valid_Sqt) - row_start;
+    for (uint32_t g = 0; g < G; ++g) {
+        const uint32_t first_tile = out_tile_shape.id_of(slot * B + nb, first_head + g, write_offset + row_start, 0);
+        if (non_empty) {
+            write_block_row_grouped(
+                noc,
+                out_writer,
+                cb_out,
+                Sq_chunk_t,
+                row_count,
+                vDHt,
+                first_tile,
+                tile_bytes,
+                out_subblock_h,
+                barrier_threshold,
+                out_cols_t);
+        }
+#ifdef SDPA_KSPLIT_FILL_CB
+        if constexpr (k_splits > 1) {
+            CircularBuffer cb_stats(SDPA_STATS_CB);
+            CircularBuffer cb_fill(SDPA_KSPLIT_FILL_CB);
+            const auto fill_rows = [&](uint32_t plane_first_tile) {
+                for (uint32_t r = 0; r < row_count; ++r) {
+                    for (uint32_t c = 0; c < out_cols_t; ++c) {
+                        noc.async_write(
+                            cb_fill,
+                            out_writer,
+                            tile_bytes,
+                            {.offset_bytes = c == vDHt ? tile_bytes : 0u},
+                            {.page_id = plane_first_tile + r * out_cols_t + c});
+                    }
+                    noc.async_writes_flushed();
+                }
+            };
+            if (non_empty) {
+                cb_stats.wait_front(2 * Sq_chunk_t);
+                for (uint32_t r = 0; r < row_count; ++r) {
+                    for (uint32_t c = 0; c < 2; ++c) {
+                        noc.async_write(
+                            cb_stats,
+                            out_writer,
+                            tile_bytes,
+                            {.offset_bytes = (2 * r + c) * tile_bytes},
+                            {.page_id = first_tile + r * out_cols_t + vDHt + c});
+                    }
+                    noc.async_writes_flushed();
+                }
+            } else {
+                fill_rows(first_tile);
+            }
+            if (ends_unit) {
+                for (uint32_t t = slot + 1; t < pieces; ++t) {
+                    fill_rows(out_tile_shape.id_of(t * B + nb, first_head + g, write_offset + row_start, 0));
+                }
+            }
+            noc.async_write_barrier();
+            if (non_empty) {
+                cb_stats.pop_front(2 * Sq_chunk_t);
+            }
+        }
+#endif
+        head_done(g, first_tile, row_start, row_count, non_empty);
+    }
+}
 
 void kernel_main() {
     Noc noc;
@@ -59,6 +170,7 @@ void kernel_main() {
     constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(25);
     constexpr uint32_t fwd_done_semaphore_id = get_compile_time_arg_val(26);
     constexpr bool causal_chain = get_compile_time_arg_val(27) == 3;
+    static_assert(!(causal_chain && (SDPA_Q_HEADS_PER_UNIT > 1 || SDPA_K_SPLITS > 1)), "chunked prefill has no chains");
     // Q-head crossing with out_concat_heads: NQH counts packed heads of gqa_pack query heads x gqa_pack_sqt row tiles
     // each. Both are 1 otherwise.
     constexpr uint32_t gqa_pack = get_compile_time_arg_val(28);
@@ -102,6 +214,12 @@ void kernel_main() {
         q_tok_offset_addr = get_arg_val<uint32_t>(12);
     }
 
+    // Grouped / K split (chunked only, so no causal chain tail): the plane slot of the core's first piece.
+    uint32_t piece_slot = 0;
+    if constexpr (SDPA_Q_HEADS_PER_UNIT > 1 || SDPA_K_SPLITS > 1) {
+        piece_slot = get_arg_val<uint32_t>(13);
+    }
+
     // Causal chain tail: the host pushes it from kv chain mode 2 on, only mode 3 reads it.
     uint32_t is_chain_participant = 0;
     uint32_t next_physical_x = 0;
@@ -131,11 +249,19 @@ void kernel_main() {
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
+    // Work items are (unit, K slice) pairs; a unit is q_heads_per_unit consecutive Q heads. With a K split the
+    // output holds a plane per piece slot, [pieces * B, NQH, Sq, vDH + 2 tiles]: the piece's normalized output,
+    // then its row max tile and row sum tile (merged after the program).
+    constexpr uint32_t q_heads_per_unit = SDPA_Q_HEADS_PER_UNIT;
+    constexpr uint32_t k_splits = SDPA_K_SPLITS;
+    constexpr bool grouped_or_split = q_heads_per_unit > 1 || k_splits > 1;
+    constexpr uint32_t out_cols_t = k_splits > 1 ? vDHt + 2 : vDHt;
+
 #ifdef SDPA_RETURN_LSE
     // LSE output: accessor after the CB-id block, address after the other runtime args (the causal-chain tail
-    // is present from kv chain mode 2 on).
+    // is present from kv chain mode 2 on, the grouped / K split plane slot instead of it).
     constexpr auto lse_args = TensorAccessorArgs<SDPA_LSE_ACCESSOR_CT_OFFSET>();
-    constexpr uint32_t lse_arg_idx = get_compile_time_arg_val(27) >= 2 ? 16 : 13;
+    constexpr uint32_t lse_arg_idx = get_compile_time_arg_val(27) >= 2 ? 16 : (grouped_or_split ? 14 : 13);
     const auto lse_writer = TensorAccessor(lse_args, get_arg_val<uint32_t>(lse_arg_idx));
     const auto lse_tile_shape = TensorTileShape(B, NQH, valid_Sqt, 1);
     constexpr uint32_t cb_lse_max = SDPA_LSE_M_CB;
@@ -163,10 +289,11 @@ void kernel_main() {
 
     // Packed, the output is [B, 1, gqa_pack_sqt, NQH*gqa_pack*vDH], and a Q chunk may run into the next query head of
     // its group (q chunk not dividing Sq); the drain wraps those rows (head_wrap_tile_skip).
+    constexpr uint32_t ksplit_pieces = SDPA_KSPLIT_PIECES;
     const auto out_tile_shape =
         out_concat_heads ? TensorTileShape(B, 1, packed_concat ? gqa_pack_sqt : valid_Sqt, NQH * gqa_pack * vDHt)
-                         : TensorTileShape(B, NQH, valid_Sqt, vDHt);
-    constexpr uint32_t out_row_stride = out_concat_heads ? NQH * gqa_pack * vDHt : vDHt;
+                         : TensorTileShape(ksplit_pieces * B, NQH, valid_Sqt, out_cols_t);
+    constexpr uint32_t out_row_stride = out_concat_heads ? NQH * gqa_pack * vDHt : out_cols_t;
     constexpr uint32_t head_rows = packed_concat ? gqa_pack_sqt : 0;  // 0 = rows never wrap to another head
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
@@ -233,6 +360,7 @@ void kernel_main() {
             uint32_t chunk_start_idx = chunk_start_ptr[0];
 #ifdef SDPA_PAIR_SPLIT
             pair_parity = chunk_start_ptr[1] & 1u;  // the reader put this device's parity after the start
+            sdpa_pair_split::g_parity = pair_parity;  // the K split's ranges (chunked_unit_k_end) read it
 #endif
 #if defined(SDPA_PAIR_SPLIT) || defined(SDPA_RETURN_LSE)
             chunk_start_tiles = chunk_start_idx / tt::constants::TILE_HEIGHT;
@@ -246,6 +374,21 @@ void kernel_main() {
         }
     }
 
+#ifdef SDPA_KSPLIT_FILL_CB
+    // An empty K slice (k_end < k_splits) writes zeros for its output and sum and a large negative max, so the
+    // merge gives it no weight. Two writer-owned tiles, filled once and never pushed: [zeros, -1e30].
+    constexpr uint32_t cb_ksplit_fill = SDPA_KSPLIT_FILL_CB;
+    {
+        CircularBuffer cb_fill(cb_ksplit_fill);
+        volatile tt_l1_ptr uint32_t* fill = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_fill.get_write_ptr());
+        constexpr uint32_t words = tile_bytes / sizeof(uint32_t);
+        for (uint32_t i = 0; i < words; ++i) {
+            fill[i] = 0;
+            fill[words + i] = 0xF149F149;  // bf16 -1.0e30, two per word
+        }
+    }
+#endif
+
     uint32_t chunk_start_t_in_q_chunks = 0;
     uint32_t write_offset = 0;
     for (uint32_t phase = 0; phase < num_phases; ++phase) {
@@ -257,6 +400,115 @@ void kernel_main() {
             write_offset = write_offset_phase_2;
         }
         for (uint32_t global_q_iter = 0; global_q_iter < global_q_count; ++global_q_iter) {
+            if constexpr (grouped_or_split) {
+                // The core's slices of one unit run as one piece; only the core's first piece can sit past the
+                // unit's first plane (other cores ran the unit's earlier slices).
+                const ChunkedPiece piece =
+                    chunked_piece_at(global_q_start + global_q_iter, global_q_start + global_q_count, k_splits);
+                global_q_iter += piece.items - 1;
+                const auto unit =
+                    decompose_global_q_index(piece.unit, q_num_chunks, NQH / q_heads_per_unit, use_zigzag_balancing);
+                const auto range = chunked_piece_range(
+                    piece,
+                    (chunk_start_t_in_q_chunks + unit.q_chunk) * Sq_chunk_t,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    k_num_chunks,
+                    k_splits);
+                write_grouped_piece<k_splits, ksplit_pieces, q_heads_per_unit, Sq_chunk_t, vDHt, out_cols_t>(
+                    noc,
+                    out_writer,
+                    out_tile_shape,
+                    cb_out,
+                    B,
+                    unit.nb,
+                    piece_slot,
+                    piece.last_slice == k_splits - 1,
+                    unit.nq * q_heads_per_unit,
+                    unit.q_chunk,
+                    valid_Sqt,
+                    write_offset,
+                    range.lo < range.hi,
+                    tile_bytes,
+                    out_subblock_h,
+                    barrier_threshold,
+                    [&]([[maybe_unused]] uint32_t g,
+                        [[maybe_unused]] uint32_t plane_first_tile,
+                        [[maybe_unused]] uint32_t row_start,
+                        [[maybe_unused]] uint32_t row_count,
+                        [[maybe_unused]] bool non_empty) {
+#ifdef SDPA_PAIR_SPLIT
+                        // Q tiles that see no local key: output 0 (with a K split the fill row, whose zero sum and
+                        // -1e30 max give it no weight in the merge). An empty piece's plane is the fill already.
+                        if (non_empty) {
+                            for (uint32_t r = 0; r < row_count; ++r) {
+                                if (!sdpa_pair_split::q_tile_sees_no_key(
+                                        chunk_start_tiles + row_start + r, pair_parity)) {
+                                    continue;
+                                }
+                                for (uint32_t c = 0; c < out_cols_t; ++c) {
+                                    const uint32_t page = plane_first_tile + r * out_cols_t + c;
+#ifdef SDPA_KSPLIT_FILL_CB
+                                    if constexpr (k_splits > 1) {
+                                        noc.async_write(
+                                            CircularBuffer(SDPA_KSPLIT_FILL_CB),
+                                            out_writer,
+                                            tile_bytes,
+                                            {.offset_bytes = c == vDHt ? tile_bytes : 0u},
+                                            {.page_id = page});
+                                        continue;
+                                    }
+#endif
+                                    noc.async_write(
+                                        CoreLocalMem<uint32_t>(pair_zero_addr),
+                                        out_writer,
+                                        tile_bytes,
+                                        {},
+                                        {.page_id = page});
+                                }
+                            }
+                            noc.async_write_barrier();
+                        }
+#endif
+#ifdef SDPA_RETURN_LSE
+                        // The head's LSE, as the ungrouped path writes it (return_lse is validated without a K split:
+                        // the merge forms it there).
+                        static_assert(k_splits == 1, "return_lse with a K split is formed by the merge");
+                        CircularBuffer cb_m(cb_lse_max);
+                        CircularBuffer cb_l(cb_lse_sum);
+                        cb_m.wait_front(Sq_chunk_t);
+                        cb_l.wait_front(Sq_chunk_t);
+                        for (uint32_t r = 0; r < row_count; ++r) {
+#ifdef SDPA_PAIR_SPLIT
+                            const bool tile_sees_no_key =
+                                sdpa_pair_split::q_tile_sees_no_key(chunk_start_tiles + row_start + r, pair_parity);
+#else
+                            constexpr bool tile_sees_no_key = false;
+#endif
+                            sdpa_lse::fill_lse_tile<SDPA_LSE_L_FP32 != 0>(
+                                lse_tile_addr,
+                                cb_m.get_read_ptr() + r * lse_max_tile_bytes,
+                                cb_l.get_read_ptr() + r * lse_sum_tile_bytes,
+                                32,
+                                lse_scale_bits,
+                                [tile_sees_no_key](uint32_t) { return tile_sees_no_key; });
+                            noc.async_write(
+                                CoreLocalMem<uint32_t>(lse_tile_addr),
+                                lse_writer,
+                                lse_tile_bytes,
+                                {},
+                                {.page_id = lse_tile_shape.id_of(
+                                     unit.nb, unit.nq * q_heads_per_unit + g, write_offset + row_start + r, 0)});
+                            noc.async_writes_flushed();  // the staging tile is refilled for the next row tile
+                        }
+                        noc.async_write_barrier();
+                        cb_m.pop_front(Sq_chunk_t);
+                        cb_l.pop_front(Sq_chunk_t);
+#endif
+                    });
+                piece_slot = 0;
+                continue;
+            }
             const auto decoded =
                 decompose_global_q_index(global_q_start + global_q_iter, q_num_chunks, NQH, use_zigzag_balancing);
             const uint32_t nb = decoded.nb;

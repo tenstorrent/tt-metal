@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
+#include "ttnn/operations/transformer/sdpa/device/chunked_ksplit_plan.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/device.hpp"
@@ -647,6 +648,45 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         const ttnn::Shape expected({q_shape[0], q_shape[1], q_shape[2], 1});
         TT_FATAL(
             lse.logical_shape() == expected, "lse output must have shape {}, got {}", expected, lse.logical_shape());
+        TT_FATAL(
+            !attrs.program_config.has_value() || attrs.program_config->k_splits <= 1,
+            "an lse output needs k_splits 1 (with a K split, chunked_flash_mla_prefill's merge forms the lse)");
+    }
+
+    // Grouped Q heads and the chunked K split (sdpa_grouped_v2): chunked causal prefill on the streaming kernel.
+    if (attrs.program_config.has_value()) {
+        const uint32_t heads_per_unit = attrs.program_config->q_heads_per_unit;
+        const uint32_t k_splits = is_chunked_mode ? attrs.program_config->k_splits : 1;
+        TT_FATAL(heads_per_unit >= 1, "q_heads_per_unit must be at least 1, got {}", heads_per_unit);
+        TT_FATAL(k_splits >= 1, "k_splits must be at least 1, got {}", k_splits);
+        if (heads_per_unit > 1 || k_splits > 1) {
+            TT_FATAL(
+                is_chunked_mode && attrs.is_causal,
+                "q_heads_per_unit > 1 needs chunked (paged) causal prefill (k_splits applies only there)");
+            TT_FATAL(
+                !ttnn::get_fp32_dest_acc_en(attrs.compute_kernel_config),
+                "q_heads_per_unit {} / k_splits {} need the streaming compute path (fp32_dest_acc_en off)",
+                heads_per_unit,
+                k_splits);
+            TT_FATAL(
+                !tensors.attention_sink.has_value() && attrs.sliding_window_size.value_or(0) == 0,
+                "q_heads_per_unit / k_splits do not support an attention sink or a sliding window");
+            const uint32_t nqh = q.logical_shape()[1];
+            const uint32_t nkv =
+                attrs.paged_cache_geometry.active() ? attrs.paged_cache_geometry.num_kv_heads : k.logical_shape()[1];
+            TT_FATAL(
+                nqh % (nkv * heads_per_unit) == 0,
+                "q_heads_per_unit {} must divide the Q heads per K/V head ({} Q heads, {} K/V heads)",
+                heads_per_unit,
+                nqh,
+                nkv);
+        }
+        if (k_splits > 1) {
+            TT_FATAL(
+                q.dtype() == DataType::BFLOAT16,
+                "k_splits > 1 writes bf16 partial results, so Q (and the output) must be bfloat16, got {}",
+                q.dtype());
+        }
     }
 
     // Check padding: Only the sequence dimension may be padded. For all other dims, logical shape must be equal to
@@ -664,6 +704,21 @@ SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
     }
     if (attrs.output_concat_heads) {
         shape = ttnn::Shape({shape[0], 1, shape[2], shape[1] * shape[3]});
+    }
+    // Chunked K split: each piece's normalized output plus its row max and row sum tiles, one plane per piece slot
+    // (chunked_ksplit_plan.hpp), merged by the caller (chunked_ksplit_merge in sdpa.cpp).
+    const bool is_chunked = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
+    if (is_chunked && attrs.program_config.has_value() && attrs.program_config->k_splits > 1) {
+        const auto& config = attrs.program_config.value();
+        const auto& q_shape = tensors.q.logical_shape();
+        const uint32_t q_num_chunks = (q_shape[2] + config.q_chunk_size - 1) / config.q_chunk_size;
+        const uint32_t items = q_shape[0] * (q_shape[1] / config.q_heads_per_unit) * q_num_chunks * config.k_splits;
+        const uint32_t pieces = chunked_ksplit_plan(
+                                    items,
+                                    config.k_splits,
+                                    config.compute_with_storage_grid_size.x * config.compute_with_storage_grid_size.y)
+                                    .pieces;
+        shape = ttnn::Shape({shape[0] * pieces, shape[1], shape[2], shape[3] + 2 * tt::constants::TILE_WIDTH});
     }
     return tt::tt_metal::TensorSpec(
         shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));

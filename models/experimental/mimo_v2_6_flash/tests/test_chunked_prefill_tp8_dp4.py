@@ -14,7 +14,9 @@ Two cases:
 
 Every chunk after the first reads the earlier ones from the paged KV cache: a SWA layer only the window
 before the chunk (kv.SwaBlockTable keeps kv.swa_blocks_per_user blocks per user), a global layer the whole
-context on the chip that owns the user (chunked MLA prefill over the K and 128-wide V caches). The test checks:
+context on the chip that owns the user (chunked MLA prefill over the K and 128-wide V caches). ``kv_both``
+(global layers): both chips of the pair keep every user's K / V, as vLLM's caches do, and a later chunk runs
+8 heads on each (TtMiMoAttention._prefill_pair_chunk). The test checks:
 
 * the chunked output against the fp32 reference (which sees the whole prompt at once) and against a
   one-shot prefill of the same prompt on the same row;
@@ -144,7 +146,7 @@ def garbage_cache(plan, num_blocks, dims, seed):
 class Row:
     """One replica (Galaxy row) with its layer and a one-shot and a chunked cache with their page tables."""
 
-    def __init__(self, sm, cfg, layer_idx, weights, dims, r, case):
+    def __init__(self, sm, cfg, layer_idx, weights, dims, r, case, kv_both=False):
         self.plan = plan = MeshPlan(sm)
         self.ropes = {
             "swa": MiMoRotarySetup(sm, MAX_BATCH, dims.head_dim, dims.rope_dim, cfg.swa_rope_theta),
@@ -153,6 +155,9 @@ class Row:
         # Replica 0 converts the weights and fills the cache; the other rows load the cached tensors.
         self.layer = TtMiMoDecoderLayer(plan, cfg, layer_idx, weights, self.ropes, cache_dir=cache_dir("layer_bfp8"))
         attn = self.layer.attn
+        self.kv_both = kv_both
+        if kv_both:
+            attn.keep_kv_on_both_chips()
         self.chunk = case.chunks[r]
         self.context_blocks = case.context_blocks
         logical = case.logical_blocks
@@ -171,6 +176,10 @@ class Row:
                 )
                 self.tables[mode], num_blocks = self.swa[mode].host_table(TP), self.swa[mode].num_blocks
                 self.scratch = 0
+            elif kv_both:  # both chips of the pair keep every user's K / V (vLLM's layout), plus a scratch block
+                self.swa[mode] = None
+                self.tables[mode], num_blocks = kv_lib.page_tables(n, MAX_BATCH, logical, TP, 1, seed=r)
+                self.scratch, num_blocks = num_blocks, num_blocks + 1
             else:
                 self.swa[mode] = None
                 self.tables[mode], num_blocks = kv_lib.page_tables(n, MAX_BATCH, logical, TP, attn.rep, seed=r)
@@ -240,7 +249,7 @@ class Row:
         worst_k, worst_v, pad_max = 1.0, 1.0, 0.0
         vd = ref_v.shape[-1]
         for chip in range(TP):
-            if slot % attn.rep != chip % attn.rep:
+            if slot % attn.rep != chip % attn.rep and not self.kv_both:
                 continue  # the other chip of the pair does not hold this user
             blocks = self.tables["chunked"][chip, slot, positions // BLOCK]
             assert (blocks != 0).all() or attn.rep > 1, "a readable SWA position sits in the scratch block"
@@ -257,8 +266,12 @@ class Row:
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize("case_name", list(CASES))
-@pytest.mark.parametrize("layer_idx", [0, 1, 5])
-def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx, case_name):
+@pytest.mark.parametrize(
+    "layer_idx, kv_both",
+    [(0, False), (1, False), (5, False), (0, True), (5, True)],
+    ids=["0", "1", "5", "0-kvboth", "5-kvboth"],
+)
+def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx, kv_both, case_name):
     case = CASES[case_name]
     torch.manual_seed(4321 + layer_idx)
     cfg, ckpt = load_config_and_ckpt()
@@ -270,7 +283,7 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx, case_name):
     )
 
     rows = [
-        Row(sm, cfg, layer_idx, weights if r == 0 else None, dims, r, case)
+        Row(sm, cfg, layer_idx, weights if r == 0 else None, dims, r, case, kv_both)
         for r, sm in enumerate(dp_submeshes(mesh_device))
     ]
 
@@ -353,6 +366,8 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx, case_name):
                 ),
                 "owner_mask": kv_lib.per_chip(plan, kv_lib.owner_mask(pos, TP, rep), ttnn.bfloat16, ttnn.TILE_LAYOUT),
             }
+            if row.kv_both:  # both chips write every slot's K / V (TtMiMoModel.global_kv_both)
+                cur_pos["pos_update"] = cur_pos["pos"]
             mask = replicated(plan, (pos >= 0).bfloat16().reshape(1, 1, -1, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT)
             outs.append(
                 row.layer.forward_decode(
@@ -389,8 +404,8 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx, case_name):
 
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-@pytest.mark.parametrize("layer_idx", [1, 5])
-def test_prefill_programs_do_not_key_on_start(mesh_device, layer_idx):
+@pytest.mark.parametrize("layer_idx, kv_both", [(1, False), (5, False), (5, True)], ids=["1", "5", "5-kvboth"])
+def test_prefill_programs_do_not_key_on_start(mesh_device, layer_idx, kv_both):
     """Chunks of one padded length at new starts, in a new slot and on new blocks compile no new program: what lets
     vLLM serving prefill between decode trace replays (a program compiled after a capture keeps buffers the replays
     overwrite). The first user's chunks cover every start alignment of a 128-token chunk (window blocks and SDPA chunk
@@ -398,7 +413,7 @@ def test_prefill_programs_do_not_key_on_start(mesh_device, layer_idx):
     cfg, ckpt = load_config_and_ckpt()
     dims = cfg.attention_dims(layer_idx)
     weights = ref.load_layer_weights(ckpt, cfg, layer_idx)
-    row = Row(dp_submeshes(mesh_device)[0], cfg, layer_idx, weights, dims, 0, CASES["short"])
+    row = Row(dp_submeshes(mesh_device)[0], cfg, layer_idx, weights, dims, 0, CASES["short"], kv_both)
     device = row.plan.mesh_device
 
     def prefill_user(slot, length, chunk=128):

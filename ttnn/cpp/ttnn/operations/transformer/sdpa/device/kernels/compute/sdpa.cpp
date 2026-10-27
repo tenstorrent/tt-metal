@@ -151,6 +151,48 @@ void kernel_main() {
             cb_mask_in_obj.wait_front(lw_mask_tile_count);
         }
 
+#if defined(SDPA_Q_HEADS_PER_UNIT) || defined(SDPA_K_SPLITS)
+        // Chunked causal prefill with grouped Q heads and/or a K split (see sdpa_grouped_v2): the per-core range
+        // counts work items, (unit, K slice) pairs.
+        sdpa_grouped_v2<
+            Sq_chunk_t,
+            Sk_chunk_t,
+            valid_Skt,
+            DHt,
+            vDHt,
+            scale_fp32,
+            qk_subblock_h,
+            qk_subblock_w,
+            out_subblock_h,
+            out_subblock_w,
+            cb_q_in,
+            cb_k_in,
+            cb_v_in,
+            cb_qk_im,
+            cb_identity_scale_in,
+            cb_exp_max_diff,
+            cb_col_identity,
+            cb_recip_scratch,
+            cb_out,
+            cb_mask_in,
+            SDPA_Q_HEADS_PER_UNIT,
+            SDPA_K_SPLITS,
+            SDPA_ACC_CB_BASE,
+            SDPA_STATS_CB>(
+            global_q_count,
+            k_num_chunks,
+            cb_out_im_A,
+            cb_out_im_B,
+            cb_max_A,
+            cb_max_B,
+            cb_sum_A,
+            cb_sum_B,
+            global_q_start,
+            chunked_q_chunk_offset_phase_1,
+            lw_mask,
+            q_num_chunks,
+            use_zigzag_balancing);
+#else
         // Global Q scheduling: sdpa_standard_v2 walks the per-core flat range over
         // B*NQH*q_num_chunks chunks; the modulo inside its inner loop extracts the per-head q_chunk
         // from each flat index. num_phases==1 is pinned for streaming, so the chunked offset comes
@@ -198,6 +240,7 @@ void kernel_main() {
             q_num_chunks,
             use_zigzag_balancing,
             kv_reuse_group);
+#endif
     } else {
         // Standard SDPA path (causal, masked, chunked, etc.)
         constexpr bool use_lightweight_causal_mask = is_causal && !use_provided_mask && (sliding_window_size == 0);
