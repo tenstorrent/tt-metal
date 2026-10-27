@@ -206,10 +206,10 @@ Tensor matmul_reduce_scatter(
         .math_fidelity = compute_kernel_config.has_value() ? compute_kernel_config->math_fidelity : MathFidelity::HiFi2,
         .math_approx_mode = compute_kernel_config.has_value() && compute_kernel_config->math_approx_mode,
         .output_memory_config = out_mem,
-        .plan = mrs_detail::solve_plan(plan_inputs),
+        .plan_inputs = plan_inputs,
     };
     record_last_plan(params);
-    ensure_mesh_resources(mesh, mrs_detail::staging_tiles(params.plan));
+    ensure_mesh_resources(mesh, mrs_detail::staging_tiles(params.plan()));
 
     return ttnn::prim::matmul_reduce_scatter(input_tensor, weight, output_tensor, params);
 }

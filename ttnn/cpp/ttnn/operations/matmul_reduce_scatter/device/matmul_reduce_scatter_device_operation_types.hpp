@@ -16,8 +16,8 @@
 
 namespace ttnn::operations::matmul_reduce_scatter {
 
-// Everything the public entry resolved before launch. The plan is solved once by the entry (it also sizes the
-// per-mesh staging tensor before launch) and is structural, so the default program hash covers it with the rest.
+// Everything the public entry resolved before launch. The entry solves the plan (it also sizes the per-mesh staging
+// tensor before launch); the plan is structural, so the program hash covers it through its inputs.
 struct MatmulReduceScatterParams {
     uint32_t cluster_axis = 0;
     int32_t scatter_dim = -2;  // canonical (-1 or -2)
@@ -28,7 +28,12 @@ struct MatmulReduceScatterParams {
     MathFidelity math_fidelity = MathFidelity::HiFi2;
     bool math_approx_mode = false;
     tt::tt_metal::MemoryConfig output_memory_config;
-    detail::Plan plan;
+    // The plan's inputs, not the plan: the solve is a pure function of them (memoized by solve_plan), so the default
+    // program hash over these 14 scalars keys the program exactly, and a hot call neither copies nor hashes the plan's
+    // per-chip schedules. plan() looks the solved plan up.
+    detail::PlanInputs plan_inputs;
+
+    const detail::Plan& plan() const { return detail::solve_plan(plan_inputs); }
 };
 
 struct MatmulReduceScatterInputs {

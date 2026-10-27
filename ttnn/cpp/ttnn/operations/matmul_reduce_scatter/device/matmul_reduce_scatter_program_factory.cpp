@@ -344,7 +344,7 @@ ProgramDescriptor MatmulReduceScatterProgramFactory::create_descriptor(
     TT_FATAL(res.staging.has_value(), "matmul_reduce_scatter: the staging tensor is not allocated");
     const Tensor& staging = *res.staging;
 
-    const detail::Plan& plan = attrs.plan;
+    const detail::Plan& plan = attrs.plan();
     const detail::GridChoice& gd = plan.grid;
     const detail::WavePlan& waves = plan.waves;
     const uint32_t L = attrs.num_links;
@@ -902,37 +902,32 @@ void MatmulReduceScatterProgramFactory::override_runtime_arguments(
     const MatmulReduceScatterInputs& tensor_args,
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // The key (attributes, plan included, and the tensor specs) pins every compile-time arg and every per-core slot;
-    // a hit rewrites the common-arg addresses and the staging-backed circular buffers (the staging tensor is
-    // reallocated whenever another plan needs a different size).
-    MeshResources& res = mesh_resources(tensor_args.input_tensor.device());
-    const Buffer& staging = *res.staging->buffer();
-    const auto staging_addr = static_cast<uint32_t>(staging.address());
-    const auto mailbox_addr = static_cast<uint32_t>(res.mailbox.buffer()->address());
-    const auto sem_addr = [&](MeshSem s) {
-        return static_cast<uint32_t>(ttnn::global_semaphore::get_global_semaphore_address(res.sems[s]));
-    };
-
+    // The key (attributes, plan inputs included, and the tensor specs) pins every compile-time arg and every per-core
+    // slot, so a hit rewrites only what can move between calls, once per program of the mesh workload:
+    // - A, W and the output: every call;
+    // - the staging tensor and the three CBs it backs: only when it moved (it is reallocated when another plan needs a
+    //   different size). Re-pointing a CB marks its dispatch config changed, so an unchanged CB keeps its cached
+    //   config;
+    // - the global semaphores and the mailbox: never. They are created once per mesh (ensure_mesh_resources) and live
+    // as
+    //   long as the mesh and its program cache, so create_descriptor's values stay right. port_sender_rt::ARRIVAL_ADDR
+    //   (per core) is the same kind of address.
     auto& reader = GetCommonRuntimeArgs(program, args::kernel_index::READER);
     reader[args::reader_common::A_ADDR] = static_cast<uint32_t>(tensor_args.input_tensor.buffer()->address());
     reader[args::reader_common::W_ADDR] = static_cast<uint32_t>(tensor_args.weight.buffer()->address());
-    reader[args::reader_common::ARR_FWD_ADDR] = sem_addr(MeshSem::ARR_FWD);
-    reader[args::reader_common::ARR_BWD_ADDR] = sem_addr(MeshSem::ARR_BWD);
+    GetCommonRuntimeArgs(program, args::kernel_index::WRITER)[args::writer_common::OUT_ADDR] =
+        static_cast<uint32_t>(output.buffer()->address());
 
-    auto& writer = GetCommonRuntimeArgs(program, args::kernel_index::WRITER);
-    writer[args::writer_common::OUT_ADDR] = static_cast<uint32_t>(output.buffer()->address());
-    writer[args::writer_common::MAILBOX_ADDR] = mailbox_addr;
-
+    const Buffer& staging = *mesh_resources(tensor_args.input_tensor.device()).staging->buffer();
+    const auto staging_addr = static_cast<uint32_t>(staging.address());
     auto& port_reader = GetCommonRuntimeArgs(program, args::kernel_index::PORT_READER);
+    if (port_reader[args::port_reader_common::FINISHED_BASE] == staging_addr) {
+        return;
+    }
     port_reader[args::port_reader_common::FINISHED_BASE] = staging_addr;
-    port_reader[args::port_reader_common::MAILBOX_BASE] = mailbox_addr;
-
-    auto& port_sender = GetCommonRuntimeArgs(program, args::kernel_index::PORT_SENDER);
-    port_sender[args::port_sender_common::STAGING_ADDR] = staging_addr;
-    port_sender[args::port_sender_common::READY_ADDR] = sem_addr(MeshSem::READY);
-    port_sender[args::port_sender_common::CREDIT_ADDR] = sem_addr(MeshSem::CREDIT);
-    // port_sender_rt::ARRIVAL_ADDR (per core) is a persistent global semaphore's address: stable for the mesh.
-
+    GetCommonRuntimeArgs(program, args::kernel_index::PORT_SENDER)[args::port_sender_common::STAGING_ADDR] =
+        staging_addr;
+    const detail::Plan& plan = attrs.plan();
     for (const auto& circular_buffer : program.circular_buffers()) {
         if (!circular_buffer->globally_allocated()) {
             continue;
@@ -940,9 +935,9 @@ void MatmulReduceScatterProgramFactory::override_runtime_arguments(
         const auto& indices = circular_buffer->buffer_indices();
         uint32_t offset = 0;
         if (indices.contains(args::cb::ARRIVALS_FWD)) {
-            offset = mrs_zone_offset(attrs.plan, kFwd);
+            offset = mrs_zone_offset(plan, kFwd);
         } else if (indices.contains(args::cb::ARRIVALS_BWD)) {
-            offset = mrs_zone_offset(attrs.plan, kBwd);
+            offset = mrs_zone_offset(plan, kBwd);
         }
         UpdateDynamicCircularBufferAddress(program, circular_buffer->id(), staging, offset);
     }

@@ -124,8 +124,9 @@ constexpr uint32_t kL1Headroom = 64 * 1024;  // bytes kept free per core beyond 
 
 // run()'s plan: 1x1, else the auto (model) search over chunk_candidates. Throws NotImplemented / std::invalid_argument
 // exactly where the Python raises NotImplementedError / ValueError. A solved plan is remembered per input (the
-// Python's _PLAN_CACHE, for the whole plan), so a repeated call looks it up instead of re-planning.
-Plan solve_plan(const PlanInputs& in);
+// Python's _PLAN_CACHE, for the whole plan), so a repeated call looks it up instead of re-planning. The memo is never
+// erased, so the reference stays valid for the process: callers keep the inputs and look the plan up, never copy it.
+const Plan& solve_plan(const PlanInputs& in);
 
 // The schedule pieces the factory walks.
 Transport plan_transport(uint32_t G, ScheduleKind kind, bool mirror, uint32_t waves);
