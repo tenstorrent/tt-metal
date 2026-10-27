@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Persistent-descriptor PLE row reads must return the host oracle's bytes.
-
-Also the decode-step form of the lookup: the scalar-integer n-gram hash against
-``reference.ngram_token_ids`` over the real id ranges and the row payload against
-the host oracle.
+"""The PLE on the CPU: the host n-gram lookup and the post-lookup layer on the released checkpoint (against the pinned
+Transformers ``Qwen4Exp`` when ``QWEN38_TRANSFORMERS_SRC`` is set); persistent-descriptor row reads that must return
+the host oracle's bytes; and the decode-step form of the lookup: the scalar-integer n-gram hash against
+``reference.ngram_token_ids`` over the real id ranges and the row payload against the host oracle.
 """
 
+import functools
 import os
 import time
 from pathlib import Path
@@ -16,10 +16,16 @@ from types import SimpleNamespace
 import pytest
 import torch
 from safetensors.torch import save_file
+from torch import nn
 
 from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint, Qwen38CheckpointRowReader
 from models.demos.blackhole.qwen38_flash_next.reference import build_ngram_hash_spec, ngram_token_ids
-from models.demos.blackhole.qwen38_flash_next.tt.ple import Qwen38HostPLEEmbedding
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import (  # noqa: F401
+    qwen4_exp_transformers,
+    release_checkpoint,
+    requires_transformers,
+)
+from models.demos.blackhole.qwen38_flash_next.tt.ple import Qwen38HostPLEEmbedding, Qwen38PLE, Qwen38PLEWeights
 from models.demos.blackhole.qwen38_flash_next.ttnn.ple import Qwen38ResidentPLELookup, ngram_token_ids_decode_step
 
 PARTS = 4
@@ -40,41 +46,101 @@ REAL_SPEC = build_ngram_hash_spec(
     divisible_by=128,
 )
 # A 33-token chain from a device run of the per-position sequential mode.
-CHAIN_33 = (
-    17,
-    15,
-    16,
-    22,
-    95859,
-    16,
-    17,
-    96212,
-    3709,
-    101857,
-    97191,
-    98478,
-    95759,
-    26076,
-    98817,
-    97035,
-    123772,
-    9616,
-    17,
-    15,
-    16,
-    22,
-    12,
-    17,
-    15,
-    18,
-    20,
-    95859,
-    7313,
-    24273,
-    10992,
-    271,
-    107680,
-)
+CHAIN_33 = (17, 15, 16, 22, 95859, 16, 17, 96212, 3709, 101857, 97191, 98478, 95759, 26076, 98817, 97035, 123772)
+CHAIN_33 += (9616, 17, 15, 16, 22, 12, 17, 15, 18, 20, 95859, 7313, 24273, 10992, 271, 107680)
+
+
+# --------------------------------------------------------------------------- the host lookup and the PLE layer
+
+
+@pytest.fixture(scope="module")
+def embedding(release_checkpoint):
+    return Qwen38HostPLEEmbedding(release_checkpoint)
+
+
+@pytest.fixture(scope="module")
+def weights(release_checkpoint):
+    return Qwen38PLEWeights.from_checkpoint(release_checkpoint)
+
+
+def test_random_access_rows_match_safetensors_slice_without_materializing_table(release_checkpoint):
+    name = "model.language_model.layers.1.ple.ple_embedding.ngram_embedding.shard_0.weight"
+    indices = torch.tensor([[0, 17], [2_500_010, 17]])
+    got = release_checkpoint.tensor_rows(name, indices)
+    expected = torch.stack(
+        [release_checkpoint.tensor_slice(name, (int(index), slice(None))) for index in indices.flatten()]
+    ).reshape(2, 2, 160)
+    torch.testing.assert_close(got, expected, rtol=0, atol=0)
+
+
+def test_exact_host_ngram_lookup_is_split_invariant_and_shards_640_per_device(embedding):
+    tokens = torch.tensor([[17, 29, 31, 248044, 43, 47]])
+    full, full_context = embedding.lookup(tokens)
+    first, first_context = embedding.lookup(tokens[:, :4])
+    second, second_context = embedding.lookup(tokens[:, 4:], first_context)
+
+    torch.testing.assert_close(torch.cat((first, second), dim=1), full, rtol=0, atol=0)
+    torch.testing.assert_close(second_context, full_context, rtol=0, atol=0)
+    assert full.shape == (1, 6, 2560)
+    device_parts = embedding.shard_result(full)
+    assert len(device_parts) == 4
+    assert all(part.shape == (1, 6, 640) for part in device_parts)
+    torch.testing.assert_close(torch.cat(device_parts, dim=-1), full, rtol=0, atol=0)
+
+
+@requires_transformers
+def test_exact_ple_post_lookup_matches_pinned_transformers(embedding, weights, checkpoint_dir):
+    configuration, modeling = qwen4_exp_transformers()
+
+    # Instantiate the official post-lookup path with a tiny temporary hash
+    # vocabulary, then replace its embedding module.  This avoids allocating
+    # the checkpoint's 51.2B host-resident n-gram parameters in the oracle.
+    config = configuration.Qwen4ExpTextConfig.from_pretrained(checkpoint_dir)
+    config.ngram_vocab_size_base = 101
+    oracle = modeling.Qwen4ExpTextPLELayer(config, layer_idx=1, ple_layer_index=0).to(torch.bfloat16).eval()
+
+    tokens = torch.tensor([[101, 202, 303]])
+    exact_embeddings, _ = embedding.lookup(tokens)
+
+    class FixedEmbedding(nn.Module):
+        def forward(self, input_ids, past_key_values):
+            assert torch.equal(input_ids, tokens)
+            assert past_key_values is None
+            return exact_embeddings
+
+    oracle.ple_embedding = FixedEmbedding()
+    oracle.load_state_dict(weights.transformers_state_dict(), strict=True)
+
+    torch.manual_seed(229)
+    hidden = torch.randn(1, 3, 10240, dtype=torch.bfloat16)
+    with torch.no_grad():
+        expected = oracle(hidden, tokens, past_key_values=None)
+        got, state = Qwen38PLE(embedding, weights).forward(hidden, tokens)
+
+    torch.testing.assert_close(got, expected, rtol=0.02, atol=0.02)
+    assert state.token_context.shape == (1, 2)
+    assert state.conv.shape == (1, 10240, 9)
+
+
+def test_exact_ple_prefill_equals_tokenwise_state_transition(embedding, weights):
+    torch.manual_seed(233)
+    tokens = torch.tensor([[501, 502, 503]])
+    hidden = torch.randn(1, 3, 10240, dtype=torch.bfloat16)
+    component = Qwen38PLE(embedding, weights)
+
+    full_output, full_state = component.forward(hidden, tokens)
+    state = None
+    pieces = []
+    for position in range(tokens.shape[1]):
+        output, state = component.forward(hidden[:, position : position + 1], tokens[:, position : position + 1], state)
+        pieces.append(output)
+
+    torch.testing.assert_close(torch.cat(pieces, dim=1), full_output, rtol=0.02, atol=0.02)
+    torch.testing.assert_close(state.token_context, full_state.token_context, rtol=0, atol=0)
+    torch.testing.assert_close(state.conv, full_state.conv, rtol=0.01, atol=1e-3)
+
+
+# --------------------------------------------------------------------------- the resident lookup
 
 
 class _SyntheticCheckpoint(Qwen38Checkpoint):
@@ -91,7 +157,7 @@ def _table_name(part: int) -> str:
     return f"table.shard_{part}.weight"
 
 
-def _synthetic_corpus(root: Path, *, parts_per_file: int = 1) -> dict[str, str]:
+def _synthetic_checkpoint(root: Path, *, parts_per_file: int = 1, file_guard=None) -> _SyntheticCheckpoint:
     """``PARTS`` table parts over ``PARTS / parts_per_file`` shard files (the real table: 128 parts over 33 files)."""
 
     torch.manual_seed(1)
@@ -105,7 +171,7 @@ def _synthetic_corpus(root: Path, *, parts_per_file: int = 1) -> dict[str, str]:
             tensors[_table_name(part)] = torch.randn(ROWS_PER_PART, HEAD_DIM, dtype=torch.bfloat16)
             weight_map[_table_name(part)] = shard
         save_file(tensors, str(root / shard))
-    return weight_map
+    return _SyntheticCheckpoint(root, weight_map, file_guard)
 
 
 def _synthetic_host_embedding(checkpoint: Qwen38Checkpoint) -> SimpleNamespace:
@@ -135,10 +201,25 @@ def _assert_bitwise_equal(got: torch.Tensor, expected: torch.Tensor) -> None:
     assert torch.equal(got.view(torch.int16), expected.view(torch.int16))
 
 
+def _assert_lookups_are_the_oracles(resident, oracle_lookup, tokens) -> None:
+    """The prefill lookup of ``tokens`` and its one-token decode chain return the oracle's rows and contexts bitwise."""
+
+    expected, expected_context = oracle_lookup(tokens)
+    got, got_context = resident.lookup(tokens)
+    _assert_bitwise_equal(got, expected)
+    assert torch.equal(got_context, expected_context)
+    context = oracle_context = None
+    for position in range(tokens.shape[1]):
+        step = tokens[:, position : position + 1]
+        got, context = resident.lookup(step, context)
+        expected, oracle_context = oracle_lookup(step, oracle_context)
+        _assert_bitwise_equal(got, expected)
+        assert torch.equal(context, oracle_context)
+
+
 def test_row_reader_matches_tensor_rows_bitwise_after_one_guarded_open(expect_error, tmp_path) -> None:
-    weight_map = _synthetic_corpus(tmp_path)
     events = []
-    checkpoint = _SyntheticCheckpoint(tmp_path, weight_map, file_guard=lambda path, phase: events.append(phase))
+    checkpoint = _synthetic_checkpoint(tmp_path, file_guard=lambda path, phase: events.append(phase))
     name = _table_name(2)
     reader = Qwen38CheckpointRowReader(checkpoint, name)
     assert [phase for phase in events if "tensor-rows" in phase] == [
@@ -173,22 +254,18 @@ def test_row_reader_matches_tensor_rows_bitwise_after_one_guarded_open(expect_er
 
 
 def test_row_reader_rejects_non_bf16_and_scalar_tensors(expect_error, tmp_path) -> None:
-    weight_map = _synthetic_corpus(tmp_path)
-    checkpoint = _SyntheticCheckpoint(tmp_path, weight_map)
+    checkpoint = _synthetic_checkpoint(tmp_path)
     with expect_error(ValueError, match="rank>=2 BF16"):
         Qwen38CheckpointRowReader(checkpoint, "leading_0.bias")
 
 
 @pytest.mark.skipif(not Path("/proc/self/fd").is_dir(), reason="procfs descriptor links are Linux only")
 def test_row_reader_opens_the_guard_supplied_procfs_duplicate(tmp_path) -> None:
-    weight_map = _synthetic_corpus(tmp_path)
+    checkpoint = _synthetic_checkpoint(
+        tmp_path, file_guard=lambda path, phase: Path(f"/proc/self/fd/{admitted}") if "before" in phase else None
+    )
     admitted = os.open(tmp_path / "part-0.safetensors", os.O_RDONLY | os.O_CLOEXEC)
     try:
-        checkpoint = _SyntheticCheckpoint(
-            tmp_path,
-            weight_map,
-            file_guard=lambda path, phase: Path(f"/proc/self/fd/{admitted}") if "before" in phase else None,
-        )
         reader = Qwen38CheckpointRowReader(checkpoint, _table_name(0))
         indices = torch.tensor([[1, 2], [3, 1]])
         _assert_bitwise_equal(reader.read(indices), checkpoint.tensor_rows(_table_name(0), indices))
@@ -198,8 +275,7 @@ def test_row_reader_opens_the_guard_supplied_procfs_duplicate(tmp_path) -> None:
 
 
 def test_row_reader_fails_closed_when_the_admitted_inode_changes(expect_error, tmp_path) -> None:
-    weight_map = _synthetic_corpus(tmp_path)
-    checkpoint = _SyntheticCheckpoint(tmp_path, weight_map)
+    checkpoint = _synthetic_checkpoint(tmp_path)
     replaced = Qwen38CheckpointRowReader(checkpoint, _table_name(1))
     rewritten = Qwen38CheckpointRowReader(checkpoint, _table_name(3))
     assert replaced.read_rows([3, 4]) == replaced.read_rows([3, 4])
@@ -227,30 +303,18 @@ def test_row_reader_fails_closed_when_the_admitted_inode_changes(expect_error, t
 
 
 def test_resident_lookup_matches_the_host_oracle_bitwise(expect_error, tmp_path) -> None:
-    weight_map = _synthetic_corpus(tmp_path)
     events = []
-    checkpoint = _SyntheticCheckpoint(tmp_path, weight_map, file_guard=lambda path, phase: events.append(phase))
+    checkpoint = _synthetic_checkpoint(tmp_path, file_guard=lambda path, phase: events.append(phase))
     host = _synthetic_host_embedding(checkpoint)
     resident = Qwen38ResidentPLELookup(host)
     assert len(resident.readers) == PARTS
     assert sum("tensor-rows-open" in phase for phase in events) == 2 * PARTS
 
     tokens = torch.tensor([[17, 29, 31, EOS, 43, 47, 0, 998]])
-    expected, expected_context = Qwen38HostPLEEmbedding.lookup(host, tokens)
     events.clear()
-    got, got_context = resident.lookup(tokens)
+    assert resident.lookup(tokens)[0].shape == (1, tokens.shape[1], 16 * HEAD_DIM)
     assert not events
-    assert got.shape == (1, tokens.shape[1], 16 * HEAD_DIM)
-    _assert_bitwise_equal(got, expected)
-    assert torch.equal(got_context, expected_context)
-
-    context = oracle_context = None
-    for position in range(tokens.shape[1]):
-        step = tokens[:, position : position + 1]
-        got, context = resident.lookup(step, context)
-        expected, oracle_context = Qwen38HostPLEEmbedding.lookup(host, step, oracle_context)
-        _assert_bitwise_equal(got, expected)
-        assert torch.equal(context, oracle_context)
+    _assert_lookups_are_the_oracles(resident, functools.partial(Qwen38HostPLEEmbedding.lookup, host), tokens)
     with expect_error(ValueError, match="host-resident"):
         resident.lookup(tokens.to("meta"))
     resident.close()
@@ -320,8 +384,7 @@ def test_decode_step_hash_threads_the_context_through_the_33_token_chain() -> No
 
 
 def test_lookup_token_returns_the_oracle_rows_and_context(expect_error, tmp_path) -> None:
-    weight_map = _synthetic_corpus(tmp_path)
-    checkpoint = _SyntheticCheckpoint(tmp_path, weight_map)
+    checkpoint = _synthetic_checkpoint(tmp_path)
     host = _synthetic_host_embedding(checkpoint)
     resident = Qwen38ResidentPLELookup(host)
     assert resident.vocab_size == 1000 and resident.eos_token_id == EOS
@@ -366,21 +429,10 @@ def test_lookup_token_returns_the_oracle_rows_and_context(expect_error, tmp_path
     resident.close()
 
 
-def test_resident_lookup_matches_the_real_checkpoint_oracle_over_a_decode_chain(checkpoint_dir) -> None:
-    embedding = Qwen38HostPLEEmbedding(Qwen38Checkpoint(checkpoint_dir))
+def test_resident_lookup_matches_the_real_checkpoint_oracle_over_a_decode_chain(embedding) -> None:
     resident = Qwen38ResidentPLELookup(embedding)
     tokens = torch.tensor([[17, 15, 16, 29, 31, 248044, 43, 47, 101, 202, 303, 501, 502, 503, 1000, 247_999]])
-    expected, expected_context = embedding.lookup(tokens)
-    got, got_context = resident.lookup(tokens)
-    _assert_bitwise_equal(got, expected)
-    assert torch.equal(got_context, expected_context)
-    context = oracle_context = None
-    for position in range(tokens.shape[1]):
-        step = tokens[:, position : position + 1]
-        got, context = resident.lookup(step, context)
-        expected, oracle_context = embedding.lookup(step, oracle_context)
-        _assert_bitwise_equal(got, expected)
-        assert torch.equal(context, oracle_context)
+    _assert_lookups_are_the_oracles(resident, embedding.lookup, tokens)
     resident.close()
 
 
@@ -421,8 +473,7 @@ def test_resident_batch_proves_each_touched_file_once_and_reads_each_distinct_ro
     one WILLNEED per distinct row before any row is read, then one ``pread`` each; the bytes are the per-part checked
     reads' bytes in request order, duplicates included."""
 
-    weight_map = _synthetic_corpus(tmp_path, parts_per_file=parts_per_file)
-    checkpoint = _SyntheticCheckpoint(tmp_path, weight_map)
+    checkpoint = _synthetic_checkpoint(tmp_path, parts_per_file=parts_per_file)
     host = _synthetic_host_embedding(checkpoint)
     resident = Qwen38ResidentPLELookup(host)
     assert len({reader.shard for reader in resident.readers}) == PARTS // parts_per_file
@@ -463,8 +514,7 @@ def test_resident_batch_fails_closed_when_a_touched_file_drifts_and_reads_the_ot
     """The per-file proof keeps the fail-closed contract: a batch touching a rewritten file is refused before any
     read (and a rewrite between the proofs would be refused after); a batch over the untouched files still reads."""
 
-    weight_map = _synthetic_corpus(tmp_path, parts_per_file=2)
-    checkpoint = _SyntheticCheckpoint(tmp_path, weight_map)
+    checkpoint = _synthetic_checkpoint(tmp_path, parts_per_file=2)
     host = _synthetic_host_embedding(checkpoint)
     resident = Qwen38ResidentPLELookup(host)
     rows_file_0 = [1, 5, ROWS_PER_PART + 7]  # parts 0 and 1 live in part-0.safetensors
@@ -486,8 +536,7 @@ def test_resident_batch_fails_closed_when_a_touched_file_drifts_and_reads_the_ot
 
 
 def test_row_reader_proven_forms_are_the_checked_forms_without_the_fstat(expect_error, tmp_path, monkeypatch) -> None:
-    weight_map = _synthetic_corpus(tmp_path)
-    checkpoint = _SyntheticCheckpoint(tmp_path, weight_map)
+    checkpoint = _synthetic_checkpoint(tmp_path)
     reader = Qwen38CheckpointRowReader(checkpoint, _table_name(1))
     assert reader.shard == "part-1.safetensors"
     rows = [3, 3, 8, 0]

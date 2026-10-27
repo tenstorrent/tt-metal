@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -45,6 +46,14 @@ def _text_item(item_id: str, tokens: int, windows=()) -> corpus.CorpusItem:
 
 def _prompt_item(item_id: str, prompt: int, continuation: int) -> corpus.CorpusItem:
     return corpus.CorpusItem(item_id, "acceptance", tuple((i * 5 + 1) % VOCAB for i in range(prompt)), continuation, ())
+
+
+def _produce(runner, manifest, items, out, producer, teacher=None) -> None:
+    """``produce_reference`` in 8-token chunks without full logits."""
+
+    corpus.produce_reference(
+        runner, manifest, items, out=out, chunk_tokens=8, teacher=teacher, full_logits_dir=None, producer=producer
+    )
 
 
 # -- packed arrays and the corpus files --------------------------------------------------------------------------
@@ -188,49 +197,20 @@ def test_produce_reference_resumes_and_refuses_another_producer(expect_error, tm
     manifest = corpus.write_corpus(items, tmp_path, provenance={})
     out = tmp_path / "ref.json"
     producer = {"kind": "synthetic"}
-    corpus.produce_reference(
-        _SyntheticRunner(),
-        manifest,
-        items[:1],
-        out=out,
-        chunk_tokens=8,
-        teacher=None,
-        full_logits_dir=None,
-        producer=producer,
-    )
+    _produce(_SyntheticRunner(), manifest, items[:1], out, producer)
     document, columns = corpus.load_reference(out, manifest=manifest)
     assert list(columns) == ["acceptance-a"] and document["producer"] == producer
     runner = _SyntheticRunner()
-    corpus.produce_reference(
-        runner, manifest, items, out=out, chunk_tokens=8, teacher=None, full_logits_dir=None, producer=producer
-    )
+    _produce(runner, manifest, items, out, producer)
     _, columns = corpus.load_reference(out, manifest=manifest)
     assert list(columns) == ["acceptance-a", "book-b"]
     assert runner.calls == [7]  # only the second item ran
     with expect_error(corpus.ReferenceCorpusError, match="producer"):
-        corpus.produce_reference(
-            runner,
-            manifest,
-            items,
-            out=out,
-            chunk_tokens=8,
-            teacher=None,
-            full_logits_dir=None,
-            producer={"kind": "other"},
-        )
+        _produce(runner, manifest, items, out, {"kind": "other"})
     # the oracle column reads the HF column's chain
     _, teacher = corpus.load_reference(out, manifest=manifest)
     again = tmp_path / "again.json"
-    corpus.produce_reference(
-        _SyntheticRunner(),
-        manifest,
-        items,
-        out=again,
-        chunk_tokens=8,
-        teacher=teacher,
-        full_logits_dir=None,
-        producer={"kind": "b"},
-    )
+    _produce(_SyntheticRunner(), manifest, items, again, {"kind": "b"}, teacher=teacher)
     _, second = corpus.load_reference(again, manifest=manifest)
     assert second["acceptance-a"].teacher_ids == teacher["acceptance-a"].teacher_ids
 
@@ -246,8 +226,6 @@ def test_reference_item_documents_round_trip_including_missing_teacher_log_probs
 
 
 def test_indexed_eager_experts_forward_is_bitwise_the_index_add_loop():
-    from types import SimpleNamespace
-
     generator = torch.Generator().manual_seed(3)
     experts = SimpleNamespace(
         num_experts=6,
@@ -319,53 +297,21 @@ def _reference_from_rows(item_id: str, rows: list[tuple[list[int], list[float]]]
 
 def test_device_records_become_a_column_normalised_over_the_candidate_row(expect_error, tmp_path):
     items = [_prompt_item("acceptance-a", 3, 2)]
-    (tmp_path / "acceptance-a.json").write_text(
-        json.dumps(
-            {
-                "schema": corpus.AGREEMENT_RECORDS_SCHEMA,
-                "item_id": "acceptance-a",
-                "positions": [
-                    {
-                        "position": 0,
-                        "teacher_id": 6,
-                        "argmax": 6,
-                        "candidate_ids": [1, 6, 9],
-                        "candidate_logits": [1.0, 3.0, 2.0],
-                    },
-                    {
-                        "position": 1,
-                        "teacher_id": 11,
-                        "argmax": 9,
-                        "candidate_ids": [9, 6],
-                        "candidate_logits": [2.0, 2.0],
-                    },
-                ],
-            }
-        )
-    )
+
+    def write_records(*rows):
+        keys = ("position", "teacher_id", "argmax", "candidate_ids", "candidate_logits")
+        positions = [dict(zip(keys, row)) for row in rows]
+        document = {"schema": corpus.AGREEMENT_RECORDS_SCHEMA, "item_id": "acceptance-a", "positions": positions}
+        (tmp_path / "acceptance-a.json").write_text(json.dumps(document))
+
+    write_records((0, 6, 6, [1, 6, 9], [1.0, 3.0, 2.0]), (1, 11, 9, [9, 6], [2.0, 2.0]))
     (columns,) = corpus.device_reference_items(tmp_path, items)
     assert columns.positions == [0, 1] and columns.teacher_ids == [6, 11]
     assert columns.top_ids == [[6, 9, 1], [9, 6]]  # a tie at the top keeps the device's own argmax first
     assert sum(math.exp(v) for v in columns.top_logprobs[0]) == pytest.approx(1.0)
     assert columns.top_logprobs[0][0] == pytest.approx(3.0 - math.log(math.exp(1) + math.exp(3) + math.exp(2)))
     assert columns.teacher_logprobs == [None, None]
-    (tmp_path / "acceptance-a.json").write_text(
-        json.dumps(
-            {
-                "schema": corpus.AGREEMENT_RECORDS_SCHEMA,
-                "item_id": "acceptance-a",
-                "positions": [
-                    {
-                        "position": 0,
-                        "teacher_id": 6,
-                        "argmax": 1,
-                        "candidate_ids": [1, 6],
-                        "candidate_logits": [1.0, 3.0],
-                    }
-                ],
-            }
-        )
-    )
+    write_records((0, 6, 1, [1, 6], [1.0, 3.0]))
     with expect_error(corpus.ReferenceCorpusError, match="argmax"):
         corpus.device_reference_items(tmp_path, items)
 
@@ -432,16 +378,7 @@ def test_verify_writes_and_checks_a_reference_stamp(expect_error, tmp_path):
     items = [_text_item("book-b", 7)]
     manifest = corpus.write_corpus(items, tmp_path, provenance={})
     out = tmp_path / "ref.json"
-    corpus.produce_reference(
-        _SyntheticRunner(),
-        manifest,
-        items,
-        out=out,
-        chunk_tokens=8,
-        teacher=None,
-        full_logits_dir=None,
-        producer={"kind": "s"},
-    )
+    _produce(_SyntheticRunner(), manifest, items, out, {"kind": "s"})
     stamp = tmp_path / "stamp.json"
     assert corpus.main(["verify", "--corpus", str(tmp_path), "--reference", str(out), "--stamp", str(stamp)]) == 0
     written = json.loads(stamp.read_text())

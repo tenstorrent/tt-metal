@@ -12,6 +12,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from models.demos.blackhole.qwen38_flash_next.checkpoint import VISION_SHARD
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import release_checkpoint  # noqa: F401
 from models.demos.blackhole.qwen38_flash_next.tests.fixtures import vision_fixture
 from models.demos.blackhole.qwen38_flash_next.tools.checkpoint_budget import vision_resident_layout
 from models.demos.blackhole.qwen38_flash_next.ttnn import vision_layout
@@ -35,13 +37,8 @@ CONFIG = VisionTowerConfig()
 
 
 def test_pinned_configuration_and_inventory():
-    assert (CONFIG.head_dim, CONFIG.patch_dim, CONFIG.grid_side, CONFIG.merged_hidden_size, CONFIG.resize_factor) == (
-        72,
-        1536,
-        48,
-        4608,
-        32,
-    )
+    pinned = (CONFIG.head_dim, CONFIG.patch_dim, CONFIG.grid_side, CONFIG.merged_hidden_size, CONFIG.resize_factor)
+    assert pinned == (72, 1536, 48, 4608, 32)
     names = vision_tensor_names(CONFIG)
     shapes = vision_tensor_shapes(CONFIG)
     assert len(names) == VISION_TENSOR_COUNT == len(shapes)
@@ -50,15 +47,12 @@ def test_pinned_configuration_and_inventory():
     assert sum(2 * torch.Size(shape).numel() for shape in shapes.values()) == VISION_TENSOR_BYTES
 
 
-def test_checkpoint_vision_domain_reads_the_tower_from_shard_one(checkpoint_dir):
-    from models.demos.blackhole.qwen38_flash_next.checkpoint import VISION_SHARD, Qwen38Checkpoint
-
-    checkpoint = Qwen38Checkpoint(checkpoint_dir)
-    names = checkpoint.vision_tensor_names()
+def test_checkpoint_vision_domain_reads_the_tower_from_shard_one(release_checkpoint, checkpoint_dir):
+    names = release_checkpoint.vision_tensor_names()
     assert names == vision_tensor_names(CONFIG)
-    assert all(checkpoint.metadata(name).shard == VISION_SHARD for name in names)
+    assert all(release_checkpoint.metadata(name).shard == VISION_SHARD for name in names)
     assert VisionTowerConfig.from_checkpoint(checkpoint_dir) == CONFIG
-    state = checkpoint.vision_state_dict()
+    state = release_checkpoint.vision_state_dict()
     expected = vision_tensor_shapes(CONFIG)
     assert set(state) == set(expected)
     assert all(
@@ -157,12 +151,9 @@ def test_interleaved_rotary_equals_rotate_half():
         return rotated
 
     q_dev, k_dev = device_side(q), device_side(k)
-    torch.testing.assert_close(
-        q_dev[:n, :, : CONFIG.head_dim][..., inverse], apply_rotary(q, cos, sin), rtol=1e-5, atol=1e-5
-    )
-    torch.testing.assert_close(
-        k_dev[:n, :, : CONFIG.head_dim][..., inverse], apply_rotary(k, cos, sin), rtol=1e-5, atol=1e-5
-    )
+    for dev, x in ((q_dev, q), (k_dev, k)):
+        expected = apply_rotary(x, cos, sin)
+        torch.testing.assert_close(dev[:n, :, : CONFIG.head_dim][..., inverse], expected, rtol=1e-5, atol=1e-5)
     scores_reference = torch.einsum("nhd,mhd->hnm", apply_rotary(q, cos, sin), apply_rotary(k, cos, sin))
     scores_device = torch.einsum("nhd,mhd->hnm", q_dev[:n], k_dev[:n])
     torch.testing.assert_close(scores_device, scores_reference, rtol=1e-4, atol=1e-4)
@@ -177,9 +168,8 @@ def test_fused_qkv_and_output_projection_layouts():
     bias = torch.randn(3 * hidden, generator=generator)
     q, k, v = (x @ weight.T + bias).reshape(40, 3, heads, head_dim).unbind(1)
     weight_dev, bias_dev = vision_layout.fused_qkv_weight(weight, bias, heads=heads, head_dim=head_dim)
-    assert tuple(weight_dev.shape) == (hidden, 3 * heads * padded_head) and tuple(bias_dev.shape) == (
-        3 * heads * padded_head,
-    )
+    assert tuple(weight_dev.shape) == (hidden, 3 * heads * padded_head)
+    assert tuple(bias_dev.shape) == (3 * heads * padded_head,)
     q_dev, k_dev, v_dev = (x @ weight_dev + bias_dev).reshape(40, 3, heads, padded_head).unbind(1)
     inverse = torch.argsort(vision_layout.interleave_permutation(head_dim))
     for dev in (q_dev, k_dev, v_dev):
@@ -225,25 +215,11 @@ def test_budget_layout_counts_the_device_tower_bytes():
         rows, cols = (32, shape[-1]) if len(shape) == 1 else shape[-2:]
         return (-(-rows // 32) * 32) * (-(-cols // 32) * 32) * 2
 
-    total = (
-        tile_bytes(layout["patch_weight"])
-        + tile_bytes(layout["patch_bias"])
-        + tile_bytes(layout["rotary_transformation"])
-    )
+    merger = [f"merger_{part}_{kind}" for part in ("norm", "fc1", "fc2") for kind in ("weight", "bias")]
+    total = sum(tile_bytes(layout[name]) for name in ["patch_weight", "patch_bias", "rotary_transformation", *merger])
     total += sum(tile_bytes(tensor) for block in layout["blocks"] for tensor in block.values())
-    for name in (
-        "merger_norm_weight",
-        "merger_norm_bias",
-        "merger_fc1_weight",
-        "merger_fc1_bias",
-        "merger_fc2_weight",
-        "merger_fc2_bias",
-    ):
-        total += tile_bytes(layout[name])
     assert total == vision_resident_layout(mesh_size=1)["device_total"]
     four = vision_resident_layout(mesh_size=4)
-    assert (
-        four["device_total"]
-        == total - (tile_bytes(layout["merger_fc2_weight"]) + tile_bytes(layout["merger_fc2_bias"])) * 3 // 4
-    )
+    fc2 = tile_bytes(layout["merger_fc2_weight"]) + tile_bytes(layout["merger_fc2_bias"])
+    assert four["device_total"] == total - fc2 * 3 // 4
     assert 950_000_000 < four["device_total"] < 1_000_000_000  # about 0.95 GB per die replicated (BF16, padded)

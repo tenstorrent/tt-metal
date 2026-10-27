@@ -1,23 +1,20 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import sys
-from pathlib import Path
-
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import (  # noqa: F401
+    qwen4_exp_transformers,
+    release_checkpoint,
+    requires_transformers,
+)
 from models.demos.blackhole.qwen38_flash_next.tt.gdn import Qwen38GDN, Qwen38GDNWeights
-
-TRANSFORMERS_SRC = os.environ.get("QWEN38_TRANSFORMERS_SRC")
 
 
 @pytest.fixture(scope="module")
-def weights(checkpoint_dir):
-    checkpoint = Qwen38Checkpoint(checkpoint_dir)
-    return Qwen38GDNWeights.from_checkpoint(checkpoint, layer_idx=0)
+def weights(release_checkpoint):
+    return Qwen38GDNWeights.from_checkpoint(release_checkpoint, layer_idx=0)
 
 
 def test_exact_checkpoint_gdn_tp4_shards_reassemble_without_replication(weights):
@@ -52,14 +49,11 @@ def test_exact_checkpoint_gdn_tp4_shards_reassemble_without_replication(weights)
     torch.testing.assert_close(torch.cat(conv_v), weights.conv[4096:], rtol=0, atol=0)
 
 
-@pytest.mark.skipif(not TRANSFORMERS_SRC, reason="set QWEN38_TRANSFORMERS_SRC to pinned Transformers source")
+@requires_transformers
 def test_exact_checkpoint_gdn_matches_pinned_transformers(weights, checkpoint_dir):
-    sys.path.insert(0, str(Path(TRANSFORMERS_SRC)))
-    from transformers.models.qwen4_exp.configuration_qwen4_exp import Qwen4ExpTextConfig
-    from transformers.models.qwen4_exp.modeling_qwen4_exp import Qwen4ExpTextGatedDeltaNet
-
-    config = Qwen4ExpTextConfig.from_pretrained(checkpoint_dir)
-    oracle = Qwen4ExpTextGatedDeltaNet(config, layer_idx=0).to(torch.bfloat16).eval()
+    configuration, modeling = qwen4_exp_transformers()
+    config = configuration.Qwen4ExpTextConfig.from_pretrained(checkpoint_dir)
+    oracle = modeling.Qwen4ExpTextGatedDeltaNet(config, layer_idx=0).to(torch.bfloat16).eval()
     oracle.load_state_dict(weights.transformers_state_dict(), strict=True)
 
     torch.manual_seed(211)

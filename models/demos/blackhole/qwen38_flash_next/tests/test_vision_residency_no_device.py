@@ -37,9 +37,8 @@ def test_both_ladders_are_powers_of_two_to_the_stock_maximum_and_the_eight_is_th
         assert all(b & (b - 1) == 0 and b % 32 == 0 for b in ladder)
         assert ladder[-1] == residency.STOCK_MAXIMUM_PATCHES == 4096 * 4096 // 16 // 16
     assert set(four) < set(eight)
-    assert (
-        residency.VISION_ROW_BUCKETS == eight
-    )  # the measured READY costs pick eight: within the ladder rule's 30 s of the four-bucket ladder
+    # the measured READY costs pick eight: within the ladder rule's 30 s of the four-bucket ladder
+    assert residency.VISION_ROW_BUCKETS == eight
 
 
 @pytest.mark.parametrize(
@@ -92,11 +91,8 @@ def test_padding_costs_at_most_twice_the_rows_on_eight_buckets_and_four_times_on
         worst[name] = (linear, attention)
     assert worst["eight"][0] <= 2.0 and worst["eight"][1] <= 2.0
     assert worst["four"][0] <= 4.0 and worst["four"][1] <= 10.0
-    assert (
-        residency.padding_cost(1024)["linear_work_factor"]
-        == 1.0
-        == residency.padding_cost(1024)["attention_work_factor"]
-    )
+    exact = residency.padding_cost(1024)
+    assert exact["linear_work_factor"] == 1.0 == exact["attention_work_factor"]
     assert residency.padding_cost(4, residency.EIGHT_BUCKET_LADDER)["rows"] == 512
     assert residency.padding_cost(4)["rows"] == 512 and residency.padding_cost(4)["linear_work_factor"] == 128.0
 
@@ -120,14 +116,8 @@ def test_admission_fits_the_line_reading_and_its_terms_cover_the_measurements() 
         admission["headroom_bytes_per_bank"]
         == LINE_32K_BEFORE_TOWER["free_bytes_per_bank"] - 12_000_000 - admission["required_free_bytes_per_bank"]
     )
-    assert set(admission) >= {
-        "required_free_bytes_per_bank",
-        "required_largest_contiguous_bytes_per_bank",
-        "headroom_bytes_per_bank",
-        "decided_by",
-        "fits",
-        "buckets",
-    }
+    required = ("required_free_bytes_per_bank", "required_largest_contiguous_bytes_per_bank", "headroom_bytes_per_bank")
+    assert set(admission) >= {*required, "decided_by", "fits", "buckets"}
 
 
 def test_admission_decides_the_lanes_128k_form_on_the_numbers() -> None:
@@ -184,12 +174,9 @@ def test_prewarm_plan_names_every_bucket_once_ascending_with_a_ready_cost_near_t
     assert residency.PREWARM_READY_SECONDS_COLD_MEASURED["eight"] > comparison["eight"]["ready_seconds"]
     # the steady state per bucket is dominated by the 65,536-row bucket (its two forwards): the rest cost under 14 s
     steady = residency.PREWARM_SECONDS_STEADY_MEASURED
-    assert set(steady) == set(residency.EIGHT_BUCKET_LADDER) and steady[65536] > sum(
-        v for k, v in steady.items() if k != 65536
-    )
-    assert (
-        residency.ladder_comparison(100.0, 80.0)["pick"] == "eight"
-    )  # a measured difference under the rule picks eight
+    assert set(steady) == set(residency.EIGHT_BUCKET_LADDER)
+    assert steady[65536] > sum(v for k, v in steady.items() if k != 65536)
+    assert residency.ladder_comparison(100.0, 80.0)["pick"] == "eight"  # a measured difference under the rule
     assert residency.ladder_comparison(120.0, 80.0)["pick"] == "four"
     # the warm forward law reproduces the measured warm device times within 25 %
     for rows_, measured in ((1024, 0.028), (4096, 0.122), (16384, 0.92), (65536, 12.4)):
@@ -310,24 +297,13 @@ def test_parser_takes_an_image_part_and_refuses_undecodable_bytes() -> None:
     buffer = io.BytesIO()
     Image.new("RGB", (512, 512), (10, 20, 30)).save(buffer, format="PNG")
     url = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
-    document = {
-        "messages": [
-            {
-                "role": "user",
-                "content": [{"type": "image_url", "image_url": {"url": url}}, {"type": "text", "text": "hi"}],
-            }
-        ],
-        "max_tokens": 8,
-    }
+    content = [{"type": "image_url", "image_url": {"url": url}}, {"type": "text", "text": "hi"}]
+    document = {"messages": [{"role": "user", "content": content}], "max_tokens": 8}
     request = server_module.parse_chat_request(document, sampling_available=False)
     assert len(request["images"]) == 1 and request["images"][0].grid.as_tuple() == (1, 32, 32)
     assert request["images"][0].merged_tokens == 256 and request["raw_messages"] is document["messages"]
-    bad = {
-        "messages": [
-            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]}
-        ],
-        "max_tokens": 8,
-    }
+    content = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]
+    bad = {"messages": [{"role": "user", "content": content}], "max_tokens": 8}
     with pytest.raises(  # allow-pytest.raises: inspect the captured exception object
         server_module.Qwen38ChatRequestRejected
     ) as caught:  # allow-pytest.raises: inspect the captured exception object

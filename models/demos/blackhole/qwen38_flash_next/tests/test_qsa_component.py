@@ -1,38 +1,31 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import sys
-from pathlib import Path
-
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import (  # noqa: F401
+    qsa_causal_mask,
+    qsa_position_embeddings,
+    qwen4_exp_transformers,
+    release_checkpoint,
+    requires_transformers,
+)
 from models.demos.blackhole.qwen38_flash_next.tt.qsa import Qwen38QSA, Qwen38QSAState, Qwen38QSAWeights
-
-TRANSFORMERS_SRC = os.environ.get("QWEN38_TRANSFORMERS_SRC")
 
 
 @pytest.fixture(scope="module")
-def weights(checkpoint_dir):
-    return Qwen38QSAWeights.from_checkpoint(Qwen38Checkpoint(checkpoint_dir), layer_idx=3)
+def weights(release_checkpoint):
+    return Qwen38QSAWeights.from_checkpoint(release_checkpoint, layer_idx=3)
 
 
-def _position_embeddings(sequence: int) -> tuple[torch.Tensor, torch.Tensor]:
-    positions = torch.arange(sequence, dtype=torch.float32).view(1, sequence, 1)
-    frequencies = torch.linspace(0.001, 0.037, 32).view(1, 1, 32)
-    angles = positions * frequencies
-    return torch.cat((angles.cos(), angles.cos()), dim=-1).to(torch.bfloat16), torch.cat(
-        (angles.sin(), angles.sin()), dim=-1
-    ).to(torch.bfloat16)
-
-
-def _causal_additive_mask(sequence: int) -> torch.Tensor:
-    visible = torch.ones(sequence, sequence, dtype=torch.bool).tril()
-    return torch.where(visible, torch.tensor(0.0), torch.tensor(torch.finfo(torch.float32).min)).view(
-        1, 1, sequence, sequence
-    )
+def _transformers_attention(weights, checkpoint_dir):
+    configuration, modeling = qwen4_exp_transformers()
+    config = configuration.Qwen4ExpTextConfig.from_pretrained(checkpoint_dir)
+    config._attn_implementation = "eager"
+    oracle = modeling.Qwen4ExpTextAttention(config, layer_idx=3).to(torch.bfloat16).eval()
+    oracle.load_state_dict(weights.transformers_state_dict(), strict=True)
+    return oracle
 
 
 def test_exact_qsa_tp4_shards_and_two_kv_groups(weights):
@@ -62,22 +55,14 @@ def test_exact_qsa_tp4_shards_and_two_kv_groups(weights):
     torch.testing.assert_close(torch.cat([shard.index_q for shard in shards]), weights.index_qk[:512], rtol=0, atol=0)
 
 
-@pytest.mark.skipif(not TRANSFORMERS_SRC, reason="set QWEN38_TRANSFORMERS_SRC to pinned Transformers source")
+@requires_transformers
 def test_exact_checkpoint_qsa_matches_pinned_transformers(weights, checkpoint_dir):
-    sys.path.insert(0, str(Path(TRANSFORMERS_SRC)))
-    from transformers.models.qwen4_exp.configuration_qwen4_exp import Qwen4ExpTextConfig
-    from transformers.models.qwen4_exp.modeling_qwen4_exp import Qwen4ExpTextAttention
-
-    config = Qwen4ExpTextConfig.from_pretrained(checkpoint_dir)
-    config._attn_implementation = "eager"
-    oracle = Qwen4ExpTextAttention(config, layer_idx=3).to(torch.bfloat16).eval()
-    oracle.load_state_dict(weights.transformers_state_dict(), strict=True)
-
+    oracle = _transformers_attention(weights, checkpoint_dir)
     torch.manual_seed(227)
     sequence = 8
     hidden = torch.randn(1, sequence, 2560, dtype=torch.bfloat16)
-    position_embeddings = _position_embeddings(sequence)
-    attention_mask = _causal_additive_mask(sequence)
+    position_embeddings = qsa_position_embeddings(sequence)
+    attention_mask = qsa_causal_mask(sequence)
     with torch.no_grad():
         expected, _ = oracle(hidden, position_embeddings, attention_mask, past_key_values=None)
         got, state, selected_mask = Qwen38QSA(weights).forward(hidden, position_embeddings, attention_mask)
@@ -107,22 +92,14 @@ class _ReferenceIndexedCache:
         return self.keys, self.values
 
 
-@pytest.mark.skipif(not TRANSFORMERS_SRC, reason="set QWEN38_TRANSFORMERS_SRC to pinned Transformers source")
+@requires_transformers
 def test_qsa_prefill_equals_tokenwise_cache_and_matches_pinned_transformers(weights, checkpoint_dir):
-    sys.path.insert(0, str(Path(TRANSFORMERS_SRC)))
-    from transformers.models.qwen4_exp.configuration_qwen4_exp import Qwen4ExpTextConfig
-    from transformers.models.qwen4_exp.modeling_qwen4_exp import Qwen4ExpTextAttention
-
-    config = Qwen4ExpTextConfig.from_pretrained(checkpoint_dir)
-    config._attn_implementation = "eager"
-    oracle = Qwen4ExpTextAttention(config, layer_idx=3).to(torch.bfloat16).eval()
-    oracle.load_state_dict(weights.transformers_state_dict(), strict=True)
-
+    oracle = _transformers_attention(weights, checkpoint_dir)
     generator = torch.Generator().manual_seed(229)
     sequence = 6
     hidden = torch.randn((1, sequence, 2560), generator=generator, dtype=torch.bfloat16)
-    full_positions = _position_embeddings(sequence)
-    full_mask = _causal_additive_mask(sequence)
+    full_positions = qsa_position_embeddings(sequence)
+    full_mask = qsa_causal_mask(sequence)
     qsa = Qwen38QSA(weights)
     with torch.no_grad():
         full_output, full_state, _ = qsa.forward(hidden, full_positions, full_mask)
@@ -154,10 +131,10 @@ def test_qsa_prefill_equals_tokenwise_cache_and_matches_pinned_transformers(weig
 def test_qsa_state_append_is_immutable_and_prefix_rolls_back(weights, expect_error):
     qsa = Qwen38QSA(weights)
     hidden = torch.zeros((1, 2, 2560), dtype=torch.bfloat16)
-    _, state, _ = qsa.forward(hidden, _position_embeddings(2), _causal_additive_mask(2))
+    _, state, _ = qsa.forward(hidden, qsa_position_embeddings(2), qsa_causal_mask(2))
     _, appended, _ = qsa.forward(
         hidden[:, :1],
-        _position_embeddings(3),
+        qsa_position_embeddings(3),
         torch.zeros((1, 1, 1, 3), dtype=torch.float32),
         state=state,
     )

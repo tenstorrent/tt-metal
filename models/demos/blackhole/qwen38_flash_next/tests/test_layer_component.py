@@ -2,40 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
-from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import (  # noqa: F401
+    qsa_causal_mask,
+    qsa_position_embeddings,
+    release_checkpoint,
+    release_placement,
+)
 from models.demos.blackhole.qwen38_flash_next.tt.layer import Qwen38DecoderLayer
 
 
-def _position_embeddings(sequence):
-    positions = torch.arange(sequence, dtype=torch.float32).view(1, sequence, 1)
-    frequencies = torch.linspace(0.001, 0.037, 32).view(1, 1, 32)
-    angles = positions * frequencies
-    return torch.cat((angles.cos(), angles.cos()), dim=-1).to(torch.bfloat16), torch.cat(
-        (angles.sin(), angles.sin()), dim=-1
-    ).to(torch.bfloat16)
-
-
-def _causal_mask(sequence):
-    visible = torch.ones(sequence, sequence, dtype=torch.bool).tril()
-    return torch.where(visible, torch.tensor(0.0), torch.tensor(torch.finfo(torch.float32).min)).view(
-        1, 1, sequence, sequence
-    )
-
-
-@pytest.fixture(scope="module")
-def checkpoint_and_placement(checkpoint_dir):
-    checkpoint = Qwen38Checkpoint(checkpoint_dir)
-    placement = Qwen38Placement(checkpoint.config, mesh_shape=(1, 4), physical_ids=(0, 1, 2, 3))
-    return checkpoint, placement
-
-
-def test_exact_gdn_decoder_layer_prefill_equals_tokenwise_state_transition(checkpoint_and_placement):
-    checkpoint, placement = checkpoint_and_placement
-    layer = Qwen38DecoderLayer.from_checkpoint(checkpoint, placement, layer_index=0)
+def test_exact_gdn_decoder_layer_prefill_equals_tokenwise_state_transition(release_checkpoint, release_placement):
+    layer = Qwen38DecoderLayer.from_checkpoint(release_checkpoint, release_placement, layer_index=0)
     generator = torch.Generator().manual_seed(43)
     hidden = (torch.randn((1, 2, 10240), generator=generator) * 0.02).to(torch.bfloat16)
 
@@ -52,10 +31,9 @@ def test_exact_gdn_decoder_layer_prefill_equals_tokenwise_state_transition(check
     assert aux.routing.scores.shape == (1, 10)
 
 
-def test_exact_ple_layer_and_qsa_layer_form_a_short_alternating_stack(checkpoint_and_placement):
-    checkpoint, placement = checkpoint_and_placement
-    ple_layer = Qwen38DecoderLayer.from_checkpoint(checkpoint, placement, layer_index=1)
-    qsa_layer = Qwen38DecoderLayer.from_checkpoint(checkpoint, placement, layer_index=3)
+def test_exact_ple_layer_and_qsa_layer_form_a_short_alternating_stack(release_checkpoint, release_placement):
+    ple_layer = Qwen38DecoderLayer.from_checkpoint(release_checkpoint, release_placement, layer_index=1)
+    qsa_layer = Qwen38DecoderLayer.from_checkpoint(release_checkpoint, release_placement, layer_index=3)
     generator = torch.Generator().manual_seed(47)
     hidden = (torch.randn((1, 2, 10240), generator=generator) * 0.02).to(torch.bfloat16)
     input_ids = torch.tensor([[17, 248044]], dtype=torch.long)
@@ -63,8 +41,8 @@ def test_exact_ple_layer_and_qsa_layer_form_a_short_alternating_stack(checkpoint
     hidden, ple_state, ple_aux = ple_layer.forward(hidden, input_ids=input_ids)
     hidden, qsa_state, qsa_aux = qsa_layer.forward(
         hidden,
-        position_embeddings=_position_embeddings(2),
-        attention_mask=_causal_mask(2),
+        position_embeddings=qsa_position_embeddings(2),
+        attention_mask=qsa_causal_mask(2),
     )
 
     assert hidden.shape == (1, 2, 10240)

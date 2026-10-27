@@ -1,17 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
 import torch.nn.functional as F
 
-from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
-from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import (  # noqa: F401
+    qwen4_exp_transformers,
+    release_checkpoint,
+    release_placement,
+    requires_transformers,
+)
 from models.demos.blackhole.qwen38_flash_next.tt.moe import (
     Qwen38MoE,
     Qwen38MoEWeights,
@@ -19,20 +20,10 @@ from models.demos.blackhole.qwen38_flash_next.tt.moe import (
     weighted_routed_reduce,
 )
 
-TRANSFORMERS_SRC = os.environ.get("QWEN38_TRANSFORMERS_SRC")
 
-
-def _load_reference_module():
-    if not TRANSFORMERS_SRC:
-        pytest.skip("set QWEN38_TRANSFORMERS_SRC to pinned Transformers source")
-    source = Path(TRANSFORMERS_SRC)
-    sys.path.insert(0, str(source))
-    try:
-        from transformers.models.qwen4_exp import modeling_qwen4_exp
-
-        return modeling_qwen4_exp
-    finally:
-        sys.path.remove(str(source))
+@pytest.fixture(scope="module")
+def weights(release_checkpoint, release_placement):
+    return Qwen38MoEWeights(release_checkpoint, release_placement, layer_index=0)
 
 
 class _LazyExpertAxis:
@@ -45,11 +36,7 @@ class _LazyExpertAxis:
         return getattr(expert, self.projection)
 
 
-def test_exact_moe_tp4_weight_placement_has_no_routed_replication(checkpoint_dir):
-    checkpoint = Qwen38Checkpoint(checkpoint_dir)
-    placement = Qwen38Placement(checkpoint.config, mesh_shape=(1, 4), physical_ids=(0, 1, 2, 3))
-    weights = Qwen38MoEWeights(checkpoint, placement, layer_index=0)
-
+def test_exact_moe_tp4_weight_placement_has_no_routed_replication(weights):
     assert weights.expert_ranges == ((0, 128), (128, 256), (256, 384), (384, 512))
     assert weights.bf4_routed_payload_bytes_per_device == 353_894_400
     assert torch.equal(torch.cat([weights.router_shard(device) for device in range(4)]), weights.router_weight)
@@ -70,11 +57,9 @@ def test_exact_moe_tp4_weight_placement_has_no_routed_replication(checkpoint_dir
     assert weights.expert(128).down.shape == (2560, 640)
 
 
-def test_exact_checkpoint_moe_and_ep4_decomposition_match_pinned_transformers(checkpoint_dir):
-    reference = _load_reference_module()
-    checkpoint = Qwen38Checkpoint(checkpoint_dir)
-    placement = Qwen38Placement(checkpoint.config, mesh_shape=(1, 4), physical_ids=(0, 1, 2, 3))
-    weights = Qwen38MoEWeights(checkpoint, placement, layer_index=0)
+@requires_transformers
+def test_exact_checkpoint_moe_and_ep4_decomposition_match_pinned_transformers(weights):
+    _, reference = qwen4_exp_transformers()
     model = Qwen38MoE(weights)
 
     generator = torch.Generator().manual_seed(38)

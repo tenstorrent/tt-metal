@@ -1,26 +1,23 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import sys
-from pathlib import Path
-
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
-from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import (  # noqa: F401
+    qwen4_exp_transformers,
+    release_checkpoint,
+    release_placement,
+    requires_transformers,
+)
 from models.demos.blackhole.qwen38_flash_next.tt.gr import Qwen38GatedResidual, Qwen38GatedResidualWeights
-
-TRANSFORMERS_SRC = os.environ.get("QWEN38_TRANSFORMERS_SRC")
 
 
 @pytest.fixture(scope="module")
-def component(checkpoint_dir):
-    checkpoint = Qwen38Checkpoint(checkpoint_dir)
-    placement = Qwen38Placement(checkpoint.config, mesh_shape=(1, 4), physical_ids=(0, 1, 2, 3))
-    weights = Qwen38GatedResidualWeights.from_checkpoint(checkpoint, placement, layer_index=0, block="attn")
-    return Qwen38GatedResidual(weights)
+def component(release_checkpoint, release_placement):
+    return Qwen38GatedResidual(
+        Qwen38GatedResidualWeights.from_checkpoint(release_checkpoint, release_placement, layer_index=0, block="attn")
+    )
 
 
 def test_exact_gr_tp4_shards_reassemble_without_replication(component):
@@ -37,14 +34,11 @@ def test_exact_gr_tp4_shards_reassemble_without_replication(component):
     assert torch.equal(torch.cat([shard.inject for shard in shards], dim=2).flatten(1), weights.inject)
 
 
-@pytest.mark.skipif(not TRANSFORMERS_SRC, reason="set QWEN38_TRANSFORMERS_SRC to pinned Transformers source")
+@requires_transformers
 def test_exact_checkpoint_gr_and_tp4_decomposition_match_pinned_transformers(component, checkpoint_dir):
-    sys.path.insert(0, str(Path(TRANSFORMERS_SRC)))
-    from transformers.models.qwen4_exp.configuration_qwen4_exp import Qwen4ExpTextConfig
-    from transformers.models.qwen4_exp.modeling_qwen4_exp import Qwen4ExpTextGatedResidual
-
-    config = Qwen4ExpTextConfig.from_pretrained(checkpoint_dir)
-    oracle = Qwen4ExpTextGatedResidual(config).to(torch.bfloat16).eval()
+    configuration, modeling = qwen4_exp_transformers()
+    config = configuration.Qwen4ExpTextConfig.from_pretrained(checkpoint_dir)
+    oracle = modeling.Qwen4ExpTextGatedResidual(config).to(torch.bfloat16).eval()
     oracle.load_state_dict(component.weights.transformers_state_dict(), strict=True)
 
     generator = torch.Generator().manual_seed(41)

@@ -23,6 +23,8 @@ PRODUCER = {
     "runtime": {"extension": "/runtime/site-packages/ttnn/extension.so", "sha256": "d" * 64},
     "checkpoint": {"config_sha256": "c" * 64, "revision": "r"},
 }
+# Every staging and verification record's claim: a CPU-staged corpus, no device touched.
+UNQUALIFIED = {"production_qualification": False, "device_opened": False, "device_locks_acquired": False}
 
 
 def _write_json(path: Path, document: dict) -> None:
@@ -87,9 +89,7 @@ def _fixture(tmp_path: Path):
             evidence_path,
             {
                 "mode": bf4_corpus.STAGING_MODE,
-                "production_qualification": False,
-                "device_opened": False,
-                "device_locks_acquired": False,
+                **UNQUALIFIED,
                 **PRODUCER,
                 "slot": list(slot),
                 "ownership": {
@@ -126,9 +126,7 @@ def _write_summaries(
             {
                 "mode": bf4_corpus.STAGING_MODE,
                 "status": "pass",
-                "production_qualification": False,
-                "device_opened": False,
-                "device_locks_acquired": False,
+                **UNQUALIFIED,
                 **PRODUCER,
                 "results": summary_results,
             },
@@ -137,9 +135,7 @@ def _write_summaries(
         verification = {
             "mode": bf4_corpus.VERIFICATION_MODE,
             "status": "pass",
-            "production_qualification": False,
-            "device_opened": False,
-            "device_locks_acquired": False,
+            **UNQUALIFIED,
             "artifact_root": str(artifact_root),
             "corpus": {
                 "slots": 49,
@@ -167,6 +163,9 @@ def test_binds_exact_49_slot_corpus_and_adopts_the_producer_order(tmp_path):
     assert dict(corpus.identity.runtime) == PRODUCER["runtime"]
     assert corpus.summary()["tensorbins"] == 98
     assert corpus.summary()["all_payload_sha256_verified"] is True
+    # the disk bytes and the contract total are reported apart
+    assert corpus.summary()["bytes"] == 49 * 24 == corpus.disk_bytes
+    assert corpus.summary()["contract_bytes"] == contract.total_bytes == 49 * 24
 
 
 def test_public_binder_reads_the_producer_identity_from_the_record_and_pins_a_given_one(expect_error, tmp_path):
@@ -193,27 +192,22 @@ def test_rejects_missing_artifact(expect_error, tmp_path):
         bf4_corpus._bind(contract.artifact_root, contract.verification_result, contract=contract)
 
 
-def test_rejects_artifact_hash_mismatch(expect_error, tmp_path):
+@pytest.mark.parametrize(
+    "slot, artifact, field, value, message",
+    [
+        (4, "w0_w1", "sha256", "f" * 64, "SHA-256 differs"),
+        (9, "w2", "local_shape", [8, 1, 127, 3], "local_shape differs"),
+    ],
+    ids=["sha256", "local_shape"],
+)
+def test_rejects_a_recorded_artifact_field_that_differs(slot, artifact, field, value, message, expect_error, tmp_path):
     contract, results, summary_paths = _fixture(tmp_path)
-    evidence_path = Path(results[4]["evidence"])
+    evidence_path = Path(results[slot]["evidence"])
     evidence = json.loads(evidence_path.read_text())
-    evidence["artifacts"]["w0_w1"]["sha256"] = "f" * 64
-    results[4]["artifacts"]["w0_w1"]["sha256"] = "f" * 64
+    evidence["artifacts"][artifact][field] = results[slot]["artifacts"][artifact][field] = value
     _write_json(evidence_path, evidence)
     _write_summaries(results, summary_paths, contract.verification_result)
-    with expect_error(bf4_corpus.DiagnosticBF4BindingError, match="SHA-256 differs"):
-        bf4_corpus._bind(contract.artifact_root, contract.verification_result, contract=contract)
-
-
-def test_rejects_artifact_shape_mismatch(expect_error, tmp_path):
-    contract, results, summary_paths = _fixture(tmp_path)
-    evidence_path = Path(results[9]["evidence"])
-    evidence = json.loads(evidence_path.read_text())
-    evidence["artifacts"]["w2"]["local_shape"] = [8, 1, 127, 3]
-    results[9]["artifacts"]["w2"]["local_shape"] = [8, 1, 127, 3]
-    _write_json(evidence_path, evidence)
-    _write_summaries(results, summary_paths, contract.verification_result)
-    with expect_error(bf4_corpus.DiagnosticBF4BindingError, match="local_shape differs"):
+    with expect_error(bf4_corpus.DiagnosticBF4BindingError, match=message):
         bf4_corpus._bind(contract.artifact_root, contract.verification_result, contract=contract)
 
 
@@ -230,13 +224,6 @@ def test_rejects_slot_mismatch_and_a_second_physical_order(expect_error, tmp_pat
     _write_json(evidence_path, evidence)
     with expect_error(bf4_corpus.DiagnosticBF4BindingError, match="physical_ids"):
         bf4_corpus._bind(contract.artifact_root, contract.verification_result, contract=contract)
-
-
-def test_summary_reports_disk_bytes_and_the_contract_total_apart(tmp_path):
-    contract, _, _ = _fixture(tmp_path)
-    corpus = bf4_corpus._bind(contract.artifact_root, contract.verification_result, contract=contract)
-    assert corpus.summary()["bytes"] == 49 * 24 == corpus.disk_bytes
-    assert corpus.summary()["contract_bytes"] == contract.total_bytes == 49 * 24
 
 
 def test_record_is_compared_to_the_disk_and_a_pre_compact_corpus_is_named(expect_error, tmp_path):

@@ -1,16 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""The host side of the vision splice (``vision_splice.py``) and the decode-tail rule of the rotary positions: no
-device, no checkpoint."""
+"""The host side of the vision splice (``vision_splice.py``), the decode-tail rule of the rotary positions and the
+committed prefix of an image prompt as a reuse key: no device, no checkpoint."""
+
+from types import SimpleNamespace
 
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.mrope import (
-    IMAGE_TOKEN_ID,
-    VISION_END_TOKEN_ID,
-    VISION_START_TOKEN_ID,
-    Qwen38ImageGrid,
-    mrope_positions,
+from models.demos.blackhole.qwen38_flash_next.mrope import IMAGE_TOKEN_ID, Qwen38ImageGrid, mrope_positions
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import mrope_prompt
+from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import (
+    Qwen38ChatSession,
+    Qwen38PromptSnapshot,
+    vision_spans_compatible,
 )
 from models.demos.blackhole.qwen38_flash_next.vision_splice import (
     HIDDEN_SIZE,
@@ -25,10 +27,6 @@ from models.demos.blackhole.qwen38_flash_next.vision_splice import (
 )
 
 TEXT = [1000, 1001, 1002, 1003]
-
-
-def _prompt(image: Qwen38ImageGrid, tail: int):
-    return TEXT + [VISION_START_TOKEN_ID] + [IMAGE_TOKEN_ID] * image.merged_tokens + [VISION_END_TOKEN_ID] + TEXT[:tail]
 
 
 def test_image_lanes_and_sentinel_rows(expect_error):
@@ -92,7 +90,7 @@ def test_split_features_walks_the_chunks(expect_error):
 
 def test_shift_at_and_the_decode_tail_rule(expect_error):
     image = Qwen38ImageGrid(1, 8, 8)  # 16 pads, span 4: shift 12
-    ids = _prompt(image, tail=4)
+    ids = mrope_prompt(TEXT, image, TEXT[:4])
     positions = mrope_positions(ids, [image])
     assert positions.shift == 12
     assert positions.shift_at(positions.length) == 12
@@ -105,7 +103,7 @@ def test_shift_at_and_the_decode_tail_rule(expect_error):
     # starts at 24 (= <|vision_end|> + 3): every token from 24 to 25 is plain text at index - 12.
     assert positions.tail_is_plain(positions.length)
     # A prompt whose last image ends inside the last index block: <|vision_end|> alone after the pads.
-    short = mrope_positions(_prompt(image, tail=0), [image])
+    short = mrope_positions(mrope_prompt(TEXT, image), [image])
     end = len(TEXT) + 1 + 16  # the <|vision_end|> index (21); its block start 20 is a pad
     assert not short.tail_is_plain(end + 1)
     # The two decode formulas disagree exactly when the shift is not a multiple of four: (P & ~3) - S is the block's
@@ -114,7 +112,7 @@ def test_shift_at_and_the_decode_tail_rule(expect_error):
     S = positions.shift
     assert (P & ~3) - S == int(positions.axes[0, P & ~3 - 0].item()) if (P & ~3) < positions.length else True
     odd = Qwen38ImageGrid(1, 6, 6)  # 9 pads, span 3: shift 6
-    odd_positions = mrope_positions(_prompt(odd, tail=4), [odd])
+    odd_positions = mrope_positions(mrope_prompt(TEXT, odd, TEXT[:4]), [odd])
     assert odd_positions.shift == 6 and odd_positions.tail_is_plain(odd_positions.length)
     P = odd_positions.length + 2
     block_start_token_row = (
@@ -129,7 +127,7 @@ def test_tail_rule_keeps_the_shift_within_the_block_start():
 
     for grid in (Qwen38ImageGrid(1, 8, 8), Qwen38ImageGrid(1, 6, 6), Qwen38ImageGrid(1, 2, 30)):
         for tail in (4, 5, 9):
-            positions = mrope_positions(_prompt(grid, tail), [grid])
+            positions = mrope_positions(mrope_prompt(TEXT, grid, TEXT[:tail]), [grid])
             length = positions.length
             assert positions.tail_is_plain(length)
             for consumed in (length - 1, length):  # the chunks' end and the first decode position
@@ -138,7 +136,7 @@ def test_tail_rule_keeps_the_shift_within_the_block_start():
 
 def test_image_spans_and_the_prompt_objects_keyed_spans(expect_error):
     grid = Qwen38ImageGrid(1, 4, 4)  # 4 merged tokens
-    ids = _prompt(grid, 2) + [VISION_START_TOKEN_ID] + [IMAGE_TOKEN_ID] * 4 + [VISION_END_TOKEN_ID] + TEXT
+    ids = mrope_prompt(TEXT, grid, TEXT[:2], grid, TEXT)
     first = len(TEXT) + 1
     second = first + 4 + 1 + 2 + 1
     assert image_spans(ids) == [(first, first + 4), (second, second + 4)]
@@ -157,7 +155,7 @@ def test_image_spans_and_the_prompt_objects_keyed_spans(expect_error):
 
 def test_vision_prompt_validation(expect_error):
     image = Qwen38ImageGrid(1, 4, 4)
-    ids = _prompt(image, tail=4)
+    ids = mrope_prompt(TEXT, image, TEXT[:4])
     positions = mrope_positions(ids, [image])
     features = torch.zeros((image.merged_tokens, HIDDEN_SIZE), dtype=torch.bfloat16)
     prompt = Qwen38VisionPrompt(positions, features, digest="abc")
@@ -168,7 +166,73 @@ def test_vision_prompt_validation(expect_error):
         Qwen38VisionPrompt(positions, features[:-1]).validate_prompt(ids)
     with expect_error(ValueError, match="BF16"):
         Qwen38VisionPrompt(positions, features.float())
-    short_ids = _prompt(image, tail=0)
+    short_ids = mrope_prompt(TEXT, image)
     short = Qwen38VisionPrompt(mrope_positions(short_ids, [image]), features)
     with expect_error(ValueError, match="last index block"):
         short.validate_prompt(short_ids)
+
+
+# -- the committed prefix as a reuse key (tools/qwen38_chat_session.py) ------------------------------------------------
+# The session keys its committed ids and its prompt-end snapshot on the images' pad spans with their digests beside the
+# ids, so a follow-up turn on the same image extends (or restores) instead of resetting, a prompt with another image of
+# the same grid (identical pad ids) resets, and a text request never extends into an image it does not carry.
+
+GRID = Qwen38ImageGrid(1, 8, 8)  # 16 merged tokens
+TURNS = list(range(1000, 1012))  # TURNS[:4] == TEXT
+
+
+def _vision(ids: list[int], *digests: str) -> Qwen38VisionPrompt:
+    grids = [GRID] * len(digests)
+    features = torch.zeros((GRID.merged_tokens * len(digests), 2560), dtype=torch.bfloat16)
+    return Qwen38VisionPrompt(mrope_positions(ids, grids), features, "+".join(digests), tuple(digests))
+
+
+def _session() -> Qwen38ChatSession:
+    chain = SimpleNamespace(capture_prompt_snapshot=lambda position: None, restore_prompt_snapshot=lambda: None)
+    return Qwen38ChatSession(chain, SimpleNamespace())
+
+
+def test_spans_compatibility_rule() -> None:
+    a = ((5, 21, "A"),)
+    assert vision_spans_compatible(a, a, 30) and vision_spans_compatible((), (), 30)
+    assert not vision_spans_compatible(a, ((5, 21, "B"),), 30)  # the same grid, another image
+    assert not vision_spans_compatible(a, (), 30) and not vision_spans_compatible((), a, 30)
+    assert vision_spans_compatible(a, ((5, 21, "A"), (40, 56, "B")), 30)  # a new image beyond the prefix
+    assert not vision_spans_compatible((), ((5, 21, "A"),), 10)  # a span the prefix cuts through
+    assert vision_spans_compatible((), ((40, 56, "B"),), 30)
+
+
+def test_a_follow_up_turn_on_the_same_image_extends_and_another_image_of_the_grid_resets() -> None:
+    session = _session()
+    first = mrope_prompt(TEXT, GRID, TURNS[4:8])
+    vision_a = _vision(first, "A")
+    # the committed state after the first turn's prefill and its reply
+    session.committed = first + TURNS[8:10]
+    session.committed_vision = vision_a.spans(first)
+    second = first + TURNS[8:10] + TURNS[10:12]
+    assert session.reusable_prefix(second, _vision(second, "A").spans(second)) == (len(session.committed), "extends")
+    # the same ids with another image (the same grid renders the same pads): a reset, never a reuse
+    assert session.reusable_prefix(second, _vision(second, "B").spans(second)) == (0, "reset")
+    # a text prompt equal to the ids so far cannot exist without the vision inputs; a text prefix reuse is untouched
+    session.committed_vision = ()
+    session.committed = TURNS[:6]
+    assert session.reusable_prefix(TURNS[:8]) == (6, "extends")
+
+
+def test_the_prompt_end_snapshot_of_an_image_prompt_is_keyed_on_its_images_too() -> None:
+    session = _session()
+    first = mrope_prompt(TEXT, GRID, TURNS[4:8])
+    spans_a = _vision(first, "A").spans(first)
+    session.snapshot = Qwen38PromptSnapshot(tuple(first[:-1]), None, "chunked", spans_a)
+    session.committed = first + TURNS[8:11]  # the committed state moved on (a reply); the snapshot still serves
+    other = first[:-1] + [TURNS[11]] + TURNS[8:10]  # a prompt extending the snapshot's ids with another question
+    assert session.reusable_prefix(other, _vision(other, "A").spans(other)) == (len(first) - 1, "snapshot")
+    assert session.reusable_prefix(other, _vision(other, "B").spans(other)) == (0, "reset")
+    # the record carries the spans; a restore brings them back as the committed images
+    session._restore_prompt_snapshot()
+    assert session.committed == list(first[:-1]) and session.committed_vision == spans_a
+    # a text prompt's snapshot keeps an empty record and a text request that extends it restores
+    session.snapshot = Qwen38PromptSnapshot(tuple(TURNS[:6]), None, "chunked")
+    session.committed = TURNS[:8]
+    assert session.reusable_prefix(TURNS[:6] + TURNS[9:12]) == (6, "snapshot")
+    assert session.snapshot.vision == ()
