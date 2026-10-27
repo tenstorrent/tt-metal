@@ -199,7 +199,6 @@ class TTResLayer:
                         cameras=cameras,
                         fp32_acc=fp32_acc,
                         dcn_sharded_input=dcn_sharded_input,
-                        conv2_act_block_h=conv2_act_block_h,
                         weights_dtype=weights_dtype,
                     )
                 )
@@ -391,7 +390,6 @@ class TTCameraBottleneck:
         cameras=1,
         fp32_acc=False,
         dcn_sharded_input=False,
-        conv2_act_block_h=None,
         weights_dtype=ttnn.bfloat8_b,
     ):
         conv1_args = conv_args.conv1
@@ -454,9 +452,10 @@ class TTCameraBottleneck:
             deallocate_activation=True,
             reshard_if_not_optimal=False,
             activation=relu,
+            act_block_h_override=self.conv2_act_block_h(),
+            enable_weights_double_buffer=True,
+            force_split_reader=True,
         )
-        if conv2_act_block_h is not None:
-            self.conv2_config.act_block_h_override = conv2_act_block_h
         # conv2d prepares its weights on the host on its first call, for the input it sees; making
         # that call here keeps the forward free of host work.
         warmup = ttnn.to_memory_config(
@@ -470,6 +469,15 @@ class TTCameraBottleneck:
             self._sharded(self.conv2_channels[0]),
         )
         ttnn.deallocate(self._conv2(warmup))
+
+    # The tallest act blocks a per-camera non-DCN conv2 was measured with.
+    CONV2_MAX_ACT_BLOCK_TILES = 9
+
+    def conv2_act_block_h(self):
+        """A non-DCN conv2's act_block_h: the tallest block up to CONV2_MAX_ACT_BLOCK_TILES that
+        splits the shard evenly, which reads the shard in the fewest blocks."""
+        tiles = max(t for t in range(1, self.CONV2_MAX_ACT_BLOCK_TILES + 1) if self.shard_tiles % t == 0)
+        return tiles * ttnn.TILE_SIZE
 
     def _shard_tiles(self, rows):
         """Tile rows per core for ``rows`` rows height-sharded over the grid."""
@@ -814,7 +822,8 @@ class TTResNet:
     whose DCNs take a height-sharded L1 input (TTModulatedDeformConv2dPack). The stem conv and the
     max pool read their DRAM inputs in ``stem_conv_height_slices`` and ``stem_maxpool_height_slices``
     height slices. ``stem_act_block_h`` and ``conv2_act_block_h`` are the stem conv's and the
-    non-DCN conv2s' act_block_h overrides, None for conv2d's own, and
+    whole-batch non-DCN conv2s' act_block_h overrides, None for conv2d's own (a per-camera conv2
+    sizes its own, TTCameraBottleneck.conv2_act_block_h), and
     ``weights_dtype`` the convs' weight dtype. ``model_config.tt_resnet_kwargs`` gives the
     configured variant's values, and ``model_config.RESNET_KWARGS["out_indices"]`` its
     ``out_indices``.
