@@ -8,14 +8,13 @@ runtime identity of a tree without git history."""
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
 
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_chat import chat_request_rejection, skip_without_git_checkout
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_server as server
 from models.demos.blackhole.qwen38_flash_next.tools import runtime_admission
-from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import Qwen38ChatRequestRejected
 
 ACCEPTANCE_RECORDS = Path(server.__file__).parent / "acceptance" / "greedy-prompts.jsonl"
 RECORD_FIELDS = {"prompt", "prompt_token_ids", "generated_token_ids", "stop_reason", "sha256"}
@@ -88,10 +87,9 @@ def test_a_request_naming_mtp_drafts_is_refused_with_its_param(where, drafts) ->
         "messages": messages,
         **({"mtp_drafts": drafts} if where == "top" else {"extra_body": {"mtp_drafts": drafts}}),
     }
-    with pytest.raises(Qwen38ChatRequestRejected) as info:  # allow-pytest.raises: inspect the captured exception object
-        server.parse_chat_request(document, seed=1)
-    assert (info.value.param, info.value.code) == ("mtp_drafts", "bad_request"), f"{info.value.param} {info.value.code}"
-    assert f"one drafting chain): drop it, got {drafts}" in str(info.value), str(info.value)
+    rejected = chat_request_rejection(server.parse_chat_request, document, seed=1)
+    assert (rejected.param, rejected.code) == ("mtp_drafts", "bad_request"), f"{rejected.param} {rejected.code}"
+    assert f"one drafting chain): drop it, got {drafts}" in str(rejected), str(rejected)
     parsed = server.parse_chat_request({"messages": messages, "mtp_drafts": None}, seed=1)  # JSON null: absent
     assert "mtp_drafts" not in parsed, sorted(parsed)
 
@@ -119,8 +117,7 @@ def test_a_tree_without_git_history_is_admitted_only_with_its_head_declared(
 
 def test_a_checkout_with_history_refuses_a_declared_head_that_differs(expect_error, monkeypatch) -> None:
     root = runtime_admission.REPO_ROOT
-    if subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True).returncode:
-        pytest.skip("not a git checkout")
+    skip_without_git_checkout(root)
     monkeypatch.delenv(runtime_admission.DECLARED_HEAD_VARIABLE, raising=False)
     identity = runtime_admission.git_identity(root)
     assert "source" not in identity and len(identity["head"]) == 40, identity

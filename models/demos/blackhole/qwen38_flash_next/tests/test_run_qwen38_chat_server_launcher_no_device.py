@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_chat import skip_without_git_checkout
+
 MODEL_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = MODEL_DIR.parents[3]
 LAUNCHER = MODEL_DIR / "tools" / "run_qwen38_chat_server.sh"
@@ -39,6 +41,18 @@ def run_launcher(cwd: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+@pytest.fixture
+def stub_python(tmp_path) -> Path:
+    """The stand-in interpreter (the launcher records the checkout's head: a git checkout only)."""
+
+    skip_without_git_checkout(REPO_ROOT)
+    stub = tmp_path / "python"
+    stub.write_text(STUB_PYTHON)
+    stub.chmod(0o755)
+    (tmp_path / "checkpoint").mkdir()
+    return stub
+
+
 def test_help_is_the_same_from_the_model_directory_and_from_elsewhere(tmp_path) -> None:
     runs = [run_launcher(cwd, "--help") for cwd in (MODEL_DIR, tmp_path)]
     for run in runs:
@@ -48,29 +62,16 @@ def test_help_is_the_same_from_the_model_directory_and_from_elsewhere(tmp_path) 
     assert runs[0].stderr == runs[1].stderr
 
 
-def test_validate_only_runs_the_interpreter_from_the_repository_root_wherever_it_is_started(tmp_path) -> None:
-    if subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], stdout=subprocess.DEVNULL).returncode:
-        pytest.skip("the launcher records the checkout's head: not a git checkout")
-    stub = tmp_path / "python"
-    stub.write_text(STUB_PYTHON)
-    stub.chmod(0o755)
+def test_validate_only_runs_the_interpreter_from_the_repository_root_wherever_it_is_started(
+    tmp_path, stub_python
+) -> None:
     checkpoint, cache_root, elsewhere = tmp_path / "checkpoint", tmp_path / "cache", tmp_path / "elsewhere"
-    checkpoint.mkdir()
     elsewhere.mkdir()
+    paths = {"--checkpoint": checkpoint, "--cache-root": cache_root, "--python": stub_python}
     reports = []
     for cwd in (MODEL_DIR, elsewhere):
-        run = run_launcher(
-            cwd,
-            "--profile",
-            "p150-line",
-            "--checkpoint",
-            os.path.relpath(checkpoint, cwd),
-            "--cache-root",
-            os.path.relpath(cache_root, cwd),
-            "--python",
-            os.path.relpath(stub, cwd),
-            "--validate-only",
-        )
+        relative = [value for flag, path in paths.items() for value in (flag, os.path.relpath(path, cwd))]
+        run = run_launcher(cwd, "--profile", "p150-line", *relative, "--validate-only")
         assert run.returncode == 0, run.stderr
         lines = run.stdout.splitlines()
         assert lines[0] == f"cwd={REPO_ROOT}", lines[0]
@@ -89,27 +90,13 @@ def test_validate_only_runs_the_interpreter_from_the_repository_root_wherever_it
     assert reports[0] == reports[1]
 
 
-def test_long_chunks_and_a_slab_combine_with_mtp(tmp_path) -> None:
+def test_long_chunks_and_a_slab_combine_with_mtp(tmp_path, stub_python) -> None:
     """The MTP chain prefills in 128-row chunks and in slabs: both flag pairs reach the server. A slab above the
     2048-row cap is refused."""
 
-    if subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], stdout=subprocess.DEVNULL).returncode:
-        pytest.skip("the launcher records the checkout's head: not a git checkout")
-    stub = tmp_path / "python"
-    stub.write_text(STUB_PYTHON)
-    stub.chmod(0o755)
     checkpoint, cache_root = tmp_path / "checkpoint", tmp_path / "cache"
-    checkpoint.mkdir()
-    common = (
-        "--profile",
-        "p150-line",
-        "--checkpoint",
-        str(checkpoint),
-        "--cache-root",
-        str(cache_root),
-        "--python",
-        str(stub),
-    )
+    common = ("--profile", "p150-line", "--checkpoint", str(checkpoint), "--cache-root", str(cache_root))
+    common += ("--python", str(stub_python))
     run = run_launcher(tmp_path, *common, "--long-chunks", "--mtp", "4", "--validate-only")
     assert run.returncode == 0, run.stderr
     args = [line[len("arg=") :] for line in run.stdout.splitlines()[1:]]

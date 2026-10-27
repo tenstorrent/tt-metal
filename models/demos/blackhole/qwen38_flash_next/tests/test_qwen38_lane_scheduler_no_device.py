@@ -15,6 +15,7 @@ from models.demos.blackhole.qwen38_flash_next.chat import EOS_TOKEN_IDS, IM_END_
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_lane_scheduler as scheduler_module
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import THINK_END_ID
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_lane_scheduler import (
+    DEFAULT_STALL_BUDGET_SECONDS,
     PLACEHOLDER_DRAFT_TOKEN,
     Qwen38LaneAdmitted,
     Qwen38LaneScheduler,
@@ -22,6 +23,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_lane_scheduler import
     Qwen38LaneStream,
     Qwen38LaneTicket,
     lane_geometry,
+    stall_budget_seconds_admitted,
 )
 
 CONTEXT = 4096
@@ -225,11 +227,19 @@ class FakeLanesDevice:
         return FakePassRecord(positions, committed, accepted, argmaxes)
 
 
-def _ticket(
-    name: str, prompt: list[int], *, max_tokens=64, stop_ids=EOS_TOKEN_IDS, think_budget=None
-) -> Qwen38LaneTicket:
+PROMPTS = {
+    "alpha": [11, 12, 13, 14, 15, 16],
+    "beta": [21, 22, 23],
+    "gamma": [31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
+    "delta": [41],
+    "epsilon": [51, 52, 53, 54],
+    "zeta": [61, 62],
+}
+
+
+def _ticket(name: str, prompt=None, *, max_tokens=64, stop_ids=EOS_TOKEN_IDS, think_budget=None) -> Qwen38LaneTicket:
     return Qwen38LaneTicket(
-        request_id=name, prompt_ids=prompt, max_tokens=max_tokens, stop_ids=tuple(stop_ids), think_budget=think_budget
+        name, PROMPTS[name] if prompt is None else prompt, max_tokens, tuple(stop_ids), think_budget
     )
 
 
@@ -243,6 +253,20 @@ def _delivered(ticket: Qwen38LaneTicket) -> list[int]:
         tokens.append(token)
 
 
+def _assert_reference_streams(tickets) -> list[list[int]]:
+    """Every ticket's delivered stream and finish equal the single-stream reference's; returns the streams."""
+
+    streams = []
+    for ticket in tickets:
+        expected, finish = reference_stream(
+            ticket.prompt_ids, max_tokens=ticket.max_tokens, stop_ids=ticket.stop_ids, think_budget=ticket.think_budget
+        )
+        assert _delivered(ticket) == expected and ticket.finish == finish, ticket.request_id
+        assert len(expected) <= ticket.max_tokens
+        streams.append(expected)
+    return streams
+
+
 class FakeClock:
     def __init__(self) -> None:
         self.now = 0.0
@@ -254,15 +278,15 @@ class FakeClock:
         self.now += seconds
 
 
-def _run(
-    device: FakeLanesDevice, tickets, *, lanes: int, queue_limit: int = 16, stall_budget_seconds=None, clock=None
-) -> Qwen38LaneScheduler:
+def _run(device: FakeLanesDevice, tickets, *, queue_limit=16, stall_budget_seconds=None, **options):
+    """A scheduler over the device's lanes, fed ``tickets`` and run until every one ends."""
+
     scheduler = Qwen38LaneScheduler(
-        lanes=lanes,
+        lanes=device.lanes,
         drafts=DRAFTS,
         queue_limit=queue_limit,
         stall_budget_seconds=stall_budget_seconds,
-        **({} if clock is None else {"clock": clock}),
+        **options,
     )
     for ticket in tickets:
         scheduler.submit(ticket)
@@ -270,49 +294,52 @@ def _run(
     return scheduler
 
 
-# --------------------------------------------------------------------------- the geometry
+def _stream(max_tokens: int, room=lambda position: True) -> Qwen38LaneStream:
+    return Qwen38LaneStream(drafts=DRAFTS, max_tokens=max_tokens, stop_ids=EOS_TOKEN_IDS, think_budget=None, room=room)
+
+
+# --------------------------------------------------------------------------- the geometry and the stream
 
 
 def test_lane_geometry_admits_two_to_eight_lanes_inside_one_tile(expect_error) -> None:
     assert lane_geometry(4, 4) == (4, 5) and lane_geometry(8, 3) == (8, 4) and lane_geometry(6, 4) == (6, 5)
-    for lanes, drafts in ((1, 4), (9, 3), (7, 4), (8, 4), (5, 5 + 1)):
-        with expect_error(ValueError):  # allow-pytest.raises: B in 2..8 and B x (k + 1) <= 32
+    for lanes, drafts in ((1, 4), (9, 3), (7, 4), (8, 4), (5, 5 + 1), (4, 0)):
+        with expect_error(ValueError):  # allow-pytest.raises: B in 2..8, B x (k + 1) <= 32, a draft count required
             lane_geometry(lanes, drafts)
-    with expect_error(ValueError):  # allow-pytest.raises: the draft count is required
-        lane_geometry(4, 0)
     assert scheduler_module.MIN_LANES == 2 and scheduler_module.MAX_LANES == 8 and scheduler_module.ONE_TILE_ROWS == 32
+
+
+def test_stream_ends_with_error_on_an_oversize_id_and_refuses_a_pass_after_its_end(expect_error) -> None:
+    step = _stream(10).start(TOKENIZER_SIZE + 5, 10)
+    assert step.finish == "error" and step.tokens == ((TOKENIZER_SIZE + 5, "error"),)
+    stream = _stream(10)
+    assert stream.start(7, 10).block == (7, 0, 0, 0, 0)
+    step = stream.after_pass([8, 9, TOKENIZER_SIZE + 1, 10], [8, 9, TOKENIZER_SIZE + 1, 10, 11], 10)
+    assert step.finish == "error" and [token for token, _ in step.tokens] == [8, 9, TOKENIZER_SIZE + 1]
+    with expect_error(RuntimeError):  # allow-pytest.raises: an ended stream takes no pass
+        stream.after_pass([1], [1, 2, 3, 4, 5], 14)
+
+
+def test_stream_no_room_ends_with_length_and_names_it() -> None:
+    stream = _stream(50, room=lambda position: position < 100)
+    assert stream.start(5, 99).block == (5, 0, 0, 0, 0)
+    step = stream.after_pass([6, 7], [6, 7, 8, 9, 10], 99)
+    assert step.finish == "length" and step.finish_detail == "no_room" and [t for t, _ in step.tokens] == [6, 7]
+    step = _stream(50, room=lambda position: False).start(5, 200)
+    assert step.finish == "length" and step.finish_detail == "no_room" and step.tokens == ((5, "length"),)
 
 
 # --------------------------------------------------------------------------- the stream rules against the reference
 
 
-PROMPTS = {
-    "alpha": [11, 12, 13, 14, 15, 16],
-    "beta": [21, 22, 23],
-    "gamma": [31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
-    "delta": [41],
-    "epsilon": [51, 52, 53, 54],
-    "zeta": [61, 62],
-}
-
-
 @pytest.mark.parametrize("think_budget", [None, 0, 1, 2, 3, 5, 8, 13])
 @pytest.mark.parametrize("max_tokens", [1, 2, 3, 7, 40, 200])
 def test_lane_streams_equal_the_single_stream_reference_for_every_budget_and_length(think_budget, max_tokens) -> None:
-    """Four lanes over six prompts: every delivered stream and finish equals the reference's."""
+    """Four lanes over six prompts."""
 
-    device = FakeLanesDevice(4)
-    tickets = [
-        _ticket(name, prompt, max_tokens=max_tokens, think_budget=think_budget) for name, prompt in PROMPTS.items()
-    ]
-    scheduler = _run(device, tickets, lanes=4)
-    for ticket in tickets:
-        expected, finish = reference_stream(
-            ticket.prompt_ids, max_tokens=max_tokens, stop_ids=EOS_TOKEN_IDS, think_budget=think_budget
-        )
-        assert _delivered(ticket) == expected, (ticket.request_id, think_budget, max_tokens)
-        assert ticket.finish == finish, (ticket.request_id, think_budget, max_tokens)
-        assert len(expected) <= max_tokens
+    tickets = [_ticket(name, max_tokens=max_tokens, think_budget=think_budget) for name in PROMPTS]
+    scheduler = _run(FakeLanesDevice(4), tickets)
+    _assert_reference_streams(tickets)
     assert scheduler.requests_done == len(tickets) and scheduler.active_count == 0 and scheduler.waiting_count == 0
 
 
@@ -321,12 +348,11 @@ def test_forced_think_end_covers_both_pass_positions_and_the_zero_budget() -> No
 
     inside = last = 0
     for budget in range(1, 14):
-        for name, prompt in PROMPTS.items():
+        for name in PROMPTS:
             device = FakeLanesDevice(2)
-            ticket = _ticket(name, prompt, max_tokens=60, think_budget=budget)
-            _run(device, [ticket], lanes=2)
-            expected, finish = reference_stream(prompt, max_tokens=60, stop_ids=EOS_TOKEN_IDS, think_budget=budget)
-            assert _delivered(ticket) == expected and ticket.finish == finish
+            ticket = _ticket(name, max_tokens=60, think_budget=budget)
+            _run(device, [ticket])
+            [expected] = _assert_reference_streams([ticket])
             overrides = [call for call in device.calls if call[0] == "override_commit"]
             forced_blocks = [
                 call
@@ -344,48 +370,19 @@ def test_forced_think_end_covers_both_pass_positions_and_the_zero_budget() -> No
     assert inside > 0 and last > 0
     # the zero budget: the model's first token is dropped for </think>, the first pass opens on it
     device = FakeLanesDevice(2)
-    ticket = _ticket("alpha", PROMPTS["alpha"], max_tokens=20, think_budget=0)
-    _run(device, [ticket], lanes=2)
-    expected, _finish = reference_stream(PROMPTS["alpha"], max_tokens=20, stop_ids=EOS_TOKEN_IDS, think_budget=0)
-    assert _delivered(ticket) == expected and expected[0] == THINK_END_ID
+    ticket = _ticket("alpha", max_tokens=20, think_budget=0)
+    _run(device, [ticket])
+    [expected] = _assert_reference_streams([ticket])
+    assert expected[0] == THINK_END_ID
     first_blocks = next(call for call in device.calls if call[0] == "set_blocks")
     assert first_blocks[1][0][0] == THINK_END_ID and first_blocks[1][0][1:] == [PLACEHOLDER_DRAFT_TOKEN] * DRAFTS
 
 
-def test_ignore_eos_streams_through_eos_and_an_oversize_id_ends_with_error(expect_error) -> None:
-    device = FakeLanesDevice(2)
-    ticket = _ticket("beta", PROMPTS["beta"], max_tokens=300, stop_ids=())
-    _run(device, [ticket], lanes=2)
-    expected, finish = reference_stream(PROMPTS["beta"], max_tokens=300, stop_ids=(), think_budget=None)
-    assert finish == "length" and _delivered(ticket) == expected and IM_END_ID in expected
-    stream = Qwen38LaneStream(
-        drafts=DRAFTS, max_tokens=10, stop_ids=EOS_TOKEN_IDS, think_budget=None, room=lambda p: True
-    )
-    step = stream.start(TOKENIZER_SIZE + 5, 10)
-    assert step.finish == "error" and step.tokens == ((TOKENIZER_SIZE + 5, "error"),)
-    stream = Qwen38LaneStream(
-        drafts=DRAFTS, max_tokens=10, stop_ids=EOS_TOKEN_IDS, think_budget=None, room=lambda p: True
-    )
-    assert stream.start(7, 10).block == (7, 0, 0, 0, 0)
-    step = stream.after_pass([8, 9, TOKENIZER_SIZE + 1, 10], [8, 9, TOKENIZER_SIZE + 1, 10, 11], 10)
-    assert step.finish == "error" and [token for token, _ in step.tokens] == [8, 9, TOKENIZER_SIZE + 1]
-    with expect_error(RuntimeError):  # allow-pytest.raises: an ended stream takes no pass
-        stream.after_pass([1], [1, 2, 3, 4, 5], 14)
-
-
-def test_stream_no_room_ends_with_length_and_names_it() -> None:
-    stream = Qwen38LaneStream(
-        drafts=DRAFTS, max_tokens=50, stop_ids=EOS_TOKEN_IDS, think_budget=None, room=lambda p: p < 100
-    )
-    step = stream.start(5, 99)
-    assert step.block == (5, 0, 0, 0, 0)
-    step = stream.after_pass([6, 7], [6, 7, 8, 9, 10], 99)
-    assert step.finish == "length" and step.finish_detail == "no_room" and [t for t, _ in step.tokens] == [6, 7]
-    stream = Qwen38LaneStream(
-        drafts=DRAFTS, max_tokens=50, stop_ids=EOS_TOKEN_IDS, think_budget=None, room=lambda p: False
-    )
-    step = stream.start(5, 200)
-    assert step.finish == "length" and step.finish_detail == "no_room" and step.tokens == ((5, "length"),)
+def test_ignore_eos_streams_through_eos() -> None:
+    ticket = _ticket("beta", max_tokens=300, stop_ids=())
+    _run(FakeLanesDevice(2), [ticket])
+    [expected] = _assert_reference_streams([ticket])
+    assert ticket.finish == "length" and IM_END_ID in expected
 
 
 # --------------------------------------------------------------------------- the driver loop
@@ -393,8 +390,8 @@ def test_stream_no_room_ends_with_length_and_names_it() -> None:
 
 def test_fifo_order_one_admission_per_boundary_and_the_fifth_request_waits() -> None:
     device = FakeLanesDevice(4)
-    tickets = [_ticket(name, prompt, max_tokens=12) for name, prompt in PROMPTS.items()]
-    scheduler = _run(device, tickets, lanes=4)
+    tickets = [_ticket(name, max_tokens=12) for name in PROMPTS]
+    scheduler = _run(device, tickets)
     admits = [call for call in device.calls if call[0] == "admit"]
     # the first four fill the idle batch in arrival order, the fifth and sixth follow as lanes free (one per boundary)
     assert [call[2] for call in admits[:4]] == ["alpha", "beta", "gamma", "delta"]
@@ -402,19 +399,9 @@ def test_fifo_order_one_admission_per_boundary_and_the_fifth_request_waits() -> 
     assert all(call[1] in range(4) for call in admits)
     first_pass = next(index for index, call in enumerate(device.calls) if call[0] == "set_active" and sum(call[1]) == 4)
     assert all(call[0] != "admit" or index < first_pass for index, call in enumerate(device.calls[: first_pass + 1]))
-    steps_between = 0
-    seen_fifth = False
-    for call in device.calls:
-        if call[0] == "admit" and call[2] == "epsilon":
-            seen_fifth = True
-        if seen_fifth and call[0] == "admit" and call[2] == "zeta":
-            break
     assert tickets[4].queue_wait >= 0 and tickets[4].lane is not None and tickets[5].lane is not None
     assert scheduler.admissions == 6 and scheduler.requests_done == 6
-    # every request's stream is the reference's (a request ending while the others continue)
-    for ticket in tickets:
-        expected, finish = reference_stream(ticket.prompt_ids, max_tokens=12, stop_ids=EOS_TOKEN_IDS, think_budget=None)
-        assert _delivered(ticket) == expected and ticket.finish == finish
+    _assert_reference_streams(tickets)  # a request ending while the others continue
 
 
 def test_the_queue_limit_refuses_beyond_the_lanes_and_stop_refuses_everything(expect_error) -> None:
@@ -432,10 +419,8 @@ def test_the_queue_limit_refuses_beyond_the_lanes_and_stop_refuses_everything(ex
     scheduler.stop()
     with expect_error(Qwen38LaneSchedulerBusy, match="stopping"):  # allow-pytest.raises: the stop
         scheduler.submit(_ticket("d", [1, 2]))
-    device = FakeLanesDevice(2)
-    scheduler.run(device, forever=False)
-    remaining = [t for t in scheduler.active if t is not None]
-    assert not remaining and scheduler.waiting_count == 0
+    scheduler.run(FakeLanesDevice(2), forever=False)
+    assert not [t for t in scheduler.active if t is not None] and scheduler.waiting_count == 0
     status = scheduler.status()
     assert status["lanes"] == 2 and status["stopping"] and status["running"] is False and status["requests_done"] == 1
     # with both lanes held the limit is the FIFO alone
@@ -454,11 +439,9 @@ def test_counts_vector_carries_admissions_and_overrides_and_positions_rewind() -
     rewinds its position."""
 
     device = FakeLanesDevice(3)
-    alpha = _ticket("alpha", PROMPTS["alpha"], max_tokens=40, think_budget=4)
-    beta = _ticket("beta", PROMPTS["beta"], max_tokens=40)
-    gamma = _ticket("gamma", PROMPTS["gamma"], max_tokens=40)
-    delta = _ticket("delta", PROMPTS["delta"], max_tokens=40)
-    scheduler = _run(device, [alpha, beta, gamma, delta], lanes=3)
+    tickets = [_ticket("alpha", max_tokens=40, think_budget=4)]
+    tickets += [_ticket(name, max_tokens=40) for name in ("beta", "gamma", "delta")]
+    scheduler = _run(device, tickets)
     writes = [call for call in device.calls if call[0] == "write_counts"]
     assert writes[0][1] == [-1, -1, -1]  # the idle batch's three admissions: nothing commits at their first pass
     overrides = [call for call in device.calls if call[0] == "override_commit"]
@@ -469,26 +452,18 @@ def test_counts_vector_carries_admissions_and_overrides_and_positions_rewind() -
             # the boundary's counts write follows the override with rows - 1 on that lane
             following = next(c for c in device.calls[index:] if c[0] == "write_counts")
             assert following[1][lane] == rows - 1
-    for ticket in (alpha, beta, gamma, delta):
-        expected, finish = reference_stream(
-            ticket.prompt_ids, max_tokens=40, stop_ids=EOS_TOKEN_IDS, think_budget=ticket.think_budget
-        )
-        assert _delivered(ticket) == expected and ticket.finish == finish
-    # the device's committed sequences are the prompt plus the stream but its last token (the pending, never fed)
+    _assert_reference_streams(tickets)
     assert scheduler.requests_done == 4
     # a delta admitted into a freed lane took -1 while the other lanes kept the device's counts
     admit_delta = next(index for index, call in enumerate(device.calls) if call[0] == "admit" and call[2] == "delta")
     following = next(c for c in device.calls[admit_delta:] if c[0] == "write_counts")
-    assert following[1][delta.lane] == -1 and all(v >= -1 for v in following[1])
+    assert following[1][tickets[3].lane] == -1 and all(v >= -1 for v in following[1])
 
 
 def test_a_cancel_parks_the_lane_at_the_next_boundary_and_the_others_continue() -> None:
     device = FakeLanesDevice(2)
-    long_one = _ticket("alpha", PROMPTS["alpha"], max_tokens=300, stop_ids=())
-    other = _ticket("beta", PROMPTS["beta"], max_tokens=300, stop_ids=())
-    scheduler = Qwen38LaneScheduler(lanes=2, drafts=DRAFTS, queue_limit=4)
-    scheduler.submit(long_one)
-    scheduler.submit(other)
+    long_one = _ticket("alpha", max_tokens=300, stop_ids=())
+    other = _ticket("beta", max_tokens=300, stop_ids=())
     original_step = device.step
 
     def step_and_cancel():
@@ -498,30 +473,25 @@ def test_a_cancel_parks_the_lane_at_the_next_boundary_and_the_others_continue() 
         return record
 
     device.step = step_and_cancel
-    scheduler.run(device, forever=False)
+    _run(device, [long_one, other], queue_limit=4, stall_budget_seconds=DEFAULT_STALL_BUDGET_SECONDS)
     assert long_one.finish == "stop" and long_one.passes == 3
     assert other.finish == "length" and other.passes > 3
     masks = [call[1] for call in device.calls if call[0] == "set_active"]
     assert [1, 1] in masks and masks[-1] == [0, 0] or masks[-1] == [0, 1] or [0, 1] in masks
-    expected, _finish = reference_stream(PROMPTS["beta"], max_tokens=300, stop_ids=(), think_budget=None)
-    assert _delivered(other) == expected
+    _assert_reference_streams([other])
 
 
 def test_stalls_are_charged_to_the_lanes_that_were_decoding() -> None:
     """A decoding lane is charged the admission's device segments, never its host wall time."""
 
-    device = FakeLanesDevice(2, admit_seconds=0.6)
     clock = [0.0]
 
     def tick() -> float:
         clock[0] += 1.0
         return clock[0]
 
-    scheduler = Qwen38LaneScheduler(lanes=2, drafts=DRAFTS, queue_limit=4, clock=tick, stall_budget_seconds=None)
-    tickets = [_ticket(name, prompt, max_tokens=30, stop_ids=()) for name, prompt in list(PROMPTS.items())[:3]]
-    for ticket in tickets:
-        scheduler.submit(ticket)
-    scheduler.run(device, forever=False)
+    tickets = [_ticket(name, max_tokens=30, stop_ids=()) for name in ("alpha", "beta", "gamma")]
+    scheduler = _run(FakeLanesDevice(2, admit_seconds=0.6), tickets, queue_limit=4, clock=tick)
     third = tickets[2]
     assert third.queue_wait > 0 and third.admission_seconds == pytest.approx(0.6)
     assert third.admission_wall_seconds > 0 and third.interleaved_passes == 0
@@ -541,11 +511,9 @@ def test_admissions_interleave_the_decoding_lanes_passes_under_the_budget(stall_
 
     clock = FakeClock()
     device = FakeLanesDevice(2, admit_seconds=1.2, segments=3, clock=clock)
-    tickets = [_ticket(name, prompt, max_tokens=30, stop_ids=()) for name, prompt in list(PROMPTS.items())[:3]]
-    scheduler = _run(device, tickets, lanes=2, stall_budget_seconds=stall_budget_seconds, clock=clock)
-    for ticket in tickets:
-        expected, finish = reference_stream(ticket.prompt_ids, max_tokens=30, stop_ids=(), think_budget=None)
-        assert _delivered(ticket) == expected and ticket.finish == finish
+    tickets = [_ticket(name, max_tokens=30, stop_ids=()) for name in ("alpha", "beta", "gamma")]
+    scheduler = _run(device, tickets, stall_budget_seconds=stall_budget_seconds, clock=clock)
+    _assert_reference_streams(tickets)
     first, second, third = tickets
     assert first.interleaved_passes == 0  # no lane decoded during the first admission
     interleaved = second.interleaved_passes + third.interleaved_passes
@@ -554,10 +522,8 @@ def test_admissions_interleave_the_decoding_lanes_passes_under_the_budget(stall_
         assert not device.between_calls if stall_budget_seconds is None else device.between_calls
     else:
         assert interleaved > 0 and scheduler.interleaved_passes == interleaved
-        per_segment = 1.2 / 3
         # budget 0: a pass at both yield points of an admission with a decoding lane; 0.5: after the second segment
-        expected_per_admission = 2 if stall_budget_seconds == 0.0 else 1
-        assert second.interleaved_passes == expected_per_admission
+        assert second.interleaved_passes == (2 if stall_budget_seconds == 0.0 else 1)
         # the passes' seconds came back through ``between`` and were excluded from the segment records
         assert all(seconds >= 0.0 for _, _, _, seconds in device.between_calls)
         assert second.admission_wall_seconds >= second.admission_seconds
@@ -573,16 +539,12 @@ def test_admissions_interleave_the_decoding_lanes_passes_under_the_budget(stall_
 
 
 def test_the_budget_counts_admission_work_since_the_decoding_lanes_last_pass() -> None:
-    """The budget sums the admission work since the decoding lane's last pass, across admissions."""
-
     clock = FakeClock()
     device = FakeLanesDevice(4, admit_seconds=0.3, segments=3, clock=clock)
-    tickets = [_ticket(name, prompt, max_tokens=12, stop_ids=()) for name, prompt in list(PROMPTS.items())[:4]]
+    tickets = [_ticket(name, max_tokens=12, stop_ids=()) for name in ("alpha", "beta", "gamma", "delta")]
     # 0.45 and not 0.5: the fake clock sums 0.1 s steps, and 0.8 - 0.3 in floats falls a hair under 0.5
-    scheduler = _run(device, tickets, lanes=4, stall_budget_seconds=0.45, clock=clock)
-    for ticket in tickets:
-        expected, finish = reference_stream(ticket.prompt_ids, max_tokens=12, stop_ids=(), think_budget=None)
-        assert _delivered(ticket) == expected and ticket.finish == finish
+    scheduler = _run(device, tickets, stall_budget_seconds=0.45, clock=clock)
+    _assert_reference_streams(tickets)
     # the waits reach 0.1, 0.2 (second admission), 0.4, 0.5 >= 0.45 (third): the pass lands inside the third; the
     # fake pass takes no clock time, so the fourth reaches 0.2 only
     assert [t.interleaved_passes for t in tickets] == [0, 0, 1, 0]
@@ -590,20 +552,14 @@ def test_the_budget_counts_admission_work_since_the_decoding_lanes_last_pass() -
 
 
 def test_a_lane_ending_inside_an_interleaved_pass_is_charged_the_segments_it_waited_for() -> None:
-    """A lane ending in a pass between two admission segments is charged the segments before that pass only."""
-
     clock = FakeClock()
     device = FakeLanesDevice(2, admit_seconds=1.2, segments=3, clock=clock)
     # alpha's stream start delivers the row's token; its first pass runs inside beta's admission (budget 0: a pass
     # at every yield point) and ends it at max_tokens 2, so alpha waited for beta's first segment only
-    alpha = _ticket("alpha", PROMPTS["alpha"], max_tokens=2, stop_ids=())
-    beta = _ticket("beta", PROMPTS["beta"], max_tokens=12, stop_ids=())
-    scheduler = _run(device, [alpha, beta], lanes=2, stall_budget_seconds=0.0, clock=clock)
-    for ticket in (alpha, beta):
-        expected, finish = reference_stream(
-            ticket.prompt_ids, max_tokens=ticket.max_tokens, stop_ids=(), think_budget=None
-        )
-        assert _delivered(ticket) == expected and ticket.finish == finish
+    alpha = _ticket("alpha", max_tokens=2, stop_ids=())
+    beta = _ticket("beta", max_tokens=12, stop_ids=())
+    scheduler = _run(device, [alpha, beta], stall_budget_seconds=0.0, clock=clock)
+    _assert_reference_streams([alpha, beta])
     assert alpha.finish == "length" and alpha.passes == 1 and beta.interleaved_passes >= 1
     assert alpha.stalled_seconds == pytest.approx(0.4)  # one of beta's three 0.4 s segments
     assert beta.stalled_seconds == 0.0 and beta.admission_seconds == pytest.approx(1.2)
@@ -611,18 +567,14 @@ def test_a_lane_ending_inside_an_interleaved_pass_is_charged_the_segments_it_wai
 
 
 def test_an_image_ticket_carries_its_images_to_the_admission_and_takes_the_tower_segment_and_record() -> None:
-    """An image ticket carries its images and rotary positions to the admit; the tower segment counts as admission
-    time and its vision record reaches the ticket."""
+    """The tower segment counts as admission time and its vision record reaches the ticket."""
 
-    device = FakeLanesDevice(2, admit_seconds=0.3)
-    text = _ticket("alpha", PROMPTS["alpha"], max_tokens=12, stop_ids=())
-    image = _ticket("beta", PROMPTS["beta"], max_tokens=12, stop_ids=())
+    text = _ticket("alpha", max_tokens=12, stop_ids=())
+    image = _ticket("beta", max_tokens=12, stop_ids=())
     image.images = ["image-a", "image-b"]
     image.vision_positions = "positions"
-    _run(device, [text, image], lanes=2)
-    for ticket in (text, image):
-        expected, finish = reference_stream(ticket.prompt_ids, max_tokens=12, stop_ids=(), think_budget=None)
-        assert _delivered(ticket) == expected and ticket.finish == finish
+    _run(FakeLanesDevice(2, admit_seconds=0.3), [text, image])
+    _assert_reference_streams([text, image])
     assert text.vision is None and "tower" not in text.admission_segments
     assert image.vision == {"images": 2, "positions": "positions"}
     assert image.admission_segments["tower"] == pytest.approx(0.1)
@@ -633,31 +585,22 @@ def test_an_image_ticket_carries_its_images_to_the_admission_and_takes_the_tower
 
 
 def test_stall_budget_is_none_or_a_non_negative_number(expect_error) -> None:
-    from models.demos.blackhole.qwen38_flash_next.tools.qwen38_lane_scheduler import (
-        DEFAULT_STALL_BUDGET_SECONDS,
-        stall_budget_seconds_admitted,
-    )
-
     assert stall_budget_seconds_admitted(None) is None and stall_budget_seconds_admitted(0) == 0.0
     assert stall_budget_seconds_admitted(0.25) == 0.25 and DEFAULT_STALL_BUDGET_SECONDS == 0.5
-    assert (
-        Qwen38LaneScheduler(lanes=2, drafts=DRAFTS, queue_limit=1).stall_budget_seconds == DEFAULT_STALL_BUDGET_SECONDS
-    )
+    default = Qwen38LaneScheduler(lanes=2, drafts=DRAFTS, queue_limit=1)
+    assert default.stall_budget_seconds == DEFAULT_STALL_BUDGET_SECONDS
     for bad in (-0.1, True, "0.2", float("nan")):
         with expect_error(ValueError):  # allow-pytest.raises: pure contract test
             stall_budget_seconds_admitted(bad)
 
 
 def test_a_device_failure_ends_every_request_with_error_and_is_kept_as_fatal(expect_error) -> None:
-    device = FakeLanesDevice(2, fail_on_pass=2)
-    tickets = [_ticket(name, prompt, max_tokens=50, stop_ids=()) for name, prompt in list(PROMPTS.items())[:3]]
+    tickets = [_ticket(name, max_tokens=50, stop_ids=()) for name in ("alpha", "beta", "gamma")]
     scheduler = Qwen38LaneScheduler(lanes=2, drafts=DRAFTS, queue_limit=4)
     for ticket in tickets:
         scheduler.submit(ticket)
-    with expect_error(
-        RuntimeError, match="the device failed"
-    ):  # allow-pytest.raises: the failure is re-raised for the server
-        scheduler.run(device, forever=False)
+    with expect_error(RuntimeError, match="the device failed"):  # allow-pytest.raises: re-raised for the server
+        scheduler.run(FakeLanesDevice(2, fail_on_pass=2), forever=False)
     assert scheduler.fatal is not None and scheduler.stopping and not scheduler.running
     for ticket in tickets:
         assert ticket.finish == "error" and ticket.done.is_set()
@@ -669,12 +612,11 @@ def test_the_forever_loop_waits_for_submits_and_ends_on_stop() -> None:
     scheduler = Qwen38LaneScheduler(lanes=2, drafts=DRAFTS, queue_limit=4)
     thread = threading.Thread(target=scheduler.run, args=(device,), kwargs={"forever": True}, daemon=True)
     thread.start()
-    ticket = _ticket("alpha", PROMPTS["alpha"], max_tokens=9)
+    ticket = _ticket("alpha", max_tokens=9)
     scheduler.submit(ticket)
     assert ticket.done.wait(timeout=10.0)
-    expected, finish = reference_stream(PROMPTS["alpha"], max_tokens=9, stop_ids=EOS_TOKEN_IDS, think_budget=None)
-    assert _delivered(ticket) == expected and ticket.finish == finish
-    late = _ticket("beta", PROMPTS["beta"], max_tokens=500, stop_ids=())
+    _assert_reference_streams([ticket])
+    late = _ticket("beta", max_tokens=500, stop_ids=())
     scheduler.submit(late)
     while late.lane is None and not late.done.is_set():
         pass

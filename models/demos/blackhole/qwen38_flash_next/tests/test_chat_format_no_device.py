@@ -19,47 +19,43 @@ from models.demos.blackhole.qwen38_flash_next.chat import (
     Qwen38ToolExecutionError,
     parse_assistant_completion,
 )
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_chat import chat_template  # noqa: F401
 
 
-@pytest.fixture(scope="module")
-def template(checkpoint_dir) -> Qwen38OfficialChatTemplate:
-    return Qwen38OfficialChatTemplate(checkpoint_dir)
-
-
-def test_exact_artifacts_and_official_thinking_suffix(template: Qwen38OfficialChatTemplate) -> None:
+def test_exact_artifacts_and_official_thinking_suffix(chat_template: Qwen38OfficialChatTemplate) -> None:
     conversation = Qwen38ChatConversation()
     conversation.add_system("Answer precisely.")
     conversation.add_user("What is two plus three?")
 
-    xhigh = conversation.render(template, enable_thinking=True, reasoning_effort="xhigh")
+    xhigh = conversation.render(chat_template, enable_thinking=True, reasoning_effort="xhigh")
     assert xhigh.template_sha256 == PINNED_TOKENIZER_ARTIFACTS["chat_template.jinja"]
     assert xhigh.text.endswith("<|im_start|>assistant\n<think>\n")
     assert "Reasoning effort is set to xhigh." in xhigh.text
     assert tuple(xhigh.input_ids.shape[:1]) == (1,)
     assert xhigh.input_ids.shape[1] > 0
 
-    medium = conversation.render(template, enable_thinking=True, reasoning_effort="medium")
+    medium = conversation.render(chat_template, enable_thinking=True, reasoning_effort="medium")
     assert "Reasoning effort is set to" not in medium.text
     assert medium.text.endswith("<think>\n")
 
 
-def test_nonthinking_suffix_and_effort_validation(expect_error, template: Qwen38OfficialChatTemplate) -> None:
+def test_nonthinking_suffix_and_effort_validation(expect_error, chat_template: Qwen38OfficialChatTemplate) -> None:
     conversation = Qwen38ChatConversation()
     conversation.add_user("Reply without thinking.")
-    rendered = conversation.render(template, enable_thinking=False, reasoning_effort="low")
+    rendered = conversation.render(chat_template, enable_thinking=False, reasoning_effort="low")
     assert rendered.text.endswith("<|im_start|>assistant\n<think>\n\n</think>\n\n")
     assert "Reasoning effort is set" not in rendered.text
     with expect_error(Qwen38ChatFormatError, match="reasoning_effort"):  # allow-pytest.raises: pure host gate
-        conversation.render(template, reasoning_effort="high")  # type: ignore[arg-type]
+        conversation.render(chat_template, reasoning_effort="high")  # type: ignore[arg-type]
 
 
-def test_text_only_boundary_rejects_vision(expect_error, template: Qwen38OfficialChatTemplate) -> None:
+def test_text_only_boundary_rejects_vision(expect_error, chat_template: Qwen38OfficialChatTemplate) -> None:
     messages = [{"role": "user", "content": [{"type": "image", "image_url": "local.png"}]}]
     with expect_error(Qwen38ChatFormatError, match="vision content is unsupported"):  # allow-pytest.raises
-        template.render(messages)
+        chat_template.render(messages)
 
 
-def test_thinking_completion_and_exact_tool_call_round_trip(template: Qwen38OfficialChatTemplate) -> None:
+def test_thinking_completion_and_exact_tool_call_round_trip(chat_template: Qwen38OfficialChatTemplate) -> None:
     generated = """Check the arithmetic.
 </think>
 
@@ -85,7 +81,7 @@ def test_thinking_completion_and_exact_tool_call_round_trip(template: Qwen38Offi
     assert conversation.execute_tool_round(tools) == ('{"a":2,"b":3,"sum":5}',)
 
     rendered = conversation.render(
-        template,
+        chat_template,
         tools=tools,
         enable_thinking=True,
         preserve_thinking=True,
@@ -96,7 +92,7 @@ def test_thinking_completion_and_exact_tool_call_round_trip(template: Qwen38Offi
     assert "<think>\nCheck the arithmetic.\n</think>" in rendered.text
 
 
-def test_preserve_thinking_false_uses_official_template(template: Qwen38OfficialChatTemplate) -> None:
+def test_preserve_thinking_false_uses_official_template(chat_template: Qwen38OfficialChatTemplate) -> None:
     conversation = Qwen38ChatConversation(
         [
             {"role": "user", "content": "first"},
@@ -104,8 +100,8 @@ def test_preserve_thinking_false_uses_official_template(template: Qwen38Official
             {"role": "user", "content": "second"},
         ]
     )
-    hidden = conversation.render(template, preserve_thinking=False)
-    preserved = conversation.render(template, preserve_thinking=True)
+    hidden = conversation.render(chat_template, preserve_thinking=False)
+    preserved = conversation.render(chat_template, preserve_thinking=True)
     assert "private old reasoning" not in hidden.text
     assert "private old reasoning" in preserved.text
 
@@ -118,25 +114,21 @@ def test_preserve_thinking_false_uses_official_template(template: Qwen38Official
         ("x</think><tool_call>broken", "malformed"),
         ("x</think><function=add_integers></function>", "incomplete"),
         ("x</think>answer<|im_end|>suffix", "after its terminal"),
+        (
+            "r</think><tool_call><function=add_integers>\n<parameter=a>1</parameter><parameter=a>2</parameter>"
+            "<parameter=b>3</parameter>\n</function></tool_call>",
+            "repeats parameter",
+        ),
+        (
+            "r</think><tool_call><function=add_integers>\n<parameter=a>1</parameter><parameter=b>2</parameter>\n"
+            "</function></tool_call>not allowed",
+            "suffix",
+        ),
     ],
 )
 def test_malformed_generated_protocol_fails_closed(expect_error, generated: str, pattern: str) -> None:
     with expect_error(Qwen38ChatFormatError, match=pattern):  # allow-pytest.raises: parser rejection gate
         parse_assistant_completion(generated, enable_thinking=True)
-
-
-def test_duplicate_parameters_and_tool_suffix_fail_closed(expect_error) -> None:
-    duplicate = """r</think><tool_call><function=add_integers>
-<parameter=a>1</parameter><parameter=a>2</parameter><parameter=b>3</parameter>
-</function></tool_call>"""
-    with expect_error(Qwen38ChatFormatError, match="repeats parameter"):  # allow-pytest.raises
-        parse_assistant_completion(duplicate, enable_thinking=True)
-
-    suffix = """r</think><tool_call><function=add_integers>
-<parameter=a>1</parameter><parameter=b>2</parameter>
-</function></tool_call>not allowed"""
-    with expect_error(Qwen38ChatFormatError, match="suffix"):  # allow-pytest.raises
-        parse_assistant_completion(suffix, enable_thinking=True)
 
 
 def test_tool_arguments_follow_the_schema_types() -> None:

@@ -27,6 +27,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.physical_route import (
     parse_chips_with_mmio,
     route_device_nodes,
 )
+from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import resolve_route
 
 
 def _links(pairs):
@@ -66,27 +67,44 @@ QUIETBOX_2_DESCRIPTOR = {
 QUIETBOX_2_FABRIC = {0: 1, 1: 0, 2: 3, 3: 2}
 
 
-def test_quietbox_fabric_order_is_derived_and_equals_this_fixture_ring_walk():
-    chips = parse_chips_with_mmio(QUIETBOX_DESCRIPTOR)
-    route = derive_fabric_line_route(QUIETBOX_DESCRIPTOR, chips, QUIETBOX_FABRIC.__getitem__)
-    walk = derive_ring_walk_route(QUIETBOX_DESCRIPTOR, chips)
-    assert route == (0, 2, 1, 3) == walk, (route, walk)
-    profile = HARDWARE_PROFILES["tt-quietbox"]
-    nodes = route_device_nodes(route, chips)
-    assert nodes == (1, 3, 2, 0), nodes
-    # derived on each host, never pinned to these IDs
+# (profile, descriptor, fabric order, route, route nodes, ring walk): the QuietBox's fabric order equals the ring walk
+# from chip 0, the QuietBox 2's does not.
+RINGS = [
+    pytest.param(
+        "tt-quietbox", QUIETBOX_DESCRIPTOR, QUIETBOX_FABRIC, (0, 2, 1, 3), (1, 3, 2, 0), (0, 2, 1, 3), id="tt-quietbox"
+    ),
+    pytest.param(
+        "tt-quietbox-2",
+        QUIETBOX_2_DESCRIPTOR,
+        QUIETBOX_2_FABRIC,
+        (1, 0, 3, 2),
+        (1, 0, 3, 2),
+        (0, 1, 2, 3),
+        id="tt-quietbox-2",
+    ),
+]
+
+
+@pytest.mark.parametrize("name, descriptor, fabric, route, nodes, walk", RINGS)
+def test_the_fabric_order_is_derived_deterministically_and_compared_with_the_ring_walk(
+    name, descriptor, fabric, route, nodes, walk
+):
+    chips = parse_chips_with_mmio(descriptor)
+    calls = []
+
+    def lookup(chip_id):
+        calls.append(chip_id)
+        return fabric[chip_id]
+
+    first = derive_fabric_line_route(descriptor, chips, lookup)
+    second = derive_fabric_line_route(descriptor, chips, lookup)
+    assert first == second == route, (first, second)
+    assert calls == [0, 1, 2, 3] * 2, calls  # ascending fabric chip id, nothing else consulted
+    assert derive_ring_walk_route(descriptor, chips) == walk
+    assert route_device_nodes(route, chips) == nodes, route_device_nodes(route, chips)
+    # derived on each host and recorded at start, never pinned to these IDs
+    profile = HARDWARE_PROFILES[name]
     assert profile.route is None and profile.route_nodes is None, (profile.route, profile.route_nodes)
-
-
-def test_quietbox_2_fabric_order_differs_from_the_ring_walk():
-    chips = parse_chips_with_mmio(QUIETBOX_2_DESCRIPTOR)
-    route = derive_fabric_line_route(QUIETBOX_2_DESCRIPTOR, chips, QUIETBOX_2_FABRIC.__getitem__)
-    walk = derive_ring_walk_route(QUIETBOX_2_DESCRIPTOR, chips)
-    assert route == (1, 0, 3, 2), route
-    assert route_device_nodes(route, chips) == (1, 0, 3, 2), route_device_nodes(route, chips)
-    assert walk == (0, 1, 2, 3) != route, (walk, route)
-    pinned = HARDWARE_PROFILES["tt-quietbox-2"].route
-    assert pinned is None, pinned  # derived and recorded at start, not pinned
 
 
 def test_fabric_order_refuses_unknown_ids_duplicates_and_non_paths(expect_error):
@@ -111,20 +129,6 @@ def test_fabric_order_refuses_unknown_ids_duplicates_and_non_paths(expect_error)
     with expect_error(PhysicalRouteError, match="not one four-chip ring"):
         derive_fabric_line_route(broken_ring, chips, asked.append)
     assert asked == [], asked
-
-
-def test_fabric_order_is_independent_of_the_open_order_and_deterministic():
-    chips = parse_chips_with_mmio(QUIETBOX_2_DESCRIPTOR)
-    calls = []
-
-    def lookup(chip_id):
-        calls.append(chip_id)
-        return QUIETBOX_2_FABRIC[chip_id]
-
-    first = derive_fabric_line_route(QUIETBOX_2_DESCRIPTOR, chips, lookup)
-    second = derive_fabric_line_route(QUIETBOX_2_DESCRIPTOR, chips, lookup)
-    assert first == second == (1, 0, 3, 2), (first, second)
-    assert calls == [0, 1, 2, 3] * 2, calls  # ascending fabric chip id, nothing else consulted
 
 
 def _system_mesh(monkeypatch, tmp_path, descriptor, fabric, shape=(1, 4)):
@@ -154,23 +158,13 @@ def _system_mesh(monkeypatch, tmp_path, descriptor, fabric, shape=(1, 4)):
     return asked, built
 
 
-@pytest.mark.parametrize(
-    "name, descriptor, fabric, route, nodes",
-    [
-        ("tt-quietbox", QUIETBOX_DESCRIPTOR, QUIETBOX_FABRIC, (0, 2, 1, 3), (1, 3, 2, 0)),
-        ("tt-quietbox-2", QUIETBOX_2_DESCRIPTOR, QUIETBOX_2_FABRIC, (1, 0, 3, 2), (1, 0, 3, 2)),
-    ],
-    ids=["tt-quietbox", "tt-quietbox-2"],
-)
+@pytest.mark.parametrize("name, descriptor, fabric, route, nodes, walk", RINGS)
 def test_resolve_route_reads_the_ring_order_from_the_system_mesh_before_any_mesh_opens(
-    monkeypatch, tmp_path, name, descriptor, fabric, route, nodes
+    monkeypatch, tmp_path, name, descriptor, fabric, route, nodes, walk
 ):
     # No call needs an open mesh: _system_mesh removes ttnn.cluster's mesh-scoped FabricNodeId -> ASIC lookup.
-    from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import resolve_route
-
     asked, _ = _system_mesh(monkeypatch, tmp_path, descriptor, fabric)
     profile, derivation = resolve_route(HARDWARE_PROFILES[name])
-    walk = derive_ring_walk_route(descriptor, parse_chips_with_mmio(descriptor))
     assert (profile.route, profile.route_nodes) == (route, nodes), (profile.route, profile.route_nodes)
     assert asked == [(0, 0), (0, 1), (0, 2), (0, 3)], asked
     assert derivation["route_derivation"] == "derive_fabric_line_route", derivation
@@ -180,8 +174,6 @@ def test_resolve_route_reads_the_ring_order_from_the_system_mesh_before_any_mesh
 def test_resolve_route_refuses_a_broken_ring_and_a_system_mesh_that_is_not_the_1x4_line(
     monkeypatch, tmp_path, expect_error
 ):
-    from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import resolve_route
-
     # The 3-0 cable out: refused from the cluster descriptor before the system mesh (the topology mapper) is built.
     broken_ring = {**QUIETBOX_2_DESCRIPTOR, "ethernet_connections": QUIETBOX_2_DESCRIPTOR["ethernet_connections"][2:]}
     asked, built = _system_mesh(monkeypatch, tmp_path, broken_ring, QUIETBOX_2_FABRIC)
@@ -230,18 +222,14 @@ def _sysfs(monkeypatch, tmp_path, nodes):
 IN_ORDER = [(0, 0), (0, 1), (0, 2), (0, 3)]
 
 
-@pytest.mark.parametrize(
-    "name, descriptor, route",
-    [("tt-quietbox", QUIETBOX_DESCRIPTOR, (0, 2, 1, 3)), ("tt-quietbox-2", QUIETBOX_2_DESCRIPTOR, (1, 0, 3, 2))],
-    ids=["tt-quietbox", "tt-quietbox-2"],
-)
+@pytest.mark.parametrize("name, descriptor, fabric, route, nodes, walk", RINGS)
 def test_live_mapping_refuses_a_ring_mesh_whose_coordinate_k_does_not_hold_fabric_chip_k(
-    monkeypatch, tmp_path, expect_error, name, descriptor, route
+    monkeypatch, tmp_path, expect_error, name, descriptor, fabric, route, nodes, walk
 ):
     # The route is read before set_fabric_config(FABRIC_1D) rebuilds the control plane, which does not compare the two
     # mappings: a rebuild that moved a chip fails at the open, not at the first all_gather.
     chips = parse_chips_with_mmio(descriptor)
-    profile = replace(HARDWARE_PROFILES[name], route=route, route_nodes=route_device_nodes(route, chips))
+    profile = replace(HARDWARE_PROFILES[name], route=route, route_nodes=nodes)
     _sysfs(monkeypatch, tmp_path, chips.values())
     mapping = hardware_profiles.live_mapping(_OpenMesh(route, IN_ORDER), chips, profile)
     fabric = [(item["fabric_mesh_id"], item["fabric_chip_id"]) for item in mapping]

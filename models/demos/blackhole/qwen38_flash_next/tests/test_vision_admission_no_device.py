@@ -43,27 +43,21 @@ def test_resident_tower_comes_off_the_free_side_before_the_captures() -> None:
         assert vision["headroom_bytes_per_bank"] == plain["headroom_bytes_per_bank"] - RESIDENT
         assert vision["decided_by"]["required_side"].endswith(" vision")
     view = {"free_bytes_per_bank": 1_700_000_000, "largest_contiguous_bytes_free_per_bank": 1_690_000_000}
-    after_build = session_module.mtp_capacity_admission(
-        32768, drafts=4, live=view, live_point="after_build", vision_resident_bytes_per_bank=RESIDENT
-    )
-    plain_after_build = session_module.mtp_capacity_admission(32768, drafts=4, live=view, live_point="after_build")
-    assert (
-        plain_after_build["free_bytes_per_bank_after_captures"] - after_build["free_bytes_per_bank_after_captures"]
-        == RESIDENT
-    )
-    assert (
-        after_build["resident_post_build_bytes_per_bank"] - plain_after_build["resident_post_build_bytes_per_bank"]
-        == RESIDENT
-    )
+    records = {
+        (point, resident): session_module.mtp_capacity_admission(
+            32768, drafts=4, live=view, live_point=point, vision_resident_bytes_per_bank=resident
+        )
+        for point in ("after_build", "after_captures")
+        for resident in (0, RESIDENT)
+    }
+    free, resident = "free_bytes_per_bank_after_captures", "resident_post_build_bytes_per_bank"
+    after_build, plain_after_build = records["after_build", RESIDENT], records["after_build", 0]
+    assert plain_after_build[free] - after_build[free] == RESIDENT
+    assert after_build[resident] - plain_after_build[resident] == RESIDENT
     # an after-captures read already holds the tower: nothing comes off
-    after_captures = session_module.mtp_capacity_admission(
-        32768, drafts=4, live=view, live_point="after_captures", vision_resident_bytes_per_bank=RESIDENT
-    )
-    plain_after_captures = session_module.mtp_capacity_admission(
-        32768, drafts=4, live=view, live_point="after_captures"
-    )
-    for key in ("free_bytes_per_bank_after_captures", "largest_contiguous_bytes_free_per_bank_after_captures"):
-        assert after_captures[key] == plain_after_captures[key] == view[key.replace("_after_captures", "")], key
+    for key in (free, "largest_contiguous_bytes_free_per_bank_after_captures"):
+        after_captures = records["after_captures", RESIDENT][key]
+        assert after_captures == records["after_captures", 0][key] == view[key.replace("_after_captures", "")], key
 
 
 def test_peak_activation_is_a_required_part_with_the_margin() -> None:

@@ -69,14 +69,9 @@ def test_page_table_places_parks_and_frees_with_single_ownership(expect_error):
 
 
 def test_page_table_rejects_bad_counts(expect_error):
-    with expect_error(ValueError):
-        Qwen38LanePageTable(0, 1)
-    with expect_error(ValueError):
-        Qwen38LanePageTable(33, 1)
-    with expect_error(ValueError):
-        Qwen38LanePageTable(4, -1)
-    with expect_error(ValueError):
-        Qwen38LanePageTable(4, True)
+    for lanes, slots in ((0, 1), (33, 1), (4, -1), (4, True)):
+        with expect_error(ValueError):
+            Qwen38LanePageTable(lanes, slots)
 
 
 # --------------------------------------------------------------------------- the admission scheduler
@@ -169,25 +164,14 @@ def test_layout_constants_and_families_follow_the_storage_plan():
     assert len(layout.tensors()) == 237
     families = {f.name: f for f in layout.families()}
     assert list(families) == ["kv", "compressed", "staging", "ring", "recurrent", "conv", "ple"]
-    assert (
-        families["kv"].local_shape == (1, 1, 32768, 512)
-        and families["kv"].count == 12
-        and families["kv"].shard_dim == 1
-    )
+    assert (families["kv"].local_shape, families["kv"].count, families["kv"].shard_dim) == ((1, 1, 32768, 512), 12, 1)
     assert families["compressed"].local_shape == (12, 1, 8192 + 32, 128) and families["compressed"].shard_dim is None
     assert families["staging"].local_shape == (12, 1, 32, 512) and families["ring"].local_shape == (12, 1, 32, 128)
-    assert families["recurrent"].local_shape == (36, 12, 128, 128) and families["recurrent"].global_shape == (
-        36,
-        48,
-        128,
-        128,
-    )
+    assert families["recurrent"].local_shape == (36, 12, 128, 128)
+    assert families["recurrent"].global_shape == (36, 48, 128, 128)
     assert families["conv"].local_shape == (1, 144, 1, 2560) and families["conv"].global_shape == (1, 144, 1, 10240)
     assert families["ple"].local_shape == (9, 1, 4, 640) and families["ple"].global_shape == (9, 1, 4, 2560)
-    assert (
-        families["conv"].layout is lanes_module.ttnn.ROW_MAJOR_LAYOUT
-        and families["kv"].layout is lanes_module.ttnn.ROW_MAJOR_LAYOUT
-    )
+    assert families["conv"].layout is families["kv"].layout is lanes_module.ttnn.ROW_MAJOR_LAYOUT
     assert families["recurrent"].dtype is lanes_module.ttnn.float32
     # 13,056 bytes per context row + the fixed per-lane bytes (4k: the measured lane-state image).
     for context in (4096, 8192, 32768):
@@ -284,9 +268,8 @@ def test_pager_moves_replay_raw_behind_an_event_fence_and_apply_the_residue_rule
     for text in (evict, readmit):
         assert text.count("with corruptible_allocation_scope(self.mesh_device)") == 1
         assert text.index("corruptible_allocation_scope") < text.index("self._fence()")
-    assert "(self.evict(lane, slot), self.readmit(slot, lane)) for lane in range(self.layout.lanes)" in _body(
-        "warm_moves"
-    )
+    warm_moves = _body("warm_moves")
+    assert "(self.evict(lane, slot), self.readmit(slot, lane)) for lane in range(self.layout.lanes)" in warm_moves
     assert "KV_STAGINGS = 2" in SOURCE and "index % KV_STAGINGS" in evict and "index % KV_STAGINGS" in readmit
     assert "tt-smi" not in SOURCE and "kill" not in SOURCE
 
@@ -304,15 +287,8 @@ def test_pager_construction_warms_up_pack_then_unpack_per_lane_before_the_captur
 
 def test_model_lane_layout_glue_collects_every_family_and_leaves_the_position_row_with_the_model():
     glue = inspect.getsource(model_module.Qwen38TTNNTextModel.lane_layout)
-    for field in (
-        "packed_kv_cache",
-        "compressed_index_cache",
-        "kv_staging",
-        "raw_key_ring",
-        "recurrent",
-        "s.conv",
-        "ple_state.conv",
-    ):
+    caches = ("packed_kv_cache", "compressed_index_cache", "kv_staging", "raw_key_ring", "recurrent")
+    for field in (*caches, "s.conv", "ple_state.conv"):
         assert field in glue, field
     assert "layout.validate(self.mesh_contract)" in glue
     assert "state.position" not in glue.split('"""')[2]  # the row stays with the model (the docstring names it)
@@ -324,8 +300,8 @@ def test_model_lane_layout_glue_collects_every_family_and_leaves_the_position_ro
         "capture_decode_lanes",
         "admit_lane",
     ):
-        assert "lanes_module" not in inspect.getsource(getattr(model_module.Qwen38TTNNTextModel, name))
-        assert "Qwen38LaneLayout" not in inspect.getsource(getattr(model_module.Qwen38TTNNTextModel, name))
+        body = inspect.getsource(getattr(model_module.Qwen38TTNNTextModel, name))
+        assert "lanes_module" not in body and "Qwen38LaneLayout" not in body, name
 
 
 def test_lane_shapes_match_the_component_states():
@@ -346,16 +322,11 @@ def test_lane_shapes_match_the_component_states():
     }
     # The QSA / GDN / PLE lane-state sources allocate exactly these shapes.
     qsa = inspect.getsource(lanes_module.qsa_module.Qwen38TTNNQSA.allocate_lane_state)
-    assert (
-        "(1, 1, lanes * self.allocated_context + kv_scratch_rows, 2 * HEAD_DIM)" in qsa
-        and "(lanes, 1, rows, INDEX_HEAD_DIM)" in qsa
-    )
+    assert "(1, 1, lanes * self.allocated_context + kv_scratch_rows, 2 * HEAD_DIM)" in qsa
+    assert "(lanes, 1, rows, INDEX_HEAD_DIM)" in qsa
     assert "(1, lanes, CACHE_WRITE_ROWS, 2 * HEAD_DIM)" in qsa and "(1, lanes, CACHE_WRITE_ROWS, INDEX_HEAD_DIM)" in qsa
     gdn = inspect.getsource(lanes_module.gdn_module.Qwen38TTNNGDNState.allocate)
-    assert (
-        "(batch_size, VALUE_HEADS_PER_DEVICE, HEAD_DIM, HEAD_DIM)" in gdn
-        and "(1, 1, batch_size, QKV_WIDTH_PER_DEVICE)" in gdn
-    )
-    assert re.search(
-        r"return \(1, lanes, RESIDUAL_BRANCHES, LOCAL_HIDDEN_SIZE\)", inspect.getsource(lanes_module.ple_module)
-    )
+    assert "(batch_size, VALUE_HEADS_PER_DEVICE, HEAD_DIM, HEAD_DIM)" in gdn
+    assert "(1, 1, batch_size, QKV_WIDTH_PER_DEVICE)" in gdn
+    ple = inspect.getsource(lanes_module.ple_module)
+    assert re.search(r"return \(1, lanes, RESIDUAL_BRANCHES, LOCAL_HIDDEN_SIZE\)", ple)

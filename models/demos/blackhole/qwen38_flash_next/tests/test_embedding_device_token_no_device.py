@@ -24,15 +24,11 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
-EMBEDDING = REPO_ROOT / "models/demos/blackhole/qwen38_flash_next/ttnn/embedding.py"
+EMBEDDING_SOURCE = inspect.getsource(embedding_module)
 
 
 def _slice(source: str, start: str, end: str) -> str:
     return source.split(start, 1)[1].split(end, 1)[0]
-
-
-def _embedding_source() -> str:
-    return EMBEDDING.read_text(encoding="utf-8")
 
 
 # --- Numerics: the device path selects the exact vocabulary owner ---------------
@@ -93,9 +89,7 @@ def test_sum_select_reproduces_the_owner_embedding_row_bitwise() -> None:
 
 def test_all_reduce_owner_select_sums_partials_then_partitions() -> None:
     helper = _slice(
-        _embedding_source(),
-        "def _all_reduce_owner_select_hidden(",
-        "\ndef _all_gather_owner_select_hidden_fallback(",
+        EMBEDDING_SOURCE, "def _all_reduce_owner_select_hidden(", "\ndef _all_gather_owner_select_hidden_fallback("
     )
     assert "ttnn.all_reduce(" in helper
     assert "ttnn.mesh_partition(" in helper
@@ -128,6 +122,9 @@ def test_embed_device_token_is_token_invariant_owner_sum_with_no_host_io() -> No
         assert forbidden not in body
     # Every metadata contract names what the op actually returned.
     assert body.count("_metadata(") >= 4
+    # The 32-row path leaves the one-row embed alone.
+    assert "vocab_localize_lanes" not in body and "rows=" not in body and "CHUNK_ROWS" not in body
+    assert "ttnn.reshape(embedded_padded, ttnn.Shape((1, 1, 1, HIDDEN_SIZE)), ttnn.Shape(expected_partial))" in body
 
 
 def test_upload_token_row_seeds_one_replicated_fp32_row() -> None:
@@ -139,11 +136,12 @@ def test_upload_token_row_seeds_one_replicated_fp32_row() -> None:
 
 
 def test_host_embedding_and_owner_select_fallback_are_retained_for_the_eager_lanes() -> None:
-    source = _embedding_source()
-    assert "def _all_gather_owner_select_hidden_fallback(" in source
+    assert "def _all_gather_owner_select_hidden_fallback(" in EMBEDDING_SOURCE
     assert inspect.getsource(model_module.Qwen38TTNNTextModel._embed_residual)
     # The fallback is explicitly marked as the host-token path of the other lanes.
-    fallback = _slice(source, "def _all_gather_owner_select_hidden_fallback(", "\ndef _localize_token_ids_on_host(")
+    fallback = _slice(
+        EMBEDDING_SOURCE, "def _all_gather_owner_select_hidden_fallback(", "\ndef _localize_token_ids_on_host("
+    )
     assert "Host-token path for the eager and fixed-position lanes" in fallback
     assert "never trace-captured" in fallback
 
@@ -312,58 +310,69 @@ def _fake_device_token_ttnn(calls: list, deallocated: list):
     )
 
 
-def test_embed_device_token_consumes_the_rank_three_fused_embedding_output(monkeypatch) -> None:
-    """The op returns [1, 32, 2560]; the path must still hand the collective a [1,1,1,2560] view."""
+TOKEN_ROW = _FakeTensor("token-row", (1, 1, 1, 32), padded_shape=(1, 1, 32, 32), dtype="float32", layout="tile")
 
-    calls: list = []
-    deallocated: list = []
-    fake_ttnn = _fake_device_token_ttnn(calls, deallocated)
-    hidden = _FakeTensor("hidden", (1, 1, 1, 640), padded_shape=(1, 1, 32, 640), dtype="bfloat16", layout="tile")
-    marked: list = []
 
-    def owner_select(local_partial, **kwargs):
-        calls.append(("owner-select", (local_partial,), kwargs))
-        assert local_partial.shape == (1, 1, 1, 2560) and local_partial.padded_shape == (1, 1, 32, 2560)
-        assert local_partial.dtype == "bfloat16" and local_partial.layout == "tile"
-        assert kwargs["replicated_reference"] == "anchor" and kwargs["collective_topology"] == "linear"
-        return hidden
+def _device_token_shell(marked: list, **token_row_constants) -> Qwen38TTNNTokenEmbedding:
+    """An embedding without a device whose mesh contract records each local-partial mark in ``marked``."""
 
-    monkeypatch.setattr(embedding_module, "ttnn", fake_ttnn)
-    monkeypatch.setattr(embedding_module, "_all_reduce_owner_select_hidden", owner_select)
     shell = object.__new__(Qwen38TTNNTokenEmbedding)
     shell.mesh_contract = SimpleNamespace(
         validate_tensor=lambda tensor, **kwargs: None,
         mark_local_partial=lambda tensor, **kwargs: marked.append((tensor.name, kwargs["expected_shape"])),
     )
-    shell.weights = SimpleNamespace(
-        replicated_anchor="anchor",
-        token_row=SimpleNamespace(
-            vocab_localize_row=_FakeTensor("localize", (1, 1, 1, 32), dtype="float32", layout="tile")
-        ),
-    )
+    shell.weights = SimpleNamespace(replicated_anchor="anchor", token_row=SimpleNamespace(**token_row_constants))
     shell.sentinel_weight = _FakeTensor("sentinel", (LOCAL_VOCAB_SIZE + 2, 2560), dtype="bfloat16", layout="row-major")
     shell.collective_topology = "linear"
-    token_row = _FakeTensor("token-row", (1, 1, 1, 32), padded_shape=(1, 1, 32, 32), dtype="float32", layout="tile")
+    return shell
 
-    assert shell.embed_device_token(token_row) is hidden
 
+# The one-row chain; the 32-row chain is it minus the [1,1,1,2560] view (no second reshape, every row survives).
+DEVICE_TOKEN_CALLS = [
+    "subtract",
+    "clamp",
+    "typecast",
+    "to_layout",
+    "reshape",
+    "embedding",
+    "unsqueeze_to_4D",
+    "reshape",
+]
+
+
+def _embed_on_fake_ttnn(monkeypatch, method: str, partial_shape, **token_row_constants):
+    """``method`` of a device-less embedding on TOKEN_ROW over the fake ttnn, the owner select handed a BF16 TILE
+    ``partial_shape`` partial; returns the calls (the owner select's last) and the local-partial marks."""
+
+    calls, deallocated, marked = [], [], []
+    hidden_shape = partial_shape[:3] + (640,)
+    hidden = _FakeTensor("hidden", hidden_shape, padded_shape=(1, 1, 32, 640), dtype="bfloat16", layout="tile")
+
+    def owner_select(local_partial, **kwargs):
+        calls.append(("owner-select", (local_partial,), kwargs))
+        assert local_partial.shape == partial_shape and local_partial.padded_shape == (1, 1, 32, 2560)
+        assert local_partial.dtype == "bfloat16" and local_partial.layout == "tile"
+        assert kwargs["replicated_reference"] == "anchor"
+        return hidden
+
+    monkeypatch.setattr(embedding_module, "ttnn", _fake_device_token_ttnn(calls, deallocated))
+    monkeypatch.setattr(embedding_module, "_all_reduce_owner_select_hidden", owner_select)
+    assert getattr(_device_token_shell(marked, **token_row_constants), method)(TOKEN_ROW) is hidden
+    assert deallocated == ["shifted", "localized", "localized-indices", "row-major"]
+    return calls, marked
+
+
+def test_embed_device_token_consumes_the_rank_three_fused_embedding_output(monkeypatch) -> None:
+    """The op returns [1, 32, 2560]; the path must still hand the collective a [1,1,1,2560] view."""
+
+    localize = _FakeTensor("localize", (1, 1, 1, 32), dtype="float32", layout="tile")
+    calls, marked = _embed_on_fake_ttnn(monkeypatch, "embed_device_token", (1, 1, 1, 2560), vocab_localize_row=localize)
     names = [call[0] for call in calls]
-    assert names == [
-        "subtract",
-        "clamp",
-        "typecast",
-        "to_layout",
-        "reshape",
-        "embedding",
-        "unsqueeze_to_4D",
-        "reshape",
-        "owner-select",
-    ]
+    assert names == DEVICE_TOKEN_CALLS + ["owner-select"] and calls[-1][2]["collective_topology"] == "linear"
     embedding_call = calls[names.index("embedding")]
     assert embedding_call[1][0].shape == (1, 1, 32) and embedding_call[1][0].dtype == "uint32"
     assert embedding_call[1][0].layout == "row-major"
     assert marked == [("embedded-base-4d-view", (1, 1, 1, 2560))]
-    assert deallocated == ["shifted", "localized", "localized-indices", "row-major"]
 
 
 def test_embed_device_token_names_the_actual_metadata_when_the_partial_differs(monkeypatch, expect_error) -> None:
@@ -374,21 +383,14 @@ def test_embed_device_token_names_the_actual_metadata_when_the_partial_differs(m
         "embedded-base", (1, 1, 32, 2560), dtype="float32", layout="tile"
     )
     monkeypatch.setattr(embedding_module, "ttnn", fake_ttnn)
-    shell = object.__new__(Qwen38TTNNTokenEmbedding)
-    shell.mesh_contract = SimpleNamespace(validate_tensor=lambda tensor, **kwargs: None)
-    shell.weights = SimpleNamespace(
-        token_row=SimpleNamespace(
-            vocab_localize_row=_FakeTensor("localize", (1, 1, 1, 32), dtype="float32", layout="tile")
-        )
-    )
-    shell.sentinel_weight = _FakeTensor("sentinel", (LOCAL_VOCAB_SIZE + 2, 2560), dtype="bfloat16", layout="row-major")
-    token_row = _FakeTensor("token-row", (1, 1, 1, 32), padded_shape=(1, 1, 32, 32), dtype="float32", layout="tile")
+    localize = _FakeTensor("localize", (1, 1, 1, 32), dtype="float32", layout="tile")
+    shell = _device_token_shell([], vocab_localize_row=localize)
     with expect_error(
         RuntimeError,
         r"must be BF16 TILE \(1, 1, 32, 2560\) backed by \(1, 1, 32, 2560\), "
         r"got shape=\(1, 1, 32, 2560\) padded_shape=\(1, 1, 32, 2560\) dtype=float32 layout=tile",
     ):
-        shell.embed_device_token(token_row)
+        shell.embed_device_token(TOKEN_ROW)
 
 
 # --- Prefill chunk: 32 lanes of one token row --------------------------------------
@@ -435,58 +437,22 @@ def test_token_row_constants_carry_the_lane_localizer() -> None:
 
 
 def test_embed_device_token_rows_keeps_all_32_rows_and_sums_per_row(monkeypatch) -> None:
-    calls: list = []
-    deallocated: list = []
-    fake_ttnn = _fake_device_token_ttnn(calls, deallocated)
-    hidden = _FakeTensor("hidden-rows", (1, 1, 32, 640), dtype="bfloat16", layout="tile")
-    marked: list = []
-
-    def owner_select(local_partial, **kwargs):
-        calls.append(("owner-select", (local_partial,), kwargs))
-        assert local_partial.shape == (1, 1, 32, 2560) and local_partial.padded_shape == (1, 1, 32, 2560)
-        assert kwargs["rows"] == 32 and kwargs["replicated_reference"] == "anchor"
-        return hidden
-
-    monkeypatch.setattr(embedding_module, "ttnn", fake_ttnn)
-    monkeypatch.setattr(embedding_module, "_all_reduce_owner_select_hidden", owner_select)
-    shell = object.__new__(Qwen38TTNNTokenEmbedding)
-    shell.mesh_contract = SimpleNamespace(
-        validate_tensor=lambda tensor, **kwargs: None,
-        mark_local_partial=lambda tensor, **kwargs: marked.append((tensor.name, kwargs["expected_shape"])),
-    )
     lanes = _FakeTensor("localize-lanes", (1, 1, 1, 32), dtype="float32", layout="tile")
-    shell.weights = SimpleNamespace(
-        replicated_anchor="anchor",
-        token_row=SimpleNamespace(vocab_localize_row="never-used-by-the-rows-path", vocab_localize_lanes=lanes),
+    calls, marked = _embed_on_fake_ttnn(
+        monkeypatch,
+        "embed_device_token_rows",
+        (1, 1, 32, 2560),
+        vocab_localize_row="never-used-by-the-rows-path",
+        vocab_localize_lanes=lanes,
     )
-    shell.sentinel_weight = _FakeTensor("sentinel", (LOCAL_VOCAB_SIZE + 2, 2560), dtype="bfloat16", layout="row-major")
-    shell.collective_topology = "linear"
-    token_row = _FakeTensor("token-rows", (1, 1, 1, 32), padded_shape=(1, 1, 32, 32), dtype="float32", layout="tile")
-
-    assert shell.embed_device_token_rows(token_row) is hidden
-
     names = [call[0] for call in calls]
-    # The 1-row chain minus its [1,1,1,2560] view: no second reshape, every row survives.
-    assert names == [
-        "subtract",
-        "clamp",
-        "typecast",
-        "to_layout",
-        "reshape",
-        "embedding",
-        "unsqueeze_to_4D",
-        "owner-select",
-    ]
-    assert calls[0][1] == (token_row, lanes)
+    assert names == DEVICE_TOKEN_CALLS[:-1] + ["owner-select"] and calls[-1][2]["rows"] == 32
+    assert calls[0][1] == (TOKEN_ROW, lanes)
     assert calls[names.index("reshape")][1][1] == (1, 1, 32)
     assert marked == [("embedded-base-4d", (1, 1, 32, 2560))]
-    assert deallocated == ["shifted", "localized", "localized-indices", "row-major"]
 
 
-def test_one_row_embed_device_token_is_untouched_by_the_rows_path() -> None:
-    body = inspect.getsource(Qwen38TTNNTokenEmbedding.embed_device_token)
-    assert "vocab_localize_lanes" not in body and "rows=" not in body and "CHUNK_ROWS" not in body
-    assert "ttnn.reshape(embedded_padded, ttnn.Shape((1, 1, 1, HIDDEN_SIZE)), ttnn.Shape(expected_partial))" in body
+def test_embed_device_token_rows_is_token_invariant_with_no_host_io() -> None:
     rows_body = inspect.getsource(Qwen38TTNNTokenEmbedding.embed_device_token_rows)
     for forbidden in ("from_torch(", "to_torch(", "ttnn.slice(", "ttnn.Shape("):
         assert forbidden not in rows_body

@@ -17,14 +17,13 @@ from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_server as
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_session as session_module
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_lane_scheduler as scheduler_module
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_lanes_session as lanes_module
+from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
+from models.demos.blackhole.qwen38_flash_next.ttnn import gr as gr_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import mtp_lanes, mtp_v2
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_rows_scan
 
-ROOT = Path(__file__).resolve().parents[1]
-SERVER_SOURCE = ROOT / "tools" / "qwen38_chat_server.py"
-MTP_LANES_SOURCE = ROOT / "ttnn" / "mtp_lanes.py"
-MTP_V2_SOURCE = ROOT / "ttnn" / "mtp_v2.py"
-GR_SOURCE = ROOT / "ttnn" / "gr.py"
+SERVER_SOURCE = inspect.getsource(server)
+SERVER_MAIN = SERVER_SOURCE[SERVER_SOURCE.index("def main() ->") :]
 
 
 def _args(**overrides):
@@ -43,36 +42,30 @@ def _args(**overrides):
 # --------------------------------------------------------------------------- the flag's admission at start
 
 
-def test_lanes_switch_is_off_by_default_and_admits_the_one_tile_geometry(expect_error) -> None:
+def test_lanes_switch_is_off_by_default_admits_the_one_tile_geometry_and_leaves_the_fused_set_alone() -> None:
     assert server.lanes_switches(_args()) is None
-    switch = server.lanes_switches(_args(lanes=4, mtp=4))
-    assert switch == {"lanes": 4, "rows": 5, "drafts": 4}
+    assert server.lanes_switches(_args(lanes=4, mtp=4)) == {"lanes": 4, "rows": 5, "drafts": 4}  # no fused_off
     assert server.lanes_switches(_args(lanes=8, mtp=3))["rows"] == 4
     assert server.lanes_switches(_args(lanes=6, mtp=4))["lanes"] == 6
-    with expect_error(SystemExit, match="needs --mtp"):  # allow-pytest.raises: the flag's refusal
-        server.lanes_switches(_args(lanes=4))
-    for lanes, drafts in ((1, 4), (9, 3), (7, 4), (8, 4)):
-        with expect_error(SystemExit):  # allow-pytest.raises: B in 2..8, B x (k + 1) <= 32
-            server.lanes_switches(_args(lanes=lanes, mtp=drafts))
+    # the lanes run the single stream's fused set: the switch sets no environment
+    assert "os.environ[fused_module.OFF_ENV]" not in SERVER_SOURCE and "LANES_FUSED_OFF" not in SERVER_SOURCE
+    assert "mtp_ple_early = False  # the lanes run the one-queue form" in SERVER_SOURCE
 
 
-def test_lanes_switch_refuses_sampling(expect_error) -> None:
-    with expect_error(SystemExit, match="greedy requests only"):  # allow-pytest.raises: the refusal names the rule
-        server.lanes_switches(_args(lanes=4, mtp=4, sampling=True))
-    with expect_error(SystemExit, match="sampling-discriminator"):  # allow-pytest.raises
-        server.lanes_switches(_args(lanes=4, mtp=4, sampling_discriminator=True))
-    with expect_error(SystemExit, match="agreement-reference"):  # allow-pytest.raises
-        server.lanes_switches(_args(lanes=4, mtp=4, agreement_reference=Path("x")))
-
-
-def test_lanes_switch_leaves_the_fused_set_alone() -> None:
-    """The lanes run the single stream's fused set: the switch sets no environment."""
-
-    switch = server.lanes_switches(_args(lanes=4, mtp=4))
-    assert "fused_off" not in switch
-    main = SERVER_SOURCE.read_text(encoding="utf-8")
-    assert "os.environ[fused_module.OFF_ENV]" not in main and "LANES_FUSED_OFF" not in main
-    assert "mtp_ple_early = False  # the lanes run the one-queue form" in main
+@pytest.mark.parametrize(
+    "overrides, match",
+    [
+        ({"lanes": 4}, "needs --mtp"),
+        ({"lanes": 4, "mtp": 4, "sampling": True}, "greedy requests only"),
+        ({"lanes": 4, "mtp": 4, "sampling_discriminator": True}, "sampling-discriminator"),
+        ({"lanes": 4, "mtp": 4, "agreement_reference": Path("x")}, "agreement-reference"),
+        # B in 2..8, B x (k + 1) <= 32
+        *(({"lanes": lanes, "mtp": drafts}, None) for lanes, drafts in ((1, 4), (9, 3), (7, 4), (8, 4))),
+    ],
+)
+def test_lanes_switch_refuses_sampling_and_a_bad_geometry(expect_error, overrides, match) -> None:
+    with expect_error(SystemExit, match=match):  # allow-pytest.raises: the flag's refusal names the rule
+        server.lanes_switches(_args(**overrides))
 
 
 def test_parser_takes_lanes_and_dropped_the_old_lane_service_flags(expect_error) -> None:
@@ -81,22 +74,8 @@ def test_parser_takes_lanes_and_dropped_the_old_lane_service_flags(expect_error)
     assert "lanes" in options
     for old in ("lane_slots", "lane_verify_policy", "lane_prefill_chunk_budget", "lane_prefill_import_check"):
         assert old not in options, old
-    argv = [
-        "--checkpoint",
-        "c",
-        "--component-cache-root",
-        "c",
-        "--routed-bf4-scratch-root",
-        "c",
-        "--model-io-cache-root",
-        "c",
-        "--phase-log",
-        "p",
-        "--lanes",
-        "4",
-        "--mtp",
-        "4",
-    ]
+    argv = "--checkpoint c --component-cache-root c --routed-bf4-scratch-root c --model-io-cache-root c".split()
+    argv += ["--phase-log", "p", "--lanes", "4", "--mtp", "4"]
     parsed = parser.parse_args(argv)
     assert parsed.lanes == 4 and parsed.mtp == 4 and parsed.sampling is False
     # the stall budget: the scheduler's default, a number of seconds, or off (whole admissions)
@@ -109,11 +88,9 @@ def test_parser_takes_lanes_and_dropped_the_old_lane_service_flags(expect_error)
             parser.parse_args(argv + ["--lanes-stall-budget", bad])
     # --long-chunks is accepted (the Hub manifests pass it) and is the chunked prefill's default
     assert parser.parse_args(argv + ["--long-chunks"]).long_chunks is True
-    main = SERVER_SOURCE.read_text(encoding="utf-8")
-    main = main[main.index("def main() ->") :]
-    assert 'args.long_chunks = args.prefill_mode == "chunked"' in main
-    assert '"--lanes-stall-budget needs --lanes' in main
-    assert "stall_budget_seconds=args.lanes_stall_budget," in main
+    assert 'args.long_chunks = args.prefill_mode == "chunked"' in SERVER_MAIN
+    assert '"--lanes-stall-budget needs --lanes' in SERVER_MAIN
+    assert "stall_budget_seconds=args.lanes_stall_budget," in SERVER_MAIN
 
 
 # --------------------------------------------------------------------------- the DRAM admission
@@ -203,11 +180,10 @@ def test_lanes_admission_terms_cover_the_measured_128k_readings() -> None:
     slope_measured = (
         (verify_state - session_module.LANES_MEASURED_VERIFY_STATE_BYTES_PER_BANK_4X4_32K) / 4 / (131072 - 32768)
     )
-    per_lane = lambda context: session_module.lanes_image_bytes_per_device(
-        context
-    ) + session_module.lanes_mtp_extra_bytes_per_device(
-        context, 5
-    )  # noqa: E731
+    per_lane = lambda context: (  # noqa: E731
+        session_module.lanes_image_bytes_per_device(context)
+        + session_module.lanes_mtp_extra_bytes_per_device(context, 5)
+    )
     slope_modeled = (per_lane(131072) - per_lane(32768)) / (131072 - 32768) / 8
     assert abs(slope_measured - slope_modeled) / slope_measured < 0.01, (slope_measured, slope_modeled)
     # the 128k point admits on the measured live reading with the served extras reserved
@@ -248,9 +224,9 @@ def test_lanes_admission_adds_the_fold_prefix_states_when_the_fold_serves_the_la
 
 
 def test_lanes_admission_grows_with_lanes_and_context() -> None:
-    at = lambda lanes, context: session_module.lanes_capacity_admission(context, lanes=lanes, drafts=4)[
-        "required_free_bytes_per_bank"
-    ]  # noqa: E731
+    at = lambda lanes, context: (  # noqa: E731
+        session_module.lanes_capacity_admission(context, lanes=lanes, drafts=4)["required_free_bytes_per_bank"]
+    )
     assert at(2, 32768) < at(4, 32768) < at(6, 32768)
     assert at(4, 32768) < at(4, 65536) < at(4, 131072)
     per_lane_32k = session_module.lanes_image_bytes_per_device(32768) + session_module.lanes_mtp_extra_bytes_per_device(
@@ -330,22 +306,20 @@ def test_lane_body_gr_read_is_the_single_streams_read_rows_call() -> None:
     """Both verify bodies read the residual through ``read_rows(residual, flat_views=True)``, the module's one fused
     read."""
 
-    lanes = MTP_LANES_SOURCE.read_text(encoding="utf-8")
-    single = MTP_V2_SOURCE.read_text(encoding="utf-8")
-    calls = (
+    lanes, single = inspect.getsource(mtp_lanes), inspect.getsource(mtp_v2)
+    for call in (
         "layer.attention_gr.read_rows(residual, flat_views=True)",
         "layer.mlp_gr.read_rows(residual, flat_views=True)",
-    )
-    for call in calls:
+    ):
         assert call in lanes and call in single, call
-    gr = GR_SOURCE.read_text(encoding="utf-8")
+    gr = inspect.getsource(gr_module)
     read_rows = gr[gr.index("    def read_rows(") :]
     assert 'if flat_views and getattr(self, "_read_fused", None) is not None:' in read_rows
     assert "return self._read_fused(self, residual_rows)" in read_rows
     init = gr[gr.index("        self._read_fused = None") : gr.index("        self._write_fused = None")]
     assert 'if fused_kernels.enabled("gr_recip_last"):' in init and 'name = "gr_recip_last"' in init
     # the lane GDN rows dispatch through the fold's registry step as the single stream's forward_rows does
-    gdn = (ROOT / "ttnn" / "gdn.py").read_text(encoding="utf-8")
+    gdn = inspect.getsource(gdn_module)
     lanes_body = gdn[gdn.index("    def forward_rows_lanes(") : gdn.index("    def commit_rows_lanes(")]
     assert (
         "scan_buffers" in lanes_body or "rows_body_scan_lanes" in lanes_body or "gdn_rows_scan" in lanes_body
@@ -356,7 +330,7 @@ def test_lanes_request_path_calls_no_device_method_of_the_session() -> None:
     """``_serve_lanes`` uses the session for its template only (the host-side decoder); every device call is the
     driver thread's (the scheduler's run over the lanes session)."""
 
-    tree = ast.parse(SERVER_SOURCE.read_text(encoding="utf-8"))
+    tree = ast.parse(SERVER_SOURCE)
     handler = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Qwen38ChatHandler")
     serve_lanes = next(
         node for node in handler.body if isinstance(node, ast.FunctionDef) and node.name == "_serve_lanes"
@@ -376,8 +350,7 @@ def test_lanes_request_path_calls_no_device_method_of_the_session() -> None:
     assert "images=list(request.get('images') or ())" in serve_lanes_source
     assert "vision_positions=request.get('vision_positions')" in serve_lanes_source
     assert "{'vision': ticket.vision}" in serve_lanes_source
-    source = SERVER_SOURCE.read_text(encoding="utf-8")
-    main = source[source.index("def main() ->") :]
+    main = SERVER_MAIN
     for line in (
         "lanes_session.prepare(opened_chain)",
         "warm_hook=warm_hook,",
@@ -393,12 +366,7 @@ def test_lanes_request_path_calls_no_device_method_of_the_session() -> None:
     assert main.index("lanes_session.capture(chain, session)") > main.index('report["acceptance"] = replay_acceptance(')
     # READY names the lanes and the mode
     ready = main[main.index("ready = {") : main.index("ready_marker.write_text")]
-    for key in (
-        '"mode": summary["mode"]',
-        '"lanes": (',
-        '"greedy_only": True',
-        '"acceptance": (',
-    ):
+    for key in ('"mode": summary["mode"]', '"lanes": (', '"greedy_only": True', '"acceptance": ('):
         assert key in ready, key
     assert '"mode": "chat_server_single_trace_chain" if lanes_switch is None else "chat_server_mtp_lanes"' in main
     assert '+ ("" if lanes_switch is None else f"-lanes{lanes_switch[\'lanes\']}")' in main
@@ -442,12 +410,8 @@ def test_scheduler_and_session_modules_split_the_device_from_the_rules() -> None
         "vision=vision_record,",
     ):
         assert call in session_source, call
-    assert lanes_module.ADMISSION_EVENT_ROWS == 128 and lanes_module.ADMISSION_SEGMENTS == (
-        "tower",
-        "chunks",
-        "prefilled",
-        "evicted",
-    )
+    assert lanes_module.ADMISSION_EVENT_ROWS == 128
+    assert lanes_module.ADMISSION_SEGMENTS == ("tower", "chunks", "prefilled", "evicted")
     # the chunk driver takes the vision inputs as the single stream passes them (the positional ``vision``)
     assert "                vision,\n                between_chunks=" in session_source
     # the scheduler's between: a pass once the admission work since the last pass reached the budget
@@ -458,6 +422,6 @@ def test_scheduler_and_session_modules_split_the_device_from_the_rules() -> None
     # the import warm-up covers every residue variant for every lane before the captures
     assert "for shift in range(IMPORT_RESIDUES):" in session_source and lanes_module.IMPORT_RESIDUES == 4
     assert lanes_module.EAGER_PASSES == 2
-    # the geometry helpers agree
-    assert mtp_lanes._validate_lane_geometry(4, 4) == (4, 5) and scheduler_module.lane_geometry(4, 4) == (4, 5)
+    # the geometry helpers agree (the scheduler's: its own test)
+    assert mtp_lanes._validate_lane_geometry(4, 4) == (4, 5)
     assert mtp_v2.SUPPORTED_DRAFTS == (3, 4, 5)

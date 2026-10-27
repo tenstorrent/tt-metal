@@ -5,10 +5,17 @@
 
 import base64
 import hashlib
+from types import SimpleNamespace
 
 import pytest
 
-from models.demos.blackhole.qwen38_flash_next.mrope import IMAGE_TOKEN_ID, Qwen38ImageGrid
+from models.demos.blackhole.qwen38_flash_next.mrope import (
+    IMAGE_TOKEN_ID,
+    VISION_END_TOKEN_ID,
+    VISION_START_TOKEN_ID,
+    Qwen38ImageGrid,
+)
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_chat import ChatTemplateFakeTokenizer, chat_request_rejection
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_protocol as protocol
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_vision_inputs as inputs
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import Qwen38ChatRequestRejected
@@ -115,11 +122,9 @@ def test_image_parts_are_collected_in_prompt_order_and_rendered_as_image_items()
     ],
 )
 def test_refused_parts(part, fragment):
-    with pytest.raises(  # allow-pytest.raises: inspect the captured exception object
-        Qwen38ChatRequestRejected, match=fragment
-    ) as caught:  # allow-pytest.raises: inspect the captured exception object
-        protocol.normalize_messages(_user(part), images=[])
-    assert caught.value.param == "messages[0].content[0]" or caught.value.param.startswith("messages[0].content[0].")
+    rejected = chat_request_rejection(protocol.normalize_messages, _user(part), images=[])
+    assert fragment in str(rejected)
+    assert rejected.param == "messages[0].content[0]" or rejected.param.startswith("messages[0].content[0].")
 
 
 def test_images_are_refused_without_a_collector_and_outside_user_messages(expect_error):
@@ -135,38 +140,8 @@ def test_images_are_refused_without_a_collector_and_outside_user_messages(expect
     assert protocol.MAX_IMAGE_BYTES == 16 << 20 and protocol.IMAGE_DETAILS == ("auto", "low", "high")
 
 
-class _FakeTokenizer:
-    """The template's render as a fixed string; ids are the characters' ordinals with the special tokens mapped."""
-
-    SPECIAL = {"<|image_pad|>": IMAGE_TOKEN_ID, "<|vision_start|>": 248_053, "<|vision_end|>": 248_054}
-
-    def apply_chat_template(self, messages, **kwargs):
-        text = ""
-        for message in messages:
-            content = message["content"]
-            if isinstance(content, str):
-                text += content
-            else:
-                for item in content:
-                    text += item["text"] if item["type"] == "text" else "<|vision_start|><|image_pad|><|vision_end|>"
-        return text + ("<think>\n" if kwargs["enable_thinking"] else "<think>\n\n</think>\n\n")
-
-    def __call__(self, text, add_special_tokens=False):
-        ids = []
-        while text:
-            for token, value in self.SPECIAL.items():
-                if text.startswith(token):
-                    ids.append(value)
-                    text = text[len(token) :]
-                    break
-            else:
-                ids.append(ord(text[0]) % 1000 + 1)
-                text = text[1:]
-        return type("Encoded", (), {"input_ids": ids})()
-
-
 def test_render_prompt_expands_the_pads_by_the_grids(expect_error):
-    tokenizer = _FakeTokenizer()
+    tokenizer = ChatTemplateFakeTokenizer()
     grid = Qwen38ImageGrid(1, 4, 6)  # 6 merged tokens
     messages = _user({"type": "image_url", "image_url": {"url": _data_url(PNG_1X1)}}, {"type": "text", "text": "Hi"})
     images: list[protocol.Qwen38ImagePart] = []
@@ -174,7 +149,8 @@ def test_render_prompt_expands_the_pads_by_the_grids(expect_error):
         tokenizer, messages, None, enable_thinking=False, reasoning_effort="medium", images=images, image_grids=[grid]
     )
     assert len(images) == 1 and ids.count(IMAGE_TOKEN_ID) == 6
-    assert ids.index(248_053) + 1 == ids.index(IMAGE_TOKEN_ID) and ids[ids.index(IMAGE_TOKEN_ID) + 6] == 248_054
+    first_pad = ids.index(IMAGE_TOKEN_ID)
+    assert ids.index(VISION_START_TOKEN_ID) + 1 == first_pad and ids[first_pad + 6] == VISION_END_TOKEN_ID
     with expect_error(protocol.Qwen38ChatFormatError, match="1 image parts but 0 image grids"):
         protocol.render_prompt(tokenizer, messages, None, enable_thinking=False, reasoning_effort="medium", images=[])
     text_only = protocol.render_prompt(
@@ -184,8 +160,6 @@ def test_render_prompt_expands_the_pads_by_the_grids(expect_error):
 
 
 def test_image_digests_key_each_image_and_the_request_digest_is_their_hash() -> None:
-    from types import SimpleNamespace
-
     grid = Qwen38ImageGrid(1, 32, 32)
     a = SimpleNamespace(sha256="aa", detail="auto", grid=grid)
     b = SimpleNamespace(sha256="bb", detail="low", grid=grid)
