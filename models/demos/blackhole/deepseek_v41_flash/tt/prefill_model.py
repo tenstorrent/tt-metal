@@ -22,30 +22,11 @@ from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d, recording, rep
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear_chunk_caches, pad_len
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_taps import TAP_LAYERS
+from models.demos.blackhole.deepseek_v41_flash.tt.replay_cfg import replay_tokens, split_enabled
 
 T = 32
 DIM = 5120
 REPLAY_BACK = 21  # bounded replay (DSV41_PF_REPLAY): layers 0..REPLAY_BACK-1 run on every chunk (trace A), layers REPLAY_BACK.. only on the chunks of the replay zone (trace B)
-
-
-def split_enabled():
-    """Boot-time switch: DSV41_PF_REPLAY > 0 captures the chunk trace as two halves (A / B) and allocates the first-replay-chunk tensors."""
-    return int(os.environ.get("DSV41_PF_REPLAY", "0")) > 0
-
-
-def replay_tokens():
-    """DSV41_PF_REPLAY = R: the last R tokens of a prompt (rounded out to whole chunks) run all 40 layers, the earlier chunks only layers 0..20 (cross-layer KV sharing: layers 21-39 read the
-    compressed KV / index keys of layer 20). Exact (bit-identical to R = 0) from R >= 19 * 127 + 1 = 2414 (the window dependency chain of layers 21..39); smaller R is window-clipped. 0 = off.
-    """
-    f = os.environ.get(
-        "DSV41_PF_REPLAY_FILE"
-    )  # live switch (a server built with the split traces): a file holding R (0 = every chunk runs every layer, as without the feature)
-    if f:
-        try:
-            return int(open(f).read().strip())
-        except (OSError, ValueError):
-            pass
-    return int(os.environ.get("DSV41_PF_REPLAY", "0"))
 
 
 ER_RM = (

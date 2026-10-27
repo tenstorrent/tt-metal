@@ -34,6 +34,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DIM as IDIM
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import HEADS as IHEADS
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import TOPK, DSV41DecodeIndexer
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import gate_user_state
+from models.demos.blackhole.deepseek_v41_flash.tt.replay_cfg import split_enabled
 
 SKIP = 0xFFFFFFFF
 PAD_HEADS = 32
@@ -1084,7 +1085,7 @@ class DSV41PrefillSparse:
         nr_ = ctx.rows if getattr(ctx, "per_row", False) else 1
         if not hasattr(ctx, "sp_perm"):
             ctx.sp_perm = mk_(self.md, perm_table(True).repeat(nr_, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-        if int(os.environ.get("DSV41_PF_REPLAY", "0")) > 0 and not hasattr(ctx, "sp_perm_b"):
+        if split_enabled() and not hasattr(ctx, "sp_perm_b"):
             assert paged, "DSV41_PF_REPLAY needs DSV41_PF_PAGED=read"
             ctx.sp_perm_b = mk_(self.md, perm_table(True).repeat(nr_, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         if r not in ctx.sp_win:

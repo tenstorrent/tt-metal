@@ -23,6 +23,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
 from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as PS
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_single import slot_s0
+from models.demos.blackhole.deepseek_v41_flash.tt.replay_cfg import split_enabled
 
 DEFAULT_MODE = "read"  # shipped default (release 2026-10): paged prefill, reads the pool; DSV41_PF_PAGED=0 selects the previous dense-table release path
 MODE = os.environ.get("DSV41_PF_PAGED", DEFAULT_MODE)
@@ -114,7 +115,7 @@ class PagedCtx:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=self._m,
             )
-            if int(os.environ.get("DSV41_PF_REPLAY", "0")) > 0
+            if split_enabled()
             else None
         )
 
