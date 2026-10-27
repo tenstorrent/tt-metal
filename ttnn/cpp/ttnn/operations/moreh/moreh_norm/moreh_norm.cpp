@@ -31,7 +31,8 @@ Tensor moreh_norm(
             return ttnn::prim::moreh_norm(input, p, dims[0], keepdim, output, memory_config, compute_kernel_config);
         }
         auto tmp_output = ttnn::moreh_abs_pow(input, p, std::nullopt, memory_config, compute_kernel_config);
-        tmp_output = ttnn::moreh_sum(tmp_output, dims[0], keepdim, std::nullopt, memory_config, compute_kernel_config);
+        tmp_output = operations::moreh::moreh_sum::moreh_sum(
+            tmp_output, dims[0], keepdim, std::nullopt, memory_config, compute_kernel_config);
         return ttnn::moreh_abs_pow(tmp_output, 1.0f / p, output, memory_config, compute_kernel_config);
     }
     std::sort(dims.begin(), dims.end(), std::greater<int64_t>());
@@ -40,7 +41,8 @@ Tensor moreh_norm(
         auto tmp_output =
             ttnn::prim::moreh_norm(input, p, dims.front(), keepdim, std::nullopt, memory_config, compute_kernel_config);
         dims.erase(dims.begin());
-        return ttnn::moreh_sum(tmp_output, dims, keepdim, output, memory_config, compute_kernel_config);
+        return operations::moreh::moreh_sum::moreh_sum(
+            tmp_output, dims, keepdim, output, memory_config, compute_kernel_config);
     }
     if (p == INF || p == -INF) {
         auto tmp_output =
@@ -54,7 +56,8 @@ Tensor moreh_norm(
             tmp_output, p, dims.back(), keepdim, output, memory_config, compute_kernel_config);
     }
     auto tmp_output = ttnn::moreh_abs_pow(input, p, std::nullopt, memory_config, compute_kernel_config);
-    tmp_output = ttnn::moreh_sum(tmp_output, dims, keepdim, std::nullopt, memory_config, compute_kernel_config);
+    tmp_output = operations::moreh::moreh_sum::moreh_sum(
+        tmp_output, dims, keepdim, std::nullopt, memory_config, compute_kernel_config);
     return ttnn::moreh_abs_pow(tmp_output, 1.0f / p, output, memory_config, compute_kernel_config);
 }
 

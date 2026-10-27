@@ -84,7 +84,7 @@ ttnn::Tensor sum_over_groups(const ttnn::Tensor& ungrouped_grads, uint32_t group
     // [B,H,S,E] -> [B*G,H/G,S,E] -> [B*G,1,S,E] -> [B,G,S,E]
     auto grouped_grads =
         ttnn::reshape(ungrouped_grads, ttnn::Shape{batch_num * groups, num_heads / groups, seq_len, embedding_dim});
-    auto summed_grads = ttnn_fixed::sum_moreh(grouped_grads, /*dim=*/1, /*keep_dim=*/true);
+    auto summed_grads = ttnn_fixed::sum_ttnn(grouped_grads, /*dim=*/1, /*keep_dim=*/true);
     return ttnn::reshape(summed_grads, ttnn::Shape{batch_num, groups, seq_len, embedding_dim});
 }
 

@@ -160,12 +160,11 @@ autograd::TensorPtr composite_layernorm(
         // recalculate normalized tensor to save memory and avoid storing it
         auto normalized_tensor = ttnn::multiply(ttnn::subtract(tensor->get_value(), mean), rstd);
 
-        auto dgamma = ttnn::moreh_sum(
+        auto dgamma = ttnn::sum(
             ttnn::multiply(dout, normalized_tensor),
-            /* dim */ ttsl::SmallVector<int64_t>{0, 1, 2},
-            /* keep_dim */ true,
-            /* output */ std::nullopt,
-            /* output_mem_config */ std::nullopt,
+            /* dim */ ttsl::SmallVector<int>{0, 1, 2},
+            /* keepdim */ true,
+            /* memory_config */ std::nullopt,
             /*compute_kernel_config */ core::ComputeKernelConfig::precise());
 
         auto dtensor_normalized = ttnn::multiply(dout, gamma->get_value());
@@ -206,12 +205,11 @@ autograd::TensorPtr composite_layernorm(
         gamma->add_grad(dgamma);
 
         if (beta_opt.has_value()) {
-            auto dbeta = ttnn::moreh_sum(
+            auto dbeta = ttnn::sum(
                 dout,
-                /* dim */ ttsl::SmallVector<int64_t>{0, 1, 2},
-                /* keep_dim */ true,
-                /* output */ std::nullopt,
-                /* output_mem_config */ std::nullopt,
+                /* dim */ ttsl::SmallVector<int>{0, 1, 2},
+                /* keepdim */ true,
+                /* memory_config */ std::nullopt,
                 /*compute_kernel_config */ core::ComputeKernelConfig::precise());
 
             beta_opt.value()->add_grad(dbeta);
