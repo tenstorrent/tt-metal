@@ -53,18 +53,6 @@ install(
         COMPONENT metalium-runtime
 )
 
-if(NOT ENABLE_TRACY)
-    return()
-endif()
-
-# Tracy-enabled-only tuning (only meaningful when profiling is actually compiled in):
-# Their code preserves frame pointers (-fno-omit-frame-pointer) → backtraces work.
-target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
-# Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
-target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
-# Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
-target_link_options(TracyClient PUBLIC -rdynamic)
-
 # TracyClient is a PUBLIC dependency of TT::Metalium, so its interface exports
 # $<INSTALL_INTERFACE:include/tracy>. Tracy's own header install rules are
 # COMPONENT-less (they land in "Unspecified", which cmake/packaging.cmake drops),
@@ -74,6 +62,10 @@ target_link_options(TracyClient PUBLIC -rdynamic)
 # Ship the public headers under the dev component so the SDK package is consistent.
 # Layout mirrors Tracy's own install: tracy/Tracy.hpp plus its ../client and
 # ../common siblings, all under <includedir>/tracy.
+# Keep this ABOVE the ENABLE_TRACY early-return below -- same reasoning as the
+# TracyClient install above: these are Tracy's own stub headers when
+# TRACY_ENABLE=OFF, and the packaged SDK must ship them regardless of
+# ENABLE_TRACY so a disabled-tracy build stays find_package-consistent.
 install(
     DIRECTORY
         ${CMAKE_CURRENT_SOURCE_DIR}/tracy/public/tracy
@@ -87,6 +79,24 @@ install(
     PATTERN
     "*.hpp"
 )
+
+if(NOT ENABLE_TRACY)
+    return()
+endif()
+
+# Tracy-enabled-only tuning (only meaningful when profiling is actually compiled in):
+# Their code preserves frame pointers (-fno-omit-frame-pointer) → backtraces work.
+target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
+# Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
+target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
+# The top-level -Wno-deprecated-declarations (see CMakeLists.txt) is declared after these
+# subdirectories are added, so it never reaches Tracy's own targets: GCC's libstdc++ marks
+# std::get_temporary_buffer as deprecated, and Tracy's server code (e.g. TracyFileRead.hpp)
+# still triggers it internally via std::stable_sort/inplace_merge. Suppress it locally on all
+# real (non-vendored) Tracy targets rather than relying on the global flag's declaration order.
+target_compile_options(TracyClient PRIVATE -Wno-deprecated-declarations)
+# Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
+target_link_options(TracyClient PUBLIC -rdynamic)
 
 set(NO_FILESELECTOR ON)
 
@@ -117,6 +127,30 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             "${TRACY_CLI_BIN_DIR}"
 )
+
+# Same -Wno-deprecated-declarations suppression as TracyClient above, extended to the rest of
+# Tracy's own (non-vendored) targets -- their server code is what actually triggers the warning.
+foreach(
+    _tt_tracy_deprecated_target
+    IN
+    ITEMS
+        TracyServer
+        TracyGetOpt
+        tracy-csvexport
+        tracy-capture
+        tracy-capture-daemon
+)
+    if(NOT TARGET ${_tt_tracy_deprecated_target})
+        continue()
+    endif()
+    get_target_property(_tt_tracy_deprecated_target_type ${_tt_tracy_deprecated_target} TYPE)
+    if(_tt_tracy_deprecated_target_type STREQUAL "INTERFACE_LIBRARY")
+        continue()
+    endif()
+    target_compile_options(${_tt_tracy_deprecated_target} PRIVATE -Wno-deprecated-declarations)
+endforeach()
+unset(_tt_tracy_deprecated_target)
+unset(_tt_tracy_deprecated_target_type)
 
 # Force a portable ISA baseline for Tracy server/CLI and key deps on x86_64.
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
@@ -210,3 +244,87 @@ ExternalProject_Add(
     INSTALL_COMMAND
         "" # Suppress default cmake --install: artifacts stay in BINARY_DIR for CI packaging to pick up.
 )
+
+set(_tt_tracy_categories_file "${CMAKE_CURRENT_SOURCE_DIR}/../tools/profiler/tracy_debug_categories.txt")
+set_property(
+    DIRECTORY
+    APPEND
+    PROPERTY
+        CMAKE_CONFIGURE_DEPENDS
+            "${_tt_tracy_categories_file}"
+)
+file(STRINGS "${_tt_tracy_categories_file}" _tt_tracy_categories_raw)
+set(_tt_tracy_categories "")
+foreach(_line IN LISTS _tt_tracy_categories_raw)
+    string(STRIP "${_line}" _line)
+    if(NOT _line STREQUAL "" AND NOT _line MATCHES "^#")
+        list(APPEND _tt_tracy_categories "${_line}")
+    endif()
+endforeach()
+
+set(_tt_tracy_valid
+    ${_tt_tracy_categories}
+    all
+)
+string(REPLACE ";" ", " _tt_tracy_valid_pretty "${_tt_tracy_valid}")
+set_property(
+    CACHE
+        TRACY_DEBUG_CATEGORY
+    PROPERTY
+        STRINGS
+            off
+            ${_tt_tracy_valid}
+)
+
+set(_tt_tracy_selected "")
+if(NOT TRACY_DEBUG_CATEGORY STREQUAL "off")
+    string(REPLACE "," ";" _tt_tracy_selected_raw "${TRACY_DEBUG_CATEGORY}")
+    foreach(_sel IN LISTS _tt_tracy_selected_raw)
+        string(STRIP "${_sel}" _sel)
+        string(TOLOWER "${_sel}" _sel)
+        if(NOT _sel IN_LIST _tt_tracy_valid)
+            message(
+                FATAL_ERROR
+                "Invalid TRACY_DEBUG_CATEGORY entry '${_sel}'; expected off, or a comma-separated list of: ${_tt_tracy_valid_pretty}."
+            )
+        endif()
+        list(APPEND _tt_tracy_selected "${_sel}")
+    endforeach()
+endif()
+
+# We emit the defines into a generated header, not onto TracyClient's PUBLIC (tree-wide) compile line, so
+# changing TRACY_DEBUG_CATEGORY recompiles only TUs including tracy_debug_zones.hpp, not all of TT::Metalium.
+set(_tt_tracy_defs "#pragma once\n")
+set(_idx 0)
+foreach(_cat IN LISTS _tt_tracy_categories)
+    set(_on 0)
+    if("all" IN_LIST _tt_tracy_selected OR "${_cat}" IN_LIST _tt_tracy_selected)
+        set(_on 1)
+    endif()
+    string(TOUPPER "${_cat}" _tok)
+    string(REPLACE "-" "_" _tok "${_tok}")
+    string(APPEND _tt_tracy_defs "#define TT_TRACY_CATEGORY_${_tok} ${_on}\n")
+    string(APPEND _tt_tracy_defs "#define TT_TRACY_CATEGORY_INDEX_${_tok} ${_idx}\n")
+    math(EXPR _idx "${_idx} + 1")
+endforeach()
+
+set(_tt_tracy_generated_dir "${PROJECT_BINARY_DIR}/generated/profiler")
+file(CONFIGURE OUTPUT "${_tt_tracy_generated_dir}/tracy_debug_categories_generated.hpp" CONTENT "${_tt_tracy_defs}")
+# Build-time header; deliberately not exported to the installed SDK.
+target_include_directories(TracyClient PUBLIC "$<BUILD_INTERFACE:${_tt_tracy_generated_dir}>")
+
+unset(_tt_tracy_categories_file)
+unset(_tt_tracy_categories_raw)
+unset(_tt_tracy_categories)
+unset(_tt_tracy_valid)
+unset(_tt_tracy_valid_pretty)
+unset(_tt_tracy_selected)
+unset(_tt_tracy_selected_raw)
+unset(_line)
+unset(_sel)
+unset(_cat)
+unset(_on)
+unset(_tok)
+unset(_idx)
+unset(_tt_tracy_defs)
+unset(_tt_tracy_generated_dir)

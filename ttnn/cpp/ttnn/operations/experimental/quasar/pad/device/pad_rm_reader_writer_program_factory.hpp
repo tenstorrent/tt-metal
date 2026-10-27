@@ -4,29 +4,21 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
-
 #include "ttnn/device_operation.hpp"
-#include "ttnn/distributed/types.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "pad_device_operation_types.hpp"
 
 namespace ttnn::prim::qsr {
 
+// Metal 2.0 (MetalV2FactoryConcept) factory for the single-core, ROW_MAJOR-layout pad path.
+//
+// The pad-value const tensor is an op-owned device tensor: allocated and filled once on cache
+// miss inside create_program_artifacts() and returned on ProgramArtifacts::op_owned_tensors so
+// the framework parks it at a stable address for the cached Program's life (re-patched, never
+// re-allocated, on cache hits).  The reader kernel reaches it through a TensorBinding (tensor::pad)
+// rather than the legacy buffer-address runtime arg.
 struct PadRmReaderWriterProgramFactory {
-    // Workload-scoped pad-value const tensor is allocated once on cache miss inside
-    // create_workload_descriptor() and parked on the returned WorkloadDescriptor::buffers
-    // so it outlives the cached workload via the program cache.  Holding the SOURCE
-    // Tensor (not just shared_ptr<MeshBuffer>) is required because ~Tensor force-deallocates
-    // the device memory through DeviceStorage::deallocate regardless of external
-    // shared_ptr<MeshBuffer> owners (see #44565).  emplace_runtime_args() with Buffer*
-    // lets the framework patch the const tensor's address on cache hits without rerunning
-    // this factory.
-    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
-        const PadParams& operation_attributes,
-        const PadInputs& tensor_args,
-        Tensor& tensor_return_value,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value);
 };
 }  // namespace ttnn::prim::qsr

@@ -5,25 +5,14 @@
 #pragma once
 
 #include <optional>
-#include <tt-metalium/profiler_types.hpp>
+
 #include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/profiler_types.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
 
 namespace detail {
-
-/**
- * Clear profiler control buffer
- *
- * Return value: void
- *
- * | Argument      | Description                                                        | Type            | Valid Range
- * | Required |
- * |---------------|--------------------------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | Clear profiler control buffer before any core attempts to profler  | IDevice*        | | True     |
- * */
-void ClearProfilerControlBuffer(IDevice* device);
 
 /**
  * Initialize device profiling data buffers
@@ -36,6 +25,9 @@ void ClearProfilerControlBuffer(IDevice* device);
  * | device        | The device holding the program being profiled.    | IDevice*        |                           |
  * True     |
  * */
+[[deprecated(
+    "InitDeviceProfiler is an internal API: the profiler is initialized when the device is opened, so remove the "
+    "call. It will be removed after 2026-11-14.")]]
 void InitDeviceProfiler(IDevice* device);
 
 /**
@@ -47,6 +39,9 @@ void InitDeviceProfiler(IDevice* device);
  * Required |
  * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
  * */
+[[deprecated(
+    "ProfilerSync is an internal API: profiler sync runs automatically when devices are opened and closed, so remove "
+    "the call. It will be removed after 2026-11-14.")]]
 void ProfilerSync(ProfilerSyncState state);
 
 // clang-format off
@@ -64,34 +59,11 @@ void ProfilerSync(ProfilerSyncState state);
  * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
  * */
 // clang-format on
+[[deprecated("Use ReadMeshDeviceProfilerResults instead. This API will be removed after 2026-11-14.")]]
 void ReadDeviceProfilerResults(
     IDevice* device,
     ProfilerReadState = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
-
-/**
- * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
- *
- * Return value: void
- *
- * | Argument     | Description                                             |  Data type  | Valid range              |
- * required |
- * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
- * | output_dir   | The output directory that will hold the output CSV logs  | std::string | Any valid directory path |
- * No       |
- * */
-void SetDeviceProfilerDir(const std::string& output_dir = "");
-
-/**
- * Start a fresh log for the device side profile results
- *
- * Return value: void
- *
- * | Argument     | Description                                             |  Data type  | Valid range              |
- * required |
- * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
- * */
-void FreshProfilerDeviceLog();
 
 }  // namespace detail
 }  // namespace tt::tt_metal

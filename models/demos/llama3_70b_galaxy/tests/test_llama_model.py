@@ -12,9 +12,9 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
+from models.tt_transformers.tests.decode_test_helpers import decode_step_state, teacher_forced_decode_token
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.sampling.tt_sampling import TTSampling
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -176,15 +176,16 @@ def test_llama_model_inference(
         ] * model_args.max_batch_size  # "This is a test" encoded prompt
         assert not instruct, "Instruct prompt not implemented with dummy weights"
     else:
-        tokenizer = Tokenizer(model_args.tokenizer_path)
+        tokenizer = model_args.create_tokenizer()
         # if instruct:
         #     encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
         # else:
-        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
+        encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in prompts]
 
     if run_ref_pt:
-        reference_model = Transformer(model_args)
+        reference_model = model_args.reference_transformer()
         reference_model.load_state_dict(reference_state_dict)
+        ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
 
     # Embedding on host
     embd = HostEmbedding(model_args)
@@ -300,6 +301,10 @@ def test_llama_model_inference(
 
     try:
         for i in range(generation_length):
+            # Validate the absolute position before executing the model step.
+            next_position, next_token_index, num_written = decode_step_state(
+                generation_start_pos, i, len(encoded_prompts[0]), model_args.max_seq_len
+            )
             logger.info(f"[Llama3 Model] Generating token {i}")
             decode_input = model_args.prepare_residual_tensor_decode(
                 tt_decode_input,
@@ -336,12 +341,12 @@ def test_llama_model_inference(
 
             if run_ref_pt:  # Run reference model
                 # In this test all users have the same position
-                ref_output = reference_model(pt_decode_input, current_pos[0])
+                ref_output = reference_model(pt_decode_input.to(ref_dtype), current_pos[0])
 
             # Increment position
-            current_pos = torch.full((batch,), generation_start_pos + i)
+            current_pos = torch.full((batch,), next_position)
 
-            current_pos_sram = torch.full((model_args.sub_core_grids.num_cores(), batch), generation_start_pos + i)
+            current_pos_sram = torch.full((model_args.sub_core_grids.num_cores(), batch), next_position)
             current_pos_tensor = ttnn.from_torch(
                 current_pos_sram,
                 device=mesh_device,
@@ -357,32 +362,46 @@ def test_llama_model_inference(
             )
 
             # Append the generated token to the list of outputs
-            if i in range(len(encoded_prompts[0])):
+            if next_token_index is not None:
                 # While in "prefill" mode, use the prompt tokens as the output
-                all_outputs.append(encoded_prompts[0][i])  # Update list of TT outputs
+                all_outputs.append(encoded_prompts[0][next_token_index])  # Update list of TT outputs
                 if run_ref_pt:
-                    all_outputs_ref.append(encoded_prompts[0][i])  # Update list of ref outputs
+                    all_outputs_ref.append(encoded_prompts[0][next_token_index])  # Update list of ref outputs
 
-                tt_decode_input = embd(encoded_prompts_tensor[:, i]).view(batch, seqlen, -1)
+                tt_decode_input = embd(encoded_prompts_tensor[:, next_token_index]).view(batch, seqlen, -1)
                 if run_ref_pt:
-                    pt_decode_input = embd(encoded_prompts_tensor[:, i]).view(batch, seqlen, -1)
+                    pt_decode_input = embd(encoded_prompts_tensor[:, next_token_index]).view(batch, seqlen, -1)
             else:
                 # tt_out_tok is a tuple of (tt_out_tok, tt_log_probs)
                 tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok[0])[0]
                 tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)
-                tt_out_tok = ttnn.to_torch(
-                    tt_out_tok_cpu,
-                ).view(32, 1)
+                tt_out_tok = (
+                    ttnn.to_torch(
+                        tt_out_tok_cpu,
+                    )
+                    .view(32, 1)
+                    .long()
+                )
 
-                all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])  # Update generated token to list of TT outputs
-                tt_decode_input = embd(tt_out_tok)
+                reference_token = None
+                if run_ref_pt:
+                    reference_token = sample_host(ref_output, None, temperature=0, top_p=0.8)
+
+                # PCC and cache comparisons require both models to follow one
+                # trajectory. Prefer the reference token when it is available;
+                # otherwise continue standalone generation from the TT sample.
+                next_token = teacher_forced_decode_token(
+                    reference_token=reference_token,
+                    device_token=tt_out_tok,
+                )
+                # Feed one shared trajectory, but keep logging the token the device
+                # actually sampled so the two generations stay comparable.
+                all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])
+                tt_decode_input = embd(next_token)
 
                 if run_ref_pt:
-                    pt_out_tok = sample_host(ref_output, None, temperature=0, top_p=0.8)
-                    pt_decode_input = embd(pt_out_tok)
-                    all_outputs_ref.append(
-                        pt_out_tok.squeeze(1).tolist()[0]
-                    )  # Update generated token to list of ref outputs
+                    all_outputs_ref.append(next_token.squeeze(1).tolist()[0])
+                    pt_decode_input = tt_decode_input
             # Measure PCC if also running reference model
             if run_ref_pt:
                 if layers == 1 and i == iterations - 1:  # On last iteration in the quick test, set a tighter PCC
@@ -408,11 +427,11 @@ def test_llama_model_inference(
                 if cache_pcc:
                     for l in range(model_args.n_layers):
                         pytorch_layer_present = [
-                            reference_model.layers[l]
-                            .attention.cache_k.clone()
+                            reference_model.cache_k[l]
+                            .clone()
                             .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                            reference_model.layers[l]
-                            .attention.cache_v.clone()
+                            reference_model.cache_v[l]
+                            .clone()
                             .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
                         ]
                         tt_layer_present = []
@@ -453,11 +472,10 @@ def test_llama_model_inference(
                                 )
 
                         for kv_cache, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                            cache_length_to_check = min(
-                                model_args.max_seq_len, generation_start_pos + generation_length + 1
-                            )
-                            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-                            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+                            # The reference DynamicCache appends only positions written so far,
+                            # while the TT cache is a fixed buffer indexed by absolute position.
+                            cache_pt = cache_pt[:, :, 0:num_written, :]
+                            cache_tt = cache_tt[:, :, generation_start_pos : generation_start_pos + num_written, :]
                             if (
                                 layers == 1 and i == iterations - 1
                             ):  # On last iteration in the quick test, set a tighter PCC
@@ -476,6 +494,7 @@ def test_llama_model_inference(
                                 logger.info(f"KV Cache Passed!")
                             else:
                                 logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
+                                kv_cache_tests_pass = False
                                 all_tests_pass = False
 
             if not dummy_weights:

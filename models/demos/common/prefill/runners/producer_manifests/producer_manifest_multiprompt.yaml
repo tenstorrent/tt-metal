@@ -1,0 +1,21 @@
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: ds_prefill
+  connect_timeout_s: 60
+
+workload:
+  num_users: 2
+  max_requests: 2
+  interleave: round_robin
+  check_pcc: true
+  slot_prompts:
+    - /path/to/golden/traces/prompt_a
+    - /path/to/golden/traces/prompt_b
+
+migration:
+  issue: false
+
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/prefill_kv_chunk_table.pb
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/prefill_kv_device_map.json

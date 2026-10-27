@@ -9,8 +9,9 @@
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <context/metal_context.hpp>
+#include "impl/context/metal_env_impl.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_device_view_impl.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -43,8 +44,8 @@ std::set<ChipId> PinnedMemoryCache::compute_device_ids(
     return device_ids;
 }
 
-std::set<ChipId> PinnedMemoryCache::compute_mmio_device_ids(const std::set<ChipId>& device_ids) {
-    auto& cluster = MetalContext::instance().get_cluster();
+std::set<ChipId> PinnedMemoryCache::compute_mmio_device_ids(
+    const tt::Cluster& cluster, const std::set<ChipId>& device_ids) {
     std::set<ChipId> mmio_ids;
     for (ChipId device_id : device_ids) {
         mmio_ids.insert(cluster.get_associated_mmio_device(device_id));
@@ -163,7 +164,8 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
     distributed::MeshDevice& mesh_device,
     const distributed::MeshCoordinateRangeSet& coordinate_range_set,
     HostBuffer& host_buffer,
-    bool map_to_noc) {
+    bool map_to_noc,
+    PinnedMemoryDeviceAccess access) {
     // Check whether this hardware/IOMMU configuration supports pinning at all.
     const auto params = GetMemoryPinningParameters(mesh_device);
     if (params.max_pins == 0) {
@@ -179,14 +181,15 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
     }
     const void* host_addr = static_cast<const void*>(buffer_bytes.data());
     const size_t buffer_size = buffer_bytes.size();
-    const size_t global_cache_limit = MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes();
+    auto& metal_env = mesh_device.impl().metal_env();
+    const size_t global_cache_limit = metal_env.get_rtoptions().get_pinned_memory_cache_limit_bytes();
     const size_t per_mmio_pin_limit = params.max_total_pin_size;
     std::set<ChipId> target_device_ids = compute_device_ids(mesh_device, coordinate_range_set);
     if (target_device_ids.empty()) {
         return nullptr;
     }
 
-    std::set<ChipId> target_mmio_ids = compute_mmio_device_ids(target_device_ids);
+    std::set<ChipId> target_mmio_ids = compute_mmio_device_ids(metal_env.get_cluster(), target_device_ids);
 
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -198,6 +201,9 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
             continue;
         }
         if (map_to_noc && !list_it->map_to_noc) {
+            continue;
+        }
+        if (access == PinnedMemoryDeviceAccess::ReadWrite && list_it->access == PinnedMemoryDeviceAccess::ReadOnly) {
             continue;
         }
         bool covers_all_devices = true;
@@ -212,6 +218,17 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
             return list_it->pinned_memory;
         }
     }
+
+    // Older KMDs cannot create a device-read-only mapping. Widen cache-created mappings to read/write so callers keep
+    // using the pinned fast path; the cache records the mapping's actual permissions.
+    const PinnedMemoryDeviceAccess actual_access =
+        access == PinnedMemoryDeviceAccess::ReadOnly && !params.supports_read_only ? PinnedMemoryDeviceAccess::ReadWrite
+                                                                                   : access;
+    // A widened request asks the driver to pin for writing memory the caller only promised to read. When that memory is
+    // genuinely non-writable -- an mmap(PROT_READ) of a file, the case read-only pinning exists for -- the pin fails
+    // every time, no matter how many slots are free. Eviction cannot help, so such a failure must not drive the
+    // retry loop below or it would unpin the entire cache for this device on the way to giving up.
+    const bool widened_to_read_write = actual_access != access;
 
     // No usable entry. Before creating a new pin, check whether any existing
     // entry for this address is still referenced externally on an MMIO device
@@ -257,10 +274,11 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
             // PinnedMemory::Create also calls HostBufferSetPinnedMemory internally
             // as part of its public API. We immediately clear it since the cache is
             // the long-term owner; callers set it transiently when needed.
-            auto pinned = PinnedMemory::Create(mesh_device, coordinate_range_set, host_buffer, map_to_noc);
+            auto pinned =
+                PinnedMemory::Create(mesh_device, coordinate_range_set, host_buffer, map_to_noc, actual_access);
             HostBufferSetPinnedMemory(host_buffer, nullptr);
 
-            CacheEntry entry{pinned, host_addr, target_device_ids, target_mmio_ids, map_to_noc};
+            CacheEntry entry{pinned, host_addr, target_device_ids, target_mmio_ids, map_to_noc, actual_access};
             lru_entries_.push_back(std::move(entry));
             address_map_.emplace(host_addr, std::prev(lru_entries_.end()));
             for (ChipId mmio_id : target_mmio_ids) {
@@ -269,6 +287,11 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
             current_size_bytes_ += pinned->get_buffer_size();
             return pinned;
         } catch (...) {
+            // A widened read-only request may be unpinnable for write no matter what is evicted; give up rather
+            // than draining the cache. See widened_to_read_write above.
+            if (widened_to_read_write) {
+                return nullptr;
+            }
             // Pin limit exceeded. Find the oldest LRU entry that shares an MMIO device
             // with the target and evict it to free a kernel pin slot.
             if (!evict_oldest_entry_for_mmio_ids(target_mmio_ids)) {
@@ -287,7 +310,7 @@ void PinnedMemoryCache::release(const void* host_address) {
 
 void PinnedMemoryCache::release_for_device(distributed::MeshDevice& mesh_device) {
     // Compute the set of MMIO device IDs for all chips in this MeshDevice.
-    auto& cluster = MetalContext::instance().get_cluster();
+    auto& cluster = mesh_device.impl().metal_env().get_cluster();
     std::set<ChipId> mmio_device_ids;
     for (ChipId chip_id : mesh_device.get_device_ids()) {
         mmio_device_ids.insert(cluster.get_associated_mmio_device(chip_id));

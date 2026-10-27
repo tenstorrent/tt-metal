@@ -3,8 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
+// llk_unpack_dummy(): debug-only SrcA flush on WH/BH (no WAIT/POP ordering role), defined in the debug
+// folder. Pulled in only so the shared compute-API dummy_unpack() resolves; on Quasar the same call is a
+// required TEN-4746 drain primitive defined inline in that arch's llk_unpack_A_api.h.
+#include "debug/llk_unpack_dummy.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK A
@@ -16,36 +22,58 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_init(
-    const std::uint32_t transpose_of_faces = 0,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t operand = 0) {
+    const std::uint32_t transpose_of_faces,
+    const std::uint32_t within_face_16x16_transpose,
+    const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
     const std::uint32_t operand_unpack_dst_format = unpack_dst_format[operand_id];
 
     LLK_ASSERT_BLOCK((is_unpacker_A_configured_correctly<
                       UnpackerProgramType::ProgramByTile,
-                      (BType != BroadcastType::NONE && !unpack_to_dest)>(
-        operand_unpack_src_format, operand_unpack_dst_format, face_r_dim, num_faces)));
+                      _llk_unpack_A_asserts_check_unpacker_B_<
+                          BType,
+                          acc_to_dest,
+                          binary_reuse_dest,
+                          unpack_to_dest>() /*check_unpacker_b*/>(
+        operand_unpack_src_format,
+        operand_unpack_dst_format,
+        tensor_shape.face_r_dim,
+        tensor_shape.total_num_faces())));
+
+    SAN_HOOK(init<OperationUnpackUnary>(
+        StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType)),
+        StateVal<OperationUnpackUnary::AccumulateToDest>(acc_to_dest),
+        StateVal<OperationUnpackUnary::BinaryReuseDest>(to_underlying(binary_reuse_dest)),
+        StateVal<OperationUnpackUnary::UnpackToDest>(unpack_to_dest),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(operand_unpack_src_format),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(operand_unpack_dst_format),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(tensor_shape.face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(tensor_shape.total_num_faces()),
+        StateDiscard<std::uint32_t>(transpose_of_faces),
+        StateDiscard<std::uint32_t>(within_face_16x16_transpose)));
 
     _llk_unpack_A_init_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces,
         within_face_16x16_transpose,
-        face_r_dim,
-        num_faces,
+        tensor_shape,
         operand_unpack_src_format,
         operand_unpack_dst_format);
 }
 
+// dst_tile_index is unused here: math places the tile. Kept so the Compute API makes one call on every arch; Quasar's
+// unpack-to-dest path reads it because there the unpacker writes DEST itself.
 template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
-inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
+inline void llk_unpack_A(
+    const std::uint32_t operand,
+    const std::uint32_t tile_index,
+    [[maybe_unused]] const std::uint32_t dst_tile_index = 0) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
@@ -55,11 +83,26 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 
     LLK_ASSERT_BLOCK((is_unpacker_A_configured_correctly<
                       UnpackerProgramType::ProgramByTile,
-                      (BType != BroadcastType::NONE && !unpack_to_dest)>(
+                      _llk_unpack_A_asserts_check_unpacker_B_<
+                          BType,
+                          acc_to_dest,
+                          binary_reuse_dest,
+                          unpack_to_dest>() /*check_unpacker_b*/>(
         unpack_src_format[operand_id],
         unpack_dst_format[operand_id],
         get_operand_face_r_dim(operand_id),
         get_operand_num_faces(operand_id))));
+
+    SAN_HOOK(execute<OperationUnpackUnary>(
+        StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType)),
+        StateVal<OperationUnpackUnary::AccumulateToDest>(acc_to_dest),
+        StateVal<OperationUnpackUnary::BinaryReuseDest>(to_underlying(binary_reuse_dest)),
+        StateVal<OperationUnpackUnary::UnpackToDest>(unpack_to_dest),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operand_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operand_id)),
+        StateDiscard<std::uint32_t>(tile_index)));
 
     WAYPOINT("UPAW");
     _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
@@ -67,13 +110,18 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     WAYPOINT("UPAD");
 }
 
+// start_dst_tile_index is unused here: math places the tiles. Kept for the same reason as llk_unpack_A's
+// dst_tile_index.
 template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_block(
-    const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
+    const std::uint32_t operand,
+    const std::uint32_t start_tile_index,
+    const std::uint32_t ntiles,
+    [[maybe_unused]] const std::uint32_t start_dst_tile_index = 0) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size;
@@ -81,7 +129,20 @@ inline void llk_unpack_A_block(
 
     LLK_ASSERT(cb_access_within_bounds(operand_id, start_tile_index, ntiles), "Block tile read exceeds CB boundary");
 
-    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+    // One execute per tile; the state is identical for every iteration, so it is restated once.
+    SAN_HOOK(execute<OperationUnpackUnary>(
+        StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType)),
+        StateVal<OperationUnpackUnary::AccumulateToDest>(acc_to_dest),
+        StateVal<OperationUnpackUnary::BinaryReuseDest>(to_underlying(binary_reuse_dest)),
+        StateVal<OperationUnpackUnary::UnpackToDest>(unpack_to_dest),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operand_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operand_id)),
+        StateDiscard<std::uint32_t>(start_tile_index),
+        StateDiscard<std::uint32_t>(ntiles)));
+
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
             address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
@@ -92,5 +153,7 @@ inline void llk_unpack_A_block(
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_A_uninit() {
+    SAN_HOOK(uninit<OperationUnpackUnary>(StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType))));
+
     _llk_unpack_A_uninit_<BType>();
 }

@@ -22,9 +22,19 @@ class DeepSeekV3Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
+    # Divisor on combine_fabric2d's forwarding region. No value can deadlock the ring -- the region is
+    # split by movement class -- so this trades DRAM against throughput and nothing else, and where the
+    # curve bends is per-model. Measured 8x4 over 1x-64x: 16 costs this model 3.1% on hot_expert traffic
+    # and nothing on balanced, for 47 -> 23 MB a chip.
+    COMBINE_FWD_REDUCTION = 16
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 8
     NUM_LIMITED_GROUPS = 4
+
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 256 experts, top-8, group-limited floors at
+    # 0.9950 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.985
 
     # Model architecture
     NUM_LAYERS = 61

@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <unistd.h>
 #include <cstdint>
 
 #include "risc_common.h"
@@ -16,7 +15,8 @@
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
 #include "api/dataflow/dataflow_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
+#include "internal/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
 #include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
@@ -79,6 +79,9 @@ uint32_t _start() {
         WAYPOINT("K");
         kernel_main();
         WAYPOINT("KD");
+        // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so
+        // DFBs stays trivially copyable.
+        RECORD_DFB_REGION_CLEAR();
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
             // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the
@@ -89,6 +92,8 @@ uint32_t _start() {
             ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
             ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
             ASSERT(ncrisc_noc_packet_tags_cleared(NOC_INDEX), DebugAssertNCriscNOCPacketTagClearedTripped);
+            // An unclosed PCIe batch here is inherited by the next kernel on the same command buffer.
+            ASSERT(noc_cmd_bufs_mid_clear(NOC_INDEX), DebugAssertNocMidNotClearedTripped);
             WAYPOINT("NKFD");
         }
     }

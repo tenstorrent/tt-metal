@@ -97,7 +97,7 @@ MorehSoftmaxBackwardOperation::spec_return_value_t MorehSoftmaxBackwardOperation
     if (tensor_args.input_grad_tensor.has_value()) {
         return tensor_args.input_grad_tensor->tensor_spec();
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         tensor_args.output_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             tensor_args.output_tensor.dtype(),

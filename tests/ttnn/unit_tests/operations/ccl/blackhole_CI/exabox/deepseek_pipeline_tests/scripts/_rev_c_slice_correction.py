@@ -25,13 +25,6 @@ from pathlib import Path
 
 import yaml
 
-PIPELINE_DIR = Path(os.environ["PIPELINE_DIR"])
-PIPELINE_CONFIG = Path(os.environ["PIPELINE_CONFIG"])
-HOSTFILE = Path(os.environ["HOSTFILE"])
-TRAY_DIR = Path(os.environ["TRAY_DIR"])
-RB_PATH = Path(os.environ["EXPECTED_RB"])
-SLICE_PATH = PIPELINE_DIR / "slice_to_pcie_device_mapping.yaml"
-
 
 def load_tray_map(yaml_text):
     """Load `tray_to_pcie_device_mapping.yaml` -> {tray_id: {logical_ids}}.
@@ -53,39 +46,6 @@ def load_tray_map(yaml_text):
     return out
 
 
-# Step 1: collect & sanity-check per-host tray maps
-tray_maps = {}
-for f in sorted(TRAY_DIR.glob("*.yaml")):
-    host = f.stem
-    tm = load_tray_map(f.read_text())
-    if set(tm) != {1, 2, 3, 4}:
-        sys.exit(f"[rev_c] {f.name}: expected trays {{1,2,3,4}}, got {sorted(tm)}")
-    for t, ids in tm.items():
-        if len(ids) != 8:
-            sys.exit(f"[rev_c] {f.name}: tray {t}: expected 8 chip ids, got {len(ids)} ({sorted(ids)})")
-    tray_maps[host] = tm
-
-# Step 2: load slicer output, sanity-check that its chip ids align per-host
-# with the discovery-binary tray map (catches anything else that might drive
-# the two sources out of sync before the correction produces a wrong yaml).
-with open(SLICE_PATH) as fp:
-    slice_doc = yaml.safe_load(fp)
-device_mapping = slice_doc["device_mapping"]
-for host, slices in device_mapping.items():
-    if host not in tray_maps:
-        sys.exit(f"[rev_c] host {host} in slice yaml but no tray map collected for it")
-    sliced = set()
-    for ids in slices.values():
-        sliced.update(ids)
-    trayed = set().union(*tray_maps[host].values())
-    if sliced != trayed:
-        sys.exit(
-            f"[rev_c] {host}: slice yaml chip ids {sorted(sliced)} != "
-            f"tray map chip ids {sorted(trayed)}; "
-            "the slicer and discovery binary disagree on this host's chip set."
-        )
-
-
 # Step 3: apply the four-equation Rev C correction per host.
 def correct_for_rev_c(slices, trays):
     s = {sid: set(ids) for sid, ids in slices.items()}
@@ -102,17 +62,6 @@ def correct_for_rev_c(slices, trays):
                 f"has {len(ids)} chips (expected 8): {sorted(ids)}"
             )
     return new
-
-
-corrected_mapping = {}
-for host, slices in device_mapping.items():
-    new_slices = correct_for_rev_c(slices, tray_maps[host])
-    corrected_mapping[host] = {sid: sorted(ids) for sid, ids in new_slices.items()}
-slice_doc["device_mapping"] = corrected_mapping
-
-with open(SLICE_PATH, "w") as fp:
-    yaml.dump(slice_doc, fp, default_flow_style=False, sort_keys=False)
-print(f"[rev_c]   wrote corrected {SLICE_PATH}")
 
 
 # Step 4: regenerate rank-binding yaml. Mirror the upstream
@@ -136,42 +85,96 @@ def sort_hosts_canonical(hosts):
     return out
 
 
-with open(PIPELINE_CONFIG) as fp:
-    pcfg = yaml.safe_load(fp)
-with open(HOSTFILE) as fp:
-    allocated = sort_hosts_canonical([l.strip() for l in fp if l.strip()])
+def main():
+    PIPELINE_DIR = Path(os.environ["PIPELINE_DIR"])
+    PIPELINE_CONFIG = Path(os.environ["PIPELINE_CONFIG"])
+    HOSTFILE = Path(os.environ["HOSTFILE"])
+    TRAY_DIR = Path(os.environ["TRAY_DIR"])
+    RB_PATH = Path(os.environ["EXPECTED_RB"])
+    SLICE_PATH = PIPELINE_DIR / "slice_to_pcie_device_mapping.yaml"
 
-config_hosts = []
-seen = set()
-for entry in pcfg["stage_to_slice_mapping"].values():
-    if entry["host"] not in seen:
-        config_hosts.append(entry["host"])
-        seen.add(entry["host"])
-if len(config_hosts) != len(allocated):
-    sys.exit(
-        f"[rev_c] hostfile has {len(allocated)} hosts but pipeline config "
-        f"has {len(config_hosts)} unique placeholder hosts"
-    )
-host_remap = dict(zip(config_hosts, allocated))
+    # Step 1: collect & sanity-check per-host tray maps
+    tray_maps = {}
+    for f in sorted(TRAY_DIR.glob("*.yaml")):
+        host = f.stem
+        tm = load_tray_map(f.read_text())
+        if set(tm) != {1, 2, 3, 4}:
+            sys.exit(f"[rev_c] {f.name}: expected trays {{1,2,3,4}}, got {sorted(tm)}")
+        for t, ids in tm.items():
+            if len(ids) != 8:
+                sys.exit(f"[rev_c] {f.name}: tray {t}: expected 8 chip ids, got {len(ids)} ({sorted(ids)})")
+        tray_maps[host] = tm
 
-rank_bindings = []
-for rank in sorted(pcfg["stage_to_slice_mapping"]):
-    info = pcfg["stage_to_slice_mapping"][rank]
-    real_host = host_remap[info["host"]]
-    devices = corrected_mapping[real_host][info["slice"]]
-    rank_bindings.append(
-        {
-            "rank": rank,
-            "mesh_id": rank,
-            "mesh_host_rank": 0,
-            "env_overrides": {"TT_VISIBLE_DEVICES": ",".join(str(d) for d in devices)},
-        }
-    )
+    # Step 2: load slicer output, sanity-check that its chip ids align per-host
+    # with the discovery-binary tray map (catches anything else that might drive
+    # the two sources out of sync before the correction produces a wrong yaml).
+    with open(SLICE_PATH) as fp:
+        slice_doc = yaml.safe_load(fp)
+    device_mapping = slice_doc["device_mapping"]
+    for host, slices in device_mapping.items():
+        if host not in tray_maps:
+            sys.exit(f"[rev_c] host {host} in slice yaml but no tray map collected for it")
+        sliced = set()
+        for ids in slices.values():
+            sliced.update(ids)
+        trayed = set().union(*tray_maps[host].values())
+        if sliced != trayed:
+            sys.exit(
+                f"[rev_c] {host}: slice yaml chip ids {sorted(sliced)} != "
+                f"tray map chip ids {sorted(trayed)}; "
+                "the slicer and discovery binary disagree on this host's chip set."
+            )
 
-rb_doc = {
-    "rank_bindings": rank_bindings,
-    "mesh_graph_desc_path": pcfg["mesh_graph_desc_path"],
-}
-with open(RB_PATH, "w") as fp:
-    yaml.dump(rb_doc, fp, default_flow_style=False, sort_keys=False)
-print(f"[rev_c]   wrote corrected {RB_PATH}")
+    corrected_mapping = {}
+    for host, slices in device_mapping.items():
+        new_slices = correct_for_rev_c(slices, tray_maps[host])
+        corrected_mapping[host] = {sid: sorted(ids) for sid, ids in new_slices.items()}
+    slice_doc["device_mapping"] = corrected_mapping
+
+    with open(SLICE_PATH, "w") as fp:
+        yaml.dump(slice_doc, fp, default_flow_style=False, sort_keys=False)
+    print(f"[rev_c]   wrote corrected {SLICE_PATH}")
+
+    with open(PIPELINE_CONFIG) as fp:
+        pcfg = yaml.safe_load(fp)
+    with open(HOSTFILE) as fp:
+        allocated = sort_hosts_canonical([l.strip() for l in fp if l.strip()])
+
+    config_hosts = []
+    seen = set()
+    for entry in pcfg["stage_to_slice_mapping"].values():
+        if entry["host"] not in seen:
+            config_hosts.append(entry["host"])
+            seen.add(entry["host"])
+    if len(config_hosts) != len(allocated):
+        sys.exit(
+            f"[rev_c] hostfile has {len(allocated)} hosts but pipeline config "
+            f"has {len(config_hosts)} unique placeholder hosts"
+        )
+    host_remap = dict(zip(config_hosts, allocated))
+
+    rank_bindings = []
+    for rank in sorted(pcfg["stage_to_slice_mapping"]):
+        info = pcfg["stage_to_slice_mapping"][rank]
+        real_host = host_remap[info["host"]]
+        devices = corrected_mapping[real_host][info["slice"]]
+        rank_bindings.append(
+            {
+                "rank": rank,
+                "mesh_id": rank,
+                "mesh_host_rank": 0,
+                "env_overrides": {"TT_VISIBLE_DEVICES": ",".join(str(d) for d in devices)},
+            }
+        )
+
+    rb_doc = {
+        "rank_bindings": rank_bindings,
+        "mesh_graph_desc_path": pcfg["mesh_graph_desc_path"],
+    }
+    with open(RB_PATH, "w") as fp:
+        yaml.dump(rb_doc, fp, default_flow_style=False, sort_keys=False)
+    print(f"[rev_c]   wrote corrected {RB_PATH}")
+
+
+if __name__ == "__main__":
+    main()

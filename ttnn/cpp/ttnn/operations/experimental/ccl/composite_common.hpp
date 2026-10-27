@@ -48,19 +48,15 @@ ttnn::Tensor composite_reduce_scatter(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     bool use_l1_small_for_semaphores = false);
 
+// The returned tensor is relabelled with the all_gather label of `input_tensor` (all_gather_output_topology); a
+// 1-D-mapped Shard gathered along an outer mesh axis is refused there because the pieces interleave. A caller that
+// only uses the result as an intermediate it relabels itself runs this inside a SilenceIntermediateRefusals scope
+// (all_reduce_async).
 ttnn::Tensor composite_all_gather(
     ttnn::Tensor input_tensor,
     int32_t dim,
-    uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis,
-    bool use_l1_small_for_semaphores = false);
-// same as above but for vector of mesh
-std::vector<ttnn::Tensor> composite_all_gather(
-    const std::vector<ttnn::Tensor>& input_tensors,
-    int32_t dim,
-    uint32_t num_links,
+    std::optional<uint32_t> num_links,
+    std::optional<ttnn::ccl::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,

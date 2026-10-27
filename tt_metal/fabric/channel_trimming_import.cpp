@@ -13,7 +13,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "tt_metal/fabric/channel_trimming_io.hpp"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"  // NocSendType
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"  // NocSendType
 
 namespace tt::tt_fabric {
 
@@ -46,6 +46,9 @@ int parse_noc_send_type(const std::string& name) {
     if (name == "NOC_UNICAST_READ") {
         return NocSendType::NOC_UNICAST_READ;
     }
+    if (name == "NOC_SPARSE_MCAST_WRITE") {
+        return NocSendType::NOC_SPARSE_MCAST_WRITE;
+    }
     return -1;
 }
 
@@ -59,8 +62,11 @@ std::optional<Vc0TrimFastPathInfo> try_derive_vc0_trim_fast_path_info_impl(
 
     Vc0TrimFastPathInfo info{};
 
-    const std::size_t vc0_width = std::min<std::size_t>(actual_sender_channels_vc0, 8u * sizeof(uint16_t));
-    const uint16_t vc0_mask = vc0_width == 0 ? 0 : static_cast<uint16_t>((1u << vc0_width) - 1u);
+    const std::size_t vc0_mask_width =
+        std::min<std::size_t>(actual_sender_channels_vc0, std::numeric_limits<uint16_t>::digits);
+    const std::size_t packet_size_scan_width =
+        std::min(vc0_mask_width, entry.sender_channel_max_packet_size_seen_bytes_by_vc.size());
+    const uint16_t vc0_mask = vc0_mask_width == 0 ? 0 : static_cast<uint16_t>((1u << vc0_mask_width) - 1u);
     const uint16_t vc0_sender_mask = entry.sender_channel_used_bitfield_by_vc & vc0_mask;
     const bool vc0_sender_idle = vc0_sender_mask == 0;
     const bool vc0_worker_only = vc0_sender_mask == 0x1u;
@@ -73,6 +79,19 @@ std::optional<Vc0TrimFastPathInfo> try_derive_vc0_trim_fast_path_info_impl(
     info.terminal_only_nonforwarding =
         vc0_sender_idle && vc0_receiver_observed_traffic && !vc0_has_downstream_router_forwarding;
     info.terminal_or_source_only = (vc0_sender_idle || vc0_worker_only) && vc0_has_no_downstream_forwarding;
+    info.vc0_sender_used_mask = vc0_sender_mask;
+    info.vc0_receiver_observed_traffic = vc0_receiver_observed_traffic;
+
+    uint16_t max_packet_size_bytes = 0;
+    for (std::size_t channel = 0; channel < packet_size_scan_width; ++channel) {
+        if ((vc0_sender_mask & (1u << channel)) != 0) {
+            max_packet_size_bytes =
+                std::max(max_packet_size_bytes, entry.sender_channel_max_packet_size_seen_bytes_by_vc[channel]);
+        }
+    }
+    if (max_packet_size_bytes != 0) {
+        info.local_sender_max_packet_size_bytes = max_packet_size_bytes;
+    }
 
     return info;
 }
@@ -149,6 +168,96 @@ std::optional<Vc0TrimFastPathInfo> try_derive_vc0_trim_fast_path_info(
     std::size_t actual_sender_channels_vc0,
     const ChannelTrimmingGlobalOverrides& global_overrides) {
     return try_derive_vc0_trim_fast_path_info_impl(entry, actual_sender_channels_vc0, global_overrides);
+}
+
+bool vc0_speedy_path_enabled(
+    std::size_t actual_sender_channels_vc0, bool deadlock_avoidance_enabled, const Vc0TrimFastPathInfo& info) {
+    // The speedy path has no first-level ack, so it is only usable where deadlock avoidance is
+    // off: either the direction never had it, or this link dropped it (terminal_or_source_only).
+    const bool deadlock_avoidance_off = !deadlock_avoidance_enabled || info.terminal_or_source_only;
+    return (actual_sender_channels_vc0 == 1 && !deadlock_avoidance_enabled) ||
+           ((info.worker_only_nonforwarding || info.enable_terminal_speedy_rx) && deadlock_avoidance_off);
+}
+
+void apply_vc0_trim_fast_path_link_symmetry(
+    Vc0TrimFastPathInfo& local_info, const std::optional<Vc0TrimFastPathInfo>& peer_info) {
+    const bool peer_known = peer_info.has_value();
+    // Dropping deadlock avoidance / first-level ack needs both ends to have nothing to forward.
+    local_info.terminal_or_source_only =
+        local_info.terminal_or_source_only && peer_known && peer_info->terminal_or_source_only;
+    // The speedy receiver returns every credit to sender channel 0, so it can only face a peer
+    // that transmits from channel 0 alone. A router whose receiver 0 is idle never runs it.
+    const bool peer_sends_from_worker_channel_only = peer_known && (peer_info->vc0_sender_used_mask & ~0x1u) == 0;
+    if (local_info.vc0_receiver_observed_traffic && !peer_sends_from_worker_channel_only) {
+        local_info.worker_only_nonforwarding = false;
+    }
+}
+
+void apply_vc0_trim_fast_path_peer_info(
+    Vc0TrimFastPathInfo& local_info, const Vc0TrimFastPathInfo& peer_info, bool allow_terminal_speedy_rx) {
+    local_info.peer_sender_max_packet_size_bytes = peer_info.local_sender_max_packet_size_bytes;
+    local_info.enable_terminal_speedy_rx =
+        allow_terminal_speedy_rx && local_info.terminal_only_nonforwarding && peer_info.worker_only_nonforwarding;
+}
+
+Vc0LinkTrimResolution resolve_vc0_link_trim(
+    const Vc0TrimFastPathInfo& local_row,
+    std::optional<Vc0TrimFastPathInfo> peer_row,
+    std::size_t actual_sender_channels_vc0,
+    bool base_deadlock_avoidance,
+    bool allow_terminal_speedy_rx) {
+    Vc0LinkTrimResolution resolution{.info = local_row};
+    apply_vc0_trim_fast_path_link_symmetry(resolution.info, peer_row);
+    if (peer_row.has_value()) {
+        apply_vc0_trim_fast_path_link_symmetry(*peer_row, local_row);
+        const bool local_can_use_speedy_vc0 =
+            vc0_speedy_path_enabled(actual_sender_channels_vc0, base_deadlock_avoidance, resolution.info) ||
+            resolution.info.terminal_only_nonforwarding;
+        if (local_can_use_speedy_vc0) {
+            apply_vc0_trim_fast_path_peer_info(resolution.info, *peer_row, allow_terminal_speedy_rx);
+        }
+    }
+    resolution.speedy = vc0_speedy_path_enabled(actual_sender_channels_vc0, base_deadlock_avoidance, resolution.info);
+    return resolution;
+}
+
+uint32_t limit_credit_amortization_frequency_by_packet_size(
+    uint32_t default_frequency,
+    uint32_t reference_packet_size_bytes,
+    std::optional<uint16_t> max_packet_size_bytes,
+    bool log_missing_packet_size_metadata) {
+    if (default_frequency == 0 || reference_packet_size_bytes == 0) {
+        return default_frequency;
+    }
+    if (!max_packet_size_bytes.has_value() || *max_packet_size_bytes == 0) {
+        if (log_missing_packet_size_metadata && default_frequency != 1) {
+            log_debug(
+                tt::LogFabric,
+                "Channel trimming: limiting credit amortization frequency from {} to 1 because packet-size metadata "
+                "is unavailable",
+                default_frequency);
+        }
+        return 1;
+    }
+    if (*max_packet_size_bytes <= reference_packet_size_bytes) {
+        return default_frequency;
+    }
+
+    const uint64_t reference_batch_size_bytes = static_cast<uint64_t>(default_frequency) * reference_packet_size_bytes;
+    const uint32_t packet_limited_frequency =
+        static_cast<uint32_t>(reference_batch_size_bytes / *max_packet_size_bytes);
+    const uint32_t limited_frequency = std::max<uint32_t>(std::min(default_frequency, packet_limited_frequency), 1);
+    if (limited_frequency != default_frequency) {
+        log_debug(
+            tt::LogFabric,
+            "Channel trimming: limiting credit amortization frequency from {} to {} for observed packet size {} bytes "
+            "against reference packet size {} bytes",
+            default_frequency,
+            limited_frequency,
+            *max_packet_size_bytes,
+            reference_packet_size_bytes);
+    }
+    return limited_frequency;
 }
 
 ChannelTrimmingOverrideMap load_channel_trimming_overrides(const std::string& yaml_path) {
@@ -245,6 +354,7 @@ ChannelTrimmingGlobalOverrides load_channel_trimming_global_overrides(const std:
         }
         if (vc_node["force_enable_sender_channels"]) {
             std::vector<size_t> indices;
+            indices.reserve(vc_node["force_enable_sender_channels"].size());
             for (const auto& idx_node : vc_node["force_enable_sender_channels"]) {
                 indices.push_back(idx_node.as<size_t>());
             }
@@ -252,6 +362,7 @@ ChannelTrimmingGlobalOverrides load_channel_trimming_global_overrides(const std:
         }
         if (vc_node["force_enable_receiver_channels"]) {
             std::vector<size_t> indices;
+            indices.reserve(vc_node["force_enable_receiver_channels"].size());
             for (const auto& idx_node : vc_node["force_enable_receiver_channels"]) {
                 indices.push_back(idx_node.as<size_t>());
             }

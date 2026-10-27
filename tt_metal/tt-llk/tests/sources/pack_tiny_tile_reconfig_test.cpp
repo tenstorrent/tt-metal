@@ -45,7 +45,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.num_faces);
 
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
-        0, 0, params.TEST_FACE_R_DIM, params.num_faces, formats.unpack_A_src, formats.unpack_A_dst);
+        0 /* transpose_of_faces */,
+        0 /* within_face_16x16_transpose */,
+        ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces),
+        formats.unpack_A_src,
+        formats.unpack_A_dst);
 
     const int total_tiles = params.NUM_TILES_IN_BLOCK * params.NUM_BLOCKS;
     for (int i = 0; i < total_tiles; ++i)

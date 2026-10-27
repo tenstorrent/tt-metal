@@ -4,19 +4,22 @@
 
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, overload
 
+from loguru import logger
 from typing_extensions import deprecated
 
 import ttnn
 
 from ..utils import tensor
+from ..utils.progress import Watchdog as _Watchdog
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator, Mapping, MutableSequence, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Mapping, MutableSequence, Sequence
     from typing import Any
 
     import torch
@@ -31,12 +34,66 @@ class LoadingError(Exception):
     pass
 
 
+class _LoadProgress:
+    """Heartbeat for weight loading. A 46 GB load+convert is silent for minutes and
+    reads as a hang; this emits a timed progress line so it never looks dead."""
+
+    def __init__(self, total: int, what: str) -> None:
+        self._total = total
+        self._done = 0
+        self._what = what
+        self._t0 = time.monotonic()
+        self._last = 0.0
+
+    def tick(self) -> None:
+        self._done += 1
+        elapsed = time.monotonic() - self._t0
+        # Throttle to ~5s so fast loads stay quiet and slow ones still show life.
+        if elapsed - self._last >= 5.0 or self._done == self._total:
+            self._last = elapsed
+            pct = 100 * self._done / self._total if self._total else 100
+            logger.info(f"{self._what}: {self._done}/{self._total} tensors ({pct:.0f}%), {elapsed:.0f}s")
+
+
+def release_device_cache(cache: dict) -> None:
+    """Free the device tensors a module's lazy per-shape cache holds and drop those entries.
+
+    `Module.deallocate_weights` frees parameters only; a module that also memoises device
+    constants (pad blocks, masks, filter taps) keyed by input shape would otherwise keep them
+    resident after its eviction, for the life of the process. Entries without a device tensor
+    (compute configs, recorded op choices) are kept: they cost nothing and are expensive to redo.
+    """
+
+    def has_device_tensor(value) -> bool:
+        if isinstance(value, ttnn.Tensor):
+            try:
+                return value.device() is not None
+            except Exception:  # noqa: BLE001 - a dead tensor is not on device
+                return False
+        if isinstance(value, (list, tuple)):
+            return any(has_device_tensor(v) for v in value)
+        return False
+
+    def free(value) -> None:
+        if isinstance(value, ttnn.Tensor):
+            if has_device_tensor(value) and value.is_allocated():
+                ttnn.deallocate(value)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                free(v)
+
+    for key in [k for k, v in cache.items() if has_device_tensor(v)]:
+        free(cache.pop(key))
+
+
 class Module(ABC):
     def __init__(self) -> None:
         self._children = {}
         self._parameters = {}
         self._is_loaded = False
         self.coresident_exclusions = None  # modules that cannot be resident in memory at the same time as this module. They should be deallocated before this module is loaded.
+        self._coresident_peers: list[Module] = []
+        self._eviction_hooks: list[Callable[[], None]] = []
 
     def named_children(self) -> Iterator[tuple[str, Module]]:
         yield from self._children.items()
@@ -93,6 +150,11 @@ class Module(ABC):
         `load_torch_state_dict`.
         """
 
+    def _num_parameters(self) -> int:
+        return len(self._parameters) + sum(
+            child._num_parameters() for _, child in self.named_children()
+        )  # noqa: SLF001
+
     def _load_torch_state_dict_inner(
         self,
         state_dict: Mapping[str, torch.Tensor],
@@ -100,6 +162,7 @@ class Module(ABC):
         module_key_prefix: str,
         missing_keys: MutableSequence[str],
         unexpected_keys: MutableSequence[str],
+        progress: _LoadProgress | None = None,
     ) -> None:
         state_dict = dict(state_dict)
         self._prepare_torch_state(state_dict)
@@ -113,6 +176,7 @@ class Module(ABC):
                     module_key_prefix=f"{module_key_prefix}{name}.",
                     missing_keys=missing_keys,
                     unexpected_keys=unexpected_keys,
+                    progress=progress,
                 )
             except LoadingError:
                 raise
@@ -127,11 +191,19 @@ class Module(ABC):
                 except LoadingError as err:
                     msg = f"while loading '{module_key_prefix}{name}': {err}"
                     raise LoadingError(msg) from err
+                if progress is not None:
+                    progress.tick()
             else:
                 missing_keys.append(f"{module_key_prefix}{name}")
 
         for name in state_dict:
             unexpected_keys.append(f"{module_key_prefix}{name}")
+
+    def _mark_loaded(self) -> None:
+        """Recursively mark this module and all descendants as loaded."""
+        self._is_loaded = True
+        for _, child in self.named_children():
+            child._mark_loaded()  # noqa: SLF001
 
     def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
         """Load PyTorch state dict into module parameters.
@@ -146,9 +218,14 @@ class Module(ABC):
         missing_keys = []
         unexpected_keys = []
         self.evict_coresident_exclusions()
-        self._load_torch_state_dict_inner(
-            state_dict, module_key_prefix="", missing_keys=missing_keys, unexpected_keys=unexpected_keys
-        )
+        with _Watchdog(f"convert {type(self).__name__}"):
+            self._load_torch_state_dict_inner(
+                state_dict,
+                module_key_prefix="",
+                missing_keys=missing_keys,
+                unexpected_keys=unexpected_keys,
+                progress=_LoadProgress(self._num_parameters(), "converting weights to device"),
+            )
 
         if strict and (missing_keys or unexpected_keys):
             parts = []
@@ -158,7 +235,7 @@ class Module(ABC):
                 parts.append("unexpected Torch state keys: " + ", ".join(unexpected_keys))
             raise ValueError("; ".join(parts))
 
-        self._is_loaded = True
+        self._mark_loaded()
         return IncompatibleKeys(missing_keys, unexpected_keys)
 
     @deprecated("Use load_torch_state_dict instead")
@@ -178,23 +255,34 @@ class Module(ABC):
     def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
 
-        self.evict_coresident_exclusions()
+        # Top-level only: announce the cache load and arm a timer watchdog so a slow/stalled
+        # module load is never silent. Signature is left untouched — subclasses (Mochi/Wan)
+        # override this method.
+        watchdog = None
+        if prefix == "":
+            logger.info(f"loading {self._num_parameters()} cached weight tensors from '{directory}'...")
+            watchdog = _Watchdog(f"load-cache {type(self).__name__}").__enter__()
+        try:
+            self.evict_coresident_exclusions()
 
-        for name, child in self.named_children():
-            child.load(directory, prefix=f"{prefix}{name}.")
+            for name, child in self.named_children():
+                child.load(directory, prefix=f"{prefix}{name}.")
 
-        for name, parameter in self.named_parameters():
-            path = directory / f"{prefix}{name}.tensorbin"
-            try:
-                parameter.load(path)
-            except LoadingError as err:
-                msg = f"{err} while loading '{path}'"
-                raise LoadingError(msg) from err
+            for name, parameter in self.named_parameters():
+                path = directory / f"{prefix}{name}.tensorbin"
+                try:
+                    parameter.load(path)
+                except LoadingError as err:
+                    msg = f"{err} while loading '{path}'"
+                    raise LoadingError(msg) from err
 
-        self._is_loaded = True
+            self._is_loaded = True
+        finally:
+            if watchdog is not None:
+                watchdog.__exit__()
 
     def deallocate_weights(self) -> None:
-        """Deallocate all parameter weights from device memory recursively."""
+        """Deallocate all parameter weights from device memory recursively, then run the eviction hooks."""
         for _, child in self.named_children():
             child.deallocate_weights()
 
@@ -202,6 +290,17 @@ class Module(ABC):
             parameter.deallocate()
 
         self._is_loaded = False
+        for hook in self._eviction_hooks:
+            hook()
+
+    def register_eviction_hook(self, hook: Callable[[], None]) -> None:
+        """Run `hook` whenever this module's weights are deallocated.
+
+        For device state that belongs with the module's residency but lives outside its parameters
+        and children -- an owner's per-geometry caches, for instance -- so that evicting the module
+        frees it too and it is rebuilt lazily on the next use.
+        """
+        self._eviction_hooks.append(hook)
 
     def is_loaded(self) -> bool:
         return self._is_loaded
@@ -394,7 +493,7 @@ class Parameter:
         )
 
     def save(self, path: str | Path, /) -> None:
-        ttnn.dump_tensor(path, self.data)
+        ttnn.dump_tensor(path, self.data, mode=ttnn.DumpTensorMode.LOCAL)
 
     def load(self, path: str | Path, /) -> None:
         try:

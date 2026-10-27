@@ -7,6 +7,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "ops/binary_ops.hpp"
+#include "utils/training_utils.hpp"
 
 void LossAverageMeter::update(float loss, size_t count) {
     m_sum += loss * static_cast<float>(count);
@@ -38,6 +39,29 @@ std::string read_file_to_str(const std::string &file_path) {
 
 uint32_t round_up_to_tile(uint32_t value, uint32_t tile_size) {
     return (value + tile_size - 1) / tile_size * tile_size;
+}
+
+TrainingSteps compute_training_steps(
+    const ttml::datasets::InMemoryTokenDataset &dataset,
+    const std::string &data_path,
+    uint32_t sequence_length,
+    uint32_t batch_size,
+    uint32_t gradient_accumulation_steps,
+    uint32_t num_data_workers,
+    uint32_t max_steps,
+    uint32_t num_epochs) {
+    if (dataset.get_size() == 0) {
+        throw std::runtime_error(fmt::format(
+            "Dataset is empty: {} holds fewer than sequence_length + 1 = {} tokens", data_path, sequence_length + 1));
+    }
+    if (num_data_workers == 0U) {
+        throw std::runtime_error("num_data_workers must be positive");
+    }
+    TrainingSteps steps;
+    steps.steps_per_epoch = ttml::utils::steps_per_epoch(
+        dataset.get_num_tokens(), num_data_workers * batch_size * gradient_accumulation_steps, sequence_length);
+    steps.effective_max_steps = ttml::utils::resolve_effective_max_steps(max_steps, num_epochs, steps.steps_per_epoch);
+    return steps;
 }
 
 GradientAccumulator::GradientAccumulator(uint32_t accumulation_steps) : m_accumulation_steps(accumulation_steps) {
@@ -87,10 +111,20 @@ std::unique_ptr<ttml::schedulers::LRSchedulerBase> create_warmup_with_linear_sch
     const size_t linear_decay_steps = total_steps - warmup_steps;
 
     std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> schedulers;
-    schedulers.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(optimizer, 0.0F, 1.0F, warmup_steps));
+    std::vector<size_t> steps;
+    // Warmup rounds down to zero steps for short runs (total_steps < 10); skip
+    // the phase entirely to avoid a divide-by-zero start_factor and a
+    // zero-length child scheduler.
+    if (warmup_steps > 0) {
+        // start_factor == 0 is rejected (matches PyTorch's LinearLR); ramp from
+        // base_lr / warmup_steps so the first optimizer step is small but nonzero.
+        schedulers.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(
+            optimizer, 1.0F / static_cast<float>(warmup_steps), 1.0F, warmup_steps));
+        steps.push_back(warmup_steps);
+    }
     schedulers.push_back(
         std::make_unique<ttml::schedulers::LinearScheduler>(optimizer, 1.0F, 0.01F, linear_decay_steps));
-    std::vector<size_t> steps = {warmup_steps, linear_decay_steps};
+    steps.push_back(linear_decay_steps);
     return std::make_unique<ttml::schedulers::SequentialScheduler>(optimizer, std::move(schedulers), std::move(steps));
 }
 

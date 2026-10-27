@@ -3,7 +3,7 @@
 This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement reads from sharded DRAM buffer into a Tensix core using the stateful one_packet APIs.
 
 ## Mesh Device API Support
-This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `GenericMeshDeviceFixture` and run on single-device unit meshes.
+This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `UnitMeshFastDispatchFixture` and run on single-device unit meshes.
 
 **Note**: The Mesh Device API only supports fast dispatch mode internally and does not support slow dispatch mode. This provides optimal performance for data movement operations.
 
@@ -46,4 +46,4 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 4. DRAM Sharded Read Trid Directed Ideal: Tests reading from DRAM sharded with transaction IDs.
 
 ## Quasar Notes
-`TensixDataMovementDRAMShardedReadDirectedIdeal` includes a Quasar-specific code path inside `GenericMeshDeviceFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1` and the Quasar simulator.
+`TensixDataMovementDRAMShardedReadDirectedIdeal` includes a Quasar-specific code path inside `UnitMeshFastDispatchFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1` and the Quasar simulator.

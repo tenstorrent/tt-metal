@@ -4,8 +4,7 @@
 
 #include "sdpa_fw_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
+#include "metal/common/tensor_validation.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "sdpa_fw_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -23,43 +22,38 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
                                  const std::string& name,
                                  const tt::tt_metal::Layout required_layout,
                                  const tt::tt_metal::DataType required_dtype) {
-        TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
-            "SDPAForward operation requires '{}' to be on DEVICE. Got storage type: '{}'",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-
-        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
+        check_device_tensor(tensor, "SDPAForward", name, {.dtypes = {required_dtype}, .layout = required_layout});
 
         TT_FATAL(
             tensor.padded_shape().rank() == 4U,
             "Tensor '{}' must have rank 4, but got rank {}",
             name,
             tensor.padded_shape().rank());
-
-        TT_FATAL(
-            tensor.layout() == required_layout,
-            "Tensor '{}' must have layout '{}', but got '{}'",
-            name,
-            enchantum::to_string(required_layout),
-            enchantum::to_string(tensor.layout()));
-
-        TT_FATAL(
-            tensor.dtype() == required_dtype,
-            "Tensor '{}' must have data type '{}', but got '{}'",
-            name,
-            enchantum::to_string(required_dtype),
-            enchantum::to_string(tensor.dtype()));
-
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
-            "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
     };
     check_tensor(query, "Query", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(key, "Key", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(value, "Value", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+
+    // The softmax scaler is 1/sqrt(head_dim) computed from the padded shape and kernels
+    // iterate the padded sequence, so tile padding on S or Q/K head_dim would silently
+    // mis-scale attention instead of erroring out. V's head_dim never feeds the scaler
+    // and non-tile-aligned vdim is a supported configuration (DiffVDim), so V is only
+    // checked on the sequence dim.
+    const auto check_tile_aligned = [](const ttnn::Tensor& tensor, const char* name, bool check_last_dim) {
+        const auto& logical = tensor.logical_shape();
+        const auto& padded = tensor.padded_shape();
+        TT_FATAL(
+            (!check_last_dim || logical[-1] == padded[-1]) && logical[-2] == padded[-2],
+            "Tensor '{}' must be tile-aligned in sequence{} (padded shape == logical shape). "
+            "Got logical={}, padded={}",
+            name,
+            check_last_dim ? " and head_dim" : "",
+            logical,
+            padded);
+    };
+    check_tile_aligned(query, "Query", /*check_last_dim=*/true);
+    check_tile_aligned(key, "Key", /*check_last_dim=*/true);
+    check_tile_aligned(value, "Value", /*check_last_dim=*/false);
 
     auto query_shape = query.logical_shape();
     auto key_shape = key.logical_shape();
@@ -134,6 +128,29 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
         "Mask tensor provided but mask_type is not Arbitrary. "
         "Use AttentionMaskType::Arbitrary to apply a custom mask, "
         "or remove the mask tensor for None/Causal modes.");
+
+    // Validate gate input shape if provided
+    if (tensor_args.gate.has_value()) {
+        const auto& gate = tensor_args.gate.value();
+        check_tensor(gate, "Gate", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+        TT_FATAL(gate.device() == query.device(), "Gate must be on the same device as query");
+        const auto gate_shape = gate.logical_shape();
+        // Gate shape (B, H, S, vE) - heads NOT fused, inner dim matches V
+        TT_FATAL(
+            gate_shape[0] == query_shape[0] &&      // B
+                gate_shape[1] == qHt &&             // H (heads NOT fused)
+                gate_shape[2] == query_shape[2] &&  // S
+                gate_shape[3] == vEt,               // D (matches V inner dim)
+            "Invalid gate shape. Expected (B, H, S, vE) = ({}, {}, {}, {}), got {}. "
+            "Query shape={}, Value shape={}",
+            query_shape[0],
+            qHt,
+            query_shape[2],
+            vEt,
+            gate_shape,
+            query_shape,
+            value_shape);
+    }
 
     if (preallocated_output.has_value()) {
         check_tensor(
@@ -234,32 +251,18 @@ tensor_return_value_t SDPAForwardDeviceOperation::create_output_tensors(
     if (tensor_args.preallocated_output.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_output.value());
     } else {
-        output_tensors.push_back(create_device_tensor(output_specs[0], tensor_args.query.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(output_specs[0], tensor_args.query.device()));
     }
 
     if (args.return_intermediates) {
         if (tensor_args.preallocated_intermediate.has_value()) {
             output_tensors.push_back(tensor_args.preallocated_intermediate.value());
         } else {
-            output_tensors.push_back(create_device_tensor(output_specs[1], tensor_args.query.device()));
+            output_tensors.push_back(ttnn::create_device_tensor(output_specs[1], tensor_args.query.device()));
         }
     }
 
     return output_tensors;
-}
-
-ttsl::hash::hash_t SDPAForwardDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& query_tensor = tensor_args.query;
-    const auto& query_logical_shape = query_tensor.logical_shape();
-    const auto& key_tensor = tensor_args.key;
-    const auto& key_logical_shape = key_tensor.logical_shape();
-    const auto& value_tensor = tensor_args.value;
-    const auto& value_logical_shape = value_tensor.logical_shape();
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SDPAForwardDeviceOperation>(
-        args, query_tensor.dtype(), query_logical_shape, key_logical_shape, value_logical_shape);
-
-    return hash;
 }
 
 }  // namespace ttml::metal::ops::sdpa_fw::device
@@ -275,13 +278,15 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const float dropout_probability,
     const bool return_intermediates,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
-    const std::optional<ttnn::Tensor>& preallocated_output) {
+    const std::optional<ttnn::Tensor>& preallocated_output,
+    const std::optional<ttnn::Tensor>& gate) {
     using OperationType = ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .return_intermediates = return_intermediates,
         .mask_type = mask_type,
-        .dropout_probability = dropout_probability};
+        .dropout_probability = dropout_probability,
+        .has_gate = gate.has_value()};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query_tensor,
         .key = key_tensor,
@@ -289,6 +294,7 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
         .mask = mask,
         .preallocated_intermediate = preallocated_intermediate,
         .preallocated_output = preallocated_output,
+        .gate = gate,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

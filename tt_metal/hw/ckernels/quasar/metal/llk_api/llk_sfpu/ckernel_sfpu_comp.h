@@ -9,6 +9,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "sfpi.h"
 
@@ -52,7 +53,6 @@ struct dst_container<DataFormat::UInt16> {
 template <DataFormat FMT>
 struct zero_comp_traits {
     static constexpr bool is_float = (FMT == DataFormat::Float32);
-    static constexpr bool is_raw8 = (FMT == DataFormat::Int8 || FMT == DataFormat::UInt8);
 
     // Result encoding: float formats emit 0.0f/1.0f, every integer format emits integer 0/1.
     using result_t = std::conditional_t<is_float, sfpi::vFloat, sfpi::vInt>;
@@ -61,28 +61,34 @@ struct zero_comp_traits {
     // every float width, else the per-format integer container.
     using container_t = std::conditional_t<is_float, sfpi::vFloat, typename dst_container<FMT>::type>;
 
-    // sfpmem mode for the raw 8-bit SFPLOAD/SFPSTORE path.
-    static constexpr std::uint32_t sfpmem8 =
-        (FMT == DataFormat::UInt8) ? ckernel::p_sfpu::sfpmem::UINT8 : ckernel::p_sfpu::sfpmem::INT8;
-
+    // Load and store avoids converting SM8 to/from 2's complement
     static inline __attribute__((always_inline)) sfpi::vInt load() {
-        if constexpr (is_raw8) {
-            return sfpi::vInt(__builtin_rvtt_sfpload(0, sfpmem8, sfpi::SFPLOAD_ADDR_MODE_NOINC));
+        if constexpr (FMT == DataFormat::UInt8) {
+            return sfpi::vInt(sfpi::dst_reg[0].mode<sfpi::DataLayout::U8>());
+        } else if constexpr (FMT == DataFormat::Int8) {
+            // The signed 8-bit format is sign magnitude.  Just pun it
+            // to vInt.
+            return sfpi::as<sfpi::vInt>(sfpi::vSMag(sfpi::dst_reg[0].mode<sfpi::DataLayout::SM8>()));
         } else {
             container_t c = sfpi::dst_reg[0];
             return sfpi::as<sfpi::vInt>(c);
         }
     }
-    // result_t(0)/result_t(1): vInt(0/1), or vFloat(0/1) which the vFloat(float) ctor folds to 0.0f/1.0f.
-    static inline __attribute__((always_inline)) result_t zero() { return result_t(0); }
-    static inline __attribute__((always_inline)) result_t one() { return result_t(1); }
     static inline __attribute__((always_inline)) void store(result_t r) {
-        if constexpr (is_raw8) {
-            __builtin_rvtt_sfpstore(r.get(), 0, sfpmem8, ckernel::ADDR_MOD_6);
+        if constexpr (FMT == DataFormat::UInt8) {
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::U8>(ckernel::ADDR_MOD_6) = r;
+        } else if constexpr (FMT == DataFormat::Int8) {
+            // The signed 8-bit format is sign magnitude.  Just pun
+            // the vInt.
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::SM8>(ckernel::ADDR_MOD_6) = sfpi::as<sfpi::vSMag>(r);
         } else {
             sfpi::dst_reg[0].mode<>(ckernel::ADDR_MOD_6) = sfpi::as<container_t>(r);
         }
     }
+
+    // result_t(0)/result_t(1): vInt(0/1), or vFloat(0/1) which the vFloat(float) ctor folds to 0.0f/1.0f.
+    static inline __attribute__((always_inline)) result_t zero() { return result_t(0); }
+    static inline __attribute__((always_inline)) result_t one() { return result_t(1); }
 };
 
 /**
@@ -99,8 +105,8 @@ struct zero_comp_traits {
  * to 1 and writes 0 here (see @ref _zero_comp_writes_zero_).
  *
  * @note Do NOT use @c abs(vInt) for the magnitude — that is two's-complement abs and leaves
- *       sign-magnitude -0 (0x80000000) unchanged (nonzero), breaking eqz(-0). @c setsgn(v,0) is the
- *       correct, format-agnostic primitive.
+ *       sign-magnitude -0 (0x80000000) unchanged (nonzero), breaking eqz(-0). Clearing the sign bit
+ *       (SFPSETSGN with sign=0) is the correct, format-agnostic primitive.
  *
  * @tparam COMP_MODE: Comparison-to-zero mode, values =
  *         <equal_zero/not_equal_zero/less_than_zero/greater_than_zero/greater_than_equal_zero/less_than_equal_zero>
@@ -113,7 +119,10 @@ inline __attribute__((always_inline)) sfpi::vBool _zero_comp_pred_(sfpi::vInt v)
             COMP_MODE == SfpuType::less_than_equal_zero || COMP_MODE == SfpuType::greater_than_equal_zero,
         "_zero_comp_pred_: COMP_MODE must be one of the six comparison-to-zero SfpuType modes "
         "(equal_zero/not_equal_zero/less_than_zero/greater_than_zero/less_than_equal_zero/greater_than_equal_zero)");
-    const sfpi::vInt mag = sfpi::setsgn(v, 0);  // sign bit cleared -> magnitude (±0 -> 0)
+    // Clear bit 31 (sign) -> magnitude (±0 -> 0) in a single SFPSETSGN; the vInt<->vSMag
+    // reinterprets are free (no instruction).
+    const sfpi::vSMag mag = sfpi::setsgn(sfpi::as<sfpi::vSMag>(v), 0);
+
     if constexpr (COMP_MODE == SfpuType::equal_zero) {
         return mag == 0;  // ±0
     } else if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
@@ -147,19 +156,19 @@ inline constexpr bool _zero_comp_writes_zero_() {
  * @brief Program the dest-increment addr mod shared by every comparison-to-zero instantiation.
  *
  * @c ADDR_MOD_6 (dest.incr=2) lets the body's SFPSTORE advance the dest counter, so
- * @ref _calculate_zero_comp_ needs no dst_reg++. It is HW state shared across every COMP_MODE/FMT
- * instantiation, so programming it once here (rather than per @ref _calculate_zero_comp_ call) keeps
+ * @ref calculate_zero_comp needs no dst_reg++. It is HW state shared across every COMP_MODE/FMT
+ * instantiation, so programming it once here (rather than per @ref calculate_zero_comp call) keeps
  * it out of the per-tile loop body.
  *
- * @note Call once after @ref _llk_math_eltwise_sfpu_init_ and before @ref _calculate_zero_comp_.
+ * @note Call once after @ref _llk_math_eltwise_sfpu_init_ and before @ref calculate_zero_comp.
  */
-inline void _init_zero_comp_() {
+inline void init_zero_comp() {
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = 2},
     }
-        .set(ADDR_MOD_6, csr_read<CSR::TRISC_ID>());
+        .set(ADDR_MOD_6);
 }
 
 /**
@@ -168,7 +177,7 @@ inline void _init_zero_comp_() {
  * Defaults each result lane and writes the opposite into the lanes matching COMP_MODE (eqz/nez/ltz/gtz
  * default 0 and write 1; gtez/ltez default 1 and write 0 — see @ref _zero_comp_writes_zero_), in FMT's
  * native encoding (see @ref zero_comp_traits). The body's SFPSTORE rides @c ADDR_MOD_6 (dest.incr=2,
- * programmed in @ref _init_zero_comp_) to advance the dest counter, so the loop needs no dst_reg++.
+ * programmed in @ref init_zero_comp) to advance the dest counter, so the loop needs no dst_reg++.
  *
  * @tparam APPROXIMATION_MODE: Unused (no approx path); retained for dispatcher signature symmetry.
  * @tparam FMT: SFPU DataFormat (sfpu_math): Int32/Int16/Int8/UInt16/UInt8, or Float32 for any float
@@ -176,17 +185,17 @@ inline void _init_zero_comp_() {
  *         resolves the actual width from the dest format config. Anything else is a compile error.
  * @tparam COMP_MODE: Comparison-to-zero mode.
  * @tparam ITERATIONS: Number of SFP-row pairs to process (8 for a 32×16 face).
- * @note Requires @ref _init_zero_comp_ to have programmed @c ADDR_MOD_6.
+ * @note Requires @ref init_zero_comp to have programmed @c ADDR_MOD_6.
  */
 template <bool APPROXIMATION_MODE, DataFormat FMT, SfpuType COMP_MODE, int ITERATIONS = SFPU_ITERATIONS>
-inline void _calculate_zero_comp_() {
+inline void calculate_zero_comp() {
     constexpr bool is_int_fmt = FMT == DataFormat::Int32 || FMT == DataFormat::Int16 || FMT == DataFormat::Int8 ||
                                 FMT == DataFormat::UInt16 || FMT == DataFormat::UInt8;
     constexpr bool is_float_fmt =
         FMT == DataFormat::Float32 || FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b;
     static_assert(
         is_int_fmt || is_float_fmt,
-        "_calculate_zero_comp_: unsupported FMT (expected an integer format or an IEEE float width)");
+        "calculate_zero_comp: unsupported FMT (expected an integer format or an IEEE float width)");
 
     using traits = zero_comp_traits<FMT>;
 
@@ -204,6 +213,20 @@ inline void _calculate_zero_comp_() {
 
         traits::store(result);
     }
+}
+
+// The Int32 unary comparisons (unary_*_tile_int32) are not ported to Quasar. The Compute API
+// keeps one signature on every arch, so their kernel entry points (ne / eq call the metal
+// calculate_comp_unary_int, gt / ge / lt / le the tt-llk _calculate_comp_unary_int_ on
+// Blackhole / Wormhole) reject the call here.
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_unary_int([[maybe_unused]] int scalar) {
+    LLK_ASSERT(false, "Int32 unary comparisons (unary_*_tile_int32) are not supported on Quasar");
+}
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void _calculate_comp_unary_int_([[maybe_unused]] int scalar) {
+    LLK_ASSERT(false, "Int32 unary comparisons (unary_*_tile_int32) are not supported on Quasar");
 }
 
 }  // namespace sfpu

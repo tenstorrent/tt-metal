@@ -21,7 +21,7 @@ using namespace tt::tt_metal;
 ProgramDescriptor ReshapeRMProgramFactory::create_descriptor(
     const ttnn::prim::ReshapeOnDeviceParams& /*operation_attributes*/,
     const ttnn::prim::ReshapeOnDeviceInputs& tensor_args,
-    tt::tt_metal::Tensor& output_tensor) {
+    ttnn::Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(
         input_tensor.dtype() == output_tensor.dtype(),
@@ -29,7 +29,7 @@ ProgramDescriptor ReshapeRMProgramFactory::create_descriptor(
         input_tensor.dtype(),
         output_tensor.dtype());
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
 
     auto output_shape = output_tensor.padded_shape();
     Buffer* src0_buffer = input_tensor.buffer();

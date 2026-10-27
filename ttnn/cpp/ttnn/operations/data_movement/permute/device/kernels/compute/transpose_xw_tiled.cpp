@@ -5,11 +5,15 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
+#ifdef ARCH_QUASAR
+#include "api/compute/pack.h"  // pack_init: Quasar packer-BFD retarget before tilize (see loop below)
+#endif
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // X = output width
@@ -23,19 +27,34 @@ void kernel_main() {
      * rearrange it into its faces, transpose, and then pack it back such that it's de-faced (WX, where X is contiguous
      * and isn't divided into subtiles)
      */
-    uint32_t start_block = get_arg_val<uint32_t>(0);
-    uint32_t end_block = get_arg_val<uint32_t>(1);
+    uint32_t start_block = get_arg(args::start_block);
+    uint32_t end_block = get_arg(args::end_block);
 
-    constexpr auto cb_in = tt::CBIndex::c_0;
-    constexpr auto cb_tilize = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
+    constexpr auto cb_in = dfb::cb_in;
+    constexpr auto cb_tilize = dfb::cb_tilize;
+    constexpr auto cb_out = dfb::cb_out;
 
-    CircularBuffer cb_tilize_exp(cb_tilize);
-    CircularBuffer cb_out_exp(cb_out);
+    // Build each DataflowBuffer once, at kernel scope, and pass the tilize helper the kernel's own buffers. The
+    // id-only helper form builds a second owner of cb_in / cb_tilize per block, and on Quasar a DataflowBuffer
+    // drains when it goes out of scope (#60848): the packer would wait at helper return for cb_tilize to be popped
+    // (by this kernel, after the transpose below) while the unpacker waited for cb_in to empty (the reader has
+    // already pushed the next block).
+    DataflowBuffer dfb_in_exp(cb_in);
+    DataflowBuffer dfb_tilize_exp(cb_tilize);
+    DataflowBuffer dfb_out_exp(cb_out);
 
-    unary_op_init_common(cb_in, cb_out);
+    compute_kernel_hw_startup(cb_in, cb_out);
+    copy_init(cb_in);
 
     for (uint32_t block = start_block; block < end_block; block++) {
+#ifdef ARCH_QUASAR
+        // Quasar: the packer's L1 destination (BFD) is baked by pack_init, and Quasar's tilize_init
+        // programs unpack+math only. compute_kernel_hw_startup aimed the packer at cb_out and
+        // pack_untilize_dest_init below re-aims it at cb_out every iteration, so without this the
+        // tilized tile is packed into cb_out's ring (the LLK re-init guard asserts; with asserts off
+        // cb_tilize is never written). WH/BH tilize_init programs the packer itself; nothing changes there.
+        pack_init(cb_tilize);
+#endif
         // Tilize input via unpack and then pack (standard symmetric: 1 tile in → 1 tile out)
         compute_kernel_lib::tilize<
             1,
@@ -43,29 +62,30 @@ void kernel_main() {
             cb_tilize,
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+            dfb_in_exp, dfb_tilize_exp, 1);
 
         // transpose input
-        cb_tilize_exp.wait_front(1);
+        dfb_tilize_exp.wait_front(1);
 
-        transpose_wh_init_short(cb_tilize);
+        transpose_init(cb_tilize);
         pack_untilize_dest_init<1>(cb_out);
 
         tile_regs_acquire();
-        transpose_wh_tile(cb_tilize, 0, 0);  // transpose call
+        transpose_tile(cb_tilize, 0, 0);  // transpose call
         tile_regs_commit();
 
         // pack and untilize
-        cb_out_exp.reserve_back(1);
+        dfb_out_exp.reserve_back(1);
 
         tile_regs_wait();
         pack_untilize_dest<1>(cb_out);  // pack call
         tile_regs_release();
 
-        cb_out_exp.push_back(1);
+        dfb_out_exp.push_back(1);
 
         pack_untilize_uninit(cb_out);
 
-        cb_tilize_exp.pop_front(1);
+        dfb_tilize_exp.pop_front(1);
     }
 }

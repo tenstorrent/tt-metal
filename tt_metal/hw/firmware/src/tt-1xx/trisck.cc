@@ -8,11 +8,14 @@
 //      Need to make sure no other file includes these lists since it also include global parameter definitions
 // 2) instantiate global variables
 
+#include "defines_generated.h"
+
 #include "internal/firmware_common.h"
+#include "api/compile_time_args.h"
 
 #include "chlkc_list.h"
 
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "api/remote_circular_buffer.h"
@@ -32,9 +35,11 @@ uint32_t op_info_offset = 0;
 namespace llk::san {
 
 static_assert(
-    sizeof(SanitizerState) <= MEM_LLK_DEBUG_SIZE, "llk_san: sanitizer state must fit in MEM_LLK_DEBUG region");
+    sizeof(State) <= MEM_LLK_DEBUG_SIZE, "llk::san | fault   | sanitizer state must fit in MEM_LLK_DEBUG region");
+static_assert(
+    alignof(State) <= 32, "llk::san | fault   | sanitizer state is aligned more strictly than MEM_LLK_DEBUG_BASE");
 
-extern SanitizerState* const sanitizer = reinterpret_cast<SanitizerState*>(MEM_LLK_DEBUG_BASE);
+extern State* const state = reinterpret_cast<State*>(MEM_LLK_DEBUG_BASE);
 }  // namespace llk::san
 #endif
 
@@ -81,7 +86,7 @@ uint32_t _start() {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
-    llk::san::thread_init();
+    SAN_HOOK(thread_init());
     RecordPerfCounters();
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG

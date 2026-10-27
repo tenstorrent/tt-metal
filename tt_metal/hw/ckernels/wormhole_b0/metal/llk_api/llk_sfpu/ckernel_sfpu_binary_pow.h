@@ -7,9 +7,10 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_conversions.h"
+#include "cmath_common.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 
 using namespace sfpi;
 
@@ -30,10 +31,16 @@ namespace sfpu {
  * @return sfpi::vFloat Result of base**pow
  *
  * Special Cases:
+ * - base = 0, pow > 0: Returns 0
  * - base = 0, pow < 0: Returns NaN (undefined)
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
+ *
+ * Parity limit: the odd/even test below converts pow through vSMag16, which saturates at
+ * +/-32767, so any larger |pow| reads as non-integer and a negative base returns NaN
+ * where the true result is finite: (-1)**40000 gives NaN rather than 1. The inline claim
+ * that "large powers will approach 0/Inf" does not hold when |base| == 1.
  *
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
@@ -42,7 +49,7 @@ namespace sfpu {
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
     // 1) Compute log2(base)
@@ -94,8 +101,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);
     sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
 
-    sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Note: z & 0x7f800000 in paper
-    sfpi::vInt zif = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));   // Note: z & 0x007fffff in paper
+    sfpi::vInt zii = sfpi::exexp(sfpi::as<sfpi::vFloat>(z));  // Note: z & 0x7f800000 in paper
+    sfpi::vInt zif = sfpi::exman(sfpi::as<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
 
     // Compute formula in Horner form
     sfpi::vFloat d1 = sfpi::vFloat(0.40196114e-7);
@@ -108,21 +115,15 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     zif = _float_to_int32_positive_(d2 * d3);
 
     // Restore exponent
-    zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));
+    zii = sfpi::as<sfpi::vInt>(sfpi::setexp(sfpi::as<sfpi::vFloat>(zif), 127U + zii));
 
-    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(zii);
+    sfpi::vFloat y = sfpi::as<sfpi::vFloat>(zii);
 
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
     auto pow_int = sfpi::convert<sfpi::vSMag16>(
         pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
     auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
-
-    // Division by 0 when base is 0 and pow is negative => set to NaN
-    v_if((absbase == 0.f) && pow < 0.f) {
-        y = std::numeric_limits<float>::quiet_NaN();  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
-    }
-    v_endif;
 
     v_if(base < 0.0f) {  // negative base
         // If pow is odd integer then result is negative
@@ -132,6 +133,24 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
+            y = std::numeric_limits<float>::quiet_NaN();
+        }
+        v_endif;
+    }
+    v_endif;
+
+    // setexp/exexp map 0 to log2 = -127, so 0**p evaluates as 2**(-127p).
+    // Must follow the negative-base branch: SFPU `<` is sign-bit based, so
+    // v_if(base < 0) classes -0 as negative and would overwrite the 0 with the
+    // complex-result NaN; -0 is a zero, not a negative base.
+    // Fill 0 for every non-zero exponent, then narrow to the negative ones.
+    // v_and tightens the enclosing predicate in place, so it costs one compare
+    // where a second flat v_if would also save and restore the lane mask.
+    // pow == 0 fails the != 0 gate and keeps 1.
+    v_if(absbase == 0.f) {
+        v_if(pow != 0.f) {
+            y = 0.0f;
+            v_and(pow < 0.f);
             y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
@@ -149,6 +168,40 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     return y;
 }
 
+/**
+ * @brief base**pow on an fp32 DST.
+ *
+ * Same two-step log2/exp2 shape as _sfpu_binary_power_21f_, but with a wider log. The
+ * zero-base block below is fp32-only: _sfpu_binary_power_21f_ still carries the original
+ * one verbatim, so on a bf16 DST pow(0, NaN) returns +0 and pow(0, pow < 0) writes NaN.
+ * See #53922, deferred there on tt-llk#675.
+ *
+ * @param base The base value (sfpi::vFloat vector), can be any floating point number
+ * @param pow The exponent/power value (sfpi::vFloat vector), can be any floating point number
+ *
+ * @return sfpi::vFloat Result of base**pow
+ *
+ * @note Two consumers, both via _sfpu_binary_power_: calculate_sfpu_binary_pow, and
+ * calculate_rpow, which passes its scalar as `base`. So ttnn.rpow(y, 0.0) is pow(0, y)
+ * and the zero-base semantics below apply to it too.
+ *
+ * Special Cases:
+ * - base = +/-0, pow > 0: Returns +/-0 for finite pow, preserving the base sign only for odd integer pow; +inf returns
+ * +0
+ * - base = +/-0, pow < 0: Returns +/-inf for finite pow, preserving the base sign only for odd integer pow; -inf
+ * returns +inf
+ * - base = +/-0, pow = +/-0: Returns 1
+ * - base = +/-0, pow = +/-NaN: Returns NaN
+ * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
+ * - base < 0, pow = non-integer: Returns NaN (complex result)
+ * - Overflow/underflow: Clamped to appropriate limits
+ *
+ * Parity limit: the same vSMag16 saturation described on _sfpu_binary_power_21f_ above.
+ * In this body it also costs the zero-base sign: a -0 base loses it for odd pow in
+ * 32767 < |pow| < 2**24, because the saturated pow reads as non-integer and the
+ * negative-base branch overwrites y with a positive NaN before the fills below copy its
+ * sign. A +0 base is unaffected, and the magnitude stays correct throughout.
+ */
 sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
     // 1) Compute log2(base)
@@ -171,47 +224,103 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     v_endif;
 
     // Transform to z = (m - 1) / (m + 1)
-    sfpi::vFloat m_plus_1 = m + sfpi::vConst1;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
-    sfpi::vFloat m_minus_1 = m - sfpi::vConst1;
+    sfpi::vFloat m_plus_1 = m + 1.0f;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
     // 1/t: initial guess 1.0f - 0.2426406871192851f*t (linear interp on [1.7,2.4]), then Newton-Raphson y = y*(2 -
     // t*y).
-    sfpi::vFloat recip = sfpi::vConst1 - 0.2426406871192851f * m_plus_1;
+    sfpi::vFloat recip = 1.0f - 0.2426406871192851f * m_plus_1;
     recip = recip * (2.0f - m_plus_1 * recip);  // 1st NR
-    recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR for float32
-    sfpi::vFloat z = m_minus_1 * recip;
+    recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR
+    // 3rd NR: two NR iterations leave a ~2 ULP reciprocal residual that, after the
+    // atanh(z) log series and pow*log2 multiply, is the floor keeping 2.5 at 4 ULP.
+    // One more quadratically-convergent step drives 1/(m+1) to full fp32 precision.
+    recip = recip * (2.0f - m_plus_1 * recip);  // 3rd NR for float32
+    // z = (m-1)*recip. The subtract is kept separate rather than folded into a multiply-add:
+    // the range reduction above leaves m in [sqrt(2)/2, sqrt(2)], which is inside [0.5, 2], so
+    // Sterbenz's lemma makes m - 1 exact for every representable m and the only rounding left is
+    // the multiply. Written as m*recip - recip it is instead a subtraction of two nearly equal
+    // quantities whenever the base is near 1.0, where m*recip and recip agree to ~24 bits. SFPMAD
+    // is only partially fused -- the product keeps four bits beyond fp32, not the exact product a
+    // true FMA would give -- so those four bits are all that survives the cancellation. The error
+    // is then scaled by pow in pow*log2(base): 250 ULP at pow = 1000, 4.4% relative at 3e6.
+    sfpi::vFloat z = (m - 1.0f) * recip;
 
     // Compute z**2 for polynomial evaluation
     sfpi::vFloat z2 = z * z;
     // Polynomial approximation using odd powers
     sfpi::vFloat p = PolynomialEvaluator::eval(
-        z2, sfpi::vConst1, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f, 0.09090909090909091f);
+        z2, 1.0f, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f, 0.09090909090909091f);
     sfpi::vFloat ln_m = 2.0f * (z * p);
 
     sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(exp), sfpi::RoundMode::Nearest);
 
-    // log2(base) = ln(base)/ln(2) = exp + ln_m/ln(2)
+    // log2(base) = ln(base)/ln(2) = exp + ln_m/ln(2). Keep the two contributions
+    // separate: exp_f32 is the large integer part, ln_m*ln2inv the small fractional
+    // part. Collapsing pow*log2(base) into one fp32 before 2**z squeezes out the
+    // fractional mantissa bits for large |base| (the 20-27 ULP error). Instead carry
+    // z = pow*log2(base) as an unevaluated double-float (z_hi, z_lo) and cancel the
+    // large integer part against k=round(z) before the tail is ever rounded away.
     const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;
-    sfpi::vFloat log2_result = exp_f32 + ln_m * vConst1Ln2;
-
-    // Step 2: base**pow = 2**(pow*log2(base)). Clamp z_f32 to -127 to avoid overflow when result should be 0 (e.g.
-    // 0**+inf, N**-inf).
-    sfpi::vFloat z_f32 = pow * log2_result;
-
-    // 2^z_f32 = exp(z_f32 * ln(2)); use Cody-Waite + Taylor exp for <1 ULP float32 accuracy
     constexpr float LN2 = 0.693147180559945309f;
-    sfpi::vFloat y = _sfpu_exp_fp32_accurate_(z_f32 * LN2);
 
-    // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
-    v_if(base == 0.f && pow < 0.f) {
-        y = std::numeric_limits<float>::quiet_NaN();  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
+    // Step 2: base**pow = 2**(pow*log2(base)).
+    // The residual after the two-sum is the fp32 rounding of pow*exp_f32 itself:
+    // exp_f32 is the large integer exponent and pow can carry a full 24-bit mantissa,
+    // so the product needs ~30 bits and drops its low bits before the two-sum sees
+    // them. exp_f32 is a small integer, so a Veltkamp split of pow makes both partial
+    // products exact (12-bit half * <=7-bit integer fits a 24-bit significand); the low
+    // half pow_lo*exp_f32 rides in z_lo so none of the integer term's bits are lost.
+    constexpr float VELTKAMP_SPLIT = 4097.0f;  // 2**12 + 1
+    sfpi::vFloat pc = pow * VELTKAMP_SPLIT;
+    sfpi::vFloat pow_hi = pc - (pc - pow);
+    sfpi::vFloat pow_lo = pow - pow_hi;
+
+    sfpi::vFloat z_hi = pow_hi * exp_f32;
+    sfpi::vFloat z_lo = pow_lo * exp_f32 + pow * (ln_m * vConst1Ln2);
+
+    // Dekker FastTwoSum so k=round(z) sees the true integer part while the residual e
+    // keeps the dropped tail. Exact under the precondition |z_hi| >= |z_lo| or z_hi == 0:
+    // z_hi = pow*exponent(base) and z_lo carries the fractional log2 term (|z_lo| <
+    // ~0.5*|pow| plus a <=2**-12*|pow| Veltkamp remainder). When exponent(base) == 0 then
+    // z_hi == 0 exactly (the sum is already exact); otherwise |exponent(base)| >= 1 so
+    // |z_hi| >= |pow| > |z_lo|.
+    sfpi::vFloat s = z_hi + z_lo;
+    sfpi::vFloat e = z_lo - (s - z_hi);
+    // vConstFloatPrgm1 holds -127 (matches the original clamp); use it directly to avoid a copy.
+    v_if(s < sfpi::vConstFloatPrgm1) {
+        s = sfpi::vConstFloatPrgm1;
+        e = 0.0f;
     }
     v_endif;
+
+    sfpi::vInt k_int;
+    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(s, k_int);
+    // Reduced argument (s - k) is exact by Sterbenz; add back the tail e.
+    sfpi::vFloat frac = (s - k) + e;
+
+    // 2**frac via the accurate exp helper (frac is small), then scale by 2**k.
+    sfpi::vFloat y = _sfpu_exp_fp32_accurate_(frac * LN2);
+    // setexp writes the 8-bit exponent field and wraps instead of saturating, so an
+    // overflowing magnitude silently becomes a finite value. Detect overflow from the
+    // biased exponent about to be written (>= 255 is the inf field) and clamp explicitly.
+    // Checking out_exp (already needed by setexp) instead of keeping the float s live
+    // across the exp helper avoids pushing this kernel past the SFPU register-allocator
+    // budget (reload-insn ICE); out_exp >= 255 is equivalent to s >= 128.
+    sfpi::vInt out_exp = sfpi::exexp(y, sfpi::ExponentMode::Biased) + k_int;
+    y = sfpi::setexp(y, out_exp);
+    v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
+    v_endif;
+
+    // |pow| removes a -0 exponent: convert<vSMag16> would round trip that back to something the
+    // bit-exact compare below reports as non-integer (on BH, not on WH) and gives NaN instead of 1
+    // for a -0 base. Kept on WH too, where it passes only because that conversion happens to
+    // preserve the sign of a -0, which is not a guarantee.
+    sfpi::vFloat abs_pow = sfpi::abs(pow);
 
     v_if(base < 0.0f) {  // negative base
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
         auto pow_int = sfpi::convert<sfpi::vSMag16>(
-            pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
+            abs_pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
         auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
 
         // If pow is odd integer then result is negative
@@ -219,9 +328,35 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
         y = sfpi::setsgn2(y, pow_int);
 
         // Check for integer power, if it is not then overwrite result with NaN
-        v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
+        v_if(pow_rounded != abs_pow) {  // negative base and non-integer power => set to NaN
             y = std::numeric_limits<float>::quiet_NaN();
         }
+        v_endif;
+    }
+    v_endif;
+
+    // setexp/exexp map 0 to log2 = -127, so 0**p evaluates as 2**(-127p).
+    // Must follow the negative-base branch: SFPU `<` is sign-bit based, so
+    // v_if(base < 0) classes -0 as negative and would overwrite the 0 with the
+    // complex-result NaN; -0 is a zero, not a negative base.
+    // SFPU `== 0` is bit-exact, so matching -0 needs an abs. Recompute it here
+    // rather than reusing abs_base: that live range would span the log2/exp2 body
+    // and spills this kernel.
+    // Fill 0 for every non-zero exponent, then narrow to the negative ones, which
+    // IEEE defines as +inf. v_and tightens the enclosing predicate in place, so it
+    // costs one compare where a second flat v_if would also save and restore the
+    // lane mask. Gating on |pow| lets both signed zeros keep the mainline's 1.
+    // Both fills take their sign from y rather than writing a positive constant, because
+    // IEEE keeps the sign of a zero base through an odd integer exponent.
+    sfpi::vFloat abs_end = sfpi::abs(base);
+    v_if(abs_end == 0.f) {
+        v_if(abs_pow != 0.f) {
+            y = sfpi::copysgn(sfpi::vFloat(0.0f), y);
+            v_and(pow < 0.f);
+            y = sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), y);
+        }
+        v_endif;
+        v_if(sfpi::is_nan(pow)) { y = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
     }
     v_endif;
@@ -244,23 +379,43 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_<true>(sfpi::vFloat base, sfpi::vFlo
     return _sfpu_binary_power_f32_(base, pow);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_pow(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    for (int d = 0; d < ITERATIONS; d++) {
-        // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-        constexpr uint dst_tile_size_sfpi = 32;
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr uint dst_tile_size_sfpi = 32;
+    const uint in0_offset = dst_index_in0 * dst_tile_size_sfpi;
+    const uint in1_offset = dst_index_in1 * dst_tile_size_sfpi;
+    const uint out_offset = dst_index_out * dst_tile_size_sfpi;
 
-        sfpi::vFloat result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
+    // Unrolled for fp32 only. The bf16 body runs slower (measured +17% at unroll 4).
+    // On BH, this unroll is perf-neutral.
+    if constexpr (is_fp32_dest_acc_en) {
+#pragma GCC unroll 4
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat in0 = sfpi::dst_reg[in0_offset];
+            sfpi::vFloat in1 = sfpi::dst_reg[in1_offset];
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
+            sfpi::vFloat result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
+
+            sfpi::dst_reg[out_offset] = result;
+            sfpi::dst_reg++;
+        }
+    } else {
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat in0 = sfpi::dst_reg[in0_offset];
+            sfpi::vFloat in1 = sfpi::dst_reg[in1_offset];
+
+            sfpi::vFloat result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
+
+            sfpi::dst_reg[out_offset] = result;
+            sfpi::dst_reg++;
+        }
     }
 }
 
 template <bool APPROXIMATION_MODE>
 inline void sfpu_binary_pow_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;
     sfpi::vConstFloatPrgm1 = -127.0f;
 }

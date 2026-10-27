@@ -4,7 +4,11 @@
 
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
+#include "gmock/gmock.h"
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/distributed.hpp>
@@ -12,6 +16,7 @@
 #include <cstddef>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -26,6 +31,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
@@ -42,6 +48,10 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/forge_backdoor/global_semaphore.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
@@ -54,6 +64,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/impl/dispatch/vector_aligned.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -66,6 +77,15 @@ static_assert(std::is_move_assignable_v<MeshBuffer>, "MeshBuffer should be move 
 using MeshBufferTest2x4 = MeshDevice2x4Fixture;
 using MeshBufferTest1x2 = MeshDevice1x2Fixture;
 using MeshBufferTestSuite = GenericMeshDeviceFixture;
+using MeshBufferViewTest = MeshDevice1x1Fixture;
+
+class MeshBufferViewBoundsTest : public MeshDeviceFixtureBase {
+protected:
+    // Reserve small SRAM and reduce worker capacity to exercise both allocator boundaries.
+    MeshBufferViewBoundsTest() :
+        MeshDeviceFixtureBase(
+            Config{.mesh_shape = MeshShape{1, 1}, .l1_small_size = 32 * 1024, .worker_l1_size = 512 * 1024}) {}
+};
 
 class MeshBufferTest1x2MultiCQ : public MeshDeviceFixtureBase {
 protected:
@@ -143,81 +163,211 @@ std::vector<uint32_t> expected_shard_host_layout_after_filtered_write(
     return expected;
 }
 
-// Helper function to print detailed mismatch information between two uint32_t vectors
-template <typename T>
-void print_vector_mismatch_details(const std::vector<T>& dst_aligned, const std::vector<T>& src) {
-    if (dst_aligned == src) {
-        return;  // No mismatch, nothing to print
+// Reject incomplete, inconsistent and invalid addresses through the Metal API itself.
+TEST_F(MeshBufferViewTest, RejectsInvalidPlacements) {
+    using namespace tt::tt_metal::experimental::per_core_allocation;
+    // Leave room for unequal addresses so that case tests equality rather than SRAM bounds.
+    DeviceLocalShardedBufferTestConfig config{
+        .num_pages_per_core = {1, 3}, .num_cores = {2, 1}, .page_shape = {1, 256}};
+    const DeviceLocalBufferConfig local{
+        .page_size = config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config)};
+    const ReplicatedBufferConfig replicated{.size = config.num_pages() * config.page_size()};
+    auto owner = MeshBuffer::create(replicated, local, mesh_device_.get());
+    const TensorSpec spec(
+        Shape{2, 64},
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig(
+                TensorMemoryLayout::HEIGHT_SHARDED,
+                BufferType::L1,
+                ShardSpec(config.shard_grid(), {1, 64}, ShardOrientation::ROW_MAJOR))));
+    const DeviceAddr address = owner->address();
+    const MeshCoordinate coord(0, 0);
+    PerNodeMeshDeviceMemorySpan valid;
+    valid.per_device_spans[coord].per_node_spans = {
+        {CoreCoord(0, 0), {address, 256}}, {CoreCoord(1, 0), {address, 256}}};
+    using ::testing::HasSubstr;
+    using ::testing::ThrowsMessage;
+    EXPECT_EQ(create_sram_buffer_view(*mesh_device_, spec, valid).address(), address);
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, {}); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("requires addresses")));
+    auto invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.erase(CoreCoord(1, 0));
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("must cover every configured data core")));
+    invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.emplace(CoreCoord(2, 0), NodeLocalSpan{address, 256});
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("core is not in the buffer configuration")));
+    invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(1, 0)).address += 1;
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("address must be aligned")));
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(1, 0)).address = address + 256;
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("requires one address on every core")));
+    invalid = valid;
+    invalid.per_device_spans.emplace(MeshCoordinate(0, 1), valid.per_device_spans.at(coord));
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("device coordinate is outside the mesh")));
+    invalid = valid;
+    for (auto& [core, span] : invalid.per_device_spans.at(coord).per_node_spans) {
+        span.address = mesh_device_->get_device(coord)->l1_size_per_core();
     }
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+    invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(0, 0)).address = 0;
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+    invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(0, 0)).size = 255;
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("padded tensor footprint exceeds supplied span")));
+    invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(0, 0)).size = std::numeric_limits<uint64_t>::max();
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+}
 
-    size_t size = std::min(dst_aligned.size(), src.size());
-    std::vector<std::pair<size_t, size_t>> mismatch_ranges;  // pairs of (start_offset, count)
-
-    // Find all ranges of mismatches
-    size_t i = 0;
-    while (i < size) {
-        if (dst_aligned[i] != src[i]) {
-            size_t start = i;
-            size_t count = 0;
-            while (i < size && dst_aligned[i] != src[i]) {
-                count++;
-                i++;
-            }
-            mismatch_ranges.emplace_back(start, count);
-        } else {
-            i++;
-        }
+// Ordinary views and semaphores must not cross into reserved small SRAM, even when physically in bounds.
+TEST_F(MeshBufferViewBoundsTest, RespectsAllocatorRegions) {
+    using namespace tt::tt_metal::experimental::per_core_allocation;
+    using ::testing::HasSubstr;
+    using ::testing::ThrowsMessage;
+    const MeshCoordinate coord(0, 0);
+    auto* device = mesh_device_->get_device(coord);
+    const auto& allocator = device->allocator();
+    const DeviceAddr base = allocator->get_base_allocator_addr(HalMemType::L1);
+    const DeviceAddr end = base + allocator->get_bank_size(BufferType::L1);
+    const DeviceAddr alignment = allocator->get_alignment(BufferType::L1);
+    ASSERT_EQ(device->l1_size_per_core() - end, 32 * 1024);
+    ASSERT_GE(base, device->l1_size_per_core() - 512 * 1024);
+    DeviceLocalShardedBufferTestConfig config{
+        .num_pages_per_core = {1, 1}, .num_cores = {1, 1}, .page_shape = {1, 256}};
+    const TensorSpec spec(
+        Shape{1, 64},
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig(
+                TensorMemoryLayout::HEIGHT_SHARDED,
+                BufferType::L1,
+                ShardSpec(config.shard_grid(), {1, 64}, ShardOrientation::ROW_MAJOR))));
+    const auto footprint = spec.compute_consumed_memory_bytes_per_bank(alignment, 1);
+    // Describe the supplied bytes without claiming ownership or writing them.
+    const auto memory_at = [&](DeviceAddr address) {
+        PerNodeMeshDeviceMemorySpan memory;
+        memory.per_device_spans[coord].per_node_spans.emplace(CoreCoord(0, 0), NodeLocalSpan{address, footprint});
+        return memory;
+    };
+    // Boundary views carry metadata only; no writes occur without an owning allocation.
+    for (const DeviceAddr address : {base, end - footprint}) {
+        EXPECT_EQ(create_sram_buffer_view(*mesh_device_, spec, memory_at(address)).address(), address);
     }
-
-    // Print information for each mismatch range
-    std::cout << "\n=== DATA MISMATCH DETECTED ===\n";
-    std::cout << "Total elements: " << size << "\n";
-    std::cout << "Number of mismatch ranges: " << mismatch_ranges.size() << "\n\n";
-
-    for (const auto& [start_offset, mismatch_count] : mismatch_ranges) {
-        std::cout << "Mismatch Range: offset=" << start_offset << ", count=" << mismatch_count << "\n";
-
-        // Print header
-        std::cout << "Offset   ";
-        for (int j = 0; j < 8; j++) {
-            std::cout << " | Dst:" << j << "    Src:" << j << "   ";
-        }
-        std::cout << "|\n";
-        std::cout << std::string(190, '-') << "\n";
-
-        // Print up to 128 pairs (or the actual count if less)
-        size_t pairs_to_print = std::min(mismatch_count, size_t(128));
-
-        for (size_t offset = 0; offset < pairs_to_print; offset += 8) {
-            size_t pairs_in_line = std::min(size_t(8), pairs_to_print - offset);
-
-            // Print offset for this line
-            std::cout << std::setw(8) << std::left << (start_offset + offset) << " ";
-
-            // Print 8 pairs (or fewer if at the end)
-            for (size_t j = 0; j < pairs_in_line; j++) {
-                size_t idx = start_offset + offset + j;
-                std::cout << " | 0x" << std::hex << std::setfill('0') << std::setw(8) << dst_aligned[idx] << " 0x"
-                          << std::hex << std::setfill('0') << std::setw(8) << src[idx];
-                std::cout << std::dec << std::setfill(' ');
-            }
-            // Fill remaining columns if less than 8 pairs in this line
-            for (size_t j = pairs_in_line; j < 8; j++) {
-                std::cout << " |                      ";
-            }
-            std::cout << " |\n";
-        }
-
-        if (mismatch_count > 128) {
-            std::cout << "... (" << (mismatch_count - 128) << " more mismatched values not shown)\n";
-        }
-        std::cout << "\n";
+    for (const DeviceAddr address : {base - alignment, end - alignment, end, end + 16 * 1024}) {
+        EXPECT_THAT(
+            [&] { create_sram_buffer_view(*mesh_device_, spec, memory_at(address)); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
     }
-
-    if (dst_aligned.size() != src.size()) {
-        std::cout << "WARNING: Size mismatch - dst_aligned.size()=" << dst_aligned.size()
-                  << ", src.size()=" << src.size() << "\n";
+    const DeviceLocalBufferConfig small_config{
+        .page_size = config.page_size(),
+        .buffer_type = BufferType::L1_SMALL,
+        .sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config)};
+    auto small_owner = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = config.num_pages() * config.page_size()}, small_config, mesh_device_.get());
+    std::vector<uint32_t> expected(64, 91);
+    WriteShard(mesh_device_->mesh_command_queue(), small_owner, expected, coord, true);
+    EXPECT_THAT(
+        [&] {
+            tt::tt_metal::experimental::CreateGlobalSemaphore(
+                *mesh_device_, config.shard_grid(), 37, BufferType::L1, small_owner->address());
+        },
+        ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+    for (const DeviceAddr address : {end - alignment, DeviceAddr{device->l1_size_per_core()}}) {
+        EXPECT_THAT(
+            [&] {
+                tt::tt_metal::experimental::CreateGlobalSemaphore(
+                    *mesh_device_, config.shard_grid(), 37, BufferType::L1_SMALL, address);
+            },
+            ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
     }
+    std::vector<uint32_t> readback;
+    ReadShard(mesh_device_->mesh_command_queue(), readback, small_owner, coord);
+    EXPECT_EQ(readback, expected);
+    {
+        auto semaphore = tt::tt_metal::experimental::CreateGlobalSemaphore(
+            *mesh_device_, config.shard_grid(), 37, BufferType::L1_SMALL, small_owner->address());
+        EXPECT_EQ(semaphore.address(), small_owner->address());
+    }
+    ReadShard(mesh_device_->mesh_command_queue(), readback, small_owner, coord);
+    ASSERT_EQ(readback.size(), expected.size());
+    EXPECT_EQ(readback.front(), 37);
+    // Padding within the written word's alignment block is unspecified; neighboring blocks stay intact.
+    EXPECT_TRUE(std::equal(
+        readback.begin() + alignment / sizeof(uint32_t),
+        readback.end(),
+        expected.begin() + alignment / sizeof(uint32_t)));
+    // A null initializer checks the final valid word without writing unowned memory.
+    EXPECT_EQ(
+        tt::tt_metal::experimental::CreateGlobalSemaphore(
+            *mesh_device_, config.shard_grid(), std::nullopt, BufferType::L1, end - alignment)
+            .address(),
+        end - alignment);
+}
+
+// Different per-core addresses must survive transfers and view destruction without touching neighbors.
+TEST_F(MeshBufferViewTest, DistinctCoreAddressesPreserveBacking) {
+    using namespace tt::tt_metal::experimental::per_core_allocation;
+    DeviceLocalShardedBufferTestConfig config{
+        .num_pages_per_core = {1, 3}, .num_cores = {2, 1}, .page_shape = {1, 256}};
+    DeviceLocalBufferConfig local{
+        .page_size = config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config)};
+    auto owner = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = config.num_pages() * config.page_size()}, local, mesh_device_.get());
+    const MeshCoordinate coord(0, 0);
+    std::vector<uint32_t> expected(384, 91);
+    WriteShard(mesh_device_->mesh_command_queue(), owner, expected, coord, true);
+    config.num_pages_per_core = {1, 1};
+    local.sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config);
+    set_per_core_allocation(local.sharding_args, true);
+    MemoryConfig memory(
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec(config.shard_grid(), {1, 64}, ShardOrientation::ROW_MAJOR));
+    set_per_core_allocation(memory, true);
+    const TensorSpec spec(Shape{2, 64}, TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory));
+    PerNodeMeshDeviceMemorySpan spans;
+    spans.per_device_spans[coord].per_node_spans = {
+        {CoreCoord(0, 0), {owner->address(), 256}}, {CoreCoord(1, 0), {owner->address() + 256, 256}}};
+    // These legacy transfer helpers require shared ownership; the view factory itself does not.
+    auto view = std::make_shared<MeshBuffer>(create_sram_buffer_view(*mesh_device_, spec, spans));
+    std::vector<uint32_t> values(128, 17);
+    std::fill(values.begin() + 64, values.end(), 29);
+    WriteShard(mesh_device_->mesh_command_queue(), view, values, coord, true);
+    std::vector<uint32_t> readback;
+    ReadShard(mesh_device_->mesh_command_queue(), readback, view, coord);
+    EXPECT_EQ(readback, values);
+    std::fill(expected.begin(), expected.begin() + 64, 17);
+    std::fill(expected.begin() + 256, expected.begin() + 320, 29);
+    view.reset();
+    ReadShard(mesh_device_->mesh_command_queue(), readback, owner, coord);
+    EXPECT_EQ(readback, expected);
 }
 
 TEST_F(MeshBufferTest2x4, ShardedBufferInitialization) {
@@ -353,6 +503,123 @@ TEST_F(MeshBufferTest2x4, GetDeviceBuffer) {
     EXPECT_ANY_THROW(replicated_buffer->get_device_buffer(MeshCoordinate{2, 4}));
 
     EXPECT_NO_THROW(replicated_buffer->get_device_buffer(MeshCoordinate{1, 3}));
+}
+
+TEST_F(MeshBufferTest2x4, GetDeviceBufferForEveryLocalDevice) {
+    // Device buffers other than the reference one are built on first use; each must still be a buffer on its own
+    // device at the lockstep address, and be built only once.
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ShardedBufferConfig buffer_config{
+        .global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 32}};
+    auto mesh_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+    // A view over the same address takes the externally-owned path.
+    auto mesh_buffer_view =
+        MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get(), mesh_buffer->address());
+
+    for (const auto& buffer : {mesh_buffer, mesh_buffer_view}) {
+        std::optional<MeshCoordinate> first_local_coord;
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            if (!mesh_device_->is_local(coord)) {
+                continue;
+            }
+            if (!first_local_coord.has_value()) {
+                first_local_coord = coord;
+            }
+            Buffer* device_buffer = buffer->get_device_buffer(coord);
+            ASSERT_NE(device_buffer, nullptr);
+            EXPECT_EQ(device_buffer->device(), mesh_device_->get_device(coord));
+            EXPECT_EQ(device_buffer->address(), buffer->address());
+            EXPECT_EQ(device_buffer->size(), buffer->device_local_size());
+            EXPECT_EQ(device_buffer->page_size(), buffer->page_size());
+            EXPECT_EQ(device_buffer->buffer_type(), BufferType::DRAM);
+            EXPECT_EQ(buffer->get_device_buffer(coord), device_buffer);
+        }
+        ASSERT_TRUE(first_local_coord.has_value());
+        EXPECT_EQ(buffer->get_reference_buffer(), buffer->get_device_buffer(*first_local_coord));
+    }
+}
+
+// Local device coordinates in the order MeshBuffer visits them; the first one holds the reference buffer.
+std::vector<MeshCoordinate> local_coords(const MeshDevice& mesh_device) {
+    std::vector<MeshCoordinate> coords;
+    for (const auto& coord : MeshCoordinateRange(mesh_device.shape())) {
+        if (mesh_device.is_local(coord)) {
+            coords.push_back(coord);
+        }
+    }
+    return coords;
+}
+
+TEST_F(MeshBufferTest2x4, GetDeviceBufferConcurrentFirstUse) {
+    // Threads racing on the first use of a device buffer must all get the same one.
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const auto coords = local_coords(*mesh_device_);
+    if (coords.size() < 2) {
+        GTEST_SKIP() << "Needs two local devices";
+    }
+    // Not the first device, whose buffer is the reference one and is built at allocation.
+    const MeshCoordinate& coord = coords[1];
+    constexpr int kNumThreads = 8;
+    // A fresh MeshBuffer per round, so that every round races on an entry that is not built yet.
+    constexpr int kNumRounds = 20;
+
+    for (int round = 0; round < kNumRounds; round++) {
+        auto mesh_buffer =
+            MeshBuffer::create(ReplicatedBufferConfig{.size = 16 << 10}, device_local_config, mesh_device_.get());
+        std::vector<Buffer*> device_buffers(kNumThreads, nullptr);
+        std::atomic<bool> start{false};
+        std::vector<std::thread> threads;
+        threads.reserve(kNumThreads);
+        for (int i = 0; i < kNumThreads; i++) {
+            threads.emplace_back([&, i]() {
+                while (!start.load()) {
+                    std::this_thread::yield();
+                }
+                // An exception escaping the thread would terminate the test binary.
+                try {
+                    device_buffers[i] = mesh_buffer->get_device_buffer(coord);
+                } catch (const std::exception& e) {
+                    ADD_FAILURE() << e.what();
+                }
+            });
+        }
+        start = true;
+        for (auto& thread : threads) {
+            thread.join();
+        }
+
+        ASSERT_NE(device_buffers[0], nullptr);
+        for (auto* device_buffer : device_buffers) {
+            EXPECT_EQ(device_buffer, device_buffers[0]);
+        }
+        EXPECT_EQ(device_buffers[0]->address(), mesh_buffer->address());
+        EXPECT_EQ(mesh_buffer->get_device_buffer(coord), device_buffers[0]);
+    }
+}
+
+TEST_F(MeshBufferTest2x4, GetDeviceBufferAfterDeallocate) {
+    // After deallocate() the address may already belong to another buffer, so no device buffer is returned, whether it
+    // was built before or not.
+    const auto coords = local_coords(*mesh_device_);
+    if (coords.size() < 2) {
+        GTEST_SKIP() << "Needs two local devices";
+    }
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
+    auto used_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+    EXPECT_NE(used_buffer->get_device_buffer(coords[1]), nullptr);
+    auto unused_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+
+    for (const auto& mesh_buffer : {used_buffer, unused_buffer}) {
+        mesh_buffer->deallocate();
+        EXPECT_FALSE(mesh_buffer->is_allocated());
+        // The reference buffer and the second device's buffer.
+        EXPECT_ANY_THROW(mesh_buffer->get_device_buffer(coords[0]));
+        EXPECT_ANY_THROW(mesh_buffer->get_device_buffer(coords[1]));
+    }
 }
 
 TEST_F(MeshBufferTestSuite, MoveConstructor) {
@@ -838,7 +1105,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
 
     // Create HostBuffer on top of dst
     HostBuffer host_buffer(
-        tt::stl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
+        ttsl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_unique = experimental::PinnedMemory::Create(
@@ -894,7 +1161,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
 
     // Create HostBuffer on top of dst
     HostBuffer host_buffer(
-        tt::stl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
+        ttsl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_shared = experimental::PinnedMemory::Create(
@@ -940,10 +1207,10 @@ TEST_F(MeshBufferTestSuite, PinnedMemoryCacheUpgradesCoverageForSameHostBuffer) 
     const uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
     const auto num_words = single_tile_size / sizeof(uint32_t);
     auto src =
-        std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(num_words, 0);
+        std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(num_words, 0);
     std::iota(src->begin(), src->end(), 0);
 
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), num_words), MemoryPin(src));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(src->data(), num_words), MemoryPin(src));
 
     const auto first_coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
     const auto single_coord_range = MeshCoordinateRangeSet(MeshCoordinateRange(first_coord, first_coord));
@@ -988,14 +1255,14 @@ TEST_F(MeshBufferTestSuite, PinnedMemoryCacheEvictsOldestEntryToStayWithinLimit)
 
     const uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
     const auto num_words = single_tile_size / sizeof(uint32_t);
-    using AlignedVector = std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>;
+    using AlignedVector = std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>;
     auto src0 = std::make_shared<AlignedVector>(num_words, 0);
     auto src1 = std::make_shared<AlignedVector>(num_words, 1);
     auto src2 = std::make_shared<AlignedVector>(num_words, 2);
 
-    HostBuffer host_buffer0(tt::stl::Span<uint32_t>(src0->data(), num_words), MemoryPin(src0));
-    HostBuffer host_buffer1(tt::stl::Span<uint32_t>(src1->data(), num_words), MemoryPin(src1));
-    HostBuffer host_buffer2(tt::stl::Span<uint32_t>(src2->data(), num_words), MemoryPin(src2));
+    HostBuffer host_buffer0(ttsl::Span<uint32_t>(src0->data(), num_words), MemoryPin(src0));
+    HostBuffer host_buffer1(ttsl::Span<uint32_t>(src1->data(), num_words), MemoryPin(src1));
+    HostBuffer host_buffer2(ttsl::Span<uint32_t>(src2->data(), num_words), MemoryPin(src2));
 
     const auto first_coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
     const auto single_coord_range = MeshCoordinateRangeSet(MeshCoordinateRange(first_coord, first_coord));
@@ -1055,7 +1322,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
     uint8_t* dst_ptr_unaligned = dst->data() + unaligned_shift;
 
     // Create HostBuffer on top of dst
-    HostBuffer host_buffer(tt::stl::Span<uint8_t>(dst_ptr_unaligned, bytes_per_device), MemoryPin(dst));
+    HostBuffer host_buffer(ttsl::Span<uint8_t>(dst_ptr_unaligned, bytes_per_device), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_shared = experimental::PinnedMemory::Create(
@@ -1099,13 +1366,13 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
         << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
         << std::endl;
     // Prepare write source buffer and pin the entire destination range for the target shard
-    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+    auto src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
         bytes_per_device / sizeof(uint32_t), 0);
     std::iota(src->begin(), src->end(), 0);
     // Create HostBuffer on top of src
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
     // Prepare read destination buffer. Use aigned vector for ease of verification with src above.
-    auto dst = std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>(
+    auto dst = std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>(
         bytes_per_device / sizeof(uint32_t), 0);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
@@ -1155,16 +1422,16 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryWaitsOnClose) {
         << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
         << std::endl;
 
-    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+    auto src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
         bytes_per_device / sizeof(uint32_t), 0);
     std::iota(src->begin(), src->end(), 0);
-    std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>> dst(
+    std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>> dst(
         bytes_per_device / sizeof(uint32_t), 0);
 
     distributed::MeshCoordinate coord(0, 0);
     {
         HostBuffer host_buffer(
-            tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
+            ttsl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
         auto pinned_shared = tt_metal::experimental::PinnedMemory::Create(
             *mesh_device_,
             MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord)),
@@ -1211,13 +1478,13 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeLargePage
         << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
         << std::endl;
     // Prepare write source buffer and pin the entire destination range for the target shard
-    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+    auto src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
         bytes_per_device / sizeof(uint32_t), 0);
     std::iota(src->begin(), src->end(), 0);
     // Create HostBuffer on top of src
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
     // Prepare read destination buffer. Use aigned vector for ease of verification with src above.
-    auto dst = std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>(
+    auto dst = std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>(
         bytes_per_device / sizeof(uint32_t), 0);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
@@ -1273,7 +1540,7 @@ TEST_F(MeshBufferTest1x2MultiCQ, EnqueueWriteShardsWithRemotePinnedMemoryAndAlig
     ASSERT_EQ(aligned_byte_shift % hal.get_alignment(HalMemType::L1), 0u)
         << "Alignment prefix must preserve L1 alignment for pinned relay";
 
-    using AlignedByteVector = std::vector<uint8_t, tt::stl::aligned_allocator<uint8_t, device_read_align>>;
+    using AlignedByteVector = std::vector<uint8_t, ttsl::aligned_allocator<uint8_t, device_read_align>>;
     const MeshCoordinate remote_coord(0, 1);
     std::vector<std::shared_ptr<AlignedByteVector>> source_storage;
     std::vector<HostBuffer> source_host_buffers;
@@ -1296,7 +1563,7 @@ TEST_F(MeshBufferTest1x2MultiCQ, EnqueueWriteShardsWithRemotePinnedMemoryAndAlig
         }
 
         source_storage.push_back(src);
-        source_host_buffers.emplace_back(tt::stl::Span<uint8_t>(src_shifted, bytes_per_device), MemoryPin(src));
+        source_host_buffers.emplace_back(ttsl::Span<uint8_t>(src_shifted, bytes_per_device), MemoryPin(src));
         pinned_sources.push_back(tt_metal::experimental::PinnedMemory::Create(
             *mesh_device_,
             MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord)),
@@ -1385,7 +1652,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
         const size_t unaligned_word_shift = aligned_byte_shift / sizeof(uint32_t);
         const size_t num_words = (bytes_per_device / sizeof(uint32_t));
         // Prepare write source buffer and pin the entire destination range for the target shard
-        auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+        auto src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
             num_words + unaligned_word_shift, 0);
 
         uint32_t* src_unaligned = src->data() + unaligned_word_shift;
@@ -1394,7 +1661,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
         // Create a copy of the source vector to make it easy to verify with the destination vector.
         std::vector<uint32_t> src_vector(src_unaligned, src_unaligned + num_words);
         // Create HostBuffer on top of src
-        HostBuffer host_buffer(tt::stl::Span<uint32_t>(src_unaligned, num_words), MemoryPin(src));
+        HostBuffer host_buffer(ttsl::Span<uint32_t>(src_unaligned, num_words), MemoryPin(src));
         std::vector<uint32_t> dst(num_words, 0);
 
         distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
@@ -1503,10 +1770,10 @@ TEST_F(MeshBufferTestSuite, EnqueueProgramAfterPinnedMemoryWriteRerunsCorrectly)
     ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
         << "Source vector alignment must be a multiple of PCIE read alignment: "
         << hal.get_read_alignment(HalMemType::HOST);
-    auto pinned_src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+    auto pinned_src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
         pinned_write_size / sizeof(uint32_t), 0);
     std::iota(pinned_src->begin(), pinned_src->end(), 0);
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(pinned_src->data(), pinned_src->size()), MemoryPin(pinned_src));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(pinned_src->data(), pinned_src->size()), MemoryPin(pinned_src));
     auto pinned_memory = tt_metal::experimental::PinnedMemory::Create(
         *mesh_device_, MeshCoordinateRangeSet(all_devices), host_buffer, /*map_to_noc=*/true);
     ASSERT_TRUE(pinned_memory);
@@ -1560,7 +1827,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
     const size_t num_words = (buf_size / sizeof(uint32_t));
 
     // Prepare write source buffer and pin it
-    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+    auto src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
         num_words + unaligned_word_shift, 0);
 
     uint32_t* src_unaligned = src->data() + unaligned_word_shift;
@@ -1570,7 +1837,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
     std::vector<uint32_t> src_vector(src_unaligned, src_unaligned + num_words);
 
     // Create HostBuffer on top of unaligned src
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src_unaligned, num_words), MemoryPin(src));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(src_unaligned, num_words), MemoryPin(src));
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
     auto pinned_shared = tt_metal::experimental::PinnedMemory::Create(
@@ -1648,13 +1915,13 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalWidthShardedBufferWithPinnedM
     const size_t source_word_shift = source_byte_shift / sizeof(uint32_t);
     const size_t num_words = buf_size / sizeof(uint32_t);
 
-    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+    auto src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
         num_words + source_word_shift, 0);
     uint32_t* src_shifted = src->data() + source_word_shift;
     std::iota(src_shifted, src_shifted + num_words, 0);
 
     std::vector<uint32_t> expected(src_shifted, src_shifted + num_words);
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src_shifted, num_words), MemoryPin(src));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(src_shifted, num_words), MemoryPin(src));
 
     const MeshCoordinate coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
     auto pinned_shared = tt_metal::experimental::PinnedMemory::Create(

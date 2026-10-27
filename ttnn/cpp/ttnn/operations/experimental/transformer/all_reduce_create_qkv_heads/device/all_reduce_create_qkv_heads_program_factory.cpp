@@ -49,14 +49,14 @@ CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
     size_t num_links,
     size_t num_workers_per_link,
-    IDevice* device,
+    const MeshDevice& device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<CoreRangeSet>& reserved_core_range = std::nullopt) {
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    auto available_cores = device->worker_cores(
+    auto available_cores = device.worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+        sub_device_id.has_value() ? *sub_device_id : device.get_sub_device_ids().at(0));
     if (reserved_core_range.has_value()) {
         available_cores = available_cores.subtract(*reserved_core_range);
     }
@@ -120,10 +120,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
-    auto* const target_device = mesh_device->get_device(mesh_coord);
-    std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
-                                        ? mesh_view.get_devices_on_column(mesh_coord[1])
-                                        : mesh_view.get_devices_on_row(mesh_coord[0]);
+    const uint32_t coord_index = mesh_coord[operation_attributes.cluster_axis];
     const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
                                      ? mesh_view.get_fabric_node_ids_on_column(mesh_coord[1])
                                      : mesh_view.get_fabric_node_ids_on_row(mesh_coord[0]);
@@ -132,7 +129,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t device_index = 0;
     for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-        if (devices.at(i) == target_device) {
+        if (i == coord_index) {
             device_index = i;
             if (i != 0) {
                 backward_fabric_node_id = fabric_node_ids.at(i - 1);
@@ -281,11 +278,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     [[maybe_unused]] bool is_first_chip = device_index == 0;
     [[maybe_unused]] bool is_last_chip = device_index == operation_attributes.ring_size - 1;
     log_trace(
-        tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        target_device->id(),
-        is_first_chip,
-        is_last_chip);
+        tt::LogOp, "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}", mesh_coord, is_first_chip, is_last_chip);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors_ccl = {input_tensor};
@@ -328,7 +321,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores_fuse(
         operation_attributes.num_links,
         num_workers_per_link,
-        mesh_device,
+        *mesh_device,
         operation_attributes.sub_device_id,
         reserved_cores);
 
@@ -341,7 +334,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = input_tensor_num_pages;  // TODO: Reduce this to double-buffer packet-size?
@@ -381,6 +374,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     // Create output tensor splits
     // TODO: Currently does not support output shards being split across multiple links
     std::vector<CoreRangeSet> output_corerangeset_per_link;
+    output_corerangeset_per_link.reserve(operation_attributes.num_links);
     std::vector<uint32_t> num_output_cores_in_link(operation_attributes.num_links, 0);
     uint32_t output_cores_per_link = tt::div_up(output_tensor_cores.num_cores(), operation_attributes.num_links);
     uint32_t num_assigned_cores = 0;
@@ -692,10 +686,16 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         uint32_t input_first_core_tile_start_offset = input_tensor_tile_offset_per_link[link];
         uint32_t output_first_core_tile_start_offset = 0;
 
+        const uint32_t num_input_cores_in_link =
+            input_cores_idx_per_link[link].second - input_cores_idx_per_link[link].first;
         std::vector<uint32_t> input_tensor_cores_x;
+        input_tensor_cores_x.reserve(num_input_cores_in_link);
         std::vector<uint32_t> input_tensor_cores_y;
+        input_tensor_cores_y.reserve(num_input_cores_in_link);
         std::vector<uint32_t> output_tensor_cores_x;
+        output_tensor_cores_x.reserve(num_output_cores_in_link[link]);
         std::vector<uint32_t> output_tensor_cores_y;
+        output_tensor_cores_y.reserve(num_output_cores_in_link[link]);
         for (uint32_t i = input_cores_idx_per_link[link].first; i < input_cores_idx_per_link[link].second; i++) {
             auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[i]);
             input_tensor_cores_x.push_back(this_core.x);
@@ -728,10 +728,15 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         desc.kernels[worker_sender_reader_kernel_id].emplace_runtime_args(core, reader_rt_args);
 
         // Set writer runtime args
+        const size_t num_mcast_ranges = output_corerangeset_per_link[link].ranges().size();
         std::vector<uint32_t> mcast_start_x;
+        mcast_start_x.reserve(num_mcast_ranges);
         std::vector<uint32_t> mcast_start_y;
+        mcast_start_y.reserve(num_mcast_ranges);
         std::vector<uint32_t> mcast_end_x;
+        mcast_end_x.reserve(num_mcast_ranges);
         std::vector<uint32_t> mcast_end_y;
+        mcast_end_y.reserve(num_mcast_ranges);
 
         uint32_t num_mcast_cores = 0;
         for (const auto& range : output_corerangeset_per_link[link].ranges()) {

@@ -2,12 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include <cstdint>
 #include <utility>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -41,10 +47,10 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     uint32_t arg_idx = 0;
-    address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    address_t input_tensor_address = get_common_arg_val<address_t>(ttnn::ccl::AllGatherCommonArgs::input);
+    address_t output_tensor_address = get_common_arg_val<address_t>(ttnn::ccl::AllGatherCommonArgs::output);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 0 is forward, 1 is backward
+    size_t out_ready_sem = get_common_arg_val<uint32_t>(ttnn::ccl::AllGatherCommonArgs::semaphore_0 + direction);
     const auto input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
     const auto input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
@@ -100,10 +106,13 @@ void kernel_main() {
     const auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_tensor_address);
 #endif
 
+    Noc noc_obj;
+    CircularBuffer cb_output(cb_output_id);
+
     OpSignaler op_signaler;
-    uint32_t self_write_done_semaphore_addr;
+    uint32_t self_write_done_sem_id = 0;
     if constexpr (fuse_op) {
-        self_write_done_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+        self_write_done_sem_id = get_arg_val<uint32_t>(arg_idx++);
         op_signaler = OpSignaler(arg_idx);
     }
 
@@ -116,8 +125,8 @@ void kernel_main() {
             uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
             uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-            cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
-            size_t l1_write_addr = get_write_ptr(cb_output_id);
+            cb_output.reserve_back(num_tiles_to_write_per_packet);
+            size_t l1_write_addr = cb_output.get_write_ptr();
             for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                 uint32_t tile_id = output_tile_id_start + tiles_read;
                 uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(tile_id);
@@ -127,8 +136,8 @@ void kernel_main() {
                 tiles_read++;
             }
 
-            noc_async_read_barrier();
-            cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
+            noc_obj.async_read_barrier();
+            cb_output.push_back(num_tiles_to_write_per_packet);
         }
         tiles_read = input_tile_id_start;
         tiles_to_read = input_tile_id_end;
@@ -305,8 +314,8 @@ void kernel_main() {
 
                         // Check if all tiles for this CB entry are ready
                         if (cb_tiles_pushed + num_tiles_to_read <= sem_iter_pos) {
-                            cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
-                            size_t l1_write_addr = get_write_ptr(cb_output_id);
+                            cb_output.reserve_back(num_tiles_to_write_per_packet);
+                            size_t l1_write_addr = cb_output.get_write_ptr();
 
                             for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                                 uint32_t tile_id = output_tile_id_start + cb_row_offset + cb_pages_read_in_row;
@@ -321,8 +330,8 @@ void kernel_main() {
                                 }
                             }
 
-                            noc_async_read_barrier();
-                            cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
+                            noc_obj.async_read_barrier();
+                            cb_output.push_back(num_tiles_to_write_per_packet);
                             cb_tiles_pushed += num_tiles_to_read;
                         } else {
                             // Need more semaphores before we can push this CB entry
@@ -381,14 +390,24 @@ void kernel_main() {
         if constexpr (fuse_op) {
             // Signal matmul to go
             if (direction == 1 && slices_received == 1) {
-                noc_semaphore_wait_min(
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(self_write_done_semaphore_addr), 1);
-                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(self_write_done_semaphore_addr), 0);
+                Semaphore<> self_write_done_sem(self_write_done_sem_id);
+                self_write_done_sem.wait_min(1);
+                self_write_done_sem.set(0);
             }
             op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
         }
     }
 
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
-    noc_async_atomic_barrier();
+    // Subtract only this launch's ready credits instead of resetting. The semaphore is shared by
+    // every launch of the cached op, and a persistent output lets a faster rank send the next
+    // launch's increments before this reader exits; a reset would erase them and the next launch
+    // would wait forever (the host-side startup barrier is skipped for persistent outputs).
+    noc_semaphore_inc(get_noc_addr(out_ready_sem), uint32_t{0} - sem_target);
+
+    // Flush any outstanding NOC transactions before the kernel exits. In the fused path
+    // OpSignaler issues non-posted atomic semaphore increments over NOC; without waiting for
+    // their acknowledgement the watcher trips an inter-kernel data race. Mirror the writer's
+    // ending which barriers both writes and non-posted atomics.
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 }

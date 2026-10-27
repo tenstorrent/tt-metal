@@ -53,7 +53,7 @@ int main(int argc, char** /*argv*/) {
         ids.push_back(id);
     }
 
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
     auto devices = distributed::MeshDevice::create_unit_meshes(
         ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
 
@@ -112,11 +112,10 @@ int main(int argc, char** /*argv*/) {
                 dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
             distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, false);
 
-            const std::array<uint32_t, 8> runtime_args = {
+            const std::array<uint32_t, 4> runtime_args = {
                 l1_buffer->address(),
                 input_dram_buffer->address(),
                 output_dram_buffer->address(),
-                l1_buffer->size(),
                 num_tiles};
 
             SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);

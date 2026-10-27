@@ -13,6 +13,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
 #include <tt_metal.hpp>
+#include "tt_metal_profiler.hpp"
 #include <fstream>
 
 #include "context/metal_env_accessor.hpp"
@@ -56,7 +57,32 @@ NLOHMANN_JSON_SERIALIZE_ENUM(
      {RiscType::TRISC_1, "TRISC_1"},
      {RiscType::TRISC_2, "TRISC_2"},
      {RiscType::TENSIX_RISC_AGG, "TENSIX_RISC_AGG"},
-     {RiscType::ERISC, "ERISC"}});
+     {RiscType::ERISC, "ERISC"},
+     {RiscType::NONE, "NONE"},
+     {RiscType::QUASAR_DM0, "QUASAR_DM0"},
+     {RiscType::QUASAR_DM1, "QUASAR_DM1"},
+     {RiscType::QUASAR_DM2, "QUASAR_DM2"},
+     {RiscType::QUASAR_DM3, "QUASAR_DM3"},
+     {RiscType::QUASAR_DM4, "QUASAR_DM4"},
+     {RiscType::QUASAR_DM5, "QUASAR_DM5"},
+     {RiscType::QUASAR_DM6, "QUASAR_DM6"},
+     {RiscType::QUASAR_DM7, "QUASAR_DM7"},
+     {RiscType::QUASAR_NEO0_TRISC0, "QUASAR_NEO0_TRISC0"},
+     {RiscType::QUASAR_NEO0_TRISC1, "QUASAR_NEO0_TRISC1"},
+     {RiscType::QUASAR_NEO0_TRISC2, "QUASAR_NEO0_TRISC2"},
+     {RiscType::QUASAR_NEO0_TRISC3, "QUASAR_NEO0_TRISC3"},
+     {RiscType::QUASAR_NEO1_TRISC0, "QUASAR_NEO1_TRISC0"},
+     {RiscType::QUASAR_NEO1_TRISC1, "QUASAR_NEO1_TRISC1"},
+     {RiscType::QUASAR_NEO1_TRISC2, "QUASAR_NEO1_TRISC2"},
+     {RiscType::QUASAR_NEO1_TRISC3, "QUASAR_NEO1_TRISC3"},
+     {RiscType::QUASAR_NEO2_TRISC0, "QUASAR_NEO2_TRISC0"},
+     {RiscType::QUASAR_NEO2_TRISC1, "QUASAR_NEO2_TRISC1"},
+     {RiscType::QUASAR_NEO2_TRISC2, "QUASAR_NEO2_TRISC2"},
+     {RiscType::QUASAR_NEO2_TRISC3, "QUASAR_NEO2_TRISC3"},
+     {RiscType::QUASAR_NEO3_TRISC0, "QUASAR_NEO3_TRISC0"},
+     {RiscType::QUASAR_NEO3_TRISC1, "QUASAR_NEO3_TRISC1"},
+     {RiscType::QUASAR_NEO3_TRISC2, "QUASAR_NEO3_TRISC2"},
+     {RiscType::QUASAR_NEO3_TRISC3, "QUASAR_NEO3_TRISC3"}});
 }  // namespace tracy
 
 namespace tt::tt_metal {
@@ -64,20 +90,20 @@ namespace tt::tt_metal {
 namespace {
 
 uint32_t get_available_worker_core_count_for_program(
+    MetalContext& ctx,
     ChipId chip_id,
     uint64_t encoded_runtime_host_id,
-    MetalEnv& env,
     uint8_t num_hw_cqs,
     const DispatchCoreConfig& dispatch_core_config) {
     const auto decoded = detail::DecodePerDeviceProgramID(encoded_runtime_host_id);
     const std::optional<tt::ProgramSubDeviceInfo> sub_device_info =
-        tt::GetProgramSubDevice(chip_id, decoded.base_program_id);
+        tt::GetProgramSubDevice(ctx.get_context_id(), chip_id, decoded.base_program_id);
     if (sub_device_info.has_value() && sub_device_info->num_available_worker_cores > 0) {
         return sub_device_info->num_available_worker_cores;
     }
 
     const CoreCoord compute_grid_size =
-        tt::get_compute_grid_size(MetalEnvAccessor(env).impl(), chip_id, num_hw_cqs, dispatch_core_config);
+        tt::get_compute_grid_size(MetalEnvAccessor(ctx.get_env()).impl(), chip_id, num_hw_cqs, dispatch_core_config);
     return compute_grid_size.x * compute_grid_size.y;
 }
 
@@ -256,7 +282,28 @@ bool matches_start_end_config(const tracy::TTDeviceMarker& marker, const Analysi
                marker.marker_name_keyword_flags, start_end_config.marker_name_keywords);
 }
 
+// Fixed per-processor-type clock (MHz) for Quasar. NEO TRISCs run at 1.4 GHz; DMs read the NEO TRISC
+// wall clock for now, so DM and TRISC timestamps share one timeline and can be compared directly.
+// TODO: update the DM clock frequency once the DMs read their own clock counter and the DM and TRISC
+// clock domains are synchronized.
+// Returns nullopt for non-Quasar RISCs (WH/BH), which fall back to the runtime device aiclk.
+std::optional<int> quasar_processor_clock_mhz(tracy::RiscType risc) {
+    using tracy::RiscType;
+    static_assert(
+        static_cast<int>(RiscType::QUASAR_DM7) - static_cast<int>(RiscType::QUASAR_DM0) == 7 &&
+            static_cast<int>(RiscType::QUASAR_NEO3_TRISC3) - static_cast<int>(RiscType::QUASAR_NEO0_TRISC0) == 15,
+        "quasar_processor_clock_mhz relies on contiguous QUASAR_DM*/QUASAR_NEO*_TRISC* enum blocks");
+    if (risc >= RiscType::QUASAR_DM0 && risc <= RiscType::QUASAR_DM7) {
+        return 1400;  // Quasar DM: 1.4 GHz (reads the NEO TRISC wall clock for now)
+    }
+    if (risc >= RiscType::QUASAR_NEO0_TRISC0 && risc <= RiscType::QUASAR_NEO3_TRISC3) {
+        return 1400;  // Neo TRISC: 1.4 GHz
+    }
+    return std::nullopt;
+}
+
 AnalysisResults parse_duration(
+    const Cluster& cluster,
     const AnalysisConfig& analysis_config,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
     ZoneScoped;
@@ -267,6 +314,7 @@ AnalysisResults parse_duration(
     std::unordered_map<experimental::ProgramExecutionUID, experimental::ProgramSingleAnalysisResult>&
         results_per_program_execution_uid = analysis_results.results_per_program_execution_uid;
     ChipId device_id = -1;
+    tracy::RiscType zone_start_risc = tracy::RiscType::NONE;
 
     for (uint32_t i = 0; i < markers.size(); ++i) {
         const auto& marker_ref = markers[i];
@@ -280,6 +328,9 @@ AnalysisResults parse_duration(
         if (matches_start_end_config(marker, analysis_config.start_config)) {
             if (program_results == PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT) {
                 program_results.start_timestamp = marker.timestamp;
+                if (zone_start_risc == tracy::RiscType::NONE) {
+                    zone_start_risc = marker.risc;
+                }
             }
         }
         if (matches_start_end_config(marker, analysis_config.end_config)) {
@@ -297,8 +348,9 @@ AnalysisResults parse_duration(
     for (auto& [_, result] : results_per_program_execution_uid) {
         if (result != PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT) {
             TT_ASSERT(result.start_timestamp <= result.end_timestamp);
+            // Quasar DM/TRISC use hardcoded clock frequencies for now
             const int chip_frequency_mhz =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
+                quasar_processor_clock_mhz(zone_start_risc).value_or(cluster.get_device_aiclk(device_id));
             result.duration = static_cast<uint64_t>(
                 std::round((result.end_timestamp - result.start_timestamp) * 1000.0 / chip_frequency_mhz));
         }
@@ -310,14 +362,16 @@ AnalysisResults parse_duration(
 }
 
 std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData>
-getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
+getMetaDataForPrograms(
+    MetalContext& ctx, const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
     ZoneScoped;
 
     std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData>
         program_execution_uid_to_meta_data;
 
-    // Use the default MetalEnv
-    MetalEnv& env = MetalContext::instance().get_env();
+    const Cluster& cluster = MetalEnvAccessor(ctx.get_env()).impl().get_cluster();
+    const uint8_t num_hw_cqs = ctx.get_dispatch_core_manager().get_num_hw_cqs();
+    const DispatchCoreConfig& dispatch_core_config = ctx.get_dispatch_core_manager().get_dispatch_core_config();
 
     std::unordered_map<experimental::ProgramExecutionUID, std::unordered_set<CoreCoord>>
         fw_cores_per_program_execution_uid;
@@ -326,16 +380,11 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
         const experimental::ProgramExecutionUID program_execution_uid = {
             marker.runtime_host_id, marker.trace_id, marker.trace_id_counter};
         if (!program_execution_uid_to_meta_data.contains(program_execution_uid)) {
-            const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             const umd::ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
             const ARCH device_arch = cluster_desc->get_arch(marker.chip_id);
 
-            const uint8_t num_hw_cqs =
-                tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
-            const DispatchCoreConfig& dispatch_core_config =
-                tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
             const uint32_t num_available_worker_cores = get_available_worker_core_count_for_program(
-                static_cast<ChipId>(marker.chip_id), marker.runtime_host_id, env, num_hw_cqs, dispatch_core_config);
+                ctx, static_cast<ChipId>(marker.chip_id), marker.runtime_host_id, num_hw_cqs, dispatch_core_config);
 
             program_execution_uid_to_meta_data[program_execution_uid] = {
                 .device_id = static_cast<ChipId>(marker.chip_id),
@@ -368,6 +417,7 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
 }
 
 AnalysisResults generateAnalysisForDeviceMarkers(
+    const Cluster& cluster,
     const AnalysisConfig& analysis_config,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) {
     TT_ASSERT(std::is_sorted(
@@ -376,16 +426,20 @@ AnalysisResults generateAnalysisForDeviceMarkers(
         analysis_config.dimension == AnalysisDimension::PROGRAM, "Analysis config dimension must be across programs");
 
     switch (analysis_config.type) {
-        case AnalysisType::PROGRAM_FIRST_TO_LAST_MARKER: return parse_duration(analysis_config, device_markers);
+        case AnalysisType::PROGRAM_FIRST_TO_LAST_MARKER:
+            return parse_duration(cluster, analysis_config, device_markers);
         default: TT_THROW("Invalid analysis type");
     }
 }
 
 ProgramsPerfResults generatePerfResultsForPrograms(
+    MetalContext& ctx,
     const std::vector<AnalysisConfig>& analysis_configs,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
     ThreadPool& thread_pool) {
     ZoneScoped;
+
+    const Cluster& cluster = MetalEnvAccessor(ctx.get_env()).impl().get_cluster();
 
     ProgramsPerfResults programs_perf_results;
     std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults>&
@@ -396,15 +450,16 @@ ProgramsPerfResults generatePerfResultsForPrograms(
     std::vector<AnalysisResults> analysis_results(analysis_configs.size());
     analysis_results_configs.resize(analysis_configs.size());
     for (const auto& analysis_config : analysis_configs) {
-        thread_pool.enqueue([&analysis_config, &analysis_results_configs, &device_markers, &analysis_results, i]() {
-            analysis_results[i] = generateAnalysisForDeviceMarkers(analysis_config, device_markers);
-            analysis_results_configs[i] = analysis_results[i].results_config;
-        });
+        thread_pool.enqueue(
+            [&cluster, &analysis_config, &analysis_results_configs, &device_markers, &analysis_results, i]() {
+                analysis_results[i] = generateAnalysisForDeviceMarkers(cluster, analysis_config, device_markers);
+                analysis_results_configs[i] = analysis_results[i].results_config;
+            });
         i++;
     }
 
     std::map<experimental::ProgramExecutionUID, ProgramsPerfResults::SingleProgramPerfResults::ProgramMetaData>
-        programs_meta_data = getMetaDataForPrograms(device_markers);
+        programs_meta_data = getMetaDataForPrograms(ctx, device_markers);
 
     thread_pool.wait();
 
@@ -426,11 +481,10 @@ ProgramsPerfResults generatePerfResultsForPrograms(
 }
 
 void writeProgramsPerfResultsToCSV(
-    const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path) {
+    MetalContext& ctx, const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path) {
     ZoneScoped;
 
-    std::scoped_lock lock(
-        tt::tt_metal::MetalContext::instance().profiler_state_manager()->programs_perf_report_write_mutex);
+    std::scoped_lock lock(ProfilerRegistry::instance().programs_perf_report_write_mutex);
 
     struct CsvRowData {
         std::string base_columns;
@@ -724,7 +778,7 @@ void writeProgramsPerfResultsToCSV(
         }
     };
 
-    const auto& dev_mgr = tt::tt_metal::MetalContext::instance().device_manager();
+    const auto& dev_mgr = ctx.device_manager();
     if (dev_mgr && dev_mgr->get_all_active_device_ids().size() == 1) {
         for (const auto& [device_id, samples] : kernel_durations_ns_by_device) {
             print_summary(device_id, samples);
@@ -800,6 +854,7 @@ std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::p
     const nlohmann::json configs_json = nlohmann::json::parse(json_ifs);
 
     std::vector<AnalysisConfig> configs;
+    configs.reserve(configs_json.size());
     for (const auto& config_json : configs_json) {
         configs.push_back(config_json.get<AnalysisConfig>());
     }

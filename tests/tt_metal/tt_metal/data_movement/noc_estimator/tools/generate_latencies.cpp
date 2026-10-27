@@ -13,12 +13,16 @@
 namespace fs = std::filesystem;
 namespace ne = tt::tt_metal::experimental::noc_estimator;
 
+static constexpr const char* NOC_ESTIMATOR_CSV_PREFIX = "Noc Estimator - ";
+
 std::vector<std::string> find_all_csvs(const std::string& data_dir) {
     std::vector<std::string> csv_paths;
 
     try {
         for (const auto& entry : fs::recursive_directory_iterator(data_dir)) {
-            if (entry.is_regular_file() && entry.path().extension() == ".csv") {
+            // The data directory also holds CSVs from other data movement tests, only take the estimator ones
+            if (entry.is_regular_file() && entry.path().extension() == ".csv" &&
+                entry.path().filename().string().starts_with(NOC_ESTIMATOR_CSV_PREFIX)) {
                 csv_paths.push_back(entry.path().string());
             }
         }
@@ -36,7 +40,7 @@ bool generate_yaml_from_csvs(const std::vector<std::string>& csv_paths, const st
         ne::offline::CsvReader reader;
         if (!reader.load_csv(path)) {
             std::cerr << "Failed to load " << path << std::endl;
-            continue;
+            return false;
         }
         std::cout << "Loaded: " << path << " (" << reader.get_data_points().size() << " points)\n";
 
@@ -83,11 +87,11 @@ int main(int argc, char** argv) {
     std::vector<std::string> csv_paths = find_all_csvs(data_dir);
 
     if (csv_paths.empty()) {
-        std::cerr << "No CSV files found in: " << data_dir << std::endl;
+        std::cerr << "No NoC estimator CSV files found in: " << data_dir << std::endl;
         return 1;
     }
 
-    std::cout << "Found " << csv_paths.size() << " CSV files" << std::endl;
+    std::cout << "Found " << csv_paths.size() << " NoC estimator CSV files" << std::endl;
 
     if (!generate_yaml_from_csvs(csv_paths, output_path)) {
         return 1;

@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -147,6 +148,7 @@ private:
     size_t string_info_size{};
     std::vector<ParsedStringInfo> parsed_string_info;
     std::map<std::string, EnumInfo, std::less<>> enum_info_cache_;
+    std::unordered_map<uint64_t, std::vector<ttexalens::native_elf::CallstackEntry>> callstack_cache_;
 };
 
 template <uint8_t PointerSize>
@@ -295,8 +297,22 @@ void DevicePrintParserImpl<PointerSize>::read_arguments_from_payload(
 template <uint8_t PointerSize>
 std::pair<std::vector<std::string>, std::vector<typename DevicePrintParserImpl<PointerSize>::FormatPlaceholderInfo>>
 DevicePrintParserImpl<PointerSize>::parse_format_string(std::string_view format_str) {
+    // Upper bound on the placeholder count: every unescaped '{' starts at most one placeholder.
+    size_t placeholder_count = 0;
+    for (size_t i = 0; i < format_str.size(); i++) {
+        if (format_str[i] == '{') {
+            if (i + 1 < format_str.size() && format_str[i + 1] == '{') {
+                i++;  // Escaped '{', not a placeholder.
+                continue;
+            }
+            placeholder_count++;
+        }
+    }
+
     std::vector<std::string> plain_text_parts;
+    plain_text_parts.reserve(placeholder_count + 1);
     std::vector<FormatPlaceholderInfo> placeholders;
+    placeholders.reserve(placeholder_count);
     fmt::memory_buffer current_text;
     for (size_t i = 0; i < format_str.size(); i++) {
         if (format_str[i] == '{' && i + 1 < format_str.size() && format_str[i + 1] == '{') {
@@ -1077,7 +1093,12 @@ auto DevicePrintParserImpl<PointerSize>::resolve_top_callstack(const TopCallstac
     // Trims anything past first terminal
     const auto resolve = [&](uint64_t offset) -> std::vector<CallstackEntry> {
         const uint64_t address = text_start + offset;
-        return ttexalens::native_elf::get_frame_callstack(elfs, address, /*extract_variables=*/false);
+        if (auto it = callstack_cache_.find(address); it != callstack_cache_.end()) {
+            return it->second;
+        }
+        auto frames = ttexalens::native_elf::get_frame_callstack(elfs, address, /*extract_variables=*/false);
+        callstack_cache_.emplace(address, frames);
+        return frames;
     };
 
     if (is_invalid_address(info.pc) || is_invalid_address(info.ra)) {

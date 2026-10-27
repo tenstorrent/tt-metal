@@ -60,7 +60,7 @@ def test_add_and_apply_activations(device, shape, activations, torch_dtype):
         # Cast bool→float because comp_equal uses subtraction which doesn't support bool tensors
         assert_equal(torch_output_tensor.float(), output_tensor.float())
     elif torch_dtype == torch.bfloat16:
-        assert_with_ulp(torch_output_tensor, output_tensor, 1)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1)
     else:
         assert_equal(torch_output_tensor, output_tensor)
     assert output_tensor.shape == shape

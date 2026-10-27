@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 import os
 import pickle
+import sys
+import warnings
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -23,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 import ttml
 from ttml.common.profiler_utils import profiler_marker
+from ttml.common.schedulers import LambdaScheduler, linear_warmup_lambda
 from ttml.common.utils import no_grad
 from ttml.datasets import Batch, TTMLDataloader
 from ttml.trainers.callback import TrainerCallback
@@ -46,8 +49,10 @@ class SFTConfig:
         seed: Optional RNG seed for reproducibility.
         max_seq_len: Maximum sequence length (currently unused; kept for
             backward compatibility).
-        learning_rate: Peak learning rate, also used to initialise the default
-            AdamW optimizer when no explicit optimizer is provided.
+        learning_rate: Used only when ``optimizer`` is ``None``: the lr of the
+            default AdamW the trainer creates. With an explicit optimizer, its own
+            ``lr`` (per param group) is the peak LR and this field is ignored,
+            because the schedule multiplies the optimizer's initial LRs.
         warmup_steps: Linear warmup steps for the default schedule.
         max_grad_norm: Maximum gradient norm for clipping (0 to disable).
         log_interval: Update the progress bar / fire ``on_step_end``
@@ -55,19 +60,6 @@ class SFTConfig:
         gradient_checkpointing: Enable activation recomputation to reduce
             memory usage at the cost of ~30 % extra compute.  Sets the
             model's ``runner_type`` to ``MemoryEfficient``.
-        enable_fsdp: Wrap the model with :func:`ttml.fsdp.fully_shard`
-            (per-block + root) so parameters, gradients, and optimizer
-            state are sharded across the ``"fsdp"`` mesh axis.  See
-            ``tt-train/docs/FSDP.md``.  Requires an open mesh with an
-            ``"fsdp"`` axis of size > 1.  Mutually exclusive with
-            ``max_grad_norm > 0`` (per-rank shard L2 norm is not the
-            global norm) and ``save_interval > 0`` (the pickle checkpoint
-            format would store per-rank shards, not full tensors).
-        fsdp_reshard_after_forward: When ``True`` (default), forward
-            re-shards weights between forward and backward to keep peak
-            memory low; the backward-pre callback re-gathers just in
-            time. ``False`` keeps weights gathered between forward and
-            backward — cheaper in CCL but uses more memory.
     """
 
     # ---- loop ----
@@ -76,6 +68,9 @@ class SFTConfig:
     eval_interval: int = 200
     save_interval: int = 500
     checkpoint_dir: str = "checkpoints"
+    # If non-empty, checkpoint files are named "{checkpoint_prefix}_step_{N}.pkl"
+    # instead of "step_{N}.pkl".
+    checkpoint_prefix: str = ""
     seed: Optional[int] = None
     max_seq_len: int = 1024
     learning_rate: float = 2e-5
@@ -83,9 +78,8 @@ class SFTConfig:
     max_grad_norm: float = 0.0
     log_interval: int = 1
     gradient_checkpointing: bool = False
-    # ---- FSDP ----
-    enable_fsdp: bool = False
-    fsdp_reshard_after_forward: bool = True
+    # If True, tqdm progress bar (and its loss/lr postfix) is suppressed.
+    disable_progress_bar: bool = False
 
 
 class SFTTrainer:
@@ -96,27 +90,14 @@ class SFTTrainer:
     defined by :class:`~ttml.modules.module_base.AbstractModuleBase` and
     :class:`~ttml.datasets.TTMLDataloader`.
 
-    Multi-device training (e.g. DDP) is supported by combining two
-    extension points:
-
-    * A **collate function** that shards batch tensors across the mesh
-      (via ``shard_tensor_to_mesh_mapper``).
-    * The :meth:`~TrainerCallback.on_before_optimizer_step` callback to
-      synchronise gradients before the optimiser step.
+    Multi-device training (DDP / FSDP / HSDP): supply a **collate function**
+    that shards batch tensors across the mesh (via
+    ``shard_tensor_to_mesh_mapper``); gradients are all-reduced automatically
+    each step across the present ``dp`` / ``fsdp`` axes.
 
     Loss aggregation across devices is handled automatically via a default
     ``concat_mesh_to_tensor_composer(device, 0)``.  Pass a custom
     ``loss_composer`` to override.
-
-    **FSDP**: setting ``config.enable_fsdp=True`` wraps the model with
-    :func:`ttml.fsdp.fully_shard` (per-block + root, FSDP2-style) before
-    the optimizer is built so optimizer state is sized against the
-    sharded shapes.  Gradients are then auto-synchronised across the
-    ``("dp", "fsdp")`` axes inside the training loop (``ttml.sync_gradients``
-    skips the FSDP axis per-param because the FSDP backward hook has
-    already reduce-scattered it). With pure FSDP no DDP callback is
-    needed; with HSDP the same call covers both axes. See
-    ``tt-train/docs/FSDP.md`` for the full picture.
 
     Example::
 
@@ -145,6 +126,10 @@ class SFTTrainer:
         compute_loss_func: Optional[Callable] = None,
         loss_composer: Any = None,
         attention_mask: Any = None,
+        checkpoint_saver: Optional[Callable[["SFTTrainer", str], None]] = None,
+        checkpoint_loader: Optional[Callable[["SFTTrainer", str], int]] = None,
+        *,
+        lr_lambda: Optional[Callable[[int], float]] = None,
     ) -> None:
         """
         Args:
@@ -161,7 +146,9 @@ class SFTTrainer:
             peft_config: Optional PEFT configuration (e.g. :class:`LoraConfig`).
                 When provided the model is automatically wrapped with the
                 appropriate adapter (currently :class:`LoraModel`).
-            lr_schedule: Optional callable ``step -> lr``.
+            lr_schedule: Deprecated, use ``lr_lambda``. Callable ``step -> LR``:
+                the first param group's LR, with the other groups keeping their
+                ratio to it (like the deprecated ``optimizer.set_lr``).
             callbacks: Optional list of :class:`TrainerCallback` instances.
             compute_loss_func: Optional callable ``(model_output, batch) -> loss``
                 that replaces the default masked cross-entropy.  Must return a
@@ -177,6 +164,19 @@ class SFTTrainer:
             attention_mask: Optional attention mask passed as the second
                 argument to ``model(input_ids, mask)``.  ``None`` (default)
                 lets the model generate a causal mask on the fly.
+            checkpoint_saver: Optional ``(trainer, path) -> None`` that
+                replaces the default thin save (which stores only
+                ``{step, model_state}``).  Caller is free to serialise
+                tokenizer, configs, RNG, etc.
+            checkpoint_loader: Optional ``(trainer, path) -> int`` that
+                restores ``model.parameters()`` from ``path`` and returns
+                the step the checkpoint was taken at.  Called by
+                :meth:`load_checkpoint` to support resume.
+            lr_lambda: Optional callable ``step -> factor``. Every step, each
+                param group's LR is set to ``factor`` times that group's initial
+                LR (PyTorch's ``LambdaLR``), so param groups keep their ratios.
+                ``None`` (default) -- linear warmup over
+                ``config.warmup_steps``, then a constant factor of 1.
 
         Note:
             When ``config.gradient_checkpointing`` is ``True`` the model's
@@ -194,50 +194,46 @@ class SFTTrainer:
         if config.gradient_checkpointing:
             self._enable_gradient_checkpointing(model)
 
-        if config.enable_fsdp:
-            # The pickle checkpoint format dumps per-rank tensors via
-            # to_numpy(); under FSDP that captures only a per-rank shard,
-            # not the full weight. clip_grad_norm is similarly broken
-            # because the per-rank shard L2 norm is not the global norm
-            # (sharding-aware variants are tracked in tt-train/docs/FSDP.md).
-            if config.max_grad_norm > 0:
-                raise ValueError(
-                    "SFTConfig.max_grad_norm > 0 is not supported with enable_fsdp=True; "
-                    "the per-rank shard L2 norm is not the global norm. "
-                    "See tt-train/docs/FSDP.md."
-                )
-            if config.save_interval > 0:
-                raise ValueError(
-                    "SFTConfig.save_interval > 0 is not supported with enable_fsdp=True; "
-                    "the pickle checkpoint format would store per-rank shards. "
-                    "Set save_interval=0 or disable FSDP."
-                )
-            self._apply_fsdp(model, config.fsdp_reshard_after_forward)
-
         self.model = model
         self.train_dataloader = train_dataloader
         self.eval_dataloader = eval_dataloader
         self.config = config
         self.step = 0  # 0-based; incremented after each optimizer step
-
-        # Mesh axes to sync gradients across before each optimizer step
-        # when FSDP is enabled. Empty tuple disables the auto-sync (DDP
-        # users keep the existing callback-based path).
-        self._sync_axes: tuple[str, ...] = ()
-        if config.enable_fsdp:
-            self._sync_axes = self._resolve_sync_axes()
+        # Axes to all-reduce gradients across each step; empty (single-device / TP-only) = no-op.
+        self._grad_sync_axes = self._resolve_grad_sync_axes()
+        self._validate_clip_grad_norm()
 
         self._optimizer = self._build_optimizer(optimizer)
-        self._lr_schedule = lr_schedule if lr_schedule is not None else self._build_lr_schedule()
+        if lr_schedule is not None:
+            if lr_lambda is not None:
+                raise ValueError("pass lr_lambda or the deprecated lr_schedule, not both")
+            warnings.warn(
+                "SFTTrainer(lr_schedule=...) is deprecated; pass lr_lambda (step -> factor of each param group's "
+                "initial LR) instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            initial_lr = self._optimizer.get_initial_lr()
+            if initial_lr == 0.0:
+                raise ValueError("lr_schedule needs a non-zero initial LR to scale from; pass lr_lambda instead")
+            lr_lambda = lambda step: lr_schedule(step) / initial_lr
+        self._lr_lambda = lr_lambda if lr_lambda is not None else linear_warmup_lambda(config.warmup_steps)
         self._attention_mask = attention_mask
         self._loss_fn = self._build_loss_fn()
         self._callbacks = callbacks or []
         self._compute_loss_override = compute_loss_func
         self._loss_composer = self._build_loss_composer(loss_composer)
+        self._checkpoint_saver = checkpoint_saver
+        self._checkpoint_loader = checkpoint_loader
+        self._mask_validated = False
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    @property
+    def optimizer(self):
+        return self._optimizer
 
     def train(self) -> None:
         """Run the full training loop.
@@ -247,7 +243,7 @@ class SFTTrainer:
         of dataset size.
         """
         self.model.train()
-        for cb in self._callbacks:
+        for cb in list(self._callbacks):
             cb.on_train_begin(self)
         data_iter = iter(self.train_dataloader)
         cfg = self.config
@@ -260,12 +256,20 @@ class SFTTrainer:
                 data_iter = iter(self.train_dataloader)
                 return next(data_iter)
 
-        bar = tqdm(range(cfg.max_steps), desc="SFTTrainer")
+        # Compilation finishes after the first iteration of THIS run; track the starting step so the
+        # marker fires on resume too, not only when self.step happens to equal 1.
+        start_step = self.step
+        # self.step (restored by load_checkpoint) is the step count of record, so the scheduler is not checkpointed:
+        # it is built on the first step, offset to start at self.step. lr_lambda gets the 0-based step index.
+        scheduler = None
+        bar = tqdm(range(self.step, cfg.max_steps), desc="SFTTrainer", disable=cfg.disable_progress_bar)
         for _ in bar:
-            # self.step is 0-based so external lr_schedule callables (e.g.
-            # SpeedrunScheduler.lr_at) receive the expected step index.
-            lr = self._lr_schedule(self.step)
-            self._optimizer.set_lr(lr)
+            # LR for the step about to run: applied when the scheduler is built, then by each step().
+            if scheduler is None:
+                scheduler = LambdaScheduler(self._optimizer, lambda step: self._lr_lambda(start_step + step))
+            else:
+                scheduler.step()
+            lr = scheduler.get_last_lrs()[0]  # logged, like HF's ``lr_scheduler.get_last_lr()[0]``
             self._optimizer.zero_grad()
 
             micro_losses = []
@@ -274,19 +278,24 @@ class SFTTrainer:
                 profiler_marker(None, "dataloader_step_done")
 
                 loss = self._compute_loss(batch)
-                micro_losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean()))
+                micro_loss = float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean())
+                micro_losses.append(micro_loss)
                 profiler_marker(None, "forward_pass_done")
+                for cb in list(self._callbacks):
+                    cb.on_after_forward(self, batch, micro_loss)
 
                 if cfg.gradient_accumulation_steps > 1:
                     loss = ttml.ops.binary.mul(loss, 1.0 / cfg.gradient_accumulation_steps)
                 loss.backward(False)
-                ttml.autograd.AutoContext.get_instance().reset_graph()
                 profiler_marker(None, "backward_pass_done")
+                for cb in list(self._callbacks):
+                    cb.on_after_backward(self, batch)
+                ttml.autograd.AutoContext.get_instance().reset_graph()
 
-            if self._sync_axes:
-                ttml.sync_gradients(self.model.parameters(), axis_names=self._sync_axes)
+            if self._grad_sync_axes:
+                ttml.sync_gradients(self.model.parameters(), axis_names=self._grad_sync_axes)
 
-            for cb in self._callbacks:
+            for cb in list(self._callbacks):
                 cb.on_before_optimizer_step(self)
 
             if cfg.max_grad_norm > 0:
@@ -302,8 +311,8 @@ class SFTTrainer:
             step_loss = float(np.mean(micro_losses))
             if cfg.log_interval > 0 and self.step % cfg.log_interval == 0:
                 bar.set_postfix({"loss": f"{step_loss:.4f}", "lr": f"{lr:.2e}"}, refresh=False)
-                for cb in self._callbacks:
-                    cb.on_step_end(self, self.step, step_loss, lr)
+            for cb in list(self._callbacks):
+                cb.on_step_end(self, self.step, step_loss, lr)
 
             if cfg.eval_interval > 0 and self.step % cfg.eval_interval == 0:
                 if self.eval_dataloader is not None:
@@ -316,24 +325,41 @@ class SFTTrainer:
                         },
                         refresh=False,
                     )
-                    for cb in self._callbacks:
+                    for cb in list(self._callbacks):
                         cb.on_eval_end(self, self.step, val_loss)
 
             if cfg.save_interval > 0 and self.step % cfg.save_interval == 0 and self.step > 0:
                 self._save_checkpoint()
-                for cb in self._callbacks:
-                    cb.on_save(
-                        self,
-                        self.step,
-                        os.path.join(cfg.checkpoint_dir, f"step_{self.step}.pkl"),
-                    )
+                save_path = self._checkpoint_path()
+                for cb in list(self._callbacks):
+                    cb.on_save(self, self.step, save_path)
 
             profiler_marker(None, f"iteration_{self.step}", dump_results=True)
-            if self.step == 1:
+            if self.step == start_step + 1:
                 profiler_marker(None, "compilation_finished")
 
-        for cb in self._callbacks:
+        for cb in list(self._callbacks):
             cb.on_train_end(self)
+
+    def _checkpoint_path(self) -> str:
+        """Path used for the current-step checkpoint (honors `config.checkpoint_prefix`)."""
+        name = f"step_{self.step}.pkl"
+        if self.config.checkpoint_prefix:
+            name = f"{self.config.checkpoint_prefix}_{name}"
+        return os.path.join(self.config.checkpoint_dir, name)
+
+    def remove_callback(self, cb: TrainerCallback) -> None:
+        """Detach ``cb`` from the trainer's callback list.
+
+        Safe to call from inside a callback method — event iteration takes a
+        snapshot of the list, so the removed callback finishes the current
+        event but receives no further events.
+        """
+        try:
+            self._callbacks.remove(cb)
+        except ValueError:
+            # cb is not registered — removal is idempotent, so a missing entry is a no-op.
+            pass
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -352,12 +378,16 @@ class SFTTrainer:
         # Validate loss_mask normalisation: for a standard SFT collate the mask
         # should sum to B*T (one entry per token position).  A large deviation
         # usually indicates a custom collate that forgot to normalise.
-        if batch.loss_mask is not None:
+        # Checked once on the first batch — repeating it would force a
+        # device→host sync every step.
+        if batch.loss_mask is not None and not self._mask_validated:
+            self._mask_validated = True
             mask_np = batch.loss_mask.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer)
             B, _, T, _ = mask_np.shape
             expected = float(B * T)
             actual = float(mask_np.sum())
-            if abs(actual - expected) > 1e-3:
+            # use relative tolerance to avoid BF16 precision issues
+            if abs(actual - expected) / expected > 0.01:
                 logger.warning(
                     "loss_mask sum (%.2f) differs from expected B*T (%d). "
                     "If you are using a custom collate function, make sure "
@@ -378,33 +408,86 @@ class SFTTrainer:
             for batch in self.eval_dataloader:
                 loss = self._compute_loss(batch)
                 losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean()))
+                ttml.autograd.AutoContext.get_instance().reset_graph()
         self.model.train()
         return float(np.mean(losses))
 
     def _save_checkpoint(self) -> None:
-        """Persist model parameters as a pickle checkpoint.
+        """Persist a checkpoint via ``checkpoint_saver`` (or the default).
+
+        The default saver stores ``{step, model_state}`` (model parameters as
+        FLOAT32 numpy arrays).  When ``checkpoint_saver`` was provided to
+        ``__init__`` it is called instead — callers use this hook to embed
+        tokenizers, configs, RNG state, etc.
 
         .. note::
             When a ``peft_config`` is used and the model is wrapped in
-            :class:`LoraModel`, this currently saves *all* parameters (base +
-            LoRA).  Ideally only the LoRA adapter weights should be persisted
-            to keep checkpoints small and avoid redundant copies of the frozen
-            base weights.
+            :class:`LoraModel`, the default saver currently saves *all*
+            parameters (base + LoRA).  Ideally only the LoRA adapter weights
+            should be persisted to keep checkpoints small.
 
-        TODO: when ``peft_config`` is set, filter ``self.model.parameters()``
-        to save only LoRA adapter parameters (e.g. those whose name contains
-        ``lora_``).
+            TODO: when ``peft_config`` is set, filter ``self.model.parameters()``
+            to save only LoRA adapter parameters (e.g. those whose name contains
+            ``lora_``).
         """
         os.makedirs(self.config.checkpoint_dir, exist_ok=True)
-        path = os.path.join(self.config.checkpoint_dir, f"step_{self.step}.pkl")
+        path = self._checkpoint_path()
+
+        if self._checkpoint_saver is not None:
+            self._checkpoint_saver(self, path)
+            return
 
         state = {}
         for name, param in self.model.parameters().items():
             tensor = param.tensor if hasattr(param, "tensor") else param
-            state[name] = tensor.to_numpy(ttnn.DataType.FLOAT32)
+            # In multi-device (DDP) setups parameter tensors are distributed across
+            # the mesh, so the underlying host storage carries the full mesh shape
+            # (e.g. [1, 64]) and ``to_numpy()`` without a composer trips the
+            # single-buffer assertion in ``host_buffer::get_host_buffer``.
+            # ``ttnn.get_device_tensors(device_tensor)[0]`` does not help: the
+            # returned tensor still references the parent mesh storage and hits
+            # the same error once moved to host.
+            #
+            # Aggregate via the loss composer (concat along tensor dim 0). Since
+            # DDP replicates weights, every device holds an identical copy, so
+            # the first ``per_replica_dim0`` rows of the concatenated array are
+            # exactly one replica.
+            # TODO: support TP / sharded parameters with a model-aware composer.
+            param_np = tensor.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer)
+            per_replica_dim0 = tensor.shape()[0]
+            state[name] = param_np[:per_replica_dim0]
 
         with open(path, "wb") as f:
             pickle.dump({"step": self.step, "model_state": state}, f)
+
+    def load_checkpoint(self, path: str) -> int:
+        """Restore training state from a checkpoint and advance ``self.step``.
+
+        Delegates to ``checkpoint_loader`` if one was supplied; otherwise reads
+        the default ``{step, model_state}`` format and loads parameters with
+        ``ttml.autograd.assign_numpy``, in the dtype each is stored in.  Returns
+        the step the checkpoint was taken at.
+        Call before :meth:`train` — the loop iterates from ``self.step`` to
+        ``cfg.max_steps`` so resume picks up exactly where the run stopped.
+        """
+        if self._checkpoint_loader is not None:
+            step = int(self._checkpoint_loader(self, path))
+            self.step = step
+            return step
+
+        with open(path, "rb") as f:
+            ckpt = pickle.load(f)
+        step = int(ckpt["step"])
+        model_state = ckpt["model_state"]
+
+        params = self.model.parameters()
+        for name, arr in model_state.items():
+            if name not in params:
+                continue
+            ttml.autograd.assign_numpy(params[name], arr)
+
+        self.step = step
+        return step
 
     def _build_optimizer(self, optimizer: Any):
         """Resolve the *optimizer* argument into an ``OptimizerBase``.
@@ -424,18 +507,6 @@ class SFTTrainer:
             {"type": "AdamW", "lr": self.config.learning_rate},
             self.model.parameters(),
         )
-
-    def _build_lr_schedule(self):
-        """Return a callable ``step -> lr`` implementing linear warmup then constant."""
-        peak_lr = self.config.learning_rate
-        warmup = max(0, self.config.warmup_steps)
-
-        def schedule(step: int) -> float:
-            if warmup > 0 and step <= warmup:
-                return peak_lr * step / warmup
-            return peak_lr
-
-        return schedule
 
     def _build_loss_composer(self, loss_composer: Optional[Any] = None):
         """Create a mesh composer for aggregating loss across devices."""
@@ -493,32 +564,26 @@ class SFTTrainer:
             return
         target.config = replace(cfg, runner_type=ttml.models.RunnerType.MemoryEfficient)
 
-    @staticmethod
-    def _apply_fsdp(model: Any, reshard_after_forward: bool) -> None:
-        """Wrap ``model`` with FSDP2-style ``fully_shard`` (per-block + root).
-
-        For LoraModel-wrapped models we descend into the inner ``model.model``
-        to find ``.blocks`` (LoraModel itself doesn't expose them). The root
-        wrapper then claims any params not already managed by a block wrapper.
-        """
-        target = model.model if hasattr(model, "model") and hasattr(model.model, "blocks") else model
-        blocks = getattr(target, "blocks", None)
-        if blocks is None:
-            raise RuntimeError(
-                "SFTConfig.enable_fsdp=True requires a model with a `.blocks` "
-                f"attribute (got {type(target).__name__}). Wrap your model so it "
-                "exposes a list of transformer blocks (matching Llama / NanoGPT)."
+    def _validate_clip_grad_norm(self) -> None:
+        """clip_grad_norm computes a per-device norm with no cross-mesh reduction, so it is only correct
+        when every parameter is replicated. Reject sharded (FSDP/TP) params up front rather than silently
+        clipping by a wrong per-shard norm."""
+        if self.config.max_grad_norm <= 0:
+            return
+        if any(not ttml.Sharding.from_tensor(p).is_fully_replicated for _, p in self.model.parameters().items()):
+            raise ValueError(
+                "clip_grad_norm is not supported with sharded parameters (FSDP/TP): each device holds "
+                "only a shard, so the per-shard norm is wrong"
             )
-        for block in blocks:
-            ttml.fsdp.fully_shard(block, reshard_after_forward=reshard_after_forward)
-        ttml.fsdp.fully_shard(target, reshard_after_forward=reshard_after_forward)
 
     @staticmethod
-    def _resolve_sync_axes() -> tuple[str, ...]:
-        """Pick the mesh axes to all-reduce gradients across.
+    def _resolve_grad_sync_axes() -> tuple[str, ...]:
+        """Mesh axes to all-reduce gradients across each step.
 
-        Returns the subset of ``("dp", "fsdp")`` whose axis is present on
-        the active mesh AND has size > 1.  Empty tuple = no sync needed
+        The subset of ``("dp", "fsdp")`` present on the active mesh with size > 1; empty otherwise
+        (single device / TP-only). FSDP-sharded params are skipped per-axis by ``ttml.sync_gradients``
+        (``fully_shard``'s backward hooks already reduce-scattered them), so this covers DDP, the dp axis
+        of HSDP, and non-sharded params on the fsdp axis.
         """
         mesh = ttml.maybe_mesh()
         if mesh is None:

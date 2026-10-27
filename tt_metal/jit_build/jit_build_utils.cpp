@@ -8,12 +8,15 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <random>
 #include <string>
 #include <system_error>
@@ -26,11 +29,13 @@
 
 #include <tt-logger/tt-logger.hpp>
 
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
+
 namespace tt::jit_build::utils {
 
 bool run_command(const std::string& cmd, const std::string& log_file, bool verbose) {
-    // ZoneScoped;
-    // ZoneText( cmd.c_str(), cmd.length());
+    TTZoneScopedD(JIT);
+    TTZoneTextD(JIT, cmd.c_str(), cmd.length());
     int ret;
     static std::mutex io_mutex;
 
@@ -66,6 +71,116 @@ std::vector<std::string> tokenize_flags(const std::string& flags) {
         tokens.emplace_back(flags, start, i - start);
     }
     return tokens;
+}
+
+std::string compiler_version(const std::string& gpp) {
+    static std::mutex mutex;
+    static std::unordered_map<std::string, std::string> versions;
+    std::lock_guard lock(mutex);
+    if (auto it = versions.find(gpp); it != versions.end()) {
+        return it->second;
+    }
+
+    auto args = tokenize_flags(gpp);
+    if (args.empty()) {
+        throw std::runtime_error("Cannot query an empty compiler command");
+    }
+    args.emplace_back("--version");
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (auto& arg : args) {
+        argv.push_back(arg.data());
+    }
+    argv.push_back(nullptr);
+
+    // A private, automatically removed file captures stdout without a pipe buffer limit.
+    // Stderr remains separate so diagnostics cannot become the compiler identity.
+    const auto close_file = [](FILE* file) { std::fclose(file); };
+    const std::unique_ptr<FILE, decltype(close_file)> output(std::tmpfile(), close_file);
+    if (!output || fcntl(fileno(output.get()), F_SETFD, FD_CLOEXEC) == -1) {
+        throw std::runtime_error(fmt::format("Cannot capture compiler version for {}: {}", gpp, std::strerror(errno)));
+    }
+    posix_spawn_file_actions_t actions;
+    int error = posix_spawn_file_actions_init(&actions);
+    if (error != 0) {
+        throw std::runtime_error(fmt::format("Cannot initialize compiler version probe: {}", std::strerror(error)));
+    }
+    error = posix_spawn_file_actions_adddup2(&actions, fileno(output.get()), STDOUT_FILENO);
+    pid_t pid = 0;
+    if (error == 0) {
+        error = posix_spawnp(&pid, argv[0], &actions, nullptr, argv.data(), ::environ);
+    }
+    posix_spawn_file_actions_destroy(&actions);
+    if (error != 0) {
+        throw std::runtime_error(fmt::format("Cannot query compiler version for {}: {}", gpp, std::strerror(error)));
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            throw std::runtime_error(
+                fmt::format("Cannot wait for compiler version from {}: {}", gpp, std::strerror(errno)));
+        }
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        throw std::runtime_error(fmt::format("Compiler version probe failed for {} (wait status {})", gpp, status));
+    }
+    if (fseek(output.get(), 0, SEEK_SET) != 0) {
+        throw std::runtime_error(fmt::format("Cannot read compiler version for {}", gpp));
+    }
+    std::string version;
+    for (int ch; (ch = fgetc(output.get())) != EOF;) {
+        version.push_back(static_cast<char>(ch));
+        if (ch == '\n') {
+            break;
+        }
+    }
+    if (ferror(output.get()) || version.empty() || version == "\n") {
+        throw std::runtime_error(fmt::format("Compiler version probe returned no readable version for {}", gpp));
+    }
+    versions.emplace(gpp, version);
+    return version;
+}
+
+std::vector<std::string> build_gpp_argv(
+    const std::string& gpp,
+    const std::string& opt_level,
+    const std::string& cflags,
+    const std::string& includes,
+    const std::vector<std::string>& defines,
+    const std::string& src,
+    GppAction action,
+    const std::string& out_path,
+    const std::string& dep_path) {
+    std::vector<std::string> args = tokenize_flags(gpp);
+    args.push_back("-" + opt_level);
+    auto append = [&args](const std::string& flags) {
+        auto toks = tokenize_flags(flags);
+        args.insert(args.end(), std::make_move_iterator(toks.begin()), std::make_move_iterator(toks.end()));
+    };
+    append(cflags);
+    append(includes);
+    // Each define is one argv element, passed verbatim (no shell) — this is what makes defines
+    // carrying shell metacharacters, like -DFULL_KERNEL_NAME="<name>", survive unescaped.
+    args.insert(args.end(), defines.begin(), defines.end());
+    switch (action) {
+        case GppAction::Compile:
+            args.push_back("-c");
+            args.push_back("-o");
+            args.push_back(out_path);
+            args.push_back(src);
+            args.push_back("-MF");
+            args.push_back(dep_path);
+            break;
+        case GppAction::Preprocess:
+            // Keep line markers: the .ii is later compiled with -fpreprocessed, which uses them to
+            // keep -Werror suppressed inside system headers and fatal only on kernel code.
+            args.push_back("-E");
+            args.push_back("-o");
+            args.push_back(out_path);
+            args.push_back(src);
+            break;
+    }
+    return args;
 }
 
 bool exec_command(const std::vector<std::string>& args, const std::string& working_dir, const std::string& log_file) {
@@ -159,9 +274,54 @@ std::vector<tt::jit_build::GeneratedFile> read_directory_files(
             std::find(extensions.begin(), extensions.end(), entry.path().extension().string()) == extensions.end()) {
             continue;
         }
-        files.push_back({entry.path().filename().string(), read_file_bytes(entry.path().string())});
+        // Tolerate concurrent writers: another process compiling the same kernel into this
+        // shared cache dir may rename a FileRenamer temp file away between enumeration and read.
+        // Skip files that vanish or fail to read rather than aborting the whole upload.
+        try {
+            files.push_back({entry.path().filename().string(), read_file_bytes(entry.path().string())});
+        } catch (const std::runtime_error& e) {
+            log_debug(
+                tt::LogBuildKernels,
+                "Skipping file that could not be read during directory scan of {}: {}",
+                dir,
+                e.what());
+        }
     }
     return files;
+}
+
+std::string format_named_ct_arg_map(const std::unordered_map<std::string, std::uint32_t>& named_args) {
+    std::vector<const std::pair<const std::string, std::uint32_t>*> sorted;
+    sorted.reserve(named_args.size());
+    for (const auto& entry : named_args) {
+        sorted.push_back(&entry);
+    }
+    std::sort(sorted.begin(), sorted.end(), [](const auto* a, const auto* b) { return a->first < b->first; });
+
+    // Whole-model kernels reach 100 KB+ here; size it up front rather than growing ~1750 times.
+    std::size_t reserved = 0;
+    for (const auto* entry : sorted) {
+        reserved += entry->first.size() + 16;
+    }
+    std::string out;
+    out.reserve(reserved);
+
+    for (const auto* entry : sorted) {
+        if (!out.empty()) {
+            out += ',';
+        }
+        out += "{\"";
+        out += entry->first;
+        out += "\",";
+        out += std::to_string(entry->second);
+        out += '}';
+    }
+    return out;
+}
+
+std::string format_named_ct_arg_map_header(const std::unordered_map<std::string, std::uint32_t>& named_args) {
+    return "// AUTO-GENERATED -- do not edit.\n#pragma once\n\n#define KERNEL_COMPILE_TIME_ARG_MAP " +
+           format_named_ct_arg_map(named_args) + "\n";
 }
 
 void create_file(const std::string& file_path_str) {
@@ -181,12 +341,20 @@ uint64_t FileRenamer::unique_id_ = []() {
 }();
 
 std::string FileRenamer::generate_temp_path(const std::filesystem::path& target_path) {
+    // unique_id_ is initialized once per process, so a fork()ed child inherits the
+    // parent's value and would otherwise generate byte-identical temp paths. Mix in
+    // the live pid so forked siblings -- e.g. pytest --forked test processes sharing
+    // one kernel cache -- never collide on the same temp file.
+    //
+    // Formatted in one call rather than through an intermediate tag string: this runs
+    // once per source file during JIT setup, and the extra allocation measured more
+    // expensive than the getpid() syscall it accompanies.
     std::filesystem::path path(target_path);
     if (path.has_extension()) {
-        path.replace_extension(fmt::format("{}{}", unique_id_, path.extension().string()));
+        path.replace_extension(fmt::format("{}_{}{}", unique_id_, ::getpid(), path.extension().string()));
         return path.string();
     }
-    return fmt::format("{}.{}", target_path.string(), unique_id_);
+    return fmt::format("{}.{}_{}", target_path.string(), unique_id_, ::getpid());
 }
 
 FileRenamer::FileRenamer(const std::string& target_path) :

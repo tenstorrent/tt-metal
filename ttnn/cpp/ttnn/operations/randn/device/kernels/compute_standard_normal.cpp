@@ -11,6 +11,8 @@
 #include "api/compute/eltwise_unary/rand.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/eltwise_unary/trigonometry.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 constexpr uint32_t neg_two = 0xc0000000u;        // -2.0f
 constexpr uint32_t two_pi = 0x40c90fdbu;         //  2pi
@@ -18,10 +20,10 @@ constexpr uint32_t flt_min = 0x00800000u;        //  FLT_MIN
 constexpr uint32_t one_minus_eps = 0x3F7FFFFFu;  //  A float value that does not exceed 1.0f
 
 template <bool EmitZ2>
-inline void generate_standard_normal_tiles(uint32_t dst_cb_id) {
+inline void generate_standard_normal_tiles(DataflowBuffer dfb_dst) {
     constexpr uint32_t num_out_tiles = EmitZ2 ? 2 : 1;
 
-    cb_reserve_back(dst_cb_id, num_out_tiles);
+    dfb_dst.reserve_back(num_out_tiles);
 
     tile_regs_acquire();
 
@@ -69,17 +71,17 @@ inline void generate_standard_normal_tiles(uint32_t dst_cb_id) {
     tile_regs_commit();
     tile_regs_wait();
 
-    pack_reconfig_data_format(dst_cb_id);
+    pack_reconfig_data_format(dfb::dst);
     // pack Z1(reg3)
-    pack_tile(3, dst_cb_id);
+    pack_tile(3, dfb::dst);
     if constexpr (EmitZ2) {
         // pack Z2(reg1)
-        pack_tile(1, dst_cb_id);
+        pack_tile(1, dfb::dst);
     }
 
     tile_regs_release();
 
-    cb_push_back(dst_cb_id, num_out_tiles);
+    dfb_dst.push_back(num_out_tiles);
 }
 
 void kernel_main() {
@@ -99,18 +101,20 @@ void kernel_main() {
     // final tile.
     // -------------------------------------------------------------------------
 
-    constexpr uint32_t dst_cb_id = get_compile_time_arg_val(0);
-    const uint32_t seed = get_arg_val<uint32_t>(0);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t seed = get_arg(args::seed);
+    const uint32_t num_tiles = get_arg(args::num_tiles);
     uint32_t num_pairs = num_tiles >> 1;
     const uint32_t is_odd = num_tiles & 1;
 
-    init_sfpu(dst_cb_id, dst_cb_id);
+    DataflowBuffer dfb_dst(dfb::dst);
+
+    compute_kernel_hw_startup(dfb::dst, dfb::dst);
+    copy_init(dfb::dst);
     rand_tile_init(seed);
     for (uint32_t p = 0; p < num_pairs; p++) {
-        generate_standard_normal_tiles<true>(dst_cb_id);
+        generate_standard_normal_tiles<true>(dfb_dst);
     }
     if (is_odd) {
-        generate_standard_normal_tiles<false>(dst_cb_id);
+        generate_standard_normal_tiles<false>(dfb_dst);
     }
 }  // void kernel_main()

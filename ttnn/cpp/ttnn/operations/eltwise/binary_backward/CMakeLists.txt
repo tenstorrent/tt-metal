@@ -6,6 +6,17 @@ add_library(TTNN::Ops::Eltwise::Binary::Backward ALIAS ttnn_op_eltwise_binary_ba
 tt_reuse_precompile_headers(ttnn_op_eltwise_binary_backward TTNN::PCHLean)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary_backward)
 
+# Kernel .cpp files ship as headers for on-device build; skip host header-set
+# verification (they include api/compute/*.h paths only visible to LLK build).
+set_target_properties(
+    ttnn_op_eltwise_binary_backward
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
+)
+
+file(GLOB_RECURSE binary_backward_kernels CONFIGURE_DEPENDS device/kernels/*.cpp)
+
 target_sources(
     ttnn_op_eltwise_binary_backward
     PUBLIC
@@ -13,6 +24,10 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES ${TTNN_OP_ELTWISE_BINARY_BACKWARD_API_HEADERS}
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${binary_backward_kernels}
     PRIVATE
         ${TTNN_OP_ELTWISE_BINARY_BACKWARD_SRCS}
 )
@@ -33,3 +48,19 @@ install(
 )
 
 install(TARGETS ttnn_op_eltwise_binary_backward LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_ELTWISE_BINARY_BACKWARD_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_ELTWISE_BINARY_BACKWARD_NANOBIND_SRCS})
+endif()

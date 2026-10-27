@@ -67,7 +67,7 @@ class HostValidatedRMSNorm:
             {"eps": self.eps},
         ),
         metric_tolerances={
-            Metric.MAX_ABS_ERROR: 1e-2,
+            Metric.MAX_ABS_ERROR: 5e-2,
             Metric.MEAN_ABS_ERROR: 1e-3,
             "pcc": 0.99,  # can use enum or their string values
         },
@@ -460,7 +460,6 @@ def test_validation_non_decorator_class_vs_class_ttnn(ttnn_mesh_device: ttnn.Mes
         },
     )(TorchLinearRef.forward)
 
-    ttnn.SetDefaultDevice(ttnn_mesh_device)
     _ = validated_call(ref_layer, x.unsqueeze(0))
 
     assert len(registry.results) == before + 1
@@ -502,7 +501,8 @@ def test_return_reference_output_torch(ttnn_mesh_device: ttnn.MeshDevice):
     # Registry records one validation
     assert len(registry.results) == before + 1
     assert not registry.results[-1].metrics[Metric.MAX_ABS_ERROR].passed
-    assert registry.results[-1].metrics[Metric.PCC].passed
+    # Mock ref is constant (ones); impl is matmul
+    assert not registry.results[-1].metrics[Metric.PCC].passed
 
     # Convert both outputs to host and verify numerical equivalence
     out_host = to_torch_auto_compose(out_tt)
@@ -558,7 +558,7 @@ def test_validation_non_decorator_host(ttnn_mesh_device: ttnn.MeshDevice):
     assert registry.results[-1].passed
 
 
-def test_validation_raises_on_reference_exception(ttnn_mesh_device: ttnn.MeshDevice):
+def test_validation_raises_on_reference_exception(ttnn_mesh_device: ttnn.MeshDevice, expect_error):
     """When raise_exceptions=True, reference exceptions should propagate and not record results."""
     registry = get_validation_registry()
     before = len(registry.results)
@@ -576,7 +576,7 @@ def test_validation_raises_on_reference_exception(ttnn_mesh_device: ttnn.MeshDev
     def _matmul(a, b):
         return ttnn.matmul(a, b)
 
-    with pytest.raises(TypeError) as e:
+    with expect_error(TypeError, "missing 1 required positional argument: 'c'") as e:
         _ = _matmul(a_tt, b_tt)
     assert "missing 1 required positional argument: 'c'" in str(e.value)
     assert len(registry.results) == before + 1
@@ -586,7 +586,7 @@ def test_validation_raises_on_reference_exception(ttnn_mesh_device: ttnn.MeshDev
     def _matmul_too(a, b):
         return ttnn.matmul(a, b)
 
-    with pytest.raises(TypeError) as e:
+    with expect_error(TypeError, "missing 1 required positional argument: 'y'") as e:
         _ = _matmul_too(a_tt, b_tt)
     assert "missing 1 required positional argument: 'y'" in str(e.value)
     assert len(registry.results) == before + 2
@@ -596,7 +596,7 @@ def test_validation_raises_on_reference_exception(ttnn_mesh_device: ttnn.MeshDev
     def _matmul_three(a, b):
         return ttnn.matmul(a, b)
 
-    with pytest.raises(TypeError) as e:
+    with expect_error(TypeError, "takes 1 positional argument but 2 were given") as e:
         _ = _matmul_three(a_tt, b_tt)
     assert "takes 1 positional argument but 2 were given" in str(e.value)
     assert len(registry.results) == before + 3

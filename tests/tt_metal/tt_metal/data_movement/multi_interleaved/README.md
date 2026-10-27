@@ -3,7 +3,7 @@
 This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions between DRAM interleaved buffers and multiple Tensix cores.
 
 ## Mesh Device API Support
-This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `GenericMeshDeviceFixture` and run on single-device unit meshes.
+This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `UnitMeshFastDispatchFixture` and run on single-device unit meshes.
 
 **Note**: The Mesh Device API only supports fast dispatch mode internally and does not support slow dispatch mode. This provides optimal performance for data movement operations.
 
@@ -45,3 +45,8 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 3. Read tests: Run only the reader kernel.
 4. Write tests: Run only the writer kernel.
 5. Grid configuration tests: Run kernel(s) on a 2x2 or on a 6x6 grid of Tensix cores.
+
+6. **Grid Sweep Sizes**: Sweeps over packet sizes across multiple grid configurations (2x2, 6x6, full compute grid) in a single test. Grid dimensions are stamped by the kernel and appear as a filterable "Grid Dimensions" column in the CSV report. Uses combined bandwidth mode to report aggregate bandwidth across all cores. Three variants:
+   - **Grid Sweep Sizes** (read+write): Synchronized reader and writer pipeline.
+   - **Grid Sweep Read Sizes** (read-only): DRAM-to-L1 read bandwidth in isolation.
+   - **Grid Sweep Write Sizes** (write-only): L1-to-DRAM write bandwidth in isolation.

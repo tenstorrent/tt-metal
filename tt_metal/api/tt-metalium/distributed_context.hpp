@@ -4,13 +4,16 @@
 
 #pragma once
 
+#include <exception>
 #include <memory>
 #include <optional>
+#include <string>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/span.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <complex>
+#include <type_traits>
 
 namespace tt::tt_metal::distributed::multihost {
 
@@ -177,7 +180,7 @@ public:
     /// Number of MPI ranks in the given sub-context (valid for 0 .. subcontext_count()-1).
     [[nodiscard]] virtual Size subcontext_size(SubcontextId subcontext_id) const;
     /// All sub-context sizes in ascending sub-context id order.
-    [[nodiscard]] virtual tt::stl::Span<const int> subcontext_sizes() const;
+    [[nodiscard]] virtual ttsl::Span<const int> subcontext_sizes() const;
     /// Translate a (subcontext_id, local_rank) pair to the corresponding world Rank.
     [[nodiscard]] virtual Rank local_to_world_rank(SubcontextId subcontext_id, Rank local_rank) const;
 

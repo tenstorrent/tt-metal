@@ -32,13 +32,27 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/pcie/tlb_window.hpp>
+#include <umd/device/io_window/io_window.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
 using namespace tt;
 using namespace tt::test_utils;
+
+class AnyDispatchSimulatorFixture : public AnyDispatchMeshDeviceFixture {
+protected:
+    void SetUp() override {
+        // Check if simulator mode is enabled
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+            GTEST_SKIP()
+                << "Simulator mode not enabled. Set TT_METAL_SIMULATOR environment variable to run simulator tests.";
+        }
+
+        // Call parent SetUp to initialize devices
+        AnyDispatchMeshDeviceFixture::SetUp();
+    }
+};
 
 class SimulatorFixture : public MeshDeviceFixture {
 protected:
@@ -56,9 +70,7 @@ protected:
 
 TEST_F(SimulatorFixture, SimulatorDeviceInitialization) {
     // Verify that all devices are properly initialized in simulator mode
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = devices_.at(id);
-
+    for (auto& mesh_device : this->devices_) {
         // Check that device is valid
         EXPECT_NE(mesh_device, nullptr);
 
@@ -74,7 +86,7 @@ TEST_F(SimulatorFixture, SimulatorDeviceInitialization) {
     }
 }
 
-TEST_F(SimulatorFixture, QuasarStaticTlbReadWrite) {
+TEST_F(AnyDispatchSimulatorFixture, QuasarIoWindowReadWrite) {
     auto& cluster = MetalContext::instance().get_cluster();
     if (cluster.arch() != tt::ARCH::QUASAR) {
         GTEST_SKIP();
@@ -85,30 +97,27 @@ TEST_F(SimulatorFixture, QuasarStaticTlbReadWrite) {
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     constexpr uint32_t value32 = 0xDEADBEEF;
 
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        const auto mesh_device = devices_.at(id);
-        const ChipId chip_id = mesh_device->get_devices()[0]->id();
+    for (auto& mesh_device : this->devices_) {
+        const ChipId chip_id = mesh_device->get_device_ids()[0];
         const auto& sdesc = cluster.get_soc_desc(chip_id);
 
         const std::vector<tt::umd::CoreCoord> tensix_cores =
             sdesc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::TRANSLATED);
         ASSERT_FALSE(tensix_cores.empty());
         const tt::umd::CoreCoord tensix = tensix_cores.front();
-        const tt_cxy_pair target(chip_id, tensix.x, tensix.y);
 
-        ASSERT_TRUE(cluster.get_tlb_data(target).has_value());
-
-        tt::umd::TlbWindow* window = cluster.get_static_tlb_window(target);
+        std::unique_ptr<tt::umd::IoWindow> window = cluster.get_driver()->create_io_window(
+            chip_id, tensix, /*addr=*/scratch_addr, {.size = 16 * sizeof(uint32_t)});
         ASSERT_NE(window, nullptr);
 
-        window->write32(scratch_addr, value32);
-        EXPECT_EQ(window->read32(scratch_addr), value32);
+        window->write32(0, value32);
+        EXPECT_EQ(window->read32(0), value32);
 
         std::array<uint32_t, 16> tx;
         std::iota(tx.begin(), tx.end(), 0x12345678);
         std::array<uint32_t, 16> rx{};
-        window->write_block(scratch_addr, tx.data(), tx.size() * sizeof(uint32_t));
-        window->read_block(scratch_addr, rx.data(), rx.size() * sizeof(uint32_t));
+        window->write_block(0, tx.data(), tx.size() * sizeof(uint32_t));
+        window->read_block(0, rx.data(), rx.size() * sizeof(uint32_t));
         EXPECT_EQ(tx, rx);
     }
 }

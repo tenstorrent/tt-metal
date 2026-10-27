@@ -1,0 +1,294 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// Parallel FPU matmul (TRISC0-2 -> buffer_C) + isolated SrcS SFPU exp (TRISC3 -> buffer_Res).
+// FPU path uses Dest dvalid {FPU, PACK}. SFPU path uses UNP_S/SrcS/PACK1 only (no Dest).
+
+#include <cstdint>
+
+#include "ckernel.h"
+#include "counters.h"
+#include "llk_defs.h"
+#include "llk_memory_checks.h"
+#include "perf.h"
+#include "profiler.h"
+#include "quasar_test_common.h"
+
+// Globals
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
+
+#ifdef LLK_TRISC_UNPACK
+
+#include "llk_bfd_alloc.h"
+#include "llk_unpack_matmul.h"
+#include "params.h"
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t CT_DIM      = params.CT_DIM;
+    const std::uint32_t RT_DIM      = params.RT_DIM;
+    const std::uint32_t KT_DIM      = params.KT_DIM;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t num_faces_A = params.num_faces_A;
+    const std::uint32_t num_faces_B = params.num_faces_B;
+    const Operand& buffer_A         = params.buffer_A;
+    const Operand& buffer_B         = params.buffer_B;
+#endif
+
+    {
+        START_PERF_MEASURE("INIT")
+        set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
+
+        const ckernel::TensorShape tensor_shape_A = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_A);
+        const ckernel::TensorShape tensor_shape_B = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_B);
+        // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
+        // UNPACR0/SrcA -- so operand A is recorded under Unp1 and operand B under Unp0 (matches product).
+        const auto bfd_a =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        const auto bfd_b =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_B, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(
+            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
+        _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, RT_DIM, KT_DIM);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            _perf_unpack_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t j = 0; j < KT_DIM; j++)
+                {
+                    _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+}
+
+#endif
+
+#ifdef LLK_TRISC_MATH
+
+#include "llk_math_common.h"
+#include "llk_math_matmul.h"
+#include "params.h"
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t CT_DIM      = params.CT_DIM;
+    const std::uint32_t RT_DIM      = params.RT_DIM;
+    const std::uint32_t KT_DIM      = params.KT_DIM;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
+
+    {
+        START_PERF_MEASURE("INIT")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        }
+
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
+        _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(
+            static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), CT_DIM, RT_DIM);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            _perf_math_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t i = 0; i < KT_DIM; i++)
+                {
+                    _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                }
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t i = 0; i < KT_DIM; i++)
+                {
+                    _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                }
+                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+            }
+        }
+        PROFILER_SYNC();
+    }
+}
+
+#endif
+
+#ifdef LLK_TRISC_ISOLATE_SFPU
+
+#include "llk_sfpu/ckernel_sfpu_exp.h"
+#include "llk_sfpu/ckernel_sfpu_srcs.h"
+#include "llk_sfpu_srcs_api.h"
+#include "params.h"
+
+using namespace ckernel;
+using namespace ckernel::sfpu;
+
+// SFPU_IMPL_LOADMACRO comes from the test's SfpuImpl parameter.
+constexpr SfpuImpl EXP_IMPL = SFPU_IMPL_LOADMACRO ? SfpuImpl::LoadMacro : SfpuImpl::Sfpi;
+
+#ifdef DISABLE_SFPLOADMACRO
+// resolve_sfpu_impl would quietly build Sfpi here; fail instead so a LoadMacro variant never reports Sfpi results.
+static_assert(!SFPU_IMPL_LOADMACRO, "SFPLOADMACRO is disabled; only the Sfpi variant can be built");
+#endif
+
+template <sfpi::DataLayout LAYOUT>
+using ExpOp = ExpSrcs<LAYOUT, APPROX_MODE, EXP_IMPL>;
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const Operand& buffer_S         = params.buffer_S;
+    const Operand& buffer_Res       = params.buffer_Res;
+#endif
+    const std::uint32_t num_tiles = TILE_CNT;
+    const DataFormat unpack_S_dst = static_cast<DataFormat>(formats.unpack_S_dst);
+    const DataFormat pack_S_src   = static_cast<DataFormat>(formats.pack_S_src);
+
+    {
+        START_PERF_MEASURE("INIT")
+        // The SrcS layout is known only at runtime, so init and the tile loop each dispatch once.
+        dispatch_sfpu_srcs_op<ExpOp>(
+            unpack_S_dst,
+            pack_S_src,
+            [&](auto op)
+            {
+                decltype(op)::init(
+                    L1_ADDRESS(buffer_S[0]),
+                    static_cast<DataFormat>(formats.unpack_S_src),
+                    L1_ADDRESS(buffer_Res[0]),
+                    static_cast<DataFormat>(formats.pack_S_dst));
+            });
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
+        {
+            // UNP_S -> SFPU exp -> PACK1; the op type decides Sfpi or LoadMacro and who clears the SrcS valids.
+            dispatch_sfpu_srcs_op<ExpOp>(
+                unpack_S_dst,
+                pack_S_src,
+                [&](auto op)
+                {
+                    for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                    {
+                        decltype(op)::run(num_tiles);
+                    }
+                });
+        }
+        wait_unpack_idle();
+        wait_sfpu_idle();
+        wait_pack_idle();
+        PROFILER_SYNC();
+    }
+}
+
+#endif
+
+#ifdef LLK_TRISC_PACK
+
+#include "llk_bfd_alloc.h"
+#include "llk_pack.h"
+#include "llk_pack_matmul.h"
+#include "params.h"
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t CT_DIM      = params.CT_DIM;
+    const std::uint32_t RT_DIM      = params.RT_DIM;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t num_faces   = params.num_faces;
+    const Operand& buffer_C         = params.buffer_C;
+#endif
+
+    {
+        START_PERF_MEASURE("INIT")
+        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
+        // Explicitly clear wait_mask because CFG state can persist across run types.
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            set_up_zero_dest_dvalid_handshake_for_pack();
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        }
+
+        const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces);
+        const auto bfd_pack =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_C[0]), formats.pack_dst);
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+        _llk_pack_matmul_init_(bfd_pack, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
+                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            }
+        }
+        PROFILER_SYNC();
+    }
+}
+
+#endif

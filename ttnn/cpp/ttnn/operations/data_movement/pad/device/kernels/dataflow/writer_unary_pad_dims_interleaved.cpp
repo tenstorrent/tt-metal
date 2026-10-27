@@ -3,53 +3,70 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
+#include "internal/local_mem/address_access.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+#if !defined(ARCH_QUASAR)
+// ckernel::load_blocking (the store drain below) is WH/BH only: Quasar's ckernel.h has no load_blocking,
+// and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. On Quasar the
+// flush_l2_cache_range after the fill orders it instead. Same guard as data_movement/common/kernels/common.hpp.
+#include "ckernel.h"
+#endif
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_unpadded_W = get_arg_val<uint32_t>(1);
-    const uint32_t num_padded_Wt = get_arg_val<uint32_t>(2);
-    const uint32_t num_unpadded_Z = get_arg_val<uint32_t>(3);
-    const uint32_t num_padded_Zt = get_arg_val<uint32_t>(4);
-    const uint32_t num_unpadded_Yt = get_arg_val<uint32_t>(5);
-    const uint32_t num_padded_Yt = get_arg_val<uint32_t>(6);
-    const uint32_t num_unpadded_Xt = get_arg_val<uint32_t>(7);
-    const uint32_t num_padded_Xt = get_arg_val<uint32_t>(8);
-    const uint32_t pad_value = get_arg_val<uint32_t>(9);
+    const auto num_unpadded_W = get_arg(args::num_unpadded_W);
+    const auto num_padded_Wt = get_arg(args::num_padded_Wt);
+    const auto num_unpadded_Z = get_arg(args::num_unpadded_Z);
+    const auto num_padded_Zt = get_arg(args::num_padded_Zt);
+    const auto num_unpadded_Yt = get_arg(args::num_unpadded_Yt);
+    const auto num_padded_Yt = get_arg(args::num_padded_Yt);
+    const auto num_unpadded_Xt = get_arg(args::num_unpadded_Xt);
+    const auto num_padded_Xt = get_arg(args::num_padded_Xt);
+    const auto pad_value = get_arg(args::pad_value);
 
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out1 = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
-
-    const uint32_t tile_size = get_tile_size(cb_id_out0);
-
-    const auto s1 = TensorAccessor(dst_args, dst_addr);
+    const auto s1 = TensorAccessor(tensor::dst);
     Noc noc;
-    CircularBuffer cb_out0(cb_id_out0);
-    CircularBuffer cb_out1(cb_id_out1);
+    DataflowBuffer dfb_out0(dfb::out0);
+    Scratchpad<uint32_t> pad(scratch::pad);
 
-    cb_out1.reserve_back(1);  // in this kernel we are not pushing anything into CBs, just using the space
-
-    uint32_t pad_buffer_l1_addr = cb_out1.get_write_ptr();
+    const uint32_t tile_size = dfb_out0.get_tile_size();
 
     // Fill pad tile with pad value
-    volatile tt_l1_ptr uint32_t* pad_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_buffer_l1_addr);
+    volatile tt_l1_ptr uint32_t* pad_buffer = &pad[0];
     const uint32_t num_elems = tile_size / sizeof(uint32_t);
     for (uint32_t z = 0; z < num_elems; z++) {
         pad_buffer[z] = pad_value;
     }
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Quasar DM: the fill above is CPU stores that land in L1D/L2; the NoC writes below source the pad tile
+    // from TL1 directly. Flush the filled tile so the NoC copies see the pad value. No-op on WH/BH. Matches
+    // fill_rm_interleaved.cpp (#51763).
+    flush_l2_cache_range(
+        static_cast<uintptr_t>(local_mem::detail::AddressAccess::address(pad.local_mem())),
+        static_cast<size_t>(tile_size));
+#endif
+    // The fill above is baby-RISCV stores and pad_tiles() below hands this buffer to the NoC as the
+    // source of every pad-tile write. A store can retire before its write-request lands in L1, and the
+    // RISCV core and the NoC are different L1 clients with no program-order guarantee between them
+    // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). Read back the last filled word so the fill
+    // is processed before the first NoC write is issued. Same construction as #50374. On Quasar the
+    // flush_l2_cache_range above already orders the fill (it fences on both sides).
+#if !defined(ARCH_QUASAR)
+    (void)ckernel::load_blocking(pad_buffer + num_elems - 1);
+#endif
 
     uint32_t src_tile_id = 0;
     uint32_t dst_tile_id = 0;
 
-    CoreLocalMem<uint32_t> pad_src(pad_buffer_l1_addr);
     auto pad_tiles = [&](uint32_t num_tiles) {
         for (uint32_t pad_tile = 0; pad_tile < num_tiles; pad_tile++) {
-            noc.async_write(pad_src, s1, tile_size, {.offset_bytes = 0}, {.page_id = dst_tile_id, .offset_bytes = 0});
+            noc.async_write(pad, s1, tile_size, {.offset_bytes = 0}, {.page_id = dst_tile_id, .offset_bytes = 0});
             dst_tile_id++;
         }
         noc.async_write_barrier();
@@ -59,11 +76,11 @@ void kernel_main() {
         for (uint32_t z = 0; z < num_unpadded_Z; z++) {
             for (uint32_t yt = 0; yt < num_unpadded_Yt; yt++) {
                 for (uint32_t xt = 0; xt < num_unpadded_Xt; xt++) {
-                    cb_out0.wait_front(1);
+                    dfb_out0.wait_front(1);
                     noc.async_write(
-                        cb_out0, s1, tile_size, {.offset_bytes = 0}, {.page_id = dst_tile_id, .offset_bytes = 0});
+                        dfb_out0, s1, tile_size, {.offset_bytes = 0}, {.page_id = dst_tile_id, .offset_bytes = 0});
                     noc.async_write_barrier();
-                    cb_out0.pop_front(1);
+                    dfb_out0.pop_front(1);
                     dst_tile_id++;
                 }
                 pad_tiles(num_padded_Xt);

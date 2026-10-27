@@ -9,6 +9,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "lltt.h"
+#include "sfpi.h"
 
 namespace ckernel
 {
@@ -37,15 +38,15 @@ inline void sfpu_reduce_max_col_subblock_4x2_configure_addrmod()
 
 inline void sfpu_reduce_max_col_subblock_4x2_load_initial_values()
 {
-    constexpr std::uint16_t neg_inf_fp16b = 0xFF80;
+    constexpr std::uint16_t neg_inf_fp16b = 0xFF80; // bf16 -inf; SFPLOADI FLOATB widens it to fp32 0xFF800000
 
     // F0 - Initialize with negative infinity
-    TTI_SFPLOADI(p_sfpu::LREG4, InstrModLoadStore::FP16B, neg_inf_fp16b);
-    TTI_SFPLOADI(p_sfpu::LREG5, InstrModLoadStore::FP16B, neg_inf_fp16b);
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, neg_inf_fp16b);
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, neg_inf_fp16b);
 
     // F1 - Initialize with negative infinity
-    TTI_SFPLOADI(p_sfpu::LREG6, InstrModLoadStore::FP16B, neg_inf_fp16b);
-    TTI_SFPLOADI(p_sfpu::LREG7, InstrModLoadStore::FP16B, neg_inf_fp16b);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, neg_inf_fp16b);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, neg_inf_fp16b);
 }
 
 template <DataFormat format>
@@ -75,8 +76,12 @@ inline void _init_reduce_max_col_subblock_4x2_()
 
 inline void _move_to_next_subblock_4x2_()
 {
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_3, -128 & 0x3ff); // wherever
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_3, -126 & 0x3ff); // wherever
+    // Spill LREG0/1 into the last tile consumed by the current pass, using
+    // 10-bit Dst row wraparound for negative relative addressing. This is safe
+    // only because the next pass reads the other tile column and the meaningful
+    // output is written later; revisit this if the 4x2 pass ordering changes.
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_3, -128 & 0x3ff);
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_3, -126 & 0x3ff);
 
     TTI_SFPTRANSP(0, 0, 0, 0); // all arguments are unused
 
@@ -84,8 +89,8 @@ inline void _move_to_next_subblock_4x2_()
     TTI_SFPSWAP(0 /*unused*/, p_sfpu::LREG5 /*lreg_src_c*/, p_sfpu::LREG6 /*lreg_dest*/, 1 /*instr_mod1*/);
     TTI_SFPSWAP(0 /*unused*/, p_sfpu::LREG4 /*lreg_src_c*/, p_sfpu::LREG5 /*lreg_dest*/, 1 /*instr_mod1*/);
 
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_3, -128 & 0x3ff); // wherever
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_3, -126 & 0x3ff); // wherever
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_3, -128 & 0x3ff);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_3, -126 & 0x3ff);
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
@@ -159,11 +164,11 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_he
 
 inline void _reduce_max_col_subblock_4x2_prologue_()
 {
-    constexpr std::uint16_t neg_inf_fp16b = 0xFF80;
+    constexpr std::uint16_t neg_inf_fp16b = 0xFF80; // bf16 -inf; SFPLOADI FLOATB widens it to fp32 0xFF800000
 
     // F0 - Initialize with negative infinity
-    TTI_SFPLOADI(p_sfpu::LREG0, InstrModLoadStore::FP16B, neg_inf_fp16b);
-    TTI_SFPLOADI(p_sfpu::LREG1, InstrModLoadStore::FP16B, neg_inf_fp16b);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, neg_inf_fp16b);
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, neg_inf_fp16b);
 }
 
 inline void _reduce_max_col_subblock_4x2_epilogue_()

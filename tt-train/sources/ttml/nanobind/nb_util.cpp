@@ -13,7 +13,6 @@
 #include "autograd/auto_context.hpp"
 #include "tt-metalium/bfloat16.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -31,6 +30,7 @@ constexpr auto BFLOAT8_B = "Unsupported type: BFLOAT8_B";
 constexpr auto BFLOAT4_B = "Unsupported type: BFLOAT4_B";
 constexpr auto UINT8 = "Unsupported type: UINT8";
 constexpr auto UINT16 = "Unsupported type: UINT16";
+constexpr auto INT8 = "Unsupported type: INT8";
 constexpr auto INVALID = "Unsupported type: INVALID";
 constexpr auto UNKNOWN = "Unsupported type: unknown";
 constexpr auto COMPLEX = "Unsupported type: Complex";
@@ -53,6 +53,7 @@ constexpr bool is_supported_datatype(tt::tt_metal::DataType dt) {
             NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT4_B);
         case tt::tt_metal::DataType::UINT8: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT8);
         case tt::tt_metal::DataType::UINT16: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT16);
+        case tt::tt_metal::DataType::INT8: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INT8);
         case tt::tt_metal::DataType::INVALID: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
         default: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UNKNOWN);
     }
@@ -122,7 +123,7 @@ auto dispatch_conversion(
 
 // Helper: Create tensor from numpy data span (common logic for both overloads)
 template <typename NumpyType, typename MetalType>
-tt::tt_metal::Tensor create_tensor_from_span(
+ttnn::Tensor create_tensor_from_span(
     std::span<const NumpyType> numpy_data_span,
     const tt::tt_metal::ShapeBase::Container& shape_container,
     tt::tt_metal::DataType tensor_data_type,
@@ -143,7 +144,7 @@ tt::tt_metal::Tensor create_tensor_from_span(
         auto row_major_tensor = (mapper != nullptr)
                                     ? ttnn::distributed::create_distributed_tensor(
                                           ttsl::make_const_span(converted_data), tensor_shape, tensor_layout, *mapper)
-                                    : tt::tt_metal::Tensor::from_vector(converted_data, tensor_spec, device);
+                                    : ttnn::Tensor::from_vector(converted_data, tensor_spec, device);
 
         if (mapper != nullptr) {
             row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
@@ -157,7 +158,7 @@ tt::tt_metal::Tensor create_tensor_from_span(
         auto row_major_tensor = (mapper != nullptr)
                                     ? ttnn::distributed::create_distributed_tensor(
                                           ttsl::make_const_span(numpy_data_span), tensor_shape, tensor_layout, *mapper)
-                                    : tt::tt_metal::Tensor::from_span(numpy_data_span, tensor_spec, device);
+                                    : ttnn::Tensor::from_span(numpy_data_span, tensor_spec, device);
 
         if (mapper != nullptr) {
             row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
@@ -189,7 +190,7 @@ tt::tt_metal::Tensor create_tensor_from_span(
 }
 
 nb::object make_numpy_tensor(
-    const tt::tt_metal::Tensor& t,
+    const ttnn::Tensor& t,
     std::optional<tt::tt_metal::DataType> new_type,
     const ttnn::distributed::MeshToTensor* composer) {
     // Get ml_dtypes.bfloat16 dtype for bfloat16 arrays
@@ -205,10 +206,7 @@ nb::object make_numpy_tensor(
     }();
 
     const auto make_numpy_tensor_from_data =
-        []<typename NumpyType>(
-            const auto& tensor_data, const auto& tensor_spec /*, const auto& tensor_strides*/) -> nb::object {
-        const tt::tt_metal::Shape& tensor_shape = tensor_spec.logical_shape();
-
+        []<typename NumpyType>(const auto& tensor_data, const tt::tt_metal::Shape& tensor_shape) -> nb::object {
         const auto tensor_shape_rank = tensor_shape.rank();
         std::vector<size_t> numpy_shape(tensor_shape_rank);
         std::copy(tensor_shape.cbegin(), tensor_shape.cend(), numpy_shape.begin());
@@ -276,55 +274,32 @@ nb::object make_numpy_tensor(
             nb::dtype<NumpyType>()));
     };
 
-    const auto convert_to_row_major = [](const tt::tt_metal::Tensor& tensor) {
-        tt::tt_metal::Shape output_tensor_end(ttsl::SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
-        int logical_rank = tensor.logical_shape().rank();
-        for (int index = -1; index >= -logical_rank; --index) {
-            output_tensor_end[index] = tensor.logical_shape()[index] - 1;
-        }
-
-        return ttnn::untilize_with_unpadding(tensor, output_tensor_end, std::nullopt);
-    };
-
     const auto impl = [&make_numpy_tensor_from_data,
-                       &convert_to_row_major,
-                       composer]<typename MetalType, typename NumpyType>(const tt::tt_metal::Tensor& tensor) {
-        if (tensor.storage_type() == ttnn::types::StorageType::HOST) {
-            if (tensor.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
-                const auto row_major_tensor = convert_to_row_major(tensor);
-                const auto row_major_tensor_data = tt::tt_metal::host_buffer::get_as<MetalType const>(row_major_tensor);
-                return make_numpy_tensor_from_data.template operator()<NumpyType>(
-                    row_major_tensor_data, row_major_tensor.tensor_spec());
-            }
-            const auto tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(tensor);
-            return make_numpy_tensor_from_data.template operator()<NumpyType>(tensor_data, tensor.tensor_spec());
-        }
-
-        // Move to CPU and convert to row major
+                       composer]<typename MetalType, typename NumpyType>(const ttnn::Tensor& tensor) {
+        // A device tensor comes to the host (a host tensor is returned as is).
         auto cpu_tensor = tensor.cpu(/*blocking=*/true);
-        cpu_tensor = cpu_tensor.to_layout(tt::tt_metal::Layout::ROW_MAJOR);
 
-        // If composer is provided, use it to compose distributed tensor shards
+        // A composer reads the host tensor in whatever layout it has: it decodes each shard it keeps (from tiles or
+        // padding) once and skips the replicas its config drops.
         if (composer != nullptr) {
-            auto composed_result = composer->compose<MetalType>(cpu_tensor);
-            auto& vec = std::get<0>(composed_result);
-            auto& shape = std::get<1>(composed_result);
-
-            // Create a temporary tensor spec with the composed shape
-            auto composed_spec = tt::tt_metal::TensorSpec(shape, cpu_tensor.tensor_spec().tensor_layout());
-            return make_numpy_tensor_from_data.template operator()<NumpyType>(vec, composed_spec);
+            const auto [composed_data, composed_shape] = composer->compose<MetalType>(cpu_tensor);
+            return make_numpy_tensor_from_data.template operator()<NumpyType>(composed_data, composed_shape);
         }
 
+        cpu_tensor = cpu_tensor.to_layout(tt::tt_metal::Layout::ROW_MAJOR);
         const auto cpu_tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(cpu_tensor);
-        const auto cpu_tensor_spec = cpu_tensor.tensor_spec();
-        const auto cpu_tensor_strides = cpu_tensor.strides();
+        const auto& cpu_tensor_spec = cpu_tensor.tensor_spec();
+        const bool logical_matches_physical = cpu_tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                                              cpu_tensor_spec.logical_2d_shape() == cpu_tensor_spec.physical_shape();
 
-        if (tt::tt_metal::logical_matches_physical(cpu_tensor_spec)) {
-            return make_numpy_tensor_from_data.template operator()<NumpyType>(cpu_tensor_data, cpu_tensor_spec);
+        if (logical_matches_physical) {
+            return make_numpy_tensor_from_data.template operator()<NumpyType>(
+                cpu_tensor_data, cpu_tensor_spec.logical_shape());
         }
 
-        const auto decoded_data = tt::tt_metal::tensor_impl::decode_tensor_data(cpu_tensor_data, cpu_tensor_spec);
-        return make_numpy_tensor_from_data.template operator()<NumpyType>(decoded_data, cpu_tensor_spec);
+        const auto decoded_data = cpu_tensor.host_tensor().to_vector<MetalType>();
+        return make_numpy_tensor_from_data.template operator()<NumpyType>(
+            decoded_data, cpu_tensor_spec.logical_shape());
     };
 
     const auto& tensor_spec = t.tensor_spec();
@@ -336,7 +311,7 @@ nb::object make_numpy_tensor(
 }
 
 // Fast path: standard NumPy dtypes validated by nanobind
-tt::tt_metal::Tensor make_metal_tensor(
+ttnn::Tensor make_metal_tensor(
     nb::ndarray<nb::numpy> numpy_data,
     tt::tt_metal::Layout target_layout,
     std::optional<tt::tt_metal::DataType> new_type,
@@ -431,7 +406,7 @@ tt::tt_metal::Tensor make_metal_tensor(
 
 // Custom dtype handler: only accepts custom dtypes (like ml_dtypes.bfloat16)
 // Standard dtypes should use the fast path nb::ndarray<nb::numpy> overload
-tt::tt_metal::Tensor make_metal_tensor(
+ttnn::Tensor make_metal_tensor(
     nb::object numpy_data_obj,
     tt::tt_metal::Layout target_layout,
     std::optional<tt::tt_metal::DataType> new_type,
@@ -488,6 +463,7 @@ tt::tt_metal::Tensor make_metal_tensor(
     nb::object shape_obj = numpy_data_obj.attr("shape");
     nb::tuple shape_tuple = nb::cast<nb::tuple>(shape_obj);
     std::vector<size_t> shape_from_python;
+    shape_from_python.reserve(rank);
     for (size_t i = 0; i < rank; ++i) {
         shape_from_python.push_back(nb::cast<size_t>(shape_tuple[i]));
     }

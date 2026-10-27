@@ -16,11 +16,20 @@ class VAEModelOptimisations(ModelOptimisations1024x1024):
     ):
         super().__init__(conv_act_dtype, conv_w_dtype, attention_weights_dtype, ff_weights_dtype)
 
+        # Preserve variance accuracy in sharded GroupNorm without changing its reduction algorithm.
+        self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE"]["op_config"][
+            "compute_kernel_config"
+        ] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+        )
+
         self.sdpa_configs["64_K"] = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             q_chunk_size=64,
             k_chunk_size=64,
-            exp_approx_mode=False,
+            exp_approx_mode=True,
         )
 
         self.groupnorm_configs["DRAM_GROUPNORM_32"] = {

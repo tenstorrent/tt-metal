@@ -150,9 +150,33 @@ def run(
     torch_input_tensor_b = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_b)(
         shape_b
     )
-    torch_input_tensor_c = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_c)(
-        shape_c
+    # input_c is the page table: integer indices into the cache's pages
+    # ([0, num_pages)). Generating it from torch_random(-1, 1) yields garbage
+    # values ({-1, 0, 1}) so the golden and device disagree on invalid/duplicate
+    # pages (PCC ~0.985). A real page table is a permutation of distinct page
+    # indices — generate that so each chunk fills a distinct valid page and the
+    # golden matches the device exactly.
+    _is_int_c = str(dtype_c).rsplit(".", 1)[-1] in ("INT32", "UINT32", "UINT16") or dtype_c in (
+        ttnn.int32,
+        ttnn.uint32,
+        ttnn.uint16,
     )
+    if _is_int_c and len(shape_a) == 4 and len(shape_c) >= 1:
+        _num_pages = int(shape_a[0])
+        _rows = int(shape_c[0]) if len(shape_c) >= 2 else 1
+        _cols = int(shape_c[-1])
+
+        def _perm_row():
+            p = torch.randperm(_num_pages)
+            if _cols <= _num_pages:
+                return p[:_cols]
+            return torch.cat([p, torch.randint(0, _num_pages, (_cols - _num_pages,))])
+
+        torch_input_tensor_c = torch.stack([_perm_row() for _ in range(_rows)]).reshape(shape_c).to(torch.int32)
+    else:
+        torch_input_tensor_c = gen_func_with_cast_tt(
+            partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_c
+        )(shape_c)
 
     # Real paged_fill_cache golden: write input_b's seq_len chunks into the
     # cache pages indexed by page_table[batch_idx]. cache layout is
@@ -241,13 +265,21 @@ def run(
     if "batch_idx" not in op_kwargs or op_kwargs["batch_idx"] is None:
         op_kwargs["batch_idx"] = 0
 
-    # mesh_coords is stripped by build_op_kwargs (infra key) — recover it from
-    # the raw test vector so the trace recorder names the per-coord variant
-    # distinctly. Without this, all configs that differ only in mesh_coords
-    # collapse to a single trace entry and validation reports them missing.
-    mesh_coords_set = _parse_mesh_coords(kwargs.get("mesh_coords"))
-    if mesh_coords_set is not None:
-        op_kwargs["mesh_coords"] = mesh_coords_set
+    # NOTE: do NOT forward the traced `mesh_coords` into the op call. The
+    # production model calls paged_fill_cache with no mesh_coords (see
+    # models/demos/llama3_70b_galaxy/tt/llama_attention.py:1050), so it fills
+    # every coordinate the cache tensor lives on. On this trace-validation path
+    # the cache is materialized REPLICATED across the whole device mesh (see
+    # create_tensor_on_mesh), so its tensor_coords are the full mesh. A single
+    # traced coord like {(0,1)} is then NOT a subset of an [8,4]-replicated
+    # tensor's coords the way the trace recorded it, and the device op asserts
+    # `tensor_coords_set.contains(mesh_coord)` (paged_fill_cache_device_operation
+    # .cpp:165) — the 96 FAIL_ASSERT_EXCEPTION on Galaxy. mesh_coords is kept in
+    # the stored vector (its own field) for per-coord vector identity, which does
+    # not require passing it to the op here. Omitting it (= None) fills all coords,
+    # matching the model; the replicated cache reads back identically, so the
+    # global golden + reconcile_golden_to_actual still validate.
+    op_kwargs.pop("mesh_coords", None)
 
     start_time = start_measuring_time()
     # Master used `page_table=` named for 128 cfgs and positional `arg2` for 1.

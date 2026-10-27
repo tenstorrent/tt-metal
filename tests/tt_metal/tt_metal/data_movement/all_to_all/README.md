@@ -3,7 +3,7 @@
 This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions from all master cores to all subordinate cores.
 
 ## Mesh Device API Support
-This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `GenericMeshDeviceFixture` and run on single-device unit meshes.
+This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `UnitMeshFastDispatchFixture` and run on single-device unit meshes.
 
 **Note**: The Mesh Device API only supports fast dispatch mode internally and does not support slow dispatch mode. This provides optimal performance for data movement operations.
 
@@ -62,6 +62,8 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
    - 2x2 To 1x1: 2x2 master grid sending to 1x1 subordinate grid
    - 4x4 To 1x1: 4x4 master grid sending to 1x1 subordinate grid
    - 2x2 To 2x2: 2x2 master grid sending to 2x2 subordinate grid
+
+4. **Grid Sweep Packet Sizes**: Sweeps over packet sizes and combinations of master and subordinate grid configurations (1x1, 2x2, 4x4, full compute grid). Master and subordinate grids are varied independently. Uses combined bandwidth mode to report aggregate bandwidth across all cores. The CSV report includes Master Grid Dimensions, Subordinate Grid Dimensions, and Number of Cores columns.
 
 ## Device 2.0 API Tests
 This test suite now includes tests using the new device 2.0 NOC API. These tests provide the same functionality as the original tests but use an updated API design:

@@ -63,7 +63,6 @@ struct UntilizeDeviceOperation {
         bool use_multicore,
         bool fp32_dest_acc_en,
         std::optional<CoreRangeSet> sub_core_grids,
-        bool enough_space_width,
         bool enough_space_height,
         uint32_t pf_type);
 
@@ -77,7 +76,6 @@ Tensor untilize(
     bool use_multicore,
     bool fp32_dest_acc_en,
     std::optional<CoreRangeSet> sub_core_grids,
-    bool enough_space_width,
     bool enough_space_height,
     uint32_t pf_type);
 

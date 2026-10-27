@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.max / ttnn.min vs torch.amax / torch.amin for int32 (SFPU reduce path)."""
+"""ttnn.max / ttnn.min vs torch.amax / torch.amin for int32 and uint32 (SFPU reduce path)."""
 
 import pytest
 import torch
@@ -12,20 +12,21 @@ from tests.ttnn.utils_for_testing import assert_equal
 
 pytestmark = pytest.mark.use_module_device
 
+_SHAPES = [
+    (1, 1, 32, 32),
+    (1, 1, 30, 96),
+    (1, 1, 90, 32),
+    (1, 3, 17, 19),
+    (2, 4, 64, 60),
+    (2, 1, 256, 2048),
+    (2, 1, 2048, 256),
+]
 
-@pytest.mark.parametrize(
-    "input_shape",
-    [
-        (1, 1, 32, 32),
-        (1, 1, 30, 96),
-        (1, 1, 90, 32),
-        (1, 3, 17, 19),
-        (2, 4, 64, 60),
-        (2, 1, 256, 2048),
-        (2, 1, 2048, 256),
-    ],
-)
-@pytest.mark.parametrize("dim", [0, 1, -1, -2, (-1, -2), None])
+_DIMS = [0, 1, -1, -2, (-1, -2), None]
+
+
+@pytest.mark.parametrize("input_shape", _SHAPES)
+@pytest.mark.parametrize("dim", _DIMS)
 @pytest.mark.parametrize("op", ["max", "min"])
 def test_max_min(device, input_shape, dim, op):
     torch.manual_seed(0)
@@ -41,6 +42,28 @@ def test_max_min(device, input_shape, dim, op):
 
     assert output_tensor.dtype == torch_input_tensor.dtype
     assert_equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("input_shape", _SHAPES)
+@pytest.mark.parametrize("dim", _DIMS)
+@pytest.mark.parametrize("op", ["max", "min"])
+def test_max_min_uint32(device, input_shape, dim, op):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randint(0, 2**32, input_shape, dtype=torch.int64)
+    torch_input_tensor.view(-1)[:4] = torch.tensor([0, 2**31 - 1, 2**31, 2**32 - 1])
+
+    torch_op = torch.amax if op == "max" else torch.amin
+    ttnn_op = ttnn.max if op == "max" else ttnn.min
+
+    torch_output_tensor = torch_op(torch_input_tensor, dim=dim)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor.to(torch.uint32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.uint32
+    )
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim))
+
+    assert output_tensor.dtype == torch.uint32
+    assert_equal(output_tensor.to(torch.int64), torch_output_tensor)
 
 
 @pytest.mark.parametrize("scale", [2.0, 0.5, -3.0])
@@ -67,6 +90,17 @@ def test_max_min_with_scaling(device, input_shape, dim, op, scale):
 
     assert output_tensor.dtype == torch_input_tensor.dtype
     assert_equal(output_tensor, torch_expected)
+
+
+@pytest.mark.parametrize("op", ["max", "min"])
+def test_max_min_uint32_rejects_scaling(device, op, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.ones((1, 1, 32, 32), dtype=torch.uint32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.uint32
+    )
+    ttnn_op = ttnn.max if op == "max" else ttnn.min
+
+    with expect_error(RuntimeError, "UINT32 sum/max/min do not support scalar"):
+        ttnn_op(input_tensor, dim=-1, scalar=2.0)
 
 
 # ---------------------------------------------------------------------------
@@ -108,28 +142,6 @@ def _int32_input_with_injected_value(input_shape, base_low, base_high, injected_
 )
 def test_int32_reduce_with_extreme_value_in_input(device, input_shape, dim, injected_value, op, base_range):
     base_low, base_high = base_range
-    _INT32_MIN = torch.iinfo(torch.int32).min
-    _INT32_MAX = torch.iinfo(torch.int32).max
-
-    # A: MIN negates input before max-finding; -INT32_MIN overflows back to INT32_MIN, losing the extreme value
-    is_min_int32_edge = op == "min" and injected_value == _INT32_MIN
-
-    # B: INT32_MIN (0x80000000) is compared as 0 via INT32_2S_COMP; 0 beats all negatives so MAX returns wrong value
-    is_max_int32_min_edge = (
-        op == "max"
-        and injected_value == _INT32_MIN
-        and (base_high < 0 or (base_low < 0 and dim == -2 and input_shape[-2] % 32 != 0))
-    )
-
-    # C: row reduce uses sign-magnitude mode; SFPSWAP picks larger magnitude, inverting negative ordering
-    is_row_reduce_sign_magnitude_issue = (
-        dim == -1
-        and injected_value == _INT32_MAX
-        and ((op == "max" and base_high < 0) or (op == "min" and base_low > 0))
-    )
-
-    if is_min_int32_edge or is_max_int32_min_edge or is_row_reduce_sign_magnitude_issue:
-        pytest.xfail("Int32 SFPU reduce(min/max) returns wrong result with INT32_MIN/MAX in input (issue #44750).")
 
     torch_input = _int32_input_with_injected_value(input_shape, base_low, base_high, injected_value)
 
@@ -142,3 +154,57 @@ def test_int32_reduce_with_extreme_value_in_input(device, input_shape, dim, inje
     output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim))
 
     assert_equal(output_tensor, torch_output)
+
+
+# Validates the pad value the reduce op uses when it tilizes ROW_MAJOR input: padding must not change
+# the result. Shapes are tile-unaligned so padding is added, and the data is single-signed (all-positive
+# MIN, all-negative MAX) so padding that wins the comparison is visible in the output.
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (1, 1, 30, 30),
+        (1, 1, 17, 19),
+        (2, 3, 60, 30),
+    ],
+)
+@pytest.mark.parametrize("dim", [-1, -2, (-1, -2)])
+@pytest.mark.parametrize(
+    "op, base_range",
+    [("min", (10, 1000)), ("max", (-1000, -10))],
+    ids=["min_all_positive", "max_all_negative"],
+)
+def test_int32_reduce_row_major_pad_value(device, input_shape, dim, op, base_range):
+    torch.manual_seed(0)
+    torch_input = torch.randint(base_range[0], base_range[1], input_shape, dtype=torch.int32)
+
+    torch_op = torch.amax if op == "max" else torch.amin
+    ttnn_op = ttnn.max if op == "max" else ttnn.min
+
+    torch_output = torch_op(torch_input, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.int32)
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim))
+
+    assert output_tensor.dtype == torch_input.dtype
+    assert_equal(output_tensor, torch_output)
+
+
+@pytest.mark.parametrize("dim", [-1, -2, (-1, -2)])
+@pytest.mark.parametrize("value", [0, 2**31, 2**32 - 1])
+@pytest.mark.parametrize("op", ["max", "min"])
+def test_uint32_reduce_tile_pad_value(device, op, dim, value):
+    """A constant UINT32 tensor on a padded shape: tile padding should not become the result."""
+    torch_input = torch.full((1, 1, 30, 50), value, dtype=torch.int64)
+
+    torch_op = torch.amax if op == "max" else torch.amin
+    ttnn_op = ttnn.max if op == "max" else ttnn.min
+
+    torch_output = torch_op(torch_input, dim=dim)
+
+    input_tensor = ttnn.from_torch(
+        torch_input.to(torch.uint32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.uint32
+    )
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim))
+
+    assert output_tensor.dtype == torch.uint32
+    assert_equal(output_tensor.to(torch.int64), torch_output)

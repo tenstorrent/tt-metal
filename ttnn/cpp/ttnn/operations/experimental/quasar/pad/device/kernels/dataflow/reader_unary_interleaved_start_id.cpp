@@ -4,30 +4,26 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
-
-    constexpr auto src_args = TensorAccessorArgs<0>();
-
-    constexpr uint32_t cb_id_in0 = 0;
-
-    // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_in0).fifo_page_size;
+    const uint32_t num_pages = get_arg(args::num_pages);
+    const uint32_t start_id = get_arg(args::start_id);
 
     // ublocks size defined in pages (works for both TILE and ROW_MAJOR layouts)
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(tensor::input);
 
     Noc noc;
-    CircularBuffer cb(cb_id_in0);
+    DataflowBuffer dfb_in(dfb::src0);
 
-// read a ublock of pages from src to CB, and then push the ublock to unpacker
+    // Page size from the DFB (works for both TILE and ROW_MAJOR layouts)
+    const uint32_t page_bytes = dfb_in.get_entry_size();
+
+// read a ublock of pages from src to DFB, and then push the ublock to unpacker
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_pages;
     for (uint32_t i = start_id; i != end_id; --i) {
@@ -35,9 +31,9 @@ void kernel_main() {
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        cb.reserve_back(onepage);
-        noc.async_read(s, cb, page_bytes, {.page_id = i}, {.offset_bytes = 0});
+        dfb_in.reserve_back(onepage);
+        noc.async_read(s, dfb_in, page_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb.push_back(onepage);
+        dfb_in.push_back(onepage);
     }
 }

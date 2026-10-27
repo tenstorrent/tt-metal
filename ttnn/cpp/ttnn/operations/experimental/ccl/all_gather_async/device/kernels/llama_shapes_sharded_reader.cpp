@@ -2,7 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 #include <utility>
@@ -28,7 +34,7 @@ void kernel_main() {
 
     size_t arg_idx = 0;
     // Load the input tensor spec
-    address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
+    address_t tensor_address0 = get_common_arg_val<address_t>(ttnn::ccl::LlamaGatherReaderCommonArgs::input);
     uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
@@ -40,21 +46,28 @@ void kernel_main() {
 
     // interleaved addrgen
 
+    Noc noc_obj;
+    CircularBuffer cb0(cb0_id);
+
     uint32_t tiles_read = 0;
     uint32_t shard_tile_id = first_core_tile_start_offset;
     uint32_t core_id = 0;
     while (tiles_read < num_tiles_to_read) {
         uint32_t num_tiles_to_read_this_core =
             std::min(num_tiles_per_core - shard_tile_id, num_tiles_to_read - tiles_read);
-        cb_reserve_back(cb0_id, num_tiles_to_read_this_core);
-        const uint32_t l1_write_addr = get_write_ptr(cb0_id);
-        uint64_t read_addr = get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0);
-        read_addr += shard_tile_id * tensor0_page_size;
+        cb0.reserve_back(num_tiles_to_read_this_core);
+        const uint32_t l1_write_addr = cb0.get_write_ptr();
+        const uint32_t shard_addr = tensor_address0 + shard_tile_id * tensor0_page_size;
 
-        noc_async_read(read_addr, l1_write_addr, num_tiles_to_read_this_core * tensor0_page_size);
-        noc_async_read_barrier();
+        noc_obj.async_read(
+            UnicastEndpoint{},
+            CoreLocalMem<uint8_t>(l1_write_addr),
+            num_tiles_to_read_this_core * tensor0_page_size,
+            {.noc_x = core_noc_x[core_id], .noc_y = core_noc_y[core_id], .addr = shard_addr},
+            {});
+        noc_obj.async_read_barrier();
 
-        cb_push_back(cb0_id, num_tiles_to_read_this_core);
+        cb0.push_back(num_tiles_to_read_this_core);
         tiles_read += num_tiles_to_read_this_core;
         shard_tile_id = 0;
         core_id++;

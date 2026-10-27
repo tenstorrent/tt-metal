@@ -56,6 +56,121 @@ def test_ones_like(device, input_shape):
 
 @pytest.mark.parametrize(
     "input_shape",
+    [[32, 32], [1, 2, 64, 64]],
+)
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype",
+    [
+        (ttnn.uint32, ttnn.bfloat16),
+        (ttnn.uint32, ttnn.float32),
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.float32, ttnn.bfloat16),
+    ],
+)
+def test_ones_like_dtype_override(device, input_shape, input_dtype, output_dtype):
+    """ones_like must honour dtype= even for TILE-layout device tensors (issue #30282)."""
+    torch_input = torch.randint(0, 10, input_shape, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.ones_like(input_tensor, dtype=output_dtype)
+
+    assert ttnn.is_tensor_storage_on_device(output_tensor)
+    assert (
+        output_tensor.dtype == output_dtype
+    ), f"Expected dtype {output_dtype}, got {output_tensor.dtype} (issue #30282)"
+
+    result = ttnn.to_torch(ttnn.from_device(output_tensor))
+    expected = torch.ones(input_shape)
+    assert torch.allclose(result.float(), expected), "ones_like values are not all 1.0"
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [[32, 32], [1, 2, 64, 64]],
+)
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype",
+    [
+        (ttnn.uint32, ttnn.bfloat16),
+        (ttnn.uint32, ttnn.float32),
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.float32, ttnn.bfloat16),
+    ],
+)
+def test_zeros_like_dtype_override(device, input_shape, input_dtype, output_dtype):
+    """zeros_like must honour dtype= even for TILE-layout device tensors (issue #30282)."""
+    torch_input = torch.randint(1, 10, input_shape, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.zeros_like(input_tensor, dtype=output_dtype)
+
+    assert ttnn.is_tensor_storage_on_device(output_tensor)
+    assert (
+        output_tensor.dtype == output_dtype
+    ), f"Expected dtype {output_dtype}, got {output_tensor.dtype} (issue #30282)"
+
+    result = ttnn.to_torch(ttnn.from_device(output_tensor))
+    expected = torch.zeros(input_shape)
+    assert torch.allclose(result.float(), expected), "zeros_like values are not all 0.0"
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [[32, 32], [1, 2, 64, 64]],
+)
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype, fill_value",
+    [
+        (ttnn.uint32, ttnn.bfloat16, 3.0),
+        (ttnn.uint32, ttnn.float32, -2.5),
+        (ttnn.bfloat16, ttnn.float32, 0.5),
+        (ttnn.float32, ttnn.bfloat16, 7.0),
+    ],
+)
+def test_full_like_dtype_override(device, input_shape, input_dtype, output_dtype, fill_value):
+    """full_like must honour dtype= even for TILE-layout device tensors (issue #30282)."""
+    torch_input = torch.randint(0, 10, input_shape, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.full_like(input_tensor, fill_value=fill_value, dtype=output_dtype)
+
+    assert ttnn.is_tensor_storage_on_device(output_tensor)
+    assert (
+        output_tensor.dtype == output_dtype
+    ), f"Expected dtype {output_dtype}, got {output_tensor.dtype} (issue #30282)"
+
+    result = ttnn.to_torch(ttnn.from_device(output_tensor))
+    expected = torch.full(input_shape, fill_value)
+    assert torch.allclose(
+        result.float(), expected, atol=1e-2
+    ), f"full_like values mismatch: expected {fill_value}, got {result.float().unique()}"
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [[32, 32], [1, 2, 64, 64]],
+)
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype",
+    [
+        (ttnn.uint32, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.float32),
+    ],
+)
+def test_ones_like_dtype_override_row_major(device, input_shape, input_dtype, output_dtype):
+    """Verify dtype override also works with ROW_MAJOR layout (was always correct, kept for coverage)."""
+    torch_input = torch.randint(0, 10, input_shape, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.ones_like(input_tensor, dtype=output_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    assert output_tensor.dtype == output_dtype
+    result = ttnn.to_torch(ttnn.from_device(output_tensor))
+    assert torch.allclose(result.float(), torch.ones(input_shape)), "ones_like ROW_MAJOR values not all 1.0"
+
+
+@pytest.mark.parametrize(
+    "input_shape",
     [[32, 32], [5, 96, 64], [1, 2, 64, 64], [1, 2, 4, 64, 64]],
 )
 @pytest.mark.parametrize(
@@ -235,6 +350,26 @@ def test_full_with_opt_tensor(device, input_shape, layout, fill_value):
 
     assert_equal(torch_tensor, opt_tensor)
     assert torch.allclose(torch_tensor, opt_tensor)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("fill_value", [0, 1.0])
+def test_full_with_opt_tensor_block_float(device, dtype, fill_value):
+    input_shape = [32, 32]
+    torch_tensor = torch.full(input_shape, dtype=torch.bfloat16, fill_value=fill_value)
+    opt_tensor = ttnn.from_torch(
+        torch.ones(input_shape, dtype=torch.bfloat16),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
+    ttnn.full(input_shape, device=device, fill_value=fill_value, optional_tensor=opt_tensor)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
+    assert ttnn.is_tensor_storage_on_device(opt_tensor)
+    assert_equal(torch_tensor, ttnn.to_torch(opt_tensor))
 
 
 @pytest.mark.parametrize(

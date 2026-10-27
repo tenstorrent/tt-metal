@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <array>
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
@@ -10,20 +11,112 @@
 namespace ckernel::math
 {
 
-// Number of rows for MATH functions
-constexpr static std::uint32_t ELTWISE_MATH_ROWS       = MATH_ROWS; // 8 for quasar, 4 for trinity
-constexpr static std::uint32_t MOVE_MATH_ROWS[3]       = {8, 4, 1};
-constexpr static unsigned int SFP_ROWS                 = 2;
+/**
+ * @brief Return the FPU phase count of a fidelity.
+ * @param fidelity: Approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
+ */
+constexpr std::uint32_t math_fidelity_phase_count(const MathFidelity fidelity)
+{
+    return fidelity == MathFidelity::LoFi ? 1 : to_underlying(fidelity);
+}
+
+/**
+ * @brief Fidelity phases an op issues for its source formats.
+ *
+ * phase_count is the number of FPU passes. phase_increment is the fidelity counter step between them:
+ * 0 for LoFi, 1 for consecutive phases, 2 when a narrow SrcA skips phase 1.
+ */
+struct MathFidelitySchedule
+{
+    std::uint8_t phase_count;
+    std::uint8_t phase_increment;
+};
+
+/**
+ * @brief Resolve the issued phase count and counter increment for the source formats.
+ *
+ * Phase 1 needs low SrcA mantissa bits, phase 2 low SrcB bits, phase 3 both. Phases the formats cannot use are dropped.
+ *
+ * @tparam fidelity: Requested approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
+ * @param src_a_format: Effective SrcA register format.
+ * @param src_b_format: Effective SrcB register format.
+ * @note Only Float16, Tf32 and Float32 carry low mantissa bits. Pass register formats, not L1 MX formats; unpacked MX normally uses Float16_b.
+ */
+template <MathFidelity fidelity>
+constexpr MathFidelitySchedule math_fidelity_schedule(const DataFormat src_a_format, const DataFormat src_b_format)
+{
+    static_assert(
+        fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2 || fidelity == MathFidelity::HiFi3 || fidelity == MathFidelity::HiFi4,
+        "Invalid math fidelity");
+    constexpr std::uint32_t requested_phases = math_fidelity_phase_count(fidelity);
+
+    const auto has_low_mantissa = [](const DataFormat format)
+    { return format == DataFormat::Float16 || format == DataFormat::Tf32 || format == DataFormat::Float32; };
+
+    const bool wide_a = has_low_mantissa(src_a_format);
+    const bool wide_b = has_low_mantissa(src_b_format);
+
+    std::uint8_t phases = 1;
+    if (wide_a && requested_phases > 1)
+    {
+        phases++;
+    }
+    if (wide_b && requested_phases > 2)
+    {
+        phases++;
+    }
+    if (wide_a && wide_b && requested_phases > 3)
+    {
+        phases++;
+    }
+    // A narrow SrcA has no phase 1, so its second phase is phase 2.
+    const std::uint8_t increment = phases == 1 ? 0 : (wide_a ? 1 : 2);
+    return {phases, increment};
+}
+
+/**
+ * @brief Return the source register format of an operand that is copied from dest instead of unpacked from L1.
+ * @tparam EN_32BIT_DEST: dest is in 32-bit mode.
+ * @param dest_format: dest format in 16-bit mode.
+ */
+template <bool EN_32BIT_DEST>
+constexpr DataFormat dest_src_format(const DataFormat dest_format)
+{
+    return EN_32BIT_DEST && dest_format == DataFormat::Float16_b ? DataFormat::Tf32 : dest_format;
+}
+
+// Rows one FPU instruction covers: 8 on the base Quasar part, 4 on the narrow one.
+constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS;
+static_assert(ELTWISE_MATH_ROWS == 4 || ELTWISE_MATH_ROWS == 8, "the math LLKs support a 4-row or 8-row FPU");
+
+template <std::uint32_t NUM_ROWS>
+constexpr auto fpu_row_offsets()
+{
+    static_assert(NUM_ROWS > 0 && NUM_ROWS % ELTWISE_MATH_ROWS == 0);
+
+    std::array<std::uint32_t, NUM_ROWS / ELTWISE_MATH_ROWS> rows {};
+
+    for (std::uint32_t i = 0; i < rows.size(); ++i)
+    {
+        rows[i] = i * ELTWISE_MATH_ROWS;
+    }
+
+    return rows;
+}
+
+constexpr static std::uint32_t FPU_MOV_ROWS = (ELTWISE_MATH_ROWS == 8) ? p_mov_src_to_dest::MOV_8_ROWS : p_mov_src_to_dest::MOV_4_ROWS;
+static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movd2a::MOV_8_ROWS : p_movd2a::MOV_4_ROWS));
+static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movd2b::MOV_8_ROWS : p_movd2b::MOV_4_ROWS));
+static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movb2a::MOV_8_ROWS : p_movb2a::MOV_4_ROWS));
+
+constexpr static bool FPU_SPLITS_DEST_ROW_GROUP = ELTWISE_MATH_ROWS < MAX_FPU_ROWS; // a dest row group takes several FPU issues
+
+constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
+constexpr static unsigned int SFP_ROWS           = 2;
 
 // SFPU register-file base addresses: dest region vs SrcS (used by SFPU load/store)
 constexpr static unsigned int SFPU_DEST_BASE_ADDR = 0x0;
 constexpr static unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
-
-#if defined(LLK_TRISC_ISOLATE_SFPU)
-constexpr static std::uint32_t TRISC_ID = 3;
-#else
-constexpr static std::uint32_t TRISC_ID = 1;
-#endif
 
 // Struct for the ALU addresses
 constexpr std::uint32_t NUM_WORDS_ALU_FORMAT = 3;
@@ -66,9 +159,9 @@ typedef union
 // List of possible data format config states
 enum class DataFormatConfigSet : std::uint8_t
 {
-    UNCONFIGURED          = 0,
-    DEFAULT               = 1,
-    MOV_OPS_EXPLICIT_FMT  = 2
+    UNCONFIGURED         = 0,
+    DEFAULT              = 1,
+    MOV_OPS_EXPLICIT_FMT = 2
 };
 
 // /**
@@ -113,6 +206,10 @@ inline void _sfpu_load_config32_(const std::uint32_t dest, const std::uint32_t u
 inline void _init_sfpu_config_reg_()
 {
     TTI_SFPCONFIG(0, 0xF, 1);
+    // Quasar simulator doesn't apply the SFPU const-lreg reset default at boot.
+    // Reload programmable constant LREG11 = -1.0 (its RTL reset default) each launch: config_dest=0xB,
+    // instr_mod1[0]=1 loads the default. sfpi materializes -1.0 and subtract-based float compares via LREG11.
+    TTI_SFPCONFIG(0, 0xB, 1);
 }
 
 /**
@@ -144,40 +241,87 @@ inline void _inc_dst_addr_()
 template <ckernel::trisc::DstTileShape TILE_SHAPE>
 inline void _set_dst_write_addr_(const std::uint32_t tile_index)
 {
-    const std::uint32_t tile_shape_idx =
-        (TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32) ? 6 : ((TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x16) ? 5 : 4);
-    const std::uint32_t dst_index = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
+    constexpr std::uint32_t tile_shape_idx = ckernel::trisc::get_dest_tile_size_log2(TILE_SHAPE);
+    const std::uint32_t dst_index          = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
     ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
 }
 
-inline void _set_dst_write_addr_by_rows_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_index)
+/**
+ * @brief Computes the tile-shape index (a log2-style shift exponent derived from
+ *        the number of rows per tile) and stores it in GPR TEMP0 for later reuse
+ *        by @ref _set_dst_write_addr_by_gpr_ and the reduce MOP instruction stream.
+ *
+ *        This is the "compute once" half of the pair that splits
+ *        @ref _set_dst_write_addr_by_rows_ so the shift amount is calculated a
+ *        single time (when the tile shape is known) and reused across many
+ *        per-tile dest-base calculations.
+ *
+ * @param num_rows_per_tile Number of data rows per tile.
+ */
+inline void _set_tile_shape_idx_gpr_(const std::uint32_t num_rows_per_tile)
 {
     const std::uint32_t tile_shape_idx =
         (num_rows_per_tile == 64)
             ? 6
             : ((num_rows_per_tile == 32) ? 5 : ((num_rows_per_tile == 16) ? 4 : ((num_rows_per_tile == 8) ? 3 : ((num_rows_per_tile == 4) ? 2 : 1))));
-    const std::uint32_t dst_index = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
+    ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX] = tile_shape_idx;
+}
+
+/**
+ * @brief Sets the destination register base address depending on the tile index,
+ *        using the tile-shape index previously stored in GPR TEMP0 by
+ *        @ref _set_tile_shape_idx_gpr_ as the left-shift amount that converts
+ *        tile_index into a dest offset.
+ *
+ *        This is the "use many" half of the pair that splits
+ *        @ref _set_dst_write_addr_by_rows_; call @ref _set_tile_shape_idx_gpr_
+ *        once before invoking this for each tile in the reduce.
+ *
+ * @param tile_index Tile index in the dest reg.
+ *        16-bit dest reg data format -> tile_index = 0 - 7
+ *        32-bit dest reg data format -> tile_index = 0 - 3
+ */
+inline void _set_dst_write_addr_by_rows_(const std::uint32_t tile_index)
+{
+    const std::uint32_t tile_shape_idx = ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX];
+    const std::uint32_t dst_index      = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
     ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
 }
 
 inline void move_d2a_fixed_face(const std::uint8_t addrmod)
 {
     // MOVD2A src is relative to dest_section_base + dest_counter.
-    // Use fixed offsets (0, 8) — the dest counter handles face progression.
+    // The FPU moves ELTWISE_MATH_ROWS rows per MOV (8 on Quasar, 4 on 4row_arch), so we emit
+    // 16 / ELTWISE_MATH_ROWS MOVs to cover all 16 rows of a face — 4row_arch needs twice as many
+    // as Quasar. The dest counter handles face progression.
     // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
-    TTI_MOVD2A(0, 0, addrmod, p_movd2a::MOV_8_ROWS, 0);
-    TTI_MOVD2A(0, 8, addrmod, p_movd2a::MOV_8_ROWS, 8);
+    static_assert(ELTWISE_MATH_ROWS == 8 || ELTWISE_MATH_ROWS == 4, "move_d2a_fixed_face supports MATH_ROWS of 8 (Quasar) or 4 (4row_arch)");
+    // MATH drains the preceding math instructions so their source-bank release has landed before
+    // SRCA_VLD tests the bank that MOVD2A will write.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCA_VLD);
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+    {
+        TTI_MOVD2A(0, row, addrmod, FPU_MOV_ROWS, row);
+    }
 }
 
 inline void move_d2b_fixed_face(const std::uint8_t addrmod)
 {
     // MOVD2B src is relative to dest_section_base + dest_counter.
-    // Use fixed offsets (0, 8) — the dest counter handles face progression.
+    // The FPU moves ELTWISE_MATH_ROWS rows per MOV (8 on Quasar, 4 on 4row_arch), so we emit
+    // 16 / ELTWISE_MATH_ROWS MOVs to cover all 16 rows of a face — 4row_arch needs twice as many
+    // as Quasar. The dest counter handles face progression.
     // NOTE: For different tile dimensions we need different amounts of MOV* instructions; see separate issue.
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
-    TTI_MOVD2B(0, 0, addrmod, p_movd2b::MOV_8_ROWS, 0, 0);
-    TTI_MOVD2B(0, 8, addrmod, p_movd2b::MOV_8_ROWS, 0, 8);
+    static_assert(ELTWISE_MATH_ROWS == 8 || ELTWISE_MATH_ROWS == 4, "move_d2b_fixed_face supports MATH_ROWS of 8 (Quasar) or 4 (4row_arch)");
+    // MATH drains the preceding math instructions so their source-bank release has landed before
+    // SRCB_VLD tests the bank that MOVD2B will write.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCB_VLD);
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<ckernel::FACE_R_DIM>())
+    {
+        TTI_MOVD2B(0, row, addrmod, FPU_MOV_ROWS, 0, row);
+    }
 }
 
 template <EltwiseBinaryReuseDestType binary_reuse_dest>

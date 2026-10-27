@@ -8,6 +8,7 @@
 #include <functional>
 #include <list>
 #include <optional>
+#include <tuple>
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
@@ -15,11 +16,13 @@
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
@@ -183,6 +186,9 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, ui
             // dispatch_s is on the same tensix as dispatch_d
             dispatcher_s_coord = this->dispatcher_d_core_locked(device_id, channel, cq_id);
         }
+    } else if (this->get_dispatch_core_type() == CoreType::DISPATCH) {
+        // Dispatch-engine 1CQ FD: prefetch (DM0), dispatch (DM1), and dispatch_s (DM2) share one tile.
+        dispatcher_s_coord = this->dispatcher_core_locked(device_id, channel, cq_id);
     } else {
         dispatcher_s_coord = this->get_next_available_dispatch_core(device_id);
     }
@@ -191,8 +197,17 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, ui
     return assignment.dispatcher_s.value();
 }
 
-CoreType dispatch_core_manager::get_dispatch_core_type() {
-    return get_core_type_from_config(this->dispatch_core_config_);
+CoreType dispatch_core_manager::get_dispatch_core_type() const {
+    // Quasar needs resolve (DISPATCH vs WORKER). WH/BH keep config-only (BH Galaxy regression).
+    if (env_.get_cluster().arch() != tt::ARCH::QUASAR) {
+        return get_core_type_from_config(this->dispatch_core_config_);
+    }
+    const auto& cluster = env_.get_cluster();
+    if (cluster.all_chip_ids().empty()) {
+        return get_core_type_from_config(this->dispatch_core_config_);
+    }
+    const ChipId device_id = *cluster.all_chip_ids().begin();
+    return resolve_dispatch_core_type(env_, device_id, this->dispatch_core_config_);
 }
 
 DispatchCoreConfig dispatch_core_manager::get_dispatch_core_config() { return this->dispatch_core_config_; }
@@ -214,6 +229,45 @@ std::vector<CoreCoord> dispatch_core_manager::get_all_logical_dispatch_cores(Chi
     return tt::get_logical_dispatch_cores(this->env_, device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_);
 }
 
+std::vector<CoreCoord> dispatch_core_manager::get_assigned_dispatch_cores(ChipId chip_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
+    std::vector<CoreCoord> cores;
+    auto add_core = [&](const tt_cxy_pair& placement) {
+        if (placement.chip == static_cast<std::size_t>(chip_id)) {
+            cores.emplace_back(placement.x, placement.y);
+        }
+    };
+    auto add_if_assigned = [&](const std::optional<tt_cxy_pair>& placement) {
+        if (placement.has_value()) {
+            add_core(placement.value());
+        }
+    };
+    // Assignments are keyed by the device a command queue targets, but a placement records the chip
+    // the core is physically on (a remote device's issue-queue cores sit on its MMIO device), so every
+    // assignment is scanned and filtered by placement chip.
+    for (const auto& device_entry : this->dispatch_core_assignments) {
+        for (const auto& channel_entry : device_entry.second) {
+            for (const auto& cq_entry : channel_entry.second) {
+                const dispatch_core_placement_t& assignment = cq_entry.second;
+                add_if_assigned(assignment.prefetcher);
+                add_if_assigned(assignment.prefetcher_d);
+                add_if_assigned(assignment.completion_queue_writer);
+                add_if_assigned(assignment.dispatcher);
+                add_if_assigned(assignment.dispatcher_d);
+                add_if_assigned(assignment.dispatcher_s);
+                for (const auto& mux_entry : assignment.fabric_mux) {
+                    add_core(mux_entry.second);
+                }
+            }
+        }
+    }
+    std::sort(cores.begin(), cores.end(), [](const CoreCoord& a, const CoreCoord& b) {
+        return std::tie(a.x, a.y) < std::tie(b.x, b.y);
+    });
+    cores.erase(std::unique(cores.begin(), cores.end()), cores.end());
+    return cores;
+}
+
 std::optional<tt_cxy_pair> dispatch_core_manager::get_reserved_realtime_profiler_core(ChipId device_id) {
     std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     auto it = reserved_realtime_profiler_core_by_device_.find(device_id);
@@ -226,8 +280,8 @@ std::optional<tt_cxy_pair> dispatch_core_manager::get_reserved_realtime_profiler
 // private methods
 
 dispatch_core_manager::dispatch_core_manager(
-    const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, MetalEnvImpl& env) :
-    env_(env) {
+    const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, MetalEnvImpl& env, MetalContext& ctx) :
+    env_(env), ctx_(ctx) {
     this->reset_dispatch_core_manager(dispatch_core_config, num_hw_cqs, env);
 }
 
@@ -239,6 +293,11 @@ void dispatch_core_manager::reset_dispatch_core_manager(
     this->reserved_realtime_profiler_core_by_device_.clear();
     this->dispatch_core_config_ = dispatch_core_config;
     for (ChipId device_id : env.get_cluster().all_chip_ids()) {
+        if (env.get_cluster().arch() == tt::ARCH::QUASAR && env.get_rtoptions().get_fast_dispatch()) {
+            tt::tt_metal::detail::validate_quasar_dispatch_cores_for_fd(
+                env, device_id, num_hw_cqs, dispatch_core_config);
+        }
+
         std::list<CoreCoord>& logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
         for (const CoreCoord& logical_dispatch_core :
              tt::get_logical_dispatch_cores(env, device_id, MAX_NUM_HW_CQS, dispatch_core_config)) {
@@ -277,7 +336,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         }
 
         // Remove service-owned cores so FD never allocates them.
-        auto claimed = MetalContext::instance().get_service_core_manager().claimed_cores(device_id);
+        auto claimed = ctx_.get_service_core_manager().claimed_cores(device_id);
         if (!claimed.empty()) {
             logical_dispatch_cores.remove_if([&claimed](const CoreCoord& c) { return claimed.contains(c); });
         }

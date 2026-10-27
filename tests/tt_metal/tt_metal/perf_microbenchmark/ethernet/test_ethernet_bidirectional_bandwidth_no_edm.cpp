@@ -9,7 +9,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
@@ -36,6 +35,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -81,15 +81,15 @@ private:
 };
 
 struct ChipSenderReceiverEthCore {
-    CoreCoord sender_core;
-    CoreCoord receiver_core;
+    tt::tt_metal::CoreCoord sender_core;
+    tt::tt_metal::CoreCoord receiver_core;
 };
 
 std::tuple<tt_metal::Program, tt_metal::Program> build(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device0*/,
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& /*device1*/,
-    CoreCoord eth_sender_core,
-    CoreCoord eth_receiver_core,
+    tt::tt_metal::CoreCoord eth_sender_core,
+    tt::tt_metal::CoreCoord eth_receiver_core,
     std::size_t /*num_samples*/,
     std::size_t /*sample_page_size*/,
     std::size_t /*max_channels_per_direction*/,
@@ -125,8 +125,8 @@ void run(
     tt_metal::KernelHandle local_kernel,
     tt_metal::KernelHandle remote_kernel,
 
-    CoreCoord eth_sender_core,
-    CoreCoord eth_receiver_core,
+    tt::tt_metal::CoreCoord eth_sender_core,
+    tt::tt_metal::CoreCoord eth_receiver_core,
     std::size_t num_samples,
     std::size_t sample_page_size,
     std::size_t max_channels_per_direction) {
@@ -228,12 +228,13 @@ int main(int argc, char** argv) {
     N300TestDevice test_fixture;
 
     const auto& device_0 = test_fixture.devices_.at(2);
-    const auto& active_eth_cores = device_0->get_devices()[0]->get_active_ethernet_cores(true);
+    const auto& active_eth_cores = device_0->impl().get_devices()[0]->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
     TT_FATAL(eth_sender_core_iter != active_eth_cores.end(), "No active ethernet cores found");
     auto eth_sender_core = *eth_sender_core_iter;
 
-    auto [device_id, eth_receiver_core] = device_0->get_devices()[0]->get_connected_ethernet_core(eth_sender_core);
+    auto [device_id, eth_receiver_core] =
+        device_0->impl().get_devices()[0]->get_connected_ethernet_core(eth_sender_core);
     const auto& device_1 = test_fixture.devices_.at(device_id);
     bool success = false;
     success = true;

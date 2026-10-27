@@ -4,6 +4,8 @@
 
 #include "ring_fusion.hpp"
 
+#include <tt-metalium/mesh_device.hpp>
+
 using namespace tt::tt_metal;
 namespace ttnn::prim {
 
@@ -19,7 +21,7 @@ void RingSDPAFusedOpSignaler::init_all_gather(
 
 void RingSDPAFusedOpSignaler::init_fused_op(
     Program& program,
-    const IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice* device,
     const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
     ttnn::experimental::ccl::FusedOpSignalerMode fused_op_signaler_mode) {
     this->fused_op_signaler_mode = fused_op_signaler_mode;
@@ -69,5 +71,20 @@ void RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args(std::vector<uint32
     out_rt_args.push_back(static_cast<uint32_t>(this->backward_writes_expected));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
+
+    // Even-ring split-forwarding: the diametric shard S arrives split across both links
+    const uint32_t split_shard_id =
+        this->ring_size ? ((this->ring_index + this->backward_writes_expected + 1) % this->ring_size) : 0;
+    // The forward chain's semaphore counts the local-slice pre-signal (the direction-1 all-gather
+    // writer signals its own slice; see synchronize_workers_and_signal_op in
+    // ring_attention_all_gather_writer.cpp) plus one signal per received slice — which is why
+    // RingIdSequencer's dir-0 waits use received + 1. The diametric shard's second half is that
+    // chain's final arrival, so its count is 1 (local) + backward_writes_expected (full slices)
+    // + 1 (second half). Waiting for backward_writes_expected + 1 would be subsumed by the
+    // sequencer's earlier wait for shard ring_index + backward_writes_expected, i.e. a no-op.
+    const uint32_t split_second_half_wait = this->backward_writes_expected + 2;
+    out_rt_args.push_back(static_cast<uint32_t>(this->split_forwarding_enabled ? 1 : 0));
+    out_rt_args.push_back(static_cast<uint32_t>(split_shard_id));
+    out_rt_args.push_back(static_cast<uint32_t>(split_second_half_wait));
 }
 }  // namespace ttnn::prim

@@ -6,6 +6,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include "allocator/allocator.hpp"
+#include "dispatch/host_device_transfer.hpp"
 
 #include "tt_metal/test_utils/stimulus.hpp"
 
@@ -74,7 +75,7 @@ struct BufferDistributionSpecInputs {
 };
 
 struct MeshBufferAllocationExpected {
-    std::vector<CoreCoord> cores;
+    std::vector<tt::tt_metal::CoreCoord> cores;
     size_t num_cores;
     size_t num_dev_pages;
     size_t aligned_size;
@@ -331,7 +332,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         Finish(mesh_device_->mesh_command_queue());
     } else {
         log_info(tt::LogTest, "Writing with: WriteToBuffer (equivalent to SDMeshCommandQueue enqueue_write_shards)");
-        tt::tt_metal::detail::WriteToBuffer(*shard_view, src);
+        tt::tt_metal::slow_dispatch::WriteToBuffer(*shard_view, src);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(local_device->id());
     }
 
@@ -398,7 +399,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         Finish(mesh_device_->mesh_command_queue());
     } else {
         log_info(tt::LogTest, "Reading with: ReadFromBuffer (equivalent to SDMeshCommandQueue enqueue_read_shards)");
-        tt::tt_metal::detail::ReadFromBuffer(*shard_view, dst);
+        tt::tt_metal::slow_dispatch::ReadFromBuffer(*shard_view, dst);
     }
 
     // Validate read results are correct
@@ -446,7 +447,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .physical_shard_shape = tt::tt_metal::Shape{1, 64, 96},
                     .page_shape = tt::tt_metal::Shape2D{32, 32},
                     .bytes_per_element = 1.0625,  // Headers for block float amortized over elements
-                    .grid = CoreRangeSet(tt::stl::Span<const CoreRange>(
+                    .grid = CoreRangeSet(ttsl::Span<const CoreRange>(
                         {CoreRange({4, 6}, {6, 6}), CoreRange({1, 1}, {1, 1}), CoreRange({0, 3}, {3, 3})})),
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,
@@ -516,7 +517,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .page_shape = tt::tt_metal::Shape2D{32, 32},
                     .bytes_per_element = 2,
                     .grid = CoreRangeSet(
-                        tt::stl::Span<const CoreRange>({CoreRange({0, 0}, {2, 0}), CoreRange({0, 1}, {1, 1})})),
+                        ttsl::Span<const CoreRange>({CoreRange({0, 0}, {2, 0}), CoreRange({0, 1}, {1, 1})})),
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,
                 },
@@ -533,3 +534,66 @@ INSTANTIATE_TEST_SUITE_P(
         )       // Combine
 );
 // clang-format on
+
+// Device-free check of the shard->core placement formula for both 1D strategies.
+// 8 single-page shards over 2 cores (R = 4 shards per core). Round-robin spreads
+// consecutive shards across cores; CONTIGUOUS_1D (shard-contiguous) packs a contiguous run per core.
+TEST(BufferDistributionSpecContiguous, CPU_ShardContiguousVsRoundRobinPlacement) {
+    const tt::tt_metal::Shape tensor_in_pages{8, 1};
+    const tt::tt_metal::Shape shard_in_pages{1, 1};
+    const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));  // 2 cores
+
+    BufferDistributionSpec round_robin(
+        tensor_in_pages, shard_in_pages, grid, ShardOrientation::ROW_MAJOR, ShardDistributionStrategy::ROUND_ROBIN_1D);
+    BufferDistributionSpec shard_contiguous(
+        tensor_in_pages, shard_in_pages, grid, ShardOrientation::ROW_MAJOR, ShardDistributionStrategy::CONTIGUOUS_1D);
+
+    ASSERT_EQ(round_robin.num_cores(), 2u);
+    ASSERT_EQ(shard_contiguous.num_cores(), 2u);
+
+    const auto round_robin_map = round_robin.compute_page_mapping().core_host_page_indices;
+    const auto shard_contiguous_map = shard_contiguous.compute_page_mapping().core_host_page_indices;
+
+    // Round-robin: core c holds shards c, c + num_cores, ...
+    EXPECT_EQ(round_robin_map[0], (std::vector<uint32_t>{0, 2, 4, 6}));
+    EXPECT_EQ(round_robin_map[1], (std::vector<uint32_t>{1, 3, 5, 7}));
+
+    // Shard-contiguous: core c holds the contiguous run c*R .. c*R + R - 1.
+    EXPECT_EQ(shard_contiguous_map[0], (std::vector<uint32_t>{0, 1, 2, 3}));
+    EXPECT_EQ(shard_contiguous_map[1], (std::vector<uint32_t>{4, 5, 6, 7}));
+}
+
+// CONTIGUOUS_1D requires a uniform shards-per-core; an indivisible count must fatal.
+TEST(BufferDistributionSpecContiguous, CPU_ShardContiguousRequiresUniformShardsPerCore) {
+    const tt::tt_metal::Shape tensor_in_pages{7, 1};  // 7 shards over 2 cores -> not uniform
+    const tt::tt_metal::Shape shard_in_pages{1, 1};
+    const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));  // 2 cores
+
+    BufferDistributionSpec shard_contiguous(
+        tensor_in_pages, shard_in_pages, grid, ShardOrientation::ROW_MAJOR, ShardDistributionStrategy::CONTIGUOUS_1D);
+    EXPECT_ANY_THROW((void)shard_contiguous.compute_page_mapping());
+}
+
+// Shape-only; the grid is arbitrary.
+TEST(BufferDistributionSpecContiguousPages, CPU_NumContiguousPages) {
+    const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));
+    auto make_spec = [&grid](std::initializer_list<uint32_t> tensor, std::initializer_list<uint32_t> shard) {
+        return BufferDistributionSpec(
+            tt::tt_metal::Shape(tensor), tt::tt_metal::Shape(shard), grid, ShardOrientation::ROW_MAJOR);
+    };
+
+    const auto padded = make_spec({3, 5}, {2, 2});
+    EXPECT_ANY_THROW((void)padded.num_contiguous_pages(15));
+    EXPECT_ANY_THROW((void)padded.num_contiguous_pages(0, 16));
+    // An empty range is an error, not shorthand for the whole tensor.
+    EXPECT_ANY_THROW((void)padded.num_contiguous_pages(0, 0));
+    EXPECT_ANY_THROW((void)padded.num_contiguous_pages(5, 5));
+
+    const auto one_page_wide = make_spec({4, 6}, {4, 1});
+    EXPECT_EQ(one_page_wide.contiguous_page_stride(), 6u);
+    EXPECT_EQ(one_page_wide.num_contiguous_pages(0), 4u);
+    EXPECT_EQ(one_page_wide.num_contiguous_pages(0, 13), 3u);
+
+    const auto single_page_shard = make_spec({8, 1}, {1, 1});
+    EXPECT_EQ(single_page_shard.contiguous_page_stride(), 1u);
+}

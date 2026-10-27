@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <numeric>
 #include <utility>
 #include <vector>
 
@@ -45,9 +46,7 @@ inline bool validate_workload_or_fail(const AddrgenTestParams& p) {
 // Generate deterministic TX pattern.
 inline std::vector<uint32_t> make_tx_pattern(size_t n_words) {
     std::vector<uint32_t> tx(n_words);
-    for (size_t i = 0; i < n_words; ++i) {
-        tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
-    }
+    std::iota(tx.begin(), tx.end(), 0xA5A50000u);
     return tx;
 }
 
@@ -57,12 +56,11 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
         ADD_FAILURE() << "RX size mismatch: got " << rx.size() << " words, expected " << tx.size();
         return;
     }
-    for (size_t i = 0; i < rx.size(); ++i) {
-        if (rx[i] != tx[i]) {
-            ADD_FAILURE() << "Data mismatch at word " << i << " (got 0x" << std::hex << rx[i] << ", exp 0x" << tx[i]
-                          << std::dec << ")";
-            return;
-        }
+    auto it = std::mismatch(rx.begin(), rx.end(), tx.begin());
+    if (it.first != rx.end()) {
+        const size_t i = static_cast<size_t>(it.first - rx.begin());
+        ADD_FAILURE() << "Data mismatch at word " << i << " (got 0x" << std::hex << *it.first << ", exp 0x"
+                      << *it.second << std::dec << ")";
     }
 }
 
@@ -86,18 +84,9 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
 
-    tt::tt_metal::IDevice* src_dev = tt::tt_metal::detail::GetActiveDevice(src_phys);
-    tt::tt_metal::IDevice* dst_dev = tt::tt_metal::detail::GetActiveDevice(dst_phys);
-    if (!src_dev || !dst_dev) {
-        ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
-        return;
-    }
-
     if (!validate_workload_or_fail(p)) {
         return;
     }
-
-    tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
 
     // --- IO buffers & initialization ---
     namespace Dist = tt::tt_metal::distributed;
@@ -171,7 +160,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     static std::optional<tt::tt_metal::GlobalSemaphore> gsem_done;
     if (!gsem_done) {
         tt::tt_metal::CoreRangeSet rx_core_one(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
-        gsem_done = tt::tt_metal::CreateGlobalSemaphore(mesh.get(), rx_core_one, /*initial_value=*/0);
+        gsem_done = tt::tt_metal::GlobalSemaphore(*mesh, rx_core_one, /*initial_value=*/0);
     }
 
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
@@ -230,6 +219,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
             receiver_progs.back(), rx_wait_k, p.receiver_core, {gsem_done->address(), sem_wait_value});
     }
 
+    tt::tt_metal::CoreCoord rx_xy = mesh->worker_core_from_logical_core(p.receiver_core);
     // Ensure the same logical worker maps to the same physical XY across all receiver chips
     for (const auto& mc : dst_coords) {
         auto* dev_i = view.impl().get_device(mc);
@@ -327,7 +317,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     auto pick_link = [&](Dist::MeshCoordinate mc, uint32_t& out_link_idx) {
         auto dst_fn = coord_to_fabric_id(std::move(mc));
-        auto links = tt::tt_fabric::get_forwarding_link_indices(src_fn, dst_fn);
+        auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, src_fn, dst_fn);
         if (links.empty()) {
             ADD_FAILURE() << "No forwarding link from src to representative";
             return false;

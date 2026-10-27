@@ -17,6 +17,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     StableDiffusion3Pipeline,
     StableDiffusion3PipelineConfig,
 )
+from ....utils.test import line_params_req_exact_devices
 
 
 def get_expected_metrics(mesh_device):
@@ -69,7 +70,8 @@ def get_expected_metrics(mesh_device):
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    [{**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    ids=["line"],
     indirect=True,
 )
 def test_sd35_new_pipeline_performance(
@@ -323,6 +325,9 @@ def test_sd35_new_pipeline_performance(
             (2, 4): "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
+        from models.demos.utils.common_demo_utils import report_generation_rate
+
+        report_generation_rate("sd35", total_times[-1], 1)
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
             run_type=device_name_map[tuple(mesh_device.shape)],

@@ -36,6 +36,10 @@ project(
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+GenerateVersionHeader()
+AddVersionHeaderTarget()
+
+include(project_options)
 
 # Augment CMake's built-in per-config flags rather than replacing them wholesale.
 # Using set(CMAKE_CXX_FLAGS_<CONFIG> ...) overwrites the variable entirely, silently
@@ -51,6 +55,7 @@ add_compile_options(
     "$<$<CONFIG:Debug,RelWithDebInfo>:-ggnu-pubnames>"
     # Keep frame pointers for profiling and stack unwinding in non-Release builds
     "$<$<CONFIG:Debug,RelWithDebInfo>:-fno-omit-frame-pointer>"
+    "$<$<BOOL:${ENABLE_TRACY}>:-fno-omit-frame-pointer>"
     # Non-standard DEBUG macro (CMake convention is absence of NDEBUG, but this preserves
     # existing behaviour for code that gates on #ifdef DEBUG).
     # Restricted to CXX: the original set(CMAKE_CXX_FLAGS_DEBUG …) never applied to C, and
@@ -79,7 +84,6 @@ else()
     message(STATUS "CMAKE_TOOLCHAIN_FILE is not set.")
 endif()
 
-include(project_options)
 include(unity)
 include(clang-tidy)
 
@@ -169,6 +173,13 @@ else()
     add_subdirectory(tt_metal/third_party SYSTEM)
 endif()
 
+option(TT_METAL_SKIP_LINKING "Replace the linker with a no-op touch for clang-tidy builds" OFF)
+if(TT_METAL_SKIP_LINKING)
+    set(CMAKE_CXX_LINK_EXECUTABLE "cmake -E touch <TARGET>")
+    set(CMAKE_C_LINK_EXECUTABLE "cmake -E touch <TARGET>")
+    set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+endif()
+
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
@@ -189,8 +200,10 @@ if(NOT DEFINED CMAKE_COMPILE_WARNING_AS_ERROR)
     set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 endif()
 
+set(TT_X86_MARCH "x86-64-v3" CACHE STRING "x86_64 architecture passed to -march")
+
 add_compile_options(
-    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
+    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=${TT_X86_MARCH}>"
     -fPIC
     -pipe # use pipes instead of tmp files
     -fvisibility-inlines-hidden
@@ -249,6 +262,18 @@ if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
 
+# Descriptor cache-hit fast-path parity check: on every fast-path hit, rebuild the descriptor and
+# assert the patched runtime args + CB addresses match a full rebuild. A debug/CI regression net for
+# incomplete in-place re-application (SDXL silu / MorehAdamW). OFF by default (per-hit rebuild cost).
+# The check is compiled only in ttnn (mesh_device_operation_adapter.hpp), so the
+# TT_DESCRIPTOR_PATCHING_PARITY_CHECK definition is scoped to the ttnn target in ttnn/CMakeLists.txt
+# rather than applied globally.
+option(
+    ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK
+    "Assert descriptor cache-hit fast-path parity against a full rebuild (debug/CI)."
+    OFF
+)
+
 add_library(metal_common_pch STATIC)
 add_library(TT::CommonPCH ALIAS metal_common_pch)
 file(GENERATE OUTPUT metal_common_pch.cpp CONTENT "/*dummy pch file*/\n")
@@ -261,13 +286,22 @@ target_precompile_headers(
         <fmt/format.h>
         <nlohmann/json.hpp>
         <algorithm>
+        <array>
+        <chrono>
         <cstddef>
         <cstdint>
+        <fstream>
         <functional>
         <map>
         <memory>
+        <mutex>
+        <optional>
+        <set>
+        <sstream>
+        <thread>
         <tuple>
         <unordered_map>
+        <unordered_set>
         <variant>
         <vector>
 )
@@ -278,8 +312,8 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
 )
-if(COMMAND tt_disable_ccache_for_pch)
-    tt_disable_ccache_for_pch(metal_common_pch)
+if(COMMAND tt_configure_ccache_for_pch)
+    tt_configure_ccache_for_pch(metal_common_pch)
 endif()
 
 ############################################################################################################################

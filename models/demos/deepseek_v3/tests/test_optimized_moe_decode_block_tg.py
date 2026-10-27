@@ -16,6 +16,7 @@ import pytest
 import torch
 from loguru import logger
 from ttnn.experimental.moe_compute_utils import (
+    auto_output_width_shard_dim,
     get_weight_core_shard_maps,
     get_weight_mem_configs,
     prepare_w0_w1_tensor_for_moe_compute,
@@ -519,12 +520,13 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("combine_mux_core_range", [((3, 0), (4, 7))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
-@pytest.mark.parametrize("enable_trace", [True])
+@pytest.mark.parametrize("enable_trace", [True, False], ids=["trace", "notrace"])
 @pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "trace_region_size": 0,
@@ -593,7 +595,13 @@ def test_optimized_moe_decode_block(
     )
     combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in combine_mux_core_range])])
 
-    compute_tilize_drain_core = ttnn.CoreCoord(6, 9)
+    compute_tilize_drain_core = ttnn.experimental.get_moe_tilize_drain_core(
+        mesh_device,
+        compute_output_height_shard_dim,
+        auto_output_width_shard_dim(hidden_size),
+        hidden_size,
+        mux_core_range_set=combine_mux_cores,
+    )
 
     ############################################
     # create global semaphores

@@ -85,6 +85,10 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                 "Embedding only supports height sharded Row Major outputs");
+            TT_FATAL(
+                operation_attributes.output_mem_config.is_l1(),
+                "Embedding sharded Row Major output must be in L1: the reader writes rows straight into its own "
+                "shard");
         }
     }
     if (a.layout() == Layout::ROW_MAJOR) {
@@ -107,7 +111,7 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec EmbeddingsDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec EmbeddingsDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor_arg;
     const auto& weight_tensor = tensor_args.weight_arg;
@@ -121,7 +125,7 @@ TensorSpec EmbeddingsDeviceOperation::compute_output_specs(
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor->tensor_spec();
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(weight_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
 }

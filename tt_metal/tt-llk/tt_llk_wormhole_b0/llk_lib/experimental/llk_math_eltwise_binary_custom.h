@@ -12,6 +12,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 
@@ -49,6 +50,8 @@ inline void eltwise_binary_configure_addrmod_custom()
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param num_faces: Number of faces to process (1, 2, or 4)
+ * @note Establishes the operand-driven default Src zero-substitution state, which the bcast-col compute asserts
+ *       under LLK asserts; an op that leaves it at keep must be followed by this init again.
  */
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type>
 inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces)
@@ -63,6 +66,9 @@ inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces)
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // A preceding datacopy leaves the Src zero flag at keep; the FPU op needs the operand-driven value.
+    math::_configure_default_zero_flag_state_();
 }
 
 inline void _llk_math_eltwise_binary_uninit_custom_()
@@ -74,31 +80,53 @@ inline void _llk_math_eltwise_binary_uninit_custom_()
 // generic. The current in-tree caller is blocked sub+bcast(col), so the
 // instruction sequence is hard-wired to ELWSUB with SrcB column broadcast and
 // SrcB reuse across ct_dim.
-inline void _llk_math_sub_bcast_cols_reuse_custom_(const std::uint32_t ct_dim = 1)
+//
+// Each 16x16 face pair (one face-row) is processed by four ELWSUBs (two per
+// face; each ELWSUB covers an aligned 8x16 block). A full 32x32 tile has two
+// face-rows (F0/F1 and F2/F3); a 16x32 tiny tile has a single face-row (F0/F1).
+// @param ct_dim       Number of SrcA tiles that reuse the single broadcast SrcB tile.
+// @param tensor_shape Shape of the operand tile (2 faces for 16x32 tiny tiles, 4 faces for full 32x32 tiles).
+// @param dst_index    Absolute dest tile slot where this block-row's ct_dim tiles begin. Multi-tile-row
+//                     callers (e.g. the fuser LoopBlockRow driver) advance this per block-row so each row
+//                     lands on its own dest slots; single-tile-row callers leave it at 0.
+// Call _llk_math_eltwise_binary_init_custom_ first; re-run it after any op that leaves the Src zero flag at keep.
+inline void _llk_math_sub_bcast_cols_reuse_custom_(
+    const std::uint32_t ct_dim = 1, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "bcast-col custom: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
+        "this call left it at keep, so denormal Src operands would not be flushed");
+
+    // Two faces make up one face-row; a full tile has two of them, a tiny tile one.
+    const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;
+
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AB);
 
     for (std::uint32_t tile = 0; tile < ct_dim; tile++)
     {
-        // F0 - F0
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
-        // F0 - F1, restore SrcB to the start of the broadcast tile.
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_1, 0);
+        // Position the dest write pointer at the start of this tile's 32x32 dest
+        // slot (stride 64 rows). The packer indexes tiles at the full 32x32 tile
+        // stride regardless of num_faces, so tiles must be written one-per-slot.
+        // The ADDR_MOD dest increments below only advance 32 rows for a 16x32 tiny
+        // tile (num_faces=2) and 64 rows for a full 32x32 tile (num_faces=4); the
+        // per-slot base + counter reset makes both land on the right slot.
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + tile);
+        math::clear_dst_reg_addr();
 
-        // F1 - F0
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
-        // F1 - F2
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_2, 0);
+        for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)
+        {
+            // Even face (F0 / F2) - F0
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
+            // Even face - next, rewind SrcB by one face to the start of the broadcast tile.
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_1, 0);
 
-        // F2 - F2
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
-        // F2 - F3, restore SrcB to the third face of the broadcast tile.
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_1, 0);
-
-        // F3 - F2
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
-        // F3 - next tile
-        TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_2, 0);
+            // Odd face (F1 / F3) - F0
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
+            // Odd face - advance SrcB to the next face-row (or next tile on the last face-row).
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_2, 0);
+        }
 
         // Move to the next SrcA tile while keeping the broadcasted SrcB tile
         // available for reuse on the next outer iteration.
@@ -107,4 +135,93 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(const std::uint32_t ct_dim = 
 
     // Release the reused SrcB tile once the whole ct_dim block is consumed.
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_AB);
+
+    // Restore the dest base offset so the next op starts from tile slot 0.
+    math::clear_dst_reg_addr();
+}
+
+/** @brief Initialises math state for cancellation-resistant column-broadcast subtraction. */
+inline void _llk_math_sub_bcast_cols_compensated_init_()
+{
+    eltwise_binary_configure_addrmod_custom<BroadcastType::COL>();
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_3);
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+/**
+ * @brief Broadcasts four SrcB column values into four rows of each destination face.
+ * @param src_row First SrcB row containing the values to broadcast.
+ * @param dst_row First destination row to write.
+ */
+inline void _compensated_move_broadcast_col_to_dest_(const std::uint32_t src_row, const std::uint32_t dst_row)
+{
+    TTI_MOVB2D(0, src_row + 0, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 0);
+    TTI_MOVB2D(0, src_row + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 4);
+    TTI_MOVB2D(0, src_row + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 8);
+    TTI_MOVB2D(0, src_row + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 12);
+}
+
+/**
+ * @brief Computes (input - anchor) + (anchor - mean) for a block of 32x32 tiles.
+ * @param ct_dim Number of consecutive input tiles to process.
+ * @param tensor_shape Shape of each input tile; only full 32x32 tiles are supported.
+ * @param dst_index First destination tile slot to write.
+ * @note Call @ref _llk_math_sub_bcast_cols_compensated_init_ before this operation.
+ * @note The input and anchor are consumed as TF32. Use an SFPU finaliser when FP32 mantissa preservation is required.
+ */
+inline void _llk_math_sub_bcast_cols_compensated_(
+    const std::uint32_t ct_dim, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
+{
+    LLK_ASSERT(tensor_shape.total_num_faces() == 4, "compensated column broadcast requires 32x32 tiles");
+
+    // Wormhole MOVB2D uses SrcA's format to select a 32-bit DEST write and
+    // SrcB's format to retain the low three TF32 mantissa bits. Override both
+    // while this operation consumes the split statistic.
+    math::_configure_preserve_zero_flag_state_();
+    constexpr std::uint32_t src_fmt_override_mask =
+        ALU_FORMAT_SPEC_REG_SrcA_val_MASK | ALU_FORMAT_SPEC_REG_SrcA_override_MASK | ALU_FORMAT_SPEC_REG_SrcB_val_MASK | ALU_FORMAT_SPEC_REG_SrcB_override_MASK;
+    constexpr std::uint32_t tf32_src_fmt_overrides =
+        (to_underlying(DataFormat::Tf32) << ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT) | (1 << ALU_FORMAT_SPEC_REG_SrcA_override_SHAMT) |
+        (to_underlying(DataFormat::Tf32) << ALU_FORMAT_SPEC_REG_SrcB_val_SHAMT) | (1 << ALU_FORMAT_SPEC_REG_SrcB_override_SHAMT);
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(tf32_src_fmt_overrides);
+
+    for (std::uint32_t tile = 0; tile < ct_dim; ++tile)
+    {
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + tile);
+        math::clear_dst_reg_addr();
+
+        // Seed DEST with anchor - mean. The split statistic tile stores the
+        // upper and lower row halves in faces 1 and 3 respectively.
+        constexpr std::uint32_t upper_mean_row      = 16;
+        constexpr std::uint32_t lower_mean_row      = 48;
+        constexpr std::uint32_t upper_left_dst_row  = 0;
+        constexpr std::uint32_t upper_right_dst_row = 16;
+        constexpr std::uint32_t lower_left_dst_row  = 32;
+        constexpr std::uint32_t lower_right_dst_row = 48;
+        _compensated_move_broadcast_col_to_dest_(upper_mean_row, upper_left_dst_row);
+        _compensated_move_broadcast_col_to_dest_(upper_mean_row, upper_right_dst_row);
+        _compensated_move_broadcast_col_to_dest_(lower_mean_row, lower_left_dst_row);
+        _compensated_move_broadcast_col_to_dest_(lower_mean_row, lower_right_dst_row);
+
+        // Accumulate x - anchor into the correction already in DEST.
+        for (std::uint32_t face_row = 0; face_row < tensor_shape.num_faces_r_dim; ++face_row)
+        {
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_1, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_2, 0);
+        }
+
+        // Publish SrcA for the next input tile while keeping the split mean resident.
+        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    }
+    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+
+    // Restore the state_configure baseline for subsequent math operations.
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(0);
+    math::_configure_default_zero_flag_state_();
+    math::clear_dst_reg_addr();
 }

@@ -1,0 +1,25 @@
+# Single Blackhole galaxy, torus in X -- matches
+# tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_x_graph_descriptor.textproto.
+# A LINE/LINE descriptor on this toroidal fabric addresses wrap-around links that
+# do not exist and faults with SIGBUS, so use these for galaxy meshes.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 8 ], dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 0
+    chip_id: 0
+  }
+  physical_asic_position {
+    tray_id: 1
+    asic_location: 1
+  }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

@@ -14,7 +14,7 @@ Options:
 Description:
     Data provider for the running-ops view chain. Builds two things:
 
-      1. An `OperationRuntimeMap` — Inspector runtime_id → OperationInfo
+      1. An `OperationRuntimeMap` - Inspector runtime_id → OperationInfo
          (name, parameters, trace_id). The mailbox holds the raw runtime_id
          for both fast and slow dispatch (see tt_metal/impl/program/dispatch.cpp
          and tt_metal/impl/host_api/tt_metal.cpp).
@@ -51,6 +51,7 @@ from triage import (
 )
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.hardware.risc_debug import RiscLocation
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
@@ -61,7 +62,7 @@ script_config = ScriptConfig(
 )
 
 
-# Core filtering — matches the historical block list from dump_running_operations.
+# Core filtering - matches the historical block list from dump_running_operations.
 BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
 
 # Matches the sentinel in rpc.capnp (kNoTraceId). Capnp has no null for primitives.
@@ -162,15 +163,16 @@ def _build_runtime_id_map(inspector_data: InspectorData) -> OperationRuntimeMap:
 
 def _collect_dispatcher_data(
     dispatcher_data: DispatcherData,
-    location: OnChipCoordinate,
-    risc_name: str,
+    risc_location: RiscLocation,
     show_all_cores: bool,
 ) -> DispatcherCoreData | None:
+    location = risc_location.location
+    risc_name = risc_location.risc_name
     if not dispatcher_data.risc_enabled(risc_name):
         return None
 
     try:
-        dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+        dispatcher_core_data = dispatcher_data.get_cached_core_data(risc_location)
     except TimeoutDeviceRegisterError:
         raise
     except Exception as e:
@@ -203,7 +205,7 @@ def run(args, context: Context) -> RunningOpsAggregation:
     runtime_id_to_operation = _build_runtime_id_map(inspector_data)
 
     collected_results = run_checks.run_per_core_check(
-        lambda location, risc_name: _collect_dispatcher_data(dispatcher_data, location, risc_name, show_all_cores),
+        lambda risc_debug: _collect_dispatcher_data(dispatcher_data, risc_debug.risc_location, show_all_cores),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
 

@@ -26,9 +26,23 @@ void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device, got: {}", tensor.storage_type());
     TT_FATAL(tensor.buffer() != nullptr, "Input tensor must be allocated in device buffers (buffer is null)");
+    const auto& tile = tensor.tensor_spec().tile();
+    TT_FATAL(
+        tile == tt::tt_metal::Tile() && !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
+        "Input tensor must use the default {}x{} tile, got {}x{} (transposed: {})",
+        TILE_HEIGHT,
+        TILE_WIDTH,
+        tile.get_height(),
+        tile.get_width(),
+        tile.get_transpose_of_faces());
+    TT_FATAL(
+        tensor.logical_shape()[-1] == tensor.padded_shape()[-1],
+        "Input last dimension must be the same as padded last dimension, got logical_dim: {} vs padded_dim: {}",
+        tensor.logical_shape()[-1],
+        tensor.padded_shape()[-1]);
 }
 
-TensorSpec FusedRMSNormPreAllGatherDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec FusedRMSNormPreAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
     using namespace tt::constants;
@@ -39,7 +53,8 @@ TensorSpec FusedRMSNormPreAllGatherDeviceOperation::compute_output_specs(
     uint32_t num_tiles_w = 1;  // RMSNorm only
     output_shape[-1] = num_tiles_w * TILE_WIDTH;
 
-    return TensorSpec(output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
 }
 
 Tensor FusedRMSNormPreAllGatherDeviceOperation::create_output_tensors(

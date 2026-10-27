@@ -29,17 +29,17 @@ void topological_sort(
 
 namespace ttml::autograd {
 
-Tensor::Tensor(const tt::tt_metal::Tensor& value, bool requires_grad) : m_value(value), m_requires_grad(requires_grad) {
+Tensor::Tensor(const ttnn::Tensor& value, bool requires_grad) : m_value(value), m_requires_grad(requires_grad) {
 }
 
-void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
+void Tensor::add_grad(const ttnn::Tensor& grad) {
     // Skip gradient addition if not required. Part of branch pruning autograd optimization.
     if (!m_requires_grad) {
         return;
     }
 
     if (!is_grad_initialized()) {
-        auto value_shape = m_value.get_tensor().logical_shape();
+        auto value_shape = m_value.get_tensor(PreferredPrecision::NATIVE).logical_shape();
         if (grad.logical_shape() != value_shape) {
             throw std::logic_error(fmt::format(
                 "Shapes of gradients are not equal. Expected: {}, got: {}", value_shape, grad.logical_shape()));
@@ -110,18 +110,22 @@ void print_tensor_stats(const autograd::TensorPtr& tensor, const std::string& na
     core::print_tensor_stats(tensor->get_value(), name);
 }
 
-void Tensor::set_value(const tt::tt_metal::Tensor& value) {
+void Tensor::set_value(const ttnn::Tensor& value) {
     m_value.set_tensor(value);
 }
 
-void Tensor::set_grad(const tt::tt_metal::Tensor& grad) {
+void Tensor::assign(const ttnn::Tensor& value) {
+    m_value.assign(value);
+}
+
+void Tensor::set_grad(const ttnn::Tensor& grad) {
     if (core::is_tensor_initialized(grad)) {
         auto grad_shape = grad.logical_shape();
-        auto value_shape = m_value.get_tensor().logical_shape();
+        auto value_shape = m_value.get_tensor(PreferredPrecision::NATIVE).logical_shape();
         if (grad_shape != value_shape) {
             throw std::logic_error(fmt::format(
                 "Shapes of gradients are not equal. Expected: {}, got: {}",
-                m_value.get_tensor().logical_shape(),
+                m_value.get_tensor(PreferredPrecision::NATIVE).logical_shape(),
                 grad.logical_shape()));
         }
     }
@@ -134,17 +138,29 @@ void Tensor::clean_node() {
 
 void Tensor::set_requires_grad(bool requires_grad) {
     m_requires_grad = requires_grad;
+    if (!requires_grad) {
+        // Drop any gradient accumulated before freezing. add_grad() is a no-op while
+        // m_requires_grad is false, so without this the old gradient (and, via zero_grad's
+        // get_requires_grad() filter, the optimizer state built from it) would keep being
+        // reapplied by step() every subsequent call, since step() only checks
+        // is_grad_initialized() rather than get_requires_grad().
+        m_grad = ttnn::Tensor();
+    }
 }
 
-const tt::tt_metal::Tensor& Tensor::get_value(PreferredPrecision preferred_precision) const {
+const ttnn::Tensor& Tensor::get_value(PreferredPrecision preferred_precision) const {
     return m_value.get_tensor(preferred_precision);
 }
 
-const tt::tt_metal::Tensor& Tensor::get_grad() const {
+MutableTensorView Tensor::get_value_for_update(PreferredPrecision precision) {
+    return m_value.get_value_for_update(precision);
+}
+
+const ttnn::Tensor& Tensor::get_grad() const {
     return m_grad;
 }
 
-tt::tt_metal::Tensor& Tensor::get_grad() {
+ttnn::Tensor& Tensor::get_grad() {
     return m_grad;
 }
 
@@ -157,7 +173,8 @@ const std::optional<NodeId>& Tensor::get_node() const {
 }
 
 const ttnn::Shape& Tensor::get_shape() const {
-    return get_value().logical_shape();
+    // The shape is the same in every precision; NATIVE never casts.
+    return get_value(PreferredPrecision::NATIVE).logical_shape();
 }
 
 uint32_t Tensor::get_rank() const {

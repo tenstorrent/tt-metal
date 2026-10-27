@@ -15,7 +15,7 @@ on:
 
 jobs:
   cleanup:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Cleanup old pre-releases
         uses: actions/github-script@v6

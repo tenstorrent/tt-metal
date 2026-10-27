@@ -70,57 +70,6 @@ struct RMSNormBackwardKernels {
     tt::tt_metal::KernelHandle compute_group_2;
 };
 
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const RMSNormBackwardKernels& kernels,
-    const tt::tt_metal::Buffer* input_buffer,
-    const tt::tt_metal::Buffer* gamma_buffer,
-    const tt::tt_metal::Buffer* rms_buffer,
-    const tt::tt_metal::Buffer* dLdout_buffer,
-    const tt::tt_metal::Buffer* da_buffer,
-    const tt::tt_metal::Buffer* dgamma_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        // Determine how many rows this core will process
-        uint32_t num_rows_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_2;
-        } else {
-            TT_FATAL(false, "Core not in specified core ranges");
-        }
-
-        // Reader kernel: (input_addr, gamma_addr, rms_addr, dLdout_addr, num_rows, offset)
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {input_buffer->address(),
-             gamma_buffer->address(),
-             rms_buffer->address(),
-             dLdout_buffer->address(),
-             num_rows_per_core,
-             num_rows_written});
-
-        // Writer kernel: (da_addr, dgamma_addr, num_rows, offset)
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {da_buffer->address(), dgamma_buffer->address(), num_rows_per_core, num_rows_written});
-
-        num_rows_written += num_rows_per_core;
-    }
-}
-
 bool fits_in_l1_check(
     const uint32_t Wt,
     const uint32_t block_size,
@@ -142,9 +91,10 @@ bool fits_in_l1_check(
     const uint64_t dL_dout_memory = Wt * bfloat16_single_tile_size_bytes;
     const uint64_t matmul_reduce_memory = kNumMatMulReduceTiles * bfloat16_single_tile_size_bytes;
     const uint64_t zero_memory = kNumZeroTiles * bfloat16_single_tile_size_bytes;
-    // Memory for output tensors
+    // Memory for output tensors. Both output CBs are drained block-by-block by the writer, so they are
+    // double-buffered (twice_block_size), independent of Wt.
     const uint64_t dL_da_memory = twice_block_size * bfloat16_single_tile_size_bytes;
-    const uint64_t dL_dgamma_components_memory = Wt * bfloat16_single_tile_size_bytes;
+    const uint64_t dL_dgamma_components_memory = twice_block_size * bfloat16_single_tile_size_bytes;
     // Memory for intermediate computations
     const uint64_t recip_rms_a_bcasted_memory = kNumRecipRmsATiles * bfloat16_single_tile_size_bytes;
     const uint64_t scale_memory = kNumScaleTiles * float32_single_tile_size_bytes;
@@ -254,10 +204,13 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMatMulReduceTiles);
     [[maybe_unused]] auto cb_zero = create_circular_buffer(
         program, all_cores, kZeroCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumZeroTiles);
+    // Output CBs are produced and drained one block at a time (see writer: "interleave the writes to avoid waiting
+    // for the entire Wt tiles at once"), so they only need double-buffering, not a full row. Sizing them to
+    // num_input_tiles (= Wt on the fits-in-L1 path) overflows L1 for large hidden dims (e.g. 32B, Wt=160).
     [[maybe_unused]] auto cb_dL_da = create_circular_buffer(
-        program, all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     [[maybe_unused]] auto cb_dL_dgamma_components = create_circular_buffer(
-        program, all_cores, kDLdgammaComponentsCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kDLdgammaComponentsCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     [[maybe_unused]] auto cb_recip_rms_a_bcasted = create_circular_buffer(
         program, all_cores, kRecipRmsACbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRecipRmsATiles);
     [[maybe_unused]] auto cb_scale = create_circular_buffer(
@@ -353,21 +306,33 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        input_buffer,
-        gamma_buffer,
-        rms_buffer,
-        dLdout_buffer,
-        dL_da_buffer,
-        dL_dgamma_components_buffer,
+    for_each_core_with_work(
         num_cores,
         num_cores_y,
+        core_group_1,
+        core_group_2,
         num_rows_per_core_group_1,
         num_rows_per_core_group_2,
-        core_group_1,
-        core_group_2);
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+            // Reader kernel: (input_addr, gamma_addr, rms_addr, dLdout_addr, num_rows, offset)
+            SetRuntimeArgs(
+                program,
+                kernels.reader,
+                core,
+                {input_buffer->address(),
+                 gamma_buffer->address(),
+                 rms_buffer->address(),
+                 dLdout_buffer->address(),
+                 num_rows,
+                 start_row});
+            // Writer kernel: (da_addr, dgamma_addr, num_rows, offset)
+            SetRuntimeArgs(
+                program,
+                kernels.writer,
+                core,
+                {dL_da_buffer->address(), dL_dgamma_components_buffer->address(), num_rows, start_row});
+        });
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
@@ -409,9 +374,7 @@ void RMSNormBackwardProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, rmsnorm_bw_reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, rmsnorm_bw_writer_kernel_id);
 
-    for (uint32_t i = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
+    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         // Update input buffers for the reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
@@ -427,7 +390,7 @@ void RMSNormBackwardProgramFactory::override_runtime_arguments(
             runtime_args[kDaBufferIdx] = da_buffer->address();
             runtime_args[kDgammaComponentsBufferIdx] = dgamma_buffer->address();
         }
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::rmsnorm_bw::device

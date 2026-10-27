@@ -6,10 +6,10 @@
 #include <tt_stl/indestructible.hpp>
 #include <memory>
 
-namespace tt::stl {
+namespace ttsl {
 namespace {
 
-TEST(IndestructibleTest, Basic) {
+TEST(IndestructibleTest, CPU_Basic) {
     struct DangerouslyDestructible {
         ~DangerouslyDestructible() {
             // Wrapping in a lambda, as `FAIL()` returns `void`.
@@ -21,4 +21,4 @@ TEST(IndestructibleTest, Basic) {
 }
 
 }  // namespace
-}  // namespace tt::stl
+}  // namespace ttsl

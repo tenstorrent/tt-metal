@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from ttnn.tools import trace_allocation_tracker
 import torch
 from tqdm import tqdm
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
@@ -44,6 +45,12 @@ class TtTransformer(LightweightModule):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         self.enable_prefetcher_performance_mode = enable_prefetcher_performance_mode
+        self.use_prefetcher = args.use_prefetcher
+        # BH-prefetcher bring-up: with unfused CCL the attention uses the non-fused create-heads/concat
+        # path, which needs the simple (non-fused-qk) rotary tables. Select the fused-qk rope tables
+        # only when the fused collectives are actually in use.
+        self.use_unfused_ccl = getattr(args, "use_unfused_ccl", False)
+        self.use_fused_rope = self.use_prefetcher and not self.use_unfused_ccl
         state_dict_prefix = args.get_state_dict_prefix("", None)
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
@@ -71,8 +78,20 @@ class TtTransformer(LightweightModule):
         self.is_prefill_setup = False
         self.is_decode_setup = False
         self.prefetcher_setup = None
+        # Device-side prefill inputs, reused across requests. Keyed by the host inputs' shape /
+        # dtype / layout signature. Callers must keep page-table widths fixed at the
+        # configured block-pool size as well as padding prompts to prefill buckets.
+        # Entries live for the model lifetime; arbitrary page-table widths would add
+        # signatures beyond the warmup set. See prepare_inputs_prefill.
+        self._prefill_input_cache = {}
         self.mesh_sub_device_manager_id_decode = None
         self.mesh_sub_device_manager_id_prefill = None
+        # Cached CCLs so the no-prefetcher path can reuse them across mode switches instead of
+        # recreating (TT_CCL.close() only resets the stall group and leaves buffers/semaphores
+        # intact, so the cached objects stay valid). Recreating a CCL on each prefill<->decode
+        # switch corrupts state on repeat batches (garbage output on batch 1+).
+        self.tt_ccl_prefill = None
+        self.tt_ccl_decode = None
 
         # First initialization of decode CCLs and prefetcher
         self.setup_decode()
@@ -111,6 +130,9 @@ class TtTransformer(LightweightModule):
             args,
             tt_ccl=self.tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
+            # Match the decoder layers: BH no-prefetch uses the distributed (non-sharded) decode
+            # norm path; the sharded fused decode norm is prefetcher-only.
+            use_sharded_decode=not args.blackhole_no_prefetcher,
         )
 
         state_dict_prefix = args.get_state_dict_prefix("", None)
@@ -133,7 +155,7 @@ class TtTransformer(LightweightModule):
                 self.setup_prefill()
             self.is_prefill_setup = True
 
-        if mode == "decode":
+        if mode == "decode" and self.use_prefetcher:
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
 
@@ -141,6 +163,25 @@ class TtTransformer(LightweightModule):
         self._tt_seq_len_buffer = ttnn.from_torch(
             torch.tensor([1, 1, self.args.max_seq_len, self.args.head_dim], dtype=torch.int32),
             device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        # Runtime bounds and row selector for the prefill tail's last-token slice; see
+        # _select_last_token_row. Allocated here, before any trace exists, and rewritten in place.
+        self._tail_slice_start = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self._tail_slice_end = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self._tail_row_mask = ttnn.from_torch(
+            torch.zeros(1, 1, 32, 1, dtype=torch.bfloat16),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         # [0, 0, 0, 0] - slice to get [0,0] and [0] for building slice start [0, 0, N, 0] from chunk_start_idx [N].
@@ -162,10 +203,52 @@ class TtTransformer(LightweightModule):
                 seq_len=int(self.args.max_seq_len),
                 scale_factor=self.args.rope_scaling_factor,
                 start_pos=0,
+                theta=self.args.rope_theta,
             )
         return self.tt_rot_mats_prefill
 
     def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
+        # BH unfused-CCL path: prefill uses the fused all_gather_minimal_matmul + interleaved weights, never
+        # the ring matmuls or the prefetcher global CB (those are decode-only). Run prefill exactly like the
+        # no-prefetcher path (default sub-device, no custom manager). Loading the prefetcher's prefill
+        # sub-device manager here forces the prefill/sampling auto-grid ops (ttnn.untilize/ttnn.embedding,
+        # which pick the full 12-wide compute grid) through the strict sub-device validation, which fails on
+        # the dispatch column ("Kernel group cores do not match sub device cores"). The no-prefetcher path
+        # loads no custom manager, so that validation is skipped (see program.cpp: "No sub device manager,
+        # nothing to validate"). Decode still sets up the prefetcher via setup_decode.
+        if not self.use_prefetcher or self.use_unfused_ccl:
+            if self.use_prefetcher:
+                # A decode run may have left the prefetcher (worker/prefetcher) sub-device manager loaded;
+                # clear it so prefill + sampling run on the default sub-device.
+                self.mesh_device.clear_loaded_sub_device_manager()
+            self.prefetcher_setup = None
+            self.mesh_sub_device_manager_id_prefill = mesh_sub_device_manager_id_prefill
+            if self.tt_ccl_prefill is not None:
+                # Reuse the previously-created prefill CCL (close() leaves it intact). Recreating it
+                # on every repeat batch corrupts state and yields garbage output on batch 1+.
+                self.tt_ccl = self.tt_ccl_prefill
+            elif mesh_sub_device_manager_id_prefill is None:
+                self.tt_ccl = TT_CCL(
+                    self.mesh_device,
+                    self.args,
+                    None,
+                    mode="prefill",
+                    allocate_prefill_buffers=self.allocate_prefill_buffers,
+                    is_qwen=True if self.args.is_qwen else False,
+                )
+                self.tt_ccl_prefill = self.tt_ccl
+            else:
+                self.tt_ccl = self.tt_ccl_prefill
+            if self.use_unfused_ccl:
+                # Force the prefill CCL onto the stable (no-prefetcher) collective paths. use_prefetcher is
+                # read at forward time to choose ring vs stable reduce_scatter/all_gather; on the BH 2D-torus
+                # the ring prefill collectives (ring_reduce_scatter / experimental all-gathers) deadlock, so
+                # the unfused prefill must use the exact same stable ops as the no-prefetcher path. Prefill
+                # buffer allocation keys off use_ring_*_prefill (topology), not use_prefetcher, so flipping
+                # this after construction is safe.
+                self.tt_ccl.use_prefetcher = False
+            return
+
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
             self.mesh_device,
             n_tensors=0,
@@ -190,6 +273,30 @@ class TtTransformer(LightweightModule):
             self.tt_ccl = self.tt_ccl_prefill
 
     def setup_decode(self, mesh_sub_device_manager_id_decode=None):
+        if not self.use_prefetcher:
+            self.prefetcher_setup = None
+            self.mesh_sub_device_manager_id_decode = mesh_sub_device_manager_id_decode
+            if self.tt_ccl_decode is not None:
+                # Reuse the previously-created decode CCL (and its SamplingGenerator); see note in
+                # setup_prefill. Avoids the recreate-per-batch corruption on repeat batches.
+                self.tt_ccl = self.tt_ccl_decode
+            elif mesh_sub_device_manager_id_decode is None:
+                self.tt_ccl = TT_CCL(
+                    self.mesh_device,
+                    self.args,
+                    None,
+                    is_qwen=True if self.args.is_qwen else False,
+                )
+                self.tt_ccl_decode = self.tt_ccl
+                self.sampling = SamplingGenerator(
+                    args=self.args,
+                    mesh_device=self.mesh_device,
+                    tt_ccl=self.tt_ccl,
+                )
+            else:
+                self.tt_ccl = self.tt_ccl_decode
+            return
+
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
             self.mesh_device,
             n_tensors=5,
@@ -397,7 +504,18 @@ class TtTransformer(LightweightModule):
         host_inputs = self.prepare_prefill_inputs_host(
             tokens, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size
         )
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
+        # Allocating these per call leaves one set of device buffers per request live behind the
+        # traces captured during warmup. Only the untraced prefill path comes through here (the
+        # traced path stages its inputs once at capture and copies into them), and it is what a
+        # seeded or greedy request takes, so this is every such request. The buffers depend only on
+        # the padded prefill bucket, so cache them on that signature and copy into them instead.
+        cache_key = tuple(None if t is None else (tuple(t.shape), str(t.dtype), str(t.layout)) for t in host_inputs)
+        cached_inputs = self._prefill_input_cache.get(cache_key)
+        if cached_inputs is None:
+            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+            self._prefill_input_cache[cache_key] = device_inputs
+        else:
+            device_inputs = copy_host_to_device(host_inputs, device_tensors=cached_inputs)
         transformed_device_inputs = self.transform_prefill_inputs_device(*device_inputs)
         return transformed_device_inputs
 
@@ -477,7 +595,15 @@ class TtTransformer(LightweightModule):
         rot_current_pos = torch.maximum(
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
-        rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
+        # The no-prefetcher (Blackhole) decode uses the NON-fused rotary op, which needs the simple
+        # get_rot_idxs/get_rot_mats tables. get_rm_rot_idxs/get_rm_rot_mats produce the FUSED-qk
+        # expanded layout ([1, expanded_batch, heads, head_dim]); feeding that to the non-fused op
+        # (via the slice branch in forward_decode) yields a wrong rotary at pos>0 (pos0 is rotary-
+        # independent, so it hides the bug) and collapses multi-layer decode PCC.
+        if self.use_fused_rope:
+            rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
+        else:
+            rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
         cur_pos_shard_dim = 0
         if is_cur_pos_sharded:
             cur_pos_shard_dim = 1
@@ -522,9 +648,68 @@ class TtTransformer(LightweightModule):
         Get rope sin/cos
         Embed tokens
         """
-        tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
+        if self.use_fused_rope:
+            tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
+        else:
+            tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
+
+    def _select_last_token_row(self, x, last_token_idx_i):
+        """
+        Pick row ``last_token_idx_i`` out of the sequence dimension without baking the position into
+        a program.
+
+        ``x[:, :, i : i + 1, :]`` puts the bounds in the slice's compile-time attributes, so every
+        distinct prompt position compiles a new program and strands its program-cache buffer behind
+        the traces captured during warmup - and warmup cannot pre-compile them, because it only ever
+        sees bucket-length mock prompts.
+
+        The tensor-args slice takes the position at runtime but only accepts a tile-aligned window,
+        which a single row is not. So take the aligned 32-row window that contains the row (the
+        position travels in a device tensor, so this compiles once per prefill bucket), then pick the
+        row inside it with a fixed-shape one-hot mask - constant shapes, so that compiles once too.
+        """
+        seq_len = int(x.shape[-2])
+        if seq_len % 32 != 0 or seq_len < 32:
+            return x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+
+        window_start = (int(last_token_idx_i) // 32) * 32
+        row_in_window = int(last_token_idx_i) % 32
+
+        for device_tensor, values in (
+            (self._tail_slice_start, [0, 0, window_start, 0]),
+            (self._tail_slice_end, [1, 1, window_start + 32, int(x.shape[-1])]),
+        ):
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.tensor(values, dtype=torch.int32),
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                ),
+                device_tensor,
+            )
+        window = ttnn.slice(
+            input_tensor=x,
+            starts=self._tail_slice_start,
+            ends=self._tail_slice_end,
+            slice_dim=2,
+            num_devices=seq_len // 32,
+        )
+
+        mask_torch = torch.zeros(1, 1, 32, 1, dtype=torch.bfloat16)
+        mask_torch[0, 0, row_in_window, 0] = 1.0
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                mask_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            ),
+            self._tail_row_mask,
+        )
+        # Exactly one row survives the mask, so the reduction copies it rather than accumulating:
+        # every other term is a true zero.
+        return ttnn.sum(ttnn.mul(window, self._tail_row_mask), dim=2, keepdim=True)
 
     def process_output_prefill_logits(self, tt_out, last_token_idx, tt_out_logits_saved=None, user_id=0):
         """
@@ -546,7 +731,7 @@ class TtTransformer(LightweightModule):
                 last_token_idx_i = last_token_idx[i]
             else:
                 last_token_idx_i = last_token_idx
-            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            x = self._select_last_token_row(x, last_token_idx_i)
             # lm_head returns logits in sharded format (same as decode before all-gather)
             tt_logits = self.lm_head(x, None, mode="prefill")
             tt_logits = tt_logits[0]
@@ -594,7 +779,9 @@ class TtTransformer(LightweightModule):
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
-                num_links=3,
+                num_links=3
+                if (self.use_prefetcher and not getattr(self.args, "is_blackhole", False))
+                else self.model_config["GALAXY_NUM_LINKS"],
                 cluster_axis=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",
@@ -614,11 +801,11 @@ class TtTransformer(LightweightModule):
             toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[output_device_idx]).float()[0, 0, 0, :1]
             toks_list.append(toks)
 
-        if tt_out_logits_saved is not None:
-            # make sure tt_out_logits_saved is mutable
-            logits_saved = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[output_device_idx]).float()[0, 0, :, :]
-
-            tt_out_logits_saved.copy_(logits_saved)
+            # One row per split entry: row i corresponds to x_split[i]
+            # (slot i in a batched prefill).
+            if tt_out_logits_saved is not None:
+                logits_saved = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[output_device_idx]).float()[0, 0, :, :]
+                tt_out_logits_saved[i : i + 1].copy_(logits_saved)
 
         return toks_list if isinstance(last_token_idx, list) else toks
 
@@ -710,7 +897,10 @@ class TtTransformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
+        if self.use_fused_rope:
+            rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
+        else:
+            rot_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
         x_embd = self.embd(x)
         tt_logits = self.forward(
             x_embd,
@@ -726,7 +916,9 @@ class TtTransformer(LightweightModule):
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
-                num_links=3,
+                num_links=3
+                if (self.use_prefetcher and not getattr(self.args, "is_blackhole", False))
+                else self.model_config["GALAXY_NUM_LINKS"],
                 cluster_axis=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",
@@ -760,14 +952,31 @@ class TtTransformer(LightweightModule):
             if self.is_decode_setup is False:
                 self.setup_decode(self.mesh_sub_device_manager_id_decode)
                 self.is_decode_setup = True
-                # prefetch
+                # Re-point every submodule at the (new) decode CCL. The prefetcher tensor inserts
+                # inside layer.prefetch are guarded on prefetcher_setup, so this is safe for the
+                # no-prefetcher Blackhole path too (otherwise layers keep the stale prefill CCL).
                 for layer in self.layers:
                     layer.prefetch(self.prefetcher_setup, self.tt_ccl)
                 self.norm.tt_ccl = self.tt_ccl
                 self.lm_head.tt_ccl = self.tt_ccl
-                self.tt_tensors = self.prefetcher_setup.get_input_tensors()
-                # Re-create global CB for decode (if it was not already created)
-                self.prefetcher_setup.create_global_cb()
+                if self.use_prefetcher:
+                    self.tt_tensors = self.prefetcher_setup.get_input_tensors()
+                    # The global CB is rebuilt on every prefill->decode switch, which on-device
+                    # prefill sampling makes once per request. It cannot be cached: it is
+                    # top-anchored in L1 and deliberately not held across prefill (keeping it
+                    # alive there fails with "static dataflow buffers clash with L1 buffers"),
+                    # and it cannot be reordered before the traces because the switch is what
+                    # creates it. Acknowledge it: the decode trace binds this CB at capture and
+                    # replays correctly across every later rebuild, so the rebuild lands where
+                    # the trace expects. NOTE this is an acknowledgement - it tells the checker
+                    # the program is prepared for this buffer, it does not stop a replay writing
+                    # it. No-op unless TT_METAL_TRACE_ALLOC_TRACKING=1.
+                    # Re-create global CB for decode (if it was not already created)
+                    with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
+                        self.prefetcher_setup.create_global_cb()
+                else:
+                    # No-prefetcher path reuses the cached decode CCL; clear its semaphore drift.
+                    self.tt_ccl.reset_global_semaphores()
 
         else:
             if self.is_decode_setup:
@@ -778,10 +987,16 @@ class TtTransformer(LightweightModule):
             if self.is_prefill_setup is False:
                 self.setup_prefill(self.mesh_sub_device_manager_id_prefill)
                 self.is_prefill_setup = True
+                # Re-point every submodule at the (new) prefill CCL. Without this the no-prefetcher
+                # Blackhole layers keep the decode CCL and prefill hits the decode all_reduce_async
+                # path (which rejects DRAM input on BH).
                 for layer in self.layers:
                     layer.prefetch(self.prefetcher_setup, self.tt_ccl)
                 self.norm.tt_ccl = self.tt_ccl
                 self.lm_head.tt_ccl = self.tt_ccl
+                if not self.use_prefetcher:
+                    # No-prefetcher path reuses the cached prefill CCL; clear its semaphore drift.
+                    self.tt_ccl.reset_global_semaphores()
 
     def forward(
         self,
@@ -798,8 +1013,10 @@ class TtTransformer(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ):
-        if mode == "decode":
-            self.prefetcher_setup.create_global_cb()
+        if mode == "decode" and self.use_prefetcher:
+            # Same rebuild-per-switch as in switch_mode; see the note there.
+            with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
+                self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
                 num_layers=self.n_layers,
@@ -853,10 +1070,14 @@ class TtTransformer(LightweightModule):
                 batch_size=batch_size,
             )
         # ttnn.deallocate(h)
-        if mode == "decode":
+        if mode == "decode" and self.use_prefetcher:
             ttnn.deallocate(garbage_tensor)
 
-            # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
+        if mode == "decode" and not getattr(self.args, "is_blackhole", False):
+            # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring. Blackhole
+            # decode reduces the LM head with line_all_reduce_gather_reduce, which does not take
+            # this buffer; allocating it there every step only left 82 KB of L1 stranded below the
+            # prefetcher's global circular buffer.
             self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
                 self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
             )
@@ -870,7 +1091,9 @@ class TtTransformer(LightweightModule):
             x = x[:, :, get_last_token:, :]
 
         lm_head_output = self.lm_head(
-            x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode
+            x,
+            None if mode == "prefill" or not self.use_prefetcher else self.prefetcher_setup.worker_sub_device_id,
+            mode=mode,
         )
         # if mode is decode and Qwen model
         if mode == "decode" and self.args.is_qwen:
@@ -878,7 +1101,10 @@ class TtTransformer(LightweightModule):
         return lm_head_output
 
     def __del__(self):
-        self.tt_ccl.close()
+        try:
+            self.tt_ccl.close()
+        except Exception:
+            pass
 
         # clear global saved addresses
         global global_tt_tensor_address

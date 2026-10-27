@@ -7,11 +7,12 @@ message MeshId {
     uint32 value = 1;
 }
 
-// Represents a port descriptor with direction, channel, and connection hash
+// Gather record for one physical inter-mesh cable channel. Direction/logical-channel are NOT
+// assigned here -- rank 0's round-robin allocator assigns them from both endpoints' port pools.
 message PortDescriptor {
-    uint32 port_direction = 1;  // RoutingDirection enum value
-    uint32 port_channel = 2;    // Channel number
-    uint64 connection_hash = 3;
+    uint64 connection_hash = 1;  // symmetric physical cable identity (matches on both endpoints)
+    uint32 src_chip = 2;         // exit-node chip id on the sending mesh
+    uint32 dst_chip = 3;         // peer chip id on the destination mesh (dst mesh = entry key)
 }
 
 // Entry containing destination mesh and associated port descriptors

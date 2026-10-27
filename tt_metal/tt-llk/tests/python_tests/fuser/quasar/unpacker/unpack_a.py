@@ -1,0 +1,150 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from typing import List, Tuple
+
+from fuser.base_unpacker import Unpacker
+from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
+from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.unpack_a import unpack_a_golden
+from fuser.indexing import InvocationGranularity
+from fuser.l1_operation import L1Operation
+from fuser.operand import BfdResource
+from helpers.llk_params import (
+    DestAccumulation,
+    EltwiseBinaryReuseDestType,
+)
+
+
+def _unp_sel(compute_unit: FpuNode) -> str:
+    if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
+        return "p_unpacr::UNP_B"
+    return "p_unpacr::UNP_A"
+
+
+class UnpackerA(Unpacker):
+    granularity = InvocationGranularity.ROW
+    golden_fn = staticmethod(unpack_a_golden)
+
+    per_block_init = True
+
+    def __init__(
+        self, reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE
+    ):
+        if reuse_dest != EltwiseBinaryReuseDestType.NONE:
+            self.granularity = InvocationGranularity.TILE
+
+    def get_headers(self) -> List[str]:
+        return [
+            "llk_unpack_common.h",
+            "llk_unpack_unary_operand.h",
+            "llk_unpack_unary_operand_to_dest.h",
+            "llk_math_common.h",
+        ]
+
+    def _perf_valid_args(
+        self,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> Tuple[str, str, int]:
+        if compute_unit.reuse_dest != EltwiseBinaryReuseDestType.NONE:
+            num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+            return "true", "true", num_faces
+        if config.dest_acc == DestAccumulation.Yes:
+            return "true", "true", block.block_cols
+        return "true", "false", block.block_cols
+
+    def perf_set_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        if compute_unit.unpack_to_dest.value:
+            return ""
+        set_a, set_b, count = self._perf_valid_args(config, compute_unit, block)
+        return f"_perf_unpack_loop_set_valid<{set_a}, {set_b}>({count});\n"
+
+    def perf_clear_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        if compute_unit.unpack_to_dest.value:
+            return ""
+        clear_a, clear_b, count = self._perf_valid_args(config, compute_unit, block)
+        return f"_perf_math_loop_clear_valid<{clear_a}, {clear_b}>({count});\n"
+
+    def init(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        engine = (
+            BfdResource.UNP1
+            if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
+            else BfdResource.UNP0
+        )
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        reuse_dest = compute_unit.reuse_dest.cpp_enum_value
+        en_32bit_dest = config.dest_acc.cpp_enum_value
+        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
+        transpose_en = compute_unit.transpose_faces.cpp_enum_value
+        unp_sel = _unp_sel(compute_unit)
+        per_tile = compute_unit.reuse_dest != EltwiseBinaryReuseDestType.NONE
+        num_tiles = 1 if per_tile else block.block_cols
+
+        if compute_unit.unpack_to_dest.value:
+            init_call = "_llk_unpack_unary_operand_to_dest_init_(bfd_id);\n"
+        else:
+            init_call = (
+                f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}, {unpack_to_dest}>"
+                f"(bfd_id, {tensor_shape}, {num_tiles});\n"
+            )
+
+        return (
+            "{\n"
+            + compute_unit.src_a.bfd_alloc_and_program(engine, result_name="bfd_id")
+            + init_call
+            + "}\n"
+        )
+
+    def unpack(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        if compute_unit.unpack_to_dest.value:
+            return (
+                "_llk_unpack_unary_operand_to_dest_block_("
+                f"{block.tile_id_src_a}, {block.tile_id_dest}, {block.block_cols});\n"
+            )
+        unp_sel = _unp_sel(compute_unit)
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        reuse_dest = compute_unit.reuse_dest.cpp_enum_value
+        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
+        dest_sync = operation.dest_sync.cpp_enum_value
+
+        return (
+            f"_llk_unpack_unary_operand_<{unp_sel}, {reuse_dest}, {unpack_to_dest}, {dest_sync}>"
+            f"({block.tile_id_src_a}, {tensor_shape});\n"
+        )
+
+    def uninit(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        return ""

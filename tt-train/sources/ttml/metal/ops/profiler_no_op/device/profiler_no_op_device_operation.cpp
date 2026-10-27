@@ -4,8 +4,7 @@
 
 #include "profiler_no_op_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
+#include "metal/common/tensor_validation.hpp"
 #include "profiler_no_op_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -13,49 +12,11 @@ namespace ttml::metal::ops::profiler_no_op::device {
 
 void ProfilerNoopOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor,
-                           const std::string& name,
-                           const tt::tt_metal::Layout required_layout,
-                           const tt::tt_metal::DataType required_dtype) {
-
-        TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
-            "ProfilerNoop operation requires '{}' to be on DEVICE. Got storage type: '{}'",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-
-        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
-
-        TT_FATAL(
-            tensor.layout() == required_layout,
-            "Tensor '{}' must have layout '{}', but got '{}'",
-            name,
-            enchantum::to_string(required_layout),
-            enchantum::to_string(tensor.layout()));
-
-        TT_FATAL(
-            tensor.dtype() == required_dtype,
-            "Tensor '{}' must have data type '{}', but got '{}'",
-            name,
-            enchantum::to_string(required_dtype),
-            enchantum::to_string(tensor.dtype()));
-
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
-            "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
-
     const auto& input_tensor = tensor_args.input;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
-    check_tensor(input_tensor, "Input", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
+    check_device_tensor(input_tensor, "ProfilerNoop", "Input", {.layout = tt::tt_metal::Layout::ROW_MAJOR});
     if (preallocated_output_tensor.has_value()) {
-        check_tensor(
-            preallocated_output_tensor.value(),
-            "Preallocated Output",
-            tt::tt_metal::Layout::TILE,
-            tt::tt_metal::DataType::BFLOAT16);
+        check_device_tensor(preallocated_output_tensor.value(), "ProfilerNoop", "Preallocated Output");
     }
 }
 
@@ -65,7 +26,7 @@ ProfilerNoopOperation::spec_return_value_t ProfilerNoopOperation::compute_output
         return tensor_args.preallocated_output->tensor_spec();
     }
     auto input_logical_shape = tensor_args.input.logical_shape();
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape(input_logical_shape),
         tt::tt_metal::TensorLayout(
             tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
@@ -80,7 +41,7 @@ ProfilerNoopOperation::tensor_return_value_t ProfilerNoopOperation::create_outpu
     if (tensor_args.preallocated_output.has_value()) {
         output_tensor = tensor_args.preallocated_output.value();
     } else {
-        output_tensor = create_device_tensor(output_specs, tensor_args.input.device());
+        output_tensor = ttnn::create_device_tensor(output_specs, tensor_args.input.device());
     }
 
     return output_tensor;

@@ -9,7 +9,7 @@ on:
 
 jobs:
   success-case:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/run-with-log
@@ -26,7 +26,7 @@ jobs:
           tail -1 out/ok.log | grep -qx '\[==tt-log-finish-line==\] exit_code=0'
 
   failure-case:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/run-with-log
@@ -44,7 +44,7 @@ jobs:
           tail -1 out/fail.log | grep -qx '\[==tt-log-finish-line==\] exit_code=7'
 
   timeout-case:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/run-with-log
@@ -69,7 +69,7 @@ jobs:
           echo "tracked-but-truncated signature correct (outcome=${{ steps.run.outcome }})"
 
   no-trailing-newline-case:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/run-with-log

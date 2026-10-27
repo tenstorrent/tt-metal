@@ -30,6 +30,16 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
-    std::optional<bool> read_local_slice_from_input = std::nullopt);
+    std::optional<bool> read_local_slice_from_input = std::nullopt,
+    const std::optional<const Tensor>& fused_ternary_input_a = std::nullopt,
+    const std::optional<const Tensor>& fused_ternary_input_b = std::nullopt,
+    std::optional<float> fused_ternary_scalar = std::nullopt,
+    int32_t chunks = 1,
+    ttnn::experimental::prim::MMSignalAggregatorMode mm_signal_aggregator_mode =
+        ttnn::experimental::prim::MMSignalAggregatorMode::Auto,
+    // Fused SwiGLU: the weight is a tile-pair-interleaved [gate|up] matrix of width 2N; the matmul
+    // emits silu(gate) * up, so the output width is N. Mutually exclusive with fused_activation
+    // and the fused ternary (addcmul) inputs.
+    bool fuse_swiglu = false);
 
 }  // namespace ttnn::experimental

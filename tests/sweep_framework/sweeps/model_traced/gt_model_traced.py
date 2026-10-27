@@ -89,7 +89,7 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config, device=device)
 
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = (
@@ -129,6 +129,9 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Initialised unconditionally: the traced-output block below is conditional, and the gather
+    # references this, so leaving it unbound raises UnboundLocalError on every vector that skips it.
+    ot_placement = None
     if is_binary:
         if shape_b is None:
             shape_b = shape_a
@@ -204,7 +207,11 @@ def run(
 
         start_time = start_measuring_time()
         output_tensor = ttnn.gt(input_tensor_a, input_tensor_b, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor,
+            device if is_mesh_device else None,
+            scatter_placement=(ot_placement or input_a_tensor_placement) if is_mesh_device else None,
+        )
         e2e_perf = stop_measuring_time(start_time)
     else:
         scalar_value = scalar if scalar is not None else 0
@@ -248,7 +255,11 @@ def run(
 
         start_time = start_measuring_time()
         output_tensor = ttnn.gt(input_tensor_a, scalar_value, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor,
+            device if is_mesh_device else None,
+            scatter_placement=(ot_placement or input_a_tensor_placement) if is_mesh_device else None,
+        )
         e2e_perf = stop_measuring_time(start_time)
 
     # Comparison

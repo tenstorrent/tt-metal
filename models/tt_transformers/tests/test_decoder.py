@@ -117,6 +117,9 @@ def test_decoder_inference(
             model_args.max_seq_len,
             model_args.rope_theta_local,
             None,
+            # Match model.py: when fused QK is on, the local rope must also double
+            # its cos/sin batch so one tensor serves both Q and K (Gemma-2 sliding layers).
+            use_qk_fused=model_args.use_qk_fused,
         )
     else:
         rope_setup_local = None

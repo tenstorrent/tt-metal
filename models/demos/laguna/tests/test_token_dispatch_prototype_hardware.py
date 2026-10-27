@@ -715,12 +715,13 @@ def test_laguna_d2_whole_8192_token_dispatch_probe():
                 weights, indices = _actual_router_sliced(decoder, x)
             else:
                 weights, indices = _actual_router(decoder, x)
-            offsets, counts, region_offsets, histogram = routing_setup(
+            routing = routing_setup(
                 ttnn_top_k_experts_indices=indices,
                 num_routed_experts=GLOBAL_EXPERTS,
-                seq_len_per_chip=TOKENS,
                 num_experts_per_tok=TOP_K,
             )
+            offsets, counts = routing.global_dispatch_offsets, routing.total_counts_per_expert
+            region_offsets, histogram = routing.expert_region_offsets, routing.expert_histograms
             if memory_stages:
                 _print_memory(mesh, "prototype_after_routing")
             dispatched, metadata = dispatch(x, weights, indices, offsets, dispatch_table_tt)

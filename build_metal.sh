@@ -16,6 +16,10 @@ fi
 
 # Function to display help
 show_help() {
+    local valid_perf_categories
+    valid_perf_categories=$(grep -vE '^[[:space:]]*(#|$)' \
+        "$(dirname "$0")/tt_metal/tools/profiler/tracy_debug_categories.txt" 2>/dev/null \
+        | awk '{print $1}' | paste -sd, - | sed 's/,/, /g' || true)
     echo "Usage: $0 [options]..."
     echo "  -h, --help                       Show this help message."
     echo "  -e, --export-compile-commands    Enable CMAKE_EXPORT_COMPILE_COMMANDS."
@@ -23,6 +27,7 @@ show_help() {
     echo "  -b, --build-type build_type      Set the build type. Default is Release."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  --disable-profiler               Disable Tracy profiler (enabled by default)."
+    echo "  --build-perf-debug <categories>  Tracy debug-verbosity categories to compile in: off (default), all, or a comma-separated list of ${valid_perf_categories}."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --build-dir                      Build directory."
     echo "  --build-tests                    Build All Testcases."
@@ -46,7 +51,9 @@ show_help() {
     echo "  --cpm-source-cache               Set path to CPM Source Cache."
     echo "  --cpm-use-local-packages         Attempt to use locally installed dependencies."
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
+    echo "  --use-system-sfpi                Use the SFPI toolchain already installed on the system/image instead of downloading it."
     echo "  --toolchain-path                 Set path to CMake toolchain file."
+    echo "  --host-march                     Set x86 host -march value. Default is x86-64-v3."
     echo "  --configure-only                 Only configure the project, do not build."
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
@@ -70,6 +77,7 @@ enable_ccache="OFF"
 enable_time_trace="OFF"
 build_type="Release"
 disable_profiler="OFF"
+perf_debug_categories=""
 build_dir=""
 build_tests="OFF"
 build_ttnn_tests="OFF"
@@ -87,7 +95,9 @@ cxx_compiler_path=""
 cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
+use_system_sfpi="OFF"
 toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+host_march="x86-64-v3"
 
 
 configure_only="OFF"
@@ -108,6 +118,7 @@ enable-ccache
 enable-time-trace
 build-type:
 disable-profiler
+build-perf-debug:
 install-prefix:
 build-dir:
 build-tests
@@ -130,7 +141,9 @@ cpm-source-cache:
 cpm-use-local-packages
 c-compiler-path:
 ttnn-shared-sub-libs
+use-system-sfpi
 toolchain-path:
+host-march:
 configure-only
 without-distributed
 without-python-bindings
@@ -170,6 +183,8 @@ while true; do
             build_type="$2";shift;;
         --disable-profiler)
             disable_profiler="ON";;
+        --build-perf-debug)
+            perf_debug_categories="$2";shift;;
         --install-prefix)
             install_prefix="$2";shift;;
         --build-tests)
@@ -192,6 +207,8 @@ while true; do
             build_all="ON";;
         --ttnn-shared-sub-libs)
             ttnn_shared_sub_libs="ON";;
+        --use-system-sfpi)
+            use_system_sfpi="ON";;
         --configure-only)
             configure_only="ON";;
         --without-python-bindings)
@@ -216,6 +233,8 @@ while true; do
             c_compiler_path="$2";shift;;
         --toolchain-path)
             toolchain_path="$2";shift;;
+        --host-march)
+            host_march="$2";shift;;
         --release)
             build_type="Release";;
         --development)
@@ -241,6 +260,10 @@ fi
 tracy_enabled="ON"
 if [ "$disable_profiler" = "ON" ]; then
     tracy_enabled="OFF"
+    if [ -n "$perf_debug_categories" ] && [ "$perf_debug_categories" != "off" ]; then
+        echo "WARNING: --build-perf-debug has no effect with --disable-profiler; debug zones stay compiled out."
+        perf_debug_categories="off"
+    fi
 fi
 
 # Validate the build_type
@@ -274,6 +297,18 @@ if [ -z "$PYTHON_ENV_DIR" ]; then
     PYTHON_ENV_DIR=$(pwd)/python_env
 fi
 
+# ENABLE_TRACY is sticky in the cache, so a prior --disable-profiler carries over.
+if [ "$disable_profiler" != "ON" ] && [ -f "$build_dir/CMakeCache.txt" ]; then
+    cached_enable_tracy=$(sed -n 's/^ENABLE_TRACY:[^=]*=//p' "$build_dir/CMakeCache.txt")
+    if [ "$cached_enable_tracy" = "OFF" ]; then
+        tracy_enabled="OFF"
+        if [ -n "$perf_debug_categories" ] && [ "$perf_debug_categories" != "off" ]; then
+            echo "WARNING: ENABLE_TRACY=OFF is cached from a prior --disable-profiler; --build-perf-debug has no effect until reconfigured."
+            perf_debug_categories="off"
+        fi
+    fi
+fi
+
 # Debug output to verify parsed options
 echo "INFO: Export compile commands: $export_compile_commands"
 echo "INFO: Enable ccache: $enable_ccache"
@@ -289,7 +324,19 @@ echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 echo "INFO: Enable Tracy: $tracy_enabled"
+if [ "$tracy_enabled" != "ON" ]; then
+    perf_debug_categories_effective="off (Tracy disabled)"
+elif [ -n "$perf_debug_categories" ]; then
+    perf_debug_categories_effective="$perf_debug_categories"
+elif [ -f "$build_dir/CMakeCache.txt" ]; then
+    perf_debug_categories_effective=$(sed -n 's/^TRACY_DEBUG_CATEGORY:[^=]*=//p' "$build_dir/CMakeCache.txt")
+    perf_debug_categories_effective="${perf_debug_categories_effective:-off} (cached)"
+else
+    perf_debug_categories_effective="off"
+fi
+echo "INFO: Tracy debug-verbosity categories: $perf_debug_categories_effective"
 echo "INFO: Enable LTO: $enable_lto"
+echo "INFO: Host march: $host_march"
 echo "INFO: Warnings as errors: $warnings_as_errors"
 
 # Prepare cmake arguments
@@ -297,6 +344,7 @@ cmake_args+=("-B" "$build_dir")
 cmake_args+=("-G" "Ninja")
 cmake_args+=("-DCMAKE_BUILD_TYPE=$build_type")
 cmake_args+=("-DCMAKE_INSTALL_PREFIX=$cmake_install_prefix")
+cmake_args+=("-DTT_X86_MARCH=$host_march")
 
 if [ "$cxx_compiler_path" != "" ]; then
     echo "INFO: C++ compiler: $cxx_compiler_path"
@@ -324,6 +372,10 @@ if [ "$disable_profiler" = "ON" ]; then
     cmake_args+=("-DENABLE_TRACY=OFF")
 fi
 
+if [ -n "$perf_debug_categories" ]; then
+    cmake_args+=("-DTRACY_DEBUG_CATEGORY=$perf_debug_categories")
+fi
+
 if [ "$export_compile_commands" = "ON" ]; then
     cmake_args+=("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
 else
@@ -332,6 +384,10 @@ fi
 
 if [ "$ttnn_shared_sub_libs" = "ON" ]; then
     cmake_args+=("-DENABLE_TTNN_SHARED_SUBLIBS=ON")
+fi
+
+if [ "$use_system_sfpi" = "ON" ]; then
+    cmake_args+=("-DTT_USE_SYSTEM_SFPI=ON")
 fi
 
 if [ "$build_tests" = "ON" ]; then

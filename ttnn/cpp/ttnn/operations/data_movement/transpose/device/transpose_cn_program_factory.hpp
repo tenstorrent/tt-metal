@@ -7,13 +7,14 @@
 
 #include "ttnn/device_operation.hpp"
 
+#include "ttnn/metal_v2_artifacts.hpp"
+
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
 struct TransposeCNProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor);
 };
 

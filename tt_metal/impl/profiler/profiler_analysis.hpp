@@ -21,6 +21,8 @@
 
 namespace tt::tt_metal {
 
+class MetalContext;
+
 enum class AnalysisType { PROGRAM_FIRST_TO_LAST_MARKER };
 
 enum class AnalysisDimension { PROGRAM };
@@ -33,7 +35,31 @@ inline const AnalysisRiscTypes AnalysisRiscTypesAny = {
     tracy::RiscType::TRISC_1,
     tracy::RiscType::TRISC_2,
     tracy::RiscType::ERISC,
-    tracy::RiscType::TENSIX_RISC_AGG};
+    tracy::RiscType::TENSIX_RISC_AGG,
+    tracy::RiscType::QUASAR_DM0,
+    tracy::RiscType::QUASAR_DM1,
+    tracy::RiscType::QUASAR_DM2,
+    tracy::RiscType::QUASAR_DM3,
+    tracy::RiscType::QUASAR_DM4,
+    tracy::RiscType::QUASAR_DM5,
+    tracy::RiscType::QUASAR_DM6,
+    tracy::RiscType::QUASAR_DM7,
+    tracy::RiscType::QUASAR_NEO0_TRISC0,
+    tracy::RiscType::QUASAR_NEO0_TRISC1,
+    tracy::RiscType::QUASAR_NEO0_TRISC2,
+    tracy::RiscType::QUASAR_NEO0_TRISC3,
+    tracy::RiscType::QUASAR_NEO1_TRISC0,
+    tracy::RiscType::QUASAR_NEO1_TRISC1,
+    tracy::RiscType::QUASAR_NEO1_TRISC2,
+    tracy::RiscType::QUASAR_NEO1_TRISC3,
+    tracy::RiscType::QUASAR_NEO2_TRISC0,
+    tracy::RiscType::QUASAR_NEO2_TRISC1,
+    tracy::RiscType::QUASAR_NEO2_TRISC2,
+    tracy::RiscType::QUASAR_NEO2_TRISC3,
+    tracy::RiscType::QUASAR_NEO3_TRISC0,
+    tracy::RiscType::QUASAR_NEO3_TRISC1,
+    tracy::RiscType::QUASAR_NEO3_TRISC2,
+    tracy::RiscType::QUASAR_NEO3_TRISC3};
 
 using AnalysisMarkerTypes = std::unordered_set<tracy::TTDeviceMarkerType>;
 inline const AnalysisMarkerTypes AnalysisMarkerTypesAny = {
@@ -89,12 +115,13 @@ struct ProgramsPerfResults {
 };
 
 ProgramsPerfResults generatePerfResultsForPrograms(
+    MetalContext& ctx,
     const std::vector<AnalysisConfig>& analysis_configs,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
     ThreadPool& thread_pool);
 
 void writeProgramsPerfResultsToCSV(
-    const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path);
+    MetalContext& ctx, const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path);
 
 std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::path& json_path);
 

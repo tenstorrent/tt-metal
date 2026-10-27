@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 namespace ttnn::prim {
 void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
@@ -36,15 +37,15 @@ void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.memory_config().memory_layout());
 }
 
-std::vector<TensorSpec> AllBroadcastDeviceOperation::compute_output_specs(
+std::vector<tt::tt_metal::TensorSpec> AllBroadcastDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const Tensor& input) {
     const auto& input_tensor = input;
     const auto& shape = input_tensor.logical_shape();
     const uint32_t ring_size = operation_attributes.ring_size;
-    std::vector<TensorSpec> output_specs;
+    std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(ring_size);
     for (uint32_t i = 0; i < ring_size; ++i) {
-        output_specs.push_back(TensorSpec(
+        output_specs.push_back(tt::tt_metal::TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(),
@@ -67,51 +68,15 @@ std::vector<Tensor> AllBroadcastDeviceOperation::create_output_tensors(
 
 std::vector<tt::tt_metal::TensorTopology> AllBroadcastDeviceOperation::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const Tensor& input) {
-    // all_broadcast produces `ring_size` tensors, each carrying the full data of one source
-    // device on `cluster_axis` and replicated across the remaining devices on that axis.
-    // So every output's placement on `cluster_axis` is Replicate; placements on the other
-    // mesh axes are inherited from the input.
-    const auto& input_topology = input.tensor_topology();
-    auto output_placements = input_topology.placements();
-
-    if (operation_attributes.cluster_axis.has_value()) {
-        const auto axis = operation_attributes.cluster_axis.value();
-        if (axis < output_placements.size()) {
-            output_placements[axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
-    } else {
-        for (auto& placement : output_placements) {
-            placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
-    }
-
-    tt::tt_metal::TensorTopology output_topology(
-        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords());
-
-    std::vector<tt::tt_metal::TensorTopology> topologies;
-    topologies.reserve(operation_attributes.ring_size);
-    for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-        topologies.push_back(output_topology);
-    }
-    return topologies;
-}
-
-ttsl::hash::hash_t AllBroadcastDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "AllBroadcastDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = operation_attributes.sub_device_id;
-    auto* mesh_device = tensor_args.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    return tt::tt_metal::operation::hash_operation<AllBroadcastDeviceOperation>(
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        operation_attributes.output_mem_config,
-        operation_attributes.topology,
-        operation_attributes.cluster_axis,
-        subdevice_core_range_set,
-        tensor_args);
+    // all_broadcast produces `ring_size` tensors, each carrying the full data of one source device on
+    // `cluster_axis` and replicated across the remaining devices on that axis. Every output is therefore
+    // Replicate on `cluster_axis` with the other mesh axes inherited from the input. Nothing is concatenated, so
+    // the helper's contiguity requirement does not apply (it is the all_reduce / all_broadcast label). No honest
+    // label (nullopt, already reported): every output keeps the input's label.
+    const auto output_topology =
+        ttnn::operations::ccl::common::all_broadcast_output_topology(input, operation_attributes.cluster_axis);
+    return std::vector<tt::tt_metal::TensorTopology>(
+        operation_attributes.ring_size, output_topology.value_or(input.tensor_topology()));
 }
 
 std::vector<ttnn::Tensor> all_broadcast(

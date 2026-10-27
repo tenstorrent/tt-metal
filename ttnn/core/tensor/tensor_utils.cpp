@@ -4,13 +4,27 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+
 #include <tt_stl/overloaded.hpp>
+#include <tt_stl/fmt.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/tensor/types.hpp"
 
 #include <tracy/Tracy.hpp>
 
-namespace tt::tt_metal {
+namespace ttnn {
+
+using tt::tt_metal::CBDescriptor;
+using tt::tt_metal::CBFormatDescriptor;
+using tt::tt_metal::CoreCoord;
+using tt::tt_metal::CoreRangeSet;
+using tt::tt_metal::datatype_to_dataformat_converter;
+using tt::tt_metal::MeshTensor;
+using tt::tt_metal::NOC;
+using tt::tt_metal::TileDescriptor;
 
 bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 
@@ -51,6 +65,18 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
         .global_circular_buffer = nullptr};
 }
 
+uint32_t get_cb_address(const CBDescriptor& desc) {
+    const tt::tt_metal::Buffer* buffer = desc.buffer;
+    if (buffer == nullptr && desc.tensor != nullptr) {
+        buffer = desc.tensor->mesh_buffer().get_reference_buffer();
+    }
+    if (buffer == nullptr) {
+        return desc.address_offset;
+    }
+    return tt::tt_metal::experimental::per_core_allocation::get_shard_base_address(*buffer, desc.core_ranges) +
+           desc.address_offset;
+}
+
 std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor& tensor, NOC noc) {
     /**
     This function takes in a sharded device tensor (can be legacy 2D sharded or ND sharded) and returns the optimal
@@ -85,4 +111,4 @@ std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor&
     return ordered_worker_cores_with_data;
 }
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

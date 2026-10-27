@@ -8,13 +8,16 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc
 from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     compute_kernel_options,
     create_ttnn_tilized_tensor,
     get_compute_kernel_options,
 )
+
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
 
 
 def get_tensors(
@@ -252,6 +255,8 @@ def test_moreh_bmm_callback(shape, device):
     AssertionError: If the number of program cache entries differs between runs with the same settings.
     """
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_bmm(shape, True, True, device)
@@ -331,6 +336,8 @@ def test_moreh_bmm_backward_callback(requires_grad, device):
     AssertionError: If the number of program cache entries differs between runs with the same settings.
     """
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_bmm_backward([7, 511, 313, 765], requires_grad, True, device)

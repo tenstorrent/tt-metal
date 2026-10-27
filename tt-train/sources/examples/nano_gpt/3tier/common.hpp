@@ -23,7 +23,8 @@ struct TrainingConfig {
     uint32_t seed = 5489U;
     uint32_t model_save_interval = 500;
     uint32_t batch_size = 64;
-    uint32_t num_epochs = 1;
+    // 0 = no epoch cap; max_steps ends the run.
+    uint32_t num_epochs = 0;
     uint32_t max_steps = 5000;
     // accumulate batches for gradient update
     uint32_t gradient_accumulation_steps = 1;
@@ -55,7 +56,7 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config);
 
 TrainingConfig parse_config(const YAML::Node &yaml_config);
 
-std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config);
+std::pair<uint32_t, uint32_t> get_effective_max_steps_and_vocab_size(const TrainingConfig &config);
 
 std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers);
 

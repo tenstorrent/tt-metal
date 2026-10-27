@@ -36,8 +36,21 @@ package tt.tt_fabric.proto;
 // - chip_id: The chip identifier within that mesh, enumerated in row-major order
 //            based on the mesh's device_topology dimensions
 message LogicalFabricNodeId {
-    uint32 mesh_id = 1;    // Mesh identifier
-    uint32 chip_id = 2;    // Chip identifier within the mesh
+    optional uint32 mesh_id = 1;    // Mesh identifier (mutually exclusive with mesh_id_regex)
+    optional uint32 chip_id = 2;    // Chip identifier within the mesh (mutually exclusive with chip_id_regex)
+
+    // Pattern alternatives to mesh_id / chip_id. When a *_regex string is non-empty it must be
+    // the sole selector for that dimension -- do not also set the corresponding numeric field.
+    // Expanded against the valid domain (instantiated mesh ids for mesh_id_regex; 0..chip_count-1
+    // of the matched mesh for chip_id_regex). Supported syntax:
+    //   - inclusive numeric range   "0-8"        -> 0,1,...,8
+    //   - comma list of the above   "0,2,4-6"    -> 0,2,4,5,6
+    //   - regex (std::regex) match  "\\d*[02468]" -> every even id (matched full-string)
+    // When mesh_id_regex is used, the whole pinning entry is replicated PER matched mesh
+    // (one all-to-all group per mesh), so the per-mesh bijection is preserved. This lets a
+    // single entry stand in for many identical per-mesh pinning blocks.
+    string mesh_id_regex = 3;
+    string chip_id_regex = 4;
 }
 
 // -----------------------------------------------------------------------------
@@ -46,20 +59,61 @@ message LogicalFabricNodeId {
 // - tray_id: The tray identifier from the cluster descriptor
 // - asic_location: The ASIC location within that tray, as defined in the cluster descriptor
 message PhysicalAsicPosition {
-    uint32 tray_id = 1;         // Tray identifier
-    uint32 asic_location = 2;   // ASIC location within the tray
+    optional uint32 tray_id = 1;         // Tray identifier (mutually exclusive with tray_id_regex)
+    optional uint32 asic_location = 2;   // ASIC location within the tray (mutually exclusive with asic_location_regex)
+
+    // Pattern alternatives to tray_id / asic_location. When a *_regex string is non-empty it must be
+    // the sole selector for that dimension -- do not also set the corresponding numeric field.
+    // Expanded against ids 0..255 (cluster-valid positions are filtered later at mapping time).
+    // Supported syntax matches LogicalFabricNodeId: inclusive ranges ("1-4"), comma lists ("2,3,6,7"),
+    // and full-string std::regex matches.
+    string tray_id_regex = 3;
+    string asic_location_regex = 4;
 }
 
 // -----------------------------------------------------------------------------
 // AsicPinning
-// Maps a logical fabric node to a physical ASIC position.
-// Used to constrain which physical ASIC a logical node can be mapped to.
-message AsicPinning {
-    // Logical fabric node to pin
-    LogicalFabricNodeId logical_fabric_node_id = 1;
+// Constrains which physical ASIC(s) a logical fabric node may be mapped to.
+//
+// All-to-all semantics: a single AsicPinning entry may list multiple logical
+// fabric nodes AND multiple physical ASIC positions. Any listed logical node may
+// map to any listed physical position (the solver still enforces a bijection, so
+// distinct logical nodes land on distinct ASICs). Listing one of each reproduces
+// the classic one-to-one pin, so existing single-entry textprotos keep working.
+//
+// Example (all 4 corners may land on any of the 4 tray-corner ASICs):
+//   pinnings {
+//     logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+//     logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+//     logical_fabric_node_id { mesh_id: 0 chip_id: 12 }
+//     logical_fabric_node_id { mesh_id: 0 chip_id: 15 }
+//     physical_asic_position { tray_id: 1 asic_location: 1 }
+//     physical_asic_position { tray_id: 2 asic_location: 1 }
+//     physical_asic_position { tray_id: 3 asic_location: 1 }
+//     physical_asic_position { tray_id: 4 asic_location: 1 }
+//   }
+// Optional board-revision gate on an AsicPinning. Unspecified means the pinning always
+// applies. BH_REV_AB / BH_REV_C apply only on a Blackhole Galaxy of that revision; WH
+// applies only on a Wormhole Galaxy. Gated pins are dropped on other board types.
+enum BoardRevision {
+    BOARD_REVISION_UNSPECIFIED = 0;
+    BH_REV_AB = 1;
+    BH_REV_C = 2;
+    WH = 3;
+}
 
-    // Physical ASIC position where the fabric node should be pinned
-    PhysicalAsicPosition physical_asic_position = 2;
+message AsicPinning {
+    // Logical fabric node(s) to pin. Must be non-empty. A given logical node may
+    // appear in at most one AsicPinning entry across the whole descriptor.
+    repeated LogicalFabricNodeId logical_fabric_node_id = 1;
+
+    // Physical ASIC position(s) the listed fabric node(s) may be pinned to. Must
+    // be non-empty. Any listed node may map to any listed position (all-to-all).
+    repeated PhysicalAsicPosition physical_asic_position = 2;
+
+    // When set to BH_REV_AB, BH_REV_C, or WH, this pinning is active only on that board.
+    // Leave unset (UNSPECIFIED) for pins that apply on every machine.
+    optional BoardRevision board_revision = 3;
 }
 
 message MeshGraphDescriptor {
@@ -138,6 +192,62 @@ message MeshDescriptor {
 
     // Optional list of explicit intra-mesh express links.
     repeated ExpressConnection express_connections = 7;
+
+    // Optional regular families of intra-mesh express links (sub-torus connectivity).
+    // Declared by pattern rather than enumerated pairs; see ExpressLink.
+    repeated ExpressLink express_links = 8;
+}
+
+// -----------------------------------------------------------------------------
+// ExpressLink
+// A regular family of intra-mesh "express" links layered on top of the base
+// device_topology, used to express sub-torus connectivity (links that jump several
+// hops along one dimension).
+//
+// Geometry:
+// - `dim_idx` is a 0-based index into device_topology.dims selecting the dimension the
+//   express links jump ALONG (0 = dims[0], 1 = dims[1], ...). A express hop changes a node's
+//   coordinate only along `dim_idx`; the pattern is replicated across the other dimension(s).
+// - Along that dimension the line is tiled into consecutive blocks of `pattern.step`
+//   nodes starting at coordinate `pattern.start`. Each block contributes one express
+//   link connecting its two endpoints: block_start <-> block_start + step - 1.
+//   The interior nodes get no express link (the link "skips" them).
+// - `wrap` decides whether the tiling wraps around the mesh boundary (the final block
+//   wraps past it, e.g. on a 32-node dim the last block [30,31,0,1] yields edge 30<->1)
+//   or is dropped. It defaults to the dimension's dim_type.
+// - The pattern is replicated across every line in the other dimension, and
+//   endpoints are mapped (per-dim coords) -> linearized chip id (row-major).
+//
+// Example (device_topology { dims: [32, 4] dim_types: [RING, RING] }):
+//   express_links { dim_idx: 0  pattern { start: 2  step: 4 } }
+//   -> 8 blocks/line ([2,5][6,9]...[26,29][30,1]) x 4 columns = 32 express links.
+//
+// Validation expectations:
+// - dim_idx < number of device_topology dimensions.
+// - pattern.step >= 2 (a 1-node block has no distinct endpoints).
+// - Prefer dim_length % step == 0 for uniform tiling under RING wrap.
+//
+// Note: how express links are presented to routing (their RoutingDirection / plane
+// identity) is resolved by the control plane and is intentionally not declared here.
+message ExpressLink {
+    // Block tiling pattern along `dim_idx`.
+    message Pattern {
+        uint32 start = 1;  // coordinate where the first block begins (phase offset)
+        uint32 step = 2;   // block width: nodes spanned start..end inclusive; must be >= 2
+    }
+
+    // The dimension the express links jump along: 0-based index into device_topology.dims
+    // (the express pattern is propagated down this dimension).
+    uint32 dim_idx = 1;
+
+    // Tiling pattern (start offset + block width) along `dim_idx`.
+    Pattern pattern = 2;
+
+    // Express links carry the mesh's `channels` count and policy; there is no per-pattern override.
+    reserved 3;
+
+    // Whether the tiling wraps around the mesh boundary. Defaults to the dimension's dim_type.
+    TorusTopology.Type wrap = 4;
 }
 
 // -----------------------------------------------------------------------------
@@ -420,6 +530,7 @@ enum Architecture {
     INVALID_ARCHITECTURE = 0;
     WORMHOLE_B0 = 1;
     BLACKHOLE = 2;
+    QUASAR = 3;
 }
 
 // Channels specify the per-connection lane count and enforcement policy.
@@ -442,7 +553,8 @@ message Channels {
 // Policy determines whether link-lane requirements must be strictly met.
 // - STRICT: initialization requires that each connection meets `channels.count` lanes.
 // - RELAXED: initialization may proceed if fewer than `channels.count` lanes are found,
-//            but there must be at least one link; absence of a link is not permitted.
+//            including zero for inter-mesh connections (issue #56762): the mapper realizes as many
+//            inter-mesh connections as it can, and one left with no physical links stays logical-only.
 // Default behavior:
 // - If Channels.policy is omitted in textproto, treat as STRICT unless the control
 //   plane overrides this default.

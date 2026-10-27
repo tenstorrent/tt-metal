@@ -33,13 +33,39 @@ struct CBIds {
     uint32_t sum_A = inactive;
     uint32_t sum_B = inactive;
     uint32_t exp_max_diff = inactive;
+    uint32_t cu_window_seqlens = inactive;   // windowed mode only (the writer's copy)
+    uint32_t windowed_q_offset = inactive;   // windowed mode with a per-device Q-offset tensor only
+    uint32_t windowed_cu_reader = inactive;  // windowed narrowing only: the reader's own cu_window copy
+    uint32_t windowed_k_range = inactive;    // windowed narrowing or mask block map: per-Q-chunk {k_lo, k_hi}
+    uint32_t mask_block_map = inactive;      // mask block map only: the reader's scratch for one row of block flags
+    uint32_t kv_fwd_ctrl = inactive;         // causal chains only: {address, bytes} forward requests, reader -> writer
 
     std::vector<uint32_t> reader_compile_time_args() const {
-        return {q_in, k_in, v_in, mask_in, attention_sink, page_table, chunk_start_idx_compute, chunk_start_idx_writer};
+        return {
+            q_in,
+            k_in,
+            v_in,
+            mask_in,
+            attention_sink,
+            page_table,
+            chunk_start_idx_compute,
+            chunk_start_idx_writer,
+            windowed_cu_reader,
+            windowed_k_range,
+            mask_block_map,
+            kv_fwd_ctrl};
     }
 
     std::vector<uint32_t> writer_compile_time_args() const {
-        return {mask_in, identity_scale_in, col_identity, chunk_start_idx_writer, out};
+        return {
+            mask_in,
+            identity_scale_in,
+            col_identity,
+            chunk_start_idx_writer,
+            out,
+            cu_window_seqlens,
+            windowed_q_offset,
+            kv_fwd_ctrl};
     }
 
     std::vector<uint32_t> compute_compile_time_args() const {
@@ -61,7 +87,8 @@ struct CBIds {
             max_B,
             sum_A,
             sum_B,
-            exp_max_diff};
+            exp_max_diff,
+            windowed_k_range};
     }
 };
 

@@ -40,7 +40,6 @@ union unpack_tilize_cfg_u
 
 // Number of rows for Unpack functions
 constexpr static std::uint32_t UNPACR_STRIDE_MAX_ROWS = 8;
-constexpr static std::uint32_t TRISC_ID               = 0;
 
 /**
  * Whether reprogramming OUT_DATA_FORMAT from buffer-descriptor \p unpack_src_format (L1) to
@@ -140,9 +139,17 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_quasar_unpack_reco
             return dst == DataFormat::UInt8;
 
         // -------------------------------------------------------------------------
-        // INT8 — INT8
+        // INT8 — INT8 / INT8_2x (2x-packed Src Reg storage; not Dest/SrcS)
         case DataFormat::Int8:
-            return dst == DataFormat::Int8;
+            switch (dst)
+            {
+                case DataFormat::Int8:
+                    return true;
+                case DataFormat::Int8_2x:
+                    return !unpack_to_dest;
+                default:
+                    return false;
+            }
 
         // -------------------------------------------------------------------------
         // INT16 — INT16

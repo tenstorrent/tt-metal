@@ -4,7 +4,7 @@
 
 """
 Nightly tests for ttnn.concat with INT32/UINT32 data types, covering all compute
-kernels that issue the MOVD2B instruction via transpose_wh_tile.
+kernels that issue the MOVD2B instruction via transpose_tile.
 
 Code paths exercised:
   Path A – permute_rm_program_factory + transpose_xw_rm_single_tile_size.cpp

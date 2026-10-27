@@ -33,6 +33,20 @@ inline bool fused_matmul_bias_row_broadcastable(const std::optional<const Tensor
     return shape[-2] == 1;
 }
 
+// Sharded out CB is the shard buffer, which holds the output of one batch. With B>1 the compute kernel would wait
+// forever for space for the second batch.
+inline void validate_block_sharded_output_batch(
+    bool output_is_sharded, uint32_t B, uint32_t per_core_M, uint32_t per_core_N) {
+    TT_FATAL(
+        !(output_is_sharded && B > 1),
+        "Sharded output is incompatible with batch > 1 (B={}). The output CB is backed by the shard buffer "
+        "which only holds per_core_M * per_core_N = {} tiles, but the kernel would produce B * per_core_M * per_core_N "
+        "= {} tiles without draining. Use fuse_batch=True.",
+        B,
+        per_core_M * per_core_N,
+        B * per_core_M * per_core_N);
+}
+
 uint32_t get_estimated_size_of_cbs(
     uint32_t per_core_M,
     uint32_t per_core_N,
@@ -48,7 +62,7 @@ uint32_t estimate_interm_tile_size(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     tt::tt_metal::DataType output_dtype);
 
-uint32_t get_max_l1_space(const tt::tt_metal::Tensor& input_tensor_a);
+uint32_t get_max_l1_space(const ttnn::Tensor& input_tensor_a);
 
 bool is_input_batched(const ttnn::Shape& shape);
 
@@ -203,6 +217,7 @@ inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType
     using ttnn::operations::unary::UnaryOpType;
     switch (opType) {
         case UnaryOpType::GELU: return KernelActivation::GELU;
+        case UnaryOpType::GELU_TANH: return KernelActivation::GELU_TANH;
         case UnaryOpType::TANH: return KernelActivation::TANH;
         case UnaryOpType::SILU: return KernelActivation::SILU;
         case UnaryOpType::RELU6: return KernelActivation::RELU6;
@@ -256,6 +271,12 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
             result.param0 = has_first ? static_cast<uint32_t>(params[0]) : 0;
             break;
 
+        case UnaryOpType::GELU_TANH:
+            result.type = KernelActivation::GELU_TANH;
+            // param0: 0 = accurate (FP32 tanh), any non-zero value = fast (BF16-grade); normalized like the unary path.
+            result.param0 = has_first && params[0] != 0.0f ? 1u : 0u;
+            break;
+
         case UnaryOpType::TANH:
             result.type = KernelActivation::TANH;
             // param0 is vector mode or fast mode
@@ -298,10 +319,18 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
 
         case UnaryOpType::SELU:
             result.type = KernelActivation::SELU;
-            // param0 is alpha (default 1.67326)
-            result.param0 = has_first ? std::bit_cast<uint32_t>(params[0]) : 0x3fd637bdu;
-            // param1 is lambda (default 1.05070)
-            result.param1 = has_second ? std::bit_cast<uint32_t>(params[1]) : 0x3f8674f5u;
+            // selu(x) is scale * x for x >= 0, and scale * alpha * (exp(x) - 1) for x < 0.
+            // selu_tile_pack takes the scale first and alpha second.
+            //
+            // Each default is the nearest float to the published SELU constant. Shown below as
+            // the published value and the exact value of the float it rounds to, which is what
+            // the bit patterns hold:
+            //   scale  1.0507009873554804934193349852946 -> 1.05070102214813232421875
+            //   alpha  1.6732632423543772848170429916717 -> 1.67326319217681884765625
+            // param0 is scale
+            result.param0 = has_first ? std::bit_cast<uint32_t>(params[0]) : 0x3f867d5fu;
+            // param1 is alpha
+            result.param1 = has_second ? std::bit_cast<uint32_t>(params[1]) : 0x3fd62d7du;
             break;
 
         case UnaryOpType::SOFTPLUS:
@@ -343,6 +372,39 @@ void validate_matmul_reuse_work_split(
 }  // namespace ttnn::operations::matmul::utilities
 
 namespace ttnn::prim::dram_sharded_helpers {
+struct DramBankReaderAssignment {
+    tt::tt_metal::CoreCoord worker_core;
+    uint32_t bank_id;
+    uint32_t worker_index;
+};
+
+void validate_num_workers_per_dram_bank(std::size_t workers_per_bank);
+
+// use_multicore_pipeline with num_workers_per_dram_bank >= 2 runs the multi-core pipeline
+// (create_program_dram_sharded_multicore_spec) when the call has no bias, no fused activation and no untilize_out, both
+// operands use 32x32 untransposed tiles, K is a whole number of tiles, A is in L1 and the output is L1 width-sharded
+// ROW_MAJOR; any other call, and every call without use_multicore_pipeline, keeps the single-reader program with its
+// multi-reader conditions.
+bool use_dram_sharded_multicore(
+    bool use_multicore_pipeline,
+    std::size_t workers_per_bank,
+    bool has_bias,
+    bool has_fused_activation,
+    bool untilize_out,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    uint32_t k_logical,
+    tt::tt_metal::BufferType a_buffer_type,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
+
+// Cores for the multi-core pipeline (num_workers_per_dram_bank >= 2): cores_per_bank logical worker cores
+// per bank for the first num_banks banks, each the nearest free core (Manhattan distance in logical
+// coordinates, ties to the same row first) to that bank's NOC-optimal worker, taken round-robin over
+// the banks so every bank gets its nearest core first. Only the per-bank optimal worker is queried
+// from the device, so the result is the same for every chip of a mesh.
+std::vector<std::vector<tt::tt_metal::CoreCoord>> get_dram_bank_adjacent_workers(
+    tt::tt_metal::distributed::MeshDevice& device, tt::tt_metal::NOC noc, uint32_t cores_per_bank, uint32_t num_banks);
+
 // This type of access pattern cannot be copied.
 // Treat it as a one off patch to restore functionality that
 // was adjusted to fix one P0 causing another P0.
@@ -350,14 +412,27 @@ namespace ttnn::prim::dram_sharded_helpers {
 tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord);
 
 void get_max_page_size_and_num_pages(
-    tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages);
+    const tt::tt_metal::distributed::MeshDevice& device,
+    uint32_t num_tiles,
+    uint32_t tile_size,
+    uint32_t& page_size,
+    uint32_t& num_pages);
 
-void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2, std::vector<CoreCoord>& commons);
+void move_common_entries(
+    std::vector<tt::tt_metal::CoreCoord>& v1,
+    std::vector<tt::tt_metal::CoreCoord>& v2,
+    std::vector<tt::tt_metal::CoreCoord>& commons);
 
 void get_optimal_dram_bank_to_reader_assignment(
-    tt::tt_metal::IDevice* device,
-    std::vector<CoreCoord>& all_worker_cores_ordered,
-    CoreRangeSet& all_worker_cores,
+    const tt::tt_metal::distributed::MeshDevice& device,
+    std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
+    tt::tt_metal::CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc);
+
+std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
+    tt::tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::NOC noc,
+    uint32_t workers_per_bank,
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores);
 
 }  // namespace ttnn::prim::dram_sharded_helpers

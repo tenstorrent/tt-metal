@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 
 // Blackhole-only: the math LLK lives only in the Blackhole llk_lib and indexer_score is a BH op.
@@ -22,19 +23,25 @@ namespace ckernel {
 // Blocked bcast-col MUL with dest-MAC head reduction (indexer_score gate-mul). Mechanism documented
 // canonically in _llk_math_bcast_cols_reuse_custom_ (llk_math_eltwise_binary_custom.h). Here: one
 // unpack context loads ONE SrcB (gate w[h]) + ct_dim SrcA tiles (qk for ct_dim consecutive cols of
-// head h, so cb_qk must be head-major). Reuses the SDPA blocked-sub unpack (op-agnostic). Pair with
-// mul_bcast_cols_init_short_custom.
+// head h, so cb_qk must be head-major). Reuses the SDPA blocked-sub unpack (op-agnostic). Honours
+// MATH_FIDELITY like mul_bcast_cols_init. Pair with mul_bcast_cols_init_short_custom.
 
-ALWI void mul_bcast_cols_init_short_custom(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void mul_bcast_cols_init_short_custom(
+    std::uint32_t icb0, std::uint32_t icb1, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_mul_bcast_cols_init_custom(icb0, icb1)));
-    UNPACK((llk_unpack_AB_sub_bcast_col_init_custom(icb0)));
+    MATH((llk_math_eltwise_binary_mul_bcast_cols_init_custom<MATH_FIDELITY>(icb0, icb1)));
+    UNPACK((llk_unpack_AB_sub_bcast_col_init_custom(icb0, icb1)));
 }
 
 // itile0 = base SrcA (qk) tile of head h's column run (ct_dim consecutive tiles); itile1 = w[h].
 ALWI void mul_tiles_bcast_cols_custom(
-    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t ct_dim) {
-    MATH((llk_math_eltwise_binary_mul_bcast_cols_custom(idst, ct_dim)));
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t itile0,
+    std::uint32_t itile1,
+    std::uint32_t idst,
+    std::uint32_t ct_dim) {
+    MATH((llk_math_eltwise_binary_mul_bcast_cols_custom<MATH_FIDELITY>(idst, ct_dim)));
     UNPACK((llk_unpack_AB_sub_bcast_col_custom(icb0, icb1, itile0, itile1, ct_dim)));
 }
 

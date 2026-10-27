@@ -47,20 +47,19 @@ void kernel_main() {
         const uint32_t row = start_row + i;
         const uint32_t logit_row_start = row * Wt;
 
-        // Read TILE_HEIGHT target indices for this tile row
-        cb_reserve_back(cb_target_idx, onetile);
-        uint32_t l1_target_write_addr = get_write_ptr(cb_target_idx);
-
-        auto [page, offset] = get_page_and_offset(row, tiled_H);
-        noc_async_read(target_addr_gen.get_noc_addr(page, offset), l1_target_write_addr, target_read_page_size);
-
         // Zero-initialize so out-of-shard targets produce 0.0.
         cb_reserve_back(cb_output_idx, onetile);
         uint32_t l1_output_write_addr = get_write_ptr(cb_output_idx);
         fill_zeros_async(noc, cb_output_idx, get_tile_size(cb_output_idx));
-        noc_async_read_barrier();
+
+        // Read TILE_HEIGHT target indices for this tile row
+        cb_reserve_back(cb_target_idx, onetile);
+        read_target_indices_page_clamped(
+            target_addr_gen, get_write_ptr(cb_target_idx), row, tiled_H, target_page_size, target_read_page_size);
+        cb_push_back(cb_target_idx, onetile);
         noc.write_zeros_l1_barrier();
 
+        cb_wait_front(cb_target_idx, onetile);
         auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(get_read_ptr(cb_target_idx));
 
         for (uint32_t h = 0U; h < TILE_HEIGHT; ++h) {

@@ -5,19 +5,56 @@
 # Blackhole LLK perf runner, shared by the 5 bh matrix groups in
 # tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
 #
-# Per slice: compile only this slice's items (producer), reset the board,
-# then measure (consumer). Slicing the producer keeps each item compiled
-# exactly once across the run (like main's --splits/--group) instead of
-# recompiling whole giant files in every group holding one of their slices
-# -- the over-compile that was timing the producer out before the consumer
-# ever ran. The per-slice `tt-smi -r 0` is the reset-between-tests fix this
-# branch exists for.
-#
-# Usage: run_llk_perf_blackhole.sh <group> <n_groups>
+# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_blackhole.sh <group> <n_groups>
+# Optional: LLK_PERF_PHASE=all|compile|run, LLK_PERF_COMPILE_WORKERS, LLK_PERF_DEBUG_SYMBOLS,
+# LLK_PERF_EXITFIRST, LLK_PERF_REPORT_TAG (JUnit name suffix). Defaults keep today's commands.
 set -euo pipefail
 
 GROUP="${1:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
 N_GROUPS="${2:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
+SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
+export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
+
+case "$SPEED_OF_LIGHT" in
+  true)
+    SPEED_OF_LIGHT_ARGS=(--speed-of-light)
+    ;;
+  false)
+    SPEED_OF_LIGHT_ARGS=()
+    ;;
+  *)
+    echo "SPEED_OF_LIGHT must be 'true' or 'false', got '$SPEED_OF_LIGHT'" >&2
+    exit 2
+    ;;
+esac
+
+PHASE="${LLK_PERF_PHASE:-all}"
+case "$PHASE" in
+  all|compile|run) ;;
+  *)
+    echo "LLK_PERF_PHASE must be 'all', 'compile' or 'run', got '$PHASE'" >&2
+    exit 2
+    ;;
+esac
+COMPILE_WORKERS="${LLK_PERF_COMPILE_WORKERS:-10}"
+
+case "${LLK_PERF_DEBUG_SYMBOLS:-true}" in
+  true) DEBUG_SYMBOL_ARGS=() ;;
+  false) DEBUG_SYMBOL_ARGS=(--no-debug-symbols) ;;
+  *)
+    echo "LLK_PERF_DEBUG_SYMBOLS must be 'true' or 'false', got '$LLK_PERF_DEBUG_SYMBOLS'" >&2
+    exit 2
+    ;;
+esac
+
+case "${LLK_PERF_EXITFIRST:-true}" in
+  true) EXITFIRST_ARGS=(-x) ;;
+  false) EXITFIRST_ARGS=() ;;
+  *)
+    echo "LLK_PERF_EXITFIRST must be 'true' or 'false', got '$LLK_PERF_EXITFIRST'" >&2
+    exit 2
+    ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/python_tests"
@@ -26,44 +63,22 @@ mkdir -p perf_data
 PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
 PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 
-# Slice-level greedy bin-pack with an adaptive target (see perf_bin_pack.py).
-# Emits this group's slices as file:group_idx:total_splits:items.
-ASSIGNMENTS=$(python3 "$SCRIPT_DIR/perf_bin_pack.py" "$GROUP" "$N_GROUPS")
-echo "Group ${GROUP}/${N_GROUPS} slices:"
-echo "$ASSIGNMENTS"
+REPORT="pytest-report-blackhole-${GROUP}${LLK_PERF_REPORT_TAG:-}"
+COMPILE_XML="${REPORT}-compile.xml"
+RUN_XML="${REPORT}-run.xml"
 
-while IFS=":" read -r FILE GIDX TOTAL ITEMS; do
-  [ -z "$FILE" ] && continue
-  tname="${FILE%.py}"
+if [[ "$PHASE" != run ]]; then
+  pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-producer -n "$COMPILE_WORKERS" -m "perf and not accuracy" --timeout=60 \
+    --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
+    --junitxml="$COMPILE_XML" .
+fi
+[[ "$PHASE" == compile ]] && exit 0
 
-  if [ "$TOTAL" = "1" ]; then
-    SPLIT_ARGS=""
-    REPORT_NAME="${tname}-run"
-  else
-    SPLIT_ARGS="--splits ${TOTAL} --group ${GIDX}"
-    REPORT_NAME="${tname}-s${GIDX}of${TOTAL}-run"
-  fi
-
-  pytest $PYTEST_COMPILE_EXTRA --speed-of-light --compile-producer -n 10 \
-    -m "perf" --timeout=60 \
-    $SPLIT_ARGS \
-    "$FILE"
-  tt-smi -r 0
-  pytest $PYTEST_RUN_EXTRA --speed-of-light --compile-consumer -n 15 -x \
-    -m "perf" --timeout=60 \
-    $SPLIT_ARGS \
-    --junitxml="pytest-report-blackhole-${GROUP}-${REPORT_NAME}.xml" \
-    "$FILE"
-done <<< "$ASSIGNMENTS"
-
-# Merge this group's per-slice run reports. Guard the glob with nullglob so an
-# early exit that produced no per-slice reports doesn't turn a real failure
-# into a confusing junitparser "file not found".
-shopt -s nullglob
-run_reports=(pytest-report-blackhole-${GROUP}-*-run.xml)
-shopt -u nullglob
-if [ "${#run_reports[@]}" -gt 0 ]; then
-  junitparser merge "${run_reports[@]}" pytest-report-blackhole-${GROUP}.xml
+pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 "${EXITFIRST_ARGS[@]}" -m "perf and not accuracy" --timeout=60 \
+  --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
+  --junitxml="$RUN_XML" .
+if [[ -f "$COMPILE_XML" ]]; then
+  junitparser merge "$COMPILE_XML" "$RUN_XML" "${REPORT}.xml"
 else
-  echo "No per-slice run reports for group ${GROUP}; skipping merge."
+  cp "$RUN_XML" "${REPORT}.xml"
 fi

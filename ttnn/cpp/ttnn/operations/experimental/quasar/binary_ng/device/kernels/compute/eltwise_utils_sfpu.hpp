@@ -7,46 +7,45 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "eltwise_utils_common.hpp"
 
 // Reads `per_core_block_size` tiles from cb_pre, runs the per-operand activation chain
 // on each tile in DST, and writes the results into cb_post — i.e. produces the
 // "activated" input that the downstream binary op consumes. cb_out is passed in only
 // so we can briefly retarget the packer at cb_post and then restore it to cb_out's
-// data format on the way out. SFPU variant: no unpacker srca reconfigure is needed —
-// the downstream binary SFPU op uses copy_tile_to_dst_init_short_with_dt to switch
-// formats itself.
-template <typename ActivationFn>
+// data format on the way out. SrcA switches from and returns to the physical-LHS
+// format established by startup and restored at the end of each binary chunk.
+template <typename DFBPre, typename DFBPost, typename DFBOut, typename ActivationFn>
 ALWI void preprocess_sfpu_impl(
-    CircularBuffer cb_pre,
-    CircularBuffer cb_post,
-    CircularBuffer cb_out,
-    uint32_t per_core_block_size,
-    ActivationFn&& process_activations) {
+    DFBPre& cb_pre, DFBPost& cb_post, DFBOut& cb_out, uint32_t per_core_block_size, ActivationFn&& process_activations) {
     using namespace ckernel;
 
-    pack_reconfig_data_format(/*old*/ cb_out.get_cb_id(), /*new*/ cb_post.get_cb_id());
+    reconfig_data_format_srca(/*old*/ QSR_BINARY_SRCA_FORMAT_CB, /*new*/ cb_pre.get_id());
+    pack_reconfig_data_format(/*old*/ cb_out.get_id(), /*new*/ cb_post.get_id());
 
     cb_pre.wait_front(per_core_block_size);
     cb_post.reserve_back(per_core_block_size);
 
     tile_regs_acquire();
     for (uint32_t i = 0; i < per_core_block_size; ++i) {
-        copy_tile_to_dst_init_short(cb_pre.get_cb_id());
-        copy_tile(cb_pre.get_cb_id(), i, i);
+        copy_init(cb_pre.get_id());
+        copy_tile(cb_pre.get_id(), i, i);
         process_activations(i);
     }
     tile_regs_commit();
 
     tile_regs_wait();
     for (uint32_t i = 0; i < per_core_block_size; ++i) {
-        pack_tile(i, cb_post.get_cb_id());
+        pack_tile(i, cb_post.get_id());
     }
     tile_regs_release();
 
     cb_pre.pop_front(per_core_block_size);
     cb_post.push_back(per_core_block_size);
 
-    pack_reconfig_data_format(/*old*/ cb_post.get_cb_id(), /*new*/ cb_out.get_cb_id());
+    reconfig_data_format_srca(/*old*/ cb_pre.get_id(), /*new*/ QSR_BINARY_SRCA_FORMAT_CB);
+    pack_reconfig_data_format(/*old*/ cb_post.get_id(), /*new*/ cb_out.get_id());
 }
 
 // Dispatcher: per-operand activation lists are configured at compile time via host-side

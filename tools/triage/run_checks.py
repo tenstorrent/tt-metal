@@ -42,6 +42,7 @@ from triage import (
     recurse_field,
     run_script,
     log_warning_device,
+    log_warning_location,
     log_warning_risc,
     create_progress,
     log_check,
@@ -52,6 +53,7 @@ from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from ttexalens.exceptions import RiscHaltError
+from ttexalens.hardware.risc_debug import RiscDebug
 import utils
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 
@@ -61,7 +63,26 @@ script_config = ScriptConfig(
 
 # Block and core types that scripts return.
 BlockType: TypeAlias = Literal["idle_eth", "active_eth", "tensix", "eth", "dram"]
-CoreType: TypeAlias = Literal["brisc", "trisc0", "trisc1", "trisc2", "ncrisc", "erisc", "erisc0", "erisc1", "drisc"]
+CoreType: TypeAlias = Literal[
+    "brisc",
+    "trisc0",
+    "trisc1",
+    "trisc2",
+    "trisc3",
+    "ncrisc",
+    "erisc",
+    "erisc0",
+    "erisc1",
+    "drisc",
+    "rocket0",
+    "rocket1",
+    "rocket2",
+    "rocket3",
+    "rocket4",
+    "rocket5",
+    "rocket6",
+    "rocket7",
+]
 
 BLOCK_TYPES: list[BlockType] = list(get_args(BlockType))
 CORE_TYPES: set[CoreType] = set(get_args(CoreType))
@@ -111,6 +132,7 @@ class PerBlockCheckResult(PerDeviceCheckResult):
 @dataclass
 class PerCoreCheckResult(PerBlockCheckResult):
     risc_name: str = triage_field("RiscV")
+    neo_id: int | None = triage_field("NEO")
 
 
 def get_devices(
@@ -135,13 +157,13 @@ def get_devices(
         metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
 
         if len(metal_device_ids) == 0:
-            # Live "in use" list is empty — most often because firmware init failed and
+            # Live "in use" list is empty - most often because firmware init failed and
             # devices were torn down. Fall back to the SystemMesh's configured local set.
             system_mesh = inspector_data.getSystemMesh().systemMesh
             metal_device_ids = [m.localChipId for m in system_mesh.mappedDevices if m.isLocal]
             if len(metal_device_ids) > 0:
                 utils.WARN(
-                    f"  No devices in use found in inspector data — firmware init likely failed. "
+                    f"  No devices in use found in inspector data - firmware init likely failed. "
                     f"Falling back to the {len(metal_device_ids)} device(s) configured in the System Mesh."
                 )
             else:
@@ -214,6 +236,16 @@ def get_block_locations(
                         )
                     else:
                         block_locations[device][block_type] = _exalens_block_locations(device, block_type)
+                # Metal reports the DRAM cores it manages (TRANSLATED coords), excluding the
+                # syseng-owned NOC0 worker endpoints (which serve CMFW DRAM telemetry and run no
+                # DRISC firmware). Prefer that authoritative list over the exalens enumeration, which
+                # would include the NOC0 endpoints and dump garbage from them. TRANSLATED coords avoid
+                # the UMD-vs-metal logical-DRAM numbering mismatch.
+                dram_cores = chip_blocks_list[i].dramCores
+                if len(dram_cores) > 0:
+                    block_locations[device]["dram"] = [
+                        OnChipCoordinate(c.x, c.y, "translated", device, "dram") for c in dram_cores
+                    ]
 
     # Exalens fallback for any device Inspector didn't cover (no inspector at all, or
     # Inspector's getBlocksByType is missing this device).
@@ -223,7 +255,7 @@ def get_block_locations(
         for block_type in BLOCK_TYPES:
             block_locations[device][block_type] = _exalens_block_locations(device, block_type)
 
-    # Keep only the requested locations. Only logical coordinates are accepted — physical (noc0)
+    # Keep only the requested locations. Only logical coordinates are accepted - physical (noc0)
     # layout shifts with harvesting, so a logical string maps to the same core on every device.
     if locations:
         for loc in locations:
@@ -370,7 +402,13 @@ class RunChecks:
                 try:
                     for block_type in block_types_to_check:
                         for location in self.block_locations[device][block_type]:
-                            check_result = check(location)
+                            try:
+                                check_result = check(location)
+                            except TimeoutDeviceRegisterError:
+                                raise  # run_per_device_check marks the whole device broken
+                            except Exception as e:
+                                log_warning_location(location, f"Skipping: {e}")
+                                check_result = None
                             progress.advance(device_task)
                             # Use the common result collection helper
                             self._collect_results(
@@ -390,7 +428,7 @@ class RunChecks:
 
     def run_per_core_check(
         self,
-        check: Callable[[OnChipCoordinate, CoreType], object],
+        check: Callable[[RiscDebug], object],
         block_filter: list[str] | str | None = None,
         core_filter: list[str] | str | None = None,
         print_broken_cores: bool = True,
@@ -411,17 +449,18 @@ class RunChecks:
             result: list[PerCoreCheckResult] = []
 
             # Get the block and its available RISC cores
-            noc_block = location._device.get_block(location)
-            risc_names = noc_block.risc_names
+            noc_block = location.device.get_block(location)
 
-            for risc_name in risc_names:
+            for risc_debug in noc_block.all_riscs:
+                risc_name = risc_debug.risc_location.risc_name
+                neo_id = risc_debug.risc_location.neo_id
                 # Skipping cores we do not want to check
                 if risc_name not in cores_to_check:
                     continue
                 try:
-                    check_result = check(location, risc_name)
+                    check_result = check(risc_debug)
                 except RiscHaltError as e:
-                    self._session.add_broken_core(location, risc_name)
+                    self._session.add_broken_core(risc_debug.risc_location)
                     if print_broken_cores:
                         log_warning_risc(risc_name, location, f"Broken: {e}.")
                     continue
@@ -434,9 +473,10 @@ class RunChecks:
                     result,
                     check_result,
                     PerCoreCheckResult,
-                    device_description=DeviceDescription(location._device, self._use_unique_id),
+                    device_description=DeviceDescription(location.device, self._use_unique_id),
                     location=location,
                     risc_name=risc_name,
+                    neo_id=neo_id,
                 )
 
             return result if len(result) > 0 else None

@@ -38,8 +38,9 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -53,14 +54,20 @@ enum watcher_features_t {
     SanitizeNOCAlignmentL1Read,
     SanitizeNOCZeroL1Write,
     SanitizeNOCMailboxWrite,
+    SanitizeNOCMailboxWriteUncachedAlias,
     SanitizeNOCInlineWriteDram,
     SanitizeNOCLinkedTransaction,
     SanitizeL1Overflow,
+    SanitizeL1OverflowStraddle,
     SanitizeEthSrcL1Overflow,
     SanitizeEthDestL1Overflow,
     SanitizeNOCMulticastInvalidRange,
     SanitizeNOCWriteWithStateBadCoord,
+    SanitizeNOCWriteWithStateAnyLenBadCoord,
     SanitizeNOCInlineWriteFromState,
+    SanitizeNOCInlineWriteWithState,
+    SanitizeNOCInvalidTxnId,
+    SanitizeNOCReadToRegAddr,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -107,13 +114,44 @@ void RunTestOnCore(
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
 
-    // IDLE_ETH cores only support SD (FD not yet implemented)
-    // TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (TODO: Remove once FD enabled on Quasar)
-    if (fixture->IsSlowDispatch() && !is_idle_eth_core && !is_quasar) {
-        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
+    if (tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
+        GTEST_SKIP();
+    }
+    // For Quasar when using ATT a bad coordinate never reaches the sanitizer: the address
+    // backend traps on it first. So the test about the coordinate itself is skipped, the
+    // inline-write-to-DRAM test addresses DRAM bank 0 instead of the tile coordinate, and the stateful
+    // and inline tests below target the buffer's real core with a bad offset instead.
+    const bool att = is_quasar && tt::tt_metal::MetalContext::instance().rtoptions().get_noc_att_map().has_value();
+    if (att && feature == SanitizeNOCAddress) {
+        GTEST_SKIP() << "Coordinates outside the ATT map trap in the address backend before the sanitizer runs";
+    }
+
+    // Non-IDLE_ETH cores (TENSIX/ACTIVE_ETH, all archs) run under both fast and slow dispatch.
+    // IDLE_ETH cores only support slow dispatch (FD not yet implemented for them).
+    if (is_idle_eth_core && !fixture->IsSlowDispatch()) {
+        GTEST_SKIP() << "IDLE_ETH core tests only run under Slow Dispatch";
     }
     if (multi_dm_race && !is_quasar) {
         GTEST_SKIP() << "Multi-DM race test only runs on Quasar";
+    }
+    // The Quasar NOC shifts the data so transfers don't need to be aligned; a misaligned transfer is
+    // legal there and there is nothing to flag. These tests stay valid on WH/BH where alignment is
+    // enforced.
+    if ((feature == SanitizeNOCAlignmentL1Write || feature == SanitizeNOCAlignmentL1Read) && is_quasar) {
+        GTEST_SKIP() << "Quasar NOC has no L1 alignment restriction; misaligned transfers are legal";
+    }
+    // Both exercise Quasar's uncached L1 alias, which only exists on Quasar DM cores.
+    if ((feature == SanitizeNOCMailboxWriteUncachedAlias || feature == SanitizeL1OverflowStraddle) &&
+        (!is_quasar || is_eth_core)) {
+        GTEST_SKIP() << "Uncached-alias tests only apply to Quasar DM cores";
+    }
+    // Invalid txn-id sanitization is exercised via the Metal 2.0 Noc API on TENSIX only.
+    if (feature == SanitizeNOCInvalidTxnId && is_eth_core) {
+        GTEST_SKIP() << "Invalid txn-id sanitize test is TENSIX-only";
+    }
+    // A read that lands in a local register is rejected on Quasar.
+    if (feature == SanitizeNOCReadToRegAddr && (!is_quasar || is_eth_core)) {
+        GTEST_SKIP() << "Read-into-register sanitize test is Quasar DM-only";
     }
 
     // TENSIX cores use the Metal 2.0 variant; ETH cores stay on the legacy kernel/API.
@@ -132,7 +170,7 @@ void RunTestOnCore(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     CoreCoord virtual_core;
@@ -171,7 +209,13 @@ void RunTestOnCore(
 
     distributed::DeviceLocalBufferConfig local_config{.page_size = buffer_size, .buffer_type = config_buffer_type};
     distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
-    auto input_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+    // The kernel reads the input buffer by tile coordinates, which an ATT map cannot resolve for a DRAM tile.
+    // Under ATT only the output buffer (the inline write's destination) moves to DRAM.
+    distributed::DeviceLocalBufferConfig input_local_config = local_config;
+    if (att) {
+        input_local_config.buffer_type = tt::tt_metal::BufferType::L1;
+    }
+    auto input_buffer = distributed::MeshBuffer::create(buffer_config, input_local_config, mesh_device.get());
     uint32_t input_buffer_addr = input_buffer->address();
 
     auto output_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
@@ -226,16 +270,27 @@ void RunTestOnCore(
         }
         // (gen1 path: no CTA bindings needed; the kernel runs on exactly one DM processor.)
 
-        // Provide both gen1 and gen2 DM configs so the same KernelSpec runs on either arch; the
-        // runtime selects the one matching the current architecture.
+        // Under SD the kernel signals completion via RUN_MSG_DONE, not the FD notify path (which wedges the NOC).
+        if (fixture->IsSlowDispatch()) {
+            defines["WATCHER_KERNEL_SLOW_DISPATCH"] = "1";
+        }
+
+        // Select the DM config variant matching the current architecture (Gen2 on Quasar, Gen1 otherwise).
         auto gen1_processor =
             use_ncrisc ? tt::tt_metal::DataMovementProcessor::RISCV_1 : tt::tt_metal::DataMovementProcessor::RISCV_0;
         auto gen1_noc = use_ncrisc ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default;
-        experimental::DataMovementHardwareConfig dm_cfg{
-            .gen1_config =
-                experimental::DataMovementHardwareConfig::Gen1Config{.processor = gen1_processor, .noc = gen1_noc},
-            .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-        };
+        experimental::DataMovementHardwareConfig dm_cfg;
+        if (is_quasar) {
+            dm_cfg = experimental::DataMovementHardwareConfig{};
+        } else {
+            dm_cfg = experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = gen1_processor,
+                        .noc = gen1_noc,
+                    },
+            };
+        }
         uint32_t num_threads = is_quasar ? 6u : 1u;
         if (!is_quasar) {
             noc = static_cast<int>(gen1_noc);
@@ -265,7 +320,10 @@ void RunTestOnCore(
                       "mcast_dst_end_x",
                       "mcast_dst_end_y",
                       "use_write_with_state",
-                      "use_inline_dw_write_from_state"}},
+                      "use_inline_dw_write_from_state",
+                      "use_inline_dw_write_with_state",
+                      "invalid_txn_id",
+                      "use_dram_bank_dst"}},
             .hw_config = dm_cfg,
         };
         experimental::WorkUnitSpec wu{
@@ -301,16 +359,24 @@ void RunTestOnCore(
     bool use_multicast_semaphore_inc = false;
     uint32_t mcast_dst_end_x = 0;
     uint32_t mcast_dst_end_y = 0;
-    bool use_write_with_state = false;
+    // 0: plain write; 1: one-packet stateful write; 2: any-length stateful write (see kernel).
+    uint32_t use_write_with_state = 0;
     bool use_inline_dw_write_from_state = false;
+    bool use_inline_dw_write_with_state = false;
+    // WH/BH expose trids [0,15]. Quasar reserves [8,31] for DFB implicit sync,
+    // leaving user kernels [0,7].
+    const uint32_t k_max_user_txn_id = is_quasar ? 7 : 15;
+    const uint32_t k_invalid_txn_id = k_max_user_txn_id + 1;
+    uint32_t invalid_txn_id = 0;
+    bool use_dram_bank_dst = false;
     switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
             output_buf_noc_xy.y = 18;
             break;
         case SanitizeNOCAlignmentL1Write:
-            output_buffer_addr++;  // This is illegal because reading DRAM->L1 needs DRAM alignment
-                                   // requirements (32 byte aligned).
+            output_buffer_addr++;  // Misaligned L1 write: on WH/BH the NoC requires
+                                   // NOC_L1_WRITE_ALIGNMENT_BYTES alignment.
             buffer_size--;
             break;
         case SanitizeNOCAlignmentL1Read:
@@ -322,9 +388,25 @@ void RunTestOnCore(
             // This is illegal because we'd be writing to the mailbox memory
             buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX);
             break;
-        case SanitizeNOCInlineWriteDram: use_inline_dw_write = true; break;
+        case SanitizeNOCMailboxWriteUncachedAlias:
+            // Quasar-only (skipped at the top otherwise): the mailbox is aliased into the uncached L1
+            // window (upper 4 MB, same physical memory as the cached view). Target the alias so a NoC
+            // access landing in the mailbox through it is still flagged. Complements
+            // SanitizeNOCMailboxWrite, which covers the cached view.
+            buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX) +
+                          hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+            break;
+        case SanitizeNOCInlineWriteDram:
+            use_inline_dw_write = true;
+            // Under ATT the destination is addressed as DRAM bank 0.
+            use_dram_bank_dst = att;
+            break;
         case SanitizeNOCLinkedTransaction: bad_linked_transaction = true; break;
         case SanitizeL1Overflow: l1_overflow_addr = 0xDDDDDDDD; break;
+        case SanitizeL1OverflowStraddle:
+            // 4-byte access starting 2 bytes below the top of L1, straddling the cached/uncached-alias seam.
+            l1_overflow_addr = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - 2;
+            break;
         case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
         case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
         case SanitizeNOCMulticastInvalidRange: {
@@ -359,6 +441,14 @@ void RunTestOnCore(
             break;
         }
         case SanitizeNOCWriteWithStateBadCoord:
+            if (att) {
+                // Stateful write to the buffer's real core at offset 0: the mailboxes. The bad coordinate
+                // of the XY variant would trap in the ATT address backend before the sanitizer runs.
+                output_buffer_addr = 0;
+                buffer_size = 32;
+                use_write_with_state = 1;
+                break;
+            }
             // Stateful write to a non-existent core. The destination coordinate lives in NOC_RET_ADDR; a
             // sanitizer that mistakenly read NOC_TARG_ADDR would instead see the sender's own (valid) coordinate
             // and fail to flag the bad target. The zero destination offset keeps the failure deterministic
@@ -367,16 +457,57 @@ void RunTestOnCore(
             output_buf_noc_xy.y = 18;
             output_buffer_addr = 0;
             buffer_size = 32;
-            use_write_with_state = true;
+            use_write_with_state = 1;
+            break;
+        case SanitizeNOCWriteWithStateAnyLenBadCoord:
+            if (att) {
+                output_buffer_addr = 0;
+                buffer_size = 32;
+                use_write_with_state = 2;
+                break;
+            }
+            // Same bad coordinate through the any-length stateful path. Any-len set_state does not program
+            // AT_LEN, so a sanitizer that read the size back from the command buffer would report a 0-byte
+            // transfer (Quasar RoCC) and the expected "tried to unicast write <buffer_size> bytes" would not match.
+            output_buf_noc_xy.x = 26;
+            output_buf_noc_xy.y = 18;
+            output_buffer_addr = 0;
+            buffer_size = 32;
+            use_write_with_state = 2;
             break;
         case SanitizeNOCInlineWriteFromState:
+            if (att) {
+                // The buffer's real core with an offset one past its L1: the state is read back from the
+                // command buffer as a whole ATT operand and the offset check fires.
+                output_buffer_addr = device->l1_size_per_core();
+                use_inline_dw_write_from_state = true;
+                break;
+            }
             // Bad destination coordinate, but keep the (nonzero) destination offset: this exercises
-            // DEBUG_SANITIZE_NOC_ADDR_FROM_STATE the way cq_noc_inline_dw_write_with_state does, and the
-            // reported offset discriminates the low-bits bug (the fixed sanitizer reports the real offset,
-            // whereas dropping NOC_TARG_ADDR_LO would report offset 0).
+            // DEBUG_SANITIZE_NOC_ADDR_FROM_STATE after noc_inline_dw_write_set_state. The reported offset
+            // discriminates low-bits bugs: dropping NOC_TARG_ADDR_LO on tt-1xx or NOC_RET_ADDR_LO on tt-2xx
+            // would report offset 0 instead of the real destination offset.
             output_buf_noc_xy.x = 26;
             output_buf_noc_xy.y = 18;
             use_inline_dw_write_from_state = true;
+            break;
+        case SanitizeNOCInlineWriteWithState:
+            if (hal.get_arch() == tt::ARCH::BLACKHOLE) {
+                GTEST_SKIP() << "cq_noc_inline_dw_write_with_state-style helper is not exposed on Blackhole";
+            }
+            if (att) {
+                output_buffer_addr = device->l1_size_per_core();
+            } else {
+                output_buf_noc_xy.x = 26;
+                output_buf_noc_xy.y = 18;
+            }
+            use_inline_dw_write_with_state = true;
+            break;
+        case SanitizeNOCInvalidTxnId: invalid_txn_id = k_invalid_txn_id; break;
+        case SanitizeNOCReadToRegAddr:
+            // The kernel's first NOC read lands buffer_size bytes at buffer_addr: point it at a local register.
+            buffer_addr = hal.get_noc_encoding_reg();  // the NOC node-id register
+            buffer_size = 4;
             break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -402,51 +533,50 @@ void RunTestOnCore(
         mcast_dst_end_x,
         mcast_dst_end_y,
         use_write_with_state,
-        use_inline_dw_write_from_state};
+        use_inline_dw_write_from_state,
+        use_inline_dw_write_with_state,
+        invalid_txn_id,
+        use_dram_bank_dst};
 
     if (is_eth_core) {
         // ETH cores still go through the legacy API.
         tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
     } else {
+        const experimental::NodeCoord node{core};
         experimental::ProgramRunArgs params;
         params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_COPY_KERNEL_NAME,
-            .runtime_arg_values =
-                {{experimental::NodeCoord{core},
-                  {{"local_buffer_addr", buffer_addr},
-                   {"buffer_src_addr", input_buffer_addr},
-                   {"src_noc_x", input_buf_noc_xy.x},
-                   {"src_noc_y", input_buf_noc_xy.y},
-                   {"buffer_dst_addr", output_buffer_addr},
-                   {"dst_noc_x", output_buf_noc_xy.x},
-                   {"dst_noc_y", output_buf_noc_xy.y},
-                   {"buffer_size", buffer_size},
-                   {"use_inline_dw_write", use_inline_dw_write},
-                   {"bad_linked_transaction", bad_linked_transaction},
-                   {"l1_overflow_addr", l1_overflow_addr},
-                   {"eth_src_overflow_addr", eth_src_overflow_addr_words},
-                   {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
-                   {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
-                   {"mcast_dst_end_x", mcast_dst_end_x},
-                   {"mcast_dst_end_y", mcast_dst_end_y},
-                   {"use_write_with_state", use_write_with_state},
-                   {"use_inline_dw_write_from_state", use_inline_dw_write_from_state}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"local_buffer_addr", buffer_addr},
+                 {"buffer_src_addr", input_buffer_addr},
+                 {"src_noc_x", input_buf_noc_xy.x},
+                 {"src_noc_y", input_buf_noc_xy.y},
+                 {"buffer_dst_addr", output_buffer_addr},
+                 {"dst_noc_x", output_buf_noc_xy.x},
+                 {"dst_noc_y", output_buf_noc_xy.y},
+                 {"buffer_size", buffer_size},
+                 {"use_inline_dw_write", use_inline_dw_write},
+                 {"bad_linked_transaction", bad_linked_transaction},
+                 {"l1_overflow_addr", l1_overflow_addr},
+                 {"eth_src_overflow_addr", eth_src_overflow_addr_words},
+                 {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
+                 {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
+                 {"mcast_dst_end_x", mcast_dst_end_x},
+                 {"mcast_dst_end_y", mcast_dst_end_y},
+                 {"use_write_with_state", use_write_with_state},
+                 {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
+                 {"use_inline_dw_write_with_state", use_inline_dw_write_with_state},
+                 {"invalid_txn_id", invalid_txn_id},
+                 {"use_dram_bank_dst", use_dram_bank_dst}}),
         }};
         experimental::SetProgramRunArgs(program, params);
     }
     workload.add_program(device_range, std::move(program));
 
-    // Run the kernel, expect an exception here
-    try {
-        fixture->RunProgram(mesh_device, workload);
-    } catch (std::runtime_error& e) {
-        std::string expected =
-            "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
-        expected += MetalContext::instance().watcher_server()->log_file_name();
-        const std::string error = std::string(e.what());
-        log_info(tt::LogTest, "Caught exception (one is expected in this test)");
-        EXPECT_TRUE(error.find(expected) != std::string::npos);
-    }
+    // Run the kernel; its illegal NoC transaction trips watcher test mode. The watcher-log check below
+    // is the real verification.
+    fixture->RunProgramExpectingWatcherError(mesh_device, workload);
 
     // We should be able to find the expected watcher error in the log as well.
     std::string expected;
@@ -468,7 +598,29 @@ void RunTestOnCore(
     switch (feature) {
         // Stateful write to a bad coordinate reports the same "did not map to any known core" error as a plain
         // bad-coordinate write; the destination coordinate is reconstructed from NOC_RET_ADDR state registers.
+        // The any-length variant must also report the real byte count (size is not in cmd-buf state).
         case SanitizeNOCWriteWithStateBadCoord:
+        case SanitizeNOCWriteWithStateAnyLenBadCoord:
+            if (att) {
+                expected = fmt::format(
+                    "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
+                    "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
+                    "overwrites mailboxes).",
+                    device->id(),
+                    core_name,
+                    core.x,
+                    core.y,
+                    virtual_core.x,
+                    virtual_core.y,
+                    risc_name,
+                    noc,
+                    buffer_size,
+                    buffer_addr,
+                    output_core_virtual_coords.str(),
+                    output_buffer_addr);
+                break;
+            }
+            [[fallthrough]];
         case SanitizeNOCAddress:
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
@@ -542,6 +694,7 @@ void RunTestOnCore(
                 input_core_virtual_coords,
                 output_buffer_addr);
         } break;
+        case SanitizeNOCMailboxWriteUncachedAlias:
         case SanitizeNOCMailboxWrite: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read {} "
@@ -563,8 +716,8 @@ void RunTestOnCore(
         case SanitizeNOCInlineWriteDram: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write 4 bytes "
-                "from local L1[{:#08x}] to DRAM core w/ virtual coords {} DRAM[addr=0x{:08x}] (inline dw writes do not "
-                "support DRAM destination addresses).",
+                "from local L1[{:#08x}] to DRAM core w/ virtual coords {}{} DRAM[addr=0x{:08x}] (inline dw writes do "
+                "not support DRAM destination addresses).",
                 device->id(),
                 core_name,
                 core.x,
@@ -574,6 +727,7 @@ void RunTestOnCore(
                 risc_name,
                 0,
                 output_core_virtual_coords.str(),
+                att ? " (bank 0)" : "",
                 output_buffer_addr);
         } break;
         case SanitizeNOCLinkedTransaction: {
@@ -594,6 +748,7 @@ void RunTestOnCore(
                 output_core_virtual_coords.str(),
                 output_buffer_addr);
         } break;
+        case SanitizeL1OverflowStraddle:
         case SanitizeL1Overflow: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} core overflowed L1 with access to {:#x} "
@@ -633,6 +788,25 @@ void RunTestOnCore(
                 (eth_dest_overflow_addr_words << 4));
         } break;
         case SanitizeNOCInlineWriteFromState:
+        case SanitizeNOCInlineWriteWithState:
+            if (att) {
+                expected = fmt::format(
+                    "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read 4 "
+                    "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
+                    "address overflow).",
+                    device->id(),
+                    core_name,
+                    core.x,
+                    core.y,
+                    virtual_core.x,
+                    virtual_core.y,
+                    risc_name,
+                    noc,
+                    0,  // l1_addr is 0 for address-only (FROM_STATE) sanitization
+                    output_core_virtual_coords.str(),
+                    output_buffer_addr);
+                break;
+            }
             // Inline dw write sanitized straight from the command-buffer state (DEBUG_SANITIZE_NOC_ADDR_FROM_STATE
             // uses read semantics with l1_addr 0). The destination coordinate is invalid; [addr=...] is the
             // reconstructed destination offset, which must be the real offset rather than 0.
@@ -675,6 +849,39 @@ void RunTestOnCore(
                 mcast_end_coord.str(),
                 output_buffer_addr);
         } break;
+        case SanitizeNOCInvalidTxnId: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} used invalid NoC transaction id {} "
+                "(exceeds max {}).",
+                device->id(),
+                core_name,
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                k_invalid_txn_id,
+                k_max_user_txn_id);
+        } break;
+        case SanitizeNOCReadToRegAddr: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read {} "
+                "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC read lands "
+                "in a local register; on Quasar the NIU can strand the response and stall L1 writes, reads must land "
+                "in L1).",
+                device->id(),
+                core_name,
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                noc,
+                buffer_size,
+                buffer_addr,
+                input_core_virtual_coords,
+                input_buffer_addr);
+        } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -713,28 +920,11 @@ void RunTestOnCore(
     }
 }
 
-void RunTestEth(
-    MeshWatcherFixture* fixture,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    watcher_features_t feature) {
-    auto* device = mesh_device->get_devices()[0];
-    if (fixture->IsSlowDispatch()) {
-        GTEST_SKIP();
-    }
-    // Run on the first ethernet core (if there are any).
-    if (device->get_active_ethernet_cores(true).empty()) {
-        log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
-        GTEST_SKIP();
-    }
-    CoreCoord core = *(device->get_active_ethernet_cores(true).begin());
-    RunTestOnCore(fixture, mesh_device, core, true, feature);
-}
-
 void RunTestIEth(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     watcher_features_t feature) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     // Run on the first ethernet core (if there are any).
     if (device->get_inactive_ethernet_cores().empty()) {
         log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
@@ -746,14 +936,13 @@ void RunTestIEth(
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
 void CheckHostSanitization(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto* device = mesh_device->get_devices()[0];
     // Try reading from a core that doesn't exist
     constexpr CoreCoord core = {99, 99};
     uint64_t addr = 0;
     uint32_t sz_bytes = 4;
     try {
-        [[maybe_unused]] auto data =
-            tt::tt_metal::MetalContext::instance().get_cluster().read_core(device->id(), core, addr, sz_bytes);
+        [[maybe_unused]] auto data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            mesh_device->get_device_ids()[0], core, addr, sz_bytes);
     } catch (std::runtime_error& e) {
         const std::string expected = fmt::format("Host watcher: bad {} NOC coord {}\n", "read", core.str());
         const std::string error = std::string(e.what());
@@ -801,6 +990,23 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCAlignmentL1ReadNCrisc) {
         this->devices_[0]);
 }
 
+// Quasar relaxes NoC transfer alignment to 1B (misaligned transfers are legal, so the watcher can't
+// flag them) while allocation alignment stays at the physical floor. Guards against regressing either.
+TEST_F(MeshWatcherFixture, TensixTestWatcherQuasarAlignmentContract) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (hal.get_arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Relaxed NoC alignment is Quasar-only";
+    }
+    // NoC transfer alignment relaxed to 1B.
+    EXPECT_EQ(hal.get_read_alignment(HalMemType::L1), 1u);
+    EXPECT_EQ(hal.get_write_alignment(HalMemType::L1), 1u);
+    EXPECT_EQ(hal.get_read_alignment(HalMemType::DRAM), 1u);
+    EXPECT_EQ(hal.get_write_alignment(HalMemType::DRAM), 1u);
+    // Allocation alignment stays at the physical floor.
+    EXPECT_EQ(hal.get_alignment(HalMemType::L1), 16u);
+    EXPECT_EQ(hal.get_alignment(HalMemType::DRAM), 64u);
+}
+
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCZeroL1Write) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -819,6 +1025,15 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCMailboxWrite) {
         this->devices_[0]);
 }
 
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCMailboxWriteUncachedAlias) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCMailboxWriteUncachedAlias);
+        },
+        this->devices_[0]);
+}
+
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteDram) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -828,26 +1043,11 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteDram) {
         this->devices_[0]);
 }
 
-TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeEth) {
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInvalidTxnId) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-            RunTestEth(fixture, mesh_device, SanitizeNOCAddress);
-        },
-        this->devices_[0]);
-}
-
-TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeNOCMailboxWrite) {
-    this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-            RunTestEth(fixture, mesh_device, SanitizeNOCMailboxWrite);
-        },
-        this->devices_[0]);
-}
-
-TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeNOCInlineWriteDram) {
-    this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-            RunTestEth(fixture, mesh_device, SanitizeNOCInlineWriteDram);
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCInvalidTxnId);
         },
         this->devices_[0]);
 }
@@ -894,26 +1094,11 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeL1Overflow) {
         this->devices_[0]);
 }
 
-TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeL1Overflow) {
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeL1OverflowStraddle) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-            RunTestEth(fixture, mesh_device, SanitizeL1Overflow);
-        },
-        this->devices_[0]);
-}
-
-TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeEthSrcL1Overflow) {
-    this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-            RunTestEth(fixture, mesh_device, SanitizeEthSrcL1Overflow);
-        },
-        this->devices_[0]);
-}
-
-TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeEthDestL1Overflow) {
-    this->RunTestOnDevice(
-        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-            RunTestEth(fixture, mesh_device, SanitizeEthDestL1Overflow);
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeL1OverflowStraddle);
         },
         this->devices_[0]);
 }
@@ -940,16 +1125,38 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCWriteWithState) {
         this->devices_[0]);
 }
 
-// Regression test for the inline-dw-write NOC sanitizer, exercised the way cq_noc_inline_dw_write_with_state
-// does: the destination is programmed into the WR_REG command buffer and then sanitized via
-// DEBUG_SANITIZE_NOC_ADDR_FROM_STATE. That macro had dropped NOC_TARG_ADDR_LO (the destination offset), so it
-// reconstructed offset 0; this test programs a nonzero offset and checks the reported [addr=...] is the real
-// offset, not 0.
+// Same through the any-length stateful path (default max_page_size). set_async_write_state does not program
+// AT_LEN there, so the sanitizer has to use the size passed to async_write_with_state; reading it back from
+// the command buffer reported a 0-byte transfer on Quasar RoCC and this test's byte count would not match.
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCWriteWithStateAnyLen) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCWriteWithStateAnyLenBadCoord);
+        },
+        this->devices_[0]);
+}
+
+// Regression test for the inline-dw-write NOC sanitizer, exercised through noc_inline_dw_write_set_state:
+// the destination is programmed into the inline command buffer and then sanitized via
+// DEBUG_SANITIZE_NOC_ADDR_FROM_STATE.
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteFromState) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCInlineWriteFromState);
+        },
+        this->devices_[0]);
+}
+
+// Regression test for the inline-dw-write NOC sanitizer, exercised the way cq_noc_inline_dw_write_with_state
+// does: the destination is programmed into the WR_REG command buffer and then sanitized via
+// DEBUG_SANITIZE_NOC_ADDR_FROM_STATE.
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteWithState) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCInlineWriteWithState);
         },
         this->devices_[0]);
 }
@@ -969,6 +1176,49 @@ TEST_F(MeshWatcherFixture, QuasarTestWatcherSanitizeMultiDMRace) {
                 false,
                 false /*is_idle_eth_core*/,
                 true /*multi_dm_race*/);
+        },
+        this->devices_[0]);
+}
+
+// Quasar-only: a NOC read must land in L1, never in a local register.
+TEST_F(MeshWatcherFixture, QuasarTestWatcherSanitizeNOCReadToRegAddr) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCReadToRegAddr);
+        },
+        this->devices_[0]);
+}
+
+// A sanitize record that stays partially written across polls must be reported as corruption, not ignored.
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizePartialRecord) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
+        GTEST_SKIP();
+    }
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture*, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord virtual_core = mesh_device->virtual_core_from_logical_core({0, 0}, CoreType::WORKER);
+            const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+            auto programmable_core_type = mesh_device->get_programmable_core_type(virtual_core);
+            auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
+            auto san = dev_msgs_factory.create<dev_msgs::debug_sanitize_addr_msg_t>();
+            uint64_t san_addr =
+                hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
+                dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::sanitize);
+            auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            tt_cxy_pair target(mesh_device->get_device_ids()[0], virtual_core);
+
+            // Return code still OK but one field published: what a torn Quasar record looks like.
+            cluster.read_core(san.data(), san.size(), target, san_addr);
+            san.view().len() = 4;
+            cluster.write_core(san.data(), san.size(), target, san_addr);
+
+            std::string exception;
+            do {
+                exception = MetalContext::instance().watcher_server()->exception_message();
+            } while (exception.empty());
+            log_info(LogTest, "Reported error: {}", exception);
+            EXPECT_NE(exception.find("partially written record noc0"), std::string::npos);
         },
         this->devices_[0]);
 }

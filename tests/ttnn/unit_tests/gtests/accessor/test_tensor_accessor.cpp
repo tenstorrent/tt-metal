@@ -10,6 +10,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 
 #include <cstddef>
+#include <stdexcept>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -32,8 +33,14 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc);
 [[maybe_unused]] static uint32_t my_x[1] = {0};
 [[maybe_unused]] static uint32_t my_y[1] = {0};
 
+static void host_assert(bool condition, const char* expression) {
+    if (!condition) {
+        throw std::out_of_range(expression);
+    }
+}
+
 #define noc_index 0
-#define ASSERT(condition, ...)
+#define ASSERT(condition, ...) host_assert(condition, #condition)
 #define FORCE_INLINE inline __attribute__((always_inline))
 #define DPRINT std::cout
 #define ENDL() std::endl
@@ -47,12 +54,27 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc);
 #define DYNAMIC_NOC_X(noc, x) (x)
 #define DYNAMIC_NOC_Y(noc, y) (y)
 #define NOC_XY_ADDR(x, y, addr) (static_cast<uint64_t>(x) << 32 | static_cast<uint64_t>(y) << 16 | static_cast<uint64_t>(addr))
+// Host mock of the device NoC address backend (see internal/dataflow/noc_address_backend_xy.h),
+// mirroring the macro stubs above. Required even when no test calls these paths: qualified
+// names in TensorAccessor's member bodies are looked up when the template is parsed.
+namespace noc_address_backend {
+[[maybe_unused]] static bool is_local(uint64_t noc_addr, uint8_t noc) {
+    return NOC_UNICAST_ADDR_X(noc_addr) == my_x[noc] && NOC_UNICAST_ADDR_Y(noc_addr) == my_y[noc];
+}
+[[maybe_unused]] static bool is_local_coordinate(uint32_t x, uint32_t y, uint8_t noc) {
+    return x == my_x[noc] && y == my_y[noc];
+}
+[[maybe_unused]] static uint64_t worker_address(uint32_t x, uint32_t y, uint32_t addr, [[maybe_unused]] uint8_t noc) {
+    return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, x), DYNAMIC_NOC_Y(noc, y), addr);
+}
+}  // namespace noc_address_backend
 #endif
 
 #include "api/tensor/tensor_accessor.h"
 
 #undef get_compile_time_arg_val
 #undef noc_index
+#undef ASSERT
 #undef DPRINT
 #undef END
 #undef DPRINT_DATA0
@@ -299,6 +321,222 @@ TYPED_TEST(TensorAccessorTests, PageLookUp) {
     }
 }
 
+// Checks each run against get_bank_and_offset: every page is one bank page past the previous (soundness),
+// and the page one stride past the run is not (maximality). Maximality fails by design when the next shard
+// lands adjacently in the same bank; only pass dspecs where it cannot (see NumContiguousPagesStopsAtShardEdge).
+template <typename Accessor>
+static void verify_num_contiguous_pages(const Accessor& accessor) {
+    const uint32_t tensor_volume = accessor.dspec().tensor_volume();
+    const uint32_t stride = accessor.contiguous_page_stride();
+    for (uint32_t page_id = 0; page_id < tensor_volume; ++page_id) {
+        const uint32_t pages = accessor.num_contiguous_pages(page_id);
+        ASSERT_GE(pages, 1u) << "page_id " << page_id;
+        ASSERT_LE(page_id + (pages - 1) * stride, tensor_volume - 1) << "page_id " << page_id;
+
+        const auto base = accessor.get_bank_and_offset(page_id);
+        for (uint32_t k = 1; k < pages; ++k) {
+            const auto mapping = accessor.get_bank_and_offset(page_id + k * stride);
+            EXPECT_EQ(mapping.bank_id, base.bank_id) << "page_id " << page_id << ", k " << k;
+            EXPECT_EQ(mapping.bank_page_offset, base.bank_page_offset + k) << "page_id " << page_id << ", k " << k;
+        }
+
+        const uint32_t next_page_id = page_id + pages * stride;
+        if (next_page_id < tensor_volume) {
+            const auto mapping = accessor.get_bank_and_offset(next_page_id);
+            const bool still_contiguous =
+                mapping.bank_id == base.bank_id && mapping.bank_page_offset == base.bank_page_offset + pages;
+            EXPECT_FALSE(still_contiguous) << "run from page_id " << page_id << " stops short";
+        }
+    }
+}
+
+// Padded edge shards on both dims.
+TEST(TensorAccessorTests, NumContiguousPagesPaddedShards) {
+    using dspec_t =
+        tensor_accessor::DistributionSpec<2, 3, ArrayWrapperU32<3, 5>, ArrayWrapperU32<2, 2>, ArrayWrapperU16<0, 1, 2>>;
+    auto accessor = TensorAccessor<dspec_t>(4096, 64);
+
+    EXPECT_EQ(accessor.contiguous_page_stride(), 1u);
+    EXPECT_EQ(accessor.num_contiguous_pages(0), 2u);
+    EXPECT_EQ(accessor.num_contiguous_pages(4), 1u);  // last column of the row, shard is padded
+    verify_num_contiguous_pages(accessor);
+}
+
+TEST(TensorAccessorTests, NumContiguousPagesExtendsAcrossDims) {
+    // Shard covers dims 1 and 2 whole, so a run walks the entire shard, not just one row.
+    using dspec_t = tensor_accessor::
+        DistributionSpec<3, 3, ArrayWrapperU32<4, 3, 4>, ArrayWrapperU32<1, 3, 4>, ArrayWrapperU16<0, 1, 2>>;
+    auto accessor = TensorAccessor<dspec_t>(4096, 64);
+
+    EXPECT_EQ(accessor.contiguous_page_stride(), 1u);
+    EXPECT_EQ(accessor.num_contiguous_pages(0), 12u);
+    EXPECT_EQ(accessor.num_contiguous_pages(5), 7u);
+    verify_num_contiguous_pages(accessor);
+}
+
+TEST(TensorAccessorTests, NumContiguousPagesWholeTensorIsOneShard) {
+    using dspec_t =
+        tensor_accessor::DistributionSpec<3, 1, ArrayWrapperU32<2, 3, 4>, ArrayWrapperU32<2, 3, 4>, ArrayWrapperU16<0>>;
+    auto accessor = TensorAccessor<dspec_t>(4096, 64);
+
+    EXPECT_EQ(accessor.num_contiguous_pages(0), 24u);
+    EXPECT_EQ(accessor.num_contiguous_pages(20), 4u);
+    verify_num_contiguous_pages(accessor);
+}
+
+TEST(TensorAccessorTests, NumContiguousPagesOnePageWideShard) {
+    // One page wide (e.g. row-major width sharding): a shard column is contiguous, stepping by the row length.
+    using dspec_t = tensor_accessor::
+        DistributionSpec<2, 6, ArrayWrapperU32<4, 6>, ArrayWrapperU32<4, 1>, ArrayWrapperU16<0, 1, 2, 3, 4, 5>>;
+    auto accessor = TensorAccessor<dspec_t>(4096, 64);
+
+    EXPECT_EQ(accessor.contiguous_page_stride(), 6u);
+    for (uint32_t page_id = 0; page_id < 6; ++page_id) {
+        EXPECT_EQ(accessor.num_contiguous_pages(page_id), 4u) << "page_id " << page_id;
+    }
+    EXPECT_EQ(accessor.num_contiguous_pages(18), 1u);     // last row, nothing below it
+    EXPECT_EQ(accessor.num_contiguous_pages(0, 13), 3u);  // pages 0, 6, 12
+    EXPECT_EQ(accessor.num_contiguous_pages(0, 12), 2u);  // pages 0, 6
+    EXPECT_EQ(accessor.num_contiguous_pages(0, 1), 1u);
+    verify_num_contiguous_pages(accessor);
+}
+
+TEST(TensorAccessorTests, NumContiguousPagesEndPageIdClamps) {
+    using dspec_t =
+        tensor_accessor::DistributionSpec<1, 2, ArrayWrapperU32<10>, ArrayWrapperU32<5>, ArrayWrapperU16<0, 1>>;
+    auto accessor = TensorAccessor<dspec_t>(4096, 64);
+
+    EXPECT_EQ(accessor.num_contiguous_pages(0), 5u);
+    EXPECT_EQ(accessor.num_contiguous_pages(0, 3), 3u);
+    EXPECT_EQ(accessor.num_contiguous_pages(0, 10), 5u);
+    EXPECT_EQ(accessor.num_contiguous_pages(2, 4), 2u);
+}
+
+// One page wide over the three trailing dims.
+TEST(TensorAccessorTests, NumContiguousPagesRank4OnePageWide) {
+    using dspec_t = tensor_accessor::
+        DistributionSpec<4, 4, ArrayWrapperU32<4, 3, 2, 2>, ArrayWrapperU32<2, 1, 1, 1>, ArrayWrapperU16<0, 1, 2, 3>>;
+    auto accessor = TensorAccessor<dspec_t>(4096, 64);
+
+    EXPECT_EQ(accessor.contiguous_page_stride(), 12u);
+    EXPECT_EQ(accessor.num_contiguous_pages(0), 2u);   // pages 0 and 12
+    EXPECT_EQ(accessor.num_contiguous_pages(12), 1u);  // last page of the shard
+    verify_num_contiguous_pages(accessor);
+}
+
+// Shard-contiguous placement puts shard 1 right after shard 0 in bank 0; the run still stops at the shard edge.
+TEST(TensorAccessorTests, NumContiguousPagesStopsAtShardEdge) {
+    using dspec_t = tensor_accessor::DistributionSpec<
+        2,
+        2,
+        ArrayWrapperU32<4, 4>,
+        ArrayWrapperU32<1, 4>,
+        ArrayWrapperU16<0, 1>,
+        /*IsInterleaved=*/false,
+        /*IsDram=*/false,
+        /*IsShardContiguous=*/true>;
+    auto accessor = TensorAccessor<dspec_t>(4096, 64);
+
+    EXPECT_EQ(accessor.num_contiguous_pages(0), 4u);
+
+    const auto first = accessor.get_bank_and_offset(0);
+    const auto past_end = accessor.get_bank_and_offset(4);
+    EXPECT_EQ(past_end.bank_id, first.bank_id);
+    EXPECT_EQ(past_end.bank_page_offset, first.bank_page_offset + 4);
+}
+
+// Runtime shapes (static rank), so strides are computed rather than compile-time constants.
+TEST(TensorAccessorTests, NumContiguousPagesDynamicShape) {
+    using dspec_t =
+        tensor_accessor::DistributionSpec<2, 3, ArrayWrapperDynamic, ArrayWrapperDynamic, ArrayWrapperU16<0, 1, 2>>;
+    std::array<uint32_t, 2> tensor_shape_array = {3, 5};
+    std::array<uint32_t, 2> shard_shape_array = {2, 2};
+    auto dspec_val = dspec_t(tensor_shape_array, shard_shape_array);
+    auto accessor = TensorAccessor<dspec_t>(std::move(dspec_val), 4096, 64);
+
+    EXPECT_EQ(accessor.contiguous_page_stride(), 1u);
+    EXPECT_EQ(accessor.num_contiguous_pages(0), 2u);
+    EXPECT_EQ(accessor.num_contiguous_pages(4), 1u);
+    verify_num_contiguous_pages(accessor);
+}
+
+// BufferDistributionSpec's host twins must agree with the accessor over the squeezed shapes the kernel receives,
+// and over the original shapes, for every page_id and end_page_id.
+TEST(TensorAccessorTests, NumContiguousPagesMatchesBufferDistributionSpec) {
+    // Dynamic rank, since squeezing can change it.
+    using dspec_t =
+        tensor_accessor::DistributionSpec<0, 1, ArrayWrapperDynamic, ArrayWrapperDynamic, ArrayWrapperU16<0>>;
+    const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));
+
+    auto expect_match = [&grid](std::vector<uint32_t> tensor_shape, std::vector<uint32_t> shard_shape) {
+        SCOPED_TRACE(::testing::PrintToString(tensor_shape) + " / " + ::testing::PrintToString(shard_shape));
+        const BufferDistributionSpec spec(
+            tt::tt_metal::Shape(tensor_shape), tt::tt_metal::Shape(shard_shape), grid, ShardOrientation::ROW_MAJOR);
+        std::vector<uint32_t> squeezed_tensor_shape(
+            spec.tensor_shape_in_pages().cbegin(), spec.tensor_shape_in_pages().cend());
+        std::vector<uint32_t> squeezed_shard_shape(
+            spec.shard_shape_in_pages().cbegin(), spec.shard_shape_in_pages().cend());
+
+        auto make_accessor = [](std::vector<uint32_t>& tensor, std::vector<uint32_t>& shard) {
+            return TensorAccessor<dspec_t>(
+                dspec_t(dspec_t::Shape(tensor.data(), tensor.size()), dspec_t::Shape(shard.data(), shard.size())),
+                4096,
+                64);
+        };
+        const auto squeezed = make_accessor(squeezed_tensor_shape, squeezed_shard_shape);
+        const auto unsqueezed = make_accessor(tensor_shape, shard_shape);
+
+        const uint32_t tensor_volume = squeezed.dspec().tensor_volume();
+        ASSERT_EQ(spec.contiguous_page_stride(), squeezed.contiguous_page_stride());
+        ASSERT_EQ(spec.contiguous_page_stride(), unsqueezed.contiguous_page_stride());
+        for (uint32_t page_id = 0; page_id < tensor_volume; ++page_id) {
+            ASSERT_EQ(spec.num_contiguous_pages(page_id), squeezed.num_contiguous_pages(page_id)) << page_id;
+            ASSERT_EQ(spec.num_contiguous_pages(page_id), unsqueezed.num_contiguous_pages(page_id)) << page_id;
+            for (uint32_t end = page_id + 1; end <= tensor_volume; ++end) {
+                ASSERT_EQ(spec.num_contiguous_pages(page_id, end), squeezed.num_contiguous_pages(page_id, end))
+                    << page_id << ", " << end;
+                ASSERT_EQ(spec.num_contiguous_pages(page_id, end), unsqueezed.num_contiguous_pages(page_id, end))
+                    << page_id << ", " << end;
+            }
+        }
+    };
+
+    expect_match({3, 5}, {2, 2});              // padded edge shards on both dims
+    expect_match({5, 3, 7}, {2, 2, 4});        // padded on every dim, does not squeeze
+    expect_match({4, 3, 4}, {1, 3, 4});        // shard covers the inner dims exactly
+    expect_match({4, 6}, {4, 1});              // one page wide
+    expect_match({4, 3, 2, 2}, {2, 1, 1, 1});  // one page wide over several trailing dims
+    expect_match({8, 1}, {1, 1});              // single-page shard
+    expect_match({2, 3, 4}, {2, 3, 4});        // whole tensor is one shard
+}
+
+TEST(TensorAccessorTests, ShardCoordinateNocAddressUsesGridCoordinates) {
+    using TensorShape = ArrayWrapperU32<6, 6>;
+    using ShardShape = ArrayWrapperU32<2, 3>;
+    using BankCoords = ArrayWrapperU16<0, 1>;
+    using dspec_t = tensor_accessor::DistributionSpec<2, 2, TensorShape, ShardShape, BankCoords>;
+
+    constexpr uint32_t bank_base_address = 4096;
+    constexpr uint32_t page_size = 64;
+    constexpr uint32_t offset = 17;
+    auto accessor = TensorAccessor<dspec_t>(bank_base_address, page_size);
+
+    ASSERT_EQ(accessor.dspec().shard_grid(), (std::array<uint32_t, 2>{3, 2}));
+    for (uint32_t row = 0; row < accessor.dspec().shard_grid()[0]; ++row) {
+        for (uint32_t column = 0; column < accessor.dspec().shard_grid()[1]; ++column) {
+            const std::array<uint32_t, 2> shard_coord{row, column};
+            const uint32_t shard_id = row * 2 + column;
+            EXPECT_EQ(accessor.get_shard_noc_addr(shard_coord, offset), accessor.get_shard_noc_addr(shard_id, offset))
+                << "Incorrect address for shard coordinate {" << row << ", " << column << "}";
+        }
+    }
+
+    // The first coordinate is valid in the shard grid even though it equals the corresponding shard-shape extent.
+    EXPECT_NO_THROW(accessor.get_shard_noc_addr(std::array<uint32_t, 2>{2, 1}));
+    // The second coordinate is outside the shard grid even though it is less than the shard-shape extent.
+    EXPECT_THROW(accessor.get_shard_noc_addr(std::array<uint32_t, 2>{0, 2}), std::out_of_range);
+}
+
 namespace crta_params {
 constexpr size_t rank = 2;
 constexpr size_t num_banks = 4;
@@ -534,9 +772,51 @@ auto make_1d_interleaved_accessor(uint32_t /*tensor_size*/) {
     return TensorAccessor<dspec_t>(std::move(dspec_val), 0, 4096);
 }
 
+// Checks the address the iterator carried forward itself against a fresh lookup. Catches a bad run
+// length or fast-path step, which collect_page_ids cannot.
+template <typename AccessorT>
+void assert_iterator_addresses(const AccessorT& accessor, uint32_t stride) {
+    const uint32_t tensor_volume = accessor.dspec().tensor_volume();
+    uint32_t expected_page_id = 0;
+    for (const auto& page : tensor_accessor::Pages(accessor, 0u, tensor_volume, stride, static_cast<uint8_t>(0))) {
+        ASSERT_EQ(page.page_id(), expected_page_id) << "stride " << stride;
+        EXPECT_EQ(page.noc_addr(), accessor.get_noc_addr(page.page_id()))
+            << "stride " << stride << ", page_id " << page.page_id();
+        expected_page_id += stride;
+    }
+}
+
 }  // namespace strided_threading_tests
 
 using namespace strided_threading_tests;
+
+// -----------------------------------------------------------------------
+// Pages iterator — incremental NOC address tracking
+// -----------------------------------------------------------------------
+
+// Stride 1, so the fast path carries the address forward across runs.
+TEST(PagesIteratorAddressTests, ContiguousStrideOne) {
+    using dspec_t = tensor_accessor::
+        DistributionSpec<3, 3, ArrayWrapperU32<4, 3, 4>, ArrayWrapperU32<1, 3, 4>, ArrayWrapperU16<0, 1, 2>>;
+    auto accessor = TensorAccessor<dspec_t>(4096, 64);
+
+    ASSERT_EQ(accessor.contiguous_page_stride(), 1u);
+    assert_iterator_addresses(accessor, 1);
+    assert_iterator_addresses(accessor, 2);
+    assert_iterator_addresses(accessor, 3);
+}
+
+// Stride 6, so a stride-1 walk never lands inside a run and must re-look-up every step.
+TEST(PagesIteratorAddressTests, ContiguousStrideGreaterThanOne) {
+    using dspec_t = tensor_accessor::
+        DistributionSpec<2, 6, ArrayWrapperU32<4, 6>, ArrayWrapperU32<4, 1>, ArrayWrapperU16<0, 1, 2, 3, 4, 5>>;
+    auto accessor = TensorAccessor<dspec_t>(4096, 64);
+
+    ASSERT_EQ(accessor.contiguous_page_stride(), 6u);
+    assert_iterator_addresses(accessor, 1);
+    assert_iterator_addresses(accessor, 4);
+    assert_iterator_addresses(accessor, 6);
+}
 
 // -----------------------------------------------------------------------
 // pages() with stride > 1 — interleaved-style (no shards)

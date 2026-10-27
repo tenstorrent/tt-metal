@@ -10,6 +10,7 @@
 #include <variant>
 #include <optional>
 #include <cstdint>
+#include <limits>
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -17,7 +18,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
@@ -45,11 +46,19 @@ using CoreConfig = std::variant<tt::tt_metal::CoreCoord, std::string>;
 using ParametrizationValues = std::variant<std::vector<std::string>, std::vector<uint32_t>>;
 using ParametrizationOptionsMap = std::unordered_map<std::string, ParametrizationValues>;
 
+// Sentinel for a per-direction hop count of "max": resolved to (axis_dim - 1) from the global mesh
+// shape at build time. UINT32_MAX is never a real hop count, so it is safe as a marker.
+inline constexpr uint32_t kHopsMax = std::numeric_limits<uint32_t>::max();
+// Sentinel stored for parametrization_params.num_links: all. Resolved to [1 .. max links] at build
+// time (when the cluster is available). 0 is never a valid num_links, so it is safe as a marker.
+inline constexpr uint32_t kNumLinksAll = 0;
+
 // Parsed structures (before resolution) - use DeviceIdentifier
 struct ParsedDestinationConfig {
     std::optional<DeviceIdentifier> device;
     std::optional<CoreConfig> core;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
+    bool full_mcast_hops = false;  // hops: full_mcast -> resolved to get_full_mcast_hops(src) at build time
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
 };
@@ -77,7 +86,7 @@ struct ParsedSenderConfig {
 // Resolved structures (after resolution) - use FabricNodeId
 struct DestinationConfig {
     std::optional<FabricNodeId> device;
-    std::optional<CoreCoord> core;
+    std::optional<tt::tt_metal::CoreCoord> core;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
@@ -107,7 +116,7 @@ struct TrafficPatternConfig {
 
 struct SenderConfig {
     FabricNodeId device = FabricNodeId(MeshId{0}, 0);
-    std::optional<CoreCoord> core;
+    std::optional<tt::tt_metal::CoreCoord> core;
     std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<TrafficPatternConfig> patterns;
     uint32_t link_id = 0;          // Link ID for multi-link tests
@@ -137,26 +146,39 @@ enum class HighLevelTrafficPattern {
     SequentialMeshPassthrough,
 };
 
-// Mesh scope filter for high-level unicast patterns on multi-mesh systems.
-// Only applied to unicast pair-based expansions (all_to_all / one_to_all / sequential_all_to_all);
-// multicast expansions currently ignore mesh_scope.
-// ALL:        intra-mesh pairs plus inter-mesh pairs to adjacent meshes (default).
-// INTRA_MESH: only same-mesh pairs.
-// INTER_MESH: only inter-mesh pairs to adjacent meshes.
+// Mesh scope filter for high-level traffic patterns on multi-mesh systems.
+// Unicast pair-based expansions apply all three scopes. Multicast cannot cross mesh boundaries:
+// INTRA_MESH and ALL stay within the sender's mesh, while INTER_MESH produces no traffic.
+// For unicast, ALL includes intra-mesh pairs plus inter-mesh pairs to adjacent meshes (default),
+// INTRA_MESH keeps only same-mesh pairs, and INTER_MESH keeps only adjacent inter-mesh pairs.
 // Note: distinct from tt::tt_fabric::MeshScope (LOCAL/GLOBAL), which describes mesh ownership.
 enum class MeshTrafficScope { ALL, INTRA_MESH, INTER_MESH };
 
 // Channel trimming mode for test config expansion
 enum class ChannelTrimmingMode { NONE, CAPTURE, REPLAY };
 
+// Trimming rtoptions a test group's fabric is built with (see TestFixture::resolve_channel_trimming_settings)
+struct ChannelTrimmingSettings {
+    ChannelTrimmingMode mode = ChannelTrimmingMode::NONE;
+    bool capture_enabled = false;
+    std::string profile_path;
+
+    bool operator==(const ChannelTrimmingSettings&) const = default;
+};
+
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
     std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
     std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
     uint32_t num_links{};
+    bool num_links_max = false;               // When true, resolve num_links to the platform max at build time
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
     std::optional<uint32_t> max_packet_size;  // Custom max packet size for router
-    bool enable_channel_trimming = false;     // When true, test is expanded into CAPTURE + REPLAY phases
+    // Tri-state channel trimming intent:
+    //   true  → test is expanded into CAPTURE + REPLAY phases
+    //   false → capture explicitly disabled for this test (overrides trimming env vars)
+    //   nullopt (key absent) → obey TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE / TT_METAL_FABRIC_TRIMMING_PROFILE
+    std::optional<bool> enable_channel_trimming;
     bool use_vc2 = false;                     // When true, use private VC2 connection API instead of public API
 };
 
@@ -165,6 +187,7 @@ struct HighLevelPatternConfig {
     std::optional<uint32_t> iterations;
     bool is_sequential = false;
     MeshTrafficScope mesh_scope = MeshTrafficScope::ALL;
+    std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2. Overrides the test defaults.
 };
 
 struct ParsedTestConfig {

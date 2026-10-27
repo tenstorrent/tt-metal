@@ -66,3 +66,17 @@ FORCE_INLINE void write_value_to_tile(
         }
     }
 }
+
+// RM helpers: read/write at a linear element offset within a stick; tile-helper dispatch reused (no face math).
+FORCE_INLINE uint32_t
+get_value_from_stick(const uint32_t l1_read_addr, const uint32_t element_offset, const uint32_t data_format_size) {
+    return get_value_from_tile(l1_read_addr, element_offset, data_format_size);
+}
+
+FORCE_INLINE void write_value_to_stick(
+    const uint32_t l1_write_addr,
+    const uint32_t element_offset,
+    const uint32_t data_format_size,
+    const uint32_t value) {
+    write_value_to_tile(l1_write_addr, element_offset, data_format_size, value);
+}

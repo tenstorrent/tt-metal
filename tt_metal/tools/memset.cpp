@@ -15,10 +15,10 @@
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
 
-void memset_l1(tt::stl::Span<const uint32_t> mem_vec, uint32_t chip_id, uint32_t start_addr) {
+void memset_l1(ttsl::Span<const uint32_t> mem_vec, uint32_t chip_id, uint32_t start_addr) {
     // Utility function that writes a memory vector to L1 for all cores at a specific start address.
     const metal_SocDescriptor& sdesc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip_id);
     for (auto& worker_core : sdesc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::NOC0)) {

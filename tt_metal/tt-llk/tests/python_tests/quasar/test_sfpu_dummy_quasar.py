@@ -41,8 +41,12 @@ def test_sfpu_dummy_quasar():
     configuration = TestConfig(
         "sources/quasar/sfpu_dummy_test.cpp",
         formats,
-        templates=[generate_input_dim(input_dimensions, input_dimensions)],
-        runtimes=[TILE_COUNT(tile_cnt_A), NUM_FACES(4)],
+        templates=[],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_A),
+            NUM_FACES(4),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

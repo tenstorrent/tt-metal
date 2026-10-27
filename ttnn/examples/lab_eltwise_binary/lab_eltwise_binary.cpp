@@ -179,7 +179,7 @@ void eltwise_add_tensix(
     // Tensors are allocated in device DRAM (i.e. DRAM that is directly attached to the Tensix processor,
     // which is distinct from the host DRAM).
     TensorLayout tile_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig(BufferType::DRAM));
-    TensorSpec t_spec(Shape({M, N}), tile_layout);
+    tt::tt_metal::TensorSpec t_spec(Shape({M, N}), tile_layout);
 
     // Create device tensors from input data.
     // This creates the tensors and queues transfer of data to device in one step.

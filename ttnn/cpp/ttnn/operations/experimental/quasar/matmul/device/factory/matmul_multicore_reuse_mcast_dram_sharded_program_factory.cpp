@@ -12,9 +12,11 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -41,10 +43,10 @@ using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
 using dram_sharded_helpers::move_common_entries;
 
 static ProgramDescriptor create_program_dram_sharded_descriptor(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice& device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -90,19 +92,19 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_mcast_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     CoreCoord top_left_core = {(std::size_t)start_core_x, (std::size_t)start_core_y};
     CoreCoord bottom_right_core = {
         (std::size_t)start_core_x + compute_with_storage_grid_size.x - 1,
         (std::size_t)start_core_y + compute_with_storage_grid_size.y - 1};
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
@@ -338,6 +340,11 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         in1_sender_writer_compile_time_args.push_back(bias_buffer_num_pages);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
     }
+    // in1 (then bias) TensorAccessorArgs for the BankView reads: CTA 9 without bias, CTA 12 with bias.
+    tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
+    if (bias.has_value()) {
+        tt::tt_metal::TensorAccessorArgs(*bias).append_to(in1_sender_writer_compile_time_args);
+    }
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_define;
@@ -378,9 +385,9 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
 
     const uint32_t num_compute_cores = all_cores_in_rect_grid.num_cores();
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_compute_cores, mm_kernel_defines);
+        device.arch(), num_compute_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_compute_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_compute_cores, mm_kernel_defines, throttle_level);
 
     // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs)
     auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
@@ -647,17 +654,18 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     });
     in0_mcast_sender_noc_x.reserve(mcast_senders_coords.size());
     for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
+        in0_mcast_sender_noc_x.push_back((std::uint32_t)device.worker_core_from_logical_core(core).x);
     }
     in0_mcast_sender_noc_y.reserve(mcast_senders_coords.size());
     for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+        in0_mcast_sender_noc_y.push_back((std::uint32_t)device.worker_core_from_logical_core(core).y);
     }
 
     // in0 sender runtime args (mcast senders)
     uint32_t sender_id = 0;
     for (auto core : mcast_senders_coords) {
         std::vector<uint32_t> mm_in0_sender_args;
+        mm_in0_sender_args.reserve(3 + in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
 
         uint32_t worker_core_type;
         if (find(storage_worker_common.begin(), storage_worker_common.end(), core) != storage_worker_common.end()) {
@@ -683,6 +691,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     std::vector<CoreCoord> mcast_receiver_coords = corerange_to_cores(mcast_receivers);
     for (auto core : mcast_receiver_coords) {
         std::vector<uint32_t> mm_in0_receiver_args;
+        mm_in0_receiver_args.reserve(3 + in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
         uint32_t worker_core_type = 3;
         mm_in0_receiver_args.push_back((std::uint32_t)worker_core_type);
         mm_in0_receiver_args.push_back((std::uint32_t)0);
@@ -711,6 +720,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     // Compute and in1 sender/writer runtime args
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
+    bank_ids.reserve(all_worker_cores_ordered.size());
     uint32_t curr_storage_core_idx = 0;
     uint32_t per_core_N_storage_curr_stride = 0;
 
@@ -724,11 +734,11 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     std::vector<CoreCoord> output_coords = corerange_to_cores(output_all_storage_cores, std::nullopt, true);
     output_noc_x.reserve(output_coords.size());
     for (auto core : output_coords) {
-        output_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
+        output_noc_x.push_back((std::uint32_t)device.worker_core_from_logical_core(core).x);
     }
     output_noc_y.reserve(output_coords.size());
     for (auto core : output_coords) {
-        output_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+        output_noc_y.push_back((std::uint32_t)device.worker_core_from_logical_core(core).y);
     }
 
     uint32_t num_cores_written_back = (N + per_core_N_storage - 1) / per_core_N_storage;
@@ -762,8 +772,11 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         bool is_worker_core = true;
         std::vector<uint32_t> mm_in1_sender_writer_args;
         mm_in1_sender_writer_args.push_back((std::uint32_t)is_worker_core);
-        mm_in1_sender_writer_args.push_back(in1_tensor.address());  // [1]: will be replaced by Buffer*
-        mm_in1_sender_writer_args.push_back(bias.has_value() ? bias->address() : 0u);  // [2]: may be replaced
+        // [1] and [2] are buffer-address slots. Push 0 placeholders here; they are overwritten with the
+        // in1/bias tensor BufferBindings (see in1_writer_args[1]/[2] below) before emplace_runtime_args, so
+        // the framework patches the addresses on cache hits. Do not push raw .address() (a smuggled RTA).
+        mm_in1_sender_writer_args.push_back(0u);  // [1]: in1_tensor address, bound below
+        mm_in1_sender_writer_args.push_back(0u);  // [2]: bias address (if present), bound below
 
         uint32_t vc = bank_id & 0x3;
         bank_ids.push_back(bank_id);
@@ -943,7 +956,7 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
     const bool row_broadcast_bias =
         operations::experimental::quasar::matmul::utilities::fused_matmul_bias_row_broadcastable(bias);
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::distributed::MeshDevice* device = a.device();
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
@@ -1018,7 +1031,7 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
     const auto& output_mesh = output.mesh_tensor();
 
     return reuse_dram_sharded_optimized_helpers::create_program_dram_sharded_descriptor(
-        device,
+        *device,
         input_all_cores_storage,
         output_all_cores_storage,
         math_fidelity,

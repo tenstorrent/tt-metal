@@ -8,11 +8,6 @@ on:
         type: string
         default: ALL_SKUS_IN_TESTS
         description: "Comma-separated SKUs, or ALL_SKUS_IN_TESTS to run every SKU defined in the tests yaml."
-      test-category:
-        required: false
-        type: string
-        default: smoke
-        description: "Time-budget workflow key passed to verify_time_budget.py (smoke for merge-gate and N300 fabric)."
       build-artifact-name:
         required: true
         type: string
@@ -36,14 +31,13 @@ on:
         required: false
         type: boolean
         default: false
-
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_smoke_merge_gate_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_merge_gate_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -57,21 +51,15 @@ jobs:
       - name: Install dependencies
         run: pip3 install PyYAML
 
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}"
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
 
   fabric-tests:
     needs: load-test-matrix
@@ -83,10 +71,13 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
+    # ARCH_NAME is derived inline from matrix.test-group.sku:
+    # bh_* / *blackhole* -> blackhole; wh_* / *wormhole* -> wormhole_b0; else '' so
+    # run_cpp_fabric_tests.sh trips its -z guard on unrecognized SKUs.
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
-        ARCH_NAME: ${{ matrix.test-group.arch }}
+        ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || (contains(matrix.test-group.sku, 'wh_') || contains(matrix.test-group.sku, 'wormhole')) && 'wormhole_b0' || '' }}
         LOGURU_LEVEL: INFO
         TT_LOGGER_LEVEL: warn
         LD_LIBRARY_PATH: /work/build/lib

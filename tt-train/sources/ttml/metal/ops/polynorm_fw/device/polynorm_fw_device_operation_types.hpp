@@ -19,7 +19,7 @@ struct PolyNorm3FWTensorArgs {
     std::optional<ttnn::Tensor> preallocated_output = std::nullopt;
 };
 
-using PolyNorm3FWSpecReturn = std::vector<ttnn::TensorSpec>;
+using PolyNorm3FWSpecReturn = std::vector<tt::tt_metal::TensorSpec>;
 using PolyNorm3FWTensorReturn = ttnn::Tensor;
 
 }  // namespace ttml::metal::ops::polynorm3_fw::device

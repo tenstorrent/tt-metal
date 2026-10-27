@@ -123,3 +123,34 @@ def test_bcast_to_scalar_int(device, dtype, input_shape, output_shape):
     tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
     tt_output = ttnn.experimental.broadcast_to(tt_input, ttnn.Shape(output_shape))
     assert_equal(torch_output, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    [
+        ([2, 4, 1, 96], [2, 4, 32, 96]),
+        ([2, 4, 32, 1], [2, 4, 32, 96]),
+        ([2, 4, 1, 1], [2, 4, 64, 96]),
+    ],
+    ids=["row", "col", "scalar"],
+)
+def test_bcast_to_program_cache(device, input_shape, output_shape):
+    """Cache hits must rebind the input and output addresses on every core."""
+    dtype = ttnn.int32
+
+    spacers, input_addresses, output_addresses = [], set(), set()
+    num_entries_before = device.num_program_cache_entries()
+    for i in range(3):
+        # A growing live allocation moves every tensor below to a new address on each cache hit, and fresh
+        # data per iteration makes a stale address show up as a mismatch.
+        spacers.append(ttnn.from_torch(torch.zeros((32, 32 * (i + 1))), layout=ttnn.TILE_LAYOUT, device=device))
+        torch_input = _rand_torch(dtype, input_shape)
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+        tt_output = ttnn.experimental.broadcast_to(tt_input, ttnn.Shape(output_shape))
+        input_addresses.add(tt_input.buffer_address())
+        output_addresses.add(tt_output.buffer_address())
+
+        assert_equal(torch_input.expand(output_shape), ttnn.to_torch(tt_output))
+
+    assert len(input_addresses) > 1 and len(output_addresses) > 1
+    assert device.num_program_cache_entries() - num_entries_before == 1

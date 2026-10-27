@@ -9,267 +9,348 @@
 #include "api/compute/bcast.h"
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/compute/pack.h"  // dummy_pack
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 template <
-    uint32_t block_w,
-    uint32_t num_subblocks_w,
-    uint32_t subblock_w,
-    uint32_t cb_in_id,
-    uint32_t cb_max_scaler_id,
-    uint32_t cb_max_id,
-    uint32_t cb_out_id>
-ALWI void calc_numeric_stable() {
-    auto cb_in_obj = CircularBuffer(cb_in_id);
-    auto cb_max_obj = CircularBuffer(cb_max_id);
-    auto cb_out_obj = CircularBuffer(cb_out_id);
-
+    std::uint32_t block_w,
+    std::uint32_t subblock_w,
+    const auto& dfb_in_token,
+    const auto& dfb_max_scaler_token,
+    const auto& dfb_max_token,
+    const auto& dfb_out_token,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2,
+    typename DFB3>
+ALWI void calc_numeric_stable(DFB0& dfb_in_obj, DFB1& dfb_max_scaler_obj, DFB2& dfb_max_obj, DFB3& dfb_out_obj) {
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
     compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
-        cb_in_id,
-        cb_max_scaler_id,
-        cb_max_id,
+        dfb_in_token,
+        dfb_max_scaler_token,
+        dfb_max_token,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(compute_kernel_lib::ReduceInputBlockShape::row(block_w));
 
     // calculate x-max(x)
-    exp_tile_init<EXP_APPROX>();
-    reconfig_data_format_srcb(cb_max_id);
-    cb_max_obj.wait_front(1);
-    sub_bcast_cols_init_short(cb_in_id, cb_max_id);
-    uint32_t index_subblock_w_offset = 0;
-    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-        tile_regs_acquire();
-        cb_out_obj.reserve_back(subblock_w);
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            uint32_t index = w + index_subblock_w_offset;
-            sub_tiles_bcast_cols(cb_in_id, cb_max_id, index, 0, w);
-        }
-        cb_out_obj.reserve_back(subblock_w);
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            exp_tile<EXP_APPROX>(w);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            pack_tile(w, cb_out_id);
-        }
-        tile_regs_release();
-        cb_out_obj.push_back(subblock_w);
-        index_subblock_w_offset += subblock_w;
-    }
-    cb_in_obj.pop_front(block_w);
-    cb_max_obj.pop_front(1);
-    cb_out_obj.wait_front(block_w);
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(block_w).block_size(subblock_w),
+        ckl::BinaryFpu<
+            ckl::BinaryFpuOp::Sub,
+            ckl::input(dfb_in_token, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::input(dfb_max_token, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{
+            dfb_in_obj, dfb_max_obj},
+        ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
+        ckl::PackTile<ckl::output(
+            dfb_out_token, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+            dfb_out_obj});
+    dfb_out_obj.wait_front(block_w);
 }
 
 void kernel_main() {
-    constexpr uint32_t block_h = get_compile_time_arg_val(0);
-    constexpr uint32_t block_w = get_compile_time_arg_val(1);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(2);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(3);
-
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_6);
-
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_max_scaler = tt::CBIndex::c_1;
-    constexpr auto cb_sum_scaler = tt::CBIndex::c_13;
-    constexpr auto cb_fused_scale = tt::CBIndex::c_2;
-    constexpr auto cb_fused_attn = tt::CBIndex::c_3;
-    constexpr auto cb_exps = tt::CBIndex::c_6;
-    constexpr auto cb_recipsumexps = tt::CBIndex::c_7;
-    constexpr auto cb_scale_mask = tt::CBIndex::c_8;
-    constexpr auto cb_out0 = tt::CBIndex::c_11;
+    constexpr std::uint32_t block_h = get_arg(args::block_h);
+    constexpr std::uint32_t block_w = get_arg(args::block_w);
+    constexpr std::uint32_t subblock_w = get_arg(args::subblock_w);
+    constexpr bool causal_mask = get_arg(args::causal_mask);
+    constexpr bool sharded_causal_mask = get_arg(args::sharded_causal_mask);
 #ifdef NUMERIC_STABLE
-    constexpr auto cb_max = tt::CBIndex::c_9;
-    constexpr auto cb_x = tt::CBIndex::c_10;
+    constexpr bool numeric_stable = true;
 #else
-    constexpr auto cb_x = cb_exps;
+    constexpr bool numeric_stable = false;
 #endif
 
-    auto cb_in0_obj = CircularBuffer(cb_in0);
-    auto cb_max_scaler_obj = CircularBuffer(cb_max_scaler);
-    auto cb_fused_scale_obj = CircularBuffer(cb_fused_scale);
-    auto cb_fused_attn_obj = CircularBuffer(cb_fused_attn);
-    auto cb_exps_obj = CircularBuffer(cb_exps);
-    auto cb_recipsumexps_obj = CircularBuffer(cb_recipsumexps);
-    auto cb_scale_mask_obj = CircularBuffer(cb_scale_mask);
-    auto cb_out0_obj = CircularBuffer(cb_out0);
-    auto cb_x_obj = CircularBuffer(cb_x);
 #ifdef NUMERIC_STABLE
-    auto cb_max_obj = CircularBuffer(cb_max);
-#endif
-
-    constexpr int dst0 = 0;
-    int index_subblock_w_offset = 0;
-    int index = 0;
-
-    for (uint32_t i = 0; i < block_h; i++) {
-#if FUSED_SCALE_MASK
-        // fused scale
-        reconfig_data_format(cb_in0, cb_fused_scale);
-        pack_reconfig_data_format(cb_scale_mask);
-        cb_fused_scale_obj.wait_front(1);
-        mul_tiles_bcast_scalar_init_short(cb_in0, cb_fused_scale);
-        index_subblock_w_offset = 0;
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            cb_scale_mask_obj.reserve_back(subblock_w);
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
-                mul_tiles_bcast_scalar(cb_in0, cb_fused_scale, index, 0, w);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                pack_tile(w, cb_scale_mask);
-            }
-            tile_regs_release();
-            cb_scale_mask_obj.push_back(subblock_w);
-            index_subblock_w_offset += subblock_w;
-        }
-        cb_in0_obj.pop_front(block_w);
-        reconfig_data_format(cb_scale_mask, cb_fused_attn);
-
-        // fused attn
-        cb_scale_mask_obj.wait_front(block_w);
-
-#ifndef SHARDED_CAUSAL_MASK
-        cb_fused_attn_obj.wait_front(block_w);
-#endif
-
-        index_subblock_w_offset = 0;
-
-#ifdef CAUSAL_MASK
-        add_tiles_init(cb_scale_mask, cb_fused_attn);
+    static constexpr auto dfb_x_id = dfb::x;
 #else
-        add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
+    // Without numeric_stable, dfb_x aliases dfb_exps (Same-FIFO reuse).
+    static constexpr auto dfb_x_id = dfb::exps;
 #endif
 
-#ifndef NUMERIC_STABLE
-        exp_tile_init<EXP_APPROX>();
+    compute_kernel_hw_startup(dfb::in0, dfb::max_scaler, dfb::exps);
+
+    DataflowBuffer dfb_exps_obj(dfb::exps);
+    DataflowBuffer dfb_x_obj(dfb_x_id);
+    DataflowBuffer dfb_max_scaler_obj(dfb::max_scaler);
+    DataflowBuffer dfb_sum_scaler_obj(dfb::sum_scaler);
+    // in0 and out0 are the borrowed input / output shards and this kernel is the only producer and consumer of
+    // each (self-loop). The rows below pop in0 (which also advances to the next row) and push out0, so push
+    // each in0 row before it is read and pop each out0 row after it is written to leave both balanced.
+    DataflowBuffer dfb_in0_obj(dfb::in0);
+    DataflowBuffer dfb_recip_sum_exps_obj(dfb::recip_sum_exps);
+    DataflowBuffer dfb_out0_obj(dfb::out0);
+#ifdef NUMERIC_STABLE
+    DataflowBuffer dfb_max_obj(dfb::max);
 #endif
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-#ifdef CAUSAL_MASK
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
-                add_tiles(cb_scale_mask, cb_fused_attn, index, index, w);
-            }
+
+#ifdef MASK_PADDED_DATA
+    // The last dimension is not a multiple of the tile width: the reader pushes one -inf padding tile that the
+    // last tile of every row gets added before the exp.
+    DataflowBuffer dfb_mask_padded_obj(dfb::mask_padded);
+    constexpr std::uint32_t block_w_unpadded = block_w - 1;
 #else
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
-                add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, index, index, w);
-            }
+    [[maybe_unused]] constexpr std::uint32_t block_w_unpadded = block_w;
 #endif
-            cb_x_obj.reserve_back(subblock_w);
-#ifndef NUMERIC_STABLE
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                exp_tile<EXP_APPROX>(w);
-            }
+
+#ifdef FUSED_SCALE_MASK
+    DataflowBuffer dfb_fused_scale_obj(dfb::fused_scale);
+    DataflowBuffer dfb_fused_attn_obj(dfb::fused_attn);
+    DataflowBuffer dfb_scale_mask_obj(dfb::scale_mask);
+    constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
+    constexpr auto mask_wait = sharded_causal_mask ? ckl::WaitPolicy::None : ckl::WaitPolicy::Upfront;
+    constexpr auto mask_pop = causal_mask ? ckl::PopPolicy::AtEnd : ckl::PopPolicy::None;
 #endif
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                pack_tile(w, cb_x);
-            }
-            tile_regs_release();
-            cb_x_obj.push_back(subblock_w);
-            index_subblock_w_offset += subblock_w;
+
+    for (std::uint32_t i = 0; i < block_h; i++) {
+        // The in0 row is already resident in L1; advance the DFB to make it available. On Quasar a push with
+        // no intervening pack trips the TEN-4746 guard, so emit a no-write PACR first (a no-op on WH/BH).
+        dfb_in0_obj.reserve_back(block_w);
+        dummy_pack(dfb::in0);
+        dfb_in0_obj.push_back(block_w);
+#ifdef FUSED_SCALE_MASK
+        if constexpr (block_w_unpadded > 0) {
+            ckl::mul<
+                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::input(dfb::fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                ckl::output(dfb::scale_mask, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+                ckl::IterationShape::tiles(block_w_unpadded).block_size(subblock_w),
+                dfb_in0_obj,
+                dfb_fused_scale_obj,
+                dfb_scale_mask_obj);
         }
-        cb_scale_mask_obj.pop_front(block_w);
+#ifdef MASK_PADDED_DATA
+        // The user mask does not cover the tile padding, so the last tile also gets the -inf padding mask.
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Mul,
+                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd),
+                ckl::input(
+                    dfb::fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{
+                dfb_in0_obj, dfb_fused_scale_obj},
+            ckl::DestReuseBinary<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(dfb::mask_padded, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                ckl::DestReuseType::DEST_TO_SRCA>{dfb_mask_padded_obj},
+            ckl::PackTile<ckl::output(dfb::scale_mask, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile)>{
+                dfb_scale_mask_obj});
+#endif
+
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(block_w).block_size(subblock_w),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(
+                    dfb::scale_mask, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::input(dfb::fused_attn, mask_bcast, mask_wait, mask_pop, ckl::InputTileMapping::Block)>{
+                dfb_scale_mask_obj, dfb_fused_attn_obj},
+            // Exp dropped when NUMERIC_STABLE (it is fused into calc_numeric_stable below).
+            ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+            ckl::PackTile<ckl::output(
+                dfb_x_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+                dfb_x_obj});
 
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-        cb_x_obj.wait_front(block_w);
-        calc_numeric_stable<block_w, num_subblocks_w, subblock_w, cb_x, cb_max_scaler, cb_max, cb_exps>();
+        dfb_x_obj.wait_front(block_w);
+        calc_numeric_stable<block_w, subblock_w, dfb_x_id, dfb::max_scaler, dfb::max, dfb::exps>(
+            dfb_x_obj, dfb_max_scaler_obj, dfb_max_obj, dfb_exps_obj);
 #endif
 
-#ifdef CAUSAL_MASK
-        cb_fused_attn_obj.pop_front(block_w);
-#endif
-        reconfig_data_format(cb_exps, cb_sum_scaler);
+        reconfig_data_format(dfb::exps, dfb::sum_scaler);
 
 #else
 
-#ifdef NUMERIC_STABLE
-        calc_numeric_stable<block_w, num_subblocks_w, subblock_w, cb_in0, cb_max_scaler, cb_max, cb_exps>();
-#else
-        reconfig_data_format(cb_in0, cb_in0);
-        pack_reconfig_data_format(cb_exps);
-        // exp(x)
-        index_subblock_w_offset = 0;
-        copy_tile_to_dst_init_short(cb_in0);
-        exp_tile_init<EXP_APPROX>();
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
-                copy_tile(cb_in0, index, w);
-            }
-            cb_exps_obj.reserve_back(subblock_w);
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                exp_tile<EXP_APPROX>(w);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                pack_tile(w, cb_exps);
-            }
-            tile_regs_release();
-            cb_exps_obj.push_back(subblock_w);
-            index_subblock_w_offset += subblock_w;
+#if defined(MASK_PADDED_DATA) && defined(NUMERIC_STABLE) && !defined(ARCH_QUASAR)
+        // Only the last tile of the row holds padding. Mask that tile into x and read the other tiles straight
+        // from in0, rather than first copying the whole row into x (one extra pass over every tile of every row).
+        // Quasar keeps the copy below: it has no MAX + REDUCE_ROW accumulation.
+        if constexpr (block_w_unpadded > 0) {
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                dfb::in0,
+                dfb::max_scaler,
+                dfb::max,
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+                dfb_in0_obj,
+                dfb_max_scaler_obj,
+                dfb_max_obj,
+                compute_kernel_lib::ReduceInputBlockShape::row(block_w_unpadded));
         }
-        cb_in0_obj.pop_front(block_w);
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(
+                    dfb::in0,
+                    ckl::WaitPolicy::None,
+                    ckl::PopPolicy::None,
+                    ckl::InputTileMapping::Scalar,
+                    ckl::DataFormatReconfig::Enabled,
+                    ckl::TileAddressing::Offset),
+                ckl::input(dfb::mask_padded, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{
+                dfb_in0_obj, dfb_mask_padded_obj, block_w_unpadded},
+            ckl::PackTile<ckl::output(dfb::x, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile)>{dfb_x_obj});
+        dfb_x_obj.wait_front(1);
+        if constexpr (block_w_unpadded > 0) {
+            // Fold the masked tile into the max of the other tiles (accumulator and output are both dfb::max).
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                dfb::x,
+                dfb::max_scaler,
+                dfb::max,
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+                dfb_x_obj,
+                dfb_max_scaler_obj,
+                dfb_max_obj,
+                compute_kernel_lib::ReduceInputBlockShape::row(1),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::Accumulate(dfb_max_obj, /*iter=*/1));
+        } else {
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                dfb::x,
+                dfb::max_scaler,
+                dfb::max,
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+                dfb_x_obj, dfb_max_scaler_obj, dfb_max_obj, compute_kernel_lib::ReduceInputBlockShape::row(1));
+        }
+        // exp(x - max): the unpadded tiles from in0 (keeping the max), then the masked tile from x.
+        if constexpr (block_w_unpadded > 0) {
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(block_w_unpadded).block_size(subblock_w),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Sub,
+                    ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                    ckl::input(dfb::max, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{
+                    dfb_in0_obj, dfb_max_obj},
+                ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
+                ckl::PackTile<ckl::output(dfb::exps, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{
+                    dfb_exps_obj});
+        }
+        // The raw last tile was read through x; release it from in0.
+        dfb_in0_obj.pop_front(1);
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Sub,
+                ckl::input(dfb::x, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd),
+                ckl::input(dfb::max, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{
+                dfb_x_obj, dfb_max_obj},
+            ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
+            ckl::PackTile<ckl::output(dfb::exps, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile)>{dfb_exps_obj});
+        dfb_exps_obj.wait_front(block_w);
+#elif defined(MASK_PADDED_DATA)
+        // Copy the row so the last tile can get the -inf padding mask before the max and the exp.
+        if constexpr (block_w_unpadded > 0) {
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(block_w_unpadded).block_size(subblock_w),
+                ckl::CopyTile<
+                    ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                    ckl::Dst::D0>{dfb_in0_obj},
+                ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+                ckl::PackTile<ckl::output(dfb_x_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{dfb_x_obj});
+        }
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd),
+                ckl::input(dfb::mask_padded, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{
+                dfb_in0_obj, dfb_mask_padded_obj},
+            ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+            ckl::PackTile<ckl::output(dfb_x_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile)>{dfb_x_obj});
+#ifdef NUMERIC_STABLE
+        dfb_x_obj.wait_front(block_w);
+        calc_numeric_stable<block_w, subblock_w, dfb_x_id, dfb::max_scaler, dfb::max, dfb::exps>(
+            dfb_x_obj, dfb_max_scaler_obj, dfb_max_obj, dfb_exps_obj);
+#endif
+#elif defined(NUMERIC_STABLE)
+        calc_numeric_stable<block_w, subblock_w, dfb::in0, dfb::max_scaler, dfb::max, dfb::exps>(
+            dfb_in0_obj, dfb_max_scaler_obj, dfb_max_obj, dfb_exps_obj);
+#else
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(block_w).block_size(subblock_w),
+            ckl::CopyTile<
+                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::Dst::D0>{dfb_in0_obj},
+            ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
+            ckl::PackTile<ckl::output(dfb::exps, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{dfb_exps_obj});
 #endif
 #endif  // FUSED_SCALE_MASK
 
         // SUM reduce with reciprocal operation using PRELOADED mode
         // PRELOADED is correct for sharded - all tiles loaded at once
         // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
-        cb_wait_front(cb_exps, block_w);
+        dfb_exps_obj.wait_front(block_w);
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            cb_exps,
-            cb_sum_scaler,
-            cb_recipsumexps,
+            dfb::exps,
+            dfb::sum_scaler,
+            dfb::recip_sum_exps,
             compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
             compute_kernel_lib::ReduceInputBlockShape::row(block_w),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::NoAccumulation{},
-            [](uint32_t) {
-                recip_tile_init();
-                recip_tile(0);
+            [](std::uint32_t) {
+                // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
+                if constexpr (DST_ACCUM_MODE) {
+                    recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
+                    recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(0);
+                } else {
+                    recip_tile_init();
+                    recip_tile(0);
+                }
             });
 
-        // exp(x) / (sum(exp(x)))
-        reconfig_data_format(cb_exps, cb_recipsumexps);
-        pack_reconfig_data_format(cb_out0);
-        cb_recipsumexps_obj.wait_front(1);
-        mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
-        index_subblock_w_offset = 0;
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            cb_out0_obj.reserve_back(subblock_w);
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
-                mul_tiles_bcast<BroadcastType::COL>(cb_exps, cb_recipsumexps, index, 0, w);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                pack_tile(w, cb_out0);
-            }
-            tile_regs_release();
-            cb_out0_obj.push_back(subblock_w);
-            index_subblock_w_offset += subblock_w;
-        }
-        cb_recipsumexps_obj.pop_front(1);
-        cb_exps_obj.pop_front(block_w);
+        ckl::mul<
+            ckl::input(dfb::exps, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::input(dfb::recip_sum_exps, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::output(dfb::out0, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(block_w).block_size(subblock_w),
+            dfb_exps_obj,
+            dfb_recip_sum_exps_obj,
+            dfb_out0_obj);
+        // The out0 row stays in place in the output shard; release it. dummy_unpack orders the pop after the
+        // wait on Quasar (nothing unpacks out0).
+        dfb_out0_obj.wait_front(block_w);
+        dummy_unpack(dfb::out0);
+        dfb_out0_obj.pop_front(block_w);
     }
+#ifdef FUSED_SCALE_MASK
+    // The fused-scale scalar is a single tile pushed once by the reader and re-waited on every row
+    // of the block; pop it once here so the buffer is left balanced.
+    dfb_fused_scale_obj.pop_front(1);
+    // A non-causal attention mask is one row of block_w tiles that every row of the block re-waits
+    // and reuses, so it is popped once here rather than per row. The causal paths set mask_pop to
+    // AtEnd and so pop it inside the loop instead, so don't pop here in that case.
+    if constexpr (!causal_mask) {
+        dfb_fused_attn_obj.pop_front(block_w);
+    }
+#endif  // FUSED_SCALE_MASK
+    // compute_kernel_lib::reduce waits the buffer it is given as the scaler and never pops it, so
+    // one pushed tile serves every reduce call. Pop each scaler here, under the same condition that
+    // gated its reductions, so the buffers are left balanced.
+#ifdef NUMERIC_STABLE
+    dfb_max_scaler_obj.pop_front(1);
+#endif
+    dfb_sum_scaler_obj.pop_front(1);
+#ifdef MASK_PADDED_DATA
+    // The padding mask is a single tile re-waited on the last tile of every row; pop it once here.
+    dfb_mask_padded_obj.pop_front(1);
+#endif
 }

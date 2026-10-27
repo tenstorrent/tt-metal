@@ -21,7 +21,7 @@ namespace ttnn::prim {
 struct TilizeWithValPaddingDeviceOperation {
     using operation_attributes_t = TilizeWithValPaddingParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<
@@ -40,10 +40,14 @@ struct TilizeWithValPaddingDeviceOperation {
         const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
 };
 
+// True if the zero-copy sharded factory runs this call.
+bool can_use_tilize_with_val_padding_sharded_factory(
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor);
+
 Tensor tilize_with_val_padding(
     const Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
-    const tt::tt_metal::PadValue& pad_value,
+    const ttnn::PadValue& pad_value,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     bool use_multicore,

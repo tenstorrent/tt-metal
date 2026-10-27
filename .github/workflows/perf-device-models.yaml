@@ -9,7 +9,7 @@ on:
         type: string
         default: '["blackhole", "wormhole_b0"]'
       requested-models:
-        description: 'List of requested models as JSON array, for example: ["resnet50", "vit"]. Default is ''all'''
+        description: 'List of requested models as JSON array, for example: ["vit"]. Default is ''all'''
         default: "all"
         type: string
       platform:
@@ -37,35 +37,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 2,7,10,14,17,20,23 * * *"
-  workflow_call:
-    inputs:
-      architecture:
-        description: 'Architectures to test: ["blackhole"], ["wormhole_b0"], or both (default)'
-        required: false
-        type: string
-        default: '["blackhole", "wormhole_b0"]'
-      requested-models:
-        description: 'List of requested models as JSON array, for example: ["resnet50", "vit"]. Default is ''all'''
-        required: false
-        type: string
-        default: "all"
-      platform:
-        required: false
-        type: string
-        default: "Ubuntu 22.04"
-        description: "Platform to build and test"
-      build-type:
-        required: false
-        type: string
-        default: "Release"
-        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
-      enable-lto:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable Link Time Optimization (LTO)"
-
+    - cron: "0 2,8,14,20 * * *" # every 6 hours, 4 runs a day
 run-name: "(Single-card) Device perf regressions"
 jobs:
   check-harbor:
@@ -73,6 +45,7 @@ jobs:
 
   build-artifact-profiler:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -82,11 +55,12 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   device-perf:
     needs: [check-harbor, build-artifact-profiler]
+    if: ${{ !cancelled() && needs.build-artifact-profiler.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
     with:

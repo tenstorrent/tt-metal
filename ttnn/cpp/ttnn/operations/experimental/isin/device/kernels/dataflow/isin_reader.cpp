@@ -29,8 +29,9 @@ FORCE_INLINE void isin_subchunks(
         reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(elements_l1_read_addr);
     volatile tt_l1_ptr elements_number_type* test_elements_subchunk_ptr =
         reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(test_elements_l1_read_addr);
-    volatile tt_l1_ptr elements_number_type* output_subchunk_ptr =
-        reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(output_l1_write_addr);
+    // Output mask is always uint32; elements_number_type is only for the compared values.
+    volatile tt_l1_ptr uint32_t* output_subchunk_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_l1_write_addr);
     for (uint32_t elements_index = 0; elements_index < elements_subchunk_size; ++elements_index) {
         for (uint32_t test_elements_index = 0; test_elements_index < test_elements_subchunk_size;
              ++test_elements_index) {
@@ -80,6 +81,7 @@ FORCE_INLINE void prefill_output(
 */
 void kernel_main() {
     constexpr auto ctas = get_ctas();
+    static_assert(ctas.output_tensor_datum_size == sizeof(uint32_t), "isin output mask must be uint32");
 
     const uint32_t elements_buffer_address = get_arg_val<uint32_t>(0);
     const uint32_t test_elements_buffer_address = get_arg_val<uint32_t>(1);
@@ -100,6 +102,8 @@ void kernel_main() {
         ctas.test_elements_size * test_elements_element_size);
 
     Noc noc;
+    CircularBuffer elements_cb(ctas.elements_cb);
+    CircularBuffer test_elements_cb(ctas.test_elements_cb);
     CircularBuffer output_cb(ctas.output_cb);
 
     /*
@@ -119,12 +123,13 @@ void kernel_main() {
             std::min(ctas.elements_size - elements_offset, ctas.single_fetch_subchunk_size);
         load_to_cb(
             ctas.elements_cb, elements_addr_gtor, elements_offset, elements_subchunk_size, elements_element_size);
-        cb_wait_front(ctas.elements_cb, ONE_PAGE);
+        elements_cb.wait_front(ONE_PAGE);
         // prepare output mask for writing
-        cb_reserve_back(ctas.output_cb, ONE_PAGE);
-        const uint32_t elements_l1_read_addr = get_read_ptr(ctas.elements_cb);
-        const uint32_t output_l1_write_addr = get_write_ptr(ctas.output_cb);
-        prefill_output<elements_number_type>(noc, output_cb, elements_subchunk_size, ctas.invert);
+        output_cb.reserve_back(ONE_PAGE);
+        const uint32_t elements_l1_read_addr = elements_cb.get_read_ptr();
+        const uint32_t output_l1_write_addr = output_cb.get_write_ptr();
+        // Mask words are uint32, including the invert fill.
+        prefill_output<uint32_t>(noc, output_cb, elements_subchunk_size, ctas.invert);
 
         // for every subchunk of the test_elements stick
         for (uint32_t test_elements_subchunk_id = 0, test_elements_offset = 0;
@@ -139,8 +144,8 @@ void kernel_main() {
                 test_elements_offset,
                 test_elements_subchunk_size,
                 test_elements_element_size);
-            cb_wait_front(ctas.test_elements_cb, ONE_PAGE);
-            const uint32_t test_elements_l1_read_addr = get_read_ptr(ctas.test_elements_cb);
+            test_elements_cb.wait_front(ONE_PAGE);
+            const uint32_t test_elements_l1_read_addr = test_elements_cb.get_read_ptr();
 
             // exhaustively perform isin on a given elements' subchunks (one elements' subchunk vs all test_elements'
             // subchunks)
@@ -152,11 +157,11 @@ void kernel_main() {
                 test_elements_subchunk_size,
                 ctas.invert);
 
-            cb_pop_front(ctas.test_elements_cb, ONE_PAGE);
+            test_elements_cb.pop_front(ONE_PAGE);
         }
 
         // push the output subchunk once it's been checked against test_elements
-        cb_push_back(ctas.output_cb, ONE_PAGE);
-        cb_pop_front(ctas.elements_cb, ONE_PAGE);
+        output_cb.push_back(ONE_PAGE);
+        elements_cb.pop_front(ONE_PAGE);
     }
 }

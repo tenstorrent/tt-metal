@@ -18,6 +18,7 @@ from ....parallel.config import MochiVAEParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache
 from ....utils.check import assert_quality
+from ....utils.test import line_params_req_exact_devices, skip_if_unsupported_num_links
 
 
 def get_padded_size(numerator, denominator):
@@ -98,7 +99,10 @@ def create_random_conv3d_models(mesh_device, in_channels, out_channels, bias=Tru
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+    "device_params",
+    [{**line_params_req_exact_devices, "trace_region_size": 20000000}],
+    ids=["line"],
+    indirect=True,
 )
 def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds):
     """Test forward pass of TtConv1x1 against Conv3d with 1x1x1 kernel."""
@@ -211,12 +215,12 @@ def create_random_resblock_models(
         ((8, 4), 2),  # BH Galaxy
     ],
     ids=[
-        "1x1",
-        "1x2",
-        "1x8",
-        "2x4",
-        "wh_8x4",
-        "bh_8x4",
+        "1x1nl1",
+        "1x2nl1",
+        "1x8nl1",
+        "2x4nl1",
+        "8x4nl4",
+        "8x4nl2",
     ],
     indirect=["mesh_device"],
 )
@@ -226,10 +230,16 @@ def create_random_resblock_models(
     ids=["bf16", "f32"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+    "device_params",
+    [{**line_params_req_exact_devices, "trace_region_size": 20000000}],
+    ids=["line"],
+    indirect=True,
 )
 def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links, dtype):
     """Test complete forward pass of TtResBlock."""
+    if tuple(mesh_device.shape) != (1, 1):
+        skip_if_unsupported_num_links(mesh_device, num_links)
+
     block_args = resblock_args.copy()
     block_args["channels"] = C
     block_args["nonlinearity"] = "silu"
@@ -329,17 +339,20 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links,
         ((8, 4), 2),  # BH Galaxy
     ],
     ids=[
-        "1x1",
-        "1x2",
-        "1x8",
-        "2x4",
-        "wh_8x4",
-        "bh_8x4",
+        "1x1nl1",
+        "1x2nl1",
+        "1x8nl1",
+        "2x4nl1",
+        "8x4nl4",
+        "8x4nl2",
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+    "device_params",
+    [{**line_params_req_exact_devices, "trace_region_size": 20000000}],
+    ids=["line"],
+    indirect=True,
 )
 def test_tt_resblock_decoder_dims(mesh_device, C, T, H_unpadded, W_unpadded, W_padded, reset_seeds, num_links):
     """Test resblock with decoder-actual dimensions that exercise W unpadding on 2D mesh.
@@ -349,6 +362,9 @@ def test_tt_resblock_decoder_dims(mesh_device, C, T, H_unpadded, W_unpadded, W_p
     logical width). The standalone resblock test doesn't cover this because those
     channels use clean W values that divide evenly by w_factor.
     """
+    if tuple(mesh_device.shape) != (1, 1):
+        skip_if_unsupported_num_links(mesh_device, num_links)
+
     N = 1
     block_args = resblock_args.copy()
     block_args["channels"] = C
@@ -558,20 +574,26 @@ def create_random_causalupsampleblock_models(
         ((8, 4), 2),  # BH Galaxy
     ],
     ids=[
-        "1x1",
-        "1x2",
-        "1x8",
-        "2x4",
-        "wh_8x4",
-        "bh_8x4",
+        "1x1nl1",
+        "1x2nl1",
+        "1x8nl1",
+        "2x4nl1",
+        "8x4nl4",
+        "8x4nl2",
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+    "device_params",
+    [{**line_params_req_exact_devices, "trace_region_size": 20000000}],
+    ids=["line"],
+    indirect=True,
 )
 def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
     """Test TtCausalUpsampleBlock against reference implementation."""
+    if tuple(mesh_device.shape) != (1, 1):
+        skip_if_unsupported_num_links(mesh_device, num_links)
+
     in_channels = config["in_channels"]
     out_channels = config["out_channels"]
     num_res_blocks = config["num_res_blocks"]
@@ -798,6 +820,7 @@ def load_dit(
             subfolder="transformer",
             parallel_config=parallel_config,
             mesh_shape=tuple(mesh_device.shape),
+            mesh_device=mesh_device,
             dtype="bf16",
         )
     else:
@@ -812,13 +835,6 @@ def load_dit(
     ids=[cfg["name"] for cfg in decoder_test_configs],
 )
 @pytest.mark.parametrize(
-    "load_dit_weights",
-    [
-        pytest.param(False, id="no_dit"),
-        pytest.param(True, id="load_dit"),
-    ],
-)
-@pytest.mark.parametrize(
     "mesh_device, num_links",
     [
         ((1, 1), 1),
@@ -829,19 +845,29 @@ def load_dit(
         ((8, 4), 2),  # BH Galaxy
     ],
     ids=[
-        "1x1",
-        "1x2",
-        "1x8",
-        "2x4",
-        "wh_8x4",
-        "bh_8x4",
+        "1x1nl1",
+        "1x2nl1",
+        "1x8nl1",
+        "2x4nl1",
+        "8x4nl4",
+        "8x4nl2",
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+    "device_params",
+    [{**line_params_req_exact_devices, "trace_region_size": 20000000}],
+    ids=["line"],
+    indirect=True,
 )
-def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, num_links):
+def test_tt_decoder_forward(mesh_device, config, reset_seeds, num_links):
+    if tuple(mesh_device.shape) != (1, 1):
+        skip_if_unsupported_num_links(mesh_device, num_links)
+
+    # TODO: Verify if this should actually fit or not. Currently does not fit.
+    if config["name"] == "large_latent" and mesh_device.get_num_devices() == 8:
+        pytest.skip("large_latent test does not fit on an 8-device mesh")
+
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
 
@@ -853,10 +879,9 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
 
-    if load_dit_weights:
-        # Load DiT weights to device to account for real world DRAM usage, checking for OOM.
-        logger.info("Loading DiT weights")
-        tt_model_dit = load_dit(mesh_device, ccl_manager, use_cache=False)
+    # Load DiT weights to device to account for real world DRAM usage, checking for OOM.
+    logger.info("Loading DiT weights")
+    tt_model_dit = load_dit(mesh_device, ccl_manager, use_cache=False)
 
     # Create models
     logger.info("Creating VAE decoder models")

@@ -5,6 +5,8 @@ set(TTNN_OP_ELTWISE_UNARY_SRCS
     common/unary_op_utils.cpp
     common/unary_utils.cpp
     device/unary_composite_op.cpp
+    device/pow_int_device_operation.cpp
+    device/pow_int_program_factory.cpp
     device/unary_device_operation.cpp
     device/unary_program_factory.cpp
     unary.cpp
@@ -17,3 +19,10 @@ set(TTNN_OP_ELTWISE_UNARY_API_HEADERS
     unary.hpp
     unary_composite.hpp
 )
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/eltwise/unary/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_ELTWISE_UNARY_NANOBIND_SRCS unary_nanobind.cpp)

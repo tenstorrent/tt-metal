@@ -14,15 +14,13 @@
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "llk_pack_common.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
 
 namespace llk_pack_internal
 {
-static std::uint32_t configured_num_tiles   = 1;
-static std::uint32_t configured_zero_output = 0;
+static std::uint32_t configured_num_tiles = 1;
 
 /**
  * @brief Emit the final close/reset PACR for a multi-tile pack run.
@@ -137,8 +135,10 @@ inline std::uint32_t _llk_pack_output_addr_offset_words_(
 /**
  * @brief Configure the packer address-modification (ADDR_MOD) slots for the selected pack mode.
  *
- * Programs ADDR_MOD_0/1/2 with the src/dest Y and Z increment/clear patterns the pack MOP relies
+ * Programs ADDR_MOD_0/1/2 with the src Y and Z increment/clear patterns the pack MOP relies
  * on to traverse the destination register and step through faces for the given layout.
+ * The dest (channel-1) counters are left alone: output placement comes from L1_Dest_addr and
+ * the packers' own write pointers, and no Wormhole code programs a channel-1 stride.
  *
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
  */
@@ -147,7 +147,6 @@ inline void _llk_pack_configure_addrmod_()
 {
     addr_mod_pack_t {
         .y_src = {.incr = 15}, // 4-bit value so max is 15. incadcxy will increment it by 1
-        .y_dst = {.incr = 1},
     }
         .set(ADDR_MOD_0);
 
@@ -155,7 +154,6 @@ inline void _llk_pack_configure_addrmod_()
     {
         addr_mod_pack_t {
             .y_src = {.incr = 1, .clr = 0, .cr = 1},
-            .y_dst = {.incr = 1, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_1);
     }
@@ -163,16 +161,13 @@ inline void _llk_pack_configure_addrmod_()
     {
         addr_mod_pack_t {
             .y_src = {.incr = 0, .clr = 1, .cr = 0},
-            .y_dst = {.incr = 0, .clr = 1, .cr = 0},
             .z_src = {.incr = 0, .clr = 0},
-            .z_dst = {.incr = 0, .clr = 0},
         }
             .set(ADDR_MOD_1);
     }
 
     addr_mod_pack_t {
         .y_src = {.incr = 0, .clr = 1, .cr = 0},
-        .y_dst = {.incr = 0, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_2);
 }
@@ -220,24 +215,20 @@ inline void _llk_pack_mop_config_(
         }
     }
 
-    const std::uint32_t PACKCNT               = (partial_face && IS_BFP_FORMAT(pack_dst_format)) ? 1 : num_faces;
-    constexpr std::uint32_t MEGAROW           = 1;
-    constexpr std::uint32_t ZERO_OUTPUT_FLAG  = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
-    constexpr std::uint32_t MOP_INNER_LOOP    = 1;
-    llk_pack_internal::configured_num_tiles   = num_tiles;
-    llk_pack_internal::configured_zero_output = ZERO_OUTPUT_FLAG;
+    const std::uint32_t PACKCNT                    = (partial_face && IS_BFP_FORMAT(pack_dst_format)) ? 1 : num_faces;
+    constexpr std::uint32_t MEGAROW                = 1;
+    constexpr std::uint32_t ZERO_OUTPUT_FLAG       = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
+    constexpr std::uint32_t MOP_INNER_LOOP         = 1;
+    llk_pack_internal::configured_num_tiles        = num_tiles;
+    llk_pack_internal::configured_zero_output      = ZERO_OUTPUT_FLAG;
+    llk_pack_internal::configured_partial_face_bfp = pack_mode != PackMode::Untilize && partial_face && IS_BFP_FORMAT(pack_dst_format);
 
     if constexpr (pack_mode != PackMode::Untilize)
     {
         if (partial_face && IS_BFP_FORMAT(pack_dst_format))
         {
             LLK_ASSERT(num_tiles == 1, "multi-tile partial-face BFP pack is not supported");
-            constexpr std::uint32_t MOP_OUTER_LOOP = 1;
-            ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
-            tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0)); // Don't close the tile, point to the next face
-            tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0));                                     // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
-            tmp.set_loop_op1(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1)); // Close the tile
-            tmp.program();
+            llk_pack_internal::program_partial_face_bfp_mop();
         }
         else if (num_tiles == 1)
         {
@@ -312,29 +303,18 @@ inline void _llk_pack_reconfig_data_format_(
     [[maybe_unused]] const bool narrow_tile = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    llk::san::pack_operand_configure<true>(
-        is_fp32_dest_acc_en, pack_src_format, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, partial_face, narrow_tile);
 
     reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face);
-}
-
-/**
- * @brief Enable or disable reading the destination register as 32-bit data for the packer.
- *
- * @param enable: True to read dest as 32-bit (FP32) data, false otherwise.
- * @note Stalls on the pack pipe before modifying the PCK_DEST_RD_CTRL config register.
- */
-inline void _llk_pack_set_fp32_dest_acc_(bool enable)
-{
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
 }
 
 /**
  * @brief One-time hardware configuration of the packer for a given data format and tile geometry.
  *
  * Programs the packer config registers (formats, strides, relu) for the chosen pack mode. Call once
- * before the init/execute sequence.
+ * before the init/execute sequence, or again when a later op needs a different packer configuration.
+ *
+ * @note Drains the packer and blocks this RISC until it is idle before any register is rewritten, so it
+ *       is safe to call while a pack from the previous op is still in flight.
  *
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
@@ -359,8 +339,8 @@ inline void _llk_pack_hw_configure_(
     const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    llk::san::pack_operand_configure(is_fp32_dest_acc_en, pack_src_format, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, partial_face, narrow_tile);
 
+    LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
@@ -390,7 +370,7 @@ inline void _llk_pack_hw_configure_(
  *       (@ref _llk_pack_reconfig_data_format_), one of which must run before this init.
  * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
  */
-template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, [[maybe_unused]] bool skip_packer_strides = false>
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides /*maybe_unused*/ = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -402,10 +382,6 @@ inline void _llk_pack_init_(
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0 pack init supports only PackMode::Default and PackMode::Untilize");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    llk::san::pack_operand_check(llk::san::IGNORE, llk::san::IGNORE, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, partial_face, narrow_tile);
-    // sstanisic todo: sanitizer: propagate enum (see #47440)
-    llk::san::operation_init<llk::san::Operation::Pack>(pack_mode == PackMode::Untilize);
-
     if constexpr (!skip_addrmod_config)
     {
         _llk_pack_configure_addrmod_<pack_mode>();
@@ -435,7 +411,6 @@ inline void _llk_pack_init_(
  */
 inline void _llk_pack_uninit_()
 {
-    llk::san::operation_uninit<llk::san::Operation::Pack>();
 }
 
 /**
@@ -457,8 +432,6 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
-    // sstanisic todo: sanitizer: propagate enum (see #47440)
-    llk::san::operation_check<llk::san::Operation::Pack>(pack_mode == PackMode::Untilize);
 
     if constexpr (pack_mode != PackMode::Untilize)
     {

@@ -18,12 +18,15 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* done_address_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_address);
 
     uint64_t pcie_noc_xy_encoding = (uint64_t)NOC_XY_PCIE_ENCODING(PCIE_NOC_X, PCIE_NOC_Y);
+
+    // Every read targets the same PCIe core, so program the routing once and let the loop change addresses.
+    noc_async_read_set_pcie_state(pcie_noc_xy_encoding | pcie_read_ptr);
     while (done_address_ptr[0] == 0) {
-        uint64_t host_src_addr = pcie_noc_xy_encoding | pcie_read_ptr;
-        noc_async_read(host_src_addr, done_address, read_sizeB);
+        noc_async_read_with_state(pcie_read_ptr, done_address, read_sizeB);
         pcie_read_ptr += read_sizeB;
         if (pcie_read_ptr > pcie_base + pcie_sizeB) {
             pcie_read_ptr = pcie_base;
         }
     }
+    noc_async_read_clear_pcie_state();
 }

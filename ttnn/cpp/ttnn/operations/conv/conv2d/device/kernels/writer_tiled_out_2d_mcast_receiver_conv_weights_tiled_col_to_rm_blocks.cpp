@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 #define ENABLE_DEBUG 0
 
@@ -56,49 +57,48 @@ void kernel_main() {
     constexpr uint32_t act_write_offset = get_compile_time_arg_val(34);
     constexpr uint32_t act_write_offset_last = get_compile_time_arg_val(35);
 
-    experimental::CB cb_act_second_obj(cb_id_act_second_reader);
+    DataflowBuffer dfb_act_second_obj(cb_id_act_second_reader);
     const uint32_t split_reader_cb_write_addr =
-        (split_reader_cb_shared) ? cb_act_second_obj.get_write_ptr() + act_write_offset : 0;
+        (split_reader_cb_shared) ? dfb_act_second_obj.get_write_ptr() + act_write_offset : 0;
     // In case of double buffering the split reader can write to two different addresses
     const uint32_t split_reader_cb_write_addr_last =
-        (split_reader_cb_shared) ? cb_act_second_obj.get_write_ptr() + act_write_offset_last : 0;
+        (split_reader_cb_shared) ? dfb_act_second_obj.get_write_ptr() + act_write_offset_last : 0;
     const uint32_t split_reader_cb_write_addr_sum = split_reader_cb_write_addr + split_reader_cb_write_addr_last;
 
-    // mcast args
-    uint32_t i = 0;
-    const uint32_t weights_mcast_sender_noc_x = get_arg_val<uint32_t>(i++);
-    const uint32_t weights_mcast_sender_noc_y = get_arg_val<uint32_t>(i++);
+    constexpr auto weights_mcast_args = dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("weights_mcast_ct_offset"),
+        get_named_compile_time_arg_val("weights_mcast_rt_offset")>();
+
+    const bool has_sharded_input = get_arg_val<uint32_t>(0) > 0;
 
     // Experimental API objects
     Noc noc;
-    Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
-    Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
-    experimental::CB cb_weight_obj(cb_id_weight);
-    experimental::CB cb_bias_obj(bias_cb_id);
-    experimental::CB cb_reader_indices_obj(cb_reader_indices);
-    experimental::CB cb_sharded_act_obj(cb_id_sharded_act);
+    DataflowBuffer dfb_weight_obj(cb_id_weight);
+    DataflowBuffer dfb_bias_obj(bias_cb_id);
+    DataflowBuffer dfb_reader_indices_obj(cb_reader_indices);
+    DataflowBuffer dfb_sharded_act_obj(cb_id_sharded_act);
 
-    const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
+    auto weights_pipe = weights_mcast_args.receiver(noc);
 
     // Split reader configuration
     if constexpr (split_reader_enabled) {
 #ifdef CONFIG_TENSOR_IN_DRAM
-        cb_reader_indices_obj.wait_front(1);
+        dfb_reader_indices_obj.wait_front(1);
 #endif
         if constexpr (needs_act_block_zero_out) {
-            zero_out_tiles<cb_id_act_second_reader>(noc, cb_act_second_obj);
+            zero_out_tiles<cb_id_act_second_reader>(noc, dfb_act_second_obj);
         }
     }
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        (split_reader_enabled && is_sender_core)
-            ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_indices_obj.get_write_ptr())
+        (split_reader_enabled && has_sharded_input)
+            ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_reader_indices_obj.get_write_ptr())
             : nullptr;
 
     // Initial setup for second reader (starting from second reader's data)
-    // Only read reader indices on cores that have sharded input (is_sender_core).
+    // Only read reader indices on cores that have sharded input.
     uint32_t start_reader_idx =
-        (split_reader_enabled && is_sender_core) ? (uint32_t)(packed_reader_indices_ptr[0] & 0xffff) + 1 : 0;
+        (split_reader_enabled && has_sharded_input) ? (uint32_t)(packed_reader_indices_ptr[0] & 0xffff) + 1 : 0;
     uint32_t reader_idx = start_reader_idx;
 
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
@@ -107,7 +107,7 @@ void kernel_main() {
     constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
 
-    const uint32_t act_l1_read_addr = split_reader_enabled ? cb_sharded_act_obj.get_read_ptr() : 0;
+    const uint32_t act_l1_read_addr = split_reader_enabled ? dfb_sharded_act_obj.get_read_ptr() : 0;
     // read in bias if enabled (done only once for all batches)
     bool load_bias = true;
 
@@ -126,16 +126,16 @@ void kernel_main() {
                 if constexpr (split_reader_enabled) {
                     reader_idx = start_reader_idx;
                     if constexpr (!split_reader_cb_shared) {
-                        cb_act_second_obj.reserve_back(act_block_num_tiles_split_last);
+                        dfb_act_second_obj.reserve_back(act_block_num_tiles_split_last);
                     }
 
-                    if (is_sender_core) {
+                    if (has_sharded_input) {
                         if constexpr (split_reader_cb_shared) {
                             reserve_done_sem.wait(VALID);
                             reserve_done_sem.set(INVALID);
                             prev_addr = l1_write_addr_act;
                         } else {
-                            l1_write_addr_act = cb_act_second_obj.get_write_ptr();
+                            l1_write_addr_act = dfb_act_second_obj.get_write_ptr();
                         }
                         experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
                         read_activation_data<
@@ -164,7 +164,7 @@ void kernel_main() {
                         }
                     }
                     if constexpr (!split_reader_cb_shared) {
-                        cb_act_second_obj.push_back(act_block_num_tiles_split_last);
+                        dfb_act_second_obj.push_back(act_block_num_tiles_split_last);
                     }
                 }
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
@@ -173,41 +173,27 @@ void kernel_main() {
                     // read weight blocks inner dim
                     // read weight slice - 1 block of weights in width dim and full weight matrix height
                     // read slice only once for all activation blocks
-                    cb_weight_obj.reserve_back(weight_block_num_tiles);
-                    // Set weights semaphore value to INVALID
-                    weights_mcast_receiver_sem.set(INVALID);
+                    dfb_weight_obj.reserve_back(weight_block_num_tiles);
+                    weights_pipe.receive();
 
-                    // Atomic increment source core counter
-                    weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
-
-                    // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    weights_mcast_receiver_sem.wait(VALID);
-
-                    cb_weight_obj.push_back(weight_block_num_tiles);
+                    dfb_weight_obj.push_back(weight_block_num_tiles);
                 }  // for weight_block_height_num_outer
             }
             if constexpr (split_reader_enabled) {
                 // Update reader index for next iteration (split reader increment)
-                // Only read reader indices on cores that have sharded input (is_sender_core).
-                if (is_sender_core) {
+                // Only read reader indices on cores that have sharded input.
+                if (has_sharded_input) {
                     start_reader_idx =
                         reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
                 }
             }
             if constexpr (fuse_bias) {
                 if (load_bias) {
-                    cb_bias_obj.reserve_back(bias_ntiles);
+                    dfb_bias_obj.reserve_back(bias_ntiles);
 
-                    // Set weights semaphore value to INVALID
-                    weights_mcast_receiver_sem.set(INVALID);
+                    weights_pipe.receive();
 
-                    // Atomic increment source core counter
-                    weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
-
-                    // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    weights_mcast_receiver_sem.wait(VALID);
-
-                    cb_bias_obj.push_back(bias_ntiles);
+                    dfb_bias_obj.push_back(bias_ntiles);
                     load_bias = false;
                 }
             }
@@ -216,4 +202,12 @@ void kernel_main() {
     }  // out_num_blocks_w
 
     noc.async_write_barrier();
+
+#ifdef CONFIG_TENSOR_IN_DRAM
+    if constexpr (split_reader_enabled) {
+        // The reader-index page is read through a raw pointer for the whole kernel, so it is popped
+        // here rather than next to the wait that acquired it.
+        dfb_reader_indices_obj.pop_front(1);
+    }
+#endif
 }

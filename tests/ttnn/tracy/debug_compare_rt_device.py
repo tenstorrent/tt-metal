@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os, threading, torch, ttnn
+import os, torch, ttnn
 
 
 def main():
-    records, lock = [], threading.Lock()
+    records = []
 
-    def collect(r):
-        with lock:
+    def collect_records(batch):
+        for r in batch.records:
             records.append(
                 {
                     "runtime_id": r.runtime_id,
@@ -25,7 +25,7 @@ def main():
         l1_small_size=24576,
         dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER),
     )
-    h = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect)
+    h = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
     try:
         torch.manual_seed(0)
         a = ttnn.to_layout(
@@ -54,8 +54,7 @@ def main():
         ttnn.close_mesh_device(dev)
         ttnn.device.UnregisterProgramRealtimeProfilerCallback(h)
 
-    with lock:
-        snap = list(records)
+    snap = list(records)
 
     csv_path = os.path.join("generated", "profiler", ".logs", "profile_log_device.csv")
     metal_home = os.environ.get("TT_METAL_HOME", "")

@@ -33,7 +33,7 @@ void TTProfiler::read_results(
     }
 
     if (get_naive_profiling()) {
-        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
         auto now = std::chrono::high_resolution_clock::now();
         auto us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
         fmt::print("[NAIVE_PROFILER] {} timestamp_us={}\n", noop_identifier, us);
@@ -82,14 +82,6 @@ TTProfiler::TTProfiler() : m_enabled(false) {
     bool runtime_profiler_enabled = env_value != nullptr && std::string(env_value) == "1";
     if (is_tracy_enabled && runtime_profiler_enabled) {
         enable();
-
-        tt::tt_metal::detail::ProfilerSync(tt::tt_metal::ProfilerSyncState::INIT);
-    }
-}
-
-TTProfiler::~TTProfiler() {
-    if (is_enabled()) {
-        tt::tt_metal::detail::ProfilerSync(tt::tt_metal::ProfilerSyncState::CLOSE_DEVICE);
     }
 }
 

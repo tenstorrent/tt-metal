@@ -5,6 +5,7 @@
 #include "auto_context.hpp"
 
 #include <optional>
+#include <sstream>
 
 #include "core/tt_profiler.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -17,6 +18,20 @@ std::mt19937& AutoContext::get_generator() {
 
 void AutoContext::set_generator(const std::mt19937& generator) {
     m_generator = generator;
+}
+
+std::string AutoContext::get_generator_state() const {
+    std::ostringstream oss;
+    oss << m_generator;  // mt19937's stream operator emits its full internal state (624 words + position)
+    return oss.str();
+}
+
+void AutoContext::set_generator_state(const std::string& state) {
+    std::istringstream iss(state);
+    iss >> m_generator;
+    if (iss.fail()) {
+        throw std::runtime_error("Failed to deserialize RNG generator state.");
+    }
 }
 
 void AutoContext::set_seed(uint32_t seed) {
@@ -63,6 +78,9 @@ void AutoContext::close_profiler() {
 }
 
 void AutoContext::close_device() {
+    // The CCL semaphores are L1 buffers of the mesh being closed; the next mesh allocates its own, and a set kept
+    // from this one would point at addresses the next mesh hands out to other buffers.
+    m_ccl_resources.reset();
     m_device = nullptr;
     // Drop the process-global fabric config that open_device_mesh may have
     // installed via enable_fabric(). Without this, fabric stays armed for

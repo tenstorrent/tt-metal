@@ -7,7 +7,12 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import is_wormhole_b0, is_blackhole, skip_for_blackhole, skip_for_slow_dispatch
+from tt_py_test_utils_common.utility_functions import (
+    is_wormhole_b0,
+    is_blackhole,
+    skip_for_blackhole,
+    skip_for_slow_dispatch,
+)
 from tests.ttnn.unit_tests.operations.prefetcher_common import run_prefetcher_mm
 
 

@@ -13,9 +13,11 @@
 
 namespace tt::tt_fabric {
 
+class FabricBuilderContext;
+
 // Local tensix (relay) connection info for UDM mode
 struct LocalTensixRelayConnectionInfo {
-    CoreCoord noc_xy = {0, 0};
+    tt::tt_metal::CoreCoord noc_xy = {0, 0};
     size_t buffer_base_address = 0;
     size_t worker_registration_address = 0;
     size_t worker_location_info_address = 0;
@@ -57,7 +59,7 @@ public:
         uint32_t inbound_vc_idx,
         uint32_t sender_channel_idx,
         eth_chan_directions downstream_direction,
-        CoreCoord downstream_noc_xy,
+        tt::tt_metal::CoreCoord downstream_noc_xy,
         bool is_2D_routing) = 0;
 
     virtual void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const = 0;
@@ -65,13 +67,16 @@ public:
     virtual void emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const = 0;
 
     // Add connection to local tensix (relay in UDM mode)
-    virtual void add_local_tensix_connection(const SenderWorkerAdapterSpec&, eth_chan_directions, CoreCoord) = 0;
+    virtual void add_local_tensix_connection(const SenderWorkerAdapterSpec&, eth_chan_directions, tt::tt_metal::CoreCoord) = 0;
 
     // Get the number of downstream EDMs connected for a specific VC
     virtual uint32_t get_downstream_edm_count_for_vc(uint32_t vc_idx) const = 0;
 
     // Get the connection mask for a specific VC
     virtual uint32_t get_downstream_edm_mask_for_vc(uint32_t vc_idx) const = 0;
+
+    // Pack destination routers' absolute sender channel IDs by compact 2D downstream slot.
+    virtual uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const = 0;
 
 protected:
     ~ChannelConnectionWriterAdapter() = default;
@@ -91,7 +96,9 @@ private:
  */
 class StaticSizedChannelConnectionWriterAdapter final : public ChannelConnectionWriterAdapter {
 public:
+    // builder_context must outlive the adapter.
     StaticSizedChannelConnectionWriterAdapter(
+        const FabricBuilderContext& builder_context,
         FabricStaticSizedChannelsAllocator& allocator,
         tt::tt_fabric::Topology topology,
         eth_chan_directions my_direction);
@@ -101,13 +108,13 @@ public:
         uint32_t inbound_vc_idx,
         uint32_t sender_channel_idx,
         eth_chan_directions downstream_direction,
-        CoreCoord downstream_noc_xy,
+        tt::tt_metal::CoreCoord downstream_noc_xy,
         bool is_2D_routing) override;
 
     void add_local_tensix_connection(
         const SenderWorkerAdapterSpec& adapter_spec,
         eth_chan_directions tensix_direction,
-        CoreCoord tensix_noc_xy) override;
+        tt::tt_metal::CoreCoord tensix_noc_xy) override;
 
     void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const override;
     void pack_adaptor_to_relay_rt_args(std::vector<uint32_t>& args_out) const override;
@@ -124,6 +131,8 @@ public:
         return downstream_edms_connected_by_vc_mask.at(vc_idx);
     }
 
+    uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const override;
+
     // Get buffer index semaphore address for a specific VC and compact index
     std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {
         return downstream_edm_buffer_index_semaphore_addresses.at(vc_idx).at(compact_idx);
@@ -134,17 +143,17 @@ private:
     uint32_t pack_downstream_noc_x_rt_arg(uint32_t vc_idx) const;
     uint32_t encode_noc_ord_for_2d(
         const std::array<
-            std::vector<std::pair<eth_chan_directions, CoreCoord>>,
+            std::vector<std::pair<eth_chan_directions, tt::tt_metal::CoreCoord>>,
             builder_config::num_max_receiver_channels>& downstream_edms_connected_by_vc,
         uint32_t vc_idx,
-        const std::function<uint32_t(CoreCoord)>& get_noc_ord) const;
+        const std::function<uint32_t(tt::tt_metal::CoreCoord)>& get_noc_ord) const;
 
     void emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const override;
 
     std::unordered_set<uint32_t> downstream_edms_connected_by_vc_set;
 
     // holds which downstream cores a given receiver/inbound channel VC can feed into
-    std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_max_receiver_channels>
+    std::array<std::vector<std::pair<eth_chan_directions, tt::tt_metal::CoreCoord>>, builder_config::num_max_receiver_channels>
         downstream_edms_connected_by_vc = {};
 
     // holds the number of buffer slots per downstream sender channel
@@ -163,6 +172,12 @@ private:
     // Per-VC connection mask: bitmask indicating which downstream EDMs are connected for each VC
     std::array<uint32_t, builder_config::num_max_receiver_channels> downstream_edms_connected_by_vc_mask = {};
 
+    // Destination router's absolute sender channel for each compact downstream slot.
+    std::array<
+        std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
+        builder_config::num_max_receiver_channels>
+        downstream_sender_channel_ids = {};
+
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
         builder_config::num_max_receiver_channels>
@@ -176,6 +191,7 @@ private:
         builder_config::num_max_receiver_channels>
         downstream_edm_buffer_index_semaphore_addresses = {};
 
+    const FabricBuilderContext& builder_context_;
     bool is_2D_routing = false;
     eth_chan_directions my_direction = eth_chan_directions::EAST;
 

@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     for (int i = 0; i < LOOP_COUNT; i++) {

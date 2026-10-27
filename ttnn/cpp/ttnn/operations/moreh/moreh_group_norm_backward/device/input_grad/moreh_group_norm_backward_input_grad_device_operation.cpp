@@ -40,6 +40,7 @@ void MorehGroupNormBackwardInputGradOperation::validate_tensors(
     check_tensor(gamma, "moreh_group_norm_backward_input_grad", "gamma");
 
     // output_grad (N, C, H, W)
+    TT_FATAL(num_groups > 0, "num_groups must be greater than 0.");
     auto C = output_grad.padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "output_grad_shape[1] must be divisible by num_groups.");
     // input (N, C, H, W)
@@ -83,7 +84,7 @@ MorehGroupNormBackwardInputGradOperation::compute_output_specs(
     if (tensor_args.input_grad.has_value()) {
         return {tensor_args.input_grad->tensor_spec()};
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         tensor_args.output_grad.logical_shape(),
         TensorLayout(
             tensor_args.output_grad.dtype(), PageConfig(Layout::TILE), operation_attributes.input_grad_memory_config));

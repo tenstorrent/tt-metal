@@ -72,7 +72,7 @@ void get_enum(FlatBufferFile& file, std::string_view name, T& value) {
     value = static_cast<T>(int_value);
 }
 
-void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const tt::tt_metal::Tensor& tensor) {
+void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const ttnn::Tensor& tensor) {
     // Store tensor in m_tensors - it will be written to file during serialize()
     // This ensures tensors are written to the correct directory
     file.put(name, tensor);
@@ -89,7 +89,7 @@ void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const tt::tt
     file.put(std::string(name) + "/storage_type", static_cast<int>(storage_type));
 }
 
-void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, tt::tt_metal::Tensor& tensor) {
+void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, ttnn::Tensor& tensor) {
     // Read tensor directly from m_tensors (loaded during deserialize)
     tensor = file.get_tensor(name);
 
@@ -115,18 +115,19 @@ void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, tt::tt_metal:
     }
 
     // Restore storage type if needed
-    tt::tt_metal::StorageType storage_type{};
+    ttnn::StorageType storage_type{};
     get_enum(file, std::string(name) + "/storage_type", storage_type);
 
-    if (storage_type == tt::tt_metal::StorageType::DEVICE &&
-        tensor.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+    if (storage_type == ttnn::StorageType::DEVICE && tensor.storage_type() != ttnn::StorageType::DEVICE) {
         tensor = tensor.to_device(&ttml::autograd::ctx().get_device());
     }
 }
 
 void write_autograd_tensor(
     FlatBufferFile& file, std::string_view name, const ttml::autograd::TensorPtr& tensor, bool save_grads) {
-    write_ttnn_tensor(file, std::string(name) + "/value", tensor->get_value(ttml::autograd::PreferredPrecision::FULL));
+    // NATIVE writes the tensor as stored, without a cast, so a checkpoint keeps each tensor's dtype.
+    write_ttnn_tensor(
+        file, std::string(name) + "/value", tensor->get_value(ttml::autograd::PreferredPrecision::NATIVE));
     auto& grad = tensor->get_grad();
     bool has_grads = save_grads && core::is_tensor_initialized(grad);
     file.put(std::string(name) + "/requires_grads", tensor->get_requires_grad());
@@ -137,16 +138,17 @@ void write_autograd_tensor(
 }
 
 void read_autograd_tensor(FlatBufferFile& file, std::string_view name, ttml::autograd::TensorPtr& tensor) {
-    tt::tt_metal::Tensor value;
+    ttnn::Tensor value;
     bool has_grads = false;
     bool requires_grads = false;
     read_ttnn_tensor(file, std::string(name) + "/value", value);
-    tensor->set_value(value);
+    // Cast to the dtype the tensor is stored in: the model decides the precision, not the file.
+    tensor->assign(value);
     requires_grads = file.get_bool(std::string(name) + "/requires_grads");
     has_grads = file.get_bool(std::string(name) + "/has_grads");
     tensor->set_requires_grad(requires_grads);
     if (has_grads) {
-        tt::tt_metal::Tensor grad;
+        ttnn::Tensor grad;
         read_ttnn_tensor(file, std::string(name) + "/grad", grad);
         tensor->set_grad(grad);
     }

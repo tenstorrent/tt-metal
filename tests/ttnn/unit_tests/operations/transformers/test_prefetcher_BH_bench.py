@@ -48,12 +48,16 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
     ring_grid_cols as _ring_grid_cols,
     make_recv_contig_weight as _make_recv_contig_weight,
+    bank_receivers_contiguous as _bank_receivers_contiguous,
+    bytes_per_tile as _bytes_per_tile,
+    tensor_prefetcher_session as _tensor_prefetcher_session,
+    require_tensor_prefetcher,
 )
 
 
@@ -62,9 +66,7 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 @pytest.fixture(autouse=True)
 def _require_tensor_prefetcher(device):
-    """Skip unless programmable DRAM cores are available on this device."""
-    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
-        pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
+    require_tensor_prefetcher(device)
 
 
 def _select_num_dram_banks(available_banks: int) -> int:
@@ -479,9 +481,23 @@ def test_bench_dram_core_repeats(device, op_name, shape):
     indirect=True,
 )
 @pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
-def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
+@pytest.mark.parametrize(
+    "distribution",
+    [ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D],
+    ids=["round_robin", "shard_contiguous"],
+)
+def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distribution):
     """Same matmul trace-replay bench as test_bench_dram_core_repeats, but the weight
     is in **receiver-contiguous** DRAM layout (NdShardSpec, num_shards = ring_size).
+
+    Parametrized on the shard distribution to A/B the ring-routing effect:
+      - round_robin: bank b feeds the STRIDED ring set [b, b+num_banks, ...] (column b
+        of receivers_per_y) -- each bank's writes fan out across the whole ring.
+      - shard-contiguous (CONTIGUOUS_1D): bank b feeds the CONTIGUOUS arc [b*R, b*R+R-1] (row b of
+        receivers_per_y) -- each bank's writes stay on a local ring segment.
+    The matmul topology (receiver cores, ring order, program config) is identical; only
+    the shard->bank placement and the GCB pairing change, so PCC holds for both. Compare
+    the logged GB/s across the two ids for the same shape.
 
     Why this is matmul-correct: in a gather_in0 matmul, ring core r computes output
     N-cols [r*per_core_N, (r+1)*per_core_N) and therefore needs weight[all K, those
@@ -493,9 +509,9 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
         ring positions [b, b+num_banks, b+2*num_banks, ...]. Under BDS round-robin,
         bank b's slab s == shard (b + s*num_banks), so this delivers shard r to ring
         position r (PCC-verified below).
-      - GCB built via create_global_circular_buffer_with_dram_senders (the _for_matmul_1d
-        wrapper asserts a K-row-major single-wide-shard-per-bank layout, which recv-contig
-        is not; the underlying GCB object is identical).
+      - GCB built via create_global_circular_buffer_for_matmul_1d, which auto-detects the
+        weight's DRAM layout (here receiver-contiguous NdShardSpec) and sizes/builds the GCB
+        accordingly.
     """
     _apply_shape(shape)
 
@@ -551,7 +567,10 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
 
     # Receiver-contiguous weight: NdShardSpec, num_shards = ring_size, each shard (K_padded, n_per_recv).
     n_per_recv = _N // ring_size
-    tt_weight = _make_recv_contig_weight(device, pt_weight, num_dram_banks, ring_size, _DTYPE)
+    is_shard_contiguous = distribution == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    tt_weight = _make_recv_contig_weight(
+        device, pt_weight, num_dram_banks, ring_size, _DTYPE, distribution_strategy=distribution
+    )
 
     K_per_shard = k_padded // ring_size
     act_mem_config = ttnn.create_sharded_memory_config(
@@ -575,35 +594,47 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
         num_global_cb_receivers=num_receivers_per_bank,
     )
 
-    # STRIDED bank_to_receivers: bank b feeds ring positions [b, b+num_banks, ...], i.e. the
-    # b-th receiver of each sorted y-row (column b of receivers_per_y). This matches the BDS
-    # round-robin placement so ring position r receives shard r (full K, N-cols [r*npr,...)).
-    bank_to_receivers = [
-        (
-            b,
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(*receivers_per_y[s][b]),
-                        ttnn.CoreCoord(*receivers_per_y[s][b]),
-                    )
-                    for s in range(num_receivers_per_bank)
-                ]
-            ),
-        )
-        for b in range(num_dram_banks)
-    ]
+    # bank_to_receivers pairing must match the BDS placement so ring position r receives
+    # shard r (full K, N-cols [r*npr, ...)):
+    #   round_robin -> STRIDED: bank b feeds [b, b+num_banks, ...] = column b of receivers_per_y.
+    #   shard-contiguous -> CONTIGUOUS arc: bank b feeds [b*R, b*R+R-1] = row b of receivers_per_y.
+    if is_shard_contiguous:
+        bank_to_receivers = [
+            (
+                b,
+                ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(*receivers_per_y[b][s]), ttnn.CoreCoord(*receivers_per_y[b][s]))
+                        for s in range(num_receivers_per_bank)
+                    ]
+                ),
+            )
+            for b in range(num_dram_banks)
+        ]
+    else:
+        bank_to_receivers = [
+            (
+                b,
+                ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(*receivers_per_y[s][b]), ttnn.CoreCoord(*receivers_per_y[s][b]))
+                        for s in range(num_receivers_per_bank)
+                    ]
+                ),
+            )
+            for b in range(num_dram_banks)
+        ]
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
     # Centralized recv-contig GCB builder: validates the (program_config, weight, bank_to_receivers)
     # triple (num_shards == ring_size, K % ring_size == 0, per_core_N == per-receiver N) and sizes/builds
     # the GCB in one place.
-    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d_recv_contig(
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
         device,
         [cc_program_config],
         [tt_weight],
         bank_to_receivers,
         gcb_size,
-        dual_senders_per_bank=dual_senders,
+        support_multi_receiver_shards=not dual_senders,
     )
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=(_M, _N // ring_size),
@@ -645,7 +676,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
     # Centralized recv-contig param + cross-check: returns the validated block_count
     # (== ring_size) and TT_FATALs on a weight/program_config/gcb mismatch.
     block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(cc_program_config, tt_weight, gcb)
-    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.start_tensor_prefetcher(device)
     ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(tt_weight, block_count)] * num_prefetch_layers,
@@ -677,9 +708,14 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
 
     per_matmul_us = elapsed / trace_repeats * 1e6
     tflops = _flops_per_matmul(_K) * trace_repeats / elapsed / 1e12
+    # Effective weight-streaming bandwidth: the full weight (K_padded x N) crosses the
+    # ring once per matmul. This is the metric shard-contiguous distribution aims to improve.
+    weight_bytes = k_padded * _N * _DTYPE_BYTES
+    gbps = weight_bytes * trace_repeats / elapsed / 1e9
+    dist_id = "shard_contiguous" if is_shard_contiguous else "round_robin"
     logger.info(
-        f"[dram_core_rc][{op_name}] dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
-        f"repeats={trace_repeats} per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s"
+        f"[dram_core_rc][{op_name}] dist={dist_id} dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
+        f"repeats={trace_repeats} per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s, {gbps:.1f} GB/s"
     )
 
 
@@ -879,4 +915,161 @@ def test_bench_workercore_repeats(device, op_name, shape):
     logger.info(
         f"[workercore][{op_name}] trace_elapsed={elapsed * 1e3:.2f}ms repeats={trace_repeats} "
         f"per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s"
+    )
+
+
+# Per-device (K, N) of Llama decode matmuls on a 1x2 mesh, the receiver-contiguous weights a model's
+# decode trace streams over a ring of 8 banks x 2 receivers.
+TRACED_PREFETCH_SHAPES = [
+    pytest.param(2048, 1536, id="1B_QKV_2d"),
+    pytest.param(4096, 2048, id="1B_FF2_2d"),
+    pytest.param(7168, 4096, id="8B_FF2_2d"),
+]
+_TRACED_RECV_PER_BANK = 2
+# A streaming gather_in0 matmul needs two K-blocks in the ring; 256 KB holds two of the largest block
+# benched here (8B FF2: 14 x 8 bfloat8_b tiles, 119 KB) and leaves most of a worker's L1 to the matmul.
+_TRACED_RING_BUDGET_BYTES = 256 * 1024
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
+    indirect=True,
+)
+@pytest.mark.parametrize("requests", ["captured", "queued_ahead"])
+@pytest.mark.parametrize("k, n", TRACED_PREFETCH_SHAPES)
+def test_bench_traced_prefetch_and_linear(device, k, n, requests):
+    """Traced matmuls that each queue their own weight with prefetch_and_linear, as a model's decode
+    trace does. Replaying the trace re-sends the captured requests from the host to every DRISC
+    sender's H2D socket while the matmuls run, so the host's send rate can pace the matmuls.
+
+    ``captured``: each traced matmul captures its own request (prefetch_and_linear).
+    ``queued_ahead``: every request is queued before the replay and the trace holds only the matmuls,
+    which takes the host's sends out of the timing; ``captured`` cannot run faster than this.
+    """
+    if device.dram_grid_size().x != _NUM_DRAM_BANKS:
+        pytest.skip(f"The receiver ring is laid out for {_NUM_DRAM_BANKS} unharvested DRAM banks")
+    trace_repeats = int(os.environ.get("BENCH_TRACE_REPEATS", "100"))
+    ring_size = _NUM_DRAM_BANKS * _TRACED_RECV_PER_BANK
+
+    # Bank b feeds ring positions [2b, 2b + 1] on an 8 x 2 rectangle; listed in ring order, these are
+    # also the order the gather ring and the sharded activation and output walk.
+    bank_to_receivers = [
+        (b, _bank_receivers_contiguous(b, _TRACED_RECV_PER_BANK, _NUM_DRAM_BANKS)) for b in range(_NUM_DRAM_BANKS)
+    ]
+    ring_cores = ttnn.CoreRangeSet([r for _, receivers in bank_to_receivers for r in receivers.ranges()])
+    k_block_tiles = k // ttnn.TILE_SIZE // ring_size
+    per_core_n = n // ttnn.TILE_SIZE // ring_size
+    block_bytes = k_block_tiles * per_core_n * _bytes_per_tile(ttnn.bfloat8_b)
+    pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
+        device,
+        sender_cores=ttnn.CoreRangeSet([]),
+        receiver_domain=ring_cores,
+        ring_size=_TRACED_RING_BUDGET_BYTES // block_bytes * block_bytes,
+        max_receivers_per_pipe=_TRACED_RECV_PER_BANK,
+        num_dram_senders=2 * _NUM_DRAM_BANKS,
+    )
+    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(pipe_space, bank_to_receivers)
+
+    torch.manual_seed(0)
+    pt_weight = torch.randn(1, 1, k, n)
+    pt_act = torch.randn(1, 1, ttnn.TILE_SIZE, k)
+    tt_weight = _make_recv_contig_weight(
+        device,
+        pt_weight,
+        _NUM_DRAM_BANKS,
+        ring_size,
+        ttnn.bfloat8_b,
+        distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    )
+
+    def width_sharded_on_ring(width):
+        return ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, width),
+            core_grid=ring_cores,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    tt_act = ttnn.from_torch(
+        pt_act,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=width_sharded_on_ring(k // ring_size),
+    )
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(_NUM_DRAM_BANKS, _TRACED_RECV_PER_BANK),
+        in0_block_w=k_block_tiles,
+        out_subblock_h=1,
+        # fp32 accumulation leaves 4 tiles of DEST
+        out_subblock_w=max(w for w in range(1, 5) if per_core_n % w == 0),
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=True,
+        hop_cores=ttnn.CoreRangeSet([]),
+        untilize_out=False,
+        stream_in1=True,
+    )
+    linear_kwargs = dict(
+        program_config=program_config,
+        memory_config=width_sharded_on_ring(n // ring_size),
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        ),
+        dtype=ttnn.bfloat16,
+    )
+
+    def single_linear():
+        if requests == "captured":
+            return ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+                tt_act, tt_weight, prefetcher_pipes=pipes, **linear_kwargs
+            )
+        return ttnn.linear(tt_act, tt_weight, prefetcher_pipes=pipes, **linear_kwargs)
+
+    with _tensor_prefetcher_session(device):
+        if requests == "queued_ahead":
+            # The correctness run's request, in the identity ring rotation prefetch_and_linear gives a
+            # streaming gather. The traced matmuls' requests are queued once it passes: a request no matmul
+            # consumes leaves its sender waiting for pipe space, where stop cannot reach it.
+            block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(
+                program_config, tt_weight, prefetcher_pipes=pipes
+            )
+            weight_request = (tt_weight, block_count, list(range(block_count)))
+            ttnn.experimental.queue_tensor_prefetcher_request(device, [weight_request], prefetcher_pipes=pipes)
+
+        passing, pcc_message = comp_pcc(pt_act.float() @ pt_weight.float(), ttnn.to_torch(single_linear()), 0.99)
+        assert passing, f"[traced_prefetch_and_linear] requests={requests}: {pcc_message}"
+
+        if requests == "queued_ahead":
+            ttnn.experimental.queue_tensor_prefetcher_request(
+                device, [weight_request] * trace_repeats, prefetcher_pipes=pipes
+            )
+
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        for _ in range(trace_repeats):
+            single_linear()
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        # The first synchronize after the device opens waits ~5 ms for the real-time profiler's
+        # first clock sync; take it before the clock starts.
+        ttnn.synchronize_device(device)
+        t0 = time.perf_counter()
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(device)
+        elapsed = time.perf_counter() - t0
+        ttnn.release_trace(device, trace_id)
+
+    per_matmul_s = elapsed / trace_repeats
+    weight_bytes = k * n // (ttnn.TILE_SIZE * ttnn.TILE_SIZE) * _bytes_per_tile(ttnn.bfloat8_b)
+    logger.info(
+        f"[traced_prefetch_and_linear][K={k} N={n}] requests={requests} repeats={trace_repeats} "
+        f"per_matmul={per_matmul_s * 1e6:.2f}us -> {weight_bytes / per_matmul_s / 1e9:.1f} GB/s of weight"
     )

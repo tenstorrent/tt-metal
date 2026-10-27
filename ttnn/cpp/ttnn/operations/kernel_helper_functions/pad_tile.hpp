@@ -4,7 +4,14 @@
 
 #pragma once
 
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
+#if !defined(ARCH_QUASAR)
+// ckernel::load_blocking (the store drain in drain_pad_stores) is WH/BH only: Quasar's ckernel.h has no
+// load_blocking, and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. The Quasar
+// branch below uses a plain volatile load instead, so the header is not needed there. Same guard as
+// data_movement/common/kernels/common.hpp.
+#include "ckernel.h"
+#endif
 
 /**
  * @brief Pads a face within a tile.
@@ -157,27 +164,291 @@ void fill_pad_tile(uint32_t l1_tile_ptr, T fill_value) {
     }
 }
 
+// Turns a mantissa width into elements-per-byte. Unrelated to Bfp8's 8-bit mantissa.
+constexpr uint32_t BITS_PER_BYTE = 8;
+
+/**
+ * @brief Zeroes a single element of a block-float mantissa row.
+ *
+ * Elements pack little-endian within the row's byte stream (element 0 in the LSBs, see
+ * create_packed_bfp_packed_as_u32), so `col` occupies bits [bits * col, bits * (col + 1)).
+ *
+ * @tparam bits_per_element Mantissa width: 8 (Bfp8), 4 (Bfp4) or 2 (Bfp2)
+ * @param face_row_ptr Pointer to the first mantissa byte of the face row
+ * @param col The column within the face to zero
+ */
+template <uint32_t bits_per_element>
+inline void zero_blockfloat_mantissa(uint8_t* face_row_ptr, uint32_t col) {
+    constexpr uint32_t elements_per_byte = BITS_PER_BYTE / bits_per_element;
+    if constexpr (elements_per_byte == 1) {
+        // Bfp8: the element owns the whole byte, so no neighbours to preserve.
+        face_row_ptr[col] = 0;
+    } else {
+        constexpr uint8_t element_mask = static_cast<uint8_t>((1u << bits_per_element) - 1);
+        const uint32_t shift = (col % elements_per_byte) * bits_per_element;
+        face_row_ptr[col / elements_per_byte] &= static_cast<uint8_t>(~(element_mask << shift));
+    }
+}
+
+/**
+ * @brief Zeroes the padded region of one face of a block-float tile's mantissa section.
+ *
+ * Mirrors fill_pad_face's padding math exactly, but indexes into a mantissa stream whose
+ * elements are bits_per_element wide instead of a T-typed array.
+ *
+ * @tparam bits_per_element Mantissa width: 8 (Bfp8), 4 (Bfp4) or 2 (Bfp2)
+ * @tparam num_elements_unpadded_w Number of unpadded elements in the width dimension
+ * @tparam num_elements_unpadded_h Number of unpadded elements in the height dimension
+ * @tparam num_faces_w Number of faces in the width dimension
+ * @tparam num_faces_h Number of faces in the height dimension
+ * @tparam face_h The height index of the face
+ * @tparam face_w The width index of the face
+ * @param mantissa_ptr Pointer to the start of the tile's mantissa section
+ */
+template <
+    uint32_t bits_per_element,
+    uint32_t num_elements_unpadded_w,
+    uint32_t num_elements_unpadded_h,
+    uint32_t num_faces_w,
+    uint32_t num_faces_h,
+    uint32_t face_h,
+    uint32_t face_w>
+void fill_pad_face_blockfloat(uint8_t* mantissa_ptr) {
+    using namespace tt::constants;
+
+    constexpr uint32_t elements_per_byte = BITS_PER_BYTE / bits_per_element;
+    constexpr uint32_t face_row_bytes = FACE_WIDTH / elements_per_byte;
+
+    // Calculate face offset
+    constexpr uint32_t face_offset_bytes = (face_h * num_faces_w + face_w) * (FACE_HW / elements_per_byte);
+    auto face_ptr = mantissa_ptr + face_offset_bytes;
+
+    // Right padding (width padding)
+    constexpr uint32_t face_w_offset = face_w * FACE_WIDTH;
+    constexpr uint32_t face_pad_w = (num_elements_unpadded_w <= face_w_offset) ? FACE_WIDTH
+                                    : (num_elements_unpadded_w >= face_w_offset + FACE_WIDTH)
+                                        ? 0
+                                        : face_w_offset + FACE_WIDTH - num_elements_unpadded_w;
+
+    if constexpr (face_pad_w > 0) {
+        for (uint32_t row = 0; row < FACE_HEIGHT; ++row) {
+            auto row_ptr = face_ptr + row * face_row_bytes;
+#pragma GCC unroll 32
+            for (uint32_t col = FACE_WIDTH - face_pad_w; col < FACE_WIDTH; ++col) {
+                zero_blockfloat_mantissa<bits_per_element>(row_ptr, col);
+            }
+        }
+    }
+
+    // Bottom padding (height padding) - the entire row is padded, so clear its bytes directly
+    constexpr uint32_t face_h_offset = face_h * FACE_HEIGHT;
+    constexpr uint32_t face_pad_h = (num_elements_unpadded_h <= face_h_offset) ? FACE_HEIGHT
+                                    : (num_elements_unpadded_h >= face_h_offset + FACE_HEIGHT)
+                                        ? 0
+                                        : face_h_offset + FACE_HEIGHT - num_elements_unpadded_h;
+
+    if constexpr (face_pad_h > 0) {
+        for (uint32_t row = FACE_HEIGHT - face_pad_h; row < FACE_HEIGHT; ++row) {
+            auto row_ptr = face_ptr + row * face_row_bytes;
+#pragma GCC unroll 32
+            for (uint32_t byte_index = 0; byte_index < face_row_bytes; ++byte_index) {
+                row_ptr[byte_index] = 0;
+            }
+        }
+    }
+}
+
+/**
+ * @brief Fills padding regions of a block-float (shared-exponent) tile with zeros.
+ *
+ * Block-float tiles are laid out as a per-face-row exponent section followed by the mantissa
+ * section (see the packing-order comment in blockfloat_common.cpp):
+ *
+ *     [ FACE_HEIGHT exponents for face 0 ] ... [ FACE_HEIGHT exponents for face N-1 ]
+ *     [ face 0 mantissas (row-major) ]     ... [ face N-1 mantissas (row-major) ]
+ *
+ * Only mantissas are touched: a zero mantissa decodes to 0.0 whatever exponent it shares (see the
+ * man == 0 branches in blockfloat_common.cpp), so elements sharing that exponent are unaffected.
+ *
+ * @tparam bits_per_element Mantissa width: 8 (Bfp8), 4 (Bfp4) or 2 (Bfp2)
+ * @tparam num_elements_unpadded_w Number of unpadded elements in the width dimension
+ * @tparam num_elements_unpadded_h Number of unpadded elements in the height dimension
+ * @tparam num_faces_w Number of faces in the width dimension (default: TILE_WIDTH / FACE_WIDTH)
+ * @tparam num_faces_h Number of faces in the height dimension (default: TILE_HEIGHT / FACE_HEIGHT)
+ * @param l1_tile_ptr Pointer to the start of the tile in L1 memory
+ */
+template <
+    uint32_t bits_per_element,
+    uint32_t num_elements_unpadded_w,
+    uint32_t num_elements_unpadded_h,
+    uint32_t num_faces_w = tt::constants::TILE_WIDTH / tt::constants::FACE_WIDTH,
+    uint32_t num_faces_h = tt::constants::TILE_HEIGHT / tt::constants::FACE_HEIGHT>
+void fill_pad_tile_blockfloat(uint32_t l1_tile_ptr) {
+    using namespace tt::constants;
+
+    constexpr uint32_t exponent_section_bytes = num_faces_w * num_faces_h * FACE_HEIGHT;
+    auto mantissa_ptr = reinterpret_cast<uint8_t*>(l1_tile_ptr) + exponent_section_bytes;
+
+    // Face 0, 0
+    fill_pad_face_blockfloat<
+        bits_per_element,
+        num_elements_unpadded_w,
+        num_elements_unpadded_h,
+        num_faces_w,
+        num_faces_h,
+        0,
+        0>(mantissa_ptr);
+
+    // Face 0, 1
+    if constexpr (num_faces_w > 1) {
+        fill_pad_face_blockfloat<
+            bits_per_element,
+            num_elements_unpadded_w,
+            num_elements_unpadded_h,
+            num_faces_w,
+            num_faces_h,
+            0,
+            1>(mantissa_ptr);
+    }
+
+    // Face 1, 0
+    if constexpr (num_faces_h > 1) {
+        fill_pad_face_blockfloat<
+            bits_per_element,
+            num_elements_unpadded_w,
+            num_elements_unpadded_h,
+            num_faces_w,
+            num_faces_h,
+            1,
+            0>(mantissa_ptr);
+    }
+
+    // Face 1, 1
+    if constexpr (num_faces_w > 1 && num_faces_h > 1) {
+        fill_pad_face_blockfloat<
+            bits_per_element,
+            num_elements_unpadded_w,
+            num_elements_unpadded_h,
+            num_faces_w,
+            num_faces_h,
+            1,
+            1>(mantissa_ptr);
+    }
+}
+
+/**
+ * @brief Mantissa bits per element for a block-float data format, or 0 if the format is not a
+ *        block-float format.
+ */
+template <DataFormat data_format>
+constexpr uint32_t blockfloat_mantissa_bits() {
+#ifndef ARCH_QUASAR
+    if constexpr (data_format == DataFormat::Bfp8 || data_format == DataFormat::Bfp8_b) {
+        return 8;
+    } else if constexpr (data_format == DataFormat::Bfp4 || data_format == DataFormat::Bfp4_b) {
+        return 4;
+    } else if constexpr (data_format == DataFormat::Bfp2 || data_format == DataFormat::Bfp2_b) {
+        return 2;
+    } else {
+        return 0;
+    }
+#else
+    // Quasar's DataFormat enum has NO WH-style block-float formats: the codes WH/BH use for Bfp8/Bfp4/Bfp2
+    // (2/3/11) are reused on Quasar for the microscaling MxInt8/MxInt4/MxInt2, and there is no Bfp8_b/Bfp4_b/
+    // Bfp2_b at all. So this WH-Bfp mantissa accounting does not apply on Quasar; report 0 (same as the
+    // non-block-float branch on WH/BH). The one block-float DataType a caller could otherwise pass, BFLOAT8_B,
+    // is rejected up front by the quasar matmul op (experimental/quasar/matmul/matmul.cpp) -- the only Quasar
+    // caller of pad_last_ktile* -- so a block-float format never reaches here on Quasar (no silent mis-pad).
+    // A value-based assert is deliberately NOT added: the codes 2/3/11 are legitimate Quasar MxInt formats,
+    // so asserting on them would false-fire; the op-level dtype reject is the correct guard. (Padding for
+    // Quasar's Mx microscaling formats, if ever needed, is a separate Mx-specific path -- not this.)
+    return 0;
+#endif
+}
+
+/**
+ * @brief Bytes occupied by one padded tile of the given format.
+ */
+template <DataFormat data_format, uint32_t tile_height = tt::constants::TILE_HEIGHT>
+constexpr uint32_t padded_tile_bytes() {
+    using namespace tt::constants;
+    constexpr uint32_t elems = tile_height * TILE_WIDTH;
+    constexpr uint32_t mantissa_bits = blockfloat_mantissa_bits<data_format>();
+    if constexpr (data_format == DataFormat::Float32) {
+        return elems * sizeof(uint32_t);
+    } else if constexpr (mantissa_bits > 0) {
+        // exponent section (one byte per face row) + packed mantissas
+        constexpr uint32_t num_faces = (TILE_WIDTH / FACE_WIDTH) * (tile_height / FACE_HEIGHT);
+        return num_faces * FACE_HEIGHT + elems * mantissa_bits / BITS_PER_BYTE;
+    } else {
+        return elems * sizeof(uint16_t);
+    }
+}
+
+/**
+ * @brief Forces the padding stores of one tile to be processed by L1 before the caller hands the
+ * tile to another L1 client (the NoC multicast in the matmul in0 senders).
+ *
+ * The padding is written with baby-RISCV stores. A store can retire before its write-request
+ * reaches L1, and the RISCV core and the NoC are different L1 clients with no program-order
+ * guarantee between them (tt-isa-documentation TensixTile/BabyRISCV/MemoryOrdering.md: "there is
+ * no general mechanism to ensure that a store's write-request has been processed before a
+ * subsequent memory operation's request is emitted"). A blocking load of an address this core has
+ * just stored to is processed by L1 only after that store, and the RISCV's L1 access port
+ * processes its requests in order, so reading back the tile's last word orders every earlier
+ * padding store ahead of whatever the caller issues next. Same construction as #50374
+ * (deepseek_grouped_gate) and the pad reader's loop-back guard.
+ *
+ * Every padding pattern writes the tile's last word: right padding covers column 31 of every row,
+ * bottom padding covers row 31, and the block-float variants zero the mantissa of face 3, row 15,
+ * column 15 in both cases.
+ */
+template <DataFormat data_format, uint32_t tile_height = tt::constants::TILE_HEIGHT>
+inline void drain_pad_stores(uint32_t l1_tile_ptr) {
+    constexpr uint32_t last_word = padded_tile_bytes<data_format, tile_height>() - sizeof(uint32_t);
+    volatile tt_l1_ptr uint32_t* drain_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_tile_ptr + last_word);
+#if defined(ARCH_QUASAR)
+    // Quasar has no ckernel::load_blocking; a volatile load is the local ordering barrier there.
+    (void)*drain_ptr;
+#else
+    (void)ckernel::load_blocking(drain_ptr);
+#endif
+}
+
 /**
  * @brief Pads the last K tile in a matrix multiplication operation.
  *
  * This function handles padding for the last K tile in a matrix multiplication operation.
- * It applies zero padding based on the specified data format (Float32 or Float16_b) and
- * the unpadded width of the last K tile.
+ * It applies zero padding based on the specified data format (Float32, Float16_b, or any of the
+ * block-float formats) and the unpadded width of the last K tile.
  *
- * @tparam in0_data_format The data format of the input tensor (Float32 or Float16_b)
+ * @tparam in0_data_format The data format of the input tensor
  * @tparam in0_last_ktile_w The unpadded width of the last K tile
+ * @tparam tile_height Physical tile height (16 or 32 rows)
  * @param l1_write_addr_in0 The L1 memory address where the zeros should be written
  */
-template <DataFormat in0_data_format, uint32_t in0_last_ktile_w>
+template <DataFormat in0_data_format, uint32_t in0_last_ktile_w, uint32_t tile_height = tt::constants::TILE_HEIGHT>
 void pad_last_ktile(uint32_t l1_write_addr_in0) {
     using namespace tt::constants;
+    static_assert(tile_height == FACE_HEIGHT || tile_height == TILE_HEIGHT);
+    // Non-zero width means block-float; blockfloat_mantissa_bits() returns 0 for everything else.
+    constexpr uint32_t mantissa_bits = blockfloat_mantissa_bits<in0_data_format>();
+    constexpr bool is_blockfloat = mantissa_bits > 0;
     if constexpr (in0_data_format == DataFormat::Float32) {
-        fill_pad_tile<uint32_t, in0_last_ktile_w, /*num_elements_unpadded_h=*/TILE_HEIGHT>(
+        fill_pad_tile<uint32_t, in0_last_ktile_w, tile_height, TILE_WIDTH / FACE_WIDTH, tile_height / FACE_HEIGHT>(
             l1_write_addr_in0, /*pad_value=*/0);
     } else if constexpr (in0_data_format == DataFormat::Float16_b) {
-        fill_pad_tile<uint16_t, in0_last_ktile_w, /*num_elements_unpadded_h=*/TILE_HEIGHT>(
+        fill_pad_tile<uint16_t, in0_last_ktile_w, tile_height, TILE_WIDTH / FACE_WIDTH, tile_height / FACE_HEIGHT>(
             l1_write_addr_in0, /*pad_value=*/0);
+    } else if constexpr (is_blockfloat) {
+        fill_pad_tile_blockfloat<
+            mantissa_bits,
+            in0_last_ktile_w,
+            tile_height,
+            TILE_WIDTH / FACE_WIDTH,
+            tile_height / FACE_HEIGHT>(l1_write_addr_in0);
     }
+    drain_pad_stores<in0_data_format, tile_height>(l1_write_addr_in0);
 }
 
 /**
@@ -187,18 +458,25 @@ void pad_last_ktile(uint32_t l1_write_addr_in0) {
  * This function applies zero padding to the height (rows) of the last K tile,
  * leaving width fully unpadded.
  *
- * @tparam in0_data_format The data format of the input tensor (Float32 or Float16_b)
+ * @tparam in0_data_format The data format of the input tensor
  * @tparam in0_last_ktile_h The unpadded height of the last K tile
  * @param l1_write_addr_in0 The L1 memory address where the zeros should be written
  */
 template <DataFormat in0_data_format, uint32_t in0_last_ktile_h>
 void pad_last_transposed_ktile(uint32_t l1_write_addr_in0) {
     using namespace tt::constants;
+    // Non-zero width means block-float; blockfloat_mantissa_bits() returns 0 for everything else.
+    constexpr uint32_t mantissa_bits = blockfloat_mantissa_bits<in0_data_format>();
+    constexpr bool is_blockfloat = mantissa_bits > 0;
     if constexpr (in0_data_format == DataFormat::Float32) {
         fill_pad_tile<uint32_t, /*num_elements_unpadded_w=*/TILE_WIDTH, in0_last_ktile_h>(
             l1_write_addr_in0, /*pad_value=*/0);
     } else if constexpr (in0_data_format == DataFormat::Float16_b) {
         fill_pad_tile<uint16_t, /*num_elements_unpadded_w=*/TILE_WIDTH, in0_last_ktile_h>(
             l1_write_addr_in0, /*pad_value=*/0);
+    } else if constexpr (is_blockfloat) {
+        fill_pad_tile_blockfloat<mantissa_bits, /*num_elements_unpadded_w=*/TILE_WIDTH, in0_last_ktile_h>(
+            l1_write_addr_in0);
     }
+    drain_pad_stores<in0_data_format>(l1_write_addr_in0);
 }

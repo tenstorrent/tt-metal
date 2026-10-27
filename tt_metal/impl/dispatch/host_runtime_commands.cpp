@@ -5,6 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
@@ -31,12 +32,6 @@ using namespace tt::tt_metal;
 
 namespace tt::tt_metal::detail {
 
-bool DispatchStateCheck(bool isFastDispatch) {
-    static bool fd = isFastDispatch;
-    TT_FATAL(fd == isFastDispatch, "Mixing fast and slow dispatch is prohibited!");
-    return fd;
-}
-
 Buffer& GetBufferObject(const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer) {
     return std::visit(
         ttsl::overloaded{
@@ -51,7 +46,7 @@ void ValidateBufferRegion(
     Buffer& buffer_obj = GetBufferObject(buffer);
 
     TT_FATAL(
-        buffer_obj.is_valid_region(region),
+        buffer_obj.impl().is_valid_region(region),
         "Buffer region with offset {} and size {} is invalid.",
         region.offset,
         region.size);

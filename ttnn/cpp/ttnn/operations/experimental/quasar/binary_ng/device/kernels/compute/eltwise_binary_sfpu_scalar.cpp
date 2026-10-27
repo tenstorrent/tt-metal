@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/dataflow/dataflow_buffer.h"
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -24,17 +25,14 @@
 #include "eltwise_utils_sfpu.hpp"
 
 // Process n LHS tiles against a scalar tile at index 0 in cb_post_rhs
+template <typename PreLhsDFB, typename PostLhsDFB, typename PostRhsDFB, typename OutDFB>
 FORCE_INLINE void process_sfpu_scalar_tiles(
     uint32_t n,
-    uint32_t cb_pre_lhs_id,
-    uint32_t cb_post_lhs_id,
-    uint32_t cb_post_rhs_id,
-    uint32_t cb_out_id ISCLOSE_RT_ARG_PARAMS) {
-    CircularBuffer cb_post_lhs(cb_post_lhs_id);
-    CircularBuffer cb_post_rhs(cb_post_rhs_id);
-    CircularBuffer cb_out(cb_out_id);
-
-    PREPROCESS(LHS, CircularBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
+    PreLhsDFB& cb_pre_lhs,
+    PostLhsDFB& cb_post_lhs,
+    PostRhsDFB& cb_post_rhs,
+    OutDFB& cb_out ISCLOSE_RT_ARG_PARAMS) {
+    PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n);
     cb_post_lhs.wait_front(n);
 
     cb_out.reserve_back(n);
@@ -44,13 +42,15 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #endif
 
     tile_regs_acquire();
-    copy_tile_to_dst_init_short_with_dt(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
+    // Startup and preprocessing preserve the physical-LHS SrcA format.
+    copy_init(cb_post_lhs.get_id());
     for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
+        copy_tile(cb_post_lhs.get_id(), i, i * 2);
     }
-    copy_tile_to_dst_init_short_with_dt(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+    reconfig_data_format_srca(cb_post_lhs.get_id(), cb_post_rhs.get_id());
+    copy_init(cb_post_rhs.get_id());
     for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_rhs.get_cb_id(), 0, i * 2 + 1);  // Always use scalar at index 0
+        copy_tile(cb_post_rhs.get_id(), 0, i * 2 + 1);  // Always use scalar at index 0
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
 #endif
@@ -61,11 +61,12 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
+    reconfig_data_format_srca(cb_post_rhs.get_id(), cb_post_lhs.get_id());
     tile_regs_commit();
 
     tile_regs_wait();
     for (uint32_t i = 0; i < n; ++i) {
-        pack_tile(i * 2, cb_out.get_cb_id());
+        pack_tile(i * 2, cb_out.get_id());
     }
     tile_regs_release();
 
@@ -88,34 +89,51 @@ void kernel_main() {
 
     constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
 
-    CircularBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
+    DataflowBuffer cb_pre_lhs(cb_pre_lhs_id);
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer cb_post_lhs(cb_post_lhs_id);
+#else
+    auto& cb_post_lhs = cb_pre_lhs;
+#endif
+    DataflowBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer cb_pre_rhs(cb_pre_rhs_id);
+#endif
+    DataflowBuffer cb_out(cb_out_id);
 
-    unary_op_init_common(cb_post_lhs_id, cb_out_id);
+    compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
+    copy_init(cb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT
 #endif
 
-    PREPROCESS(RHS, CircularBuffer(cb_pre_rhs_id), cb_post_rhs, CircularBuffer(cb_out_id), 1);
+    PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, 1);
     cb_post_rhs.wait_front(1);
 
     // Process full chunks
     uint32_t full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < full_chunks; ++chunk) {
-        process_sfpu_scalar_tiles(
-            num_tiles_per_cycle, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs.get_cb_id(), cb_out_id ISCLOSE_RT_ARG_FWD);
+        process_sfpu_scalar_tiles(num_tiles_per_cycle, cb_pre_lhs, cb_post_lhs, cb_post_rhs, cb_out ISCLOSE_RT_ARG_FWD);
     }
 
     // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_scalar_tiles(
-            remainder, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs.get_cb_id(), cb_out_id ISCLOSE_RT_ARG_FWD);
+        process_sfpu_scalar_tiles(remainder, cb_pre_lhs, cb_post_lhs, cb_post_rhs, cb_out ISCLOSE_RT_ARG_FWD);
     }
 
     // Pop the scalar tile from RHS CB
+    // Only the zero-work path (num_tiles == 0) needs this: both chunk loops zero-trip, so nothing unpacks
+    // cb_post_rhs between its wait_front(1) above and this pop_front(1) -> a bare pair that traps the Quasar
+    // unpacker. dummy_unpack() interposes an UNPACR_NOP so POP follows a real unpack. For num_tiles > 0 the op
+    // already unpacked the RHS, so skip it. (On WH/BH dummy_unpack is a debug-only SrcA flush with no ordering
+    // role; the guard also keeps it off the hot path there.)
+    if (num_tiles == 0) {
+        dummy_unpack(cb_post_rhs.get_id());
+    }
     cb_post_rhs.pop_front(1);
 }

@@ -14,7 +14,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
 std::array<ttnn::Tensor, 2> dispatch(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
@@ -24,43 +23,45 @@ std::array<ttnn::Tensor, 2> dispatch(
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
     uint32_t max_dispatch_buffer_token_size,
+    const std::optional<ttnn::Tensor>& padding_config,
+    const std::optional<ttnn::Tensor>& scales_tensor,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
     bool use_l1_small_for_semaphores,
-    bool use_fp8_dispatch,
-    uint32_t num_untilizers_per_sender) {
+    bool fp8_output,
+    bool fp8_scaled_input,
+    uint32_t num_workers_per_sender) {
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
+    // A singleton communication axis has no peers, even when other axes have devices.
+    // Preserve omitted-axis behavior and the existing local worker pipeline.
+    const bool singleton_domain =
+        mesh_device->shape().mesh_size() == 1 || (cluster_axis == 0 && mesh_device->shape()[0] == 1);
+    const bool local_only = singleton_domain && dispatch_group_size == 1;
     // Validate fabric configuration - only tested values are supported
     TT_FATAL(
         cluster_axis.value_or(0) == 0,
         "cluster_axis must be 0 (current value: {}). Other values are not tested.",
         cluster_axis.value_or(0));
+    TT_FATAL(
+        (local_only || num_links.value_or(1) >= 1) && num_links.value_or(1) <= 4,
+        "num_links must be between 1 and 4, or 0 on a singleton dispatch group (current value: {}).",
+        num_links.value_or(1));
     auto topology_ = topology.value_or(tt::tt_fabric::Topology::Linear);
     TT_FATAL(
         topology_ == tt::tt_fabric::Topology::Linear || topology_ == tt::tt_fabric::Topology::Ring,
         "topology must be Linear or Ring. 2D topologies are not supported.");
 
     std::optional<uint32_t> axis = cluster_axis;
-    const bool local_only = dispatch_group_size == 1 && ::ttnn::ccl::get_topological_dimension(input_tensor, axis) == 1;
-    // Local-only dispatch uses no fabric links: num_links is just the row-major path's core count there.
-    TT_FATAL(
-        num_links.value_or(1) >= 1 && (local_only || num_links.value_or(1) <= 4),
-        "num_links must be between 1 and 4 (current value: {}).",
-        num_links.value_or(1));
-    // Keep one worker lane for the existing reader/untilizer core geometry,
-    // but do not query fabric links or topology for a size-one dispatch group.
-    // The program factory suppresses all fabric defines/connections in this
-    // mode, so the kernels execute only their direct local-write paths.
     uint32_t num_links_ =
-        local_only ? num_links.value_or(1) : num_links.value_or(ccl::common::get_num_links(*mesh_device, axis));
+        local_only ? 0 : (num_links.has_value() ? *num_links : ccl::common::get_num_links(*mesh_device, axis));
     tt::tt_fabric::Topology usable_topology =
-        local_only ? topology_ : ::ttnn::ccl::get_usable_topology(input_tensor, topology_, axis);
+        local_only ? tt::tt_fabric::Topology::Linear : ::ttnn::ccl::get_usable_topology(input_tensor, topology_, axis);
 
     log_debug(tt::LogOp, "num_links={} axis={} topology={}", num_links_, axis, usable_topology);
 
@@ -68,7 +69,6 @@ std::array<ttnn::Tensor, 2> dispatch(
 
     return ttnn::prim::prefill_dispatch(
         input_tensor,
-        weights_tensor,
         indices_tensor,
         expert_offsets_tensor,
         expert_dispatch_table_tensor,
@@ -78,14 +78,17 @@ std::array<ttnn::Tensor, 2> dispatch(
         num_experts_per_tok,
         metadata_len,
         max_dispatch_buffer_token_size,
+        padding_config,
+        scales_tensor,
         axis,
         num_links_,
         usable_topology,
         memory_config_,
         subdevice_core_range_set,
         use_l1_small_for_semaphores,
-        use_fp8_dispatch,
-        num_untilizers_per_sender);
+        fp8_output,
+        fp8_scaled_input,
+        num_workers_per_sender);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch

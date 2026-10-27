@@ -103,7 +103,7 @@ BatchNormOperation::spec_return_value_t BatchNormOperation::compute_output_specs
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(operation_attributes.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
@@ -116,32 +116,6 @@ BatchNormOperation::tensor_return_value_t BatchNormOperation::create_output_tens
     }
 
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
-ttsl::hash::hash_t BatchNormOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
-
-    TT_FATAL(is_device_tensor(input), "Unexpected type {}", input.storage_type());
-
-    auto hash_optional_tensor = [](const std::optional<Tensor>& t) -> ttsl::hash::hash_t {
-        if (!t.has_value()) {
-            return ttsl::hash::hash_objects_with_default_seed(false);
-        }
-        return ttsl::hash::hash_objects_with_default_seed(true, t->tensor_spec(), t->padded_shape());
-    };
-
-    return operation::hash_operation<BatchNormOperation>(
-        attributes,
-        input.tensor_spec(),
-        input.padded_shape(),
-        batch_mean.tensor_spec(),
-        batch_mean.padded_shape(),
-        batch_var.tensor_spec(),
-        batch_var.padded_shape(),
-        hash_optional_tensor(weight),
-        hash_optional_tensor(bias),
-        hash_optional_tensor(output));
 }
 
 ttsl::hash::hash_t BatchNormOperation::operation_attributes_t::to_hash() const {

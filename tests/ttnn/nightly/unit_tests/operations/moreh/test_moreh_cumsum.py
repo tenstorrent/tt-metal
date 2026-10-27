@@ -8,8 +8,11 @@ import ttnn
 
 from loguru import logger
 
-from models.common.utility_functions import comp_allclose_and_pcc
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc
 from tests.ttnn.unit_tests.operations.test_utils import TILE_HEIGHT, TILE_WIDTH
+
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
 
 
 def create_tt_tensor(tensor: torch.Tensor, dtype, device, layout):
@@ -313,6 +316,8 @@ def test_moreh_cumsum_backward_callback(input_shape, dim, device):
         # test for equivalance
         rtol = atol = 0.1
 
+        # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+        device.clear_program_cache()
         for i in range(2):
             tt_input_grad_cpu = ttnn.to_torch(ttnn.operations.moreh.cumsum_backward(tt_output_grad, dim))
 

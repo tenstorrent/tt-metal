@@ -7,6 +7,7 @@
 #include <csignal>
 #include <cstdint>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/memory_reporter.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -34,6 +35,7 @@
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
 #include "utils/memory_utils.hpp"
+#include "utils/training_utils.hpp"
 
 namespace {
 
@@ -135,6 +137,13 @@ uint64_t get_number_of_parameters(Model &model, bool tp) {
     return num_params;
 }
 
+uint64_t get_available_device_memory() {
+    auto *device = &ttml::autograd::ctx().get_device();
+    auto dram_view = tt::tt_metal::detail::GetMemoryView(device, ttnn::BufferType::DRAM);
+    uint64_t total_dram = dram_view.total_bytes_per_bank * dram_view.num_banks * tt::tt_metal::GetNumAvailableDevices();
+    return total_dram;
+}
+
 using ttml::autograd::TensorPtr;
 using SocketManager = ttml::core::distributed::SocketManager;
 using SocketType = ttml::core::distributed::SocketType;
@@ -152,7 +161,8 @@ struct TrainingConfig {
     uint32_t seed = 5489U;
     uint32_t model_save_interval = 0;
     uint32_t batch_size = 64;
-    uint32_t num_epochs = 1;
+    // 0 = no epoch cap; max_steps ends the run.
+    uint32_t num_epochs = 0;
     uint32_t max_steps = 5000;
     uint32_t gradient_accumulation_steps = 1;
     std::string model_config;
@@ -169,7 +179,9 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.seed = training_config["seed"].as<uint32_t>();
     config.model_save_interval = training_config["model_save_interval"].as<uint32_t>(config.model_save_interval);
     config.batch_size = training_config["batch_size"].as<uint32_t>();
-    config.num_epochs = training_config["num_epochs"].as<uint32_t>();
+    if (auto num_epochs_node = training_config["num_epochs"]) {
+        config.num_epochs = num_epochs_node.as<uint32_t>();
+    }
     config.max_steps = training_config["max_steps"].as<uint32_t>();
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
@@ -382,6 +394,10 @@ int main(int argc, char **argv) {
         multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
     }
 
+    if (is_pipeline_parallel_enabled(multihost_config)) {
+        optimizer_node["allow_empty_param_groups"] = true;
+    }
+
     // Calculate total number of devices from mesh shape (handles both 1D and 2D meshes)
     uint32_t num_devices = 1;
     for (uint32_t i = 0; i < device_config.mesh_shape.dims(); ++i) {
@@ -459,7 +475,6 @@ int main(int argc, char **argv) {
 
     auto schedule_func = schedulers.at(training_config.scheduler_type);
 
-    fmt::print("Max steps {}\n", training_config.max_steps);
     fmt::print("Batch size {}\n", training_config.batch_size);
     fmt::print("Gradient accumulation steps {}\n", training_config.gradient_accumulation_steps);
     fmt::print("Total batch size {}\n", training_config.batch_size * training_config.gradient_accumulation_steps);
@@ -523,6 +538,24 @@ int main(int argc, char **argv) {
     auto dataset = create_dataset(text_or_tokens, sequence_length, model_config);
 
     fmt::print("Dataset size: {}\n", dataset.get_size());
+    // In 3-tier training every worker iterates the full dataset with its own seed and the optimizer
+    // averages their gradients, so one optimizer step consumes num_mh_workers batches.
+    const uint32_t num_data_workers = is_three_tier_training(multihost_config) ? multihost_config.num_mh_workers : 1U;
+    const auto [steps_per_epoch, effective_max_steps] = compute_training_steps(
+        dataset,
+        training_config.data_path,
+        sequence_length,
+        training_config.batch_size,
+        training_config.gradient_accumulation_steps,
+        num_data_workers,
+        training_config.max_steps,
+        training_config.num_epochs);
+    fmt::print("Steps per epoch {:.2f}\n", steps_per_epoch);
+    fmt::print(
+        "Effective max steps {} (max_steps {}, num_epochs {})\n",
+        effective_max_steps,
+        training_config.max_steps,
+        training_config.num_epochs);
 
     struct CachedHostData {
         std::vector<uint32_t> data;
@@ -665,6 +698,7 @@ int main(int argc, char **argv) {
         model_config.transformer_config);
 
     fmt::print("Model number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
+    fmt::print("Available Device Memory: {} MB\n", get_available_device_memory() / (1024 * 1024));
     if (track_memory) {
         ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
     }
@@ -714,9 +748,9 @@ int main(int argc, char **argv) {
     } else {
         fmt::print("Optimizer: {}\n", optimizer->get_name());
         // TODO: Replace with print_stats() after #38756 is resolved
-        fmt::print("    Learning rate: {}\n", optimizer->get_lr());
+        fmt::print("    Learning rates: {}\n", optimizer->get_group_lrs());
     }
-    auto scheduler = schedule_func(optimizer.get(), training_config.max_steps);
+    auto scheduler = schedule_func(optimizer.get(), effective_max_steps);
 
     if (is_three_tier_training(multihost_config)) {
         auto *optimizer_ptr = dynamic_cast<ttml::optimizers::RemoteOptimizer *>(optimizer.get());
@@ -768,15 +802,19 @@ int main(int argc, char **argv) {
         return loss_float / static_cast<float>(loss_xtensors.size());
     };
 
-    const uint32_t num_epochs = training_config.num_epochs;
-    auto gradient_accumulator_helper = GradientAccumulator(training_config.gradient_accumulation_steps);
+    const uint32_t accumulation_steps = training_config.gradient_accumulation_steps;
+    auto gradient_accumulator_helper = GradientAccumulator(accumulation_steps);
 
     bool is_everything_compiled = false;
-    auto memory_snapshot = [&is_everything_compiled, track_memory](const std::string &name) {
-        if (track_memory && !is_everything_compiled) {
-            ttml::utils::MemoryUsageTracker::snapshot(name);
-        }
-    };
+    uint32_t accumulation_micro_step = 0;
+    auto memory_snapshot =
+        [&is_everything_compiled, track_memory, accumulation_steps, &accumulation_micro_step](const std::string &name) {
+            if (track_memory && !is_everything_compiled) {
+                const std::string snapshot_name =
+                    accumulation_steps > 1 ? fmt::format("{}_micro_{}", name, accumulation_micro_step) : name;
+                ttml::utils::MemoryUsageTracker::snapshot(snapshot_name);
+            }
+        };
 
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(multihost_config);
     // All TP-enabled LM heads (TP-only and PP+TP) emit vocab-sharded logits, so the loss
@@ -784,7 +822,8 @@ int main(int argc, char **argv) {
     const bool use_vocab_parallel_loss = device_config.enable_tp;
 
     // Training loop
-    for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
+    uint32_t completed_epochs = ttml::utils::epochs_completed(optimizer->get_steps(), steps_per_epoch);
+    while (optimizer->get_steps() < effective_max_steps) {
         for (auto [features, target, masks] : train_dataloader) {
             ttml::autograd::ctx().get_profiler().read_results(device, "dataloader_step_done");
 
@@ -794,6 +833,7 @@ int main(int argc, char **argv) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             if (gradient_accumulator_helper.should_zero_grad()) {
                 optimizer->zero_grad();
+                accumulation_micro_step = 0;
             }
             auto output = run_model(model, features, masks);
             float loss_float = 0.0F;
@@ -822,6 +862,7 @@ int main(int argc, char **argv) {
 
             auto samples = features->get_value().logical_shape()[0];
             gradient_accumulator_helper.update(loss_float, samples);
+            ++accumulation_micro_step;
 
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
@@ -857,6 +898,14 @@ int main(int argc, char **argv) {
                         average_loss,
                         (double)duration / 1000,
                         device->num_program_cache_entries());
+                    const uint32_t epochs_now = ttml::utils::epochs_completed(global_step, steps_per_epoch);
+                    while (completed_epochs < epochs_now) {
+                        ++completed_epochs;
+                        if (multihost_config.enable_mpi) {
+                            fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context()->rank());
+                        }
+                        fmt::print("Epoch {} completed\n", completed_epochs);
+                    }
                 }
 
                 if (!multihost_config.enable_mpi) {
@@ -871,7 +920,7 @@ int main(int argc, char **argv) {
                 ttml::autograd::ctx().get_profiler().read_results(
                     device, fmt::format("iteration_{}", global_step), /* dump_results */ true);
 
-                if (global_step >= training_config.max_steps) {
+                if (global_step >= effective_max_steps) {
                     break;
                 }
 
@@ -888,9 +937,6 @@ int main(int argc, char **argv) {
                 }
             }
         }
-        if (optimizer->get_steps() >= training_config.max_steps) {
-            break;
-        }
     }
 
     if (!multihost_config.enable_mpi) {
@@ -905,7 +951,7 @@ int main(int argc, char **argv) {
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
     fmt::print(
         "{} Steps training time: {} s, cache entries: {}\n",
-        training_config.max_steps,
+        effective_max_steps,
         (double)duration / 1000000.,
         device->num_program_cache_entries());
 

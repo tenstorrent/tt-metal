@@ -213,3 +213,21 @@ def test_roll_with_program_cache(device, shape, shifts, dims):
 
         assert_with_pcc(torch_output_tensor, ttnn_output_torch)
         assert torch.allclose(ttnn_output_torch, ttnn_output_torch)
+
+
+@pytest.mark.parametrize(
+    "first_shape, second_shape, shifts, dims",
+    [
+        ((1, 1, 32, 32), (1, 1, 128, 128), [1, 1], [2, 3]),
+        ((2, 2, 32, 32), (2, 2, 96, 64), [2, -1], [2, 3]),
+    ],
+)
+def test_roll_cache_hit_larger_shape(device, first_shape, second_shape, shifts, dims):
+    # shift/dim/dtype/layout/memory_config match, so both shapes share one program-cache entry by design:
+    # the hit path re-applies the new shape's transfer plan. Guards that reuse against a stale plan.
+    for shape in (first_shape, second_shape):
+        torch_input = torch.arange(1, 1 + torch.tensor(shape).prod().item(), dtype=torch.float32).reshape(shape)
+        expected = torch.roll(torch_input, shifts=shifts, dims=dims)
+        ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+        actual = ttnn.to_torch(ttnn.roll(ttnn_input, shifts, dims))
+        assert_with_pcc(expected, actual)

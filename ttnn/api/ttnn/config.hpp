@@ -26,6 +26,9 @@ struct Config {
         std::filesystem::path tmp_dir = "/tmp/ttnn";
         bool enable_model_cache = false;
         bool enable_fast_runtime_mode = true;
+        // Re-validate Metal 2.0 program args on the cache-hit fast path (Update{Tensor,ProgramRun}Args).
+        // The cache-miss build path always validates. Off by default; CI turns it on.
+        bool validate_program_args = false;
         bool throw_exception_on_fallback = false;
         bool enable_logging = false;
         bool enable_graph_report = false;
@@ -37,6 +40,18 @@ struct Config {
         float comparison_mode_pcc = 0.9999;
         std::filesystem::path root_report_path = "generated/ttnn/reports";
         std::optional<std::filesystem::path> report_name = std::nullopt;
+        // The CCL output-topology helpers (ttnn/operations/ccl/common/host/ccl_topology_utils.hpp) TT_FATAL on a
+        // TensorTopology they cannot label honestly when this is true. When false, they log and return no label, and
+        // the op's output keeps the input's label. false by default; intended to be set in CI (TTNN_CONFIG_OVERRIDES)
+        // as a follow-up. Appended last: the positional constructor and the index accessors below embed the member
+        // order, so a new member goes at the end.
+        bool strict_ccl_topology = false;
+        // dump_tensor writes shards that the tensor topology labels as replicas of each other once. Before folding
+        // a shard into its group it compares the values (tile padding excluded) and fails if they differ, since a
+        // wrong Replicate label would otherwise drop data silently. One memcmp per replica, plus one pass over the
+        // logical region of both shards when a padded tensor's padding bytes differ; turn off only when replicas are
+        // known to legitimately differ, in which case the first replica is the one written.
+        bool verify_replicated_shards_on_dump = true;
     };
 
 private:
@@ -83,6 +98,21 @@ public:
 
     // Defined in config.cpp (uses tt-logger).
     void validate(std::string_view name) const;
+
+    // Applies a JSON object of attribute overrides (the TTNN_CONFIG_OVERRIDES format). Unknown keys and
+    // bad values throw when strict (applying nothing) and are skipped with a warning otherwise.
+    // `source` names the origin (env var, file path) in those messages. Defined in config.cpp.
+    void apply_json_overrides(const std::string& json_text, bool strict = true, const std::string& source = {});
+
+    // Names of the overridable attributes, so callers need not filter dir(CONFIG). Defined in config.cpp.
+    static std::vector<std::string> keys();
+
+    // Applies a config file written by save_to_file (the TTNN_CONFIG_PATH format). A stale or corrupt file
+    // warns and leaves the parsed keys applied rather than failing the process. Defined in config.cpp.
+    void load_from_file(const std::filesystem::path& path);
+
+    // Writes the overridable attributes as JSON, in the format load_from_file reads. Defined in config.cpp.
+    void save_to_file(const std::filesystem::path& path) const;
 
     // Returns all config attributes as key-value pairs for Inspector.
     // Defined in config.cpp (uses reflection for_each).

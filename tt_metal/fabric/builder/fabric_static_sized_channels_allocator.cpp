@@ -5,7 +5,6 @@
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <enchantum/enchantum.hpp>
@@ -48,6 +47,18 @@ size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_number_of_slots(
         channel_id,
         vc_id);
     return receiver_channels_num_buffers[vc_id][channel_id];
+}
+
+size_t FabricStaticSizedChannelsAllocator::get_remote_receiver_channel_number_of_slots(
+    size_t vc_id, size_t channel_id) const {
+    TT_FATAL(
+        vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);
+    TT_FATAL(
+        channel_id < remote_receiver_channels_num_buffers[vc_id].size(),
+        "Remote receiver channel ID {} out of bounds for VC{}",
+        channel_id,
+        vc_id);
+    return remote_receiver_channels_num_buffers[vc_id][channel_id];
 }
 
 size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(size_t vc_id, size_t channel_id) const {
@@ -270,7 +281,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         total_size,
         this->available_channel_buffering_space);
     TT_FATAL(
-        buffer_addr_end < this->max_l1_loading_size,
+        buffer_addr_end <= this->max_l1_loading_size,
         "Internal error - channel buffers spilled past the end of usable L1 region.");
 }
 
@@ -460,16 +471,15 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
              {1, 2, 0, 0, 0, 0},
              {1, 1, 0, 0, 0, 0}}};
 
-        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_only_mesh_slots(
+        static ttsl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_only_mesh_slots(
             vc0_only_mesh_buffer_slot_options);
-        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_vc1_mesh_slots(
+        static ttsl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_vc1_mesh_slots(
             vc0_vc1_mesh_buffer_slot_options);
-        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_vc2_mesh_slots(
+        static ttsl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_vc2_mesh_slots(
             vc0_vc2_mesh_buffer_slot_options);
-        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_vc1_vc2_mesh_slots(
+        static ttsl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_vc1_vc2_mesh_slots(
             vc0_vc1_vc2_mesh_buffer_slot_options);
-        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(
-            other_buffer_slot_options);
+        static ttsl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(other_buffer_slot_options);
 
         if (topology == Topology::Mesh || topology == Topology::Torus) {
             // Select table based on which VCs are actually active
@@ -598,7 +608,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     };
 
     // auto axis_index = static_cast<std::size_t>(options.edm_axis);
-    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    auto arch = options.arch;
     size_t arch_index;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         arch_index = 0;
@@ -688,6 +698,35 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     num_remote_sender_buffer_slots_per_vc[2].fill(vc2_sender_buffer_slots);
     num_receiver_buffer_slots_per_vc[2].fill(vc2_receiver_buffer_slots);
     num_remote_receiver_buffer_slots_per_vc[2].fill(vc2_receiver_buffer_slots);
+
+    // Mesh allocation uses one conservative depth for every channel in a VC,
+    // which can leave whole packet slots unused. Give those slots to the live
+    // local-worker injection channel; forwarding and receive depths stay
+    // unchanged.
+    if ((topology == Topology::Mesh || topology == Topology::Torus) &&
+        options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        size_t allocated_slots = 0;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            allocated_slots += std::accumulate(
+                num_sender_buffer_slots_per_vc[vc].begin(),
+                num_sender_buffer_slots_per_vc[vc].begin() + num_used_sender_channels_per_vc[vc],
+                size_t{0});
+            allocated_slots += std::accumulate(
+                num_receiver_buffer_slots_per_vc[vc].begin(),
+                num_receiver_buffer_slots_per_vc[vc].begin() + num_used_receiver_channels_per_vc[vc],
+                size_t{0});
+        }
+        const size_t slot_capacity = available_channel_buffering_space / channel_buffer_size_bytes;
+        TT_FATAL(allocated_slots <= slot_capacity, "Fabric channel allocation exceeds its slot capacity");
+        const size_t spare_slots = slot_capacity - allocated_slots;
+        const uint32_t worker_channel = get_worker_connected_sender_channel();
+
+        const size_t requested_worker_slots = num_sender_buffer_slots_per_vc[0][worker_channel] + spare_slots;
+        const size_t worker_slots = std::min(requested_worker_slots, MAX_CHANNEL_BUFFER_SLOTS);
+
+        num_sender_buffer_slots_per_vc[0][worker_channel] = worker_slots;
+        num_remote_sender_buffer_slots_per_vc[0][worker_channel] = worker_slots;
+    }
 }
 
 void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args) const {
@@ -739,7 +778,7 @@ void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
     // allocated but unused). When emitting the kernel-side SENDER_TO_ENTRY_IDX mapping we
     // must skip past the *per-VC* unused slots, not the total unused slots — the kernel
     // compacts its sender channels in (VC0, VC1, VC2) order using the ACTUAL_* counts
-    // (see VC1_SENDER_CHANNEL_START / VC2_SENDER_CHANNEL_START in
+    // (see VC1_LOCAL_CHANNEL_START / VC2_LOCAL_CHANNEL_START in
     // fabric_erisc_router_ct_args.hpp), so each VC's used channels must point into its
     // own allocator-entry region.
     //

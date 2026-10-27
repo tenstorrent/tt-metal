@@ -40,7 +40,7 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         Tensor intermediate_packet_buffer;
     };
 
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
@@ -92,6 +92,8 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };

@@ -16,13 +16,14 @@
 #include "core_coord.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <tt_stl/tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "hal_types.hpp"
 
 namespace tt::tt_metal {
 
@@ -86,7 +87,6 @@ static std::vector<std::string> dispatch_kernel_file_names = {
 // E.g., Changing fabric mode from Disabled to Enabled constructs a new control plane
 using GetControlPlaneFn = std::function<tt::tt_fabric::ControlPlane&()>;
 using GetDispatchQueryManagerFn = std::function<const DispatchQueryManager&()>;
-using GetMaxNumEthCoresFn = std::function<uint32_t()>;
 using GetReadsDispatchCoresFn = std::function<bool(ChipId)>;
 
 // Top-level class describing a Fast Dispatch Kernel (kernel running on a specific core). All FD kernels should inherit
@@ -103,7 +103,6 @@ public:
         dispatch_core_manager& dispatch_core_manager,
         const GetControlPlaneFn& get_control_plane = {},
         const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
-        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {}) :
         device_id_(device_id),
         servicing_device_id_(servicing_device_id),
@@ -114,25 +113,7 @@ public:
         dispatch_core_manager_(dispatch_core_manager),
         get_control_plane_(get_control_plane),
         get_dispatch_query_manager_(get_dispatch_query_manager),
-        get_max_num_eth_cores_(get_max_num_eth_cores),
-        get_reads_dispatch_cores_(get_reads_dispatch_cores) {
-        bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
-        bool are_fd_kernels_on_same_core = descriptor.cluster().arch() == tt::ARCH::QUASAR && descriptor.num_cqs() == 1;
-        dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-            CoreType::WORKER,
-            descriptor.num_cqs(),
-            descriptor.hal(),
-            is_galaxy_cluster,
-            are_fd_kernels_on_same_core,
-            descriptor.rtoptions());
-        dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-            CoreType::ETH,
-            descriptor.num_cqs(),
-            descriptor.hal(),
-            is_galaxy_cluster,
-            /*are_fd_kernels_on_same_core=*/false,
-            descriptor.rtoptions());
-    }
+        get_reads_dispatch_cores_(get_reads_dispatch_cores) {}
     virtual ~FDKernel() = default;
 
     // Populate the static configs for this kernel (ones that do not depend on configs from other kernels), including
@@ -167,12 +148,7 @@ public:
         int tunnel_index = -1,
         const GetControlPlaneFn& get_control_plane = {},
         const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
-        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
-
-    // Translate DispatchCoreType to programmable core type index
-    static uint32_t get_programmable_core_type_index(
-        const ContextDescriptor& descriptor, CoreType dispatch_core_type, bool is_active_eth_core = false);
 
     // Translate core coord using the chip_id from the logical_cxy
     //
@@ -203,9 +179,10 @@ public:
 
     tt::tt_fabric::ControlPlane& get_control_plane_ref() const;
     const DispatchQueryManager& get_dispatch_query_manager_ref() const;
-    uint32_t get_max_num_eth_cores() const;
 
 protected:
+    const DispatchMemMap& get_dispatch_mem_map() const;
+
     // Attributes for an EDM client to connect to the router
     struct FDKernelEdmConnectionAttributes {
         size_t worker_flow_control_sem{0};
@@ -257,9 +234,7 @@ protected:
     dispatch_core_manager& dispatch_core_manager_;
     GetControlPlaneFn get_control_plane_;
     GetDispatchQueryManagerFn get_dispatch_query_manager_;
-    GetMaxNumEthCoresFn get_max_num_eth_cores_;
     GetReadsDispatchCoresFn get_reads_dispatch_cores_;
-    std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
 };
 
 }  // namespace tt::tt_metal

@@ -66,7 +66,19 @@ if [[ $1 = MERGE ]]; then
 	    fi
 	done <$file
     done
-    echo '# sfpi version information'
+
+    # releases must be MAJOR.MINOR.MICRO
+    if [[ $sfpi_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+	echo "# sfpi release $sfpi_version"
+    else
+	echo "# sfpi trial $sfpi_version"
+	echo
+	echo '		#######################################'
+	echo '		###   NOT A RELEASE, DO NOT DEPLOY  ###'
+	echo '		#######################################'
+    fi
+    echo
+
     for var in ${vars[@]}; do
 	eval val="\$$var"
 	echo "$var='$val'"
@@ -181,7 +193,7 @@ Building SFPI $sfpi_version
 Working Directory: $src
 
 Install (or otherwise provide) the following components:
-Common names: autoconf automake bison expect flex gawk patchutils python3 texinfo
+Common names: autoconf automake bison dejagnu expect flex gawk patchutils python3 texinfo
 Debian names: gcc g++ libexpat1-dev libgmp-dev libmpc-dev libmpfr-dev
 Fedora names: gcc gcc-c++ expat-devel gmp-devel libmpc-devel mpfr-devel
 
@@ -217,7 +229,7 @@ echo "Fetching sfpi $sfpi_version ..." | dupstderr
 echo | dupstderr
 echo "Building ..." | dupstderr
 (set -x; rm -rf build)
-(set -x; scripts/build.sh --test-tt 2>&1)
+(set -x; scripts/build.sh --checking=release --test-tt 2>&1)
 
 echo | dupstderr
 echo "Packaging ..." | dupstderr

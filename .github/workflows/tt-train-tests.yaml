@@ -6,7 +6,7 @@ on:
       test-category:
         required: true
         type: string
-        description: "Choice of 'smoke', 'unit', 'perf'. Maps tests/pipeline_reorg/train_{test-category}_tests.yaml."
+        description: "Choice of 'merge_gate', 'unit', 'perf'. Maps tests/pipeline_reorg/train_{test-category}_tests.yaml."
       docker-image:
         required: true
         type: string
@@ -20,7 +20,7 @@ on:
       enabled-skus:
         required: true
         type: string
-        description: "Comma-separated SKUs (e.g. wh_n150_civ2,wh_n300_civ2). Maps to runs_on via .github/sku_config.yaml."
+        description: "Comma-separated SKUs (e.g. bh_p100,bh_p150b_civ2). Maps to runs_on via .github/sku_config.yaml."
       enable-watcher:
         required: false
         type: boolean
@@ -50,12 +50,30 @@ on:
         type: number
         default: 0
         description: "If > 0, skip time budget verification and use this as job timeout."
+      subcategories:
+        required: false
+        type: string
+        default: ''
+        description: "Comma-separated category filter. Keep only entries whose `category` field appears in this list."
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+    outputs:
+      matrix:
+        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
+        value: ${{ jobs.load-test-matrix.outputs.matrix }}
+
+permissions:
+  contents: read
+  packages: read
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ inputs.subcategories != '' && steps.filter-categories.outputs.matrix || steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/train_${{ inputs.test-category }}_tests.yaml
     steps:
@@ -72,23 +90,28 @@ jobs:
       - name: Install dependencies
         run: pip3 install PyYAML
 
-      - name: Verify test timeouts against budget
-        if: ${{ inputs.timeout-minutes-override == 0 }}
-        run: |
-          set -e
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}"
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
 
+      - name: Filter matrix by subcategories
+        if: ${{ inputs.subcategories != '' }}
+        id: filter-categories
+        run: |
+          matrix='${{ steps.build-matrix.outputs.matrix }}'
+          categories='${{ inputs.subcategories }}'
+          filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains(",\($c),"))]')
+          {
+            echo "matrix<<EOF"
+            echo "$filtered"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
   tt-train-tests:
     needs: [load-test-matrix]
@@ -104,12 +127,6 @@ jobs:
       image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         LOGURU_LEVEL: INFO
-        TT_METAL_HOME: /work
-        TT_METAL_RUNTIME_ROOT: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        PYTHONPATH: /work
-        TEST_DATA_DIR: /work/data
-        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
         TT_LOGGER_LEVEL: warn
       volumes:
         - ${{ github.workspace }}/docker-job:/work
@@ -141,33 +158,40 @@ jobs:
           redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
           auto-triage: ${{ !inputs.enable-watcher }}
 
-      - name: Install ttml module
-        if: ${{ inputs.wheel-artifact-name }}
+      - name: Set up tt-train
+        uses: ./docker-job/.github/actions/setup-tt-train
         timeout-minutes: 10
-        run: |
-          SITE_PACKAGES=$(uv pip show ttnn | sed -n 's/^Location: //p')
-          if [[ -z "$SITE_PACKAGES" ]]; then
-            echo "ERROR: Could not determine site-packages from ttnn. Is the wheel installed?"
-            exit 1
-          fi
-          TTML_SRC_DIR="$TT_METAL_HOME/tt-train/sources/ttml"
-          TTML_BUILD_DIR="$TT_METAL_HOME/build/tt-train/sources/ttml"
-          echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
-          echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
+        with:
+          install-ttml: ${{ inputs.wheel-artifact-name != '' }}
+          hf-token: ${{ secrets.HUGGINGFACE_TOKEN }}
 
       - name: Install Python dependencies for metrics
         if: ${{ inputs.test-category == 'perf' }}
         run: |
           uv pip list
-          uv pip install "gitpython==3.1.50" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
+          uv pip install "gitpython==3.1.55" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
 
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
-        run: |
-          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
-            --backend sysfs \
-            --out /work/power_report.json \
-            -- bash -c '${{ matrix.test-group.cmd }}'
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+              --backend sysfs \
+              --out /work/power_report.json \
+              -- bash -c '${{ matrix.test-group.cmd }}'
+
+      - name: 📈 Publish tt-train metrics
+        if: ${{ !cancelled() }}
+        uses: ./docker-job/.github/actions/publish-tt-train-metrics
+        with:
+          repo-root: /work
+          plot-artifact-name: loss-plot-${{ matrix.test-group.name }}-${{ matrix.test-group.sku }}
+          upload-to-sftp: ${{ inputs.test-category == 'perf' }}
+          sftp-ssh-private-key: ${{ secrets.TT_TRAIN_AWS_KEY }}
+          sftp-username: ${{ secrets.TT_TRAIN_AWS_USERNAME }}
+          sftp-hostname: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
 
       - name: Upload power report
         if: ${{ !cancelled() }}
@@ -177,16 +201,6 @@ jobs:
           path: ${{ github.workspace }}/docker-job/power_report.json
           if-no-files-found: warn
           retention-days: 30
-
-      - name: Upload metrics data to AWS SFTP bucket
-        if: ${{ inputs.test-category == 'perf' }}
-        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
-        with:
-          ssh-private-key: ${{ secrets.TT_TRAIN_AWS_KEY }}
-          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/tt_train_model_metrics.txt
-          username: ${{ secrets.TT_TRAIN_AWS_USERNAME }}
-          hostname: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
-          path: /work
 
       - name: 📊 CCache Report
         if: ${{ !cancelled() }}
@@ -208,6 +222,24 @@ jobs:
         with:
           path: /work/generated/test_reports
           prefix: "test_reports_"
+
+      - name: 🤖 AI job summary
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries",
+              "scope": "${{ inputs.summary-scope }}",
+              "authoritative_job_status": ${{ matrix.test-group.authoritative_job_status }}
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

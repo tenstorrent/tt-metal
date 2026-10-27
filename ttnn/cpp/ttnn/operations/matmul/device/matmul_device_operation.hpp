@@ -18,7 +18,7 @@ namespace ttnn::prim {
 struct MatmulDeviceOperation {
     using operation_attributes_t = MatmulParams;
     using tensor_args_t = MatmulInputs;
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<
@@ -42,12 +42,26 @@ struct MatmulDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    static ttsl::hash::hash_t compute_program_hash(
+    // NOTE: intentionally NOT named compute_program_hash so the device-operation framework does
+    // NOT detect a custom program-cache hash (DeviceOperationWithCustomProgramCacheConcept) and
+    // instead keys the program cache on the default hash (attributes + tensor_args). This helper is
+    // retained only for the experimental descriptor interface (models/experimental/ops/descriptors),
+    // which computes its own cache key and reaches it through the pybind name "compute_program_hash".
+    static ttsl::hash::hash_t compute_descriptor_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
+
+// The in1 transport and output geometry that mcast_in0 over prefetcher_pipes requires: one output block
+// per worker, pipes of one kind and ring size whose ring holds the reader's lookahead, and, for DRAM-sender
+// pipes, a receiver-contiguous weight whose shards match this matmul's per-worker blocks.
+void validate_prefetcher_pipes_mcast_in0_geometry(
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
+    const Tensor& input_tensor_b,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config);
 
 MatmulParams create_matmul_attributes(
     const Tensor& input_tensor_a,

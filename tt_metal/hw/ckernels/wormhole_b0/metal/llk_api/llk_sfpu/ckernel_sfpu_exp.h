@@ -10,7 +10,8 @@
 
 // clang-format off: sfpi.h before polyval (polyval uses sfpi_inline); matches blackhole ordering
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "llk_math_eltwise_unary_sfpu.h"
+#include "ckernel_sfpu_polyval.h"
 // clang-format on
 #include "ckernel_sfpu_recip.h"
 #include "lltt.h"
@@ -48,25 +49,36 @@ sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val) {
  * Use this variant when the caller has already clamped its input (e.g. i1's
  * asymptotic path operates on |x| ∈ [10, 88.5]).
  *
+ * The overload taking c0, c1 and c2 is for a caller that evaluates it once per element
+ * (e.g. logaddexp): it can load the fractional-part coefficients once, before its loop.
+ * Each is a full fp32 value, two SFPLOADIs, which the one-argument form reloads on every
+ * call. Pass EXP_21F_BF16_C0..C2, each as a float or as a vFloat already holding it: like
+ * PolynomialEvaluator::eval, the overload takes either, so the one-argument form, which
+ * passes floats, compiles exactly as it did before.
+ *
  * @param val The input value, must be in the safe range described above.
  * @return sfpi::vFloat Result of exp(val), 21-bit accuracy (~3 FP32 ULP).
  */
-template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
+constexpr float EXP_21F_BF16_C0 = 1.0017248f;
+constexpr float EXP_21F_BF16_C1 = 7.839635491371155e-08f;
+constexpr float EXP_21F_BF16_C2 = 4.791750143340323e-15f;
+
+template <bool is_fp32_dest_acc_en, typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val, C0 c0, C1 c1, C2 c2) {
     constexpr float ONE_LN2 = 1.4426950216293334961f;
     sfpi::vFloat xlog2 = (val * ONE_LN2 + 127.f);
 
     sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
 
     sfpi::vInt exponential_part =
-        sfpi::exexp(z, sfpi::ExponentMode::NoDebias);  // Extract exponent ( = 2**(integer part of val/ln2))
-    sfpi::vMag fractional_part = sfpi::exman(z);       // Extract mantissa ( = leftover part, in [0; 1])
+        sfpi::exexp(z, sfpi::ExponentMode::Biased);  // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vMag fractional_part = sfpi::exman(z);     // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
-    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+    frac = PolynomialEvaluator::eval(frac, c0, c1, c2);
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
@@ -80,6 +92,11 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
     }
 
     return y;
+}
+
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
+    return _sfpu_exp_21f_bf16_unsafe_<is_fp32_dest_acc_en>(val, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
 }
 
 /*
@@ -118,15 +135,12 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
     // (when input < -88.5) and +inf (when input > 88.5)
     // To avoid this, we clamp xlog2 to [0, 255]
     // (thresholds values are rounded to bf16, as it does not change result but only requires one SFPLOADI vs. two)
-    sfpi::vFloat threshold_low = 0.f;
-    sfpi::vFloat threshold_high = sfpi::vFloat(255.f);
-    sfpi::vec_min_max(threshold_low, xlog2);
-    sfpi::vec_min_max(xlog2, threshold_high);
+    xlog2 = sfpi::clamp(xlog2, 0.0f, 255.0f);
 
     sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
 
     sfpi::vInt exponential_part =
-        exexp(z, sfpi::ExponentMode::NoDebias);   // Extract exponent ( = 2**(integer part of val/ln2))
+        exexp(z, sfpi::ExponentMode::Biased);     // Extract exponent ( = 2**(integer part of val/ln2))
     sfpi::vMag fractional_part = sfpi::exman(z);  // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
@@ -160,7 +174,7 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
 
     sfpi::vFloat tmp = z + c231;
     sfpi::vFloat k = tmp - c231;
-    k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
+    k_int = sfpi::as<sfpi::vInt>(tmp) - sfpi::as<sfpi::vInt>(c231);
 
     return k;
 }
@@ -195,61 +209,88 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-template <bool unsafe = false>
+// base_two = true computes 2^a instead of e^a. The reduction is then exact: j = round(a) and
+// a - j are both representable, so the only rounding before the polynomial is one multiply by
+// ln 2 on |a - j| <= 1/2. Passing a * ln2 to the base-e form instead rounds the argument,
+// and that relative error grows into the result in proportion to |a| (tens of ULP near 2^-126).
+template <bool unsafe = false, bool base_two = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+    sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
+    sfpi::vSMag16 sm;
 
-    // j = round(a / ln2)
-    // interleaved with first coefficient of polynomial
-    j = 1.442695f * a;
-    r = 1.37805939e-3f;
-    sfpi::vSMag i_smag = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
-    j = sfpi::convert<sfpi::vFloat>(i_smag, sfpi::RoundMode::Nearest);
+    if constexpr (base_two) {
+        // j = round(a), f = (a - j) * ln2
+        r = 1.37805939e-3f;
+        sm = sfpi::convert<sfpi::vSMag16>(a, sfpi::RoundMode::Nearest);
+        j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
+        f = (a - j) * 6.93147182e-1f;
+    } else {
+        // j = round(a / ln2)
+        // interleaved with first coefficient of polynomial
+        j = 1.442695f * a;
+        r = 1.37805939e-3f;
+        sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
+        j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
 
-    // f = a - i*j (two-part cody-waite)
-    f = j * -6.93145752e-1f + a;
-    f = j * -1.42860677e-6f + f;
+        // f = a - i*j (two-part cody-waite)
+        f = j * -6.93145752e-1f + a;
+        f = j * -1.42860677e-6f + f;
+    }
 
     // approximate r = exp(f) on [-ln2/2, ln2/2]
-    // interleaved with conversion of i from sign-mag to two's complement
+    // interleaved with conversion of i from sign-mag to two's complement via abs and copysgn
     r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
     r = r * f + 4.16695364e-2f;  // 0x1.555b5ap-5
     r = r * f + 1.66664720e-1f;  // 0x1.555450p-3
     r = r * f + 4.99999851e-1f;  // 0x1.fffff6p-2
+    i = sfpi::abs(sfpi::as<sfpi::vInt>(sm));
     y = r * f + 1.0f;
-    sfpi::vInt i_2c = sfpi::convert<sfpi::vInt>(i_smag);
+    i = sfpi::as<sfpi::vInt>(sfpi::copysgn(sfpi::as<sfpi::vFloat>(i), j));
     r = y * f + 1.0f;
 
-    sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias) + i_2c;
     if constexpr (unsafe) {
         // y = 2**i * r
+        e = sfpi::exexp(r, sfpi::ExponentMode::Biased) + i;
         y = sfpi::setexp(r, e);
     } else {
-        // overflow: y = infinity or NaN
-        y *= std::numeric_limits<float>::infinity();
-
-        // if e < 255
-        v_block {
-            sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
-
-            // y = 2**i * r
-            y = sfpi::setexp(r, e);
-
-            // if e < 1
-            v_if(e_lt_255 < -254) {
-                // underflow, including subnormals
-                y = 0.0f;
+        // IMPORTANT: this bit-level hack only works on Wormhole, which
+        // doesn't produce canonical NaNs and requires this hack to handle
+        // -NaN while maintaining performance.
+        // Often (but not always), we can guarantee that both -NaN and +NaN
+        // have a mantissa of exactly 1 on Wormhole.  For this specific code,
+        // we can guarantee this is the case.
+        // The hack: subtract 1, which converts ±NaN to ±inf, otherwise
+        // generates a finite value.
+        // Then, multiply by 0 to obtain 0*±inf = ±NaN, otherwise 0*±finite = 0.
+        // This is our underflow result, which handles -NaN correctly too.
+        y = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(y) + -1);
+        y *= 0.0f;
+        e = sfpi::exexp(r, sfpi::ExponentMode::Biased) + i;
+        v_if(e >= 1) {
+            // Overflow: y = infinity or NaN
+            // We add infinity to our underflow result to get the overflow result.
+            // If underflow was NaN, then NaN+inf = NaN.  Otherwise 0+inf = inf.
+            y += std::numeric_limits<float>::infinity();
+            v_if(e < 255) {
+                // y = 2**i * r
+                y = sfpi::setexp(r, e);
             }
             v_endif;
         }
-        v_endblock;
+        v_endif;
     }
 
     return y;
 }
 
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
-    return _sfpu_exp_fp32_accurate_<true>(x);
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
+
+// 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN: unlike the
+// base-e form, no multiply precedes the rounding. The only caller, logaddexp2, zeroes NaN gaps
+// first. |x| >= 32768 saturates the rounding and gets the guards' +Inf / +0, the exact result.
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
+    return _sfpu_exp_fp32_accurate_</*unsafe=*/false, /*base_two=*/true>(x);
 }
 
 /*
@@ -414,8 +455,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val) {
     v_endif;
 
     // Run series in Horner form
-    sfpi::vFloat tmp = val * sfpi::vConst0p8373 + sfpi::sFloat16b(0.863281f);
-    val = val * tmp + sfpi::vConst1;
+    sfpi::vFloat tmp = val * 0.8373f + sfpi::sFloat16b(0.863281f);
+    val = val * tmp + 1.0f;
 
     v_if(exp >= 0) {
         val = val * val;
@@ -429,38 +470,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val) {
     v_endif;
 
     return val;
-}
-
-template <bool APPROXIMATION_MODE>
-sfpi_inline sfpi::vFloat _calculate_exponential_body_(sfpi::vFloat in) {
-    sfpi::vFloat out;
-
-    if constexpr (APPROXIMATION_MODE) {
-        constexpr int FRAC_BITS = 3;
-        constexpr std::uint32_t SP_BIAS = 127 << FRAC_BITS;
-
-        // * by 1/ln2 and add convert to 7.3 FxP format
-        sfpi::vFloat vConstLn2Recip = sfpi::vConstFloatPrgm0;
-        sfpi::vFloat conv = in * vConstLn2Recip;
-
-        // Clear exp bits
-        sfpi::vInt c23_73 = p_exp::C23_73;
-        sfpi::vInt tmp = sfpi::reinterpret<sfpi::vInt>(conv) - c23_73;
-
-        // Add bias
-        tmp += SP_BIAS;
-
-        // SHL to move integer bits to exponent
-        out = sfpi::reinterpret<sfpi::vFloat>(tmp << (10 - FRAC_BITS));
-    } else {
-        // Force sign to 0 (make number positive)
-        out = _sfpu_exp_(sfpi::setsgn(in, 0));
-
-        v_if(in < 0) { out = sfpu_reciprocal_iter<2>(out); }
-        v_endif;
-    }
-
-    return out;
 }
 
 template <bool SCALE_EN, bool is_fp32_dest_acc_en>
@@ -478,7 +487,7 @@ template <
     bool SCALE_EN = false,
     int ITERATIONS = 8,
     bool CLAMP_NEGATIVE = true>
-void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
@@ -496,7 +505,9 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
+            TTI_SFPNOP;  // SFPMAD must not read LREG0 before the SFPSWAP result lands (SFPSWAP + SFPNOP costs no cycle)
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+            TTI_SFPNOP;  // no WH SFPU scoreboard: SFP_STOCH_RND must not read LREG0 the cycle after SFPMAD writes it
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
             TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
@@ -622,6 +633,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+            TTI_SFPNOP;  // no WH SFPU scoreboard: SFP_STOCH_RND must not read LREG0 the cycle after SFPMAD writes it
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
             TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG1, 5);  // lreg[1] = lreg[0] << 15
             TTI_SFPSETSGN(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // lreg[0] preserves sign, copies e/m from lreg[1]
@@ -698,12 +710,14 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
-template <
-    bool APPROXIMATION_MODE,
-    uint32_t scale = 0x3F800000,
-    bool CLAMP_NEGATIVE = true,
-    bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
 void exp_init() {
+    // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
+    // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
+    // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
+    sfpu::_init_sfpu_config_reg();
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
         // Algorithm is adapted from:
         //      A Fast, Compact Approximation of the Exponential Function
@@ -1022,15 +1036,11 @@ void exp_init() {
 #endif
     } else {
         if constexpr (!is_fp32_dest_acc_en) {
-            // LREG12 = 1/ln2
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3fb8);
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
-            TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
-
-            // LREG13 = c2 = 4.791750143340323e-15f (0x27aca418)
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
-            TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+            // LREG12 = 1/ln2 (0x3fb8aa3b), LREG13 = c2 (0x27aca418), consumed by
+            // _sfpu_exp_21f_bf16_tti_. vConstFloatPrgm0/1 map to LREG12/13 and lower to
+            // the same SFPLOADI+SFPCONFIG pair (verified instruction-identical via disasm).
+            sfpi::vConstFloatPrgm0 = 1.4426950216293334961f;
+            sfpi::vConstFloatPrgm1 = 4.791750143340323e-15f;
         } else {
             // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
             // reciprocal LLK for negative inputs, so its constants must be

@@ -24,15 +24,31 @@ constexpr auto kShape = "shape";
 constexpr auto kDtype = "dtype";
 constexpr auto kMemoryConfig = "memory_config";
 constexpr auto kBufferType = "buffer_type";
+constexpr auto kStorageType = "storage_type";      // "HOST" or "DEVICE"; tensor nodes only
 constexpr auto kDeviceTensors = "device_tensors";  // Per-device buffer placement for multi-device (mesh) tensors
 constexpr auto kMeshDeviceId = "mesh_device_id";
 constexpr auto kNumCores = "num_cores";
 constexpr auto kPageSize = "page_size";
 constexpr auto kCoreRangeSet = "core_range_set";
 constexpr auto kGloballyAllocated = "globally_allocated";
+constexpr auto kBorrowsMemory = "borrows_memory";
 constexpr auto kDeviceId = "device_id";
+constexpr auto kPhysicalDeviceId = "physical_device_id";
 constexpr auto kDurationNs = "duration_ns";
 constexpr auto kMaxSizePerBank = "max_size_per_bank";
+constexpr auto kSubDeviceManagerId = "sub_device_manager_id";
+constexpr auto kSubDeviceId = "sub_device_id";
+constexpr auto kWorkerCoreRanges = "worker_core_ranges";
+constexpr auto kSubDevices = "sub_devices";
+constexpr auto kRuntimeId = "runtime_id";
+constexpr auto kGlobalCallCount = "global_call_count";
+constexpr auto kCommandQueueId = "command_queue_id";
+constexpr auto kProgramFactoryType = "program_factory_type";
+constexpr auto kProgramFactoryIndex = "program_factory_index";
+constexpr auto kProgramCacheHit = "program_cache_hit";
+// Set on a function_end that closes a scope left by an exception rather than by returning.
+constexpr auto kAborted = "aborted";
+constexpr auto kAbortReason = "abort_reason";
 
 // node names
 constexpr auto kNodeBuffer = "buffer";
@@ -40,11 +56,16 @@ constexpr auto kNodeBufferAllocate = "buffer_allocate";
 constexpr auto kNodeBufferDeallocate = "buffer_deallocate";
 constexpr auto kNodeTensor = "tensor";
 constexpr auto kNodeCBAllocate = "circular_buffer_allocate";
+constexpr auto kNodeDataflowBufferAllocate = "dataflow_buffer_allocate";
+constexpr auto kNodeScratchpadAllocate = "scratchpad_allocate";
+// Releases every kind of program-scope L1: circular buffers, dataflow buffers and scratchpads.
 constexpr auto kNodeCBDeallocateAll = "circular_buffer_deallocate_all";
 constexpr auto kNodeFunctionStart = "function_start";
 constexpr auto kNodeFunctionEnd = "function_end";
 constexpr auto kNodeCaptureStart = "capture_start";
 constexpr auto kNodeCaptureEnd = "capture_end";
+constexpr auto kNodeProgramExecution = "program_execution";
+constexpr auto kNodeSubDeviceManager = "sub_device_manager";
 // levelized graph keys
 constexpr auto kInEdges = "in_edges";
 constexpr auto kOutEdges = "out_edges";
@@ -62,6 +83,11 @@ constexpr auto kReportTimestampNs = "capture_timestamp_ns";
 constexpr auto kReportTotalDurationNs = "total_duration_ns";
 constexpr auto kReportRank = "rank";
 constexpr auto kReportWorldSize = "world_size";
+constexpr auto kReportGitSha = "git_sha";
+constexpr auto kReportGitShaShort = "git_sha_short";
+constexpr auto kReportGitVersion = "version";
+constexpr auto kReportBuildType = "build_type";
+constexpr auto kReportGitDirty = "dirty";
 
 // device info keys
 constexpr auto kDeviceNumYCores = "num_y_cores";

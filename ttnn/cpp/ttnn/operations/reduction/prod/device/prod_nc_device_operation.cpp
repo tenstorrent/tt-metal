@@ -31,11 +31,17 @@ void ProdNcDeviceOperation::validate_on_program_cache_miss(
             output_shape[i]);
     }
 
-    // prod supports only bfloat16, per ttnn/cpp/ttnn/operations/reduction/prod/prod_nanobind.hpp
     TT_FATAL(
-        input.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "Error - unsupported data type for prod, expected BFLOAT16 but got {}.",
+        input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            input.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "Error - unsupported data type for prod, expected BFLOAT16, FLOAT32 or BFLOAT8_B but got {}.",
         input.dtype());
+
+    TT_FATAL(
+        input.dtype() == output.dtype(),
+        "Error - prod requires input and output dtypes to match, got input: {} vs output: {}.",
+        input.dtype(),
+        output.dtype());
 
     const auto& out_memory_config = output.memory_config();
     ReduceOpDeviceGridValidationOptions prod_nc_grid_opts;

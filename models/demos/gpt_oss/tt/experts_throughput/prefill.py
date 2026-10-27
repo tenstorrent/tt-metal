@@ -123,6 +123,7 @@ class DeepSeekPrefillConfig:
             cluster_axis=0,
             num_links=num_links,
             topology=topology,
+            num_workers_per_sender=1,
         )
 
         self.combine_module = TtCombineModule(
@@ -321,10 +322,9 @@ def _forward_prefill_deepseek_chunk(
         idx_for_routing = ttnn.to_layout(idx_u16, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(idx_u16)
 
-    tt_offsets, tt_counts, expert_region_offsets, _ = pc.routing_setup(
+    tt_offsets, tt_counts, expert_region_offsets, _, _ = pc.routing_setup(
         ttnn_top_k_experts_indices=idx_for_routing,
         num_routed_experts=config.num_experts,
-        seq_len_per_chip=pc.seq_len_per_chip,
         num_experts_per_tok=config.num_experts_per_tok,
     )
     ttnn.deallocate(idx_for_routing)

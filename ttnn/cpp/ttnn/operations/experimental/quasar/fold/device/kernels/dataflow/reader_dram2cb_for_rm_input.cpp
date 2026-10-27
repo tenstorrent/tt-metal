@@ -6,25 +6,23 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(1);
-    constexpr uint32_t aligned_stick_nbytes_dram = get_compile_time_arg_val(2);
-    constexpr uint32_t stride_h = get_compile_time_arg_val(3);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(4);
-    constexpr uint32_t input_width = get_compile_time_arg_val(5);
-    constexpr uint32_t work_per_core = get_compile_time_arg_val(6);
-    constexpr auto src_args = TensorAccessorArgs<9>();
+    constexpr uint32_t stick_nbytes = get_arg(args::stick_nbytes);
+    constexpr uint32_t aligned_stick_nbytes_dram = get_arg(args::aligned_stick_nbytes);
+    constexpr uint32_t stride_h = get_arg(args::stride_h);
+    constexpr uint32_t stride_w = get_arg(args::stride_w);
+    constexpr uint32_t input_width = get_arg(args::input_width);
+    constexpr uint32_t work_per_core = get_arg(args::work_per_core);
 
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const auto s_in = TensorAccessor(src_args, src_addr);
+    const auto s_in = TensorAccessor(tensor::src);
 
     Noc noc;
-    experimental::CB cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(dfb::src0);
 
-    uint32_t src_index = get_arg_val<uint32_t>(1);
-    uint32_t curr_src_row_index = get_arg_val<uint32_t>(2);
+    uint32_t src_index = get_arg(args::src_index);
+    uint32_t curr_src_row_index = get_arg(args::curr_src_row_index);
     for (uint32_t input_idx = 0; input_idx < work_per_core; input_idx++) {
         uint32_t curr_src_offset = src_index;
         cb_in0.reserve_back(1);

@@ -26,6 +26,7 @@ flatbuffers::Offset<flatbuffer::CoreRange> to_flatbuffer(
 flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const CoreRangeSet& range_set) {
     std::vector<flatbuffers::Offset<flatbuffer::CoreRange>> range_offsets;
+    range_offsets.reserve(range_set.ranges().size());
     for (const auto& range : range_set.ranges()) {
         range_offsets.push_back(to_flatbuffer(builder, range));
     }
@@ -36,7 +37,7 @@ flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
 std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec) {
     return std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [&](const CoreCoord& spec) -> std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> {
                 return {flatbuffer::CoreSpec::CoreCoord, to_flatbuffer(builder, spec).Union()};
             },
@@ -62,6 +63,7 @@ FlatbufferCoreCoordVector to_flatbuffer(
 FlatbufferUInt32VecOfVec to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::vector<std::vector<uint32_t>>& vec_of_vec) {
     std::vector<flatbuffers::Offset<flatbuffer::UInt32Vector>> vec_offsets;
+    vec_offsets.reserve(vec_of_vec.size());
 
     for (const auto& sub_vector : vec_of_vec) {
         auto values_offset = builder.CreateVector(sub_vector);
@@ -76,6 +78,7 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const DataMovementConfig& config) {
     // Convert defines (map) to FlatBuffer format
     std::vector<flatbuffers::Offset<flatbuffer::DefineEntry>> defines_vector;
+    defines_vector.reserve(config.defines.size());
     for (const auto& [key, value] : config.defines) {
         auto key_offset = builder.CreateString(key);
         auto value_offset = builder.CreateString(value);
@@ -99,6 +102,7 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const ComputeConfig& config) {
     // Convert defines (map) to FlatBuffer format
     std::vector<flatbuffers::Offset<flatbuffer::DefineEntry>> defines_vector;
+    defines_vector.reserve(config.defines.size());
     for (const auto& [key, value] : config.defines) {
         auto key_offset = builder.CreateString(key);
         auto value_offset = builder.CreateString(value);
@@ -133,6 +137,7 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const EthernetConfig& config) {
     // Convert defines (map) to FlatBuffer format
     std::vector<flatbuffers::Offset<flatbuffer::DefineEntry>> defines_vector;
+    defines_vector.reserve(config.defines.size());
     for (const auto& [key, value] : config.defines) {
         auto key_offset = builder.CreateString(key);
         auto value_offset = builder.CreateString(value);
@@ -185,7 +190,7 @@ flatbuffers::Offset<flatbuffer::RuntimeArg> create_runtime_arg(
     flatbuffer::RuntimeArgValue value_type;
 
     flatbuffers::Offset<void> value_offset = std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [&](uint32_t arg_value) -> flatbuffers::Offset<void> {
                 value_type = flatbuffer::RuntimeArgValue::UInt32Value;
                 return builder.CreateStruct(tt_metal::flatbuffer::UInt32Value{arg_value}).Union();
@@ -204,6 +209,7 @@ flatbuffers::Offset<flatbuffer::RuntimeArg> create_runtime_arg(
 flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffer::RuntimeArg>>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::shared_ptr<RuntimeArgs>& runtime_args) {
     std::vector<flatbuffers::Offset<flatbuffer::RuntimeArg>> arg_offsets;
+    arg_offsets.reserve(runtime_args->size());
 
     for (const auto& arg : *runtime_args) {
         arg_offsets.push_back(create_runtime_arg(builder, arg));
@@ -213,7 +219,7 @@ flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffer::RuntimeA
 }
 
 flatbuffers::Offset<flatbuffers::Vector<uint8_t>> to_flatbuffer(
-    flatbuffers::FlatBufferBuilder& builder, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    flatbuffers::FlatBufferBuilder& builder, ttsl::Span<const SubDeviceId> sub_device_ids) {
     std::vector<uint8_t> fb_sub_device_ids(sub_device_ids.size());
     for (size_t i = 0; i < sub_device_ids.size(); ++i) {
         fb_sub_device_ids[i] = *sub_device_ids[i];

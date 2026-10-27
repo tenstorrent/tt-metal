@@ -8,7 +8,7 @@ import copy
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import is_unsupported_case
+from tests.nightly.t3000.ccl.test_all_gather import is_unsupported_case
 from models.common.utility_functions import skip_for_blackhole
 
 from tracy import signpost
@@ -49,12 +49,11 @@ def run_strided_all_gather_impl(
     tile = (32, 32)
 
     # Skip unsupported cases
-    (is_known_failure, message) = is_unsupported_case(
+    is_known_failure, message = is_unsupported_case(
         ag_output_shape,
         dim,
         mem_config_ag,
         num_devices,
-        num_links,
         ag_input_dtype,
         layout,
         tile,
@@ -216,6 +215,8 @@ def run_strided_all_gather_impl(
         # # Multiple y core tests
         # ([1, 1, 128, 256], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
         # ([1, 1, 128, 256], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
+        # One tile shared by two workers: the second worker's band share is zero
+        ([1, 1, 32, 256], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
         # Full tests
         ([1, 1, 4096, 2560], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320),
     ],
@@ -235,6 +236,7 @@ def run_strided_all_gather_impl(
         # # Multiple y core tests
         # "2tile2chunk1worker4row2ycores",
         # "2tile2chunk2worker4row2ycores",
+        "1tile2workers",
         # Full tests
         "4k4k",
     ],

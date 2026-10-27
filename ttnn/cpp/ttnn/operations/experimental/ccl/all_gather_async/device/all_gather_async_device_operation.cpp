@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
@@ -83,7 +84,7 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& dtype = input_tensor.dtype();
     const auto& page_size = input_tensor.buffer()->page_size();
     TT_FATAL(
-        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
+        (input_tensor.device()->arch() != tt::ARCH::BLACKHOLE) ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM) ||
             !args.use_all_gather_async_llama_sharded,
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
@@ -209,7 +210,7 @@ AllGatherAsyncDeviceOperation::spec_return_value_t AllGatherAsyncDeviceOperation
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
     shape[args.dim] *= args.ring_size;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
@@ -226,60 +227,17 @@ AllGatherAsyncDeviceOperation::tensor_return_value_t AllGatherAsyncDeviceOperati
 
 AllGatherAsyncDeviceOperation::topology_return_value_t AllGatherAsyncDeviceOperation::compute_output_topologies(
     const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
-    // After all_gather, the gathered axis is fully replicated across all devices on that axis.
-    // Replace the placement on `cluster_axis` with Replicate, leaving other mesh axes untouched.
-    // When cluster_axis is not provided, the op acts across the entire (1D) mesh, so all
-    // placements are set to Replicate.
-    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
-    auto output_placements = input_topology.placements();
-
-    if (args.cluster_axis.has_value()) {
-        const auto axis = args.cluster_axis.value();
-        if (axis < output_placements.size()) {
-            output_placements[axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
-    } else {
-        for (auto& placement : output_placements) {
-            placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
-    }
-
-    return {tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords())};
-}
-
-ttsl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "AllGatherAsyncDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = args.sub_device_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    if (args.sub_core_grid.has_value()) {
-        subdevice_core_range_set = subdevice_core_range_set.intersection(args.sub_core_grid.value());
-    }
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<AllGatherAsyncDeviceOperation>(
-        args.dim,
-        args.num_links,
-        args.ring_size,
-        args.output_mem_config,
-        args.topology,
-        args.cluster_axis,
-        args.barrier_semaphore.has_value(),
-        args.using_persistent_buffers,
-        args.chunks_per_sync,
-        args.num_workers_per_link,
-        args.num_buffers_per_channel,
-        args.use_all_gather_async_llama_sharded,
-        args.use_optimal_ccl_for_llama,
-        args.reverse_order,
-        subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
+    // After all_gather the gathered axis is Replicate and the other mesh axes keep their placements; without a
+    // cluster_axis the op spans the whole mesh and every placement becomes Replicate. The helper expands a
+    // collapsed 1-D label to one placement per mesh axis first and refuses a gather that would interleave the shards
+    // of a 1-D-mapped tensor. `args.dim` is already normalised (all_gather_async_build_operation_args). No honest
+    // label (nullopt, already reported): the
+    // output keeps the input's label. Returning {} would instead hand the framework the union over every tensor
+    // argument, the persistent output buffer's label included.
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto output_topology =
+        ttnn::operations::ccl::common::all_gather_output_topology(input_tensor, args.cluster_axis, args.dim);
+    return {output_topology.value_or(input_tensor.tensor_topology())};
 }
 
 std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_operation_args(

@@ -1,0 +1,609 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+//
+// Writer kernel for the worker cores — the unified dispatch writer for both
+// TILE and ROW_MAJOR input. Layout-agnostic: it drains cb_untilize_id (the compute
+// output c_11 on TILE, or the reader-filled row CB c_0 on ROW_MAJOR) identically.
+// Runs on RISCV_0 (data movement) of each worker core, opposite the reader
+// RISC on the same core: the reader builds the next batch's route plan while
+// this kernel drains the current one and performs the NOC writes.
+//
+// Token batches are distributed round-robin across total_workers worker cores:
+// core i processes batches i, i+total_workers, …  Each worker core is bound to
+// ONE sender core (fabric-only) that forwards its cross-device tokens.
+//
+// Startup handshake:
+//   Wait for the owning sender to multicast its c_4/c_5/c_6 receive-buffer L1
+//   base addresses (addr_ready_semaphore), then read them from the cross-addr
+//   mailbox.  c_4 = route_info slots, c_5 = payload slots, c_6 = metadata slots.
+//
+// For each assigned batch:
+//   1. Wait for this batch's payload to be ready (cb_wait_front on cb_untilize_id):
+//      compute output on TILE, reader-filled rows on ROW_MAJOR.
+//   2. Wait for the reader RISC to publish this batch's route plan (cb_wait_front
+//      on cb_plan_id), then read it as PlanHeader + PlanEntry[] (layout shared
+//      with the reader via dispatch_plan.hpp).
+//   3. For each plan entry:
+//        - Local (PLAN_FLAG_LOCAL): NOC-write the token payload and its metadata
+//          straight to local DRAM, bypassing the sender.  Sources are unique per
+//          token / ring-rotated, so a single flush at batch end covers reuse.
+//        - Cross-device: wait for a per-entry credit (space_avail; the sender
+//          frees one slot per fabric send), then write route_info, payload and
+//          metadata into the sender's c_4/c_5/c_6 slot (TRID-tagged, barriered
+//          per entry) and bump the sender's data_avail semaphore so it forwards
+//          the token over the fabric.
+//   4. Flush outstanding local writes, then release the plan and untilize CBs
+//      (cb_pop_front).
+//
+// After the last batch: drain the reader's end-of-plan sentinel page, send
+// ROUTE_INFO_SENTINEL to the sender (so it stops forwarding), and full-barrier
+// before exit.
+//
+
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/debug/dprint.h"
+#include "api/debug/assert.h"
+#include "ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/dispatch_plan.hpp"
+
+#define ENABLE_DISPATCH_DEBUG 0
+#if ENABLE_DISPATCH_DEBUG
+#define DPRINT_DISPATCH(...) DPRINT(__VA_ARGS__)
+#else
+#define DPRINT_DISPATCH(...)
+#endif
+
+constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
+constexpr uint32_t TRID_NON_LOCAL_WRITE = 1;
+
+void kernel_main() {
+    // ===== Compile-time args =====
+    constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(0);
+    CircularBuffer cb_untilize(cb_untilize_id);
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(1);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t total_batches = get_compile_time_arg_val(3);
+    constexpr uint32_t core_id = get_compile_time_arg_val(4);
+    constexpr uint32_t total_workers = get_compile_time_arg_val(5);
+
+    constexpr uint32_t cb_metadata_scratch_id = get_compile_time_arg_val(6);
+    CircularBuffer cb_metadata_scratch(cb_metadata_scratch_id);
+    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_plan_id = get_compile_time_arg_val(8);
+    CircularBuffer cb_plan(cb_plan_id);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(9);
+
+    // Per-entry CB protocol on sender side (sender writer CBs, writer_cb_size slots deep).
+    constexpr uint32_t route_info_slot_stride = get_compile_time_arg_val(10);    // l1_alignment
+    constexpr uint32_t writer_cb_size = get_compile_time_arg_val(11);            // = read_batch_size = 32
+    constexpr uint32_t cb_route_info_scratch_id = get_compile_time_arg_val(12);  // 16B local scratch
+    CircularBuffer cb_route_info_scratch(cb_route_info_scratch_id);
+    constexpr uint32_t meta_scratch_slots = get_compile_time_arg_val(13);
+
+    Noc noc;
+
+    constexpr auto output_args = TensorAccessorArgs<14>();
+    constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+
+#ifdef HAS_PADDING_CONFIG
+    // padding_config accessor + scratch CB id appended LAST so the existing index layout is unchanged.
+    constexpr auto padding_cfg_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_padding_config_id =
+        get_compile_time_arg_val(padding_cfg_args.next_compile_time_args_offset());
+#endif
+
+#ifdef FP8_SCALED
+    // Per-token fp8 scales CB id + aligned page size + word count, appended AFTER padding_config.
+    // The writer reads scales straight from the CB (the reader filled it), so no DRAM accessor.
+#ifdef HAS_PADDING_CONFIG
+    constexpr uint32_t scales_args_offset = padding_cfg_args.next_compile_time_args_offset() + 1;
+#else
+    constexpr uint32_t scales_args_offset = metadata_args.next_compile_time_args_offset();
+#endif
+    constexpr uint32_t cb_scales_id = get_compile_time_arg_val(scales_args_offset);
+    CircularBuffer cb_scales(cb_scales_id);
+    constexpr uint32_t aligned_scales_page_size = get_compile_time_arg_val(scales_args_offset + 1);
+    constexpr uint32_t num_scale_words = get_compile_time_arg_val(scales_args_offset + 2);
+#endif
+
+    // ===== Runtime args =====
+    uint32_t rt_idx = 0;
+    uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t sender_noc_y = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t addr_ready_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t cross_addr_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t data_avail_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t space_avail_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_idx++);
+#ifdef HAS_PADDING_CONFIG
+    // padding_config base address appended after the 8 base runtime args.
+    uint32_t padding_config_address = get_arg_val<uint32_t>(rt_idx++);
+#endif
+
+    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
+    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
+
+    // ===== Startup handshake: receive the owning sender's receive-buffer base addresses =====
+    // The sender owns three L1 receive buffers this worker fabric-feeds — c_4 (route_info),
+    // c_5 (payload), c_6 (metadata) — whose L1 base addresses are only known at runtime.  The
+    // sender packs all three into our cross_addr mailbox slot, then increments addr_ready.  The
+    // sender barriers those address writes before the inc, so once addr_ready fires the packed
+    // addresses are already in our local L1 and the read below is safe.  We reset addr_ready to 0
+    // so the slot is clean for the next program launch.
+    Semaphore<> addr_ready_sem(addr_ready_semaphore_id);
+    addr_ready_sem.wait(1);
+    addr_ready_sem.set(0);
+
+    // All three base addresses arrive packed in the single mailbox slot (words [0],[1],[2]).
+    volatile tt_l1_ptr uint32_t* cross_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(cross_addr_semaphore_id));
+    uint32_t sender_c4_l1_addr = cross_addr_ptr[0];
+    uint32_t sender_c5_l1_addr = cross_addr_ptr[1];
+    uint32_t sender_c6_l1_addr = cross_addr_ptr[2];
+
+    // Pre-compute NOC addresses for the sender's three receive buffers and its data_avail
+    // semaphore.  A cross-device entry writes route_info/payload/metadata into these slots,
+    // then bumps data_avail to tell the sender one slot is ready to forward over the fabric.
+    uint64_t sender_c4_base_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_c4_l1_addr);
+    uint64_t sender_c5_base_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_c5_l1_addr);
+    uint64_t sender_c6_base_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_c6_l1_addr);
+    uint64_t sender_data_avail_noc_addr =
+        get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_avail_semaphore_id));
+    Semaphore<> data_avail_sem(data_avail_semaphore_id);
+
+    // space_avail lives in our local L1; the sender increments it remotely once per slot it has
+    // finished forwarding.  We poll it as a per-entry credit (wait for produced_count+1) before
+    // overwriting a slot, so the sender's in-flight fabric send is never clobbered.
+    Semaphore<> space_avail_sem(space_avail_semaphore_id);
+    volatile tt_l1_ptr uint32_t* space_avail_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(space_avail_semaphore_id));
+
+    // Metadata scratch layout: [meta_scratch_slots local ring slots][1 trailing cross-device slot].
+    // Local entries rotate through the ring so consecutive DRAM writes overlap; cross-device entries
+    // stage into the single trailing slot (xdev_metadata_scratch_addr) before the NOC write to c_6.
+    // route_info_scratch is a tiny local buffer where the 4×u32 route_info word group is assembled
+    // before being pushed to the sender's c_4 in one NOC write.
+    uint32_t metadata_scratch_addr = cb_metadata_scratch.get_write_ptr();
+    uint32_t xdev_metadata_scratch_addr = metadata_scratch_addr + meta_scratch_slots * aligned_metadata_page_size;
+    uint32_t route_info_scratch_addr = cb_route_info_scratch.get_write_ptr();
+    volatile tt_l1_ptr uint32_t* route_info_scratch =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(route_info_scratch_addr);
+    uint32_t produced_count = 0;
+    uint32_t local_count = 0;
+
+#ifdef SPARSE_MCAST_DISPATCH
+    // Grouped sparse-multicast staging (1D Ring): a token's cross-device destinations are bucketed per
+    // fabric direction (entry->route) for the current token, then flushed as grouped ring slots — one
+    // sparse-multicast payload write per slot instead of one unicast per destination. The grouped
+    // route_info carries the three documented routing fields the sender needs to rebuild each
+    // destination's metadata ([src chip, global token idx, top-k slot]), so on the default path no
+    // metadata is staged here at all.
+    //
+    // Under FP8_SCALED the metadata page additionally carries the token's fp32 scale tail (fields
+    // 3..metadata_len-1), which the sender cannot produce — the scales live in this worker's scales CB.
+    // A group is always one token fanned out to several chips, and of the metadata fields only the top-k
+    // slot varies per destination: [0], [1] and the whole tail are per-token constants. So the tail is
+    // staged once per slot here (see emit_slot) and the sender simply overwrites [0..2] per destination
+    // and forwards the full page. Cost is one extra NOC write per group slot, on the fp8 path only.
+    //
+    // One bound shapes a slot: at most NOC_SPARSE_MCAST_WRITE_MAX_DESTS total pages (the fabric packet header holds
+    // that many address slots). Same-distance (same-chip) destinations may share a slot — the sender emits them as
+    // multiple pages to that one chip in a single sparse multicast. A direction whose pages exceed the cap spills into
+    // additional slots.
+    constexpr uint32_t MCAST_NUM_DIRS = 4;
+    // A token can route all its top-k picks through a single direction, so each per-direction bucket
+    // must hold top-k entries. top-k is not a direct arg here, but meta_scratch_slots was sized as
+    // read_batch_size * top-k on the host.
+    constexpr uint32_t MCAST_BUCKET_CAP = meta_scratch_slots / read_batch_size;
+    // The buckets mirror GroupedRouteInfo's per-destination arrays one-for-one; see that struct for
+    // why nothing beyond page/distance/k belongs in a group.
+    uint32_t bk_count[MCAST_NUM_DIRS];
+    uint32_t bk_dist[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
+    uint32_t bk_page[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
+    uint32_t bk_k[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
+    for (uint32_t d = 0; d < MCAST_NUM_DIRS; d++) {
+        bk_count[d] = 0;
+    }
+    // The grouped record is built in the same route_info scratch the legacy path uses; the host sized
+    // that CB from sizeof(GroupedRouteInfo) on this path.
+    volatile tt_l1_ptr GroupedRouteInfo* grouped_route_info =
+        reinterpret_cast<volatile tt_l1_ptr GroupedRouteInfo*>(route_info_scratch_addr);
+
+    uint32_t cur_token_valid = 0;  // 0 until the first cross-device entry of a token is bucketed
+    uint32_t cur_token_t = 0;      // token row (into the current batch's untilize CB)
+    uint32_t cur_token_idx = 0;    // global token index (shared metadata field for the group)
+#ifdef FP8_SCALED
+    // Current batch's scales CB read pointer. flush_group captures this by reference (like the other
+    // cur_* state) rather than taking it as a parameter, so the two call sites stay layout-agnostic;
+    // the per-batch loop republishes it alongside cb_scales.wait_front below.
+    uint32_t cur_scales_read_ptr = 0;
+#endif
+
+    // Emit the buffered token's direction groups as grouped ring slots, then reset the buckets. Called
+    // at each token boundary and at batch end (src base = this batch's untilize read pointer).
+    auto flush_group = [&](uint32_t untilize_read_ptr_local) {
+        if (!cur_token_valid) {
+            return;
+        }
+        uint32_t src_addr = untilize_read_ptr_local + cur_token_t * aligned_output_page_size;
+
+        // Emit one sparse-multicast slot: route_info header (per-dest fields already filled by the
+        // caller) plus the token payload, paced by the sender's space_avail credit.
+        auto emit_slot = [&](uint32_t dir, uint32_t gcount, uint16_t hop_mask) {
+            space_avail_sem.wait_min(produced_count + 1);
+            uint32_t slot = produced_count % writer_cb_size;
+            grouped_route_info->direction = dir;
+            grouped_route_info->num_dests = gcount;
+            grouped_route_info->token_idx = cur_token_idx;
+            DPRINT_DISPATCH(
+                "[W c={}] GROUP dir={} num_dests={} hop_mask={} slot={}\n",
+                (uint32_t)core_id,
+                dir,
+                gcount,
+                (uint32_t)hop_mask,
+                slot);
+
+            uint64_t c4_slot = sender_c4_base_noc_addr + slot * route_info_slot_stride;
+            noc_async_write_one_packet_with_trid(
+                route_info_scratch_addr, c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
+
+            // Payload: the token's untilized row, chunked to NOC_MAX_BURST_SIZE packets. Every slot of a
+            // token reads the same src_addr; the sender fans it out to gcount pages.
+            uint64_t c5_slot = sender_c5_base_noc_addr + slot * aligned_output_page_size;
+            uint32_t off = 0;
+            while (off < aligned_output_page_size) {
+                uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
+                                     ? (uint32_t)NOC_MAX_BURST_SIZE
+                                     : (aligned_output_page_size - off);
+                noc_async_write_one_packet_with_trid(src_addr + off, c5_slot + off, chunk, TRID_NON_LOCAL_WRITE);
+                off += chunk;
+            }
+#ifdef FP8_SCALED
+            // Stage the metadata page so its fp8 scale tail reaches the sender. [0]/[1] and the tail are
+            // per-token constants shared by every destination in this group; [2] is per-destination and
+            // is overwritten by the sender from route_info, so the value written here is irrelevant.
+            // Reuses the single trailing xdev scratch slot — safe because the barrier below retires this
+            // write before the next emit_slot call can touch the scratch again.
+            {
+                volatile tt_l1_ptr int32_t* meta =
+                    reinterpret_cast<volatile tt_l1_ptr int32_t*>(xdev_metadata_scratch_addr);
+                meta[0] = (int32_t)linearized_mesh_coord;
+                meta[1] = (int32_t)cur_token_idx;
+                meta[2] = 0;  // placeholder; sender writes the real top-k slot per destination
+                // Same bit-for-bit fp32 scale copy as the local and legacy cross-device paths.
+                tt_l1_ptr uint32_t* src_scales =
+                    reinterpret_cast<tt_l1_ptr uint32_t*>(cur_scales_read_ptr + cur_token_t * aligned_scales_page_size);
+                for (uint32_t w = 0; w < num_scale_words; w++) {
+                    meta[3 + w] = (int32_t)src_scales[w];
+                }
+                uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
+                noc_async_write_one_packet_with_trid(
+                    xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
+            }
+#else
+            // No metadata staged: the sender builds each destination's metadata from route_info.
+#endif
+
+            noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+            noc_semaphore_inc<true>(sender_data_avail_noc_addr, 1);
+            produced_count++;
+        };
+
+        for (uint32_t dir = 0; dir < MCAST_NUM_DIRS; dir++) {
+            uint32_t n = bk_count[dir];
+            if (n == 0) {
+                continue;
+            }
+            // Sort this direction's destinations by hop distance (ascending) so equal-distance
+            // (same-chip) destinations become adjacent for run-aware packing below.
+            for (uint32_t a = 1; a < n; a++) {
+                uint32_t dv = bk_dist[dir][a], pv = bk_page[dir][a], kv = bk_k[dir][a];
+                int32_t b = (int32_t)a - 1;
+                while (b >= 0 && bk_dist[dir][b] > dv) {
+                    bk_dist[dir][b + 1] = bk_dist[dir][b];
+                    bk_page[dir][b + 1] = bk_page[dir][b];
+                    bk_k[dir][b + 1] = bk_k[dir][b];
+                    b--;
+                }
+                bk_dist[dir][b + 1] = dv;
+                bk_page[dir][b + 1] = pv;
+                bk_k[dir][b + 1] = kv;
+            }
+            // Pack NOC_SPARSE_MCAST_WRITE_MAX_DESTS pages per slot, in the ascending-distance order from the sort
+            // above. A same-distance run (one chip hit by multiple experts of this token) may span a slot boundary:
+            // each slot is an independent sparse multicast whose per-chip page count the sender re-derives from the
+            // contiguous distances it actually holds, so a chip's pages split across two slots still land correctly.
+            // Filling every slot to the cap minimizes fabric calls.
+            uint32_t a = 0;
+            while (a < n) {
+                uint32_t gcount =
+                    (n - a < NOC_SPARSE_MCAST_WRITE_MAX_DESTS) ? (n - a) : NOC_SPARSE_MCAST_WRITE_MAX_DESTS;
+                uint16_t hop_mask = 0;
+                for (uint32_t r = 0; r < gcount; r++) {
+                    grouped_route_info->page_idx[r] = bk_page[dir][a + r];
+                    grouped_route_info->distance[r] = bk_dist[dir][a + r];
+                    grouped_route_info->k[r] = bk_k[dir][a + r];
+                    // Same 16-hop bound the sender consumes: the mask is 16 bits wide, and the
+                    // program factory only enables this path on meshes that fit it.
+                    ASSERT(bk_dist[dir][a + r] >= 1 && bk_dist[dir][a + r] <= 16);
+                    hop_mask |= static_cast<uint16_t>(1u << (bk_dist[dir][a + r] - 1));
+                }
+                a += gcount;
+                emit_slot(dir, gcount, hop_mask);
+            }
+            bk_count[dir] = 0;
+        }
+        cur_token_valid = 0;
+    };
+#endif
+
+    DPRINT_DISPATCH(
+        "Writer worker: handshake done c4={} c5={} c6={}\n", sender_c4_l1_addr, sender_c5_l1_addr, sender_c6_l1_addr);
+
+    // Mirror the reader's right-padding loop reduction so reader and writer agree on how many batches
+    // are produced/consumed (the end-of-plan sentinel handshake below is independent of batch count).
+    uint32_t effective_total_batches = total_batches;
+#ifdef HAS_PADDING_CONFIG
+    {
+        const auto padding_cfg_gen = TensorAccessor(padding_cfg_args, padding_config_address);
+        cb_reserve_back(cb_padding_config_id, 1);
+        uint32_t pc_l1 = get_write_ptr(cb_padding_config_id);
+        noc_async_read_page(0, padding_cfg_gen, pc_l1);
+        noc_async_read_barrier();
+        tt_l1_ptr uint32_t* pc = reinterpret_cast<tt_l1_ptr uint32_t*>(pc_l1);
+        uint32_t real_count = pc[0];
+        uint32_t pad_side = pc[1];
+        if (pad_side == 0) {
+            uint32_t real_batches = (real_count + read_batch_size - 1) / read_batch_size;
+            if (real_batches < effective_total_batches) {
+                effective_total_batches = real_batches;
+            }
+        }
+    }
+#endif
+
+    // ===== Per-batch loop — drains the route plan published by the reader RISC =====
+    for (uint32_t batch_idx = core_id; batch_idx < effective_total_batches; batch_idx += total_workers) {
+        // Wait for compute to finish untilizing this batch
+        cb_untilize.wait_front(read_batch_size);
+
+        uint32_t untilize_read_ptr = cb_untilize.get_read_ptr();
+
+#ifdef FP8_SCALED
+        // Wait for the reader to publish this batch's per-token scale rows (lockstep with c_0).
+        cb_scales.wait_front(read_batch_size);
+        uint32_t scales_read_ptr = cb_scales.get_read_ptr();
+#ifdef SPARSE_MCAST_DISPATCH
+        // Republish for flush_group, which is defined before this loop and reads it by reference.
+        cur_scales_read_ptr = scales_read_ptr;
+#endif
+#endif
+
+        // Wait for reader to publish the per-batch route plan
+        cb_plan.wait_front(1);
+        uint32_t plan_addr = cb_plan.get_read_ptr();
+        volatile tt_l1_ptr PlanHeader* plan = reinterpret_cast<volatile tt_l1_ptr PlanHeader*>(plan_addr);
+        volatile tt_l1_ptr PlanEntry* entries =
+            reinterpret_cast<volatile tt_l1_ptr PlanEntry*>(plan_addr + sizeof(PlanHeader));
+        uint32_t entry_count = plan->entry_count;
+        DPRINT_DISPATCH(
+            "[W c={}] b={} draining plan entries={} produced_so_far={}\n",
+            (uint32_t)core_id,
+            batch_idx,
+            entry_count,
+            produced_count);
+
+        {
+            // Drain every entry the reader recorded for this batch.  Each entry decodes to one
+            // untilized token; flags selects its destination: local DRAM here, or staged into the
+            // sender's receive buffers for the sender to forward over the fabric.
+            for (uint32_t e = 0; e < entry_count; e++) {
+                volatile tt_l1_ptr PlanEntry* entry = &entries[e];
+                uint32_t flags = entry->flags;
+                uint32_t token_t = entry->token_t;
+                uint32_t page_idx = entry->page_idx;
+                uint32_t token_idx = entry->token_idx;
+                uint32_t weight_k = entry->weight_k;
+                uint32_t k = unpack_k(weight_k);
+
+                // Payload source: this token's untilized row inside the compute output CB.
+                uint32_t src_addr = untilize_read_ptr + token_t * aligned_output_page_size;
+                bool is_local = (flags & PLAN_FLAG_LOCAL) != 0;
+
+                if (is_local) {
+                    //  Local: NOC1 write payload + metadata directly to DRAM.
+                    //  No in-loop flush — payload source (src_addr) is unique per token,
+                    //  and metadata source rotates through meta_scratch_slots ring slots.
+                    //  Single noc_async_writes_flushed() at batch end covers reuse.
+                    noc.async_write(
+                        cb_untilize,
+                        output_addr_gen,
+                        aligned_output_page_size,
+                        {.offset_bytes = token_t * aligned_output_page_size},
+                        {.page_id = page_idx});
+                    // Per-token metadata layout (3 × int32): [src chip, global token idx, top-k slot].  Built into the
+                    // next ring slot, then written to the same DRAM page index as the payload.
+                    uint32_t meta_addr =
+                        metadata_scratch_addr + (local_count % meta_scratch_slots) * aligned_metadata_page_size;
+                    volatile tt_l1_ptr int32_t* meta = reinterpret_cast<volatile tt_l1_ptr int32_t*>(meta_addr);
+                    meta[0] = (int32_t)linearized_mesh_coord;
+                    meta[1] = (int32_t)token_idx;
+                    meta[2] = (int32_t)k;
+#ifdef FP8_SCALED
+                    // Copy this token's fp32 scale words (bit-for-bit) into the metadata tail so the
+                    // routed buffer can be dequantized downstream. token_t indexes the scales CB.
+                    {
+                        tt_l1_ptr uint32_t* src_scales =
+                            reinterpret_cast<tt_l1_ptr uint32_t*>(scales_read_ptr + token_t * aligned_scales_page_size);
+                        for (uint32_t w = 0; w < num_scale_words; w++) {
+                            meta[3 + w] = (int32_t)src_scales[w];
+                        }
+                    }
+#endif
+                    noc.async_write(
+                        cb_metadata_scratch,
+                        metadata_addr_gen,
+                        aligned_metadata_page_size,
+                        {.offset_bytes = (local_count % meta_scratch_slots) * aligned_metadata_page_size},
+                        {.page_id = page_idx});
+                    local_count++;
+                } else {
+#ifdef SPARSE_MCAST_DISPATCH
+                    // Cross-device (grouped): bucket this destination under its fabric direction for the
+                    // current token. Entries are ordered by token, so a token's destinations are
+                    // contiguous; flush the previous token's groups first when a new token opens.
+                    uint32_t dir = entry->route;
+                    if (cur_token_valid && token_t != cur_token_t) {
+                        flush_group(untilize_read_ptr);
+                    }
+                    cur_token_valid = 1;
+                    cur_token_t = token_t;
+                    cur_token_idx = token_idx;
+                    // Bucket bound: total cross-device dests per token is <= top-k == MCAST_BUCKET_CAP,
+                    // so this never trips in practice; guard defensively against OOB if that changes.
+                    uint32_t dst = bk_count[dir];
+                    if (dst < MCAST_BUCKET_CAP) {
+                        bk_count[dir] = dst + 1;
+                        bk_dist[dir][dst] = entry->distance;
+                        bk_page[dir][dst] = page_idx;
+                        bk_k[dir][dst] = k;
+                    }
+#else
+                    // Cross-device: stage this token into one sender slot as three NOC writes —
+                    // route_info (c_4), payload (c_5), metadata (c_6) — then signal data_avail so
+                    // the sender forwards it over the fabric.  route/distance tell the sender's
+                    // fabric writer where to send.
+                    uint32_t route = entry->route;
+                    uint32_t distance = entry->distance;
+                    uint32_t dst_chip = entry->dst_chip;
+
+                    // Per-entry credit: wait until the sender has fabric-sent the slot we're
+                    // about to overwrite (sender writer inc's space_avail once per slot freed).
+                    DPRINT_DISPATCH(
+                        "[W c={}] b={} WAIT space_avail>={} (have={}) for xdev entry route={}\n",
+                        (uint32_t)core_id,
+                        batch_idx,
+                        produced_count + 1,
+                        (uint32_t)(*space_avail_sem_ptr),
+                        route);
+                    space_avail_sem.wait_min(produced_count + 1);
+
+                    uint32_t slot = produced_count % writer_cb_size;
+
+                    // Build route_info (4 × u32) in local scratch, send as one NOC write.
+                    // [3]=dst_chip carries the linearized dest device index for the sender's 2D
+                    // fabric route (ignored under 1D, where [0]=route/[1]=distance drive the send).
+                    route_info_scratch[0] = route;
+                    route_info_scratch[1] = distance;
+                    route_info_scratch[2] = page_idx;
+                    route_info_scratch[3] = dst_chip;
+                    uint64_t c4_slot = sender_c4_base_noc_addr + slot * route_info_slot_stride;
+                    noc_async_write_one_packet_with_trid(
+                        route_info_scratch_addr, c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
+
+                    // Payload: chunk to NOC_MAX_BURST_SIZE packets, each tagged with TRID.
+                    uint64_t c5_slot = sender_c5_base_noc_addr + slot * aligned_output_page_size;
+                    uint32_t off = 0;
+                    while (off < aligned_output_page_size) {
+                        uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
+                                             ? (uint32_t)NOC_MAX_BURST_SIZE
+                                             : (aligned_output_page_size - off);
+                        noc_async_write_one_packet_with_trid(
+                            src_addr + off, c5_slot + off, chunk, TRID_NON_LOCAL_WRITE);
+                        off += chunk;
+                    }
+
+                    // Metadata: same [chip, token, top-k slot] layout as the local path, staged in
+                    // the cross-device scratch slot, then written to the sender's c_6 slot.
+                    volatile tt_l1_ptr int32_t* meta =
+                        reinterpret_cast<volatile tt_l1_ptr int32_t*>(xdev_metadata_scratch_addr);
+                    meta[0] = (int32_t)linearized_mesh_coord;
+                    meta[1] = (int32_t)token_idx;
+                    meta[2] = (int32_t)k;
+#ifdef FP8_SCALED
+                    // Same scale-tail copy as the local path; the full aligned_metadata_page_size
+                    // (which already accounts for the scale fields) is sent to the sender's c_6 slot.
+                    {
+                        tt_l1_ptr uint32_t* src_scales =
+                            reinterpret_cast<tt_l1_ptr uint32_t*>(scales_read_ptr + token_t * aligned_scales_page_size);
+                        for (uint32_t w = 0; w < num_scale_words; w++) {
+                            meta[3 + w] = (int32_t)src_scales[w];
+                        }
+                    }
+#endif
+                    uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
+                    noc_async_write_one_packet_with_trid(
+                        xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
+
+                    // Wait only on this entry's cross-device writes — in-flight local
+                    // DRAM writes are tagged-out by TRID and keep flying.
+                    noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+                    // The transaction ID is a command-buffer register, not a per-write
+                    // argument. Restore the default ID before this worker hands its NOC
+                    // interface to another kernel (or issues an untagged local write).
+                    noc_async_write_set_trid(0);
+
+                    noc_semaphore_inc<true>(sender_data_avail_noc_addr, 1);
+
+                    produced_count++;
+#endif  // SPARSE_MCAST_DISPATCH
+                }
+            }
+        }
+
+#ifdef SPARSE_MCAST_DISPATCH
+        // Flush the last token's direction groups for this batch (src base = this batch's untilize CB
+        // read pointer, still valid until the cb_untilize.pop_front below).
+        flush_group(untilize_read_ptr);
+#endif
+
+        // Drain all local NOC writes issued during this batch before the scratch ring or
+        // untilize CB get reused. Cross-device entries already barriered per-entry.
+        noc.async_writes_flushed();
+        local_count = 0;
+
+        cb_plan.pop_front(1);
+        cb_untilize.pop_front(read_batch_size);
+#ifdef FP8_SCALED
+        cb_scales.pop_front(read_batch_size);
+#endif
+    }
+
+    // Teardown: the reader pushes one extra end-of-plan sentinel page after the last batch.
+    // Consume it (its entry_count is 0, so nothing was drained above for it).
+    cb_plan.wait_front(1);
+    cb_plan.pop_front(1);
+
+    // Then send ROUTE_INFO_SENTINEL as one final route_info entry into the next sender slot.
+    // It takes a real slot, so wait for a space_avail credit just like any data entry; the
+    // sender treats this sentinel as "no more tokens from this worker" and stops forwarding.
+
+    DPRINT_DISPATCH(
+        "[W c={}] loop DONE; WAIT space_avail>={} (have={}) to send SENTINEL\n",
+        (uint32_t)core_id,
+        produced_count + 1,
+        (uint32_t)(*space_avail_sem_ptr));
+    space_avail_sem.wait_min(produced_count + 1);
+    DPRINT_DISPATCH("[W c={}] sending SENTINEL (produced total={})\n", (uint32_t)core_id, produced_count);
+
+    uint32_t sentinel_slot = produced_count % writer_cb_size;
+    route_info_scratch[0] = ROUTE_INFO_SENTINEL;
+    route_info_scratch[1] = 0;
+    route_info_scratch[2] = 0;
+    route_info_scratch[3] = 0;
+    uint64_t sentinel_c4_slot = sender_c4_base_noc_addr + sentinel_slot * route_info_slot_stride;
+    noc_async_write_one_packet_with_trid(
+        route_info_scratch_addr, sentinel_c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
+    noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+    noc_async_write_set_trid(0);
+    data_avail_sem.up(noc, sender_noc_x, sender_noc_y, 1);
+
+    // noc_async_full_barrier flushes everything in-flight (including the inc) before exit.
+    noc_async_full_barrier();
+}

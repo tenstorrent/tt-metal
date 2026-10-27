@@ -53,13 +53,19 @@ void DeepseekMoEFastReduceNCDeviceOperation::validate_on_program_cache_miss(
         num_output_tensors * tt::constants::TILE_WIDTH);
 }
 
-ttnn::TensorSpec DeepseekMoEFastReduceNCDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec DeepseekMoEFastReduceNCDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const uint32_t reduction_dim = operation_attributes.dim;
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.logical_shape();
 
+    TT_FATAL(input_shape[-1] > 0, "Last dim of the input must be greater than 0");
+    TT_FATAL(
+        operation_attributes.split_size > 0 && input_shape[-1] % operation_attributes.split_size == 0,
+        "split_size ({}) must be greater than 0 and divide the last dim ({})",
+        operation_attributes.split_size,
+        input_shape[-1]);
     const uint32_t num_output_tensors = input_shape[-1] / operation_attributes.split_size;
     const uint32_t split_dim = input_shape.rank() - 1;
 
@@ -67,7 +73,7 @@ ttnn::TensorSpec DeepseekMoEFastReduceNCDeviceOperation::compute_output_specs(
     output_shape[reduction_dim] = 1;  // keepdim = true
     output_shape[split_dim] /= num_output_tensors;
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         operations::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
 }
@@ -76,7 +82,7 @@ std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCDeviceOperation::create_output_
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
 
-    const ttnn::TensorSpec& output_tensor_spec = compute_output_specs(operation_attributes, tensor_args);
+    const tt::tt_metal::TensorSpec& output_tensor_spec = compute_output_specs(operation_attributes, tensor_args);
 
     const uint32_t num_output_tensors = input_tensor.logical_shape()[-1] / operation_attributes.split_size;
     std::vector<ttnn::Tensor> output_tensors(num_output_tensors);

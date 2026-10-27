@@ -8,41 +8,36 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);     // Destination address in dram
-    const uint32_t num_tiles = get_arg_val<uint32_t>(1);    // Number of tiles to write
-    const uint32_t tile_offset = get_arg_val<uint32_t>(2);  // Tile offset for this core
+    const auto num_tiles = get_arg(args::num_tiles);      // Number of tiles to write
+    const auto tile_offset = get_arg(args::tile_offset);  // Tile offset for this core
 
-    constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
-    constexpr auto dst_args = TensorAccessorArgs<1>();
+    constexpr auto blk = get_arg(args::blk);  // needed for correctness of softmax/LN kernels
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_14;
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_out);
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    CircularBuffer cb_out_buf(cb_out);
+    // Destination for the packed output tiles, drained here and written out to the output tensor.
+    DataflowBuffer dfb_out_buf(dfb::out);
+
+    const uint32_t tile_bytes = dfb_out_buf.get_tile_size();
 
     uint32_t tile_id = tile_offset;
     for (uint32_t i = 0; i < num_tiles; i += blk) {
-        cb_out_buf.wait_front(blk);
+        dfb_out_buf.wait_front(blk);
         uint32_t write_offset = 0;
         for (uint32_t j = 0; j < blk; j++) {
-            noc.async_write(
-                use<CircularBuffer::AddrSelector::READ_PTR>(cb_out_buf),
-                s,
-                tile_bytes,
-                {.offset_bytes = write_offset},
-                {.page_id = tile_id});
+            noc.async_write(dfb_out_buf, s, tile_bytes, {.offset_bytes = write_offset}, {.page_id = tile_id});
             tile_id++;
             write_offset += tile_bytes;
         }
         noc.async_write_barrier();
-        cb_out_buf.pop_front(blk);
+        dfb_out_buf.pop_front(blk);
     }
 }

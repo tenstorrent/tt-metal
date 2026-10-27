@@ -13,6 +13,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "llrt.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -110,7 +111,11 @@ inline std::vector<std::uint32_t> transpose_tiles(
 }
 
 inline bool move_tiles_to_dram(
-    tt_metal::IDevice* device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
+    distributed::MeshDevice& mesh_device,
+    std::vector<uint32_t> tensor,
+    int tiles_r,
+    int tiles_c,
+    uint32_t dram_buffer_addr) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into u32
     int tile_size_bytes = 32 * 32 * 2;
@@ -121,10 +126,10 @@ inline bool move_tiles_to_dram(
         for (int j = 0; j < tiles_c; j++) {
             tile.clear();
             tile.insert(tile.end(), tensor.begin() + start_index, tensor.begin() + start_index + tile_size);
-            uint32_t dram_addr = ((tile_id / device->num_dram_channels()) * tile_size_bytes) + dram_buffer_addr;
-            int dram_channel = tile_id % device->num_dram_channels();
+            uint32_t dram_addr = ((tile_id / mesh_device.num_dram_channels()) * tile_size_bytes) + dram_buffer_addr;
+            int dram_channel = tile_id % mesh_device.num_dram_channels();
 
-            pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_channel, dram_addr, tile);
+            pass &= tt_metal::slow_dispatch::WriteToDRAMChannel(mesh_device, dram_channel, dram_addr, tile);
             start_index += tile_size;
             tile_id++;
         }

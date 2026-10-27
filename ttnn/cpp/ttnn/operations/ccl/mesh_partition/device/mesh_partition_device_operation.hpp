@@ -6,6 +6,7 @@
 
 #include <variant>
 #include <optional>
+#include <string_view>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -30,7 +31,7 @@ struct MeshPartitionDeviceOperation {
         const std::optional<ttnn::Tensor> optional_output_tensor;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
 
     using tensor_return_value_t = ttnn::Tensor;
 
@@ -38,17 +39,12 @@ struct MeshPartitionDeviceOperation {
         using OverrideRuntimeArgsCallback = std::function<void(
             const void*,
             tt::tt_metal::Program&,  // ‼  no const, exact type
-            const std::vector<tt::tt_metal::Tensor>&,
-            const std::vector<std::optional<const tt::tt_metal::Tensor>>&,
-            const std::vector<tt::tt_metal::Tensor>&)>;
+            const std::vector<ttnn::Tensor>&,
+            const std::vector<std::optional<const ttnn::Tensor>>&,
+            const std::vector<ttnn::Tensor>&)>;
 
-        // -- shared variables --------------------------------------------
-        // Slice factories are ProgramDescriptor-based; on cache hit we re-run
-        // the matching factory's create_descriptor with the per-coord slice
-        // attrs and let apply_descriptor_runtime_args patch the cached Program.
-        struct shared_variables_t {
-            prim::SliceDeviceOperation::program_factory_t slice_program_factory;
-        };
+        // Each coordinate owns a program with fixed slice geometry; cache hits refresh only tensors.
+        struct shared_variables_t {};
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
         static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
@@ -80,11 +76,17 @@ struct MeshPartitionDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // Label the output Shard{dim} along the partitioned mesh axis. The rules are the CCL topology helper's
+    // (ttnn/operations/ccl/common/host/ccl_topology_utils.hpp, mesh_partition_output_topology: the reduce_scatter rule
+    // where nothing is summed); a label the helper refuses leaves the input's label on the output.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 };
 
 namespace detail {
 uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::optional<uint32_t>& cluster_axis);
-}
+}  // namespace detail
 
 }  // namespace ttnn::operations::ccl
 

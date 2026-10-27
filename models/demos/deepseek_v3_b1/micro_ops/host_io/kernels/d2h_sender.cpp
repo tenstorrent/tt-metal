@@ -116,6 +116,9 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_read_barrier();
+    // socket_notify_receiver clears MID after every page today, but that is incidental to this kernel's
+    // PCIe writes. Firmware does not reset MID before the next kernel on this core.
+    noc_async_write_clear_pcie_state(NOC_INDEX, write_cmd_buf);
 
     if constexpr (use_fabric) {
         upstream_fabric_connection.close();

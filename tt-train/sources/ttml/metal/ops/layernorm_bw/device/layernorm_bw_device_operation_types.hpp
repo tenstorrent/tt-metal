@@ -27,7 +27,7 @@ using operation_attributes_t = LayerNormBackwardParams;
 using tensor_args_t = LayerNormBackwardInputs;
 
 // Output tensor specs and tensors
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
 }  // namespace ttml::metal::ops::layernorm_bw::device

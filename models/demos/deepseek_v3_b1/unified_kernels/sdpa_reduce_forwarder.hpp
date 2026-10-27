@@ -24,7 +24,7 @@
 #include "kernel_op_api.hpp"
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -168,7 +168,7 @@ struct SdpaReduceForwarder {
 
             noc_semaphore_set(r1_sem_ptr, 0);
             noc_semaphore_set(r2_sem_ptr, 0);
-            fabric_connection.close();
+            fabric_connection.template close<use_posted_transport_writes, forwarder_to_fabric_noc>();
 
             noc_async_full_barrier();
         }

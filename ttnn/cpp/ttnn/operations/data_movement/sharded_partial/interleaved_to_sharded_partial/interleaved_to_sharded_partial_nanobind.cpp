@@ -21,7 +21,7 @@ void bind_interleaved_to_sharded_partial(nb::module_& mod) {
         Converts a partial tensor from interleaved to sharded memory layout
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): input tensor
+            * :attr:`input_tensor` (ttnn.Tensor): input tensor. Must be TILE layout with the standard 32x32 tile.
             * :attr:`grid` (ttnn.CoreGrid): Grid of sharded tensor
             * :attr:`num_slices` (int): Number of slices.
             * :attr:`slice_index` (int): Slice index.

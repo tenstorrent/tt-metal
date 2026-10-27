@@ -66,10 +66,46 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
 
     {
         const int32_t logical_rank = input_tensor.logical_shape().rank();
-        const int32_t acc_dim = attributes.dim;
+        // Normalize the way the program factory does, so both checks see the dim it will actually use.
+        const int32_t acc_dim = (attributes.dim < 0) ? (attributes.dim + logical_rank) : attributes.dim;
         TT_FATAL(
-            acc_dim < logical_rank, "Accumulation dim {} must be less than logical rank {}", acc_dim, logical_rank);
+            acc_dim >= 0 && acc_dim < logical_rank,
+            "Accumulation dim {} is out of range for logical rank {}",
+            attributes.dim,
+            logical_rank);
+        // The host permutes any other scan along a tile axis to dim 0 before reaching the device.
+        TT_FATAL(
+            acc_dim < logical_rank - 2 ||
+                is_tile_axis_accumulation(input_tensor, acc_dim, attributes.dtype, attributes.flip, attributes.op),
+            "Accumulation along tile axis {} of a rank-{} tensor is only supported for forward bf16/fp32 cumsum "
+            "and cumprod on 32x32 tiles (only bf16 cumsum on Quasar)",
+            acc_dim,
+            logical_rank);
     }
+}
+
+bool is_tile_axis_accumulation(
+    const Tensor& input_tensor, int32_t dim, DataType output_dtype, bool flip, AccumulationOp op) {
+    const int32_t rank = input_tensor.logical_shape().rank();
+    if (rank < 2 || (dim != rank - 1 && dim != rank - 2)) {
+        return false;
+    }
+    const auto& tile = input_tensor.tensor_spec().tile();
+    // cumsum_tile and cumprod_tile only scan floats, and only forward.
+    if (flip || input_tensor.layout() != Layout::TILE || input_tensor.dtype() != output_dtype ||
+        tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+        return false;
+    }
+    // cumprod_tile and the compensated cumsum scan have no Quasar port.
+    // preprocess_input_tensor also calls this on host tensors, which have no device.
+    const bool not_quasar = input_tensor.device() != nullptr && input_tensor.device()->arch() != tt::ARCH::QUASAR;
+    switch (op) {
+        case AccumulationOp::CUMSUM:
+            return output_dtype == DataType::BFLOAT16 || (output_dtype == DataType::FLOAT32 && not_quasar);
+        case AccumulationOp::CUMPROD:
+            return (output_dtype == DataType::BFLOAT16 || output_dtype == DataType::FLOAT32) && not_quasar;
+    }
+    return false;
 }
 
 AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::compute_output_specs(
@@ -89,7 +125,7 @@ AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::co
             : ((attributes.dtype == DataType::INVALID) ? tensor_args.input_tensor.dtype() : attributes.dtype);
 
     const auto output_shape{tensor_args.input_tensor.logical_shape()};
-    return TensorSpec{output_shape, TensorLayout{dtype, output_layout, attributes.output_memory_config}};
+    return tt::tt_metal::TensorSpec{output_shape, TensorLayout{dtype, output_layout, attributes.output_memory_config}};
 }
 
 AccumulationDeviceOperation::tensor_return_value_t AccumulationDeviceOperation::create_output_tensors(
@@ -102,22 +138,6 @@ AccumulationDeviceOperation::tensor_return_value_t AccumulationDeviceOperation::
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-operation::Hash AccumulationDeviceOperation::compute_program_hash(
-    const operation_attributes_t& op_args, const tensor_args_t& tensor_args) {
-    return operation::hash_operation<AccumulationDeviceOperation>(
-        op_args.dim,
-        op_args.output_memory_config,
-        op_args.flip,
-        op_args.dtype,
-        op_args.op,
-        tensor_args.input_tensor.logical_shape(),
-        tensor_args.input_tensor.dtype(),
-        tensor_args.input_tensor.memory_config(),
-        tensor_args.opt_output.has_value() ? tensor_args.opt_output.value().logical_shape() : Shape{},
-        tensor_args.opt_output.has_value() ? tensor_args.opt_output.value().memory_config() : MemoryConfig{},
-        tensor_args.opt_output.has_value() ? tensor_args.opt_output.value().dtype() : DataType{});
-}
-
 ttnn::Tensor accumulation(
     const Tensor& input_tensor,
     const int32_t& dim,
@@ -125,7 +145,8 @@ ttnn::Tensor accumulation(
     const bool& reverse_order,
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config,
-    AccumulationOp op) {
+    AccumulationOp op,
+    bool disable_compensation) {
     using OperationType = AccumulationDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -136,7 +157,8 @@ ttnn::Tensor accumulation(
                 ? *memory_config
                 : (optional_out.has_value() ? optional_out->memory_config() : input_tensor.memory_config()),
             reverse_order,
-            op},
+            op,
+            disable_compensation},
         OperationType::tensor_args_t{input_tensor, std::move(optional_out)});
 }
 

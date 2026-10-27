@@ -5,7 +5,6 @@
 // Note: The sender kernels in One To All write the same transaction_size_bytes amount of data to the same location
 // num_of_transactions times
 
-#include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -18,8 +17,8 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "test_one_to_all.hpp"
-#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -57,8 +56,7 @@ struct OneToAllConfig {
     //  response packets) (60, 45, 23, vs 60, 60, 60 at posted)
 };
 
-bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToAllConfig& test_config) {
-    IDevice* device = mesh_device->impl().get_device(0);
+bool run_dm(distributed::MeshDevice& mesh_device, const OneToAllConfig& test_config) {
     /* ================ SETUP ================ */
 
     // Program
@@ -80,7 +78,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
 
     // Master Logical
     CoreRangeSet mst_logical_core_set({CoreRange(test_config.mst_core_coord)});
-    auto mst_core_physical = device->worker_core_from_logical_core(test_config.mst_core_coord);
+    auto mst_core_physical = mesh_device.worker_core_from_logical_core(test_config.mst_core_coord);
     uint32_t mst_core_coord_packed = (mst_core_physical.x << 16) | (mst_core_physical.y & 0xFFFF);
 
     // Subordinate Logical
@@ -97,11 +95,11 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
     auto sub_core_list = corerange_to_cores(sub_logical_core_set);
 
     // Subordinate Physical (only needed for unicast)
-    CoreCoord sub_worker_start_coord = device->worker_core_from_logical_core(sub_logical_start_coord);
-    CoreCoord sub_worker_end_coord = device->worker_core_from_logical_core(sub_logical_end_coord);
+    CoreCoord sub_worker_start_coord = mesh_device.worker_core_from_logical_core(sub_logical_start_coord);
+    CoreCoord sub_worker_end_coord = mesh_device.worker_core_from_logical_core(sub_logical_end_coord);
     vector<uint32_t> sub_worker_coordinates = {};
     for (auto& sub_logical_core : sub_core_list) {
-        CoreCoord sub_worker_core = device->worker_core_from_logical_core(sub_logical_core);
+        CoreCoord sub_worker_core = mesh_device.worker_core_from_logical_core(sub_logical_core);
         uint32_t sub_worker_core_packed =
             (sub_worker_core.x << 16) | (sub_worker_core.y & 0xFFFF);  // Pack coordinates into a single uint32_t
         sub_worker_coordinates.push_back(sub_worker_core_packed);
@@ -201,11 +199,11 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
         {"pages_per_tx", (uint32_t)test_config.pages_per_transaction},
         {"bytes_per_page", (uint32_t)test_config.bytes_per_page},
         {"test_id", (uint32_t)test_config.test_id},
-        {"num_subordinates", (uint32_t)num_subordinates}};
+        {"num_subordinates", (uint32_t)num_subordinates},
+        {"loopback", (uint32_t)test_config.loopback}};
 
     if (test_config.is_multicast) {
         sender_named_args["is_linked"] = (uint32_t)test_config.is_linked;
-        sender_named_args["loopback"] = (uint32_t)test_config.loopback;
         sender_named_args["start_x"] = (uint32_t)sub_worker_start_coord.x;
         sender_named_args["start_y"] = (uint32_t)sub_worker_start_coord.y;
         sender_named_args["end_x"] = (uint32_t)sub_worker_end_coord.x;
@@ -241,21 +239,25 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
 
         const uint32_t num_coord_varargs = test_config.is_multicast ? 0u : (uint32_t)sub_worker_coordinates.size();
 
+        DataMovementHardwareConfig sender_hw_config;
+        if (mesh_device.arch() == tt::ARCH::QUASAR) {
+            sender_hw_config = DataMovementHardwareConfig{};
+        } else {
+            sender_hw_config = DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = test_config.noc_id,
+                    },
+            };
+        }
         KernelSpec sender_spec{
             .unique_id = KernelSpecName{"sender"},
             .source = sender_kernel_path,
             .num_threads = 1,
             .compile_time_args = cta_bindings,
             .runtime_arg_schema = {.runtime_arg_names = {"num_of_transactions", "pages_per_transaction"}},
-            .hw_config =
-                DataMovementHardwareConfig{
-                    .gen1_config =
-                        DataMovementHardwareConfig::Gen1Config{
-                            .processor = DataMovementProcessor::RISCV_0,
-                            .noc = test_config.noc_id,
-                        },
-                    .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-                },
+            .hw_config = sender_hw_config,
             .advanced_options = {.num_runtime_varargs = num_coord_varargs},
         };
 
@@ -269,16 +271,18 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
             }},
         };
 
-        program = MakeProgramFromSpec(*mesh_device, spec);
+        program = MakeProgramFromSpec(mesh_device, spec);
 
         ProgramRunArgs run_params;
         ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
         for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
-            sender_run_params.runtime_arg_values.push_back(
-                {.node = mst_logical_core,
-                 .args = {
-                     {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
-                     {"pages_per_transaction", (uint32_t)test_config.pages_per_transaction}}});
+            AddRuntimeArgsForNode(
+                sender_run_params.runtime_arg_values,
+                mst_logical_core,
+                {
+                    {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
+                    {"pages_per_transaction", (uint32_t)test_config.pages_per_transaction},
+                });
             if (!test_config.is_multicast) {
                 sender_run_params.advanced_options.runtime_varargs.emplace(mst_logical_core, sub_worker_coordinates);
             }
@@ -346,8 +350,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
     vector<uint32_t> packed_golden = packed_input;
 
     // Write input to master L1 buffer
-    detail::WriteToDeviceL1(device, test_config.mst_core_coord, mst_l1_base_address, packed_input);
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    slow_dispatch::WriteToL1(mesh_device, test_config.mst_core_coord, mst_l1_base_address, packed_input);
+    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
 
     // LAUNCH THE PROGRAM
     auto mesh_workload = distributed::MeshWorkload();
@@ -355,7 +359,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 
@@ -363,7 +367,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
     vector<uint32_t> packed_output;
 
     for (auto& sub_logical_core : sub_core_list) {
-        detail::ReadFromDeviceL1(device, sub_logical_core, sub_l1_base_address, bytes_per_transaction, packed_output);
+        slow_dispatch::ReadFromL1(
+            mesh_device, sub_logical_core, sub_l1_base_address, bytes_per_transaction, packed_output);
 
         // Results comparison
         bool is_equal = (packed_output == packed_golden);
@@ -383,7 +388,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
 /* TEST TYPES */
 
 void directed_ideal_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
@@ -438,7 +443,7 @@ void directed_ideal_test(
 }
 
 void packet_sizes_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
@@ -457,7 +462,7 @@ void packet_sizes_test(
 
     uint32_t max_transactions = 256;
     uint32_t max_pages_reservable_per_transaction =
-        mesh_device->impl().get_device(0)->arch() == ARCH::BLACKHOLE
+        mesh_device.arch() == ARCH::BLACKHOLE
             ? 1024 * max_pages_override_factor
             : 2048 * max_pages_override_factor;  // Max total transaction size == 64 KB
 
@@ -500,7 +505,7 @@ void packet_sizes_test(
 }
 
 void virtual_channels_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
@@ -562,7 +567,7 @@ void virtual_channels_test(
 }
 
 void custom_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
@@ -620,7 +625,7 @@ void custom_test(
 /* ========== UNICAST ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 0;
 
@@ -631,13 +636,12 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2Pac
     CoreCoord sub_start_core_coord = {0, 0};
     CoreCoord sub_grid_size = {2, 2};
 
-    auto mesh_device = get_mesh_device();
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 1;
 
@@ -648,38 +652,32 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5Pac
     CoreCoord sub_start_core_coord = {0, 0};
     CoreCoord sub_grid_size = {5, 5};
 
-    auto mesh_device = get_mesh_device();
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== All ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 2;
-
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
 
     bool is_multicast = false;
     bool is_linked = false;
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== MULTICAST ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 3;
-
-    auto mesh_device = get_mesh_device();
 
     bool is_multicast = true;
     bool is_linked = false;
@@ -689,15 +687,13 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2P
     CoreCoord sub_grid_size = {2, 2};
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 4;
-
-    auto mesh_device = get_mesh_device();
 
     bool is_multicast = true;
     bool is_linked = false;
@@ -707,36 +703,31 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5P
     CoreCoord sub_grid_size = {5, 5};
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== All ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 5;
-
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
 
     bool is_multicast = true;
     bool is_linked = false;
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== MULTICAST LINKED ========== */
 
 /* ========== 2x2 ========= */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 6;
-
-    auto mesh_device = get_mesh_device();
 
     bool is_multicast = true;
     bool is_linked = true;
@@ -746,15 +737,13 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLink
     CoreCoord sub_grid_size = {2, 2};
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 7;
-
-    auto mesh_device = get_mesh_device();
 
     bool is_multicast = true;
     bool is_linked = true;
@@ -764,37 +753,32 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLink
     CoreCoord sub_grid_size = {5, 5};
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== 11x10 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 8;
-
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
 
     bool is_multicast = true;
     bool is_linked = true;
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== MULTICAST LINKED WITH SEMAPHORE ========== */
 /* ========== 2x2 ========= */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore2x2PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore2x2PacketSizes) {
     GTEST_SKIP() << "Skipping test because CI timeout issue (#35788)";
 
     // Parameters
     uint32_t test_case_id = 24;
-
-    auto mesh_device = get_mesh_device();
 
     bool is_multicast = true;
     bool is_linked = true;
@@ -806,7 +790,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
     CoreCoord sub_grid_size = {2, 2};
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device,
+        this->device(),
         test_case_id,
         is_multicast,
         is_linked,
@@ -818,13 +802,11 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 }
 
 /* ========== 5x5 ========= */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore5x5PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore5x5PacketSizes) {
     GTEST_SKIP() << "Skipping test because CI timeout issue (#35788)";
 
     // Parameters
     uint32_t test_case_id = 25;
-
-    auto mesh_device = get_mesh_device();
 
     bool is_multicast = true;
     bool is_linked = true;
@@ -836,7 +818,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
     CoreCoord sub_grid_size = {5, 5};
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device,
+        this->device(),
         test_case_id,
         is_multicast,
         is_linked,
@@ -848,14 +830,11 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 }
 
 /* ========== All ========= */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphorePacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedSemaphorePacketSizes) {
     GTEST_SKIP() << "Skipping test because CI timeout issue (#35788)";
 
     // Parameters
     uint32_t test_case_id = 26;
-
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
 
     bool is_multicast = true;
     bool is_linked = true;
@@ -864,10 +843,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device,
+        this->device(),
         test_case_id,
         is_multicast,
         is_linked,
@@ -881,18 +860,16 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 /* ========== DIRECTED IDEAL ========== */
 
 /* ========== UNICAST ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
-    if (device->arch() == ARCH::QUASAR) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
+    if (this->device().arch() == ARCH::QUASAR) {
         // sub_grid_size {2, 1} requires at least 2 columns in the compute grid
-        if (device->compute_with_storage_grid_size().x < 2) {
+        if (this->device().compute_with_storage_grid_size().x < 2) {
             GTEST_SKIP() << "Skipping: sub_grid_size {2, 1} requires >= 2 columns, but grid has "
-                         << device->compute_with_storage_grid_size().x << " column(s). Use emu-quasar-2x3 or larger.";
+                         << this->device().compute_with_storage_grid_size().x
+                         << " column(s). Use emu-quasar-2x3 or larger.";
         }
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-            unit_tests::dm::compute_physical_constraints(mesh_device);
+            unit_tests::dm::compute_physical_constraints(this->device());
         unit_tests::dm::core_to_all::OneToAllConfig test_config = {
             .test_id = 52,
             .mst_core_coord = {0, 0},
@@ -904,7 +881,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal)
             .l1_data_format = DataFormat::Float16_b,
             .loopback = true,
             .is_multicast = false};
-        EXPECT_TRUE(run_dm(mesh_device, test_config));
+        EXPECT_TRUE(run_dm(this->device(), test_config));
         return;
     }
 
@@ -919,10 +896,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal)
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     unit_tests::dm::core_to_all::directed_ideal_test(
-        mesh_device,
+        this->device(),
         test_case_id,
         is_multicast,
         is_linked,
@@ -935,12 +912,9 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal)
 }
 
 /* ========== MULTICAST ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 53;  // Arbitrary test id
-
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
 
     bool loopback = true;
     NOC noc_id = NOC::NOC_0;
@@ -950,10 +924,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdea
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     unit_tests::dm::core_to_all::directed_ideal_test(
-        mesh_device,
+        this->device(),
         test_case_id,
         is_multicast,
         is_linked,
@@ -966,12 +940,9 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdea
 }
 
 /* ========== MULTICAST LINKED ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 54;  // Arbitrary test id
-
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
 
     bool loopback = true;
     NOC noc_id = NOC::NOC_0;
@@ -981,10 +952,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirect
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     unit_tests::dm::core_to_all::directed_ideal_test(
-        mesh_device,
+        this->device(),
         test_case_id,
         is_multicast,
         is_linked,
@@ -997,12 +968,9 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirect
 }
 
 /* ========== MULTICAST LINKED WITH SEMAPHORE ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphoreDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedSemaphoreDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 56;  // Arbitrary test id
-
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
 
     bool loopback = true;
     NOC noc_id = NOC::NOC_0;
@@ -1014,10 +982,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     unit_tests::dm::core_to_all::directed_ideal_test(
-        mesh_device,
+        this->device(),
         test_case_id,
         is_multicast,
         is_linked,
@@ -1032,14 +1000,11 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 }
 
 /* ========== VIRTUAL CHANNELS ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannels) {  // Expose loopback here?
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllUnicastVirtualChannels) {  // Expose loopback here?
     GTEST_SKIP() << "Skipping test";
 
     // Parameters
     uint32_t test_case_id = 154;
-
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
 
     // These should always be false
     bool is_multicast = false;
@@ -1048,13 +1013,13 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannel
     // Grid Parameters
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     // Loopback
     bool loopback = true;
 
     unit_tests::dm::core_to_all::virtual_channels_test(
-        mesh_device,
+        this->device(),
         test_case_id,
         is_multicast,
         is_linked,
@@ -1064,14 +1029,11 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannel
         loopback);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastCustom) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllUnicastCustom) {
     GTEST_SKIP() << "Skipping test";
 
     // Parameters
     uint32_t test_case_id = 155;
-
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
 
     // These should always be false
     bool is_multicast = false;
@@ -1080,7 +1042,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastCustom) {
     // Grid Parameters
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     // Custom Parameters
     bool loopback = true;
@@ -1089,7 +1051,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastCustom) {
     uint32_t num_virtual_channels = 4;
 
     unit_tests::dm::core_to_all::custom_test(
-        mesh_device,
+        this->device(),
         test_case_id,
         is_multicast,
         is_linked,
@@ -1105,7 +1067,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastCustom) {
 /* ========== UNICAST 2.0 ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2PacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2PacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 0;
 
@@ -1116,13 +1078,12 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2Pac
     CoreCoord sub_start_core_coord = {0, 0};
     CoreCoord sub_grid_size = {2, 2};
 
-    auto mesh_device = get_mesh_device();
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5PacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5PacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 1;
 
@@ -1133,34 +1094,31 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5Pac
     CoreCoord sub_start_core_coord = {0, 0};
     CoreCoord sub_grid_size = {5, 5};
 
-    auto mesh_device = get_mesh_device();
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== All ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllUnicastPacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 2;
-
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
 
     bool is_multicast = false;
     bool is_linked = false;
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     // Quasar emulator: full packet-size sweep across the whole grid times-out. Run a single
     // small config to exercise the Metal 2.0 host path + sender_unicast_2_0 kernel.
-    if (device->arch() == ARCH::QUASAR) {
-        if (sub_grid_size.x < 2 && sub_grid_size.y < 1) {
-            GTEST_SKIP() << "Skipping: emulator grid too small for one_to_all unicast 2_0";
+    if (this->device().arch() == ARCH::QUASAR) {
+        if (sub_grid_size.x * sub_grid_size.y < 2) {
+            GTEST_SKIP() << "Skipping: one_to_all unicast 2_0 needs >= 2 cores, but the grid is " << sub_grid_size.x
+                         << "x" << sub_grid_size.y;
         }
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-            unit_tests::dm::compute_physical_constraints(mesh_device);
+            unit_tests::dm::compute_physical_constraints(this->device());
         unit_tests::dm::core_to_all::OneToAllConfig test_config = {
             .test_id = test_case_id,
             .mst_core_coord = mst_core_coord,
@@ -1175,22 +1133,20 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes2_0
             .is_multicast = false,
             .is_linked = false,
         };
-        EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(mesh_device, test_config));
+        EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(this->device(), test_config));
         return;
     }
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== MULTICAST 2.0 ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2PacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2PacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 3;
-
-    auto mesh_device = get_mesh_device();
 
     bool is_multicast = true;
     bool is_linked = false;
@@ -1200,15 +1156,13 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2P
     CoreCoord sub_grid_size = {2, 2};
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5PacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5PacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 4;
-
-    auto mesh_device = get_mesh_device();
 
     bool is_multicast = true;
     bool is_linked = false;
@@ -1218,32 +1172,29 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5P
     CoreCoord sub_grid_size = {5, 5};
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== All ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastPacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 5;
-
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
 
     bool is_multicast = true;
     bool is_linked = false;
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     // Quasar emulator: full packet-size sweep across the whole grid times-out. Run a single
     // small config to exercise the Metal 2.0 host path + sender_multicast_2_0 kernel.
-    if (device->arch() == ARCH::QUASAR) {
+    if (this->device().arch() == ARCH::QUASAR) {
         if (sub_grid_size.x < 2 || sub_grid_size.y < 1) {
             GTEST_SKIP() << "Skipping: emulator grid too small for one_to_all multicast 2_0";
         }
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-            unit_tests::dm::compute_physical_constraints(mesh_device);
+            unit_tests::dm::compute_physical_constraints(this->device());
         unit_tests::dm::core_to_all::OneToAllConfig test_config = {
             .test_id = test_case_id,
             .mst_core_coord = mst_core_coord,
@@ -1258,22 +1209,20 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes2
             .is_multicast = true,
             .is_linked = false,
         };
-        EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(mesh_device, test_config));
+        EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(this->device(), test_config));
         return;
     }
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== MULTICAST LINKED ========== */
 
 /* ========== 2x2 ========= */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked2x2PacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked2x2PacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 6;
-
-    auto mesh_device = get_mesh_device();
 
     bool is_multicast = true;
     bool is_linked = true;
@@ -1283,15 +1232,13 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLink
     CoreCoord sub_grid_size = {2, 2};
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked5x5PacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked5x5PacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 7;
-
-    auto mesh_device = get_mesh_device();
 
     bool is_multicast = true;
     bool is_linked = true;
@@ -1301,32 +1248,29 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLink
     CoreCoord sub_grid_size = {5, 5};
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== 11x10 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 8;
-
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
 
     bool is_multicast = true;
     bool is_linked = true;
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     // Quasar emulator: full packet-size sweep across the whole grid times-out. Run a single
     // small config to exercise the Metal 2.0 host path + sender_multicast_2_0 kernel (linked).
-    if (device->arch() == ARCH::QUASAR) {
+    if (this->device().arch() == ARCH::QUASAR) {
         if (sub_grid_size.x < 2 || sub_grid_size.y < 1) {
             GTEST_SKIP() << "Skipping: emulator grid too small for one_to_all multicast linked 2_0";
         }
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-            unit_tests::dm::compute_physical_constraints(mesh_device);
+            unit_tests::dm::compute_physical_constraints(this->device());
         unit_tests::dm::core_to_all::OneToAllConfig test_config = {
             .test_id = test_case_id,
             .mst_core_coord = mst_core_coord,
@@ -1341,21 +1285,18 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacket
             .is_multicast = true,
             .is_linked = true,
         };
-        EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(mesh_device, test_config));
+        EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(this->device(), test_config));
         return;
     }
 
     unit_tests::dm::core_to_all::packet_sizes_test(
-        mesh_device, test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
+        this->device(), test_case_id, is_multicast, is_linked, mst_core_coord, sub_start_core_coord, sub_grid_size);
 }
 
 /* ========== MULTICAST LINKED WITH LOOPBACK ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 9;
-
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
 
     bool loopback = true;
     NOC noc_id = NOC::NOC_0;
@@ -1365,10 +1306,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirect
 
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     unit_tests::dm::core_to_all::directed_ideal_test(
-        mesh_device,
+        this->device(),
         test_case_id,
         is_multicast,
         is_linked,
@@ -1380,19 +1321,17 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirect
         0);  // multicast_scheme_type (not used here)
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllUnicastDirectedIdeal_2_0) {
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 11;
 
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
-    if (device->arch() == ARCH::QUASAR) {
-        if (device->compute_with_storage_grid_size().x < 2) {
+    if (this->device().arch() == ARCH::QUASAR) {
+        if (this->device().compute_with_storage_grid_size().x < 2) {
             GTEST_SKIP() << "Skipping: sub_grid_size {2, 1} requires >= 2 columns, but grid has "
-                         << device->compute_with_storage_grid_size().x << " column(s). Use emu-quasar-2x3 or larger.";
+                         << this->device().compute_with_storage_grid_size().x
+                         << " column(s). Use emu-quasar-2x3 or larger.";
         }
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-            unit_tests::dm::compute_physical_constraints(mesh_device);
+            unit_tests::dm::compute_physical_constraints(this->device());
         unit_tests::dm::core_to_all::OneToAllConfig test_config = {
             .test_id = test_case_id,
             .mst_core_coord = {0, 0},
@@ -1405,7 +1344,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal_
             .loopback = true,
             .is_multicast = false,
         };
-        EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(mesh_device, test_config));
+        EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(this->device(), test_config));
         return;
     }
 
@@ -1415,10 +1354,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal_
     bool is_linked = false;
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     unit_tests::dm::core_to_all::directed_ideal_test(
-        mesh_device,
+        this->device(),
         test_case_id,
         is_multicast,
         is_linked,
@@ -1430,18 +1369,15 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal_
         0);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastDirectedIdeal_2_0) {
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 12;
 
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
-    if (device->arch() == ARCH::QUASAR) {
-        if (device->compute_with_storage_grid_size().x < 2) {
+    if (this->device().arch() == ARCH::QUASAR) {
+        if (this->device().compute_with_storage_grid_size().x < 2) {
             GTEST_SKIP() << "Skipping: emulator grid too small for multicast directed ideal _2_0";
         }
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-            unit_tests::dm::compute_physical_constraints(mesh_device);
+            unit_tests::dm::compute_physical_constraints(this->device());
         unit_tests::dm::core_to_all::OneToAllConfig test_config = {
             .test_id = test_case_id,
             .mst_core_coord = {0, 0},
@@ -1456,7 +1392,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdea
             .is_multicast = true,
             .is_linked = false,
         };
-        EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(mesh_device, test_config));
+        EXPECT_TRUE(unit_tests::dm::core_to_all::run_dm(this->device(), test_config));
         return;
     }
 
@@ -1466,10 +1402,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdea
     bool is_linked = false;
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = this->device().compute_with_storage_grid_size();
 
     unit_tests::dm::core_to_all::directed_ideal_test(
-        mesh_device,
+        this->device(),
         test_case_id,
         is_multicast,
         is_linked,

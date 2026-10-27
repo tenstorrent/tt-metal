@@ -17,9 +17,18 @@
 
 namespace ttnn::operations::experimental::conv3d {
 
+// Minimal valid C_in_block for a conv3d with the given kernel volume (kD*kH*kW).
+// It satisfies weight tile-alignment (kernel_vol * C_in_block divisible by
+// TILE_WIDTH) and L1 alignment, and is the smallest such value -> smallest
+// circular buffers. Used as the shared default in both prepare_conv3d_weights
+// and conv3d so their K-row blocking always agrees (issues #42146, #47316).
+uint32_t default_c_in_block(uint32_t kernel_vol);
+
 Tensor convert_conv_weight_tensor_to_grouped_layout(
     const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
+// For Conv3dConfig::enable_fp32_operand_split, split the fp32 weight before preparing it (W_hi = bf16(W),
+// W_lo = W - W_hi) and prepare both with identical groups / C_in_block / alignment; the kernel pairs their rows.
 Tensor prepare_conv3d_weights(
     const ttnn::Tensor& weights,
     uint32_t groups,

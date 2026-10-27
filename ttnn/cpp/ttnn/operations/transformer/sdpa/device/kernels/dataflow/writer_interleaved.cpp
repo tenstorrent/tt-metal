@@ -5,73 +5,133 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/debug/assert.h"
+#include "api/tensor/tensor_accessor.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
+#include "windowed_mask_gen.hpp"
 
 void kernel_main() {
     Noc noc;
 
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
-    constexpr uint32_t NKH = get_compile_time_arg_val(2);
-    constexpr uint32_t Sqt = get_compile_time_arg_val(3);
-    constexpr uint32_t valid_Sqt = get_compile_time_arg_val(4);
-    constexpr uint32_t unpadded_Sk = get_compile_time_arg_val(5);
-    constexpr uint32_t DHt = get_compile_time_arg_val(6);
-    constexpr uint32_t vDHt = get_compile_time_arg_val(7);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(8);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(9);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(10);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(11);
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(12);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(13);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(14);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(15) == 1;
-    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(17) == 1;
-    constexpr uint32_t is_chunked = get_compile_time_arg_val(18) == 1;
-    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(19);
-    constexpr bool use_lightweight_mask = get_compile_time_arg_val(20) == 1;
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(21) == 1;
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
-    constexpr uint32_t k_partial_col = get_compile_time_arg_val(23);
-    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t valid_Sqt = get_compile_time_arg_val(2);
+    constexpr uint32_t unpadded_Sk = get_compile_time_arg_val(3);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(4);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(6);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(7);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(8);
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(9);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(10);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(11) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(12) == 1;
+    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(13) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(14) == 1;
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(15);
+    constexpr bool use_lightweight_mask = get_compile_time_arg_val(16) == 1;
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(18);
+    constexpr uint32_t k_partial_col = get_compile_time_arg_val(19);
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(20) == 1;
+    // Windowed (block-diagonal) mask generation flags. Fixed scalar slots BEFORE the tensor-accessor
+    // block so the accessor offset chain stays intact for all configs.
+    constexpr auto windowed_mode = static_cast<WindowedMode>(get_compile_time_arg_val(21));
+    constexpr bool use_windowed_mask = is_windowed_mode(windowed_mode);
+    // Write the heads side by side as [B x 1 x S x NQH*DH] (what nlp_concat_heads produces) instead of [B x NQH x S x
+    // DH].
+    constexpr bool out_concat_heads = get_compile_time_arg_val(22) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<25>();
+    // Causal K/V chains (kv chain mode 3): this writer forwards the K/V slots the reader queues on the ctrl CB.
+    constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(23);
+    constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(24);
+    constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(25);
+    constexpr uint32_t fwd_done_semaphore_id = get_compile_time_arg_val(26);
+    constexpr bool causal_chain = get_compile_time_arg_val(27) == 3;
+    // Q-head crossing with out_concat_heads: NQH counts packed heads of gqa_pack query heads x gqa_pack_sqt row tiles
+    // each. Both are 1 otherwise.
+    constexpr uint32_t gqa_pack = get_compile_time_arg_val(28);
+    constexpr uint32_t gqa_pack_sqt = get_compile_time_arg_val(29);
+    constexpr bool packed_concat = out_concat_heads && gqa_pack > 1;
+
+    // out accessor, then the cu_window accessor chained immediately after it (before the CB-id block).
+    constexpr auto out_args = TensorAccessorArgs<30>();
+    constexpr auto cu_window_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    // Per-device Q offset accessor, chained after cu_window so the offset chain stays intact.
+    constexpr auto q_offset_args = TensorAccessorArgs<cu_window_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
-    const uint32_t core_id = get_arg_val<uint32_t>(1);
-    const uint32_t num_phases = get_arg_val<uint32_t>(2);
-    const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(3);
-    uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(4);
-    const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(5);
+    const uint32_t num_phases = get_arg_val<uint32_t>(1);
+    const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(2);
+    uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(3);
+    const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(4);
     uint32_t chunk_start_t_in_q_chunks_phase_2 = 0;
     uint32_t write_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(6);
-        write_offset_phase_2 = get_arg_val<uint32_t>(7);
+        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(5);
+        write_offset_phase_2 = get_arg_val<uint32_t>(6);
     }
 
     // Global Q scheduling args follow phase_2 args.
-    const uint32_t global_q_start = get_arg_val<uint32_t>(8);
-    const uint32_t global_q_count = get_arg_val<uint32_t>(9);
+    const uint32_t global_q_start = get_arg_val<uint32_t>(7);
+    const uint32_t global_q_count = get_arg_val<uint32_t>(8);
+    const uint32_t cu_window_seqlens_addr = get_arg_val<uint32_t>(9);
+    const uint32_t cu_window_seqlens_eles = get_arg_val<uint32_t>(10);
+    // Global row index of this tensor's first Q row. Non-zero when Q is a sequence-parallel shard:
+    // Q/output are addressed locally, but cu_window_seqlens and K/V are global, so the mask generator
+    // needs the shard's global origin. Windowed builds only: the ring-distributed factory shares this
+    // kernel, never sets use_windowed_mask, and supplies runtime args only through slot 10 — so slots
+    // 11/12 must not be read there (mirrors the reader's guarded windowed tail).
+    uint32_t q_tok_offset = 0;
+    // Per-device form: when a tensor was supplied its value wins, read below once cb_cu_window_in is
+    // available. Zero address means the caller used the scalar above.
+    uint32_t q_tok_offset_addr = 0;
+    if constexpr (use_windowed_mask) {
+        q_tok_offset = get_arg_val<uint32_t>(11);
+        q_tok_offset_addr = get_arg_val<uint32_t>(12);
+    }
 
-    constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
+    // Causal chain tail: the host pushes it from kv chain mode 2 on, only mode 3 reads it.
+    uint32_t is_chain_participant = 0;
+    uint32_t next_physical_x = 0;
+    uint32_t next_physical_y = 0;
+    if constexpr (causal_chain) {
+        is_chain_participant = get_arg_val<uint32_t>(13);
+        next_physical_x = get_arg_val<uint32_t>(14);
+        next_physical_y = get_arg_val<uint32_t>(15);
+    }
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
 
-    constexpr uint32_t cb_arg_offset = out_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_arg_offset = q_offset_args.next_compile_time_args_offset();
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 2);
     constexpr uint32_t cb_chunk_start_idx = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 4);
+    // cu_window CB id lives in the CB-id block (appended by CBIds for windowed mode; inactive otherwise).
+    constexpr uint32_t cb_cu_window_in = get_compile_time_arg_val(cb_arg_offset + 5);
+    // Dedicated 1-tile CB for the per-device Q-offset tensor; allocated only when that tensor is passed
+    // (q_in otherwise, same fallback rule as cb_cu_window_in), and only touched behind the runtime guard.
+    constexpr uint32_t cb_windowed_q_offset = get_compile_time_arg_val(cb_arg_offset + 6);
+    // Causal chains: reader -> writer forward requests (see post_kv_forward in the reader).
+    constexpr uint32_t cb_id_kv_fwd_ctrl = get_compile_time_arg_val(cb_arg_offset + 7);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
-    const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, vDHt);
+    // Packed, the output is [B, 1, gqa_pack_sqt, NQH*gqa_pack*vDH], and a Q chunk may run into the next query head of
+    // its group (q chunk not dividing Sq); the drain wraps those rows (head_wrap_tile_skip).
+    const auto out_tile_shape =
+        out_concat_heads ? TensorTileShape(B, 1, packed_concat ? gqa_pack_sqt : valid_Sqt, NQH * gqa_pack * vDHt)
+                         : TensorTileShape(B, NQH, valid_Sqt, vDHt);
+    constexpr uint32_t out_row_stride = out_concat_heads ? NQH * gqa_pack * vDHt : vDHt;
+    constexpr uint32_t head_rows = packed_concat ? gqa_pack_sqt : 0;  // 0 = rows never wrap to another head
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
@@ -79,9 +139,8 @@ void kernel_main() {
         cb_identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-        /*compute_uses_reduce_tile=*/true>();
-    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     // Lightweight mask: generate template tiles once, leave permanently fronted.
     // Sliding layout: [neginf, trailing_primary, leading_prev, leading_current, trailing_next, k_partial?].
@@ -95,6 +154,39 @@ void kernel_main() {
             cb_mask_in,
             is_causal,
             sliding_window_size>(noc);
+    }
+
+    // Windowed: load cu_window_seqlens into L1 once; the writer synthesizes the block-diagonal mask per
+    // Q chunk from it (so the reader streams Q/K/V only).
+    if constexpr (use_windowed_mask) {
+        const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
+        constexpr uint32_t cu_tile_bytes = get_tile_size(cb_cu_window_in);
+        CircularBuffer cb_cu(cb_cu_window_in);
+        cb_cu.reserve_back(1);
+        noc.async_read(
+            cu_window_reader, CoreLocalMem<uint32_t>(cb_cu.get_write_ptr()), cu_tile_bytes, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        // Per-device Q origin, if the caller passed it as a tensor. Lands in its own dedicated CB —
+        // every other CB here has a producer/consumer contract with another kernel that a writer-side
+        // reserve/push would break.
+        if (q_tok_offset_addr != 0) {
+            const auto q_offset_reader = TensorAccessor(q_offset_args, q_tok_offset_addr);
+            CircularBuffer cb_off(cb_windowed_q_offset);
+            cb_off.reserve_back(1);
+            const uint32_t off_ptr = cb_off.get_write_ptr();
+            noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(off_ptr), 4, {.page_id = 0}, {});
+            noc.async_read_barrier();
+            q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_ptr);
+        }
+        // Watcher-build guard for the offset contract the host cannot check in the tensor form (the
+        // per-device value lives on device, so validate() never sees it): the origin must be
+        // tile-aligned, and the Q shard must fit in the K sequence. Tile-granular -- the host's
+        // scalar-form check rounded up to whole tiles. Compiled out of non-watcher builds.
+        ASSERT(q_tok_offset % tt::constants::TILE_HEIGHT == 0);
+        ASSERT(
+            q_tok_offset / tt::constants::TILE_HEIGHT + valid_Sqt <=
+            (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT);
+        cb_cu.push_back(1);
     }
 
     if constexpr (is_chunked) {
@@ -146,17 +238,80 @@ void kernel_main() {
                     is_causal);
             }
 
+            // Windowed: synthesize this Q chunk's block-diagonal mask (all K chunks) before draining its
+            // output. The call resolves to a no-op overload for WindowedMode::None, so the generator is only
+            // instantiated in a windowed mode (kernel_main is not a template, so a bare `if constexpr` here
+            // would still compile the discarded body). valid_Skt derived from the unpadded K length.
+            constexpr uint32_t windowed_valid_Skt =
+                (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+            windowed_generate_if_enabled<windowed_mode, cb_mask_in, cb_cu_window_in>(
+                noc,
+                q_chunk,
+                Sq_chunk_t,
+                Sk_chunk_t,
+                valid_Sqt,
+                windowed_valid_Skt,
+                k_num_chunks,
+                cu_window_seqlens_eles,
+                q_tok_offset);
+
+            // Forwards before the drain: the reader queues all of them before compute can push this Q chunk's output.
+            if constexpr (causal_chain) {
+                if (is_chain_participant) {
+                    CircularBuffer cb_kv_fwd(cb_id_kv_fwd_ctrl);
+                    cb_kv_fwd.wait_front(1);
+                    const uint32_t fwd_entries =
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_kv_fwd.get_read_ptr());
+                    cb_kv_fwd.pop_front(1);
+                    Semaphore<> sender_sem(sender_semaphore_id);
+                    for (uint32_t n = 0; n < fwd_entries; ++n) {
+                        cb_kv_fwd.wait_front(1);
+                        volatile tt_l1_ptr uint32_t* entry =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_kv_fwd.get_read_ptr());
+                        const uint32_t src_address = entry[0];
+                        const uint32_t bytes = entry[1];
+                        cb_kv_fwd.pop_front(1);
+                        // the receiver posts its slot address as the ready signal
+                        sender_sem.wait_min(1);
+                        const uint32_t dst_address = sender_sem.value();
+                        sender_sem.set(0);
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(src_address),
+                            UnicastEndpoint{},
+                            bytes,
+                            {},
+                            {.noc_x = next_physical_x, .noc_y = next_physical_y, .addr = dst_address});
+                        noc.async_writes_flushed();
+                        Semaphore<>(valid_semaphore_id)
+                            .relay_unicast(noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
+                        Semaphore<>(fwd_done_semaphore_id).up(1);
+                    }
+                }
+            }
+
             // Determine how many rows of OUT will be written. Both start and end rows are
             // capped by valid_Sqt, since Sq padding is independent of Sk padding.
             const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
-            uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+            uint32_t out_tile_id;
+            uint32_t first_row_in_head = 0;
+            if constexpr (packed_concat) {
+                // packed row r of packed head nq is row r % gqa_pack_sqt of query head nq * gqa_pack + r / gqa_pack_sqt
+                const uint32_t packed_row = write_offset + out_row_start_tile;
+                first_row_in_head = packed_row % gqa_pack_sqt;
+                out_tile_id =
+                    out_tile_shape.id_of(nb, 0, first_row_in_head, (nq * gqa_pack + packed_row / gqa_pack_sqt) * vDHt);
+            } else if constexpr (out_concat_heads) {
+                out_tile_id = out_tile_shape.id_of(nb, 0, write_offset + out_row_start_tile, nq * vDHt);
+            } else {
+                out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+            }
             if constexpr (use_streaming_compute) {
                 // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
                 // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
                 // are padding and get popped without being written.
-                write_block_row_grouped(
+                write_block_row_grouped<head_rows>(
                     noc,
                     out_writer,
                     cb_out,
@@ -166,9 +321,11 @@ void kernel_main() {
                     out_tile_id,
                     tile_bytes,
                     out_subblock_h,
-                    barrier_threshold);
+                    barrier_threshold,
+                    out_row_stride,
+                    first_row_in_head);
             } else {
-                write_block(
+                write_block<head_rows>(
                     noc,
                     out_writer,
                     cb_out,
@@ -177,7 +334,9 @@ void kernel_main() {
                     vDHt,
                     out_tile_id,
                     tile_bytes,
-                    barrier_threshold);
+                    barrier_threshold,
+                    out_row_stride,
+                    first_row_in_head);
             }
         }
     }  // close phase

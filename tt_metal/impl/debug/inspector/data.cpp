@@ -12,7 +12,6 @@
 #include <tt-metalium/experimental/inspector_config.hpp>
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include "distributed/mesh_workload_impl.hpp"
 #include <program_cache.hpp>
 #include <system_mesh.hpp>
 #include "jit_build/build_env_manager.hpp"
@@ -45,6 +44,9 @@ Data::Data(std::optional<int> rank, ContextId context_id) :
     context_id(context_id), logger(MetalContext::instance().rtoptions().get_inspector_log_path(), rank) {
     // Initialize RPC server if enabled
     const auto& rtoptions = MetalContext::instance().rtoptions();
+    mesh_buffer_logging_enabled = rtoptions.get_inspector_log_mesh_buffers();
+    mesh_socket_logging_enabled = rtoptions.get_inspector_log_mesh_sockets();
+    runtime_entries_logging_enabled = rtoptions.get_inspector_log_runtime_entries();
     if (rtoptions.get_inspector_rpc_server_enabled()) {
         try {
             int port = rtoptions.get_inspector_rpc_server_port();
@@ -58,7 +60,9 @@ Data::Data(std::optional<int> rank, ContextId context_id) :
             // Connect callbacks that we want to respond to
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
-            get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
+            get_rpc_server().setGetSocketsCallback([this](auto result) { this->rpc_get_sockets(result); });
+            get_rpc_server().setGetGlobalSemaphoresCallback(
+                [this](auto result) { this->rpc_get_global_semaphores(result); });
             get_rpc_server().setGetMeshWorkloadRuntimeEntriesCallback(
                 [this](auto result) { this->rpc_get_mesh_workload_runtime_entries(result); });
             get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
@@ -129,6 +133,20 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
                 elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
             }
         }
+
+        auto semaphores_list = program.initSemaphores(program_data.semaphores.size());
+        j = 0;
+        for (const auto& semaphore_data : program_data.semaphores) {
+            auto semaphore = semaphores_list[j++];
+            semaphore.setId(semaphore_data.id());
+            semaphore.setCoreType(
+                semaphore_data.core_type() == CoreType::ETH ? rpc::SemaphoreCoreType::ETH
+                                                            : rpc::SemaphoreCoreType::TENSIX);
+            semaphore.setInitialValue(semaphore_data.initial_value());
+            semaphore.setOffset(semaphore_data.offset());
+            const auto core_ranges = semaphore_data.core_range_set();
+            populate_core_ranges(semaphore.initCoreRanges(core_ranges.ranges().size()), core_ranges);
+        }
     }
 }
 
@@ -160,40 +178,54 @@ void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& 
     }
 }
 
-void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Builder& results) {
-    std::lock_guard<std::mutex> lock(mesh_workloads_mutex);
-    auto mesh_workloads = results.initMeshWorkloads(mesh_workloads_data.size());
+void Data::rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(mesh_buffers_mutex);
+    auto sockets = results.initSockets(mesh_sockets_data.size());
     uint32_t i = 0;
-    for (const auto& [mesh_workload_id, mesh_workload_data] : mesh_workloads_data) {
-        auto mesh_workload = mesh_workloads[i++];
-        mesh_workload.setMeshWorkloadId(mesh_workload_id);
-
-        const auto& programs = mesh_workload_data.mesh_workload->get_programs();
-        auto programs_data = mesh_workload.initPrograms(programs.size());
+    for (const auto& [config_buffer, socket_data] : mesh_sockets_data) {
+        auto socket = sockets[i++];
+        socket.setIsSender(socket_data.is_sender);
+        socket.setConfigBufferAddress(socket_data.config_buffer_address);
+        socket.setDataBufferAddress(socket_data.data_buffer_address);
+        socket.setFifoSize(socket_data.fifo_size);
+        socket.setBytesAckedOffsetBytes(socket_data.bytes_acked_offset_bytes);
+        socket.setBytesAckedStrideBytes(socket_data.bytes_acked_stride_bytes);
+        socket.setLocalMeshId(socket_data.local_mesh_id);
+        socket.setPeerMeshId(socket_data.peer_mesh_id);
+        auto local_cores = socket.initLocalCores(socket_data.local_cores.size());
         uint32_t j = 0;
-        for (const auto& [device_range, program] : programs) {
-            auto program_data = programs_data[j++];
-            program_data.setProgramId(program.impl().get_id());
-            auto coordinates_list = program_data.initCoordinates(device_range.shape().mesh_size());
+        for (const auto& c : socket_data.local_cores) {
+            auto local_core = local_cores[j++];
+            local_core.setChipId(c.chip_id);
+            auto core = local_core.initCore();
+            core.setCoreX(c.core.core_x);
+            core.setCoreY(c.core.core_y);
+            core.setFabricChipId(c.core.fabric_chip_id);
+            auto peers = local_core.initPeers(c.peers.size());
             uint32_t k = 0;
-            for (const auto& device_coordinate : device_range) {
-                auto mesh_coordinate = coordinates_list[k++];
-                auto coords = device_coordinate.coords();
-                auto coordinates = mesh_coordinate.initCoordinates(coords.size());
-                for (size_t l = 0; l < coords.size(); ++l) {
-                    coordinates.set(l, coords[l]);
-                }
+            for (const auto& p : c.peers) {
+                auto peer = peers[k++];
+                peer.setFabricChipId(p.fabric_chip_id);
+                peer.setCoreX(p.core_x);
+                peer.setCoreY(p.core_y);
             }
         }
+    }
+}
 
-        auto binary_status_list =
-            mesh_workload.initBinaryStatusPerMeshDevice(mesh_workload_data.binary_status_per_device.size());
-        j = 0;
-        for (const auto& [mesh_id, status] : mesh_workload_data.binary_status_per_device) {
-            auto binary_status = binary_status_list[j++];
-            binary_status.setMeshId(mesh_id);
-            binary_status.setStatus(convert_binary_status(status));
+void Data::rpc_get_global_semaphores(rpc::Inspector::GetGlobalSemaphoresResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(mesh_buffers_mutex);
+    auto semaphores = results.initSemaphores(global_semaphores_data.size());
+    uint32_t i = 0;
+    for (const auto& [buffer, semaphore_data] : global_semaphores_data) {
+        auto semaphore = semaphores[i++];
+        semaphore.setAddress(semaphore_data.address);
+        populate_core_ranges(semaphore.initCoreRanges(semaphore_data.cores.ranges().size()), semaphore_data.cores);
+        auto chip_ids = semaphore.initChipIds(semaphore_data.chip_ids.size());
+        for (uint32_t j = 0; j < semaphore_data.chip_ids.size(); ++j) {
+            chip_ids.set(j, semaphore_data.chip_ids[j]);
         }
+        semaphore.setResetValue(semaphore_data.reset_value ? int64_t{*semaphore_data.reset_value} : -1);
     }
 }
 
@@ -287,6 +319,12 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
     // Populate RPC response with build environment info for all devices
     auto result_build_envs = results.initBuildEnvs(build_envs_info.size());
     const auto fw_compile_hash = this->fw_compile_hash.load(std::memory_order_acquire);
+    const auto tensix_fw_launch_addr_value = [] {
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        const auto tensix_core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        return hal.get_jit_build_config(tensix_core_type_idx, 0, 0).fw_launch_addr_value;
+    }();
+
     size_t i = 0;
     for (const auto& build_env : build_envs_info) {
         auto item = result_build_envs[i++];
@@ -296,10 +334,11 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
         build_info.setBuildKey(build_env.build_key);
         build_info.setFirmwarePath(build_env.firmware_root_path);
         build_info.setFwCompileHash(fw_compile_hash);
-        // Surface whether DRAM programmable RISC cores are enabled (Blackhole only)
-        // This reflects the runtime option used when initializing HAL on silicon.
+        // Surface whether DRAM programmable RISC cores are enabled (Blackhole only).
+        // Reflects what the HAL registered at init; see MetalEnvImpl for the enable conditions.
         build_info.setDramProgrammableCoresEnabled(
-            tt::tt_metal::MetalContext::instance().rtoptions().get_enable_blackhole_dram_programmable_cores());
+            tt::tt_metal::MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM));
+        build_info.setTensixFwLaunchAddrValue(tensix_fw_launch_addr_value);
     }
 }
 
@@ -356,6 +395,7 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
 
 void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results) {
     auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    auto& cluster = tt_metal::MetalContext::instance().get_cluster();
     auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
 
     auto chips_builder = results.initChips(device_ids.size());
@@ -368,11 +408,15 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
         std::vector<std::pair<uint32_t, uint32_t>> active_eth_xy;
         std::vector<std::pair<uint32_t, uint32_t>> idle_eth_xy;
 
-        for (const CoreCoord& logical_core : control_plane.get_active_ethernet_cores(device_id)) {
+        const auto active_eth_cores = control_plane.get_active_ethernet_cores(device_id);
+        active_eth_xy.reserve(active_eth_cores.size());
+        for (const CoreCoord& logical_core : active_eth_cores) {
             active_eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
-        for (const CoreCoord& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
+        const auto idle_eth_cores = control_plane.get_inactive_ethernet_cores(device_id);
+        idle_eth_xy.reserve(idle_eth_cores.size());
+        for (const CoreCoord& logical_core : idle_eth_cores) {
             idle_eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
@@ -386,6 +430,18 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
         };
         set_coords([&blocks](size_t n) { return blocks.initActiveEth(n); }, active_eth_xy);
         set_coords([&blocks](size_t n) { return blocks.initIdleEth(n); }, idle_eth_xy);
+
+        // DRAM cores Metal manages (TRANSLATED coords), reported only when DRAM programmable cores are
+        // available. get_metal_dram_cores omits the syseng-owned NOC0 worker endpoints (CMFW DRAM
+        // telemetry), where Metal runs no DRISC firmware, so tools dump only these cores.
+        std::vector<std::pair<uint32_t, uint32_t>> dram_cores_xy;
+        if (MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+            for (const auto& dram_core :
+                 cluster.get_soc_desc(device_id).get_metal_dram_cores(CoordSystem::TRANSLATED)) {
+                dram_cores_xy.emplace_back(dram_core.x, dram_core.y);
+            }
+        }
+        set_coords([&chip_entry](size_t n) { return chip_entry.initDramCores(n); }, dram_cores_xy);
     }
 }
 
@@ -419,6 +475,19 @@ rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
 }
 
 // Helper function to populate the core info
+void Data::populate_core_ranges(
+    ::capnp::List<rpc::LogicalCoreRange>::Builder list, const CoreRangeSet& core_range_set) {
+    const auto& ranges = core_range_set.ranges();
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        auto start = list[i].initStart();
+        start.setX(ranges[i].start_coord.x);
+        start.setY(ranges[i].start_coord.y);
+        auto end = list[i].initEnd();
+        end.setX(ranges[i].end_coord.x);
+        end.setY(ranges[i].end_coord.y);
+    }
+}
+
 void Data::populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id) {
     out.setMetalDeviceId(info.device_id);
     out.setServicingMetalDeviceId(info.servicing_device_id);
@@ -537,6 +606,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT_CUSTOM("target_device", static_cast<int>(rt.get_target_device()));
     RT(simulator_enabled);
     RT_CUSTOM("simulator_path", rt.get_simulator_path().string());
+    RT(simulator_serve_over_sockets);
     RT(mock_enabled);
     RT(mock_cluster_desc_path);
     RT(visible_devices);
@@ -566,7 +636,6 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(disable_fabric_2_erisc_mode);
     RT(disable_dma_ops);
     RT(disable_sfploadmacro);
-    RT(disable_xip_dump);
     RT(skip_eth_cores_with_retrain);
     RT(use_mesh_graph_descriptor_2_0);
     RT(custom_fabric_mesh_graph_desc_path);
@@ -645,6 +714,8 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(inspector_rpc_server_port);
     RT(inspector_capture_tensor_specs);
     RT(inspector_log_runtime_entries);
+    RT(inspector_log_mesh_buffers);
+    RT(inspector_log_mesh_sockets);
     RT_CUSTOM("inspector_log_path", rt.get_inspector_log_path().string());
     RT(serialize_inspector_on_dispatch_timeout);
     RT(riscv_debug_info_enabled);
@@ -659,12 +730,9 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     // DispatchCoreConfig
     {
         static const char* dispatch_core_types[] = {"WORKER", "ETH"};
-        static const char* dispatch_core_axes[] = {"ROW", "COL"};
-        auto config = rt.get_dispatch_core_config();
-        auto type_idx = static_cast<int>(config.get_dispatch_core_type());
-        auto axis_idx = static_cast<int>(config.get_dispatch_core_axis());
+        auto type_idx = static_cast<int>(
+            rt.get_dispatch_core_type_override().value_or(tt::tt_metal::DispatchCoreType::WORKER));
         RT_CUSTOM("dispatch_core_config_type", (type_idx < 2) ? dispatch_core_types[type_idx] : fmt::format("{}", type_idx));
-        RT_CUSTOM("dispatch_core_config_axis", (axis_idx < 2) ? dispatch_core_axes[axis_idx] : fmt::format("{}", axis_idx));
     }
 
     // FabricTelemetrySettings

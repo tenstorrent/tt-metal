@@ -7,7 +7,6 @@
 //   MULTICAST not defined -> double-buffered unicast with TRIDs (bandwidth measurement).
 
 #include "api/dataflow/noc.h"
-#include "experimental/drisc_mode.h"
 #include "experimental/gddr_dma.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -26,9 +25,6 @@ void kernel_main() {
 
     Noc noc;
     UnicastEndpoint src;
-    // Stream mode: required for DRISC to initiate NOC traffic and for
-    // remote cores to reach DRISC L1 over NOC.
-    experimental::drisc_set_stream_mode();
 
 #if defined(MULTICAST)
     MulticastEndpoint dst;
@@ -126,8 +122,7 @@ void kernel_main() {
         half_buffer_bytes,
         {.addr = dst_A},
         {.noc_x = tensix_noc_x_start, .noc_y = tensix_noc_y_start, .addr = tensix_dst_A},
-        NOC_UNICAST_WRITE_VC,
-        trid_A);
+        NocOptVals{.trid = trid_A});
 
     // Final B: drain the remaining outstanding read.
     experimental::dma_async_read_wait_n(tx_stream, 0);                        // B[last] ready
@@ -138,8 +133,7 @@ void kernel_main() {
         half_buffer_bytes,
         {.addr = dst_B},
         {.noc_x = tensix_noc_x_start, .noc_y = tensix_noc_y_start, .addr = tensix_dst_B},
-        NOC_UNICAST_WRITE_VC,
-        trid_B);
+        NocOptVals{.trid = trid_B});
 
     // Drain: wait for the final two NOC writes to be acked.
     noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid_A});
@@ -152,6 +146,4 @@ void kernel_main() {
     uint32_t offset = num_bytes / sizeof(uint64_t);
     total_time_res[offset] = total_time;
 #endif
-    // Always restore NOC2AXI so subsequent context observes the default.
-    experimental::drisc_set_noc2axi_mode();
 }

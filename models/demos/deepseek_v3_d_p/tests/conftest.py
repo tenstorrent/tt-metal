@@ -10,6 +10,8 @@ Automatically downloads weights from HuggingFace if not available locally.
 
 import json
 import os
+import shutil
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -20,54 +22,102 @@ from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.demos.common.prefill.adapter import ADAPTER_PATHS, PrefillModelAdapter, get_adapter
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
-from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
-from models.demos.deepseek_v3_d_p.tests.model_variants import DSV3, TEST_VARIANTS, TestVariant
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
-from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
+from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 
-# Shared FABRIC_2D parametrize entries for the prefill block + transformer tests.
-# Minimum CI-gated coverage: (4,2) on BH LoudBox, (8,4) on BH Galaxy. (2,4) included
-# for asymmetry coverage. RELAXED_INIT matches the canonical pattern in test_prefill_block.py
-# and is required on BH Galaxy for FABRIC_2D bring-up.
+# The per-model registry now lives in models/demos/common/prefill/adapter.py and is shared by the
+# runner and the tests. These aliases keep the existing fixture/test references (TestVariant /
+# TEST_VARIANTS / DSV3) working.
+TestVariant = PrefillModelAdapter
+TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}
+DSV3 = get_adapter("deepseek_v3_d_p")
+
+from models.demos.deepseek_v3_d_p.tests import _reuse
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    assert_torus_xy_descriptor,
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
+
+# glm_5_3 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
+# ADAPTER_PATHS (prefill serving is not wired), so register it locally for the `variant` fixture
+# without modifying the common prefill registry.
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
+
+TEST_VARIANTS["glm_5_3"] = GLM53Adapter()
+
+from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
+    download_infinitebench_subset,
+    extract_moe_layer_weights,
+)
+
+# Shared production-policy params for prefill block + transformer tests. LoudBox executes canonical
+# 2x4 Fabric2D and one 4x2 axis-order diagnostic; Galaxy production executes only 8x4 TorusXY.
 FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
     pytest.param(
         (4, 2),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
+        fabric2d_device_params(),
         1,
-        ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
         id="fabric2d-mesh-4x2",
     ),
     pytest.param(
         (2, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
+        fabric2d_device_params(),
         1,
-        ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
         id="fabric2d-mesh-2x4",
     ),
+    # FABRIC_2D_TORUS_XY on the full 8x4 galaxy: Ring on BOTH axes (SP dim 0 = Ring-8, TP dim 1 =
+    # Ring-4). SP-axis MoE dispatch/combine ride #48225's ring-aware kernels; TP-axis collectives ring.
     pytest.param(
         (8, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
+        torus_xy_device_params(),
         2,
-        ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="fabric2d-mesh-8x4",
+        id="torus-xy-8x4",
+    ),
+    # Existing 16-chip subtorus diagnostics. These run only with an explicit 4x4 carve descriptor;
+    # they are a distinct workload and are not substitutes for production 8x4 TorusXY coverage.
+    pytest.param(
+        (4, 4),
+        torus_y_device_params(),
+        2,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-y-4x4",
+    ),
+    pytest.param(
+        (4, 4),
+        torus_x_device_params(),
+        2,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-x-4x4",
+    ),
+    pytest.param(
+        (4, 4),
+        torus_xy_device_params(),
+        2,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-xy-4x4",
     ),
 ]
+
+
+def pytest_addoption(parser):
+    try:
+        parser.addoption(
+            "--wrapper-invocation",
+            action="store_true",
+            default=False,
+            help="Set by wrapper tests on the child pytest they spawn: every uncollect_if trim "
+            "is bypassed, so the wrapper's -k filter fully owns the selection.",
+        )
+    except ValueError:
+        pass
 
 
 def pytest_configure(config):
@@ -78,6 +128,30 @@ def pytest_configure(config):
         "device/topology combinations. mesh_shape is (rows, cols) tuple, topology is 'ring' or 'linear'. "
         "Skips automatically based on available devices and arch constraints.",
     )
+    config.addinivalue_line(
+        "markers",
+        "uncollect_if(pred): deselect parametrized cases for which pred(**params) returns True. "
+        "pred receives the test's collection-time param values as keyword args, plus is_ci_env / is_ci_v2_env.",
+    )
+
+
+def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):
+    kept = []
+    is_bh = is_blackhole()
+    for item in items:
+        marker = item.get_closest_marker("uncollect_if")
+        if marker is None:
+            kept.append(item)
+            continue
+        params = dict(getattr(getattr(item, "callspec", None), "params", {}))
+        # Values the predicate wants that come from fixtures, not parametrization.
+        params.setdefault("is_ci_env", is_ci_env)
+        params.setdefault("is_ci_v2_env", is_ci_v2_env)
+        params.setdefault("is_bh", is_bh)
+        if not marker.kwargs["pred"](**params):
+            kept.append(item)
+
+    return kept
 
 
 def pytest_collection_modifyitems(config, items):
@@ -85,11 +159,135 @@ def pytest_collection_modifyitems(config, items):
     Skip tests based on mesh/topology requirements at collection time.
 
     Hardware constraints:
-    - Blackhole: Only supports 4-device configs (linear-4, ring-4)
-    - Wormhole: Ring topology only works with 8 devices (ring-8)
+    - Blackhole: multi-device test shapes must consume the complete local box
+    - Wormhole: wrapped topology only works with 8 devices
+
+    Galaxy TorusXY guard (CI): the production ring/ring fabric requires an explicit descriptor and
+    a cabling-certified allocation. Generic Galaxy jobs skip it before device open. Certified jobs
+    set PREFILL_TORUS_XY_CERTIFIED=1 and TT_MESH_GRAPH_DESC_PATH. Native Nx1 ring proxies use
+    Fabric2D TorusY and 1xN ring proxies use TorusX; non-ring local shapes remain unwrapped Fabric2D.
     """
+    is_ci_env = os.getenv("CI") == "true"
+    is_ci_v2_env = "TT_GH_CI_INFRA" in os.environ
+    on_ci = is_ci_env or is_ci_v2_env
+
+    # A wrapper's child pytest owns its own selection through -k; trimming it here would
+    # hide exactly the cases the wrapper exists to measure.
+    if not config.getoption("--wrapper-invocation"):
+        items[:] = _test_defined_uncollection(items, is_ci_env, is_ci_v2_env)
+
+    torus_xy_certified = os.getenv("PREFILL_TORUS_XY_CERTIFIED") == "1"
+    torus_xy_fabric = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    ring_or_torus_fabrics = {
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    }
+
+    CT = ttnn.cluster.ClusterType
+    FC = ttnn.FabricConfig
+    DEFAULT_ALLOWED_FABRICS = frozenset({FC.DISABLED, FC.FABRIC_1D, FC.FABRIC_2D})
+    # DISABLED is listed only on shapes that already own fabric-irrelevant diagnostics
+    # (currently single-chip). Do not expand it into
+    # communicating-test matrices merely to make this table visually symmetric.
+    CI_ALLOWED_FABRICS = {
+        CT.P150: {(1, 1): [FC.DISABLED, FC.FABRIC_2D]},  # single chip
+        CT.P300_X2: {  # 4-chip QuietBox
+            (4, 1): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_Y],  # KDA's QuietBox SP4xTP1 and TP4 rings
+            (2, 2): [FC.FABRIC_2D],
+            (1, 4): [FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_X],  # KDA's QKV exchange rings SP4 on a 1D fabric
+        },
+        CT.P150_X8: {
+            (8, 1): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_Y],  # KDA's LoudBox SP8xTP1 rings SP8
+            (4, 2): [FC.FABRIC_2D],
+            (2, 4): [FC.FABRIC_1D, FC.FABRIC_2D],  # KDA's LoudBox SP4xTP2 and TP4 line run on a 1D fabric
+            (1, 8): [FC.FABRIC_2D_TORUS_X],
+        },
+        CT.T3K: {
+            (8, 1): [FC.FABRIC_1D, FC.FABRIC_2D_TORUS_Y],
+            (4, 2): [FC.FABRIC_2D],
+            (2, 4): [FC.FABRIC_2D],
+            (1, 8): [FC.FABRIC_2D_TORUS_X],
+        },
+        CT.BLACKHOLE_GALAXY: {
+            # A TT_VISIBLE_DEVICES-filtered Galaxy column retains its board type. The device
+            # count check below still requires exactly eight visible devices for this mesh;
+            # Torus-Y auto-discovery must map the selected chips into a physical ring.
+            (8, 1): [FC.FABRIC_2D_TORUS_Y],
+            (32, 1): [FC.FABRIC_2D],
+            (16, 2): [FC.FABRIC_2D],
+            (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
+            (4, 4): [FC.FABRIC_2D_TORUS_X, FC.FABRIC_2D_TORUS_Y, FC.FABRIC_2D_TORUS_XY],
+            (4, 8): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (2, 16): [FC.FABRIC_2D],
+            (1, 32): [FC.FABRIC_2D],
+        },
+        CT.GALAXY: {
+            (32, 1): [FC.FABRIC_2D],
+            (16, 2): [FC.FABRIC_2D],
+            (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
+            (4, 4): [FC.FABRIC_2D_TORUS_X, FC.FABRIC_2D_TORUS_Y, FC.FABRIC_2D_TORUS_XY],
+            (4, 8): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (2, 16): [FC.FABRIC_2D],
+            (1, 32): [FC.FABRIC_2D],
+        },
+        CT.TG: {
+            (32, 1): [FC.FABRIC_2D],
+            (16, 2): [FC.FABRIC_2D],
+            (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
+            (4, 4): [FC.FABRIC_2D_TORUS_X, FC.FABRIC_2D_TORUS_Y, FC.FABRIC_2D_TORUS_XY],
+            (4, 8): [FC.FABRIC_1D, FC.FABRIC_2D],
+            (2, 16): [FC.FABRIC_2D],
+            (1, 32): [FC.FABRIC_2D],
+        },
+    }
+
+    def _get_requested_fabric_cfg(item):  # returns fabric cfg that a particular test case requested for the test
+        params = getattr(getattr(item, "callspec", None), "params", {})
+        dp = params.get("device_params")
+        if isinstance(dp, dict):
+            return dp.get("fabric_config")
+        else:
+            return None
+
+    def _is_torus_xy(item):
+        return _get_requested_fabric_cfg(item) == torus_xy_fabric
+
+    torus_xy_items_collected = any(_is_torus_xy(item) for item in items)
+    if torus_xy_items_collected and torus_xy_certified and not os.getenv("TT_MESH_GRAPH_DESC_PATH"):
+        pytest.exit("PREFILL_TORUS_XY_CERTIFIED=1 requires explicit TT_MESH_GRAPH_DESC_PATH", returncode=2)
+    if torus_xy_items_collected and torus_xy_certified:
+        assert_torus_xy_descriptor(os.environ["TT_MESH_GRAPH_DESC_PATH"])
+
+    # Generic CI galaxies are not wrap-cabling certified. get_cluster_type() opens the chip cluster as a
+    # side effect, so call it only when this session collects a wrapped device configuration. This keeps
+    # device-free tracy perf wrappers from opening devices in the parent; their parametrized child session
+    # performs the detection instead. On detection failure default to skipping (a missed skip can hang).
+    # A 1D ring is not skipped on Galaxy, but it is allowed only per cluster, so it needs the cluster type too.
+    skip_rings = False
+    cluster_type = None
+    if any((_get_requested_fabric_cfg(item) in ring_or_torus_fabrics | {FC.FABRIC_1D_RING}) for item in items):
+        try:
+            cluster_type = ttnn.cluster.get_cluster_type()
+            skip_rings = on_ci and cluster_type in [CT.GALAXY, CT.BLACKHOLE_GALAXY, CT.TG]
+        except Exception:
+            skip_rings = True
 
     for item in items:
+        # Galaxy TorusXY guard — runs before the marker check so it catches configs whether or
+        # not they carry a requires_mesh_topology mark.
+        requested_fabric_cfg = _get_requested_fabric_cfg(item)
+        if skip_rings:
+            certified_production_torus = requested_fabric_cfg == torus_xy_fabric and torus_xy_certified
+            if requested_fabric_cfg in ring_or_torus_fabrics and not certified_production_torus:
+                item.add_marker(
+                    pytest.mark.skip(
+                        reason="Wrapped fabric requires a compatible physical ring; Galaxy TorusXY additionally "
+                        "requires an explicit ring/ring descriptor and a cabling-certified allocation"
+                    )
+                )
+                continue
+
         marker = item.get_closest_marker("requires_mesh_topology")
         if not marker:
             continue
@@ -102,6 +300,23 @@ def pytest_collection_modifyitems(config, items):
         topology = marker.kwargs.get("topology") or (marker.args[1] if len(marker.args) > 1 else None)
 
         if mesh_shape is None or topology is None:
+            continue
+
+        # Unsupported fabric rings on QB/LB meshes
+        allowed_fabric_cfgs = DEFAULT_ALLOWED_FABRICS
+        if cluster_type in CI_ALLOWED_FABRICS.keys():
+            allowed_fabric_dct = CI_ALLOWED_FABRICS[cluster_type]
+            if mesh_shape in allowed_fabric_dct.keys():
+                allowed_fabric_cfgs = allowed_fabric_dct[mesh_shape]
+
+        # A case with no device_params fabric never opens a fabric, so it cannot request an
+        # unfeasible mesh/fabric combination — only device-count matching below applies to it.
+        if requested_fabric_cfg is not None and requested_fabric_cfg not in allowed_fabric_cfgs:
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="requested combination of fabric config and mesh, unfeasible on the given hardware"
+                )
+            )
             continue
 
         devices_needed = mesh_shape[0] * mesh_shape[1]
@@ -126,6 +341,48 @@ def pytest_collection_modifyitems(config, items):
 
         if skip_reason:
             item.add_marker(pytest.mark.skip(reason=skip_reason))
+
+
+if _reuse.reuse_enabled():
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """Root mesh_device, kept open across tests while device_params stay the same (see _reuse)."""
+        return _reuse.get_device(request, silicon_arch_name, device_params)
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_makereport(item, call):
+        outcome = yield
+        rep = outcome.get_result()
+        if rep.failed:
+            logger.warning(f"{item.nodeid} {rep.when} failed; dropping the reused mesh device and models")
+            _reuse.mark_dirty()
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_teardown(item, nextitem):
+        yield
+        _reuse.close_if_dirty()
+
+    def pytest_sessionfinish(session, exitstatus):
+        _reuse.close_all()
+
+
+@pytest.fixture(autouse=True)
+def _assert_certified_torus_profile(request):
+    """Fail closed after mesh open for every certified TorusXY parametrized case."""
+    params = getattr(getattr(request.node, "callspec", None), "params", {})
+    device_params = params.get("device_params")
+    if not isinstance(device_params, dict):
+        return
+    if device_params.get("fabric_config") != ttnn.FabricConfig.FABRIC_2D_TORUS_XY:
+        return
+    if os.getenv("PREFILL_TORUS_XY_CERTIFIED") != "1":
+        return
+    request.getfixturevalue("mesh_device")
+    assert ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+
+    assert per_axis_topology() == (ttnn.Topology.Ring, ttnn.Topology.Ring)
 
 
 @pytest.fixture
@@ -167,7 +424,7 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
             "*.safetensors.index.json",
             "generation_config.json",
             "tokenizer*",
-            "tiktoken*",  # Kimi K2.6 ships its BBPE tokenizer as tiktoken.model
+            "tiktoken*",  # Kimi ships its BBPE tokenizer as tiktoken.model
         ]
 
         # Add custom model code files (needed for trust_remote_code=True)
@@ -186,8 +443,37 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
             ignore_patterns=["*.safetensors"],  # Don't download weight files
         )
 
-        logger.success(f"✓ Config files downloaded to: {model_dir}")
-        return Path(model_dir)
+        # Variants that load config/tokenizer without trust_remote_code (e.g. DeepSeek-V3, stock fast
+        # tokenizer) can use the HF snapshot dir directly — no flat copy needed. Skipping it also avoids
+        # writing into a possibly read-only HF cache mount.
+        if not variant.needs_flat_config_dir:
+            logger.success(f"✓ Config files downloaded to: {model_dir}")
+            return Path(model_dir)
+
+        # The HF cache stores files as symlinks into blobs/ (content-hash names). With
+        # trust_remote_code=True, transformers resolves the remote module to its blob realpath
+        # and then looks for its relative-import siblings (e.g. tool_declaration_ts.py) by name in
+        # that same dir, which fails in blobs/. Copy into a flat dir of real files so relative
+        # imports resolve by name. The dir name is made dot-free (trust_remote_code can't import a
+        # dynamic module whose dir contains '.'). Weight shards are excluded so we never materialize
+        # the hundreds of GB the snapshot may hold from a prior weight download, and the flat dir lives
+        # in a writable temp location so a read-only HF cache mount doesn't break the copy.
+        flat_dir = (
+            Path(tempfile.gettempdir())
+            / "ttnn_flat_config"
+            / variant.hf_repo_id.replace("/", "__").replace(".", "_").replace("-", "_").replace("_", "-")
+        )
+
+        shutil.copytree(
+            model_dir,
+            flat_dir,
+            symlinks=False,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("*.safetensors"),
+        )
+
+        logger.success(f"✓ Config files downloaded to: {model_dir} (flattened to: {flat_dir})")
+        return flat_dir
 
     except Exception as e:
         logger.error(f"Failed to download {variant.hf_repo_id} config: {e}")
@@ -229,7 +515,7 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
             "*.safetensors.index.json",
             "generation_config.json",
             "tokenizer*",
-            "tiktoken*",  # Kimi K2.6 ships its BBPE tokenizer as tiktoken.model
+            "tiktoken*",  # Kimi ships its BBPE tokenizer as tiktoken.model
         ]
 
         # Add custom model code files (needed for trust_remote_code=True)
@@ -270,12 +556,6 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
                 if f"model.layers.{layer_id}." in key:
                     required_shards.add(shard_file)
 
-        # Find shard for model.norm (always needed by pretrained_transformer_weights fixture)
-        for key, shard_file in weight_map.items():
-            if "model.norm.weight" in key:
-                required_shards.add(shard_file)
-                break
-
         # Convert shard filenames to patterns
         shard_patterns = []
         for shard_file in sorted(required_shards):
@@ -284,7 +564,7 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
             shard_patterns.append(f"*-{shard_num}-of-*.safetensors")
 
         logger.info(
-            f"Step 2/2: Downloading weight shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embeddings + norm..."
+            f"Step 2/2: Downloading weight shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embeddings..."
         )
         logger.info(
             f"Required shards: {len(required_shards)} files ({', '.join(sorted(required_shards)[:5])}{'...' if len(required_shards) > 5 else ''})"
@@ -308,6 +588,29 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
         raise
 
 
+def _resolve_hf_snapshot_dir(path: Path) -> Path:
+    """If `path` is an HF hub-cache repo root (``models--org--name/`` with a ``snapshots/`` subdir),
+    return the active snapshot dir (the ``refs/main`` commit, else the newest snapshot that has the
+    safetensors index) so callers see the real config.json + shards. Otherwise return `path` as-is.
+
+    Lets ``*_HF_MODEL`` point at either the hub root (``.../hub/models--zai-org--GLM-5.3``) or a plain
+    checkout dir. The hash snapshot dir also sidesteps the trust_remote_code dot-in-path import issue.
+    """
+    if (path / "model.safetensors.index.json").exists():
+        return path
+    snaps = path / "snapshots"
+    if snaps.is_dir():
+        ref = path / "refs" / "main"
+        if ref.is_file():
+            cand = snaps / ref.read_text().strip()
+            if (cand / "model.safetensors.index.json").exists():
+                return cand
+        cands = [d for d in snaps.iterdir() if d.is_dir() and (d / "model.safetensors.index.json").exists()]
+        if cands:
+            return max(cands, key=lambda d: d.stat().st_mtime)
+    return path
+
+
 def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: int = 6) -> Path:
     """
     Get model path, downloading from HuggingFace if necessary.
@@ -316,7 +619,7 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
         variant: The TestVariant to resolve weights for.
         layer_idx: Which layer weights to ensure are available.
         num_layers: Number of layers to download (default: 6).
-                    When >1, downloads additional shards including shard 160 for model.norm.
+                    When >1, downloads the additional per-layer shards.
 
     Returns:
         Path to model directory with weights.
@@ -326,14 +629,17 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
     if env_path:
         model_path = Path(env_path)
         if model_path.exists():
+            # Accept an HF hub-cache root (e.g. /mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.3)
+            # by descending into its current snapshot, where config.json + the safetensors index live.
+            model_path = _resolve_hf_snapshot_dir(model_path)
             index_file = model_path / "model.safetensors.index.json"
             if index_file.exists():
                 logger.info(f"Using existing model from {variant.env_var}: {model_path}")
                 # Keep the user path absolute but do NOT symlink-resolve it: resolve() would follow a
-                # dot-free symlink (e.g. Kimi-K2_6) back to a dotted real dir (Kimi-K2.6), and HF
+                # dot-free symlink (e.g. Kimi-K2_7-Code) back to a dotted real dir (Kimi-K2.7-Code), and HF
                 # trust_remote_code cannot import a dynamic module whose name contains a '.'. The
                 # safetensors load works through the symlink either way; only the config import cares.
-                # This matches _resolve_config_only, which already loads config from the raw env path.
+                # _resolve_config_only descends the same way for config.json.
                 return model_path.absolute()
             else:
                 logger.warning(f"{variant.env_var} set but missing index file: {index_file}")
@@ -364,20 +670,22 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
 
 
 def _unwrap_multimodal_config(cfg):
-    """Unwrap Kimi K2.5/K2.6's multimodal wrapper config to the inner text_config.
+    """Unwrap a Kimi multimodal wrapper config (K2.7-Code ships
+    ``KimiK25ForConditionalGeneration``) to the inner text_config.
 
     The LM fields the rest of the code reads (hidden_size, n_routed_experts, etc.) live
-    under `text_config`. Also stubs `quantization_config.weight_block_size` when missing
-    so that DSv3's dequant helper's eager read doesn't fail on pre-dequantized Kimi
-    checkpoints (which carry only plain `.weight` keys, no `_scale_inv`).
+    under `text_config`.
     """
     if hasattr(cfg, "text_config") and hasattr(cfg.text_config, "hidden_size"):
         logger.info(f"Unwrapping multimodal wrapper config (inner model_type={cfg.text_config.model_type})")
+        # `quantization_config` describes the CHECKPOINT, so HF puts it on the outer wrapper only and
+        # the unwrap drops it. convert_state_dict then falls to passthrough and raises on the first
+        # float8 tensor ("config has no `quantization_config`"). Carry the genuine one across rather
+        # than reconstructing it, so modules_to_not_convert / dequantize survive.
+        outer_quant = getattr(cfg, "quantization_config", None)
         cfg = cfg.text_config
-    qc = getattr(cfg, "quantization_config", None)
-    if isinstance(qc, dict) and not qc.get("weight_block_size"):
-        qc["weight_block_size"] = [128, 128]
-        logger.info("Stubbed quantization_config.weight_block_size for pre-dequantized checkpoint")
+        if getattr(cfg, "quantization_config", None) is None and outer_quant is not None:
+            cfg.quantization_config = outer_quant
     return cfg
 
 
@@ -409,10 +717,18 @@ def _resolve_hf_config(model_path_str: str):
 @lru_cache(maxsize=None)
 def _resolve_config_only(variant_name: str):
     v = TEST_VARIANTS[variant_name]
+    # Hand-built config takes precedence: some models (e.g. GLM-5.3 `glm_moe_dsa`, DeepSeek-V3.2
+    # `deepseek_v32`) are not registered with transformers, so AutoConfig cannot load them. The builder
+    # returns a ready HF-attribute config. (Result is lru_cached like the AutoConfig path; tests that
+    # mutate config.max_seq_len already rely on this shared/cached object.)
+    if v.config_builder is not None:
+        return v.config_builder()
     # Check environment variable first
     env_path = os.getenv(v.env_var)
     if env_path:
-        model_path = Path(env_path)
+        # Same hub-cache descent get_or_download_model does: *_HF_MODEL may point at the
+        # repo root, whose config.json lives one level down in snapshots/<sha>/.
+        model_path = _resolve_hf_snapshot_dir(Path(env_path))
         if (model_path / "config.json").exists():
             logger.info(f"Using existing config from {v.env_var}: {model_path}")
             return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(model_path), trust_remote_code=True))
@@ -451,18 +767,24 @@ def _resolve_state_dict(model_path_str: str):
 @lru_cache(maxsize=None)
 def _resolve_tokenizer(variant_name: str, padding_side: str):
     v = TEST_VARIANTS[variant_name]
+    # Only variants that ship custom tokenizer code (e.g. Kimi) need trust_remote_code; DeepSeek-V3
+    # uses a stock fast tokenizer and turns it off to avoid the flat-config custom-import path.
+    trust_remote_code = v.tokenizer_trust_remote_code
+    env_path = os.getenv(v.env_var)
     candidates = [
-        os.getenv(v.env_var),
+        # Descend an HF hub-cache root to its snapshot, where tokenizer.json lives; the root itself
+        # holds only blobs/refs/snapshots, so the glob below never matches it.
+        str(_resolve_hf_snapshot_dir(Path(env_path))) if env_path else None,
         str(v.default_local_path) if v.default_local_path is not None else None,
         str(v.shared_path) if v.shared_path is not None else None,
     ]
     for candidate in candidates:
         if candidate is None:
             continue
-        p = Path(candidate)
+        p = _resolve_hf_snapshot_dir(Path(candidate))
         if p.exists() and any(p.glob("tokenizer*")):
             logger.info(f"Loading tokenizer from: {p}")
-            tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=True)
+            tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=trust_remote_code)
             tok.padding_side = padding_side
             return tok
 
@@ -470,7 +792,7 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
     cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
     config_path = download_model_config_only(v, cache_dir)
     logger.info(f"Loading tokenizer from downloaded config: {config_path}")
-    tok = AutoTokenizer.from_pretrained(str(config_path), use_fast=True, trust_remote_code=True)
+    tok = AutoTokenizer.from_pretrained(str(config_path), use_fast=True, trust_remote_code=trust_remote_code)
     tok.padding_side = padding_side
     return tok
 
@@ -492,11 +814,24 @@ def model_path(variant) -> Path:
 
 
 @pytest.fixture
-def hf_config(model_path):
+def hf_config(variant, model_path):
     """
     Load HF config for testing.
     Returns None if model path doesn't exist (weights not available).
+
+    `config_builder_overrides_checkpoint` means the adapter's config is authoritative even though
+    the checkpoint's own loads: transformers 5.x nests rope_theta inside rope_parameters, so an
+    AutoConfig-derived config lacks attributes ttMLA reads as plain ones.
+
+    It delegates to `_resolve_config_only` rather than calling the builder directly, so this fixture
+    and `config_only` hand out the SAME object for one variant -- both lru_cached, as the AutoConfig
+    path below already is. Calling the builder here would return a fresh config per request, and the
+    fixtures mutate what they are given (`config.max_seq_len` throughout, `setattr` in
+    pretrained_mla_layer_weights), so a second copy silently drops those mutations for whichever
+    fixture did not make them.
     """
+    if variant.config_builder_overrides_checkpoint and variant.config_builder is not None:
+        return _resolve_config_only(variant.name)
     return _resolve_hf_config(str(model_path))
 
 
@@ -627,8 +962,37 @@ def random_weights(config_only):
         ).to(torch.bfloat16),
     }
 
+    # Kimi-K3 output gate. Appended AFTER the block above so the manual_seed(42) draw order for every
+    # non-gated variant is unchanged (the cached reference results depend on it — see above).
+    if getattr(config, "mla_use_output_gate", False):
+        weights["g_proj.weight"] = (
+            torch.randn(
+                config.num_attention_heads * config.v_head_dim,
+                config.hidden_size,
+            )
+            * std
+        ).to(torch.bfloat16)
+
     logger.info(f"Generated {len(weights)} random weight tensors using config dimensions")
     return config, weights
+
+
+def _load_mla_weights(state_dict, hf_config, prefix: str, layer_idx: int) -> dict:
+    """One layer's MLA weights, read without the rest of the layer: a whole-layer view drags in the
+    MoE experts, which Kimi-K3 packs as MXFP4 and convert_state_dict raises on."""
+    sd = convert_state_dict(sub_state_dict(state_dict, f"{prefix}model.layers.{layer_idx}.self_attn."), hf_config)
+    names = [
+        "q_a_proj.weight",
+        "q_a_layernorm.weight",
+        "q_b_proj.weight",
+        "kv_a_proj_with_mqa.weight",
+        "kv_a_layernorm.weight",
+        "kv_b_proj.weight",
+        "o_proj.weight",
+    ]
+    if getattr(hf_config, "mla_use_output_gate", False):
+        names.append("g_proj.weight")  # Kimi-K3; ttMLA reads it with no default
+    return {name: sd[name] for name in names}
 
 
 @pytest.fixture
@@ -636,9 +1000,10 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
     """
     Dequantized pretrained weights for N-layer transformer in TT state_dict format.
 
-    Extracts embed, norm, and per-layer weights (attention, FFN/MoE) using
-    sub_state_dict() + dequantize_state_dict(), matching the format produced
-    by extract_tt_state_dict() in transformer_helpers.py.
+    Extracts embed and per-layer weights (attention, FFN/MoE) using
+    sub_state_dict() + convert_state_dict(), matching the format produced
+    by extract_tt_state_dict() in transformer_helpers.py. No final norm: the
+    prefill transformer has no norm / LM-head tail.
 
     Parametrize with num_layers (default 6) via indirect fixture or marker:
         @pytest.mark.parametrize("pretrained_transformer_weights", [4], indirect=True)
@@ -656,41 +1021,33 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
         pytest.skip(f"{variant.name}: failed to load state dict. Check model path and weights.")
 
     num_layers = request.node.callspec.params.get("num_layers", 1)
-    first_k_dense = hf_config.first_k_dense_replace  # 3
-    n_routed = hf_config.n_routed_experts  # 256
+    first_k_dense = hf_config.first_k_dense_replace
+    n_routed = hf_config.n_routed_experts
+
+    # Kimi's raw multimodal checkpoint nests the LM under a `language_model.` prefix; the
+    # dequantized/stripped checkpoint and DeepSeek use bare `model.` keys. Detect it from the
+    # actual keys so the same variant works for either, then `sub_state_dict` strips it.
+    prefix = detect_language_model_prefix(state_dict)
 
     logger.info(f"Loading pretrained transformer weights for {num_layers} layers from: {model_path}")
 
     # Embed tokens
-    embed_sd = sub_state_dict(state_dict, "model.embed_tokens.")
-    embed_dequant = dequantize_state_dict(embed_sd, hf_config)
+    embed_sd = sub_state_dict(state_dict, f"{prefix}model.embed_tokens.")
+    embed_dequant = convert_state_dict(embed_sd, hf_config)
     result = {
         "embed_weight": embed_dequant["weight"].float(),
     }
-
-    # Final norm
-    norm_sd = sub_state_dict(state_dict, "model.norm.")
-    norm_dequant = dequantize_state_dict(norm_sd, hf_config)
-    result["norm_weight"] = norm_dequant["weight"]
 
     # Per-layer weights
     result["layers"] = []
     for i in range(num_layers):
         logger.info(f"Loading layer {i} weights...")
-        layer_sd = sub_state_dict(state_dict, f"model.layers.{i}.")
-        layer_dequant = dequantize_state_dict(layer_sd, hf_config)
+        layer_sd = sub_state_dict(state_dict, f"{prefix}model.layers.{i}.")
+        layer_dequant = convert_state_dict(layer_sd, hf_config)
 
         layer_dict = {
             "attn_norm_weight": layer_dequant["input_layernorm.weight"],
-            "mla_weights": {
-                "q_a_proj.weight": layer_dequant["self_attn.q_a_proj.weight"],
-                "q_a_layernorm.weight": layer_dequant["self_attn.q_a_layernorm.weight"],
-                "q_b_proj.weight": layer_dequant["self_attn.q_b_proj.weight"],
-                "kv_a_proj_with_mqa.weight": layer_dequant["self_attn.kv_a_proj_with_mqa.weight"],
-                "kv_a_layernorm.weight": layer_dequant["self_attn.kv_a_layernorm.weight"],
-                "kv_b_proj.weight": layer_dequant["self_attn.kv_b_proj.weight"],
-                "o_proj.weight": layer_dequant["self_attn.o_proj.weight"],
-            },
+            "mla_weights": _load_mla_weights(state_dict, hf_config, prefix, i),
             "ffn_norm_weight": layer_dequant["post_attention_layernorm.weight"],
         }
 
@@ -702,29 +1059,47 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
                 "down_proj": layer_dequant["mlp.down_proj.weight"],
             }
         else:
-            layer_dict["gate_weights"] = {
-                "weight": layer_dequant["mlp.gate.weight"],
-                "e_score_correction_bias": layer_dequant["mlp.gate.e_score_correction_bias"],
-            }
-            layer_dict["routed_expert_weights"] = [
-                {
-                    "gate_proj": layer_dequant[f"mlp.experts.{j}.gate_proj.weight"],
-                    "up_proj": layer_dequant[f"mlp.experts.{j}.up_proj.weight"],
-                    "down_proj": layer_dequant[f"mlp.experts.{j}.down_proj.weight"],
-                }
-                for j in range(n_routed)
-            ]
-            layer_dict["shared_expert_weights"] = {
-                "gate_proj": layer_dequant["mlp.shared_experts.gate_proj.weight"],
-                "up_proj": layer_dequant["mlp.shared_experts.up_proj.weight"],
-                "down_proj": layer_dequant["mlp.shared_experts.down_proj.weight"],
-            }
+            layer_dict.update(extract_moe_layer_weights(layer_dequant, n_routed=n_routed))
 
         result["layers"].append(layer_dict)
         logger.info(f"Layer {i} loaded ({'dense' if is_dense else 'MoE'})")
 
     logger.info(f"Loaded pretrained transformer weights for {num_layers} layers")
     return hf_config, result
+
+
+@pytest.fixture
+def pretrained_mla_layer_weights(variant, model_path, hf_config, state_dict):
+    """Pretrained MLA weights from ``variant.pretrained_mla_layer``, as ``(hf_config, weights)``.
+
+    Same shape ``random_weights`` returns, so an MLA test swaps one fixture for the other. Separate
+    from ``pretrained_transformer_weights`` because that one also loads the embedding, the norms and
+    the full MoE side, which Kimi-K3 cannot do.
+    """
+    if variant.pretrained_mla_layer is None:
+        pytest.skip(f"{variant.name}: no reachable checkpoint, so no MLA weights to load")
+    if not _check_pretrained_available(model_path):
+        pytest.skip(f"{variant.name}: pretrained weights not available. Set {variant.env_var} or download model.")
+    if hf_config is None:
+        pytest.skip(f"{variant.name}: failed to load HF config. Check model path.")
+    if state_dict is None:
+        pytest.skip(f"{variant.name}: failed to load state dict. Check model path and weights.")
+
+    # The torch MLA reference reads all three with no defaults. Kimi-K3's checkpoint config omits the
+    # first two, and for the third transformers synthesizes {'rope_type': 'default'}, on which
+    # _init_rope KeyErrors -- a NoPE model has no scaling, so None is the value it wants.
+    for field, default in (("attention_bias", False), ("attention_dropout", 0.0)):
+        if not hasattr(hf_config, field):
+            setattr(hf_config, field, default)
+    if getattr(hf_config, "mla_use_nope", False):
+        hf_config.rope_scaling = None
+
+    layer_idx = variant.pretrained_mla_layer
+    prefix = detect_language_model_prefix(state_dict)
+    logger.info(f"Loading pretrained MLA weights from layer {layer_idx} of {model_path}")
+    weights = _load_mla_weights(state_dict, hf_config, prefix, layer_idx)
+    logger.info(f"Loaded {len(weights)} MLA weight tensors (layer {layer_idx})")
+    return hf_config, weights
 
 
 # ---------------------------------------------------------------------------

@@ -608,7 +608,7 @@ def _run_cb_heavy_noop_program(io_tensors, cb_core_grid, cb_total_size_bytes):
     # Dispatch needs all 3 RISCs configured (NCRISC + BRISC + TRISC) even if kernels are blank;
     # otherwise launch crashes on the un-bound cores.
     reader = ttnn.KernelDescriptor(
-        kernel_source="tt_metal/kernels/dataflow/blank.cpp",
+        kernel_source="tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cb_core_grid,
         config=ttnn.DataMovementConfigDescriptor(
@@ -616,7 +616,7 @@ def _run_cb_heavy_noop_program(io_tensors, cb_core_grid, cb_total_size_bytes):
         ),
     )
     writer = ttnn.KernelDescriptor(
-        kernel_source="tt_metal/kernels/dataflow/blank.cpp",
+        kernel_source="tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cb_core_grid,
         config=ttnn.DataMovementConfigDescriptor(
@@ -624,7 +624,7 @@ def _run_cb_heavy_noop_program(io_tensors, cb_core_grid, cb_total_size_bytes):
         ),
     )
     compute = ttnn.KernelDescriptor(
-        kernel_source="tt_metal/kernels/compute/blank.cpp",
+        kernel_source="tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cb_core_grid,
         config=ttnn.ComputeConfigDescriptor(),
@@ -637,7 +637,7 @@ def _run_cb_heavy_noop_program(io_tensors, cb_core_grid, cb_total_size_bytes):
 
 @pytest.mark.parametrize("use_from_torch", [False, True], ids=["experimental_to_single_device", "from_torch_replicate"])
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
-def test_per_core_cb_collision_errors_on_same_cores(mesh_device, use_from_torch):
+def test_per_core_cb_collision_errors_on_same_cores(mesh_device, use_from_torch, expect_error):
     """CB validation should reject a program whose CBs land on cores already filled by a per-core tensor."""
     same_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
     # Allocate I/O first so lockstep places them at top of L1 (no per-core ranges to avoid yet).
@@ -646,7 +646,7 @@ def test_per_core_cb_collision_errors_on_same_cores(mesh_device, use_from_torch)
     assert _per_core_tensor is not None  # keep alive until CB validation runs
 
     # Huge CB on the SAME cores as the per-core tensor: should trip validate_circular_buffer_region.
-    with pytest.raises(RuntimeError, match=r"clash|circular buffer|L1"):
+    with expect_error(RuntimeError, r"clash|circular buffer|L1"):
         _run_cb_heavy_noop_program(io_tensors, same_grid, cb_total_size_bytes=1024 * 1024)
 
 

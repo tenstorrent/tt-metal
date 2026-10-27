@@ -4,13 +4,15 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
+#include "cmath_common.h"
 
 namespace ckernel::sfpu {
 
@@ -36,8 +38,12 @@ namespace ckernel::sfpu {
  *   scale_packed: precomputed (-1)^(n+1) * n! (as float bits)
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
-    constexpr int NUM_TERMS = 11;  // Exact terms (k=0..10)
+inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_packed) {
+    // Exact terms (k=0..NUM_TERMS-1). The Euler-Maclaurin tail (with B2,B4,B6 corrections)
+    // is applied at z = x + NUM_TERMS. For the supported domain (x >= 0.5) this puts
+    // z >= 6.5, where the asymptotic remainder is far below bfloat16 precision, so 6 exact
+    // terms are sufficient. Reduced from 11 to save ~5 reciprocals (+power chains) per element.
+    constexpr int NUM_TERMS = 6;
 
     // Unpack parameters using Converter (union-based type punning supported by SFPU compiler)
     float n_float = Converter::as_float(n_packed);
@@ -55,10 +61,13 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
     float n4 = static_cast<float>(n + 4);
     float n5 = static_cast<float>(n + 5);
     float nf = static_cast<float>(n);
-    float inv_nf = 1.0f / nf;
-    float c_b2 = n1 / 12.0f;                           // B_2 term coefficient
-    float c_b4 = -(n1 * n2 * n3) / 720.0f;             // B_4 term coefficient
-    float c_b6 = (n1 * n2 * n3 * n4 * n5) / 30240.0f;  // B_6 term coefficient
+    // The scale (-1)^(n+1) * n! goes into every term rather than onto the final sum: the unscaled
+    // sum sits n! below the result and flushes to zero while the result is still a normal float.
+    float c_b0 = scale / nf;                                   // leading term coefficient
+    float c_b2 = scale * n1 / 12.0f;                           // B_2 term coefficient
+    float c_b4 = -scale * (n1 * n2 * n3) / 720.0f;             // B_4 term coefficient
+    float c_b6 = scale * (n1 * n2 * n3 * n4 * n5) / 30240.0f;  // B_6 term coefficient
+    float half_scale = 0.5f * scale;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -66,7 +75,8 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
         sfpi::vFloat sum = sfpi::vFloat(0.0f);
 
         // Part 1: Exact summation of first NUM_TERMS terms
-        // Σ_{k=0}^{NUM_TERMS-1} 1/(x+k)^(n+1)
+        // Σ_{k=0}^{NUM_TERMS-1} scale/(x+k)^(n+1)
+#pragma GCC unroll NUM_TERMS
         for (int k = 0; k < NUM_TERMS; k++) {
             sfpi::vFloat xi = x + static_cast<float>(k);
 
@@ -80,7 +90,7 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
                 inv_xi = sfpu_reciprocal_iter<1>(xi);
             }
 
-            sfpi::vFloat inv_power = inv_xi;
+            sfpi::vFloat inv_power = inv_xi * scale;
             for (int j = 1; j < n_plus_1; j++) {
                 inv_power = inv_power * inv_xi;
             }
@@ -104,33 +114,30 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
 
         sfpi::vFloat inv_z2 = inv_z * inv_z;
 
-        // Compute inv_z^n by repeated multiplication
-        sfpi::vFloat inv_z_n = inv_z;  // inv_z^1
-        for (int j = 1; j < n; j++) {
-            inv_z_n = inv_z_n * inv_z;  // inv_z^n
-        }
-
         // Use PolynomialEvaluator for the Bernoulli polynomial in the tail:
-        // E = inv_nf + c_b2*inv_z2 + c_b4*inv_z2^2 + c_b6*inv_z2^3
-        sfpi::vFloat E = PolynomialEvaluator::eval(inv_z2, inv_nf, c_b2, c_b4, c_b6);
-        sfpi::vFloat tail = inv_z_n * (E + 0.5f * inv_z);
+        // E = c_b0 + c_b2*inv_z2 + c_b4*inv_z2^2 + c_b6*inv_z2^3
+        sfpi::vFloat E = PolynomialEvaluator::eval(inv_z2, c_b0, c_b2, c_b4, c_b6);
+        // Multiply inv_z^n into the scaled tail one factor at a time, so that no intermediate
+        // falls below the result.
+        sfpi::vFloat tail = E + half_scale * inv_z;
+        for (int j = 0; j < n; j++) {
+            tail = tail * inv_z;
+        }
 
         sum = sum + tail;
 
-        // Apply scale: (-1)^(n+1) * n!
-        sfpi::vFloat result = sum * scale;
-
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            sum = sfpi::convert<sfpi::vFloat16b>(sum, sfpi::RoundMode::Nearest);
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[0] = sum;
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE>
 void polygamma_init() {
-    recip_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    recip_init<APPROXIMATION_MODE, false>();
 }
 
 }  // namespace ckernel::sfpu

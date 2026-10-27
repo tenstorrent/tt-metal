@@ -27,7 +27,7 @@ public:
     void RunDramProgram(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const std::string& kernel_path,
-        stl::Span<const uint32_t> runtime_args = {}) {
+        ttsl::Span<const uint32_t> runtime_args = {}) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -35,7 +35,8 @@ public:
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
-        constexpr CoreCoord core = {0, 0};
+        // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
+        constexpr CoreCoord core = {0, 1};
         KernelHandle kernel_handle = CreateKernel(program_, kernel_path, core, DramConfig{.noc = tt_metal::NOC::NOC_0});
 
         SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
@@ -47,7 +48,7 @@ public:
     void TestDramOutput(
         const std::string& kernel_path,
         const std::vector<std::string>& expected_messages,
-        stl::Span<const uint32_t> runtime_args = {}) {
+        ttsl::Span<const uint32_t> runtime_args = {}) {
         for (auto& mesh_device : this->devices_) {
             RunDramProgram(mesh_device, kernel_path, runtime_args);
             EXPECT_TRUE(FileContainsAllStrings(dprint_file_name, expected_messages));

@@ -21,9 +21,9 @@ struct ActivationInitHelper {
     // Compile-time validation
     static_assert(
         ACT == KernelActivation::NONE || ACT == KernelActivation::SILU || ACT == KernelActivation::TANH ||
-            ACT == KernelActivation::GELU || ACT == KernelActivation::RELU6 || ACT == KernelActivation::SIGMOID ||
-            ACT == KernelActivation::HARDSIGMOID || ACT == KernelActivation::HARDTANH ||
-            ACT == KernelActivation::SELU || ACT == KernelActivation::SOFTPLUS,
+            ACT == KernelActivation::GELU || ACT == KernelActivation::GELU_TANH || ACT == KernelActivation::RELU6 ||
+            ACT == KernelActivation::SIGMOID || ACT == KernelActivation::HARDSIGMOID ||
+            ACT == KernelActivation::HARDTANH || ACT == KernelActivation::SELU || ACT == KernelActivation::SOFTPLUS,
         "Unsupported KernelActivation type for fused activation init");
 
     FORCE_INLINE static void init() {
@@ -35,6 +35,9 @@ struct ActivationInitHelper {
         } else if constexpr (ACT == KernelActivation::GELU) {
             // PARAM0: 0 = accurate, non-zero = fast
             gelu_tile_init_pack<PARAM0 != 0>();
+        } else if constexpr (ACT == KernelActivation::GELU_TANH) {
+            // PARAM0: 0 = accurate (FP32 tanh), non-zero = fast (BF16-grade)
+            gelu_tanh_tile_init_pack<PARAM0 != 0>();
         } else if constexpr (ACT == KernelActivation::RELU6) {
             relu_max_tile_init_pack();
         } else if constexpr (ACT == KernelActivation::SIGMOID) {
@@ -57,9 +60,9 @@ struct ActivationApplyHelper {
     // Compile-time validation
     static_assert(
         ACT == KernelActivation::NONE || ACT == KernelActivation::SILU || ACT == KernelActivation::TANH ||
-            ACT == KernelActivation::GELU || ACT == KernelActivation::RELU6 || ACT == KernelActivation::SIGMOID ||
-            ACT == KernelActivation::HARDSIGMOID || ACT == KernelActivation::HARDTANH ||
-            ACT == KernelActivation::SELU || ACT == KernelActivation::SOFTPLUS,
+            ACT == KernelActivation::GELU || ACT == KernelActivation::GELU_TANH || ACT == KernelActivation::RELU6 ||
+            ACT == KernelActivation::SIGMOID || ACT == KernelActivation::HARDSIGMOID ||
+            ACT == KernelActivation::HARDTANH || ACT == KernelActivation::SELU || ACT == KernelActivation::SOFTPLUS,
         "Unsupported KernelActivation type for fused activation apply");
 
     // Parameter-specific validation
@@ -76,6 +79,9 @@ struct ActivationApplyHelper {
         } else if constexpr (ACT == KernelActivation::GELU) {
             // PARAM0: 0 = accurate, non-zero = fast
             gelu_tile_pack<PARAM0 != 0>(tile_index);
+        } else if constexpr (ACT == KernelActivation::GELU_TANH) {
+            // PARAM0: 0 = accurate (FP32 tanh), non-zero = fast (BF16-grade)
+            gelu_tanh_tile_pack<DST_ACCUM_MODE, PARAM0 != 0>(tile_index);
         } else if constexpr (ACT == KernelActivation::RELU6) {
             // PARAM0 is the max value (as uint32_t bit pattern)
             // Default to 6.0 if PARAM0 is 0
@@ -92,7 +98,7 @@ struct ActivationApplyHelper {
         } else if constexpr (ACT == KernelActivation::HARDTANH) {
             hardtanh_tile_pack(tile_index, PARAM0, PARAM1);
         } else if constexpr (ACT == KernelActivation::SELU) {
-            // PARAM0 is alpha, PARAM1 is lambda
+            // PARAM0 is the scale, PARAM1 is alpha
             selu_tile_pack(tile_index, PARAM0, PARAM1);
         } else if constexpr (ACT == KernelActivation::SOFTPLUS) {
             // PARAM0 is beta, PARAM2 beta reciprocal, PARAM1 is threshold

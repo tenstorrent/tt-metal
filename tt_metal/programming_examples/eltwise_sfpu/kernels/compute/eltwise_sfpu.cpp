@@ -12,7 +12,8 @@ void kernel_main() {
     uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
     // Initialize the SFPU
-    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    copy_init(tt::CBIndex::c_0);
     // Telling the SFPU to perform exponential. This is required each time we
     // switch to a different SFPU operation.
     exp_tile_init();

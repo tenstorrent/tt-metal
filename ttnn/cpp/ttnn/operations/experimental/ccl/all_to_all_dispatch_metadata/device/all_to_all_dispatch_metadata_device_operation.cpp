@@ -173,7 +173,7 @@ AllToAllDispatchMetadataDeviceOperation::compute_output_specs(
     // Output tokens tensor - use input tensor's memory config (DRAM interleaved)
     auto dram_memory_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    auto output_tokens_spec = TensorSpec(
+    auto output_tokens_spec = tt::tt_metal::TensorSpec(
         Shape(output_shape),
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), dram_memory_config));
@@ -197,7 +197,7 @@ AllToAllDispatchMetadataDeviceOperation::compute_output_specs(
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, scores_shard_spec};
 
     // Indices tensor spec - sharded to drain core
-    auto indices_spec = TensorSpec(
+    auto indices_spec = tt::tt_metal::TensorSpec(
         Shape(metadata_shape),
         tt::tt_metal::TensorLayout(
             tensor_args.expert_indices_tensor.dtype(),
@@ -205,7 +205,7 @@ AllToAllDispatchMetadataDeviceOperation::compute_output_specs(
             indices_sharded_mem_config));
 
     // Scores tensor spec - sharded to drain core (same shape as indices, different dtype)
-    auto scores_spec = TensorSpec(
+    auto scores_spec = tt::tt_metal::TensorSpec(
         Shape(metadata_shape),
         tt::tt_metal::TensorLayout(
             tensor_args.expert_scores_tensor.dtype(),
@@ -273,7 +273,8 @@ all_to_all_dispatch_metadata(
             .worker_mode = worker_mode,
             .mux_core_range_set = mux_core_range_set,
             .dispatch_algorithm = dispatch_algorithm,
-            .cross_device_semaphore = cross_device_semaphore},
+            .cross_device_semaphore = cross_device_semaphore,
+            .has_cross_device_semaphore = cross_device_semaphore.has_value()},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,

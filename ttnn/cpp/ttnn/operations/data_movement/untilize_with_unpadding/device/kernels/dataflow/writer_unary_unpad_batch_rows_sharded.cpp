@@ -5,33 +5,35 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t num_unpadded_output_rows = get_arg_val<uint32_t>(0);
-    uint32_t num_padded_tiles_per_batch = get_arg_val<uint32_t>(1);
-    uint32_t num_unpadded_rows_per_batch = get_arg_val<uint32_t>(2);
-    uint32_t padded_block_row_size_bytes = get_arg_val<uint32_t>(3);
-    uint32_t unpadded_block_row_size_bytes = get_arg_val<uint32_t>(4);
-    uint32_t batch = get_arg_val<uint32_t>(5);
+    auto num_unpadded_output_rows = get_arg(args::num_unpadded_output_rows);
+    auto num_padded_tiles_per_batch = get_arg(args::num_padded_tiles_per_batch);
+    auto num_unpadded_rows_per_batch = get_arg(args::num_unpadded_rows_per_batch);
+    auto padded_block_row_size_bytes = get_arg(args::padded_block_row_size_bytes);
+    auto unpadded_block_row_size_bytes = get_arg(args::unpadded_block_row_size_bytes);
+    auto batch = get_arg(args::batch);
 
-    constexpr uint32_t cb_id_untilize_out = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
-    constexpr uint32_t aligned_page_size = get_compile_time_arg_val(2);
+    constexpr auto aligned_page_size = get_arg(args::aligned_page_size);
 
     Noc noc;
-    CircularBuffer cb_untilize_out(cb_id_untilize_out);
-    CircularBuffer cb_out(cb_id_out);
+    // The untilized block the compute kernel packs; drained here row by row.
+    DataflowBuffer dfb_untilize_out(dfb::untilize_out);
+    // Borrowed onto the output shard itself: this kernel is its only toucher, filling it by write
+    // pointer, so nothing downstream drains it.
+    DataflowBuffer dfb_out(dfb::out);
 
-    cb_out.reserve_back(num_unpadded_output_rows);
-    uint32_t l1_write_addr = cb_out.get_write_ptr();
+    dfb_out.reserve_back(num_unpadded_output_rows);
+    uint32_t l1_write_addr = dfb_out.get_write_ptr();
 
     for (uint32_t b = 0; b < batch; ++b) {
-        cb_untilize_out.wait_front(num_padded_tiles_per_batch);
-        uint32_t src_addr = cb_untilize_out.get_read_ptr();
+        dfb_untilize_out.wait_front(num_padded_tiles_per_batch);
+        uint32_t src_addr = dfb_untilize_out.get_read_ptr();
 
         for (uint32_t row = 0; row < num_unpadded_rows_per_batch; ++row) {
             CoreLocalMem<uint32_t> dst(l1_write_addr);
@@ -48,7 +50,6 @@ void kernel_main() {
         }
 
         noc.async_read_barrier();
-        cb_untilize_out.pop_front(num_padded_tiles_per_batch);
+        dfb_untilize_out.pop_front(num_padded_tiles_per_batch);
     }
-    cb_out.push_back(num_unpadded_output_rows);
 }

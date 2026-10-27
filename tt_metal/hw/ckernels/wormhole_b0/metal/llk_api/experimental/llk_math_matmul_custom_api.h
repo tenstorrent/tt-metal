@@ -6,6 +6,7 @@
 
 #include "experimental/llk_math_matmul_custom_no_mop.h"
 #include "llk_math_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK MATMUL NO MOP
@@ -18,6 +19,7 @@ inline void llk_math_matmul_init_no_mop(
     const bool transpose = false,
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1) {
+    SAN_HOOK(unsupported());
     const std::uint32_t in0_id = get_operand_id(operandA);
     const std::uint32_t in1_id = get_operand_id(operandB);
 
@@ -34,8 +36,27 @@ inline void llk_math_matmul_init_no_mop(
 
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void llk_math_matmul_no_mop(
-    const std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
-    _llk_math_matmul_no_mop_<math_fidelity, THROTTLE_LEVEL>(dst_index, ct_dim, rt_dim);
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t dst_index,
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t rt_dim = 1) {
+    SAN_HOOK(unsupported());
+    // Operand cb ids are threaded from the compute API so the execute matches the geometry-aware
+    // Blackhole path; on Wormhole the fixed 16-MVMUL replay is tile-size independent so the derived
+    // dims are passed through for signature parity.
+    const std::uint32_t in0_id = get_operand_id(operandA);
+    const std::uint32_t in1_id = get_operand_id(operandB);
+
+    const std::uint32_t in0_tile_r_dim = get_operand_tile_r_dim(in0_id);
+    const std::uint32_t in0_tile_c_dim = get_operand_tile_c_dim(in0_id);
+    const std::uint32_t in1_tile_r_dim = get_operand_tile_r_dim(in1_id);
+    const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
+
+    const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
+
+    _llk_math_matmul_no_mop_<math_fidelity, THROTTLE_LEVEL>(
+        dst_index, ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 }
 
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
@@ -45,6 +66,7 @@ inline void llk_math_matmul_reinit_no_mop(
     const bool transpose = false,
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1) {
+    SAN_HOOK(unsupported());
     const std::uint32_t in0_id = get_operand_id(operandA);
     const std::uint32_t in1_id = get_operand_id(operandB);
 

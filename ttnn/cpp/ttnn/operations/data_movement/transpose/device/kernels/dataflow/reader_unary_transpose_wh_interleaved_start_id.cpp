@@ -5,29 +5,25 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
-    uint32_t start_ht = get_arg_val<uint32_t>(3);
-    uint32_t start_wt = get_arg_val<uint32_t>(4);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t start_ht = get_arg(args::start_ht);
+    uint32_t start_wt = get_arg(args::start_wt);
 
-    uint32_t Ht = get_arg_val<uint32_t>(5);
-    uint32_t Wt = get_arg_val<uint32_t>(6);
-    uint32_t HtWt = get_arg_val<uint32_t>(7);
-
-    constexpr auto src_args = TensorAccessorArgs<0>();
-
-    constexpr uint32_t cb_id_in0 = 0;
+    uint32_t Ht = get_arg(args::Ht);
+    uint32_t Wt = get_arg(args::Wt);
+    uint32_t HtWt = get_arg(args::HtWt);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    CircularBuffer cb(cb_id_in0);
-    const uint32_t tile_bytes = cb.get_tile_size();
-    const auto s = TensorAccessor(src_args, src_addr);
+    DataflowBuffer dfb(dfb::in0);
+    const uint32_t tile_bytes = dfb.get_entry_size();
+    const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
 
@@ -37,11 +33,11 @@ void kernel_main() {
 
     // this reader will read a NHW tensor in NWH order
     for (uint32_t i = 0; i < num_tiles; i++) {
-        cb.reserve_back(onetile);
-        noc.async_read(s, cb, tile_bytes, {.page_id = i_tile}, {.offset_bytes = 0});
+        dfb.reserve_back(onetile);
+        noc.async_read(s, dfb, tile_bytes, {.page_id = i_tile}, {.offset_bytes = 0});
         noc.async_read_barrier();
 
-        cb.push_back(onetile);
+        dfb.push_back(onetile);
         i_tile += Wt;  // stride in H
         ht += 1;
         if (ht == Ht) {

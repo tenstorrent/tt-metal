@@ -4,6 +4,12 @@
 
 #pragma once
 
+// Host-only header. Device (kernel/firmware) code must use api/tile_constants.h from tt_metal/hw/inc instead:
+// the two sides are compiled by different compilers and must not share this file.
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#error "tt-metalium/constants.hpp is host-only; include \"api/tile_constants.h\" in device code"
+#endif
+
 #include <cstdint>
 
 namespace tt::constants {
@@ -16,8 +22,5 @@ constexpr uint32_t TILE_HW = TILE_WIDTH * TILE_HEIGHT;
 constexpr uint32_t FACE_HEIGHT = 16;
 constexpr uint32_t FACE_WIDTH = 16;
 constexpr uint32_t FACE_HW = FACE_WIDTH * FACE_HEIGHT;
-constexpr uint32_t BFLOAT8_B_TILE_HW = TILE_HW + 64;  // Value is in bytes - 1B per BFP8 datum + 4x16B exponent section
-constexpr uint32_t BFLOAT4_B_TILE_HW =
-    (TILE_HW / 2) + 64;  // Value is in bytes - 0.5B per BFP4 datum + 4x16B exponent section
 
 }  // namespace tt::constants

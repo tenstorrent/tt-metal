@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/soc_descriptor.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/soc_descriptor.hpp>
 #include <memory>
 #include <vector>
 
@@ -53,6 +53,10 @@ public:
 
     // Clears the log file of a currently-running print server.
     void clear_log_file();
+
+    // Prepares a long-lived print server to serve a fresh run (i.e. the next test in a suite that
+    // shares one set of open devices).
+    void reset_for_new_run();
 
     bool reads_dispatch_cores(ChipId device_id);
 

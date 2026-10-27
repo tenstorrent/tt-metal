@@ -36,7 +36,7 @@ import ttnn  # noqa: E402
 import ttml  # noqa: E402
 
 # Available device memory calculation
-from ttml.common.utils import get_available_device_memory_in_bytes
+from ttml.common.performance import get_available_device_memory_in_bytes
 
 # Memory tracking utilities
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker

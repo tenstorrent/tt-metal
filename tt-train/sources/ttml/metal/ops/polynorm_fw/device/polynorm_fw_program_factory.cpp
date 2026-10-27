@@ -48,55 +48,6 @@ struct PolyNorm3ForwardKernels {
     tt::tt_metal::KernelHandle compute_group_2{};
 };
 
-// Assign reader/writer runtime arguments for every active core.
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const PolyNorm3ForwardKernels& kernels,
-    const tt::tt_metal::Buffer* input_buffer,
-    const tt::tt_metal::Buffer* weight_buffer,
-    const tt::tt_metal::Buffer* bias_buffer,
-    const tt::tt_metal::Buffer* output_buffer,
-    uint32_t scaler_fp32_bits,
-    uint32_t eps_fp32_bits,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; ++i) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        uint32_t num_rows_per_core = 0U;
-        if (core_group_1.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_2;
-        } else {
-            TT_FATAL(false, "Core not in specified core ranges");
-        }
-
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {
-                input_buffer->address(),
-                weight_buffer->address(),
-                bias_buffer->address(),
-                num_rows_per_core,
-                num_rows_written,
-                scaler_fp32_bits,
-            });
-
-        SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows_per_core, num_rows_written});
-
-        auto compute_kernel = core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2;
-        SetRuntimeArgs(program, compute_kernel, core, {eps_fp32_bits});
-        num_rows_written += num_rows_per_core;
-    }
-}
-
 }  // namespace
 
 namespace ttml::metal::ops::polynorm3_fw::device {
@@ -200,21 +151,29 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
     const uint32_t scaler_fp32_bits = std::bit_cast<uint32_t>(1.0F / static_cast<float>(input.logical_shape()[-1]));
     const uint32_t eps_fp32_bits = std::bit_cast<uint32_t>(args.epsilon);
 
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        input_buffer,
-        weight_buffer,
-        bias_buffer,
-        output_buffer,
-        scaler_fp32_bits,
-        eps_fp32_bits,
+    for_each_core_with_work(
         num_cores,
         num_cores_y,
+        core_group_1,
+        core_group_2,
         num_rows_per_core_group_1,
         num_rows_per_core_group_2,
-        core_group_1,
-        core_group_2);
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+            SetRuntimeArgs(
+                program,
+                kernels.reader,
+                core,
+                {input_buffer->address(),
+                 weight_buffer->address(),
+                 bias_buffer->address(),
+                 num_rows,
+                 start_row,
+                 scaler_fp32_bits});
+            SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows, start_row});
+            SetRuntimeArgs(
+                program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {eps_fp32_bits});
+        });
 
     return cached_program_t{
         std::move(program),
@@ -251,9 +210,7 @@ void PolyNorm3ForwardProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, shared.reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, shared.writer_kernel_id);
 
-    for (uint32_t i = 0; i < shared.num_cores; ++i) {
-        tt::tt_metal::CoreCoord core = {i / shared.num_cores_y, i % shared.num_cores_y};
-
+    for_each_core(shared.num_cores, shared.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         auto& rr = reader_runtime_args[core.x][core.y];
         rr[0] = input_buffer->address();
         rr[1] = weight_buffer->address();
@@ -267,7 +224,7 @@ void PolyNorm3ForwardProgramFactory::override_runtime_arguments(
             shared.core_group_1.contains(core) ? shared.compute_kernel_group_1_id : shared.compute_kernel_group_2_id;
         auto& cr = GetRuntimeArgs(program, compute_kernel);
         cr[core.x][core.y][0] = eps_fp32_bits;
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::polynorm3_fw::device

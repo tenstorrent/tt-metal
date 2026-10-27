@@ -18,12 +18,14 @@
 #include <tt-metalium/mxfp8.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include "llk_device_fixture.hpp"
+#include "single_node_dfb_program.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
 #include "tt_metal/test_utils/mx_utils.hpp"
@@ -51,153 +53,14 @@ static vector<uint32_t> run_mxfp8_typecast(
     const vector<uint32_t>& src_vec,
     uint32_t num_tiles,
     bool fp32_dest_acc_en) {
-    IDevice* dev = mesh_device.get_devices()[0];
-    const experimental::NodeCoord node{0, 0};
-
-    uint32_t input_tile_size = tt::tile_size(input_fmt);
-    uint32_t output_tile_size = tt::tile_size(output_fmt);
-
-    InterleavedBufferConfig src_config{
-        .device = dev,
-        .size = num_tiles * input_tile_size,
-        .page_size = input_tile_size,
-        .buffer_type = BufferType::DRAM};
-    auto src_buffer = CreateBuffer(src_config);
-
-    InterleavedBufferConfig dst_config{
-        .device = dev,
-        .size = num_tiles * output_tile_size,
-        .page_size = output_tile_size,
-        .buffer_type = BufferType::DRAM};
-    auto dst_buffer = CreateBuffer(dst_config);
-
-    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
-    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
-
-    experimental::DataflowBufferSpec input_dfb_spec{
-        .unique_id = INPUT_DFB,
-        .entry_size = input_tile_size,
-        .num_entries = 2,
-        .data_format_metadata = input_fmt,
-    };
-    experimental::DataflowBufferSpec output_dfb_spec{
-        .unique_id = OUTPUT_DFB,
-        .entry_size = output_tile_size,
-        .num_entries = 2,
-        .data_format_metadata = output_fmt,
-    };
-
-    experimental::KernelSpec reader_spec{
-        .unique_id = READER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
-        .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = INPUT_DFB,
-            .accessor_name = "out",
-            .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
-    };
-
-    experimental::KernelSpec writer_spec{
-        .unique_id = WRITER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
-        .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = OUTPUT_DFB,
-            .accessor_name = "in",
-            .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
-    };
-
-    experimental::KernelSpec compute_spec{
-        .unique_id = COMPUTE,
-        .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp",
-        .num_threads = 1,
-        .dfb_bindings =
-            {{
-                 .dfb_spec_name = INPUT_DFB,
-                 .accessor_name = "in",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = OUTPUT_DFB,
-                 .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             }},
-        .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-            },
-    };
-
-    experimental::WorkUnitSpec wu{
-        .name = "main",
-        .kernels = {READER, WRITER, COMPUTE},
-        .target_nodes = node,
-    };
-
-    experimental::ProgramSpec spec{
-        .name = "mxfp8_typecast",
-        .kernels = {reader_spec, writer_spec, compute_spec},
-        .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
-        .work_units = {wu},
-    };
-
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
-
-    detail::WriteToBuffer(src_buffer, src_vec);
-    // Pass aligned DRAM page stride so the reader/writer advance the DRAM
-    // pointer by the allocator's aligned_page_size while the DFB streams the
-    // native tile size (e.g. 1056 bytes for MxFp8 on Quasar; the allocator
-    // rounds up to 1088 due to 64B DRAM alignment).
-    uint32_t src_dram_stride = static_cast<uint32_t>(src_buffer->aligned_page_size());
-    uint32_t dst_dram_stride = static_cast<uint32_t>(dst_buffer->aligned_page_size());
-
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_buffer->address()},
-                   {"src_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", src_dram_stride}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", dst_buffer->address()},
-                   {"dst_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", dst_dram_stride}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
-    };
-    experimental::SetProgramRunArgs(program, params);
-
-    detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
-
-    vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_buffer, result_vec);
-    return result_vec;
+    return single_node_dfb::run(
+        mesh_device,
+        {.name = "mxfp8_typecast",
+         .inputs = {{.data = src_vec, .format = input_fmt, .num_tiles = num_tiles, .accessor = "in", .num_entries = 2}},
+         .output = {.format = output_fmt, .num_tiles = num_tiles, .accessor = "out", .num_entries = 2},
+         .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp",
+         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
+         .hw_config = experimental::ComputeHardwareConfig{.enable_32_bit_dest = fp32_dest_acc_en}});
 }
 
 // Data generators follow the fp8_typecast tests' convention: generate
@@ -225,7 +88,7 @@ static vector<uint32_t> create_random_vector_of_mxfp8(
         v = dist(rng) + offset;
     }
 
-    auto span = tt::stl::make_const_span(fp32_vec);
+    auto span = ttsl::make_const_span(fp32_vec);
     vector<uint32_t> packed = pack_as_mx_tiles(fmt, span, /*row_major_input=*/true);
     TT_FATAL(
         packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
@@ -298,7 +161,7 @@ struct TileLayout {
 static TileLayout get_e5m2_tile_layout() {
     constexpr uint32_t kTileHW = 1024;
     std::vector<float> zeros(kTileHW, 0.0f);
-    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8R, tt::stl::make_const_span(zeros), /*row_major_input=*/true);
+    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8R, ttsl::make_const_span(zeros), /*row_major_input=*/true);
     const size_t elem_words = kTileHW / 4;
     const size_t exp_words = packed.size() - elem_words;
     return TileLayout{.total_words = packed.size(), .exp_bytes = exp_words * 4};
@@ -307,7 +170,7 @@ static TileLayout get_e5m2_tile_layout() {
 static TileLayout get_e4m3_tile_layout() {
     constexpr uint32_t kTileHW = 1024;
     std::vector<float> zeros(kTileHW, 0.0f);
-    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8P, tt::stl::make_const_span(zeros), /*row_major_input=*/true);
+    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8P, ttsl::make_const_span(zeros), /*row_major_input=*/true);
     const size_t elem_words = kTileHW / 4;
     const size_t exp_words = packed.size() - elem_words;
     return TileLayout{.total_words = packed.size(), .exp_bytes = exp_words * 4};
@@ -454,10 +317,9 @@ namespace mxfp8_tc = unit_tests::llk::mxfp8_typecast;
 // Expected: no precision loss → rtol=0.0, atol=0.0.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16b) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16b) {
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8R,
         tt::DataFormat::Float16_b,
         /*rtol=*/0.0f,
@@ -466,10 +328,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16b) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16bFp32Dest) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16bFp32Dest) {
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8R,
         tt::DataFormat::Float16_b,
         /*rtol=*/0.0f,
@@ -485,10 +346,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16bFp32Dest) {
 // Expected: no precision loss → rtol=0.0, atol=0.0.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16b) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16b) {
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8P,
         tt::DataFormat::Float16_b,
         /*rtol=*/0.0f,
@@ -497,10 +357,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16b) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16bFp32Dest) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16bFp32Dest) {
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8P,
         tt::DataFormat::Float16_b,
         /*rtol=*/0.0f,
@@ -515,10 +374,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16bFp32Dest) {
 // has 2 mantissa bits. Tolerances are loose to account for block-scaling behavior.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8R) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8R) {
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::MxFp8R,
         /*rtol=*/0.25f,
@@ -527,10 +385,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8R) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RFp32Dest) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RFp32Dest) {
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::MxFp8R,
         /*rtol=*/0.25f,
@@ -545,10 +402,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RFp32Dest) {
 // has 3 mantissa bits. Tolerances are tighter than E5M2.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8P) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8P) {
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::MxFp8P,
         /*rtol=*/0.125f,
@@ -557,10 +413,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8P) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PFp32Dest) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PFp32Dest) {
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::MxFp8P,
         /*rtol=*/0.125f,
@@ -574,10 +429,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PFp32Dest) {
 // Same format on both sides. The round-trip should be lossless.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8R) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8R) {
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8R,
         tt::DataFormat::MxFp8R,
         /*rtol=*/0.0f,
@@ -586,10 +440,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8R) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8RFp32Dest) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8RFp32Dest) {
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8R,
         tt::DataFormat::MxFp8R,
         /*rtol=*/0.0f,
@@ -603,10 +456,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8RFp32Dest) {
 // Same format on both sides. The round-trip should be lossless.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8P) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8P) {
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8P,
         tt::DataFormat::MxFp8P,
         /*rtol=*/0.0f,
@@ -615,10 +467,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8P) {
         /*fp32_dest_acc_en=*/false);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8PFp32Dest) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8PFp32Dest) {
     mxfp8_tc::run_random_typecast_test(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8P,
         tt::DataFormat::MxFp8P,
         /*rtol=*/0.0f,
@@ -635,8 +486,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8PFp32Dest) {
 // for NaN/Inf comparisons.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToBf16SpecialCases) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8RToBf16SpecialCases) {
     auto layout = mxfp8_tc::get_e5m2_tile_layout();
 
     // Block 0: scale = 0xFF → all 32 elements should be NaN (rule 1).
@@ -651,7 +501,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToBf16SpecialCases) {
         {{32, 0x7C}, {33, 0xFC}, {34, 0x7D}, {35, 0x7E}, {36, 0x7F}, {64, 0x7B}, {65, 0xFB}, {96, 0x3C}});
 
     auto result = mxfp8_tc::run_mxfp8_typecast(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8R,
         tt::DataFormat::Float16_b,
         packed,
@@ -673,8 +523,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToBf16SpecialCases) {
     EXPECT_EQ(mxfp8_tc::bf16_raw_at(result, 96), 0x3F80u);  // BF16 +1.0
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToBf16SpecialCases) {
-    auto& mesh_device = *devices_[0];
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp8PToBf16SpecialCases) {
     auto layout = mxfp8_tc::get_e4m3_tile_layout();
 
     // Block 0: scale = 0xFF → all 32 elements should be NaN (rule 1).
@@ -690,7 +539,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToBf16SpecialCases) {
         {{32, 0x7F}, {33, 0x78}, {34, 0x7B}, {35, 0x7E}, {64, 0x7E}, {65, 0xFE}, {96, 0x38}});
 
     auto result = mxfp8_tc::run_mxfp8_typecast(
-        mesh_device,
+        this->device(),
         tt::DataFormat::MxFp8P,
         tt::DataFormat::Float16_b,
         packed,
@@ -745,9 +594,7 @@ static vector<uint32_t> build_bf16_tile_with_block_values(std::initializer_list<
 
 }  // namespace unit_tests::llk::mxfp8_typecast
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RSpecialCases) {
-    auto& mesh_device = *devices_[0];
-
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RSpecialCases) {
     // Block layout (32 BF16 elements per block):
     //   0: all +NaN  → block must read as NaN (NaN propagation).
     //   1: all +Inf  → +Inf, NaN, or +max-normal (saturation when ovf_en=0).
@@ -761,7 +608,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RSpecialCases) {
     auto src = mxfp8_tc::build_bf16_tile_with_block_values({kBf16PosNaN, kBf16PosInf, kBf16NegInf, kBf16PosOne});
 
     auto result = mxfp8_tc::run_mxfp8_typecast(
-        mesh_device,
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::MxFp8R,
         src,
@@ -806,9 +653,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RSpecialCases) {
     }
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PSpecialCases) {
-    auto& mesh_device = *devices_[0];
-
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PSpecialCases) {
     // Block layout, mirroring the E5M2 test. E4M3 has no Inf encoding, so the
     // ±Inf blocks must produce either NaN or saturate to ±max-normal.
     //   0: all +NaN  → block must read as NaN.
@@ -823,7 +668,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PSpecialCases) {
     auto src = mxfp8_tc::build_bf16_tile_with_block_values({kBf16PosNaN, kBf16PosInf, kBf16NegInf, kBf16PosOne});
 
     auto result = mxfp8_tc::run_mxfp8_typecast(
-        mesh_device,
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::MxFp8P,
         src,

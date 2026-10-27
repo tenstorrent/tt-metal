@@ -29,7 +29,18 @@ inline void llk_math_matmul_init(
     const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
 
     // In0/operandA -> srcB, In1/operandB -> srcA
-    llk::san::math_operand_check(unpack_dst_format[in1_id], unpack_dst_format[in0_id]);
+    SAN_HOOK(init<OperationFpuMatmul>(
+        StateVal<OperationFpuMatmul::MathFidelity>(to_underlying(math_fidelity)),
+        StateVal<OperationFpuMatmul::ThrottleLevel>(THROTTLE_LEVEL),
+        StateVal<OperationFpuMatmul::CtDim>(ct_dim),
+        StateVal<OperationFpuMatmul::RtDim>(rt_dim),
+        StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[in1_id]),
+        StateDiscard<std::uint32_t>(transpose),
+        StateDiscard<std::uint32_t>(in0_tile_r_dim),
+        StateDiscard<std::uint32_t>(in0_tile_c_dim),
+        StateDiscard<std::uint32_t>(in1_tile_r_dim),
+        StateDiscard<std::uint32_t>(in1_tile_c_dim),
+        StateDiscard<bool>(partial_face)));
 
     _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
@@ -40,7 +51,7 @@ inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1
     static_assert(num_faces == 4, "num_faces other than 4 is not supported in llk_math_matmul");
     LLK_ASSERT(
         (ckernel::math::get_dest_max_matmul_tiles(dst_index, ct_dim, rt_dim) <
-         get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+         get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "llk_math_matmul: computed matmul dest tile range exceeds available dest register "
         "capacity. Uncomment the DPRINT block below and enable DPRINT support to inspect "
         "the calculated and max dest tile values.");
@@ -48,10 +59,17 @@ inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1
     // DPRINT("llk_math_matmul: calculated dest tiles = {}, max dest tiles = {} (dst_index={}, ct_dim={},
     // rt_dim={})\n",
     //     ckernel::math::get_dest_max_matmul_tiles(dst_index, ct_dim, rt_dim),
-    //     get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
+    //     get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>(),
     //     dst_index,
     //     ct_dim,
     //     rt_dim);
+
+    SAN_HOOK(execute<OperationFpuMatmul>(
+        StateVal<OperationFpuMatmul::MathFidelity>(to_underlying(math_fidelity)),
+        StateVal<OperationFpuMatmul::ThrottleLevel>(THROTTLE_LEVEL),
+        StateVal<OperationFpuMatmul::CtDim>(ct_dim),
+        StateVal<OperationFpuMatmul::RtDim>(rt_dim),
+        StateDiscard<uint>(dst_index)));
 
     _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL>(dst_index, ct_dim, rt_dim);
 }

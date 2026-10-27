@@ -13,6 +13,8 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 
@@ -26,16 +28,8 @@ using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using MeshCoordinateRange = tt::tt_metal::distributed::MeshCoordinateRange;
 using MeshCoordinateRangeSet = tt::tt_metal::distributed::MeshCoordinateRangeSet;
 
-// ─────────────────────────────────────────────────────────────────────
-// compute_output_placements_and_shape
-// ─────────────────────────────────────────────────────────────────────
-//
-// Factored from the former template get_output_placements_and_shape<device_operation_t>.
-// The only reason it was templated was to call visit_object_of_type<Tensor> on tensor_args.
-// Callers now extract tensors first and pass them as a vector.
-
-static bool is_fully_replicated(const tt::tt_metal::Tensor& tensor) {
-    for (const auto& placement : tensor.tensor_topology().placements()) {
+static bool is_fully_replicated(const tt::tt_metal::TensorTopology& topology) {
+    for (const auto& placement : topology.placements()) {
         if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement)) {
             return false;
         }
@@ -43,36 +37,53 @@ static bool is_fully_replicated(const tt::tt_metal::Tensor& tensor) {
     return true;
 }
 
+// Factored from the former template get_output_placements_and_shape<device_operation_t>. The only
+// reason it was templated was to call visit_object_of_type<Tensor> on tensor_args; callers now
+// extract the tensors first and pass them as a vector.
+std::pair<
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+    tt::tt_metal::distributed::MeshShape>
+compute_output_placements_and_shape(const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors) {
+    TT_FATAL(!tensors.empty(), "Cannot compute output placements and shape with no tensors");
+
+    std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>> topologies;
+    topologies.reserve(tensors.size());
+    for (const auto& tensor_ref : tensors) {
+        topologies.emplace_back(tensor_ref.get().tensor_topology());
+    }
+    return compute_output_placements_and_shape(topologies);
+}
+
 std::pair<
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
 compute_output_placements_and_shape(
-    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors) {
-    using Tensor = tt::tt_metal::Tensor;
+    const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& topologies) {
+    using TensorTopology = tt::tt_metal::TensorTopology;
     using Placement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
     using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
     using Replicate = tt::tt_metal::distributed::MeshMapperConfig::Replicate;
 
-    TT_FATAL(!tensors.empty(), "Cannot compute output placements and shape with no tensors");
+    TT_FATAL(!topologies.empty(), "Cannot compute output placements and shape with no tensor topologies");
 
-    std::vector<std::reference_wrapper<const Tensor>> sharded_tensors;
-    for (const auto& tensor_ref : tensors) {
-        if (!is_fully_replicated(tensor_ref.get())) {
-            sharded_tensors.push_back(tensor_ref);
+    std::vector<std::reference_wrapper<const TensorTopology>> sharded_topologies;
+    sharded_topologies.reserve(topologies.size());
+    for (const auto& topology_ref : topologies) {
+        if (!is_fully_replicated(topology_ref.get())) {
+            sharded_topologies.push_back(topology_ref);
         }
     }
 
     // Compute max distribution rank: use only sharded tensors if they exist, otherwise use all tensors (fully
     // replicated)
     size_t max_distribution_rank = 0;
-    if (!sharded_tensors.empty()) {
-        for (const auto& tensor_ref : sharded_tensors) {
-            max_distribution_rank =
-                std::max(max_distribution_rank, tensor_ref.get().tensor_topology().distribution_shape().dims());
+    if (!sharded_topologies.empty()) {
+        for (const auto& topology_ref : sharded_topologies) {
+            max_distribution_rank = std::max(max_distribution_rank, topology_ref.get().distribution_shape().dims());
         }
     } else {
-        const auto &first_tensor = tensors.front().get();
-        max_distribution_rank = first_tensor.tensor_topology().distribution_shape().dims();
+        const auto& first_topology = topologies.front().get();
+        max_distribution_rank = first_topology.distribution_shape().dims();
     }
 
     auto result_strides = ttsl::SmallVector<uint32_t>(max_distribution_rank, 1);
@@ -82,17 +93,17 @@ compute_output_placements_and_shape(
 
     // TODO: #25340 - Add back logging / validation. Currently, this results in a lot of log spam.
     constexpr bool kEnableLogging = false;
-    for (const auto& tensor_ref : tensors) {
-        const Tensor& tensor = tensor_ref.get();
+    for (const auto& topology_ref : topologies) {
+        const TensorTopology& topology = topology_ref.get();
         // Augment output tensor distribution shape with the max strides of all input tensors with the max
         // distribution rank
-        const auto& tensor_distribution_shape = tensor.tensor_topology().distribution_shape();
+        const auto& tensor_distribution_shape = topology.distribution_shape();
         if (tensor_distribution_shape.dims() == max_distribution_rank) {
             for (size_t i = 0; i < std::min(result_strides.size(), tensor_distribution_shape.dims()); i++) {
                 result_strides[i] = std::max(result_strides[i], tensor_distribution_shape[i]);
             }
 
-            const auto& tensor_placements = tensor.tensor_topology().placements();
+            const auto& tensor_placements = topology.placements();
             for (size_t i = 0; i < tensor_placements.size(); i++) {
                 Placement output_placement = result_placements[i];
                 if (std::holds_alternative<Shard>(tensor_placements[i])) {
@@ -132,7 +143,7 @@ compute_output_placements_and_shape(
                 }
                 result_placements[i] = output_placement;
             }
-        } else if (!is_fully_replicated(tensor)) {
+        } else if (!is_fully_replicated(topology)) {
             dim_mismatch = true;
         }
     }
@@ -142,12 +153,8 @@ compute_output_placements_and_shape(
             "Input tensors have different distribution ranks, only imputing output tensor topology with tensors that "
             "have the max distribution rank");
     }
-    return {result_placements, tt::tt_metal::distributed::MeshShape(result_strides)};
+    return {std::move(result_placements), tt::tt_metal::distributed::MeshShape(std::move(result_strides))};
 }
-
-// ─────────────────────────────────────────────────────────────────────
-// extract_tensor_coordinates_impl
-// ─────────────────────────────────────────────────────────────────────
 
 // Checks if the MeshCoordinateRangeSet containing all coordinates in b is a subset of a.
 static bool is_subset_of(const std::vector<MeshCoordinate>& a, const std::vector<MeshCoordinate>& b) {
@@ -178,9 +185,9 @@ static bool is_subset_of(const std::vector<MeshCoordinate>& a, const std::vector
 }
 
 std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
-    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors,
+    const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors,
     tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    using Tensor = tt::tt_metal::Tensor;
+    using Tensor = ttnn::Tensor;
 
     // If no tensor is found, return zero coordinate
     if (tensors.empty()) {
@@ -192,6 +199,7 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
 
     const Tensor& first_tensor = tensors.front().get();
     std::vector<ttnn::MeshCoordinate> tensor_coordinates;
+    tensor_coordinates.reserve(first_tensor.device_storage().get_coords().size());
     std::transform(
         first_tensor.device_storage().get_coords().begin(),
         first_tensor.device_storage().get_coords().end(),
@@ -204,6 +212,7 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
         const Tensor& tensor = tensor_ref.get();
         if (tensor.device_storage().get_coords().size() != tensor_coordinates.size()) {
             std::vector<ttnn::MeshCoordinate> tensor_mesh_coords;
+            tensor_mesh_coords.reserve(tensor.device_storage().get_coords().size());
             std::transform(
                 tensor.device_storage().get_coords().begin(),
                 tensor.device_storage().get_coords().end(),
@@ -222,6 +231,27 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
         }
     }
     return tensor_coordinates;
+}
+
+void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_view operation_name, size_t input_index) {
+    // Ask device_local_config().sharding_args, not the MeshBuffer overload of
+    // is_per_core_allocation. That overload resolves MeshBuffer::get_reference_buffer(), which
+    // TT_THROWs "no local buffer found" when no shard is local -- and this runs before launch()'s
+    // inactive-MeshDevice short-circuit, which exists precisely because most MeshDevice calls fail
+    // there. A guard whose contract is to be inert must not be able to throw.
+    // This is also the expression behind Tensor.is_per_core_allocated(), so the guard and the
+    // accessor callers branch on cannot disagree about what per-core means.
+    TT_FATAL(
+        !tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(
+            tensor.mesh_buffer().device_local_config().sharding_args),
+        "{}: tensor {} is per-core allocated, but this operation has not opted in to per-core "
+        "allocation. Ops address a buffer by a single L1 address, so a per-core buffer would be read as "
+        "though every core shared the first core's allocation (#51354). If the operation resolves "
+        "per-core addresses, declare `static constexpr bool supports_per_core_allocation = true` on it; "
+        "otherwise build the tensor with a lockstep memory config. Memory config: {}",
+        operation_name,
+        input_index,
+        tensor.memory_config());
 }
 
 }  // namespace ttnn::device_operation::detail

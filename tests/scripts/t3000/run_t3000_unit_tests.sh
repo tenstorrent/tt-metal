@@ -72,6 +72,7 @@ run_t3000_ttfabric_tests() {
   TT_METAL_FABRIC_BW_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2*Fixture.*"
 
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
 
@@ -115,6 +116,10 @@ run_t3000_ttnn_tests() {
   pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
   pytest tests/ttnn/distributed/test_data_parallel_example.py ; fail+=$?
   pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; fail+=$?
+  pytest tests/ttnn/distributed/test_matmul_send_recv_pipeline.py ; fail+=$?
+  # Multi-device graph-report coverage: the 2x4 cases skip on smaller machines, so this leg is
+  # the only one that exercises program-execution fan-out and submesh device-id normalization.
+  pytest tests/ttnn/unit_tests/base_functionality/test_graph_report.py ; fail+=$?
   # Regression test for async cpu() use-after-free (issue #43638)
   pytest tests/ttnn/unit_tests/base_functionality/test_device_synchronize.py::test_cpu_blocking_false_discarded_return_no_uaf -xv --count=3 ; fail+=$?
   # Record the end time
@@ -171,7 +176,7 @@ run_t3000_ttnn_multiprocess_tests() {
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/unit_tests_ttnn --gtest_filter="*LaunchOperation*"
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_data_parallel_example.py
-  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_2x4
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_new_all_broadcast.py::test_all_broadcast_sharded_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace_submesh
@@ -184,49 +189,8 @@ run_t3000_ttnn_multiprocess_slow_tests() {
   local mesh2x4_rank_binding="tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml"
 
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py
-}
-
-run_t3000_grok_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_grok_tests"
-
-  pytest models/experimental/grok/tests/test_grok_rms_norm.py ; fail+=$?
-  pytest models/experimental/grok/tests/test_grok_attention.py ; fail+=$?
-  pytest models/experimental/grok/tests/test_grok_mlp.py --timeout=500; fail+=$?
-  pytest models/experimental/grok/tests/test_grok_moe.py --timeout=600; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_grok_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-run_t3000_qwen3_vl_unit_tests() {
-  # install qwen3_vl requirements
-  uv pip install -r models/demos/qwen3_vl/requirements.txt
-
-  # export PYTEST_ADDOPTS for concise pytest output
-  export PYTEST_ADDOPTS="--tb=short"
-
-  qwen3_vl_32b=Qwen/Qwen3-VL-32B-Instruct
-  tt_cache_32b=$TT_CACHE_HOME/$qwen3_vl_32b
-
-  # run unit tests
-  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen3_vl/tests/conftest.py
-}
-
-run_t3000_deepseek_tests() {
-  uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-
-  export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
-  export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
-  MESH_DEVICE=T3K pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_multihost_graph_report
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4_to_string
 }
 
 run_t3000_ccl_tests() {
@@ -238,13 +202,13 @@ run_t3000_ccl_tests() {
 
   # all gather: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # width sharded to interleaved case using linear - using i2s_shape0 which is perf with fabric_linear
-  pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-1-Layout.TILE-DataType.BFLOAT16-mesh_device0]
-  # 10 iteration trace test with fabric ring (dit_shape now in test_ttnn_all_gather, no barrier parameters)
-  pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-1link-mesh_device0]
+  pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-Layout.TILE-DataType.BFLOAT16-mesh_device0]
+  # 10 iteration trace test with fabric ring (dit_shape now in test_all_gather, no barrier parameters)
+  pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-mesh_device0]
   # 2D fabric case – hanging on main? tracking with issue #30250
-  # pytest tests/nightly/t3000/2d_ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_2d_dynamic_linear-check-mem_config_input0-mem_config_ag0-tt_training_test_one-mesh_device0-1link]
+  # pytest tests/nightly/t3000/2d_ccl/test_all_gather.py::test_all_gather_training_shapes[wormhole_b0-fabric_2d_linear-perf-mem_config_input0-mem_config_ag0-tt_training_test_one-mesh_device0]
   # training shapes - Re-enable this test when we have more T3K availability
-  # pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_linear-mem_config_input0-mem_config_ag0-tt_training_test_four-check-mesh_device0-1link]
+  # pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_training_shapes[wormhole_b0-fabric_linear-mem_config_input0-mem_config_ag0-tt_training_test_four-check-mesh_device0]
 
   # reduce scatter: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # sharded intermediate case with cluster axis 1
@@ -284,181 +248,16 @@ run_t3000_ccl_tests() {
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "zeros_width_dim-check"
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "small_5d_h0w1"
 
+  # all_gather_matmul fp32 accumulation precision on the classic mcast program paths (2D and 1D), and the
+  # sharded 1D decode config models run. One pytest invocation so a failure in one doesn't stop the others.
+  pytest tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_fp32_reload_precision \
+    tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_1d_fp32_reload_precision \
+    tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_async_1d_sharded_decode
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_ccl_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-run_t3000_tt_dit_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_tt_dit_tests"
-
-  #Timestep Encoding (Currently used in Wan2.2)
-  pytest models/tt_dit/tests/unit/test_embeddings.py::test_timestep_encoding ; fail+=$?
-
-  #Wan2.2 Time Text Image Embedding
-  pytest models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding  -k "t3k" ; fail+=$?
-
-  #T5 Encoder
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder -k "t3k" ; fail+=$?
-
-  #UMT5 Encoder
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "t3k" ; fail+=$?
-
-  #Clip Encoder
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/clip/test_clip_full_projection.py -k 1x4-t3k ; fail+=$?
-
-  #Image DiTs VAE with one iteration pcc and perf test
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/sd35/test_vae_sd35.py::test_sd35_vae_vae_decoder -k "t3k" ; fail+=$?
-
-  #Flux1 Single Transformer Block and other Image DiTs Transformer blocks
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_transformer -k 2x4sp0tp1 ; fail+=$?
-
-  #DITs Wan2.2 VAE
-  pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py::test_wan_decoder[wormhole_b0-device_params0-2x4_h1_w0-bf16-chunk_1-check_output-fake_weights-0-1-_1f-480p] ; fail+=$?
-
-  #DITs Wan2.2 Transformer
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model[wormhole_b0-short_seq-2x4sp0tp1-True] ; fail+=$?
-
-  #Mochi Transformer
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model[wormhole_b0-device_params0-no_load_cache-no_test_attention_mask-short_seq-2x4sp0tp1-True] ; fail+=$?
-
-  #Mochi VAE main component
-  FAKE_DEVICE=T3K pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "resblock_forward and 1x8 and l768 and bf16" ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_tt_dit_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-
-}
-
-run_t3000_mistral-small-3.1-24b-vision_unit_tests() {
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_mistral-small-3.1-24b-vision_unit_tests"
-
-  mistral24b=mistralai/Mistral-Small-3.1-24B-Instruct-2503
-  tt_cache_mistral24b=$TT_CACHE_HOME/$mistral24b
-
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_conv2d.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_rms.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_mlp.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_attention.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_pixtral_transformer.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_patch_rot_emb.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_model.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_tower.py ; fail+=$?
-
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_mistral-small-3.1-24b-vision_unit_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-run_t3000_tttv2_fast_unit_tests() {
-  fail=0
-
-  # Run non-module models/common unit tests
-  pytest --tb=short --ignore=models/common/tests/modules models/common/tests ; fail+=$?
-
-  # [INFO] HF_MODEL Only used for test_*_1d_vs_reference_from_model_args, which will retire with TTTv1
-  # Run MLP1D fast unit tests (full set is run in t3k_e2e_tests.yaml to match timeout values and frequency of runs)
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d \
-  pytest models/common/tests/modules/mlp/test_mlp_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.mlp.mlp_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run RMSNorm1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rmsnorm_1d \
-  pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.rmsnorm.rmsnorm_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Rope1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rope_1d \
-  pytest models/common/tests/modules/rope/test_rope_1d.py \
-    -m "not slow" \
-    --durations=10 \
-    --tb=short \
-    --cov=models.common.modules.rope.rope_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run LMHead1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d \
-  pytest models/common/tests/modules/lm_head/test_lm_head_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.lm_head.lm_head_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Attention1D tests
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
-  pytest models/common/tests/modules/attention/test_attention_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.attention.attention_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Embedding1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d \
-  pytest models/common/tests/modules/embedding/test_embedding_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.embedding.embedding_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Penalties1D tests
-  pytest models/common/tests/modules/sampling/test_penalties_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.sampling.penalties_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Sampling1D tests
-  pytest models/common/tests/modules/sampling/test_sampling_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.sampling.sampling_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -473,15 +272,6 @@ run_t3000_tests() {
 
   # Run ttnn tests
   run_t3000_ttnn_tests
-
-  # Run grok tests
-  run_t3000_grok_tests
-
-  # Run tt_dit tests
-  run_t3000_tt_dit_tests
-
-  # Run tttv2 fast unit tests
-  run_t3000_tttv2_fast_unit_tests
 }
 
 fail=0

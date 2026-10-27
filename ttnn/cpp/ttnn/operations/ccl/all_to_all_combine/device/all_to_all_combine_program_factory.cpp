@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::ccl {
@@ -158,7 +159,8 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
     });
 
     // client interface
-    constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
+    // [0] data unicast; [1]/[2] bidirectional completion atomic-inc (pos/neg arcs); [1] reused for init send.
+    constexpr auto num_headers = 3;
     constexpr auto client_interface_cb_id = tt::CBIndex::c_4;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_headers * CLIENT_INTERFACE_SIZE,
@@ -194,7 +196,7 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
 
     const auto& axis = operation_attributes.axis;
 
-    const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
+    const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
@@ -348,7 +350,7 @@ tt::tt_metal::WorkloadDescriptor AllToAllCombineDeviceOperation::AllToAllCombine
     auto final_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
     tt::tt_metal::distributed::Synchronize(
-        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+        *mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
 
     WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(init_barrier_semaphore);

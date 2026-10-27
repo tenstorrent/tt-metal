@@ -15,11 +15,10 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/reg_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
 namespace norm::kernel_util::compute {
 /**
@@ -35,19 +34,21 @@ struct RSqrtPolicy {
 /**
  * @brief Combine partial mean and variance results for
  *        multiple sets into a single mean and variance
- * @param cb_partials CB containing interleaved [mean, variance] tiles for
+ * @param dfb_partials CB containing interleaved [mean, variance] tiles for
  *                    all sets to be combined. This CB will be consumed
- * @param cb_combined CB to store the combined mean and variance results(size 2)
+ * @param dfb_combined CB to store the combined mean and variance results(size 2)
  * @param num_sets Number of sets to combine
  * @param rsqrt_policy Policy to specify if 1/sqrt(Var[x] + eps) should be computed
  *                     and pushed to the combined CB instead of variance
  * @tparam NextSetSizeFn Functor that takes the set index and returns the
  *                       size of the next set
+ * @tparam PartialsDFB DataflowBuffer type of dfb_partials (deduced)
+ * @tparam CombinedDFB DataflowBuffer type of dfb_combined (deduced)
  */
-template <typename NextSetSizeFn>
+template <typename NextSetSizeFn, typename PartialsDFB, typename CombinedDFB>
 inline void combine_welford_partials(
-    CircularBuffer& cb_partials,
-    CircularBuffer& cb_combined,
+    PartialsDFB& dfb_partials,
+    CombinedDFB& dfb_combined,
     uint32_t num_sets,
     NextSetSizeFn&& next_set_size_fn,
     RSqrtPolicy rsqrt_policy = RSqrtPolicy{}) {
@@ -59,11 +60,11 @@ inline void combine_welford_partials(
     constexpr uint32_t m2_acc_dst = 3;
 
     // Work with two tiles (1 mean and 1 var) at a time
-    constexpr uint32_t mean_cb_idx = 0;
-    constexpr uint32_t var_cb_idx = 1;
+    constexpr uint32_t mean_dfb_idx = 0;
+    constexpr uint32_t var_dfb_idx = 1;
 
-    reconfig_data_format(cb_partials.get_cb_id(), cb_partials.get_cb_id());
-    pack_reconfig_data_format(cb_combined.get_cb_id());
+    reconfig_data_format(dfb_partials.get_id(), dfb_partials.get_id());
+    pack_reconfig_data_format(dfb_combined.get_id());
     tile_regs_acquire();
 
     // Make sure that the registers are zeroed out
@@ -75,7 +76,7 @@ inline void combine_welford_partials(
     uint32_t acc_n = 0;
     for (uint32_t b = 0; b < num_sets; b++) {
         // Wait for 1 mean tile and 1 var tile
-        cb_partials.wait_front(2);
+        dfb_partials.wait_front(2);
 
         const float n_a = acc_n;
         const float n_b = next_set_size_fn(b);
@@ -84,8 +85,8 @@ inline void combine_welford_partials(
         const float n_b_norm = static_cast<float>(n_b) / (n_a + n_b);
 
         // Copy x_b to dst1
-        copy_tile_to_dst_init_short(cb_partials.get_cb_id());
-        copy_tile(cb_partials.get_cb_id(), mean_cb_idx, tmp_dst1);
+        copy_init(dfb_partials.get_id());
+        copy_tile(dfb_partials.get_id(), mean_dfb_idx, tmp_dst1);
 
         // Compute delta = x_b - x_a, store in dst0
         sub_binary_tile_init();
@@ -116,8 +117,8 @@ inline void combine_welford_partials(
         add_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
 
         // Copy var_b into dst0
-        copy_tile_to_dst_init_short(cb_partials.get_cb_id());
-        copy_tile(cb_partials.get_cb_id(), var_cb_idx, tmp_dst0);
+        copy_init(dfb_partials.get_id());
+        copy_tile(dfb_partials.get_id(), var_dfb_idx, tmp_dst0);
 
         // Multiply var_b by n_b to get M2_b, store in dst0
         binop_with_scalar_tile_init();
@@ -128,7 +129,7 @@ inline void combine_welford_partials(
         add_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
 
         acc_n += n_b;
-        cb_partials.pop_front(2);
+        dfb_partials.pop_front(2);
     }
 
     // Convert final M2 to var
@@ -148,10 +149,10 @@ inline void combine_welford_partials(
 
     // Pack the results into the combined CB
     tile_regs_commit();
-    cb_combined.reserve_back(2);
+    dfb_combined.reserve_back(2);
     tile_regs_wait();
-    pack_tile(mean_acc_dst, cb_combined.get_cb_id());
-    pack_tile(m2_acc_dst, cb_combined.get_cb_id());
+    pack_tile(mean_acc_dst, dfb_combined.get_id());
+    pack_tile(m2_acc_dst, dfb_combined.get_id());
     tile_regs_release();
 }
 

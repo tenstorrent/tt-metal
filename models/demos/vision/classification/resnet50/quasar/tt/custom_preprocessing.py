@@ -7,7 +7,7 @@ import torchvision
 from ttnn.model_preprocessing import convert_torch_model_to_ttnn_model, fold_batch_norm2d_into_conv2d
 
 import ttnn
-from models.common.utility_functions import pad_and_fold_conv_filters_for_unity_stride
+from models.common.utility_functions import is_quasar, pad_and_fold_conv_filters_for_unity_stride
 
 
 def preprocess_conv_parameter(parameter, *, dtype):
@@ -41,7 +41,11 @@ def custom_preprocessor(
             )
     elif isinstance(model, torchvision.models.resnet.ResNet):
         conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
-        conv1_weight = pad_and_fold_conv_filters_for_unity_stride(conv1_weight, 2, 2)
+        # Quasar row-major fold aligns channels to 8 (bf16 16B shard-width), so fold the first-conv
+        # filters to groups*8 input channels (zero pad channels) to match the direct fold's aligned
+        # output and skip the per-group padding strip. WH/BH keep align_c=4 (groups*4).
+        fold_align_c = 8 if is_quasar() else 4
+        conv1_weight = pad_and_fold_conv_filters_for_unity_stride(conv1_weight, 2, 2, align_c=fold_align_c)
         parameters["conv1"] = {}
         parameters["conv1"]["weight"] = ttnn.from_torch(conv1_weight, mesh_mapper=mesh_mapper)
         parameters["conv1"]["bias"] = ttnn.from_torch(torch.reshape(conv1_bias, (1, 1, 1, -1)), mesh_mapper=mesh_mapper)

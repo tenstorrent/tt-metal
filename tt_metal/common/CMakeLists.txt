@@ -5,7 +5,7 @@ add_library(TT::Metalium::Common ALIAS common)
 
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(common)
-target_precompile_headers(common REUSE_FROM metal_common_pch)
+tt_reuse_precompile_headers(common metal_common_pch)
 
 target_sources(common PRIVATE ${COMMON_SOURCES})
 
@@ -24,7 +24,6 @@ target_link_libraries(
         enchantum::enchantum
         fmt::fmt-header-only
         TT::STL
-        umd::Firmware
         umd::tt-umd
         simde::simde
         Taskflow::Taskflow

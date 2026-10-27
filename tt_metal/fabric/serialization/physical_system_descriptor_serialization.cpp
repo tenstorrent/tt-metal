@@ -8,7 +8,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_metal/llrt/tt_target_device.hpp>
 
-#include <umd/device/cluster.hpp>
+#include <tt-umd/cluster.hpp>
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
@@ -96,6 +96,7 @@ AsicTopology proto_to_asic_topology(const tt::fabric::proto::HostAsicConnectivit
         for (const auto& edge : asic_graph.topology().asic_connections()) {
             AsicID dst_asic_id{edge.dst_asic_id()};
             std::vector<EthConnection> eth_connections;
+            eth_connections.reserve(edge.eth_connections().size());
 
             for (const auto& proto_eth_conn : edge.eth_connections()) {
                 eth_connections.push_back(proto_to_eth_connection(proto_eth_conn));
@@ -136,6 +137,7 @@ HostTopology proto_to_host_topology(const tt::fabric::proto::PhysicalConnectivit
         for (const auto& edge : host_conn.host_connections()) {
             std::string dst_host = edge.dst_host_name();
             std::vector<ExitNodeConnection> exit_connections;
+            exit_connections.reserve(edge.exit_node_connections().size());
 
             for (const auto& proto_exit_conn : edge.exit_node_connections()) {
                 exit_connections.push_back(proto_to_exit_node_connection(proto_exit_conn));
@@ -176,6 +178,7 @@ void physical_system_descriptor_to_proto(
         proto_asic_desc->set_unique_id(*asic_desc.unique_id);
         proto_asic_desc->set_umd_unique_id(asic_desc.umd_unique_id);
         proto_asic_desc->set_host_name(asic_desc.host_name);
+        proto_asic_desc->set_mpi_rank(asic_desc.mpi_rank);
     }
 
     // Convert host to mobo name map
@@ -266,10 +269,9 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     system_graph.host_connectivity_graph = proto_to_host_topology(proto_desc.system_graph());
 
     // Convert ASIC descriptors
-    auto& asic_descriptors = descriptor->get_asic_descriptors();
     for (const auto& proto_asic_map : proto_desc.asic_descriptors()) {
         AsicID asic_id{proto_asic_map.asic_id()};
-        ASICDescriptor asic_desc;
+        ASICDescriptor asic_desc{};
 
         const auto& proto_asic_desc = proto_asic_map.asic_descriptor();
         asic_desc.tray_id = TrayID{proto_asic_desc.tray_id()};
@@ -282,8 +284,11 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         asic_desc.umd_unique_id =
             proto_asic_desc.has_umd_unique_id() ? proto_asic_desc.umd_unique_id() : static_cast<ChipId>(-1);
         asic_desc.host_name = proto_asic_desc.host_name();
+        asic_desc.mpi_rank = proto_asic_desc.mpi_rank();
+        asic_desc.physical_node_id =
+            experimental::make_physical_node_id(asic_desc.host_name, asic_desc.tray_id, asic_desc.asic_location);
 
-        asic_descriptors[asic_id] = asic_desc;
+        descriptor->add_asic_descriptor(asic_id, std::move(asic_desc));
     }
 
     // Convert host to mobo name map
@@ -302,6 +307,7 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     auto& exit_node_connection_table = descriptor->get_exit_node_connection_table();
     for (const auto& proto_table : proto_desc.exit_node_connection_table()) {
         std::vector<ExitNodeConnection> exit_connections;
+        exit_connections.reserve(proto_table.exit_connections().size());
 
         for (const auto& proto_exit_conn : proto_table.exit_connections()) {
             exit_connections.push_back(proto_to_exit_node_connection(proto_exit_conn));

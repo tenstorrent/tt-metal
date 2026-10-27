@@ -6,7 +6,7 @@ import ttnn
 import torch
 import pytest
 from loguru import logger
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )
@@ -280,6 +280,13 @@ def test_convt2d_dram(
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip(
+            "Row-major DRAM auto-slicing underestimates peak L1 for simultaneous interleaved-to-row-major "
+            "untilize staging buffers and can select an oversized slice; tiled DRAM-slicing coverage remains "
+            "enabled. See https://github.com/tenstorrent/tt-metal/issues/51672"
+        )
 
     # for TILE layout, the maximum number of slices for the (16,  16,  16, 256, 128) test case is 1 due to tile boundary constraints
     adjusted_num_slices = num_slices
@@ -893,3 +900,26 @@ def test_conv_transpose2d_replicate_pad_bfloat8b_weights(device):
         padding=(1, 1),
         weights_dtype=ttnn.bfloat8_b,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_conv_transpose2d_zero_stride_raises(device, expect_error):
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 32).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    w = ttnn.from_torch(torch.randn(32, 32, 3, 3).bfloat16(), dtype=ttnn.bfloat16)
+    with expect_error(RuntimeError, "stride must be greater than 0"):
+        ttnn.conv_transpose2d(
+            input_tensor=x,
+            weight_tensor=w,
+            device=device,
+            in_channels=32,
+            out_channels=32,
+            batch_size=1,
+            input_height=8,
+            input_width=8,
+            kernel_size=(3, 3),
+            stride=(0, 1),
+            padding=(1, 1),
+            output_padding=(0, 0),
+            dilation=(1, 1),
+            groups=1,
+        )

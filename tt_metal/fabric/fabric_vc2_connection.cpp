@@ -7,19 +7,20 @@
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt_stl/assert.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include <optional>
 #include <vector>
 
 #include "erisc_datamover_builder.hpp"
-#include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
@@ -29,11 +30,12 @@ namespace tt::tt_fabric {
 
 template <typename ProgramOrDescriptor>
 void append_fabric_vc2_connection_rt_args(
+    const FabricContext& fabric_context,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     const uint32_t link_idx,
     ProgramOrDescriptor& worker_program_or_desc,
-    const CoreCoord& worker_core,
+    const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args) {
     TT_FATAL(
         src_fabric_node_id != dst_fabric_node_id,
@@ -41,8 +43,7 @@ void append_fabric_vc2_connection_rt_args(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& control_plane = fabric_context.get_control_plane();
     const auto& builder_context = fabric_context.get_builder_context();
     TT_FATAL(
         builder_context.requires_vc2(),
@@ -108,31 +109,34 @@ void append_fabric_vc2_connection_rt_args(
         auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, CoreType::WORKER);
         TT_FATAL(teardown_sem_id_opt.has_value(), "No available semaphore ID for teardown semaphore");
         worker_teardown_semaphore_id = teardown_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_teardown_semaphore_id,
-            .core_type = CoreType::WORKER,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
+        worker_program_or_desc.semaphores.push_back(
+            tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_teardown_semaphore_id,
+                .core_type = CoreType::WORKER,
+                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
 
         auto buffer_index_sem_id_opt =
             worker_program_or_desc.find_available_semaphore_id(worker_core, CoreType::WORKER);
         TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
         worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_buffer_index_semaphore_id,
-            .core_type = CoreType::WORKER,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
+        worker_program_or_desc.semaphores.push_back(
+            tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_buffer_index_semaphore_id,
+                .core_type = CoreType::WORKER,
+                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
 
         auto flow_control_sem_id_opt =
             worker_program_or_desc.find_available_semaphore_id(worker_core, CoreType::WORKER);
         TT_FATAL(flow_control_sem_id_opt.has_value(), "No available semaphore ID for flow control semaphore");
         worker_flow_control_semaphore_id = flow_control_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_flow_control_semaphore_id,
-            .core_type = CoreType::WORKER,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
+        worker_program_or_desc.semaphores.push_back(
+            tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_flow_control_semaphore_id,
+                .core_type = CoreType::WORKER,
+                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
     } else {
         worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0);
         worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0);
@@ -143,9 +147,8 @@ void append_fabric_vc2_connection_rt_args(
     const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
 
     ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-    CoreCoord fabric_router_virtual_core =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-            src_chip_id, fabric_router_channel);
+    tt::tt_metal::CoreCoord fabric_router_virtual_core =
+        fabric_context.get_cluster().get_virtual_eth_core_from_channel(src_chip_id, fabric_router_channel);
 
     const auto& edm_config = fabric_context.get_builder_context().get_fabric_router_config();
     auto* channel_allocator = edm_config.channel_allocator.get();
@@ -255,19 +258,21 @@ void append_fabric_vc2_connection_rt_args(
 
 // Explicit template instantiations
 template void append_fabric_vc2_connection_rt_args<tt::tt_metal::Program>(
+    const FabricContext&,
     const FabricNodeId&,
     const FabricNodeId&,
     uint32_t,
     tt::tt_metal::Program&,
-    const CoreCoord&,
+    const tt::tt_metal::CoreCoord&,
     std::vector<uint32_t>&);
 
 template void append_fabric_vc2_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+    const FabricContext&,
     const FabricNodeId&,
     const FabricNodeId&,
     uint32_t,
     tt::tt_metal::ProgramDescriptor&,
-    const CoreCoord&,
+    const tt::tt_metal::CoreCoord&,
     std::vector<uint32_t>&);
 
 }  // namespace tt::tt_fabric

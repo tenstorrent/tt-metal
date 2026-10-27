@@ -23,6 +23,8 @@ namespace tt::tt_fabric {
 
 // Forward declarations
 enum class FabricTensixCoreType : uint32_t;
+class FabricContext;
+class FabricTensixDatamoverConfig;
 
 // Shared struct for mux/relay connection info (used by both mux→mux and relay→mux connections)
 struct MuxConnectionInfo {
@@ -138,6 +140,10 @@ protected:
 public:
     virtual ~FabricTensixDatamoverBaseConfig() = default;
 
+    const FabricContext& get_fabric_context() const { return fabric_context_; }
+    // The FabricTensixDatamoverConfig that owns this per-core config
+    const FabricTensixDatamoverConfig& get_tensix_config() const { return tensix_config_; }
+
     // Common getters - accept ChannelTypes to select the correct channel type configuration
     size_t get_num_channels(ChannelTypes channel_type) const;
     size_t get_total_num_channels() const;  // Returns total channels across all types
@@ -169,7 +175,7 @@ public:
         const FabricNodeId& dst_fabric_node_id,
         uint32_t link_idx,
         tt::tt_metal::Program& program,
-        const CoreCoord& logical_core) const;
+        const tt::tt_metal::CoreCoord& logical_core) const;
 
 protected:
     static constexpr size_t default_num_buffers = 8;
@@ -178,7 +184,10 @@ protected:
 
     // Constructor for derived classes - accepts map of channel type configurations
     // Uses std::map (not unordered_map) to maintain sorted order by ChannelTypes enum
+    // Both outlive this config: tensix_config holds it, and fabric_context owns tensix_config.
     FabricTensixDatamoverBaseConfig(
+        const FabricContext& fabric_context,
+        const FabricTensixDatamoverConfig& tensix_config,
         const std::map<ChannelTypes, ChannelTypeConfig>& channel_configs,
         size_t base_l1_address,
         size_t l1_end_address);
@@ -187,6 +196,9 @@ protected:
     void validate_channel_id(ChannelTypes channel_type, size_t channel_id) const;
     size_t get_channel_global_offset(ChannelTypes channel_type, size_t channel_id) const;
     void append_default_persistent_channel_flags_to_ct_args(std::vector<uint32_t>& ct_args) const;
+
+    const FabricContext& fabric_context_;
+    const FabricTensixDatamoverConfig& tensix_config_;
 
     // Configuration parameters
     size_t core_type_index_ = 0;
@@ -271,6 +283,8 @@ class FabricTensixDatamoverMuxConfig : public FabricTensixDatamoverBaseConfig {
 public:
     // Constructor accepting channel type configuration map (sorted by ChannelTypes enum)
     FabricTensixDatamoverMuxConfig(
+        const FabricContext& fabric_context,
+        const FabricTensixDatamoverConfig& tensix_config,
         const std::map<ChannelTypes, ChannelTypeConfig>& channel_type_configs,
         size_t base_l1_address,
         size_t l1_end_address);
@@ -339,6 +353,8 @@ class FabricTensixDatamoverRelayConfig : public FabricTensixDatamoverBaseConfig 
 public:
     // Constructor accepting channel type configuration map (sorted by ChannelTypes enum)
     FabricTensixDatamoverRelayConfig(
+        const FabricContext& fabric_context,
+        const FabricTensixDatamoverConfig& tensix_config,
         const std::map<ChannelTypes, ChannelTypeConfig>& channel_type_configs,
         size_t base_l1_address,
         size_t l1_end_address);
@@ -419,7 +435,7 @@ class FabricTensixDatamoverMuxBuilder : public FabricDatamoverBuilderBase {
 
 public:
     FabricTensixDatamoverMuxBuilder(
-        const CoreCoord& my_core_logical,
+        const tt::tt_metal::CoreCoord& my_core_logical,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
         uint32_t ethernet_channel_id,
@@ -437,7 +453,7 @@ public:
     tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
 
     // Getters
-    const CoreCoord& get_logical_core() const { return my_core_logical_; }
+    const tt::tt_metal::CoreCoord& get_logical_core() const { return my_core_logical_; }
     tt::tt_fabric::FabricNodeId get_local_fabric_node_id() const { return local_fabric_node_id_; }
     tt::tt_fabric::FabricNodeId get_remote_fabric_node_id() const { return remote_fabric_node_id_; }
     uint32_t get_ethernet_channel_id() const { return ethernet_channel_id_; }
@@ -455,7 +471,7 @@ private:
     std::vector<uint32_t> get_persistent_channels_flags(ChannelTypes channel_type) const;
 
     // Core and fabric configuration
-    CoreCoord my_core_logical_;
+    tt::tt_metal::CoreCoord my_core_logical_;
     tt::tt_fabric::FabricNodeId local_fabric_node_id_;
     tt::tt_fabric::FabricNodeId remote_fabric_node_id_;
     uint32_t ethernet_channel_id_;
@@ -488,7 +504,7 @@ class FabricTensixDatamoverRelayBuilder : public FabricDatamoverBuilderBase {
 
 public:
     FabricTensixDatamoverRelayBuilder(
-        const CoreCoord& my_core_logical,
+        const tt::tt_metal::CoreCoord& my_core_logical,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
         uint32_t ethernet_channel_id,
@@ -506,7 +522,7 @@ public:
     tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
 
     // Getters
-    const CoreCoord& get_logical_core() const { return my_core_logical_; }
+    const tt::tt_metal::CoreCoord& get_logical_core() const { return my_core_logical_; }
     tt::tt_fabric::FabricNodeId get_local_fabric_node_id() const { return local_fabric_node_id_; }
     tt::tt_fabric::FabricNodeId get_remote_fabric_node_id() const { return remote_fabric_node_id_; }
     uint32_t get_ethernet_channel_id() const { return ethernet_channel_id_; }
@@ -520,7 +536,7 @@ private:
     std::vector<uint32_t> get_runtime_args(tt::tt_metal::Program&) const;
 
     // Core and fabric configuration
-    CoreCoord my_core_logical_;
+    tt::tt_metal::CoreCoord my_core_logical_;
     tt::tt_fabric::FabricNodeId local_fabric_node_id_;
     tt::tt_fabric::FabricNodeId remote_fabric_node_id_;
     uint32_t ethernet_channel_id_;

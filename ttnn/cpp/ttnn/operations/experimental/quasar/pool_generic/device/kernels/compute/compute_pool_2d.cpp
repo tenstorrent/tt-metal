@@ -12,15 +12,18 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/add_int_sfpu.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/kernel_thread_globals.h"
+#include "experimental/kernel_args.h"
 
-#define DEBUG_PRINT 0
-
-#if DEBUG_PRINT == 1
-#include "api/debug/dprint.h"
-#include "api/debug/dprint_pages.h"
-#include "api/debug/dprint_tensix.h"
-#include "tools/profiler/kernel_profiler.hpp"
-#endif
+//   0 = production path: narrow pack_untilize straight into the real output CB (out_cb), then DPRINT it.
+//   1 = experiment:      full-tile (32x32) pack of the reduced DEST into the scratch CB, then DPRINT it
+//                        (out_cb still gets a balancing push with garbage).
+// The pack_untilize_dest_init and the pack call all follow this switch, so flipping this one value moves
+// the whole pack pipeline between the two CBs consistently.
+// NOTE: PACK_TO_SCRATCH==1 requires the reader-side scratch consume (reader_pool_2d.cpp) to be enabled
+// too — compute PRODUCES the scratch CB and the DM reader CONSUMES it; they must be on/off together.
+#define PACK_TO_SCRATCH 1
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -29,38 +32,53 @@
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 
+// out_cb is the borrowed output shard and compute is its only producer and consumer (self-loop): the result
+// stays resident, so pop each block right after it is pushed to leave the buffer balanced. dummy_unpack
+// orders the pop after the wait on Quasar (nothing unpacks this buffer, and a bare wait_front -> pop_front
+// traps the unpacker).
+template <typename DFB>
+ALWI void release_out_pages(DFB& out_cb, uint32_t num_pages) {
+    out_cb.wait_front(num_pages);
+    dummy_unpack(out_cb.get_id());
+    out_cb.pop_front(num_pages);
+}
+
 void kernel_main() {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
-    constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
-    constexpr uint32_t window_size_hw = get_compile_time_arg_val(1);
+    constexpr uint32_t in_ntiles_c = get_arg(args::in_ntiles_c);
+    constexpr uint32_t window_size_hw = get_arg(args::window_size_hw);
+    constexpr uint32_t scratch_npages = get_arg(args::scratch_npages);
 
-    constexpr uint32_t split_reader = get_compile_time_arg_val(2);
+    constexpr uint32_t max_out_sticks_per_core = get_arg(args::max_out_sticks_per_core);
+    constexpr uint32_t in_c = get_arg(args::in_c);
+    constexpr uint32_t in_nblocks_c = get_arg(args::in_nblocks_c);
+    constexpr uint32_t max_sticks_for_reduction = get_arg(args::max_sticks_for_reduction);
 
-    constexpr uint32_t max_out_sticks_per_core = get_compile_time_arg_val(3);
-    constexpr uint32_t in_c = get_compile_time_arg_val(4);
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(5);
-    constexpr uint32_t max_sticks_for_reduction = get_compile_time_arg_val(6);
-
-    constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(7);
-    constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(8);  // for split reader
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
-    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(13);
-    constexpr bool is_output_tiled = get_compile_time_arg_val(14);  // 1 = TILED, 0 = ROW_MAJOR
-    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(15);
+    // CB ids are Metal 2.0 DFB tokens. Keep the legacy variable names so the rest of the
+    // kernel (DataflowBuffer construction and LLK calls taking a uint32_t CB id) is unchanged;
+    // dfb::<name> converts implicitly to uint32_t.
+    constexpr auto in_cb_id_0 = dfb::in_cb_0;
+    constexpr auto in_scalar_cb_id_0 = dfb::in_scalar_cb_0;
+    constexpr auto out_cb_id = dfb::out_cb;
+    constexpr auto scratch_cb_id_0 = dfb::scratch_cb_0;
+    constexpr bool one_scalar_per_core = get_arg(args::one_scalar_per_core);
+    constexpr bool is_output_tiled = get_arg(args::is_output_tiled);  // 1 = TILED, 0 = ROW_MAJOR
+    constexpr bool is_output_block_format = (bool)get_arg(args::is_output_block_format);
+#ifdef OUTPUT_TILED
+    constexpr auto pre_tilize_cb_id = dfb::pre_tilize_cb;
     // fast_tilize_cb_id is a consumer-view alias of pre_tilize_cb_id (same L1 region,
     // full-tile face_geometry = {face_r_dim=16, num_faces=4}). Used as the input operand
     // to fast_tilize so the unpacker/math read the correct face count from CB metadata.
-    constexpr uint32_t fast_tilize_cb_id = get_compile_time_arg_val(38);
-
-    constexpr bool use_split_reader = split_reader;
+    constexpr auto fast_tilize_cb_id = dfb::fast_tilize_cb;
+#endif
 
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
-    constexpr uint32_t num_faces_in_input_tile =
-        (max_sticks_for_reduction < TILE_HEIGHT || window_size_hw <= FACE_HEIGHT) ? 2 : 4;
+    // QSR: match num_faces_in_input_tile_for_cb in the pool factory. The reduce-col strided tilize
+    // requires a full 32x32 (4-face) SrcA tile, so always reduce 4 faces; padding rows [window,32) hold
+    // the pool identity so the extra reduced rows are a no-op. (On Quasar reduce_tile_math ignores this
+    // num_faces arg and uses the CB face-geometry metadata, but keep it coherent.)
+    constexpr uint32_t num_faces_in_input_tile = 4;
     // "Single partial tile per core that fits in one face": when there is only one output tile
     // per core (in_c < TILE_WIDTH) and it fits in a single face (in_c <= FACE_WIDTH), pack just
     // one face for that tile. The host correspondingly aligns output_shard_width to FACE_WIDTH,
@@ -74,18 +92,15 @@ void kernel_main() {
         last_tile_is_partial && (in_c % TILE_WIDTH == FACE_WIDTH || single_partial_fits_in_face) ? 1 : 2;
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::AVG;
-    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
-    // otherwise we can reduce 8 tiles at a time. Callers (e.g. grid_sample under fp32_dest_acc_en) can
-    // also force the 4-tile limit via ct_arg[16] so each chunk fits in half-sync DEST (= 4 fp32 tiles)
-    // without forcing dst_full_sync_en.
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
-    constexpr bool force_max_tiles_per_reduction_4 = get_compile_time_arg_val(16);
-    constexpr uint32_t MAX_TILES_PER_REDUCTION =
-        (force_max_tiles_per_reduction_4 || (is_avg_pool && is_large_kernel)) ? 4 : 8;
+    // The host factory resolves DEST-capacity limits (fp32 vs fp16, half-sync vs full-sync) and
+    // equal-width c-block constraints into a single value; kernels consume it directly.
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = get_arg(args::max_tiles_per_reduction);
     constexpr uint32_t max_tiles_per_iter =
         in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
+    static_assert(partial_iter_output_tiles == max_tiles_per_iter, "c-blocks must all be the same width");
 
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::AVG, "Only supports REDUCE_OP = MAX or AVG");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
@@ -98,20 +113,35 @@ void kernel_main() {
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      window_size_hw <= FACE_HEIGHT && !last_tile_is_partial;
 
-    constexpr uint32_t tilize_untilize_cb = is_output_tiled ? pre_tilize_cb_id : out_cb_id;
+    // tilize_untilize_cb references pre_tilize_cb_id at parse time, so gate the name selection
+    // at the preprocessor (an `is_output_tiled ? ...` ternary would still name-look-up
+    // pre_tilize_cb_id on the non-tiled build, where that DFB token is not emitted).
+#ifdef OUTPUT_TILED
+    constexpr uint32_t tilize_untilize_cb = pre_tilize_cb_id;
+#else
+    constexpr uint32_t tilize_untilize_cb = out_cb_id;
+#endif
 
-    experimental::CB in_scalar_cb_0(in_scalar_cb_id_0);
-    experimental::CB in_scalar_cb_1(in_scalar_cb_id_1);
-    experimental::CB in_cb_0(in_cb_id_0);
-    experimental::CB in_cb_1(in_cb_id_1);
-    experimental::CB out_cb(out_cb_id);
-    experimental::CB pre_tilize_cb(pre_tilize_cb_id);
-    experimental::CB fast_tilize_cb(fast_tilize_cb_id);
+    DataflowBuffer in_scalar_cb_0(in_scalar_cb_id_0);
+    DataflowBuffer in_cb_0(in_cb_id_0);
+    DataflowBuffer out_cb(out_cb_id);
+    DataflowBuffer scratch_cb_0(scratch_cb_id_0);
+#ifdef OUTPUT_TILED
+    DataflowBuffer pre_tilize_cb(pre_tilize_cb_id);
+    DataflowBuffer fast_tilize_cb(fast_tilize_cb_id);
+#endif
 
-    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tilize_untilize_cb);
+    // Packer dest is baked at init (hw_startup + pack_untilize_dest_init) and must match the CB
+    // the per-stick loop packs into. tilizeA_B_reduce_init only programs unpack+math (no ocb).
+#if PACK_TO_SCRATCH == 1
+    constexpr uint32_t pack_target_cb_id = is_output_tiled ? tilize_untilize_cb : scratch_cb_id_0;
+#else
+    constexpr uint32_t pack_target_cb_id = tilize_untilize_cb;
+#endif
+    compute_kernel_hw_startup(in_cb_id_0, in_scalar_cb_id_0, pack_target_cb_id);
+    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter);
 
-    pack_untilize_dest_init<max_tiles_per_iter>(tilize_untilize_cb);
+    pack_untilize_dest_init<max_tiles_per_iter>(pack_target_cb_id);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
@@ -125,19 +155,25 @@ void kernel_main() {
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
     // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
     // runtime args are used while for grid sample the max out sticks is set
-    uint32_t num_out_sticks_this_core = max_out_sticks_per_core ? max_out_sticks_per_core : get_arg_val<uint32_t>(0);
+    const uint32_t num_out_sticks_this_cluster =
+        max_out_sticks_per_core ? max_out_sticks_per_core : get_arg(args::out_nhw_this_core);
+    // This lane's share: the reader deals sticks round-robin (stick i -> lane i % T), so lane t owns
+    // quotient + 1 sticks for t < sticks % T and quotient otherwise — no divisibility required.
+    // get_num_threads()/get_my_thread_id() are 1/0 off Quasar.
+    const uint32_t num_threads = get_num_threads();
+    const uint32_t num_out_sticks_per_thread =
+        num_out_sticks_this_cluster / num_threads +
+        (get_my_thread_id() < num_out_sticks_this_cluster % num_threads ? 1u : 0u);
     uint32_t last_tile_height =
-        num_out_sticks_this_core % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_core % TILE_HEIGHT;
+        num_out_sticks_this_cluster % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_cluster % TILE_HEIGHT;
 
     uint32_t tilize_stick_counter = 0;
     uint32_t tilize_stick_total = 0;
-    for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
-        const bool reader0 = !(use_split_reader && (n & 0x1));
-        const bool use_reader1_scalar = !reader0 && !one_scalar_per_core;
-        const uint32_t curr_scalar_cb_id = use_reader1_scalar ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
-        const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
-        experimental::CB curr_scalar_cb = use_reader1_scalar ? in_scalar_cb_1 : in_scalar_cb_0;
-        experimental::CB curr_in_cb = reader0 ? in_cb_0 : in_cb_1;
+    for (uint32_t n = 0; n < num_out_sticks_per_thread; ++n) {
+        const uint32_t curr_scalar_cb_id = in_scalar_cb_id_0;
+        const uint32_t curr_in_cb_id = in_cb_id_0;
+        auto& curr_scalar_cb = in_scalar_cb_0;
+        auto& curr_in_cb = in_cb_0;
         if constexpr (!one_scalar_per_core) {
             curr_scalar_cb.wait_front(1);
         }
@@ -155,15 +191,17 @@ void kernel_main() {
                  (in_c % TILE_WIDTH == FACE_WIDTH || single_partial_fits_in_face))
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
+#if PACK_TO_SCRATCH == 0
             if constexpr (!is_output_tiled) {
                 out_cb.reserve_back(output_faces);
             }
-            if constexpr (tilize_reconfig) {
-                if (first_c_block || last_c_block) {
-                    UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
-                }
-            }
+#endif
+            // Re-init the fused tilize+reduce for THIS stick/c-block through the compute API rather than
+            // hand-issuing individual UNPACK/MATH llk_* calls: tiles_to_reduce changes across c-blocks
+            // (e.g. 4 then 2 for 6 tiles / 192c), so UNPACK and MATH must both be re-programmed for the
+            // new count (PACK is re-init'd via pack_untilize_dest_init below).
+            tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+                curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce);
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 curr_in_cb.wait_front(1);
@@ -180,7 +218,11 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
             if constexpr (is_output_tiled) {
-                // TILED output: accumulate sticks and perform tilization when needed
+                // TILED output: accumulate sticks and perform tilization when needed.
+                // pre_tilize_cb_id / fast_tilize_cb_id are only emitted under OUTPUT_TILED; even
+                // though this branch is discarded by `if constexpr` on the non-tiled build, the
+                // compiler still name-looks-up those DFB tokens, so the body must be #ifdef-gated.
+#ifdef OUTPUT_TILED
                 if (last_c_block) {
                     pack_untilize_dest<partial_iter_output_tiles>(pre_tilize_cb_id, 1, 0);
                     pre_tilize_cb.push_back(partial_iter_output_tiles);
@@ -192,7 +234,7 @@ void kernel_main() {
                 }
                 tile_regs_release();
 
-                bool last_tile = num_out_sticks_this_core - tilize_stick_total < last_tile_height;
+                bool last_tile = num_out_sticks_this_cluster - tilize_stick_total < last_tile_height;
                 if (tilize_stick_counter == TILE_HEIGHT || (last_tile && tilize_stick_counter == last_tile_height)) {
                     if (last_tile && last_tile_height != TILE_HEIGHT) {
                         pre_tilize_cb.wait_front(last_tile_height * in_ntiles_c);
@@ -204,7 +246,7 @@ void kernel_main() {
                             ((in_nblocks_c - 1) * max_tiles_per_iter + partial_iter_output_tiles);
                         pre_tilize_cb.push_back(filler_stick_tiles);
                     }
-                    PACK((pack_untilize_uninit(pre_tilize_cb_id)));
+                    pack_untilize_uninit(pre_tilize_cb_id);
 
                     unpack_tilizeA_B_uninit(curr_in_cb_id);
                     pack_reconfig_data_format(out_cb_id);
@@ -219,11 +261,16 @@ void kernel_main() {
                     fast_tilize_cb.push_back(in_ntiles_c);
                     fast_tilize_cb.wait_front(in_ntiles_c);
 
+#ifdef ARCH_QUASAR
+                    // Quasar tilize_init does not program PACK; retarget from pack-untilize (pre_tilize) to out_cb.
+                    pack_init(out_cb_id);
+#endif
                     fast_tilize_init(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
                     fast_tilize_block(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
                     fast_tilize_uninit(fast_tilize_cb_id, out_cb_id, in_ntiles_c);
 
                     out_cb.push_back(in_ntiles_c);
+                    release_out_pages(out_cb, in_ntiles_c);
                     fast_tilize_cb.pop_front(in_ntiles_c);
                     fast_tilize_cb.reserve_back(in_ntiles_c);
                     pre_tilize_cb.pop_front(TILE_HEIGHT * in_ntiles_c);
@@ -231,34 +278,66 @@ void kernel_main() {
 
                     tilize_stick_counter = 0;
 
-                    UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
-                    // init math for reduction again since FPU gets reprogrammed by tilize
-                    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
-#ifdef ARCH_BLACKHOLE
-                    // need this on BH to set swizzle bit before pack untilize dest
-                    MATH((llk_math_reconfig_remap(true)));
-#endif
-
+                    // Re-init fused tilize+reduce: tilize_init reprogrammed the FPU (A2D datacopy).
+                    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce);
                     if constexpr (is_output_block_format) {
                         pack_reconfig_data_format(pre_tilize_cb_id);
                     }
-                    PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
-                        pre_tilize_cb_id)));
+                    pack_untilize_dest_init<max_tiles_per_iter, max_tiles_per_iter, false /*narrow_row*/, TILE_C_DIM>(
+                        pre_tilize_cb_id);
                 }
+#endif  // OUTPUT_TILED
             } else {
-                // ROW_MAJOR output: pack directly to output CB
+#if PACK_TO_SCRATCH == 1
+                const uint32_t curr_scratch_cb_id = scratch_cb_id_0;
+                auto& curr_scratch_cb = scratch_cb_0;
+                // One full-width stick per output row: reserve/push once, pack each c-block into its channel slice.
+                if (first_c_block) {
+                    curr_scratch_cb.reserve_back(1);
+                }
+                // Re-init pack-untilize for this stick's scratch CB.
+                // full_ct_dim = in_ntiles_c; block_c_index places the slice. Init width must match pack width.
                 if (last_c_block) {
+                    pack_untilize_dest_init<partial_iter_output_tiles, in_ntiles_c>(curr_scratch_cb_id);
+                    pack_untilize_dest<partial_iter_output_tiles, in_ntiles_c>(
+                        curr_scratch_cb_id, 1, (c_i * max_tiles_per_iter) / partial_iter_output_tiles);
+                } else {
+                    pack_untilize_dest_init<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id);
+                    pack_untilize_dest<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id, 1, c_i);
+                }
+                tile_regs_release();
+
+                if (last_c_block) {
+                    // One entry per output stick (the scratch DFB is sized num_threads_per_cluster entries of
+                    // one full-width stick each), pushed once after every c-block has packed its slice.
+                    curr_scratch_cb.push_back(1);  // hand off to the DM reader, which writes the output
+                }
+#else
+                // Production RM path: narrow pack straight into out_cb (already reserved above). Pair the
+                // pack-untilize init with a matching width per c-block (same contract as the scratch path).
+                if (last_c_block) {
+                    pack_untilize_dest_init<partial_iter_output_tiles>(out_cb_id);
                     pack_untilize_dest<partial_iter_output_tiles>(out_cb_id, 1, 0);
                 } else {
+                    pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id);
                     pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0);
                 }
-                out_cb.push_back(output_faces);
                 tile_regs_release();
+                out_cb.push_back(output_faces);
+                release_out_pages(out_cb, output_faces);
+#endif
             }
         }
         if constexpr (!one_scalar_per_core) {
             curr_scalar_cb.pop_front(1);
         }
+    }
+    if constexpr (one_scalar_per_core) {
+        // The single scalar tile was waited once up front and reused for every stick; pop it now so the
+        // buffer is left balanced. dummy_unpack orders the pop after the wait on Quasar when no stick was
+        // processed (a bare wait_front -> pop_front traps the unpacker).
+        dummy_unpack(in_scalar_cb_id_0);
+        in_scalar_cb_0.pop_front(1);
     }
 }

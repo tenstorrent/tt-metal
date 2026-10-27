@@ -39,6 +39,10 @@ void RunningStatistics::validate_tensors(
     check_tensor_stat(batch_mean, "batch_mean_shape", C);
     check_tensor_stat(batch_var, "batch_var_shape", C);
 
+    TT_FATAL(
+        running_mean.has_value() || running_var.has_value(),
+        "running_statistics requires at least one of running_mean / running_var");
+
     // running_mean (1, C, 1, 1)
     if (running_mean.has_value()) {
         check_tensor_stat(running_mean.value(), "running_mean_shape", C);
@@ -89,7 +93,7 @@ RunningStatistics::spec_return_value_t RunningStatistics::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto output_shape = tensor_args.batch_mean.logical_shape();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(operation_attributes.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
@@ -98,27 +102,6 @@ RunningStatistics::tensor_return_value_t RunningStatistics::create_output_tensor
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.batch_mean.device());
-}
-
-ttsl::hash::hash_t RunningStatistics::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& [batch_mean, batch_var, running_mean, running_var] = tensor_args;
-
-    auto hash_optional_tensor = [](const std::optional<Tensor>& t) -> ttsl::hash::hash_t {
-        if (!t.has_value()) {
-            return ttsl::hash::hash_objects_with_default_seed(false);
-        }
-        return ttsl::hash::hash_objects_with_default_seed(true, t->tensor_spec(), t->padded_shape());
-    };
-
-    return operation::hash_operation<RunningStatistics>(
-        attributes,
-        batch_mean.tensor_spec(),
-        batch_mean.padded_shape(),
-        batch_var.tensor_spec(),
-        batch_var.padded_shape(),
-        hash_optional_tensor(running_mean),
-        hash_optional_tensor(running_var));
 }
 
 }  // namespace ttnn::operations::normalization

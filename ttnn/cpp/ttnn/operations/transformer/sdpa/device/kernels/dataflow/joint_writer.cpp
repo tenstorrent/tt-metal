@@ -16,23 +16,18 @@ void kernel_main() {
     constexpr uint32_t DHt = get_compile_time_arg_val(2);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(5);
-    constexpr uint32_t valid_Nt = get_compile_time_arg_val(6);
-    constexpr uint32_t valid_Lt = get_compile_time_arg_val(7);
-    constexpr uint32_t padded_Nqt = get_compile_time_arg_val(8);
-    constexpr uint32_t padded_Nkt = get_compile_time_arg_val(9);
-    constexpr uint32_t padded_Lqt = get_compile_time_arg_val(10);
-    constexpr uint32_t padded_Lkt = get_compile_time_arg_val(11);
-    constexpr uint32_t unpadded_N = get_compile_time_arg_val(12);
-    constexpr uint32_t unpadded_L = get_compile_time_arg_val(13);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(14);
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(15);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(16);
-    constexpr bool use_joint_mask = get_compile_time_arg_val(17) == 1;
-    constexpr uint32_t mask_chunk_0 = get_compile_time_arg_val(18);
-    constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(19);
+    constexpr uint32_t valid_Nt = get_compile_time_arg_val(5);
+    constexpr uint32_t valid_Lt = get_compile_time_arg_val(6);
+    constexpr uint32_t padded_Nqt = get_compile_time_arg_val(7);
+    constexpr uint32_t padded_Lqt = get_compile_time_arg_val(8);
+    constexpr uint32_t unpadded_N = get_compile_time_arg_val(9);
+    constexpr uint32_t unpadded_L = get_compile_time_arg_val(10);
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(11);
+    constexpr bool use_joint_mask = get_compile_time_arg_val(12) == 1;
+    constexpr uint32_t mask_chunk_0 = get_compile_time_arg_val(13);
+    constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(14);
 
-    constexpr auto out_args = TensorAccessorArgs<20>();
+    constexpr auto out_args = TensorAccessorArgs<15>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
@@ -64,9 +59,8 @@ void kernel_main() {
         cb_identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-        /*compute_uses_reduce_tile=*/true>();
-    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {

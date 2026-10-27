@@ -4,6 +4,8 @@
 
 #include "distribution_mode.hpp"
 
+#include <algorithm>
+
 namespace ttnn::distributed {
 
 DistributionMode compute_distribution_mode(
@@ -31,6 +33,8 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> compute_distribution_to_m
     const tt::tt_metal::distributed::MeshShape& mesh_shape) {
     DistributionMode mode = compute_distribution_mode(std::make_optional(distribution_shape), mesh_shape);
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords;
+    // In ROW_MAJOR mode the mapping stops once the mesh range is exhausted, so the mesh shape bounds the result.
+    mesh_coords.reserve(std::min(distribution_shape.mesh_size(), mesh_shape.mesh_size()));
 
     if (mode == DistributionMode::SUBMESH) {
         // For SUBMESH mode, coordinates map directly (distribution coords match mesh coords)

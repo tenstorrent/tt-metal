@@ -28,18 +28,9 @@ struct SdpaDecodeParams {
     // When true, enables multi-latent attention (MLA) path where V is derived from K.
     std::optional<bool> use_mla = std::nullopt;
     std::optional<uint32_t> head_dim_v = std::nullopt;
-    // Optional per-call block_size for paged attention. Lets this call read a K/V cache
-    // that was allocated for a different layer's (block_size, head_dim) shape — Q's last
-    // dim then drives head_dim. Required when vLLM's shared kv-cache groups place layers
-    // with different specs on one physical buffer. num_kv_heads * block_size * head_dim
-    // must be preserved across views (checked in validate_on_program_cache_miss).
-    std::optional<uint32_t> block_size_override = std::nullopt;
-    // Optional per-call num_kv_heads, companion to block_size_override for HMA
-    // cross-group sharing where the cache was allocated with a different num_kv_heads
-    // from the layer's actual view (e.g. Gemma4-26B-A4B sliding kv=8 / full kv=2 at
-    // small TP). Drives both the kernel's per-block stride and its head-parallel
-    // reduction grid. When nullopt, falls back to K.padded_shape[1] (legacy behavior).
-    std::optional<uint32_t> num_kv_heads_override = std::nullopt;
+    // Paired paged-cache geometry overrides (shared with chunked prefill SDPA). See
+    // ttnn::operations::transformer::PagedCacheGeometryOverride.
+    ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry{};
     // Optional circular-buffer capacity (in tokens) for the K/V cache view. When set,
     // the kernel computes ``virtual_pos %= cache_position_modulo`` before resolving the
     // page_table entry for every tile read, so a bounded sliding-window cache of
@@ -49,6 +40,17 @@ struct SdpaDecodeParams {
     // the effective block_size and ≥ sliding_window_size when both are set. Paged-mode
     // only (validated in validate_on_program_cache_miss).
     std::optional<uint32_t> cache_position_modulo = std::nullopt;
+    // Speculative multi-position mode. 0 = off (legacy behaviour, byte-for-byte).
+    // When set to Tg (candidates per batch GROUP), the op folds Tg candidates that share one
+    // KV cache onto a single batch row, so each row scans its KV once instead of Tg times:
+    // Q is [1, B, Tg*32, DH] (batch b, row-tile j = candidate b*Tg + j), the page_table has
+    // B rows, and cur_pos_tensor holds B*Tg positions, ascending within each group of Tg —
+    // candidate b*Tg+j attends to [0, cur_pos[b*Tg+j]] inclusive, exactly like batch row
+    // b*Tg+j with that cur_pos in the legacy B*Tg-row form. B groups let the op fill a grid
+    // that one group's row-tile count cannot (L1 caps cores/head by Tg).
+    // Requires num_kv_heads==1, causal, paged, no sliding window, no MLA, unsharded bf16
+    // TILE Q with Tg*32 padded rows per batch.
+    uint32_t spec_multi_pos_tiles = 0;
 };
 
 struct SdpaDecodeInputs {

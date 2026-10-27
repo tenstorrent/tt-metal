@@ -8,8 +8,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 
 void kernel_main() {
@@ -27,6 +29,9 @@ void kernel_main() {
 
     const auto input_accessor = TensorAccessor(input_args, input_addr);
 
+    Noc noc;
+    CircularBuffer cb_input(input_cb);
+
     // Generate constant tiles for reduce scalar
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<reduce_scalar_cb, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
@@ -35,15 +40,20 @@ void kernel_main() {
         uint32_t input_tile_idx = tile_row * num_tile_cols;
         // read input tiles
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-            cb_reserve_back(input_cb, block_size);
-            uint32_t input_wr_ptr = get_write_ptr(input_cb);
+            cb_input.reserve_back(block_size);
+            uint32_t input_wr_offset = 0;
             for (uint32_t r = 0; r < block_size && col_tile + r < num_tile_cols; r++) {
-                noc_async_read_page(input_tile_idx, input_accessor, input_wr_ptr);
-                input_wr_ptr += input_tile_bytes;
+                noc.async_read(
+                    input_accessor,
+                    cb_input,
+                    input_tile_bytes,
+                    {.page_id = input_tile_idx},
+                    {.offset_bytes = input_wr_offset});
+                input_wr_offset += input_tile_bytes;
                 input_tile_idx++;
             }
-            noc_async_read_barrier();
-            cb_push_back(input_cb, block_size);
+            noc.async_read_barrier();
+            cb_input.push_back(block_size);
         }
     }
 }

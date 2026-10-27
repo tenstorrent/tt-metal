@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_argmax_interleaved_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and this file is
+// retired, changes here likely belong in the fork too.
+
 #include "argmax_common.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -36,10 +41,10 @@ void kernel_main() {
     constexpr uint32_t red_dim_units = get_compile_time_arg_val(6);
 
     // Boolean to indicate if we reduce across _all_ dimensions or just on the reduction dim (last dim)
-    constexpr bool reduce_all = (bool)get_compile_time_arg_val(7);
+    constexpr bool reduce_all = get_compile_time_arg_val(7) == 1;
 
     constexpr auto s_src_args = TensorAccessorArgs<8>();
-    constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
+    constexpr auto s_dst_args = TensorAccessorArgs<decltype(s_src_args)::next_compile_time_args_offset()>();
 
     //-------------------------------------------------------------------------
     const auto s_src = TensorAccessor(s_src_args, src_base_addr);

@@ -5,8 +5,12 @@
 #include "reduce_scatter_minimal_async.hpp"
 #include "device/reduce_scatter_minimal_async_op_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+#include <mutex>
 
 namespace ttnn::experimental {
 
@@ -29,7 +33,7 @@ ttnn::Tensor reduce_scatter_minimal_async(
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for reduce_scatter_minimal_async operation");
     uint32_t resolved_num_links =
-        num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis));
+        num_links.has_value() ? *num_links : ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis);
 
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
@@ -48,6 +52,9 @@ ttnn::Tensor reduce_scatter_minimal_async(
         num_devices,
         usable_topology);
 
+    auto resolved_compute_kernel_config =
+        ttnn::ccl::resolve_fp32_acc_compute_kernel_config(compute_kernel_config, input_tensor.dtype());
+
     // Use composite reduce scatter for edge cases (e.g., tile dimensions not evenly divisible)
     if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
         log_debug(tt::LogOp, "reduce_scatter_minimal_async: using composite_reduce_scatter");
@@ -61,15 +68,15 @@ ttnn::Tensor reduce_scatter_minimal_async(
             cluster_axis,
             chunks_per_sync,
             num_workers_per_link,
-            num_buffers_per_channel);
+            num_buffers_per_channel,
+            resolved_compute_kernel_config);
     }
-
-    bool using_persistent_buffers = persistent_output_buffers.has_value();
 
     std::optional<ttnn::Tensor> optional_intermediate_tensor = std::nullopt;
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt;
+    std::optional<ttnn::Tensor> optional_penult_intermediate_tensor = std::nullopt;
 
-    if (using_persistent_buffers) {
+    if (persistent_output_buffers.has_value()) {
         const auto& buffers = persistent_output_buffers.value();
         if (!buffers.empty()) {
             optional_intermediate_tensor = buffers[0];
@@ -77,18 +84,35 @@ ttnn::Tensor reduce_scatter_minimal_async(
         if (buffers.size() >= 2) {
             optional_output_tensor = buffers[1];
         }
+        if (buffers.size() >= 3) {
+            optional_penult_intermediate_tensor = buffers[2];
+        }
     }
 
-    // For fp32 inputs without an explicit compute_kernel_config, enable fp32 dest accumulation
-    // so the line_reduction sum runs at fp32 precision in dst (Tf32 unpack-dst). Without this,
-    // the JIT data-format selection picks a 7-bit-mantissa dst, silently truncating the
-    // cross-device sum.
-    auto resolved_compute_kernel_config = compute_kernel_config;
-    if (!resolved_compute_kernel_config.has_value() && input_tensor.dtype() == DataType::FLOAT32) {
-        resolved_compute_kernel_config = ttnn::DeviceComputeKernelConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
-        };
+    // Skip the start barrier only when the op allocates none of its buffers. Allocation runs in lockstep across the
+    // mesh, so a buffer allocated here takes the same address on every chip, where a slower neighbour's earlier ops
+    // may still be using it. The op writes into its neighbour's intermediate and, depending on the path, output or
+    // penult intermediate; the barrier holds those writes until the neighbour has reached this op.
+    const bool use_contiguous_interm = ttnn::experimental::ccl::reduce_scatter_use_contiguous_interm(
+        input_tensor,
+        optional_intermediate_tensor,
+        usable_topology,
+        scatter_dim,
+        num_devices,
+        ttnn::get_fp32_dest_acc_en(resolved_compute_kernel_config));
+    const bool using_persistent_buffers = optional_intermediate_tensor.has_value() &&
+                                          optional_output_tensor.has_value() &&
+                                          (optional_penult_intermediate_tensor.has_value() || !use_contiguous_interm);
+    if (!using_persistent_buffers && !barrier_semaphore.has_value()) {
+        static std::once_flag no_barrier_warned;
+        std::call_once(no_barrier_warned, [] {
+            log_warning(
+                tt::LogOp,
+                "reduce_scatter_minimal_async: no barrier_semaphore, but the op allocates some of its buffers. It "
+                "writes into them on its neighbours without waiting, which is only safe if every device is idle when "
+                "it starts (e.g. after ttnn.synchronize_device). Pass a barrier_semaphore, or persistent intermediate, "
+                "output and (contiguous ring path) penult intermediate buffers.");
+        });
     }
 
     // Call the prim operation
@@ -96,6 +120,7 @@ ttnn::Tensor reduce_scatter_minimal_async(
         input_tensor,
         optional_intermediate_tensor,
         optional_output_tensor,
+        optional_penult_intermediate_tensor,
         scatter_dim,
         resolved_num_links,
         num_devices,
@@ -112,8 +137,51 @@ ttnn::Tensor reduce_scatter_minimal_async(
         num_buffers_per_channel,
         resolved_compute_kernel_config);
 
-    // Return the output tensor (index 1, intermediate is at index 0)
+    // Index 0 is the intermediate and index 1 the output. On the contiguous staging path the op also
+    // returns its internal penult intermediate at index 2 — it is declared as an output so the device
+    // operation owns its allocation rather than a program factory, but it is not a result the caller
+    // asked for. Dropping the vector here releases both staging buffers unless the caller passed them in
+    // as persistent buffers.
     return result.at(1);
+}
+
+std::vector<ttnn::Tensor> reduce_scatter_minimal_async_create_intermediate_buffer(
+    const ttnn::Tensor& input_tensor,
+    int32_t dim,
+    ttnn::ccl::Topology topology,
+    std::optional<uint32_t> cluster_axis,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    auto* mesh_device = input_tensor.device();
+    TT_FATAL(mesh_device != nullptr, "Mesh device is required to allocate the reduce_scatter intermediate buffer");
+
+    // Mirror reduce_scatter_minimal_async's resolution so the sizing is identical to what the op derives.
+    const int32_t rank = input_tensor.logical_shape().rank();
+    const int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
+    const uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+    const ttnn::ccl::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+
+    // fp32 inputs default to fp32 dest-acc (see reduce_scatter_minimal_async); this affects tile_granularity
+    // and therefore the staging page size, so it must be resolved the same way here.
+    auto resolved_compute_kernel_config =
+        ttnn::ccl::resolve_fp32_acc_compute_kernel_config(compute_kernel_config, input_tensor.dtype());
+    const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(resolved_compute_kernel_config);
+
+    auto stage_spec = ttnn::experimental::ccl::reduce_scatter_ring_interm_staging_spec(
+        input_tensor, usable_topology, scatter_dim, num_devices, fp32_dest_acc_en);
+    TT_FATAL(
+        stage_spec.has_value(),
+        "reduce_scatter_minimal_async_create_intermediate_buffer only applies to the contiguous fast path "
+        "(Ring topology, scatter dim != 0). For other configurations the intermediate has the input tensor "
+        "shape and can be allocated directly.");
+
+    auto penult_intermediate_spec = ttnn::experimental::ccl::reduce_scatter_ring_penult_intermediate_staging_spec(
+        input_tensor, usable_topology, scatter_dim, num_devices, fp32_dest_acc_en);
+    TT_FATAL(
+        penult_intermediate_spec.has_value(),
+        "penult intermediate staging spec must apply whenever the intermediate one does");
+
+    return {
+        create_device_tensor(*stage_spec, mesh_device), create_device_tensor(*penult_intermediate_spec, mesh_device)};
 }
 
 }  // namespace ttnn::experimental

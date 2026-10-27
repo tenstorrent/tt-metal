@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 
@@ -95,6 +96,46 @@ std::optional<UnaryWithParam> get_fused_activation(const std::optional<const Act
     return std::get<UnaryWithParam>(act);
 }
 
+// The reuse-optimized program factory can fuse a full [M, N] elementwise bias,
+// but only when each batch element's matrix is a single block.
+// Returns true if and only if `bias` matches that precondition exactly for the given reuse config; every
+// other bias (row-vector, etc.) returns false and falls through to a post-processed add.
+static bool reuse_config_fuses_full_block_bias(
+    const std::optional<const MatmulProgramConfig>& program_config,
+    const ttnn::Tensor& input_tensor_a_adjusted,
+    const ttnn::Tensor& input_tensor_b_adjusted,
+    const ttnn::Tensor& bias,
+    const bool transpose_a,
+    const bool transpose_b) {
+    // The fused reader assumes untransposed operands and an explicit reuse program config.
+    if (transpose_a || transpose_b || !program_config.has_value() ||
+        !std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(program_config.value())) {
+        return false;
+    }
+    // Bias must broadcast over the batch dim: a single [M, N] block reused across batch elements.
+    if (detail::is_input_batched(bias.logical_shape())) {
+        return false;
+    }
+    const auto& cfg = std::get<MatmulMultiCoreReuseProgramConfig>(program_config.value());
+    const auto a_tile = utilities::get_matmul_tile(input_tensor_a_adjusted, transpose_a);
+    const auto b_tile = utilities::get_matmul_tile(input_tensor_b_adjusted, transpose_b);
+    const uint32_t M_t = utilities::get_M_dim(
+        utilities::get_matmul_tensor_padded_shape(input_tensor_a_adjusted, transpose_a), a_tile, /*fuse_batch=*/false);
+    const uint32_t N_t =
+        utilities::get_N_dim(utilities::get_matmul_tensor_padded_shape(input_tensor_b_adjusted, transpose_b), b_tile);
+    const uint32_t per_core_M_per_batch = cfg.per_core_M > M_t ? M_t : cfg.per_core_M;
+
+    // Single block per element (N and each element's M fit one block).
+    if (N_t != cfg.per_core_N || per_core_M_per_batch != M_t) {
+        return false;
+    }
+    // The bias must be the *full* [M, N] block. Use the LOGICAL shape so a row-vector [1, N] (which
+    // pads up to a full tile) is excluded and falls through to a broadcast/post-processed add.
+    const auto& bias_logical = bias.logical_shape();
+    return static_cast<uint32_t>(bias_logical[-2]) == M_t * a_tile.get_height() &&
+           static_cast<uint32_t>(bias_logical[-1]) == N_t * b_tile.get_width();
+}
+
 static bool get_post_process_bias(
     const std::optional<const ttnn::Tensor>& bias,
     const std::optional<const MatmulProgramConfig>& program_config,
@@ -102,11 +143,30 @@ static bool get_post_process_bias(
     const MemoryConfig& output_mem_config,
     const ttnn::Tensor& input_tensor_a_adjusted,
     const ttnn::Tensor& input_tensor_b_adjusted,
-    const bool transpose_a) {
+    const bool transpose_a,
+    const bool transpose_b) {
     // Determine if we should post-process bias based on the program config
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
     if (bias.has_value()) {
+        // The reuse-optimized factory fuses a full [M, N] bias (broadcast over batch) for a
+        // single-block-per-element config; route exactly those to fusion. Everything else (including
+        // batched weights with any other bias) falls through to a post-processed add.
+        const bool is_reuse_config = program_config.has_value() &&
+                                     std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(program_config.value());
+        if (reuse_config_fuses_full_block_bias(
+                program_config,
+                input_tensor_a_adjusted,
+                input_tensor_b_adjusted,
+                bias.value(),
+                transpose_a,
+                transpose_b)) {
+            return false;
+        }
+        // A row-broadcastable ([1, N]) bias on the reuse config must be post-processed.
+        if (is_reuse_config && utilities::fused_matmul_bias_row_broadcastable(bias)) {
+            return true;
+        }
         // Fused matmul+bias does not support batched weights; apply bias via add().
         if (detail::is_input_batched(input_tensor_b_adjusted.logical_shape())) {
             return true;
@@ -114,6 +174,14 @@ static bool get_post_process_bias(
         const auto& bias_tensor = bias.value();
         // Fused matmul+bias does not support batched bias; apply bias via add().
         if (detail::is_input_batched(bias_tensor.logical_shape())) {
+            return true;
+        }
+        // Fused matmul+bias needs a full row of N values; a narrower bias (e.g. [1]) is broadcast via add().
+        const auto& bias_logical_shape = bias_tensor.logical_shape();
+        const auto& b_logical_shape = input_tensor_b_adjusted.logical_shape();
+        const uint32_t bias_width = bias_logical_shape.rank() == 0 ? 1 : bias_logical_shape[-1];
+        const uint32_t N = transpose_b ? b_logical_shape[-2] : b_logical_shape[-1];
+        if (bias_width < N) {
             return true;
         }
         // Check if bias shape is compatible with kernel fusion
@@ -241,16 +309,43 @@ static ttnn::Tensor bound_matmul(
         parameters.output_mem_config,
         input_tensor_a_adjusted,
         input_tensor_b_adjusted,
-        parameters.transpose_a);
+        parameters.transpose_a,
+        parameters.transpose_b);
+    // A 1D b is reshaped to [K, 1], so the output's meaningful dim is M, not N; the fused kernel would
+    // add bias[0] to every element. Apply a multi-element bias after the output is reshaped back instead.
+    if (bias.has_value() && input_tensor_b.logical_shape().rank() == 1) {
+        const auto& bias_shape = bias->logical_shape();
+        if (bias_shape.rank() > 0 && bias_shape[-1] > 1) {
+            post_process_bias = true;
+        }
+    }
+
+    // With a user core grid the activation is fused into the kernel, which would apply it before a
+    // post-processed bias. In that case keep it out of the kernel and apply it after the bias instead.
+    std::optional<UnaryWithParam> trailing_activation;
+    if (parameters.user_fused_activation.has_value() &&
+        (!parameters.user_core_coord.has_value() || post_process_bias)) {
+        trailing_activation = parameters.user_fused_activation;
+        parameters.user_fused_activation = std::nullopt;
+    }
+
+    std::optional<Tensor> matmul_output_tensor = optional_output_tensor;
+    if (post_process_bias && optional_output_tensor.has_value() &&
+        optional_output_tensor->logical_shape().volume() !=
+            utilities::compute_matmul_output_shape(
+                input_tensor_a_adjusted, input_tensor_b_adjusted, parameters.transpose_a, parameters.transpose_b)
+                .volume()) {
+        matmul_output_tensor = std::nullopt;
+    }
 
     auto attributes = ttnn::prim::create_matmul_attributes(
-        input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
+        input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {matmul_output_tensor});
 
     auto output_tensor = ttnn::prim::matmul(
                              input_tensor_a_adjusted,
                              input_tensor_b_adjusted,
                              post_process_bias ? std::nullopt : bias,
-                             optional_output_tensor,
+                             matmul_output_tensor,
                              attributes)
                              .at(0);
 
@@ -267,7 +362,8 @@ static ttnn::Tensor bound_matmul(
             output_tensor,
             bias.value(),
             /*output_dtype=*/std::nullopt,
-            output_tensor.memory_config(),
+            optional_output_tensor.has_value() ? optional_output_tensor->memory_config()
+                                               : output_tensor.memory_config(),
             optional_output_tensor);
     }
 
@@ -291,11 +387,9 @@ static ttnn::Tensor bound_matmul(
         output_tensor = ttnn::reshape(output_tensor, result_shape);
     }
 
-    if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
-        const UnaryWithParam& activation = parameters.user_fused_activation.value();
-
-        output_tensor =
-            ttnn::unary_chain(output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
+    if (trailing_activation.has_value()) {
+        output_tensor = ttnn::unary_chain(
+            output_tensor, {trailing_activation.value()}, output_tensor.memory_config(), optional_output_tensor);
     }
 
     return output_tensor;
@@ -315,7 +409,8 @@ Tensor matmul(
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const PrefetcherPipeList& prefetcher_pipes) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -340,7 +435,8 @@ Tensor matmul(
         transpose_b,
         output_tile,
         global_cb,
-        sub_device_id};
+        sub_device_id,
+        prefetcher_pipes};
 
     return bound_matmul(
         input_tensor_a,
@@ -365,7 +461,15 @@ Tensor linear(
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<ttnn::Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const PrefetcherPipeList& prefetcher_pipes,
+    std::optional<uint32_t> in0_column_offset) {
+    // Checked before the program config is chosen: an auto-selected config would see mismatched K.
+    TT_FATAL(
+        !in0_column_offset.has_value() ||
+            (program_config.has_value() &&
+             std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config.value())),
+        "in0_column_offset requires a MatmulMultiCoreReuseMultiCastProgramConfig");
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -386,7 +490,9 @@ Tensor linear(
         transpose_b,
         output_tile,
         global_cb,
-        sub_device_id};
+        sub_device_id,
+        prefetcher_pipes,
+        in0_column_offset};
     return bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
 }
 
@@ -515,7 +621,12 @@ Tensor addmm(
     }
 
     if (beta != 0.0) {
-        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta) : input_tensor;
+        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta, out_tensor.dtype()) : input_tensor;
+        // The matmul output dtype can differ from input_tensor's dtype when `dtype` overrides it.
+        // binary_ng's in-place add requires both operands to share a dtype
+        if (add_tensor.dtype() != out_tensor.dtype()) {
+            add_tensor = ttnn::typecast(add_tensor, out_tensor.dtype());
+        }
         add_(out_tensor, add_tensor);
     }
 
@@ -538,6 +649,9 @@ Tensor sparse_matmul(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<Tensor>& indices,
+    const std::optional<Tensor>& bias,
+    const PrefetcherPipeList& prefetcher_pipes,
     bool zero_init_output) {
     std::optional<CoreCoord> user_core_coord =
         core_grid.has_value() ? std::make_optional(CoreCoord(core_grid->x, core_grid->y)) : std::nullopt;
@@ -558,6 +672,9 @@ Tensor sparse_matmul(
                output_tile,
                global_cb,
                sub_device_id,
+               indices,
+               bias,
+               prefetcher_pipes,
                zero_init_output)
         .at(0);
 }

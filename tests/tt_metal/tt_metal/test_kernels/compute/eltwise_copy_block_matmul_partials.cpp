@@ -17,7 +17,8 @@ void kernel_main() {
 
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
-    unary_op_init_common(dfb::in, dfb::out);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    copy_init(dfb::in);
 
     for (uint32_t b = 0; b < outer_loop; ++b) {
         dfb_in.wait_front(num_single_transfer);
@@ -26,10 +27,10 @@ void kernel_main() {
         tile_regs_wait();
 
         for (uint32_t i = 0; i < num_single_transfer; ++i) {
-            copy_block_matmul_partials(dfb::in, i, i, 1);
+            copy_block(dfb::in, i, i, 1);
         }
 
-        pack_tile_block(0, dfb::out, num_single_transfer);
+        pack_block(0, dfb::out, num_single_transfer);
 
         tile_regs_commit();
         tile_regs_release();

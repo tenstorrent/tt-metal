@@ -4,18 +4,23 @@
 
 #pragma once
 
+#include <cstdint>
+#include <cstddef>
 #include <memory>
-#include <stddef.h>
 #include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
+class MetalContext;
 class MetalEnvImpl;
 using DeviceAddr = uint64_t;
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::internal {
@@ -34,7 +39,7 @@ class ServiceCoreManagerImpl;
 // disjoint worker spaces, no overlap.
 //
 // Lives on MetalContext (one instance per context, keyed internally by ChipId). Obtain it via
-// MetalContext::instance().get_service_core_manager(); do not construct it directly.
+// service_core_manager(mesh_device); do not construct it directly.
 //
 // This is the thin, user-facing surface. Internal dispatch routing / placement-validation
 // methods live on ServiceCoreManagerImpl, reachable only through impl() by translation units
@@ -61,7 +66,7 @@ class ServiceCoreManagerImpl;
 //   // 1. Launch App in FD
 //
 //   // 2. Claim service cores (must be done while FD is active)
-//   auto& svc = MetalContext::instance().get_service_core_manager();
+//   auto& svc = service_core_manager(*mesh_device);
 //   auto claimable = svc.get_claimable_cores(device);
 //   svc.claim(device, claimable);
 //
@@ -86,9 +91,9 @@ class ServiceCoreManagerImpl;
 //
 class ServiceCoreManager {
 public:
-    // Constructed by MetalContext. Stores a reference to the MetalEnvImpl that owns the cluster,
-    // rtoptions and hal it queries (mirrors dispatch_core_manager).
-    explicit ServiceCoreManager(MetalEnvImpl& env);
+    // Constructed by MetalContext. Stores MetalEnvImpl (cluster/rtoptions/hal) and the owning
+    // MetalContext (for sibling accessors such as get_dispatch_core_manager).
+    ServiceCoreManager(MetalEnvImpl& env, MetalContext& ctx);
     ~ServiceCoreManager();
 
     // Returns dispatch-column cores not yet allocated to FD infra or claimed as service cores.
@@ -133,6 +138,12 @@ public:
     // Allocates top-down (from L1_END downward) so service buffers and CBs (which grow up
     // from DEFAULT_UNRESERVED) stay in disjoint zones — same convention as worker-core L1 buffers.
     DeviceAddr allocate_l1(IDevice* device, CoreCoord core, size_t size);
+    // Reserve [addr, L1_top) in this core's allocator so a later allocate_l1() won't hand out an
+    // address overlapping externally-owned L1 at the top of the core (e.g. MeshSocket config /
+    // data-FIFO buffers the device allocator placed there; both allocators grow top-down from
+    // L1_END independently and would otherwise collide). Must be called before any allocate_l1()
+    // on this core. TT_FATALs if addr is at/above the range top or the span is already allocated.
+    void reserve_l1_to_top(IDevice* device, CoreCoord core, DeviceAddr addr);
     void deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr);
     size_t bytes_available(IDevice* device, CoreCoord core) const;
 
@@ -148,6 +159,7 @@ private:
     std::unique_ptr<ServiceCoreManagerImpl> pimpl_;
 };
 
-ServiceCoreManager& service_core_manager();
+// Returns the ServiceCoreManager owned by the MetalContext that `mesh_device` belongs to.
+ServiceCoreManager& service_core_manager(distributed::MeshDevice& mesh_device);
 
 }  // namespace tt::tt_metal::internal

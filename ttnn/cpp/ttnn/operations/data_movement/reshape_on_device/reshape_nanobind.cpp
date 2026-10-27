@@ -11,7 +11,7 @@
 
 #include "reshape.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
-#include "ttnn-nanobind/small_vector_caster.hpp"  // for SmallVector<int32_t>
+#include "ttnn-nanobind/small_vector_caster.hpp"  // for ttsl::SmallVector<int32_t>
 
 namespace ttnn::operations::data_movement {
 
@@ -25,7 +25,7 @@ ttnn::Tensor reshape_on_device_wrapper(
     int Y,
     int X,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return reshape_on_device(input_tensor, ttnn::SmallVector<int32_t>{W, Z, Y, X}, memory_config_arg);
+    return reshape_on_device(input_tensor, ttsl::SmallVector<int32_t>{W, Z, Y, X}, memory_config_arg);
 }
 
 }  // namespace
@@ -49,7 +49,7 @@ void bind_reshape(nb::module_& mod) {
 
 
         Args:
-            * :attr:`input_tensor`: Input Tensor.
+            * :attr:`input_tensor`: Input Tensor. A TILE layout tensor must use the standard 32x32 tile.
             * :attr:`W`: W dim of tensor.
             * :attr:`Z`: Z dim of tensor.
             * :attr:`Y`: Y dim of tensor.

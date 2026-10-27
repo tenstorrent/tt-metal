@@ -8,44 +8,49 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <ostream>
 #include <tuple>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
 
-// forward declarations
 namespace tt::tt_metal {
-class IDevice;
-class GlobalSemaphore;
 
-namespace experimental {
-// TODO: Move to impl when this class is PIMPLed
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> initial_value,
-    BufferType buffer_type,
-    uint64_t address);
-}  // namespace experimental
+using DeviceAddr = std::uint64_t;
+
+class IDevice;
+class GlobalSemaphoreImpl;
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
 class GlobalSemaphore {
 public:
+    /**
+     * @brief Allocates a global semaphore in L1 on the mesh device.
+     *
+     * @param device Mesh device to create the semaphore on.
+     * @param cores Range of Tensix coordinates using the semaphore.
+     * @param initial_value Initial value of the semaphore.
+     * @param buffer_type Buffer type to store the semaphore. Can only be an L1 buffer type.
+     */
     GlobalSemaphore(
-        IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        distributed::MeshDevice& device,
+        CoreRangeSet cores,
+        uint32_t initial_value,
+        BufferType buffer_type = BufferType::L1);
 
-    GlobalSemaphore(
-        IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+    explicit GlobalSemaphore(GlobalSemaphoreImpl impl);
+    GlobalSemaphore(const GlobalSemaphore& other);
+    GlobalSemaphore& operator=(const GlobalSemaphore& other);
 
-    GlobalSemaphore(const GlobalSemaphore&) = default;
-    GlobalSemaphore& operator=(const GlobalSemaphore&) = default;
+    GlobalSemaphore(GlobalSemaphore&& other) noexcept;
+    GlobalSemaphore& operator=(GlobalSemaphore&& other) noexcept;
 
-    GlobalSemaphore(GlobalSemaphore&&) noexcept = default;
-    GlobalSemaphore& operator=(GlobalSemaphore&&) noexcept = default;
+    ~GlobalSemaphore();
 
     IDevice* device() const;
 
@@ -54,33 +59,13 @@ public:
     void reset_semaphore_value(uint32_t reset_value) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type");
-    auto attribute_values() const { return std::make_tuple(this->cores_, this->buffer_.get_buffer()->buffer_type()); }
+    std::tuple<CoreRangeSet, BufferType> attribute_values() const;
+
+    GlobalSemaphoreImpl& impl();
+    const GlobalSemaphoreImpl& impl() const;
 
 private:
-    // private constructor used by experimental API
-    // TODO: Move to impl when this class is PIMPLed
-    GlobalSemaphore(
-        IDevice* device,
-        const CoreRangeSet& cores,
-        std::optional<uint32_t> initial_value,
-        BufferType buffer_type,
-        uint64_t address);
-
-    void setup_buffer(
-        std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address = std::nullopt);
-
-    // GlobalSemaphore is implemented as a wrapper around a sharded buffer
-    // This can be updated in the future to be its own container with optimized dispatch functions
-    distributed::AnyBuffer buffer_;
-    IDevice* device_;
-    CoreRangeSet cores_;
-
-    friend GlobalSemaphore experimental::CreateGlobalSemaphore(
-        IDevice* device,
-        const CoreRangeSet& cores,
-        std::optional<uint32_t> initial_value,
-        BufferType buffer_type,
-        uint64_t address);
+    std::unique_ptr<GlobalSemaphoreImpl> impl_;
 };
 
 }  // namespace tt::tt_metal

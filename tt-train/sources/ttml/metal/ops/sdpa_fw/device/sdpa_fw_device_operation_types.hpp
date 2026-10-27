@@ -13,6 +13,7 @@ struct SDPAForwardParams {
     bool return_intermediates{false};
     AttentionMaskType mask_type{AttentionMaskType::Causal};
     float dropout_probability{0.0F};
+    bool has_gate{false};
 };
 
 struct SDPAForwardInputs {
@@ -23,6 +24,8 @@ struct SDPAForwardInputs {
 
     std::optional<ttnn::Tensor> preallocated_intermediate;
     std::optional<ttnn::Tensor> preallocated_output;
+
+    const std::optional<ttnn::Tensor>& gate;  // optional gate input
 };
 
 using operation_attributes_t = SDPAForwardParams;
@@ -30,6 +33,6 @@ using tensor_args_t = SDPAForwardInputs;
 
 using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttml::metal::ops::sdpa_fw::device

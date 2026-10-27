@@ -25,19 +25,13 @@ on:
         type: boolean
         default: true
         description: "Set to false to allow write access to MLPerf mount"
-      test-category:
-        required: false
-        type: string
-        default: smoke
-        description: "Time-budget workflow key passed to verify_time_budget.py."
-
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.build-matrix.outputs.matrix || '[]' }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/models_smoke_merge_gate_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/models_merge_gate_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -51,21 +45,14 @@ jobs:
       - name: Install dependencies
         run: pip3 install PyYAML
 
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          python3 .github/scripts/utils/verify_time_budget.py \
-            "${{ env.TESTS_YAML_PATH }}" \
-            ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}"
 
-      - name: Build test matrix based on enabled SKUs
-        id: build-matrix
+      - name: Check for an empty test yaml
+        id: check-tests
         env:
           TESTS_YAML: ${{ env.TESTS_YAML_PATH }}
         run: |
           set -euo pipefail
-          # TODO: Remove this empty-yaml short-circuit once models_smoke_merge_gate_tests.yaml
+          # TODO: Remove this empty-yaml short-circuit once models_merge_gate_tests.yaml
           # has at least one test row; prepare_test_matrix.py fails on an empty yaml.
           test_count=$(python3 - <<'PY'
           import os, yaml
@@ -76,13 +63,20 @@ jobs:
           )
           if [ "$test_count" -eq 0 ]; then
             echo "::notice::No tests defined in ${{ env.TESTS_YAML_PATH }} yet; skipping hardware jobs."
-            echo "matrix=[]" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "empty=false" >> "$GITHUB_OUTPUT"
           fi
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            "${{ env.TESTS_YAML_PATH }}" \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        if: steps.check-tests.outputs.empty != 'true'
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: "${{ env.TESTS_YAML_PATH }}"
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
 
   models-smoke-tests:
     needs: load-test-matrix

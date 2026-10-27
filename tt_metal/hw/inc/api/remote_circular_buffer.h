@@ -10,7 +10,11 @@
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "noc_address_backend.h"
 #include "api/lock.h"
+#include "internal/profiler/noc_debugging_profiler.hpp"
 #endif
 
 namespace experimental {
@@ -55,10 +59,9 @@ FORCE_INLINE void update_pages_sent(
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_pages_sent_addr);
     volatile tt_l1_ptr uint32_t* remote_noc_xy_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_noc_xy_addr);
     for (uint32_t i = 0; i < num_receivers; ++i) {
-        uint32_t remote_noc_xy = uint32_t(
-            NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, remote_noc_xy_ptr[0]), DYNAMIC_NOC_Y(noc, remote_noc_xy_ptr[1])));
         *pages_sent_ptr += aligned_page_adjustment;
-        uint64_t remote_ack_ptr_addr = get_noc_addr_helper(remote_noc_xy, remote_pages_sent_addr);
+        uint64_t remote_ack_ptr_addr = noc_address_backend::worker_address(
+            remote_noc_xy_ptr[0], remote_noc_xy_ptr[1], remote_pages_sent_addr, noc);
         noc_fast_atomic_increment<nm>(
             noc,
             cmd_buf,
@@ -331,6 +334,54 @@ FORCE_INLINE void remote_cb_sender_barrier(uint32_t cb_id) {
     WAYPOINT("RCBD");
 }
 
+namespace detail {
+
+template <NocOptions opts, uint32_t max_page_size>
+FORCE_INLINE void write_rows_with_state(
+    const Noc& noc,
+    uint64_t dst_noc_addr,
+    uint32_t src_addr,
+    uint32_t num_rows,
+    uint32_t pages_per_row,
+    uint32_t page_size,
+    uint32_t src_row_stride) {
+    const PrecomposedUnicastEndpoint dst;
+    noc.set_async_write_state<opts, max_page_size>(dst, page_size, {.noc_addr = dst_noc_addr});
+    for (uint32_t h = 0; h < num_rows; ++h) {
+        uint32_t page_src_addr = src_addr;
+        for (uint32_t w = 0; w < pages_per_row; ++w) {
+            noc.async_write_with_state<opts, max_page_size>(
+                CoreLocalMem<uint32_t>(page_src_addr), dst, page_size, {}, {.noc_addr = dst_noc_addr});
+            page_src_addr += page_size;
+            dst_noc_addr += page_size;
+        }
+        src_addr += src_row_stride;
+    }
+}
+
+// One receiver's slice of a strided stage: num_rows rows of pages_per_row pages, src_row_stride apart at
+// src_addr, written back to back from dst_noc_addr. The receiver is fixed for the slice, so its NoC target
+// is programmed once; a page that fits in one burst is then a single packet that supplies only addresses.
+template <NocOptions opts>
+FORCE_INLINE void write_rows_to_receiver(
+    const Noc& noc,
+    uint64_t dst_noc_addr,
+    uint32_t src_addr,
+    uint32_t num_rows,
+    uint32_t pages_per_row,
+    uint32_t page_size,
+    uint32_t src_row_stride) {
+    if (page_size <= NOC_MAX_BURST_SIZE) {
+        write_rows_with_state<opts, NOC_MAX_BURST_SIZE>(
+            noc, dst_noc_addr, src_addr, num_rows, pages_per_row, page_size, src_row_stride);
+    } else {
+        write_rows_with_state<opts, NOC_MAX_BURST_SIZE + 1>(
+            noc, dst_noc_addr, src_addr, num_rows, pages_per_row, page_size, src_row_stride);
+    }
+}
+
+}  // namespace detail
+
 template <bool skip_ptr_update = true>
 FORCE_INLINE void remote_cb_push_back_and_write_pages(
     uint32_t cb_id,
@@ -356,8 +407,8 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
 
     uint32_t next_receiver_start_addr_stride = coalesced_num_pages_per_row * coalesced_page_size;
     uint32_t next_block_row_stride = next_receiver_start_addr_stride * num_receivers;
-
-    uint32_t dest_addr;
+    constexpr NocOptions write_opts = posted ? NocOptions::POSTED : NocOptions::DEFAULT;
+    const Noc write_noc(noc);
 
     uint32_t next_receiver_start_addr_offset = 0;
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
@@ -369,31 +420,22 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
     volatile tt_l1_ptr uint32_t* remote_noc_xy_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.receiver_noc_xy_ptr);
     for (uint32_t i = 0; i < num_receivers; ++i) {
-        uint32_t src_addr = local_cb_addr + next_receiver_start_addr_offset;
-        dest_addr = fifo_wr_ptr;
-
-        uint32_t remote_noc_xy = uint32_t(
-            NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, remote_noc_xy_ptr[0]), DYNAMIC_NOC_Y(noc, remote_noc_xy_ptr[1])));
-        uint64_t dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
-
-        noc_async_write_one_packet_set_state<posted>(dest_noc_addr, coalesced_page_size, noc);
-
-        for (uint32_t h = 0; h < num_rows; ++h) {
-            uint32_t prev_src_addr = src_addr;
-            for (uint32_t w = 0; w < coalesced_num_pages_per_row; ++w) {
-                dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
-
-                noc_async_write_one_packet_with_state<posted>(src_addr, dest_noc_addr, noc);
-
-                src_addr += coalesced_page_size;
-                dest_addr += coalesced_page_size;
-            }
-            src_addr = prev_src_addr + next_block_row_stride;
-        }
+        // Receiver base address; offsets are added to it (offset arithmetic on a NoC
+        // address stays within the local-address bits, so it is backend-agnostic).
+        const uint64_t receiver_base =
+            noc_address_backend::worker_address(remote_noc_xy_ptr[0], remote_noc_xy_ptr[1], 0, noc);
+        detail::write_rows_to_receiver<write_opts>(
+            write_noc,
+            receiver_base + fifo_wr_ptr,
+            local_cb_addr + next_receiver_start_addr_offset,
+            num_rows,
+            coalesced_num_pages_per_row,
+            coalesced_page_size,
+            next_block_row_stride);
         next_receiver_start_addr_offset += next_receiver_start_addr_stride;
         *pages_sent_ptr += pages_sent;
 
-        uint64_t remote_sent_ptr_addr = get_noc_addr_helper(remote_noc_xy, remote_sent_base);
+        uint64_t remote_sent_ptr_addr = receiver_base + remote_sent_base;
         noc_semaphore_inc<posted>(remote_sent_ptr_addr, pages_sent, noc);
         // Local stride may be smaller than the remote stride on a DRISC sender (see
         // REMOTE_CB_LOCAL_PAGES_STRIDE) — the receiver-side layout is always L1-aligned.
@@ -402,6 +444,7 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
         remote_noc_xy_ptr += 2;
     }
 
+    uint32_t dest_addr = fifo_wr_ptr + num_rows * next_receiver_start_addr_stride;
     if (dest_addr == fifo_limit_page_aligned) {
         dest_addr = fifo_start_addr;
     }
@@ -416,6 +459,14 @@ FORCE_INLINE void align_local_cbs_to_remote_cb(
     // We assert that the offset of sender and receiver common attributes are the same
     // so we can use either interface here
     const RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(remote_cb_index);
+    // The align define is emitted per-kernel, so a kernel spanning a core range where only some cores
+    // own this remote CB also runs here on cores that don't. setup_remote_cb_interfaces zeroes
+    // fifo_start_addr on those cores, so fifo_start_addr == 0 means "remote CB not present here" (a real
+    // start is an L1 buffer address, never 0): nothing to align, and the interface may hold stale state
+    // from a prior program, so skip.
+    if (remote_cb.fifo_start_addr == 0) {
+        return;
+    }
     uint32_t fifo_limit = remote_cb.fifo_limit_page_aligned >> cb_addr_shift;
     uint32_t fifo_size = fifo_limit - (remote_cb.fifo_start_addr >> cb_addr_shift);
     uint32_t fifo_ptr = remote_cb.fifo_rd_ptr >> cb_addr_shift;
@@ -496,6 +547,7 @@ public:
         uint32_t coalesced_page_size,
         const typename noc_traits_t<Src>::src_args_type& src_args =
             typename noc_traits_t<Src>::src_args_type{}) {
+        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
         auto src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(
             src, noc, src_args);
         remote_cb_push_back_and_write_pages<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
@@ -612,14 +664,21 @@ public:
      * @return A scoped lock on the RemoteCircularBuffer
      */
     [[nodiscard]] auto scoped_lock() {
-        return Lock([this]() { release_scoped_lock(); });
+#if defined(DEVICE_DEBUG_DUMP) && defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
+        const RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(remote_cb_index_);
+        uint32_t addr = remote_cb.fifo_start_addr;
+        ASSERT(addr != 0);
+        uint32_t num_bytes = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.config_ptr)[3];
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_LOCK, addr, num_bytes);
+        return Lock([addr, num_bytes]() {
+            RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::CB_UNLOCK, addr, num_bytes);
+        });
+#else
+        return Lock([]() {});
+#endif
     }
 
 private:
-    void release_scoped_lock() {
-        // TODO: Unregister with the debugger
-    }
-
     uint32_t remote_cb_index_;
 };
 

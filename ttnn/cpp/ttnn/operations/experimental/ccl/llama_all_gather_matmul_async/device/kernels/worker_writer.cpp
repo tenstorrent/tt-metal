@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -12,6 +14,7 @@
 
 using address_t = uint32_t;
 FORCE_INLINE void advance_local_read_address_for_fabric_write(
+    Noc& noc,
     uint64_t noc0_dest_noc_addr,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
@@ -44,7 +47,7 @@ FORCE_INLINE void advance_local_read_address_for_fabric_write(
             (uint32_t)pkt_hdr_backward, sizeof(PACKET_HEADER_TYPE));
     }
 
-    noc_async_writes_flushed();
+    noc.async_writes_flushed();
 
     l1_read_addr += payload_size_bytes;
 }
@@ -96,16 +99,20 @@ void kernel_main() {
         FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
             arg_idx);
 
+    Noc noc_obj;
+    CircularBuffer cb_pkt_hdr(reserved_packet_header_cb_id);
+    CircularBuffer cb0(cb0_id);
+
     // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
+    cb_pkt_hdr.reserve_back(1);
+    auto packet_header_buffer_addr_forward = cb_pkt_hdr.get_write_ptr();
+    cb_pkt_hdr.push_back(1);
+    cb_pkt_hdr.reserve_back(1);
+    auto packet_header_buffer_addr_backward = cb_pkt_hdr.get_write_ptr();
+    cb_pkt_hdr.push_back(1);
+    cb_pkt_hdr.reserve_back(1);
+    auto packet_header_buffer_seminc = cb_pkt_hdr.get_write_ptr();
+    cb_pkt_hdr.push_back(1);
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -126,8 +133,8 @@ void kernel_main() {
     while (tiles_read < num_tiles_to_read) {
         uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
         num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
-        cb_wait_front(cb0_id, num_tiles_to_read_this_core);
-        size_t l1_read_addr = get_read_ptr(cb0_id);
+        cb0.wait_front(num_tiles_to_read_this_core);
+        size_t l1_read_addr = cb0.get_read_ptr();
 
         uint64_t noc0_dest_noc_addr =
             get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
@@ -135,6 +142,7 @@ void kernel_main() {
 
         // This issues a flush barrier
         advance_local_read_address_for_fabric_write(
+            noc_obj,
             noc0_dest_noc_addr,
             pkt_hdr_forward,
             pkt_hdr_backward,
@@ -147,7 +155,7 @@ void kernel_main() {
             std::swap(pkt_hdr_forward, pkt_hdr_backward);
         }
 
-        cb_pop_front(cb0_id, num_tiles_to_read_this_core);
+        cb0.pop_front(num_tiles_to_read_this_core);
         tiles_read += num_tiles_to_read_this_core;
         shard_tile_id += num_tiles_to_read_this_core;
         if (shard_tile_id >= num_tiles_per_core) {
@@ -181,5 +189,5 @@ void kernel_main() {
     }
 
     fabric_connection.close();
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

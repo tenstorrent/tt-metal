@@ -26,12 +26,13 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
     // Reconfigure input
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
+    reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+    copy_init(mm_partials_cb_id);
     cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
-    copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
+    copy_block(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
     cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
     // Reconfigure srcA back
@@ -225,7 +226,7 @@ void kernel_main() {
 #endif
 
                         uint32_t start_dst_index = 0;
-                        pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                        pack_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
 
                         tile_regs_release();
                         cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
@@ -250,7 +251,7 @@ void kernel_main() {
 #endif
 
                         uint32_t start_dst_index = 0;
-                        pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+                        pack_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
 
                         tile_regs_release();
                         cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
@@ -305,9 +306,9 @@ void kernel_main() {
 
         reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
         if constexpr (row_broadcast_bias) {
-            add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
+            add_bcast_rows_init(mm_partials_cb_id, bias_cb_id);
         } else {
-            add_tiles_init(mm_partials_cb_id, bias_cb_id);
+            add_init(mm_partials_cb_id, bias_cb_id);
         }
         // reconfigure unpacker df for src B
         cb_wait_front(bias_cb_id, in1_per_core_w);
@@ -370,7 +371,7 @@ void kernel_main() {
 #endif
 #endif  // FUSE_BIAS
             pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
-            copy_tile_to_dst_init_short(mm_partials_cb_id);
+            copy_init(mm_partials_cb_id);
             for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                 reblock_and_untilize<out_subblock_w, out_block_w>(
                     in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_cb_id, out_cb_id);

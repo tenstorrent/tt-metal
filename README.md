@@ -65,7 +65,9 @@ The Models team is focused on developing the following models, optimizing them f
 
 Blackhole software optimization is under active development.  Please join us in shaping the future of open source AI! <br> [\[Discord\]](https://discord.gg/tenstorrent) [\[Developer Hub\]](https://tenstorrent.com/developers)
 
-For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM TT plugin README](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/README.md).
+For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM TT plugin README](https://github.com/tenstorrent/vllm-tt-plugin).
+Note that the previously maintained [vLLM TT fork](https://github.com/tenstorrent/vllm)
+is deprecated.
 
 ## Model Updates
 
@@ -78,6 +80,7 @@ For information on initial model procedures, please see [Model Bring-Up and Test
 ## TT-NN Tech Reports
 
 - [Advanced Performance Optimizations for Models](./tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) (updated March 4th, 2025)
+- [CCL Performance Tuning Tips](./tech_reports/CCLs/CCL_Performance_Best_Practices.md) (updated Sept 24th, 2026)
 - [ViT Implementation in TT-NN on GS](./tech_reports/ViT-TTNN/vit.md)  (updated Sept 22nd, 2024)
 - [LLMs Bring up in TT-NN](./tech_reports/LLMs/llms.md)  (updated Oct 29th, 2024)
 - [CNN Bring up & Optimization in TT-NN](./tech_reports/CNNs/cnn_optimizations.md) (updated Jan 22nd, 2025)
@@ -85,6 +88,7 @@ For information on initial model procedures, please see [Model Bring-Up and Test
 ## Benchmarks
 
 - [Matrix Multiply FLOPS on Wormhole and Blackhole](./tech_reports/GEMM_FLOPS/GEMM_FLOPS.md)  (updated June 17th, 2025)
+- [CCL Bandwidth on Wormhole and Blackhole](./tech_reports/CCLs/CCL_bandwidth.md)  (updated Sept 24th, 2026)
 
 ---
 

@@ -7,12 +7,16 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
+#include <type_traits>
 #include <utility>
 #include <string>
 #include <tuple>
 #include <ostream>
 
+#include <fmt/base.h>
 #include <fmt/core.h>
+#include <fmt/format.h>
 
 namespace tt::tt_metal {
 

@@ -186,6 +186,32 @@ def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] |
     _mesh = mesh
 
 
+def close_device_mesh() -> None:
+    """Tear down the global device mesh opened by :func:`open_device_mesh`.
+
+    Reverses, in opposite order, the state ``open_device_mesh`` installs:
+
+      1. ``_mesh = mesh``            -> ``_mesh = None`` (this function)
+      2. ``AutoContext.open_device`` -> ``AutoContext.close_device``
+      3. ``enable_fabric``           -> ``disable_fabric``
+
+    Steps 2 and 3 are both handled by a single ``close_device()`` call:
+    ``AutoContext::close_device`` drops the ``MeshDevice`` *and* calls
+    ``disable_fabric()`` (see auto_context.cpp), which is exactly the
+    process-global fabric config ``open_device_mesh`` arms via
+    ``enable_fabric`` for multi-device meshes. That call is idempotent — it is
+    safe when no device is open and when fabric was never enabled (a
+    single-device mesh) — so this function needs no bookkeeping of what open
+    actually did, and is itself safe to call repeatedly or when nothing is
+    open.
+    """
+    global _mesh
+    try:
+        ttml.autograd.AutoContext.get_instance().close_device()
+    finally:
+        _mesh = None
+
+
 def maybe_mesh() -> Mesh | None:
     """Return the active device mesh, or ``None`` if no mesh has been opened."""
     global _mesh

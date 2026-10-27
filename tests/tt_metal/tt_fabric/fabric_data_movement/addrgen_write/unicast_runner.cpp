@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <numeric>
 #include <vector>
 
 #include <tt-metalium/tt_metal.hpp>
@@ -46,11 +47,13 @@ inline bool validate_workload_or_fail(const AddrgenTestParams& p) {
 
 // Resolve forwarding link and fail early if none found.
 inline bool pick_forwarding_link_or_fail(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const tt::tt_fabric::FabricNodeId& /*src*/,
     const tt::tt_fabric::FabricNodeId& /*dst*/,
     uint32_t& out_link_idx,
     const AddrgenTestParams& p) {
     auto links = tt::tt_fabric::get_forwarding_link_indices(
+        mesh_device,
         tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip},
         tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip});
 
@@ -63,24 +66,10 @@ inline bool pick_forwarding_link_or_fail(
     return true;
 }
 
-// Device lookup and basic existence check.
-inline bool lookup_devices_or_fail(
-    ChipId src_phys, ChipId dst_phys, tt::tt_metal::IDevice*& src_dev, tt::tt_metal::IDevice*& dst_dev) {
-    src_dev = tt::tt_metal::detail::GetActiveDevice(src_phys);
-    dst_dev = tt::tt_metal::detail::GetActiveDevice(dst_phys);
-    if (!src_dev || !dst_dev) {
-        ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
-        return false;
-    }
-    return true;
-}
-
 // Generate deterministic TX pattern.
 inline std::vector<uint32_t> make_tx_pattern(size_t n_words) {
     std::vector<uint32_t> tx(n_words);
-    for (size_t i = 0; i < n_words; ++i) {
-        tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
-    }
+    std::iota(tx.begin(), tx.end(), 0xA5A50000u);
     return tx;
 }
 
@@ -90,12 +79,11 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
         ADD_FAILURE() << "RX size mismatch: got " << rx.size() << " words, expected " << tx.size();
         return;
     }
-    for (size_t i = 0; i < rx.size(); ++i) {
-        if (rx[i] != tx[i]) {
-            ADD_FAILURE() << "Data mismatch at word " << i << " (got 0x" << std::hex << rx[i] << ", exp 0x" << tx[i]
-                          << std::dec << ")";
-            return;
-        }
+    auto it = std::mismatch(rx.begin(), rx.end(), tx.begin());
+    if (it.first != rx.end()) {
+        const size_t i = static_cast<size_t>(it.first - rx.begin());
+        ADD_FAILURE() << "Data mismatch at word " << i << " (got 0x" << std::hex << *it.first << ", exp 0x"
+                      << *it.second << std::dec << ")";
     }
     // OK -> no failure emitted
 }
@@ -121,17 +109,9 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
     ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
 
-    tt::tt_metal::IDevice* src_dev = nullptr;
-    tt::tt_metal::IDevice* dst_dev = nullptr;
-    if (!lookup_devices_or_fail(src_phys, dst_phys, src_dev, dst_dev)) {
-        return;
-    }
-
     if (!validate_workload_or_fail(p)) {
         return;
     }
-
-    tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
 
     // --- Mesh device + coords for per-shard IO ---
     auto mesh = fixture->get_mesh_device();
@@ -203,8 +183,8 @@ Notes:
     tt::tt_metal::CoreRangeSet rx_core_set(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
     static std::optional<tt::tt_metal::GlobalSemaphore> gsem;
     if (!gsem) {
-        gsem = tt::tt_metal::CreateGlobalSemaphore(
-            mesh.get(),
+        gsem = tt::tt_metal::GlobalSemaphore(
+            *mesh,
             rx_core_set,
             /*initial_value=*/0);
     }
@@ -320,10 +300,11 @@ Notes:
 
     // Resolve forwarding and append fabric connection args
     uint32_t link_idx = 0;
-    if (!pick_forwarding_link_or_fail(src, dst, link_idx, p)) {
+    if (!pick_forwarding_link_or_fail(*mesh, src, dst, link_idx, p)) {
         return;
     }
 
+    tt::tt_metal::CoreCoord rx_xy = mesh->worker_core_from_logical_core(p.receiver_core);
     std::vector<uint32_t> writer_rt = {
         (uint32_t)dst_buf->address(),  // 0: dst_base (receiver L1 offset)
         (uint32_t)p.mesh_id,           // 1: dst_mesh_id (logical)

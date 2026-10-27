@@ -22,7 +22,6 @@
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/operations/full_like/full_like.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 // Make NamedParameters opaque - must be before unordered_map include
@@ -35,6 +34,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_profiler.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 #include "utils/memory_utils.hpp"
@@ -101,17 +101,13 @@ void py_module(nb::module_& m) {
 
     m.def(
         "zeros_like",
-        [](const tt::tt_metal::Tensor& tensor) -> tt::tt_metal::Tensor {
-            return ttnn::moreh_full_like(tensor, 0.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
-        },
+        [](const ttnn::Tensor& tensor) -> ttnn::Tensor { return ttml::core::zeros_like(tensor); },
         nb::arg("tensor"),
         "Create a zero tensor with the same shape and properties as the input tensor");
 
     m.def(
         "ones_like",
-        [](const tt::tt_metal::Tensor& tensor) -> tt::tt_metal::Tensor {
-            return ttnn::moreh_full_like(tensor, 1.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
-        },
+        [](const ttnn::Tensor& tensor) -> ttnn::Tensor { return ttml::core::ones_like(tensor); },
         nb::arg("tensor"),
         "Create a ones tensor with the same shape and properties as the input tensor");
 
@@ -138,6 +134,12 @@ void py_module(nb::module_& m) {
             &ttnn_fixed::distributed::disable_fabric,
             "Tear down the process-global fabric config (SetFabricConfig(DISABLED)). "
             "Safe to call only when no devices are open; close the mesh device first.");
+        py_distributed.def(
+            "release_metal_env",
+            &ttnn_fixed::distributed::release_metal_env,
+            "Destroy the process-global MetalContext and the MetalEnv it owns, so the next "
+            "device access rebuilds both from the current environment. Raises if any device "
+            "is still open.");
 
         // Returns std::unique_ptr<TensorToMesh>
         py_distributed.def(
@@ -200,20 +202,20 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none(),
-            "Raw all_gather without autograd tracking. Returns a new tt::tt_metal::Tensor.");
+            "Raw all_gather without autograd tracking. Returns a new ttnn::Tensor.");
         py_distributed.def(
             "reduce_scatter",
             &ttml::ttnn_fixed::distributed::reduce_scatter,
             nb::arg("tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none(),
-            "Raw reduce_scatter without autograd tracking. Returns a new tt::tt_metal::Tensor.");
+            "Raw reduce_scatter without autograd tracking. Returns a new ttnn::Tensor.");
         py_distributed.def(
             "all_reduce",
             &ttml::ttnn_fixed::distributed::all_reduce,
             nb::arg("tensor"),
             nb::arg("cluster_axis") = nb::none(),
-            "Raw all_reduce without autograd tracking. Returns a new tt::tt_metal::Tensor.");
+            "Raw all_reduce without autograd tracking. Returns a new ttnn::Tensor.");
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
@@ -300,8 +302,7 @@ void py_module(nb::module_& m) {
                     auto filled = self.recv(tensor.get_grad(), ctx, Rank{rank});
                     tensor.set_grad(filled);
                 } else {
-                    auto filled = self.recv(tensor.get_value(), ctx, Rank{rank});
-                    tensor.set_value(filled);
+                    self.recv_value(tensor, ctx, Rank{rank});
                 }
                 return tensor;
             },
@@ -433,7 +434,7 @@ void py_module(nb::module_& m) {
                 name: The name to store the trace under (default: "END_TRACE")
 
             Note:
-                If capture is not active, this function prints a warning.
+                If capture is not active, this function does nothing.
                 Not thread safe.
             )doc");
 
@@ -472,7 +473,8 @@ void py_module(nb::module_& m) {
                 DRAMUsage object with peak, total_allocations, and total_deallocations fields
 
             Raises:
-                RuntimeError: If the named trace doesn't exist
+                RuntimeError: If the named trace doesn't exist, or if more than one
+                    segment shares the name (use get_dram_usage_all() for duplicates)
 
             Note:
                 Not thread safe.
@@ -505,7 +507,8 @@ void py_module(nb::module_& m) {
                 L1UsagePerCore object with peak_cb, peak_l1, and peak_total fields
 
             Raises:
-                RuntimeError: If the named trace doesn't exist
+                RuntimeError: If the named trace doesn't exist, or if more than one
+                    segment shares the name (use get_l1_usage_all() for duplicates)
 
             Note:
                 Not thread safe.

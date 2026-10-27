@@ -1,0 +1,215 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""Parsers for the perf counter headers in tools/include/perf_counters, the single source of counter names.
+types.h gives the ordinal -> name table the firmware tags records with; <arch>.h gives (bank, select) -> name.
+"""
+
+import importlib.util
+import os
+import re
+from pathlib import Path
+from typing import Dict, List, NamedTuple, Optional
+
+_PACKAGE_DIR = Path(__file__).resolve().parent
+
+# Array name in <arch>.h -> bank key. l1_<mux>_counters arrays are handled separately.
+_ARRAY_TO_BANK = {
+    "instrn_counters": "INSTRN",
+    "fpu_counters": "FPU",
+    "unpack_counters": "TDMA_UNPACK",
+    "pack_counters": "TDMA_PACK",
+}
+BANK_KEYS = ("INSTRN", "FPU", "TDMA_UNPACK", "TDMA_PACK", "L1")
+
+_ARCH_HEADER = {
+    "blackhole": "blackhole.h",
+    "wormhole": "wormhole.h",
+    "wormhole_b0": "wormhole.h",
+    "quasar": "quasar.h",
+}
+# Quasar has no L1 counter bank (its l1_client CSR is not a select table).
+_ARCHES_WITHOUT_L1 = ("quasar",)
+
+
+class CounterEntry(NamedTuple):
+    name: str
+    select: int
+    l1_mux: Optional[int]
+
+
+def _candidate_include_dirs(explicit) -> List[Path]:
+    candidates: List[Path] = []
+    if explicit is not None:
+        candidates.append(Path(explicit))
+    llk_home = os.environ.get("LLK_HOME")
+    if llk_home:
+        candidates.append(Path(llk_home) / "tools" / "include" / "perf_counters")
+    candidates.append(_PACKAGE_DIR.parents[1] / "include" / "perf_counters")
+    metal_home = os.environ.get("TT_METAL_HOME")
+    if metal_home:
+        candidates.append(
+            Path(metal_home)
+            / "tt_metal"
+            / "tt-llk"
+            / "tools"
+            / "include"
+            / "perf_counters"
+        )
+    # An installed ttnn wheel carries the headers as package data next to ttnn/__init__.py.
+    ttnn_dir = _ttnn_package_dir()
+    if ttnn_dir is not None:
+        candidates.append(
+            ttnn_dir / "tt_metal" / "tt-llk" / "tools" / "include" / "perf_counters"
+        )
+    return candidates
+
+
+def _ttnn_package_dir() -> Optional[Path]:
+    try:
+        spec = importlib.util.find_spec("ttnn")
+    except (ImportError, ValueError):
+        return None
+    if spec is None:
+        return None
+    if spec.origin and spec.origin != "namespace":
+        return Path(spec.origin).resolve().parent
+    if spec.submodule_search_locations:
+        return Path(next(iter(spec.submodule_search_locations))).resolve()
+    return None
+
+
+def find_include_dir(explicit=None) -> Path:
+    """The perf_counters header directory; the first existing candidate wins."""
+    candidates = _candidate_include_dirs(explicit)
+    for candidate in candidates:
+        if (candidate / "types.h").is_file():
+            return candidate
+    tried = "\n  ".join(str(c) for c in candidates)
+    raise FileNotFoundError(
+        "Could not find the perf_counters headers (types.h). Tried:\n  " + tried
+    )
+
+
+def _strip_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def _enum_body(text: str, enum_name: str) -> str:
+    match = re.search(
+        rf"enum\s+(?:class\s+|struct\s+)?{enum_name}\b[^{{]*\{{(.*?)\}}\s*;", text, re.S
+    )
+    if match is None:
+        raise ValueError(f"enum {enum_name} not found")
+    return match.group(1)
+
+
+def parse_enum(text: str, enum_name: str = "PerfCounterType") -> Dict[int, str]:
+    """Ordinal -> name for a C++ enum body, honouring explicit `= N` assignments."""
+    body = _strip_comments(_enum_body(text, enum_name))
+    names: Dict[int, str] = {}
+    value = -1
+    for token in body.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        match = re.fullmatch(
+            r"([A-Za-z_]\w*)\s*(?:=\s*(0[xX][0-9a-fA-F]+|\d+))?", token
+        )
+        if match is None:
+            raise ValueError(f"unexpected enumerator {token!r} in enum {enum_name}")
+        value = int(match.group(2), 0) if match.group(2) else value + 1
+        if value in names:
+            raise ValueError(f"duplicate ordinal {value} in enum {enum_name}")
+        names[value] = match.group(1)
+    return names
+
+
+def num_neos(include_dir=None) -> int:
+    """NUM_NEOS from registers.h: the NEO execution units a Quasar core carries."""
+    header = find_include_dir(include_dir) / "registers.h"
+    match = re.search(r"NUM_NEOS\s*=\s*(\d+)", _strip_comments(header.read_text()))
+    if match is None:
+        raise ValueError(f"NUM_NEOS not found in {header}")
+    return int(match.group(1))
+
+
+def counter_type_names(include_dir=None) -> Dict[int, str]:
+    """Ordinal -> name table of PerfCounterType, parsed from types.h."""
+    header = find_include_dir(include_dir) / "types.h"
+    names = parse_enum(header.read_text())
+    if not names:
+        raise ValueError(f"enum PerfCounterType in {header} parsed empty")
+    return names
+
+
+# LLK_PERF_TABLE_SECTION (quasar.h) may sit between the array name and =
+_TABLE_DECL = re.compile(
+    r"std::array<\s*Entry\s*,\s*(\d+)\s*>\s+(\w+_counters)\b[^=;]*="
+)
+_TABLE_ENTRY = re.compile(r"\{\s*PerfCounterType::(\w+)\s*,\s*([^{}]*?)\s*\}")
+_SELECT_LITERAL = re.compile(r"0[xX][0-9a-fA-F]+|0|[1-9]\d*")
+
+
+def _table_entries(name: str, size: int, chunk: str) -> List[tuple]:
+    """(name, select) pairs of one table; raises on a non-literal select or a count other than the array size."""
+    pairs = []
+    for counter, select in _TABLE_ENTRY.findall(chunk):
+        if _SELECT_LITERAL.fullmatch(select) is None:
+            raise ValueError(
+                f"{name}: select {select!r} of {counter} is not an integer literal"
+            )
+        pairs.append((counter, int(select, 0)))
+    if len(pairs) != size:
+        raise ValueError(
+            f"{name}: parsed {len(pairs)} entries but the array declares {size}"
+        )
+    return pairs
+
+
+def parse_tables(text: str) -> Dict[str, List[CounterEntry]]:
+    """Bank -> entries for one <arch>.h; empty arrays (Wormhole L1 banks 2-5) are skipped."""
+    banks: Dict[str, List[CounterEntry]] = {bank: [] for bank in BANK_KEYS}
+    text = _strip_comments(text)
+    decls = list(_TABLE_DECL.finditer(text))
+    for i, decl in enumerate(decls):
+        size, name = int(decl.group(1)), decl.group(2)
+        chunk = text[decl.end() : decls[i + 1].start() if i + 1 < len(decls) else None]
+        chunk = chunk.split("};", 1)[0]
+        pairs = _table_entries(name, size, chunk)
+        if not pairs:
+            continue
+        l1 = re.fullmatch(r"l1_(\d+)_counters", name)
+        if l1 is not None:
+            mux = int(l1.group(1))
+            banks["L1"].extend(CounterEntry(n, s, mux) for n, s in pairs)
+        elif name in _ARRAY_TO_BANK:
+            banks[_ARRAY_TO_BANK[name]].extend(
+                CounterEntry(n, s, None) for n, s in pairs
+            )
+    return banks
+
+
+def normalize_arch(arch) -> str:
+    """Lower-case arch name; accepts an enum through its .value (the harness ChipArchitecture)."""
+    return str(getattr(arch, "value", arch)).lower()
+
+
+def bank_tables(arch, include_dir=None) -> Dict[str, List[CounterEntry]]:
+    """Bank -> [CounterEntry] for one arch; every bank key is present, Quasar's L1 is empty."""
+    arch = normalize_arch(arch)
+    if arch not in _ARCH_HEADER:
+        raise ValueError(
+            f"unknown arch {arch!r}; expected one of {sorted(_ARCH_HEADER)}"
+        )
+    header = find_include_dir(include_dir) / _ARCH_HEADER[arch]
+    banks = parse_tables(header.read_text())
+    optional = ("L1",) if arch in _ARCHES_WITHOUT_L1 else ()
+    empty = [bank for bank in BANK_KEYS if not banks[bank] and bank not in optional]
+    if empty:
+        raise ValueError(
+            f"{header}: banks {empty} parsed empty. The table syntax probably changed; "
+            "the parser expects {PerfCounterType::NAME, <select>} entries in *_counters arrays."
+        )
+    return banks

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "buffer_distribution_spec.hpp"
+#include "impl/buffers/compute_page_mapping.hpp"
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/math.hpp>
@@ -30,6 +31,11 @@ struct PageMappingIntermData {
     uint32_t* actual_shard_size = nullptr;
     size_t core_id = 0;
     size_t shard_id = 0;
+
+    // Shard-contiguous (CONTIGUOUS_1D) placement: adjacent shards fill one core's slots before advancing.
+    // When false, the default round-robin placement is used.
+    bool shard_contiguous_placement = false;
+    size_t shards_per_core = 0;  // only meaningful when shard_contiguous_placement is true
 };
 
 void iterate_within_shard(PageMappingIntermData& params, size_t dim, size_t src_offset, size_t dst_offset) {
@@ -47,8 +53,16 @@ void iterate_within_shard(PageMappingIntermData& params, size_t dim, size_t src_
 
 void iterate_over_shards(PageMappingIntermData& params, size_t dim, size_t src_offset) {
     if (dim == params.rank) {
-        params.core_id = params.shard_id % params.num_cores;
-        size_t dst_offset = (params.shard_id / params.num_cores) * params.shard_volume;
+        size_t dst_offset = 0;
+        if (params.shard_contiguous_placement) {
+            // Contiguous: shards_per_core consecutive shards fill one core's slots [0..shards_per_core)
+            // before advancing to the next core.
+            params.core_id = params.shard_id / params.shards_per_core;
+            dst_offset = (params.shard_id % params.shards_per_core) * params.shard_volume;
+        } else {
+            params.core_id = params.shard_id % params.num_cores;
+            dst_offset = (params.shard_id / params.num_cores) * params.shard_volume;
+        }
 
         iterate_within_shard(params, 0, src_offset, dst_offset);
 
@@ -82,6 +96,15 @@ tt::tt_metal::Shape convert_shape_to_pages(tt::tt_metal::Shape shape, const tt::
     return shape;
 }
 
+// Page-id step of dim d: the product of the tensor dims after it.
+uint32_t tensor_stride(const tt::tt_metal::Shape& tensor_shape, int d) {
+    uint32_t stride = 1;
+    for (int i = static_cast<int>(tensor_shape.rank()) - 1; i > d; --i) {
+        stride *= tensor_shape[i];
+    }
+    return stride;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -103,7 +126,8 @@ BufferDistributionSpec::BufferDistributionSpec(
     const tt::tt_metal::Shape& shard_shape_in_pages,
     const CoreRangeSet& core_range_set,
     ShardOrientation shard_orientation,
-    ShardDistributionStrategy shard_distribution_strategy) {
+    ShardDistributionStrategy shard_distribution_strategy) :
+    shard_distribution_strategy_(shard_distribution_strategy) {
     TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.volume() != 0, "Shard shape must have non zero volume!");
@@ -141,7 +165,10 @@ std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
     const CoreRangeSet& core_range_set,
     ShardOrientation shard_orientation,
     ShardDistributionStrategy shard_distribution_strategy) {
-    if (shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D) {
+    if (shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D ||
+        shard_distribution_strategy == ShardDistributionStrategy::CONTIGUOUS_1D) {
+        // Both 1D strategies linearize the core grid identically; they differ only in how shards
+        // are assigned to that list (round-robin vs. shard-contiguous), which is handled in iterate_over_shards.
         return corerange_to_cores(
             core_range_set, core_range_set.num_cores(), shard_orientation == ShardOrientation::ROW_MAJOR);
     }
@@ -192,6 +219,60 @@ size_t BufferDistributionSpec::num_shards_per_core(size_t core_idx) const {
 
 size_t BufferDistributionSpec::num_dev_pages_per_core(size_t core_idx) const {
     return num_shards_per_core(core_idx) * shard_volume_;
+}
+
+int BufferDistributionSpec::contiguous_page_dim() const {
+    const int rank = static_cast<int>(shard_shape_in_pages_.rank());
+    for (int i = rank - 1; i >= 0; --i) {
+        if (shard_shape_in_pages_[i] > 1) {
+            return i;
+        }
+    }
+    return rank - 1;
+}
+
+uint32_t BufferDistributionSpec::contiguous_page_stride() const {
+    return CMAKE_UNIQUE_NAMESPACE::tensor_stride(tensor_shape_in_pages_, contiguous_page_dim());
+}
+
+uint32_t BufferDistributionSpec::num_contiguous_pages(uint32_t page_id) const {
+    return num_contiguous_pages(page_id, tensor_shape_in_pages_.volume());
+}
+
+uint32_t BufferDistributionSpec::num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const {
+    const uint32_t tensor_volume = tensor_shape_in_pages_.volume();
+    TT_FATAL(page_id < end_page_id, "page_id {} must be less than end_page_id {}", page_id, end_page_id);
+    TT_FATAL(end_page_id <= tensor_volume, "end_page_id {} exceeds tensor volume {}", end_page_id, tensor_volume);
+
+    const int d = contiguous_page_dim();
+    const uint32_t stride = CMAKE_UNIQUE_NAMESPACE::tensor_stride(tensor_shape_in_pages_, d);
+
+    // The shard is one page wide after d, so the walk starts at d. Dividing by stride drops the dims after d;
+    // skip it when d is the last dim (stride 1), matching the device accessor.
+    uint32_t coords = (d == static_cast<int>(tensor_shape_in_pages_.rank()) - 1) ? page_id : page_id / stride;
+
+    uint32_t run = 1;
+    uint32_t block = 1;  // run entries per step of dim i
+    for (int i = d; i >= 0; --i) {
+        const uint32_t extent = tensor_shape_in_pages_[i];
+        const uint32_t shard_extent = shard_shape_in_pages_[i];
+        const uint32_t page_coord = coords % extent;
+        coords /= extent;
+
+        const uint32_t to_shard_edge = shard_extent - page_coord % shard_extent;
+        const uint32_t to_tensor_edge = extent - page_coord;
+        run += (std::min(to_shard_edge, to_tensor_edge) - 1) * block;
+
+        // Carry outward only if the shard covers this dim exactly.
+        if (shard_extent != extent) {
+            break;
+        }
+        block *= extent;
+    }
+
+    // end_page_id is in page ids, the run steps by stride.
+    const uint32_t room = (end_page_id - page_id - 1) / stride + 1;
+    return std::min(run, room);
 }
 
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t>
@@ -245,9 +326,17 @@ void BufferDistributionSpec::init_precomputed_data() {
     }
 }
 
+UncompressedBufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
+    return detail::compute_page_mapping(
+        tensor_shape_in_pages_, shard_shape_in_pages_, cores_, shard_distribution_strategy_);
+}
+
 namespace detail {
 UncompressedBufferPageMapping compute_page_mapping(
-    const Shape& tensor_shape, const Shape& shard_shape, const std::vector<CoreCoord>& cores) {
+    const Shape& tensor_shape,
+    const Shape& shard_shape,
+    const std::vector<CoreCoord>& cores,
+    ShardDistributionStrategy shard_distribution_strategy) {
     UncompressedBufferPageMapping page_mapping;
     page_mapping.all_cores = cores;
 
@@ -263,20 +352,28 @@ UncompressedBufferPageMapping compute_page_mapping(
     size_t num_shards_per_core = (num_shards + cores.size() - 1) / cores.size();
     size_t shard_pages = shard_shape.volume();
 
+    const bool shard_contiguous_placement = shard_distribution_strategy == ShardDistributionStrategy::CONTIGUOUS_1D;
+    TT_FATAL(
+        !shard_contiguous_placement || num_shards % cores.size() == 0,
+        "CONTIGUOUS_1D distribution requires a uniform shards-per-core: num_shards ({}) must be divisible by "
+        "num_cores ({}).",
+        num_shards,
+        cores.size());
+
     page_mapping.core_host_page_indices.resize(cores.size());
     for (size_t i = 0; i < cores.size(); i++) {
         page_mapping.core_host_page_indices[i].resize(
             num_shards_per_core * shard_pages, UncompressedBufferPageMapping::PADDING);
     }
 
-    tt::stl::SmallVector<uint32_t> shard_grid(tensor_shape.rank());
+    ttsl::SmallVector<uint32_t> shard_grid(tensor_shape.rank());
     for (size_t i = 0; i < tensor_shape.rank(); i++) {
         shard_grid[i] = (tensor_shape[i] + shard_shape[i] - 1) / shard_shape[i];
     }
 
-    tt::stl::SmallVector<uint64_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape);
-    tt::stl::SmallVector<uint64_t> shard_strides = tt::tt_metal::compute_strides(shard_shape);
-    tt::stl::SmallVector<uint32_t> actual_shard_size(tensor_shape.rank());
+    ttsl::SmallVector<uint64_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape);
+    ttsl::SmallVector<uint64_t> shard_strides = tt::tt_metal::compute_strides(shard_shape);
+    ttsl::SmallVector<uint32_t> actual_shard_size(tensor_shape.rank());
 
     CMAKE_UNIQUE_NAMESPACE::PageMappingIntermData params{
         .page_mapping = &page_mapping,
@@ -291,6 +388,8 @@ UncompressedBufferPageMapping compute_page_mapping(
         .actual_shard_size = actual_shard_size.data(),
         .core_id = 0,
         .shard_id = 0,
+        .shard_contiguous_placement = shard_contiguous_placement,
+        .shards_per_core = num_shards_per_core,
     };
     CMAKE_UNIQUE_NAMESPACE::iterate_over_shards(params, 0, 0);
 
@@ -306,8 +405,8 @@ std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Sha
 
     uint64_t tensor_volume = tensor_shape.volume();
     uint64_t shard_volume = shard_shape.volume();
-    tt::stl::SmallVector<uint32_t> new_tensor_shape;
-    tt::stl::SmallVector<uint32_t> new_shard_shape;
+    ttsl::SmallVector<uint32_t> new_tensor_shape;
+    ttsl::SmallVector<uint32_t> new_shard_shape;
 
     bool matching_dims_sequence = false;
     bool last_dim_divisible = false;

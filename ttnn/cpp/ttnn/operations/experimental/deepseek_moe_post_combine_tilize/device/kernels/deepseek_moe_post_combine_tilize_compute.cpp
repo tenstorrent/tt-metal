@@ -6,25 +6,28 @@
 
 #include "api/compute/cb_api.h"
 #include "api/compute/tilize.h"
-#include "tt-metalium/constants.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+#include "api/tile_constants.h"
 
 void kernel_main() {
-    constexpr uint32_t tilize_input_cb_id = get_named_compile_time_arg_val("tilize_input_cb_id");
-    constexpr uint32_t tilize_output_cb_id = get_named_compile_time_arg_val("tilize_output_cb_id");
-    constexpr uint32_t num_tiles = get_named_compile_time_arg_val("num_tiles");
+    constexpr uint32_t num_tiles = get_arg(args::num_tiles);
 
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
-    compute_kernel_hw_startup(tilize_input_cb_id, tilize_output_cb_id);
-    fast_tilize_init(tilize_input_cb_id, num_tiles, tilize_output_cb_id);
+    DataflowBuffer dfb_tilize_input(dfb::tilize_input);
+    DataflowBuffer dfb_tilize_output(dfb::tilize_output);
 
-    cb_wait_front(tilize_input_cb_id, tile_height);
-    cb_reserve_back(tilize_output_cb_id, num_tiles);
+    compute_kernel_hw_startup(dfb::tilize_input, dfb::tilize_output);
+    fast_tilize_init(dfb::tilize_input, num_tiles, dfb::tilize_output);
 
-    fast_tilize_block(tilize_input_cb_id, num_tiles, tilize_output_cb_id);
+    dfb_tilize_input.wait_front(tile_height);
+    dfb_tilize_output.reserve_back(num_tiles);
 
-    cb_push_back(tilize_output_cb_id, num_tiles);
-    cb_pop_front(tilize_input_cb_id, tile_height);
+    fast_tilize_block(dfb::tilize_input, num_tiles, dfb::tilize_output);
 
-    fast_tilize_uninit(tilize_input_cb_id, tilize_output_cb_id, num_tiles);
+    dfb_tilize_output.push_back(num_tiles);
+    dfb_tilize_input.pop_front(tile_height);
+
+    fast_tilize_uninit(dfb::tilize_input, dfb::tilize_output, num_tiles);
 }

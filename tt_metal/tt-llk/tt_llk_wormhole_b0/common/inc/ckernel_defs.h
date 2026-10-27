@@ -184,7 +184,7 @@ constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(std::uint32_t format)
             return (1024 >> 4);
         default:
             return ((1024 >> 4) + (64 >> 4));
-    };
+    }
 }
 
 constexpr static bool IS_BFP_FORMAT(std::uint32_t format)
@@ -200,7 +200,7 @@ constexpr static bool IS_BFP_FORMAT(std::uint32_t format)
             return true;
         default:
             return false;
-    };
+    }
 }
 
 constexpr static bool IS_BFP_A_FORMAT(std::uint32_t format)
@@ -213,7 +213,7 @@ constexpr static bool IS_BFP_A_FORMAT(std::uint32_t format)
             return true;
         default:
             return false;
-    };
+    }
 }
 
 constexpr static bool IS_A_FORMAT(std::uint32_t format)
@@ -228,7 +228,7 @@ constexpr static bool IS_A_FORMAT(std::uint32_t format)
             return true;
         default:
             return false;
-    };
+    }
 }
 
 constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
@@ -246,7 +246,22 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint3
 
         default:
             return datum_count;
-    };
+    }
+}
+
+// Datum byte size from a data format's low 2 bits: Float32 -> 4, Float16 -> 2, else 1.
+// Distinct from SCALE_DATUM_SIZE above: that switches on the full masked format and has no Tf32 case
+// (returns 1 for Tf32), whereas this keys on (fmt & 0x3) and returns 4 for Tf32 -- the behavior
+// register strides need. The two agree on every other format, so they are NOT interchangeable.
+constexpr static std::uint32_t datum_size_in_bytes(const std::uint32_t format)
+{
+    return (format & 0x3) == to_underlying(DataFormat::Float32) ? 4 : (format & 0x3) == to_underlying(DataFormat::Float16) ? 2 : 1;
+}
+
+// True if the format is Int8 or Int32 -- the formats that enable INT8 math (ALU_ACC_CTRL_INT8_math_enabled).
+constexpr static bool is_int8_or_int32_format(const std::uint32_t format)
+{
+    return (masked_data_format(format) == to_underlying(DataFormat::Int8)) || (format == to_underlying(DataFormat::Int32));
 }
 
 #define LOWER_HALFWORD(x) ((x) & 0xFFFF)
@@ -268,6 +283,15 @@ enum class RoundingMode : std::uint8_t
     Floor = 2,
 };
 
+// Selects how a float32 SFPU result is narrowed when it is stored back into a
+// bf16 DEST. Ignored when fp32 DEST accumulation is enabled, since no narrowing
+// happens in that case.
+enum class DstRoundingMode : std::uint8_t
+{
+    Default     = 0, // SFPSTORE truncates fp32->bf16 on all architectures; no software rounding
+    NearestEven = 1, // IEEE 754 round-to-nearest-even, applied in software before the store
+};
+
 enum class BinaryOp : std::uint8_t
 {
     ADD           = 0,
@@ -287,6 +311,59 @@ enum class BinaryOp : std::uint8_t
     GE            = 14,
     EQ            = 15,
     NE            = 16,
+    // Test-harness binary ops (functional coverage for metal llk_sfpu kernels that
+    // have no dedicated production BinaryOp). Appended at the end so existing values
+    // are unchanged.
+    MAX             = 17,
+    MIN             = 18,
+    FMOD            = 19,
+    REMAINDER       = 20,
+    BITWISE_AND     = 21,
+    BITWISE_OR      = 22,
+    BITWISE_XOR     = 23,
+    DIV_INT32       = 24,
+    DIV_INT32_FLOOR = 25,
+    GCD             = 26,
+    LCM             = 27,
+    RSUB_INT32      = 28,
+    MASK            = 29,
+    ATAN2           = 30,
+    MUL_INT32       = 31,
+    ISCLOSE         = 32,
+    LOGSIGMOID      = 33,
+    // Integer / format-typed binary SFPU kernels (functional coverage). Names match the
+    // corresponding SfpuType enumerators so the coverage guard maps them 1:1.
+    EQ_INT           = 34,
+    NE_INT           = 35,
+    MAX_INT32        = 36,
+    MIN_INT32        = 37,
+    MAX_UINT32       = 38,
+    MIN_UINT32       = 39,
+    REMAINDER_INT32  = 40,
+    REMAINDER_UINT32 = 41,
+    FMOD_INT32       = 42,
+    // nextafter steps the bit pattern, so the step is one ULP of the destination format rather
+    // than a fixed epsilon. bfloat16 carries its mantissa in the top 16 bits of the fp32 dest
+    // register, so it needs its own variant.
+    NEXTAFTER      = 43,
+    NEXTAFTER_BF16 = 44,
+    // LOGADDEXP, LOGADDEXP2, and COPY_DEST have no SfpuType counterpart, so their
+    // inits pass a placeholder (`add1` in the test helpers, `unused` in Compute API).
+    LOGADDEXP  = 45,
+    LOGADDEXP2 = 46,
+    // Quant family and Dest-to-Dest copy. Appended so the values above stay put.
+    // The kernels are calculate_quant_int32 / requant / dequant and copy_dest_value.
+    QUANT     = 47,
+    REQUANT   = 48,
+    DEQUANT   = 49,
+    COPY_DEST = 50,
+    // calculate_mask_posinf (mask_posinf_tile) and the equal_nan=True instantiation of
+    // calculate_sfpu_isclose, which the MASK / ISCLOSE entries above do not reach. Not named
+    // ISCLOSE_EQUAL_NAN: that is the binary_ng compute-kernel define (0/1, the
+    // isclose_binary_tile template argument), and an enumerator of the same name would be
+    // macro-expanded wherever both are visible.
+    MASK_POSINF   = 51,
+    ISCLOSE_EQNAN = 52,
 };
 
 enum class PackMode : std::uint8_t

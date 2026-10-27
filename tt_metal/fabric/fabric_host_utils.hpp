@@ -4,38 +4,63 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // FabricType
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/core_coordinates.hpp>          // CoreType
 #include <llrt/tt_cluster.hpp>
-#include "erisc_datamover_builder.hpp"
+#include <tt_stl/assert.hpp>
+#include <map>
 #include <set>
 #include <vector>
 #include <unordered_map>
-#include <queue>
-#include <functional>
-#include <unordered_set>
 #include <optional>
 #include <filesystem>
 #include <string>
 #include <climits>
 #include <unistd.h>
 
+namespace tt::tt_metal {
+class PhysicalSystemDescriptor;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_fabric {
 
 class TopologyMapper;
+class FabricContext;
 
 class FabricNodeId;
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ubb_galaxy);
 
+// Returns whether a declared torus axis realizes a distinct wrap edge. Use bare
+// has_flag only for declared intent, never to decide realized routing topology.
+inline bool has_genuine_torus_axis(FabricType fabric_type, const MeshShape& mesh_shape, uint32_t axis) {
+    TT_FATAL(mesh_shape.dims() == 2, "Genuine torus-axis query requires a 2D mesh shape, got {}", mesh_shape);
+    TT_FATAL(axis < mesh_shape.dims(), "Torus axis must be within mesh shape {}, got {}", mesh_shape, axis);
+    return has_flag(fabric_type, torus_flag_for_axis(axis)) && is_genuine_torus_dim(mesh_shape[axis]);
+}
+
 // Helper to validate that requested FabricType doesn't require more connectivity than available FabricType provides
 // Returns true if requested_type requires more connections than available_type provides
-// mesh_shape: [rows, cols] - used to detect edge cases where 2-row/2-col torus is equivalent to mesh
+// mesh_shape: [rows, cols], used to compare realized per-axis torus connectivity.
 bool requires_more_connectivity(FabricType requested_type, FabricType available_type, const MeshShape& mesh_shape);
+
+// True when the fabric config (not the descriptor's declared dim_types) is the origin of a torus on
+// this axis. On a genuine torus axis the wrap cables physically consume every port of that axis;
+// smaller extents leave those ports open, but they still belong to the torus by convention: deadlock
+// avoidance is derived per direction from the fabric config, so an inter-mesh link placed on such a
+// port can face a peer that labels the axis differently and hang (issue #54650). Edge ports of a
+// config-driven torus axis are therefore reserved (excluded from inter-mesh use); an axis the
+// descriptor itself declares as RING keeps its boundary ports.
+inline bool is_config_driven_torus_axis(FabricType requested_type, FabricType declared_type, uint32_t axis) {
+    return has_flag(requested_type, torus_flag_for_axis(axis)) && !has_flag(declared_type, torus_flag_for_axis(axis));
+}
 
 // Compute maximum 1D hops across all meshes in topology
 // Returns max(rows-1, cols-1) across all meshes, representing longest linear path
@@ -52,6 +77,33 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     RoutingDirection direction);
+
+// Context-explicit form of the public get_forwarding_link_indices: resolves the forwarding direction and the link
+// indices from `control_plane` instead of the default MetalContext's. Returns {} when there is no forwarding direction.
+std::vector<uint32_t> get_forwarding_link_indices(
+    const ControlPlane& control_plane, const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
+
+// Context-explicit form of the public append_fabric_connection_rt_args: reads the control plane and cluster from
+// `fabric_context` instead of the default MetalContext's. Instantiated for Program and ProgramDescriptor.
+template <typename ProgramOrDescriptor>
+void append_fabric_connection_rt_args(
+    const FabricContext& fabric_context,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx,
+    ProgramOrDescriptor& worker_program_or_desc,
+    const tt::tt_metal::CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type);
+
+// Wormhole non-Galaxy only. For each MMIO chip, the fabric dispatch-link channels toward its directly connected remote
+// (non-MMIO) chips, i.e. the link FabricBuilder::discover_channels configures for dispatch. That router polls for base
+// firmware often enough to keep UMD's remote transfers responsive; the other fabric routers can hold the core for tens
+// of seconds per transfer while fabric is active. MMIO chips without a one-hop remote chip are left out. Needs the
+// fabric routing tables (MetalContext::initialize_fabric_config()). Each entry is meant for
+// tt::Cluster::configure_ethernet_cores_for_remote_transfers.
+std::map<ChipId, std::set<chan_id_t>> get_remote_transfer_dispatch_channels(
+    const ControlPlane& control_plane, const tt::Cluster& cluster);
 
 // Helper: Build adjacency map and discover corners/edges using BFS
 using AdjacencyMap = std::unordered_map<ChipId, std::vector<ChipId>>;
@@ -73,7 +125,16 @@ void serialize_mesh_coordinates_to_file(
 // Serialize ASIC ID to Fabric node ID mappings to a YAML file
 // Categorizes mappings by mesh and host, showing which ASICs map to which Fabric nodes
 void serialize_asic_to_fabric_node_mapping_to_file(
-    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path);
+    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path, bool mock_enabled);
+
+// Serialize the resolved inter-mesh port assignment to a YAML file (golden-comparable, debug-logged).
+// Builds per-boundary entries "D<chip>ch<chan>(<DIR>)>M<peer_mesh>D<peer_chip>ch<peer_chan>" from the
+// control-plane maps, fully sorted so the output is deterministic and independent of the physical host.
+void serialize_intermesh_port_assignment_to_file(
+    const std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>>& exit_node_directions,
+    const std::map<FabricNodeId, std::unordered_map<chan_id_t, std::pair<FabricNodeId, chan_id_t>>>&
+        intermesh_chan_to_peer,
+    const std::filesystem::path& output_file_path);
 
 }  // namespace tt::tt_fabric
 

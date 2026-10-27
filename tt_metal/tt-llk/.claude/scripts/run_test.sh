@@ -26,7 +26,7 @@
 #   --k        EXPR   pytest -k filter expression
 #   --test-id  ID     Full parametrize ID for a single variant run
 #                     (single-quotes, brackets, commas are safe — no escaping needed)
-#   --port     PORT   Simulator port (default: 5556)
+#   --port     PORT   Deprecated, ignored
 #   --timeout  SECS   pytest --timeout ceiling (default: 600)
 #   --jobs     N      Compile parallelism (default: 15)
 #   --lock     FILE   flock lock file (default: /tmp/tt-llk-test-<arch>.lock)
@@ -35,6 +35,7 @@
 #   --lock-timeout N  Seconds to wait for the lock (default: 900)
 #   --sim-path PATH   Override TT_UMD_SIMULATOR_PATH
 #                     (default: /proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-<arch>-1x3)
+#   --speed-of-light  Pass pytest --speed-of-light (compile-time formats / SOL path).
 #   --no-split        Skip compile-producer step; run pytest --run-simulator without
 #                     --compile-consumer (combined compile+run in one pytest invocation).
 #                     Use for issue-solver tests that don't pre-build ELFs.
@@ -58,7 +59,7 @@
 #   0  All tests passed (or count written to stdout successfully)
 #   1  One or more tests failed
 #   2  Compile step failed  (only from the 'run' command)
-#   3  Environment error (flock timeout, simulator port stuck, venv missing)
+#   3  Environment error (flock timeout, venv missing)
 #   4  Usage / validation error (missing required options)
 #   5  Hang detected by watchdog. Both modes watch the consumer's stdout
 #      cadence via a heartbeat file's mtime; if it goes quiet past the per-mode
@@ -105,13 +106,13 @@ TEST_FILE=""
 MAXFAIL="10"
 K_FILTER=""
 TEST_ID=""
-PORT="5556"
 TIMEOUT="600"
 JOBS="15"
 LOCKFILE=""  # set in _validate based on ARCH if not user-overridden
 LOCK_TIMEOUT="900"
 SIM_PATH=""
 NO_SPLIT="false"
+SPEED_OF_LIGHT="false"
 LOG_DIR=""
 PROGRESS_ENABLED="false"
 PROGRESS_INTERVAL="30"
@@ -125,7 +126,7 @@ while [[ $# -gt 0 ]]; do
     --maxfail)       MAXFAIL="$2";       shift 2 ;;
     --k)             K_FILTER="$2";      shift 2 ;;
     --test-id)       TEST_ID="$2";       shift 2 ;;
-    --port)          PORT="$2";          shift 2 ;;
+    --port)          shift 2 ;;
     --timeout)       TIMEOUT="$2";       shift 2 ;;
     --jobs)          JOBS="$2";          shift 2 ;;
     --lock)          LOCKFILE="$2";      shift 2 ;;
@@ -134,6 +135,7 @@ while [[ $# -gt 0 ]]; do
     --log-dir)       LOG_DIR="$2";       shift 2 ;;
     --progress)      PROGRESS_ENABLED="true"; shift ;;
     --progress-interval) PROGRESS_INTERVAL="$2"; shift 2 ;;
+    --speed-of-light) SPEED_OF_LIGHT="true"; shift ;;
     --no-split)      NO_SPLIT="true";    shift   ;;
     --verbose|-v)    VERBOSE="true";     shift   ;;
     --help|-h)
@@ -202,7 +204,7 @@ _validate() {
 
   # Mode inferred from arch: quasar runs against the UMD simulator; blackhole
   # and wormhole run against physical silicon. Hardware mode skips the
-  # --run-simulator flag, port cleanup, and TT_UMD_SIMULATOR_PATH.
+  # --run-simulator flag and TT_UMD_SIMULATOR_PATH.
   case "$ARCH" in
     quasar)              MODE="simulator" ;;
     blackhole|wormhole)  MODE="hardware"  ;;
@@ -428,7 +430,7 @@ _do_count() {
 
 _do_compile() {
   _validate
-  _vlog "compile: ${TEST_FILE} (arch=${ARCH}, -n ${JOBS}${K_FILTER:+, -k '${K_FILTER}'})"
+  _vlog "compile: ${TEST_FILE} (arch=${ARCH}, -n ${JOBS}${K_FILTER:+, -k '${K_FILTER}'}$([[ "$SPEED_OF_LIGHT" == true ]] && echo ', sol'))"
 
   # The two-phase flow requires compile and simulate to filter to the same set:
   # simulate's --compile-consumer reads per-variant artifacts that producer
@@ -443,6 +445,7 @@ _do_compile() {
   else
     pytest_args=("$TEST_FILE")
   fi
+  [[ "$SPEED_OF_LIGHT" == "true" ]] && pytest_args=(--speed-of-light "${pytest_args[@]}")
 
   # Background pytest so the progress ticker can run alongside. If progress is
   # disabled we still pay the (negligible) cost of background+wait — keeps the
@@ -493,7 +496,7 @@ _do_compile() {
 _do_simulate() {
   _validate
   if [[ "$MODE" == "simulator" ]]; then
-    _vlog "consume: ${TEST_FILE} (arch=${ARCH}, mode=simulator, port=${PORT})"
+    _vlog "consume: ${TEST_FILE} (arch=${ARCH}, mode=simulator)"
   else
     _vlog "consume: ${TEST_FILE} (arch=${ARCH}, mode=hardware)"
   fi
@@ -514,14 +517,15 @@ _do_simulate() {
   trap 'rm -f "${sim_script}" "${hang_log}" "${heartbeat}"' EXIT INT TERM
 
   # Build the pytest flags string.
-  # Simulator mode adds --run-simulator/--port; hardware mode targets silicon directly.
+  # Simulator mode adds --run-simulator; hardware mode targets silicon directly.
   # --no-split: run combined (no prior compile step needed, no --compile-consumer).
   # Default (split): requires a prior compile-producer run; passes --compile-consumer.
   local pytest_flags="--timeout=${TIMEOUT} -rN"
   if [[ "$MODE" == "simulator" ]]; then
-    pytest_flags="${pytest_flags} --run-simulator --port=${PORT}"
+    pytest_flags="${pytest_flags} --run-simulator"
   fi
   [[ "$NO_SPLIT" == "false" ]] && pytest_flags="${pytest_flags} --compile-consumer"
+  [[ "$SPEED_OF_LIGHT" == "true" ]] && pytest_flags="${pytest_flags} --speed-of-light"
   [[ -n "$MAXFAIL" ]] && pytest_flags="${pytest_flags} --maxfail=${MAXFAIL}"
 
   # Determine the test target (file, -k filter, or single variant by ID)
@@ -537,25 +541,14 @@ _do_simulate() {
     pytest_target="'${TEST_FILE}'"
   fi
 
-  # Write the consumer script. Simulator mode prepends port-cleanup and the
-  # TT_UMD_SIMULATOR_PATH env var; hardware mode skips both since BH/WH run
-  # against silicon directly.
+  # Write the consumer script. Simulator mode sets the TT_UMD_SIMULATOR_PATH
+  # env var; hardware mode skips it since BH/WH run against silicon directly.
   # Single-quotes around variable expansions are intentional: the values are
   # fixed at script-write time and contain no shell-special chars that matter
   # to the inner bash invocation.
   {
     printf '#!/bin/bash\n'
     printf 'set -u\n\n'
-    if [[ "$MODE" == "simulator" ]]; then
-      printf '# Kill any process holding port %s\n' "${PORT}"
-      printf 'STALE=$(lsof -ti :%s 2>/dev/null || true)\n' "${PORT}"
-      printf 'if [ -n "$STALE" ]; then\n'
-      printf '  echo "[run_llk_tests] Killing stale port %s processes: $STALE"\n' "${PORT}"
-      printf '  echo "$STALE" | xargs kill -9 2>/dev/null || true\n'
-      printf 'fi\n'
-      printf 'pkill -9 -f "tt-exalens.*--port=%s" 2>/dev/null || true\n' "${PORT}"
-      printf 'sleep 1\n\n'
-    fi
     printf 'source %q\n' "${VENV}/bin/activate"
     printf 'cd %q\n\n' "${TEST_DIR}"
     if [[ "$MODE" == "simulator" ]]; then

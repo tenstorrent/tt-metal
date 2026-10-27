@@ -158,21 +158,21 @@ class TtMistralImageAttention(LightweightModule):
     def forward(self, x_11SH, position_embeddings=None):
         seq_len = x_11SH.shape[-2]
 
-        MAX_MM_SEQ_LEN = seq_len
-
-        if seq_len > MAX_MM_SEQ_LEN:
-            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
-
+        # No explicit program_config: IMAGE_ATTN_QKV_PROGCFG derives
+        # per_core_M = ceil(m / (32 * grid_y)) from the full sequence length, and the
+        # Pixtral tower runs the whole image sequence in one shot (12100 tokens for the
+        # 1540px / patch-14 config), giving per_core_M = 48. The resulting circular
+        # buffers run past the end of L1 and abort with "Statically allocated circular
+        # buffers in program N clash with L1 buffers". Letting ttnn pick the matmul
+        # config sizes the CBs to fit; this matches vision_mlp.py in this same model,
+        # which has always run unconfigured at this sequence length.
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
         )
-        if seq_len > MAX_MM_SEQ_LEN:
-            xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
         # split qkv into heads
         (
@@ -218,20 +218,15 @@ class TtMistralImageAttention(LightweightModule):
         )
         ttnn.deallocate(attn_output_1QSD)
 
-        # reshaping long sequence to matmul fit on device
-        if seq_len > MAX_MM_SEQ_LEN:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
-
+        # See the QKV matmul above: IMAGE_ATTN_OUT_PROGCFG has the same per_core_M
+        # blow-up at the Pixtral sequence length, so let ttnn size this one too.
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
             compute_kernel_config=self.compute_kernel_config_hifi4,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.model_config["IMAGE_ATTN_OUT_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
         )
-        if seq_len > MAX_MM_SEQ_LEN:
-            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
         # All reduce

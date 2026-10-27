@@ -3,7 +3,7 @@ name: "Code analysis"
 on:
   schedule:
     # Run every 6 hours to keep ccache/ctcache warm for code-analysis PR runs (Ubuntu 24.04)
-    - cron: "0 */6 * * *"
+    - cron: "0 */2 * * *"
   workflow_call:
     inputs:
       platform:
@@ -46,6 +46,21 @@ on:
         type: boolean
         default: false
         description: "Post inline clang-tidy fix suggestions on PR diffs"
+      publish-annotations:
+        required: false
+        type: boolean
+        default: true
+        description: "Emit ::error file annotations for violations on the PR diff / checks tab"
+      check-harbor-runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-light"
+        description: "Runner label for the Harbor health check job"
+      clang-tidy-version:
+        required: false
+        type: string
+        default: "20"
+        description: "LLVM major version of clang-tidy for the full scan"
   workflow_dispatch:
     inputs:
       architecture:
@@ -81,6 +96,19 @@ on:
         type: boolean
         default: false
         description: "Force a full scan even if no C++ changes are detected"
+      publish-annotations:
+        required: false
+        type: boolean
+        default: true
+        description: "Emit ::error file annotations for violations on the PR diff / checks tab"
+      clang-tidy-version:
+        required: false
+        type: choice
+        default: "20"
+        options:
+          - "20"
+          - "23"
+        description: "clang-tidy version for the full scan"
 
 jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml internally.
@@ -91,6 +119,7 @@ jobs:
     outputs:
       do-full-scan: ${{ steps.compute-outputs.outputs.do-full-scan }}
       do-scan: ${{ steps.compute-outputs.outputs.do-scan }}
+      api-headers-changed: ${{ steps.find-changes.outputs.tt-metalium-api-headers-changed }}
     steps:
       - name: Check out repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -119,8 +148,7 @@ jobs:
 
           # Skip scan entirely if no code/cmake changes and not a full scan
           if [[ "$do_full_scan" == "true" ]] || \
-             [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]] || \
-             [[ "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]]; then
+             [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]]; then
             do_scan="true"
           else
             do_scan="false"
@@ -134,6 +162,8 @@ jobs:
   # Check Harbor availability first
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
+    with:
+      runs-on: ${{ inputs.check-harbor-runs-on }}
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
@@ -165,6 +195,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan == 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -173,7 +206,9 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: ''
       scan-targets: ''
-      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+      publish-annotations: ${{ inputs.publish-annotations || false }}
+      clang-tidy-version: ${{ inputs.clang-tidy-version || '20' }}
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
@@ -183,6 +218,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -191,7 +229,8 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: ''
       scan-targets: 'tt_metal'
-      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+      publish-annotations: ${{ inputs.publish-annotations || false }}
 
   clang-tidy-incremental-ttnn:
     name: 🤖 Clang Tidy (TTNN)
@@ -200,6 +239,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -208,7 +250,8 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal'
       scan-targets: 'ttnn'
-      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+      publish-annotations: ${{ inputs.publish-annotations || false }}
 
   clang-tidy-incremental-tt-train:
     name: 🤖 Clang Tidy (tt-train)
@@ -217,6 +260,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -225,7 +271,8 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: 'tt-train'
-      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+      publish-annotations: ${{ inputs.publish-annotations || false }}
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
@@ -234,6 +281,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -242,4 +292,89 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
-      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+      publish-annotations: ${{ inputs.publish-annotations || false }}
+
+  # Gate: every tt_metal public header must include exactly what it uses
+  # (clang-tidy misc-include-cleaner, no missing and no unused includes). Any
+  # finding, or any header that cannot be analyzed, fails the job and with it the
+  # PR / merge-queue gate. Runs whenever a tt_metal/api header or the check itself
+  # changes, and always sweeps all public headers (about 40 s), so effects of one
+  # header on another are caught. The check only reports on a translation unit's
+  # main file, so each header is analyzed as its own main file (-x c++-header)
+  # with the flags of its CMake header-verification TU; only configure and the
+  # generated API headers are needed, no build. The step summary lists every
+  # finding and the commands to reproduce and fix it locally. See
+  # .github/scripts/utils/run_api_header_include_cleaner.py.
+  include-cleaner-api-headers:
+    name: "🔍 Include cleaner (tt_metal API headers)"
+    needs: [resolve-docker-pull-refs, determine-scan-type]
+    if: >-
+      ${{ !cancelled() &&
+          needs.resolve-docker-pull-refs.result == 'success' &&
+          needs.determine-scan-type.outputs.api-headers-changed == 'true' }}
+    # Configure and flatc are mostly single-threaded and the sweep takes about 40 s
+    # on this size; medium is the smallest self-hosted size that already runs
+    # CPU-only container jobs.
+    runs-on: tt-ubuntu-2204-medium-stable
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    container:
+      # The ci-build image the clang-tidy jobs above already use: it has
+      # clang-tidy-20, cmake and ninja, so no extra image is needed.
+      image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
+      volumes:
+        - ${{ github.workspace }}:/work
+      options: --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
+
+      - name: 🧪 Unit tests for the include-cleaner script
+        run: python3 .github/scripts/utils/test_run_api_header_include_cleaner.py
+
+      - name: 📦 Restore CPM source cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .cpmcache.tar.zst
+          key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          restore-keys: cpm-z22-
+
+      - name: Unpack CPM cache
+        run: |
+          [ -f .cpmcache.tar.zst ] && tar -I 'zstd -T0' -xf .cpmcache.tar.zst || true
+
+      - name: 🔧 CMake configure
+        run: cmake --preset iwyu
+
+      - name: 🛠️ Generate API headers
+        run: cmake --build .build/iwyu --target metalium_GeneratedHeaders
+
+      - name: 🔍 Include cleaner on all tt_metal public headers
+        run: |
+          .github/scripts/utils/run_api_header_include_cleaner.py .build/iwyu --all --fail-on-findings \
+            | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload include-cleaner results
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: include-cleaner-api-headers-results
+          path: |
+            /work/.build/iwyu/report-api-include-cleaner/include-cleaner.txt
+            /work/.build/iwyu/report-api-include-cleaner/findings.json
+            /work/.build/iwyu/report-api-include-cleaner/clang-tidy-version.txt
+            /work/.build/iwyu/report-api-include-cleaner/exit-code.txt
+          retention-days: 30

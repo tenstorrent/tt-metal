@@ -120,6 +120,12 @@ Grep for "{wrapper_function_name}" in tt_metal/hw/inc/api/compute/untilize.h
 Grep for "{operation}" in tests/tt_metal/tt_metal/llk/ (*.cpp files)
 ```
 
+### Scenario 4: Convert Tile-Size Args to TensorShape
+
+*e.g., replace `face_r_dim` / `num_faces` with `ckernel::TensorShape` on unpack/math/pack*
+
+Follow `.claude/references/tensor-shape.md` (Claude skill `tensor-shape` / Cursor rule `tensor-shape`). Coverage is TRISC-scoped — new APIs call `LLK_VALIDATE_TENSOR_SHAPE_*` with a string literal; they do **not** register in a central API list in `coverage.h`. Then continue with Scenario 1 for metal-layer propagation.
+
 ---
 
 ## Quick Reference: Key File Paths

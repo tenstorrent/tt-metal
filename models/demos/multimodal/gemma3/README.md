@@ -26,7 +26,8 @@ HF_MODEL=google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/demo/text_d
 ```
 Notes:
 Use --dummy_weights true  to enable dummy_weights loading in demo
-Tested with [vllm:03cb300](https://github.com/tenstorrent/vllm/commit/03cb30064575c7dbda6f62f18d7889758531bcfd)
+Tested with [vllm:03cb300](https://github.com/tenstorrent/vllm/commit/03cb30064575c7dbda6f62f18d7889758531bcfd). **Important**: currently, the TT-specific vLLM
+development is in [vLLM TT Plugin](https://github.com/tenstorrent/vllm-tt-plugin), while the fork is deprecated.
 
 ```
 HF_MODEL=google/gemma-3-27b-it MESH_DEVICE=T3K python plugins/vllm-tt-plugin/examples/offline_inference_tt.py --model "google/gemma-3-27b-it" --multi_modal --max_seqs_in_batch 32 --additional-config '{"tt": {"l1_small_size": 768, "fabric_config": "FABRIC_1D"}}'

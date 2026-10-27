@@ -48,10 +48,10 @@ void PrefixScanDeviceOperation::validate_on_program_cache_miss(
         "Expected h tensor to be row major orientation");
 }
 
-TensorSpec PrefixScanDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec PrefixScanDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.a;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         a.logical_shape(),
         TensorLayout::fromPaddedShape(
             args.dtype, PageConfig(Layout::TILE), args.memory_config, a.logical_shape(), a.padded_shape()));

@@ -65,37 +65,34 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
-            return;
-        }
-
-        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-        {
-            for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                const std::uint32_t tile_row_addr = L1_ADDRESS(src + (i % 8) * 0x1000); // TODO SS<-LP use PERF_ADDRESS here
-                for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
+                for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
                 {
-                    _llk_unpack_tilize_wrapper_(
-                        tile_row_addr,
-                        j,
-                        formats.unpack_A_src,
-                        formats.unpack_A_dst,
-                        0 /* block_ct_dim */,
-                        FACE_R_DIM,
-                        4 /* num_faces */,
-                        false /* narrow_tile */);
+                    const std::uint32_t tile_row_addr = L1_ADDRESS(src + (i % 8) * 0x1000); // TODO SS<-LP use PERF_ADDRESS here
+                    for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
+                    {
+                        _llk_unpack_tilize_wrapper_(
+                            tile_row_addr,
+                            j,
+                            formats.unpack_A_src,
+                            formats.unpack_A_dst,
+                            0 /* block_ct_dim */,
+                            FACE_R_DIM,
+                            4 /* num_faces */,
+                            false /* narrow_tile */);
+                    }
                 }
             }
         }
         PROFILER_SYNC();
     }
+    _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst);
 }
 
 #endif
-
-static constexpr bool TILIZE = true;
 
 #ifdef LLK_TRISC_MATH
 
@@ -118,6 +115,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        const bool TILIZE = true;
         // copy srca to dest
         _llk_math_eltwise_unary_datacopy_init_wrapper_<
             DataCopyType::A2D,
@@ -126,7 +125,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_int_fpu_en,
             llk_test_pack_mode_v<false, TILIZE>>(4 /* num_faces */, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         PROFILER_SYNC();
     }
 
@@ -212,11 +210,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-
-        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
-            formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
-        _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(formats.pack_dst);
-        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        const bool skip_bh_tilize_workaround = _llk_pack_skip_bh_tilize_workaround_wrapper_(formats.unpack_A_src);
+        const bool TILIZE                    = true;
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, false>>(
+            formats.pack_src,
+            formats.pack_dst,
+            16 * 16 * 4 /* tile_size */,
+            FACE_R_DIM,
+            TILE_C_DIM,
+            4 /* num_faces */,
+            false /* partial_face */,
+            false /* narrow_tile */,
+            0 /* relu_config */);
+        _llk_pack_init_with_src_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(
+            formats.pack_src,
+            formats.pack_dst,
+            FACE_R_DIM,
+            TILE_C_DIM,
+            4 /* num_faces */,
+            false /* partial_face */,
+            false /* narrow_tile */,
+            1 /* num_tiles */,
+            skip_bh_tilize_workaround);
+        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
         PROFILER_SYNC();
     }
     {

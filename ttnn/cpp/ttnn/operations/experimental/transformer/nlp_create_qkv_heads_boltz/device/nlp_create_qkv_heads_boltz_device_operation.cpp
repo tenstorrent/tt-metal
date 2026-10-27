@@ -61,8 +61,9 @@ void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.num_kv_heads,
             num_cores);
         TT_FATAL(
-            operation_attributes.num_q_heads >= operation_attributes.num_kv_heads,
-            "Number of Q heads ({}) must be >= number of KV heads ({})",
+            operation_attributes.num_kv_heads > 0 &&
+                operation_attributes.num_q_heads >= operation_attributes.num_kv_heads,
+            "Number of Q heads ({}) must be >= number of KV heads ({}), which must be greater than 0",
             operation_attributes.num_q_heads,
             operation_attributes.num_kv_heads);
         TT_FATAL(
@@ -196,30 +197,30 @@ NlpCreateHeadsBoltzDeviceOperation::spec_return_value_t NlpCreateHeadsBoltzDevic
             operation_attributes.output_mem_config.buffer_type(),
             kv_shard_spec);
         return {
-            TensorSpec(
+            tt::tt_metal::TensorSpec(
                 q_output_shape,
                 tt::tt_metal::TensorLayout(
                     input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), q_mem_config)),
-            TensorSpec(
+            tt::tt_metal::TensorSpec(
                 k_output_shape,
                 tt::tt_metal::TensorLayout(
                     input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), kv_mem_config)),
-            TensorSpec(
+            tt::tt_metal::TensorSpec(
                 v_output_shape,
                 tt::tt_metal::TensorLayout(
                     input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), kv_mem_config))};
     }
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.output_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             k_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.output_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             v_output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.output_mem_config))};

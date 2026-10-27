@@ -7,11 +7,12 @@
 #include "api/compute/common.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/pack_untilize.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "api/debug/dprint.h"
 #include "internal/circular_buffer_interface.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
@@ -44,8 +45,11 @@
 //   5: total_untilizers                - G, total untilizer cores across all senders (global stride)
 void kernel_main() {
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(0);
+    CircularBuffer cb_untilize(cb_untilize_id);
     constexpr uint32_t cb_in_id = get_compile_time_arg_val(1);
+    CircularBuffer cb_in(cb_in_id);
     constexpr uint32_t cb_experts_tok_counter_id = get_compile_time_arg_val(2);
+    CircularBuffer cb_experts_tok_counter(cb_experts_tok_counter_id);
     constexpr uint32_t experts_tok_counter_pages = get_compile_time_arg_val(3);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(4);
     constexpr uint32_t counter_offset = get_compile_time_arg_val(5);
@@ -77,7 +81,15 @@ void kernel_main() {
     // core pushes the counter CB once after counter_ready_sem fires, so cb_wait_front here
     // doubles as the gate for "counter data is live in L1".  The CB is never popped — both
     // this kernel and writer_untilize rely on the data staying resident.
-    cb_wait_front(cb_experts_tok_counter_id, cb_counter_total_pages);
+    // cb_experts_tok_counter is not used as a typical CB. It's intended to be a scratchpad that is setup
+    // once, remote-written-to once, then read by multiple consumers. The order of operations is
+    // - sender core remote-writes to this CB's data region, then bumps the untilizer core's semaphore
+    // - untilizer's reader kernel waits on the semaphore and reserves + pushes to the CB, thus making the data
+    //   available
+    // - untilizer's reader, writer and compute kernels wait_front on the CB, then read from it.
+    // These kernels must not pop_front because it can happen that pop lands before some other kernel got to its
+    // wait_front step, which would cause it to wait forever (a.k.a. hang)
+    cb_experts_tok_counter.wait_front(cb_counter_total_pages);
 
     // Snapshot per-expert token counts.  read_tile_value has UNPACK read from L1 and broadcast
     // to MATH / PACK via mailbox, so all three TRISCs end up with identical counts and walk the
@@ -111,16 +123,16 @@ void kernel_main() {
         // expert (G = total_untilizers across all senders).  Must match reader_untilize /
         // writer_untilize exactly so the c_0 / c_2 producer-consumer protocol stays in lockstep.
         for (uint32_t batch_idx = untilizer_global_pos; batch_idx < actual_batches; batch_idx += total_untilizers) {
-            cb_reserve_back(cb_untilize_id, read_batch_size);
+            cb_untilize.reserve_back(read_batch_size);
             for (uint32_t block = 0; block < num_blocks; block++) {
-                cb_wait_front(cb_in_id, block_ct_dim);
+                cb_in.wait_front(block_ct_dim);
                 {
                     // DeviceZoneScopedN("UNTILIZING");
                     pack_untilize_block<block_ct_dim, full_ct_dim>(cb_in_id, 1, cb_untilize_id, block);
                 }
-                cb_pop_front(cb_in_id, block_ct_dim);
+                cb_in.pop_front(block_ct_dim);
             }
-            cb_push_back(cb_untilize_id, read_batch_size);
+            cb_untilize.push_back(read_batch_size);
         }
         start_page_tiled += ((expert_tokens + tile_height - 1) / tile_height) * tiles_per_batch;
     }

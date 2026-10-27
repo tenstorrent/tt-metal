@@ -48,6 +48,7 @@ class WanTransformerBlock(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         sdpa_chunk_size_overrides: dict | None = None,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -83,6 +84,7 @@ class WanTransformerBlock(Module):
             is_fsdp=is_fsdp,
             is_self=True,
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
+            lora_enabled=lora_enabled,
         )
 
         self.attn2 = WanAttention(
@@ -95,6 +97,7 @@ class WanTransformerBlock(Module):
             is_fsdp=is_fsdp,
             is_self=False,
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
+            lora_enabled=lora_enabled,
         )
 
         self.norm2 = (
@@ -113,12 +116,13 @@ class WanTransformerBlock(Module):
         self.ffn = ParallelFeedForward(
             dim,
             inner_dim=ffn_dim,
-            activation_fn="gelu",
+            activation_fn="gelu_tanh",
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            lora_enabled=lora_enabled,
         )
 
         self.norm3 = DistributedLayerNorm(
@@ -271,6 +275,7 @@ class WanTransformer3DModel(Module):
         is_fsdp: bool = True,
         model_type: str = "t2v",
         output_dtype: ttnn.DataType = ttnn.float32,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -278,6 +283,7 @@ class WanTransformer3DModel(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         self.is_fsdp = is_fsdp
+        self.lora_enabled = lora_enabled
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
         self.model_type = model_type
         self.cached_rope_features = {}
@@ -330,6 +336,7 @@ class WanTransformer3DModel(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 is_fsdp=is_fsdp,
+                lora_enabled=lora_enabled,
             )
             for i in range(num_layers)
         )
@@ -615,7 +622,7 @@ class WanTransformer3DModel(Module):
 
         spatial_1BND = self.patch_embedding(spatial_1BNI)
 
-        for idx, block in enumerate(self.blocks):
+        for block in self.blocks:
             spatial_1BND = block(
                 spatial_1BND=spatial_1BND,
                 prompt_1BLP=prompt_1BLP,
@@ -662,7 +669,7 @@ class WanTransformer3DModel(Module):
         rope_sin_1HND: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
         timestep: ttnn.Tensor,
-        guidance_scale: float,
+        guidance_scale: ttnn.Tensor,
         *,
         gather_output: bool = True,
     ) -> ttnn.Tensor:
@@ -694,6 +701,183 @@ class WanTransformer3DModel(Module):
 
         return combined
 
+    # ------------------------------------------------------------------------------------------
+    # DBCache split forward (see models/tt_dit/utils/dbcache.py).
+    #
+    # `inner_step` is split into three pieces so the pipeline can decide, between `cache_head`
+    # and `cache_body`, whether the middle blocks may be skipped this step:
+    #
+    #   cache_head: timestep conditioning + patch embedding + first Fn blocks. Also emits the Fn
+    #               residual and the per-device partial sums needed for the relative-L1 diff
+    #               against the previous computed step's Fn residual.
+    #   cache_body: the middle blocks (Fn .. num_layers - Bn). Emits their total residual, which
+    #               the pipeline caches and re-applies on skipped steps.
+    #   cache_tail: last Bn blocks + output norm/projection (+ optional SP gather).
+    #
+    # Each piece only takes/returns ttnn tensors and Python scalars so it can be wrapped in a
+    # `Tracer` independently.
+    # ------------------------------------------------------------------------------------------
+    def _run_blocks(
+        self,
+        blocks,
+        spatial_1BND: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        timestep_proj_1BTD: ttnn.Tensor,
+        N: int,
+        rope_cos_1HND: ttnn.Tensor,
+        rope_sin_1HND: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        for block in blocks:
+            spatial_1BND = block(
+                spatial_1BND=spatial_1BND,
+                prompt_1BLP=prompt_1BLP,
+                temb_1BTD=timestep_proj_1BTD,
+                N=N,
+                rope_cos=rope_cos_1HND,
+                rope_sin=rope_sin_1HND,
+                trans_mat=trans_mat,
+            )
+        return spatial_1BND
+
+    def cache_head(
+        self,
+        spatial_1BNI: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        rope_cos_1HND: ttnn.Tensor,
+        rope_sin_1HND: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+        N: int,
+        timestep: ttnn.Tensor,
+        prev_fn_residual_1BND: ttnn.Tensor,
+        *,
+        num_fn_blocks: int,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Timestep conditioning, patch embedding and the first ``num_fn_blocks`` blocks.
+
+        Returns ``(spatial_1BND, fn_residual_1BND, sums_1B12, temb_11BD, timestep_proj_1BTD)`` where::
+
+            fn_residual  = spatial_after_Fn_blocks - spatial_after_patch_embedding
+            sums[..., 0] = sum(|fn_residual - prev_fn_residual|)   (this device's shard only)
+            sums[..., 1] = sum(|fn_residual|)                      (this device's shard only)
+
+        Summing over all mesh devices, ``sums[0]`` divided by the previous computed step's
+        ``sums[1]`` is cache-dit's relative mean-L1 residual diff. The reductions stay in bf16
+        (accumulated on device; the ~0.1% rounding is irrelevant for thresholding) and are packed
+        into one tensor so the host needs a single readback. ``spatial_1BND`` is a private copy,
+        safe to hold across the following ``cache_body`` call.
+        """
+        temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
+
+        spatial_0_1BND = self.patch_embedding(spatial_1BNI)
+        spatial_1BND = self._run_blocks(
+            self.blocks[:num_fn_blocks],
+            spatial_0_1BND,
+            prompt_1BLP,
+            timestep_proj_1BTD,
+            N,
+            rope_cos_1HND,
+            rope_sin_1HND,
+            trans_mat,
+        )
+        # Block outputs may live in CCL ping-pong buffers; take a private copy so the value
+        # survives the middle blocks (needed for the Bn residual in `cache_body`).
+        spatial_1BND = ttnn.clone(spatial_1BND)
+
+        fn_residual_1BND = ttnn.subtract(spatial_1BND, spatial_0_1BND)
+        ttnn.deallocate(spatial_0_1BND)
+
+        diff_1BND = ttnn.abs(ttnn.subtract(fn_residual_1BND, prev_fn_residual_1BND))
+        diff_sum_1B11 = ttnn.sum(diff_1BND, dim=[2, 3], keepdim=True)
+        ttnn.deallocate(diff_1BND)
+        abs_1BND = ttnn.abs(fn_residual_1BND)
+        cur_sum_1B11 = ttnn.sum(abs_1BND, dim=[2, 3], keepdim=True)
+        ttnn.deallocate(abs_1BND)
+        sums_1B12 = ttnn.concat([diff_sum_1B11, cur_sum_1B11], dim=3)
+
+        return spatial_1BND, fn_residual_1BND, sums_1B12, temb_11BD, timestep_proj_1BTD
+
+    def cache_body(
+        self,
+        spatial_1BND: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        timestep_proj_1BTD: ttnn.Tensor,
+        N: int,
+        rope_cos_1HND: ttnn.Tensor,
+        rope_sin_1HND: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+        *,
+        num_fn_blocks: int,
+        num_bn_blocks: int,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Middle blocks ``[num_fn_blocks, num_layers - num_bn_blocks)``.
+
+        Returns ``(spatial_1BND, bn_residual_1BND)`` with ``bn_residual = output - input``.
+        """
+        end = len(self.blocks) - num_bn_blocks
+        out_1BND = self._run_blocks(
+            self.blocks[num_fn_blocks:end],
+            spatial_1BND,
+            prompt_1BLP,
+            timestep_proj_1BTD,
+            N,
+            rope_cos_1HND,
+            rope_sin_1HND,
+            trans_mat,
+        )
+        bn_residual_1BND = ttnn.subtract(out_1BND, spatial_1BND)
+        return out_1BND, bn_residual_1BND
+
+    def cache_tail(
+        self,
+        spatial_1BND: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        temb_11BD: ttnn.Tensor,
+        timestep_proj_1BTD: ttnn.Tensor,
+        N: int,
+        rope_cos_1HND: ttnn.Tensor,
+        rope_sin_1HND: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+        *,
+        num_bn_blocks: int,
+        gather_output: bool = True,
+    ) -> ttnn.Tensor:
+        """Last ``num_bn_blocks`` blocks followed by the output norm / projection of `inner_step`."""
+        if num_bn_blocks > 0:
+            spatial_1BND = self._run_blocks(
+                self.blocks[len(self.blocks) - num_bn_blocks :],
+                spatial_1BND,
+                prompt_1BLP,
+                timestep_proj_1BTD,
+                N,
+                rope_cos_1HND,
+                rope_sin_1HND,
+                trans_mat,
+            )
+
+        scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
+        shift_11BD, scale_11BD = ttnn.chunk(scale_shift_1BSD, 2, -2)
+
+        spatial_norm_1BND = self.norm_out(
+            spatial_1BND, dynamic_weight=(1 + scale_11BD), dynamic_bias=shift_11BD, dtype=ttnn.float32
+        )
+
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_norm_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_norm_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+            )
+
+        spatial_1BNI = self.proj_out(
+            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=self.output_dtype
+        )
+
+        if gather_output:
+            spatial_1BNI = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
+            )
+
+        return spatial_1BNI
+
 
 class WanCheckpoint:
     """A Wan transformer-subfolder checkpoint: fetches weights and builds loaded transformers."""
@@ -724,6 +908,7 @@ class WanCheckpoint:
         parallel_config: DiTParallelConfig,
         is_fsdp: bool,
         model_type: str,
+        lora_enabled: bool = False,
     ) -> WanTransformer3DModel:
         """Construct a ``WanTransformer3DModel`` for this checkpoint (weights NOT loaded).
 
@@ -747,6 +932,7 @@ class WanCheckpoint:
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
             model_type=model_type,
+            lora_enabled=lora_enabled,
         )
 
     def load(
@@ -765,5 +951,6 @@ class WanCheckpoint:
             subfolder=self._subfolder,
             parallel_config=parallel_config,
             mesh_shape=tuple(mesh_device.shape),
+            mesh_device=mesh_device,
             is_fsdp=is_fsdp,
         )

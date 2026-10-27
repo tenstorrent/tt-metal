@@ -1,0 +1,48 @@
+# Single Blackhole galaxy carved to a 4x4 sub-torus, Ring-4 on the X axis, with all 16 chips pinned.
+#
+# device_topology [4,4] [LINE,RING]: dim 0 (rows / Y / SP) is a line; dim 1 (cols / X / TP) is a
+# closed ring of 4. The pinnings below map each logical chip_id to a fixed physical (tray_id,
+# asic_location), so placement is deterministic and portable across Rev-C Blackhole galaxies
+# (tray_id / asic_location come from the PCIe-bus UBB id). The 16 chips are ASICs 3, 4, 7, 8 of
+# trays 1-4; positions follow the row-major chip_id convention.
+#
+# The pinning set is IDENTICAL to single_bh_galaxy_subtorus_xy4_pinned_graph_descriptor.textproto
+# (same 16-chip embedding). That is intentional and correct: the xy4 descriptor declares this exact
+# embedding as [RING,RING] (both axes physically wrapped), so the X-axis (dim 1) ring is a real
+# physical ring on these chips — this [LINE,RING] descriptor simply uses only the X wrap and leaves
+# the Y axis a line. (Validated on-device via the non-pinned x4 descriptor; the [RING,RING] embedding
+# itself is exercised by the xy4 configs.) If the xy4 pinnings are ever regenerated, regenerate these
+# to match.
+#
+# Usage: select with TT_MESH_GRAPH_DESC_PATH, pair with FabricConfig.FABRIC_2D_TORUS_X and
+# Topology.Ring on cluster_axis=1 (Linear on cluster_axis=0), with TT_VISIBLE_DEVICES restricted to
+# those 16 chips. Single host / single rank.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Pinnings (chip_id -> tray/asic): ASICs 3,4,7,8 of trays 1-4 -------------
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 0  } physical_asic_position { tray_id: 1 asic_location: 7 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 1  } physical_asic_position { tray_id: 1 asic_location: 3 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 2  } physical_asic_position { tray_id: 2 asic_location: 3 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 3  } physical_asic_position { tray_id: 2 asic_location: 7 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 4  } physical_asic_position { tray_id: 3 asic_location: 7 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 5  } physical_asic_position { tray_id: 3 asic_location: 3 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 6  } physical_asic_position { tray_id: 4 asic_location: 3 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 7  } physical_asic_position { tray_id: 4 asic_location: 7 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 8  } physical_asic_position { tray_id: 3 asic_location: 8 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 9  } physical_asic_position { tray_id: 3 asic_location: 4 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 10 } physical_asic_position { tray_id: 4 asic_location: 4 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 11 } physical_asic_position { tray_id: 4 asic_location: 8 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 12 } physical_asic_position { tray_id: 1 asic_location: 8 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 13 } physical_asic_position { tray_id: 1 asic_location: 4 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 14 } physical_asic_position { tray_id: 2 asic_location: 4 } }
+pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 15 } physical_asic_position { tray_id: 2 asic_location: 8 } }
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

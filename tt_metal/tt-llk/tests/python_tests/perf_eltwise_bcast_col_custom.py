@@ -13,7 +13,7 @@ from helpers.llk_params import (
     PerfRunType,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
@@ -41,7 +41,7 @@ class CT_DIM(TemplateParameter):
     math_fidelity=[MathFidelity.LoFi],
     broadcast_type=[BroadcastType.Column],
     ct_dim=[1, 8],
-    loop_factor=[16],
+    loop_factor=[64],
 )
 def test_perf_eltwise_bcast_col_custom(
     perf_report,

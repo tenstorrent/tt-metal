@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -23,9 +24,11 @@
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
+#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
 #include "small_vector_caster.hpp"
@@ -41,8 +44,12 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
+#include <tt-metalium/experimental/operation_timeout.hpp>
+#include <tt-metalium/experimental/per_core_allocation/allocator_state.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
@@ -57,6 +64,11 @@ namespace {
 // RegisterProgramRealtimeProfilerCallback. Access only from the Python thread (always under GIL), so no mutex needed.
 std::unordered_map<uint64_t, PyObject*> python_realtime_callback_refs;
 
+struct PythonProgramRealtimeRecordBatch {
+    std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord> records;
+    uint64_t dropped = 0;
+};
+
 void ttnn_device(nb::module_& mod) {
     mod.def(
         "open_device",
@@ -68,7 +80,7 @@ void ttnn_device(nb::module_& mod) {
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
         nb::arg("num_command_queues") = 1,
-        nb::arg("dispatch_core_config") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
+        nb::arg("dispatch_core_config") = nb::none(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
         nb::rv_policy::reference,  // cleanup has to happen in c++ land
         R"doc(
@@ -76,7 +88,7 @@ void ttnn_device(nb::module_& mod) {
 
             Keyword Args:
                 device_id (int): The device ID to open.
-                l1_small_size (int, optional): The size of the L1 small buffer. Defaults to `ttnn.device.DEFAULT_L1_SMALL_SIZE`.
+                l1_small_size (int, optional): The size of the L1 small buffer. Defaults to `ttnn.device.DEFAULT_L1_SMALL_SIZE`. The default is 0: ops that allocate from the L1_SMALL region (conv2d and pooling with kernel > 1, CCL semaphores) fail with an `L1_SMALL` out-of-memory error, or fall back to L1, unless this is large enough for their allocations. The conv and pool unit tests use 16384 or 32768; model demos under `models/` use 8192 to 131072.
                 trace_region_size (int, optional): The size of the trace region. Defaults to `ttnn.device.DEFAULT_TRACE_REGION_SIZE`.
                 num_command_queues (int, optional): The number of command queues to open. Defaults to 1.
                 dispatch_core_config (ttnn.device.DispatchCoreConfig, optional): The dispatch core config to use. Defaults to a hardware-specific value.
@@ -92,7 +104,11 @@ void ttnn_device(nb::module_& mod) {
                 <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    mod.def("close_device", [](ttnn::MeshDevice& device) { ttnn::close_device(device); }, nb::arg("device"));
+    mod.def(
+        "close_device",
+        [](ttnn::MeshDevice& device) { ttnn::close_device(device); },
+        nb::arg("device"),
+        nb::call_guard<nb::gil_scoped_release>());
 
     mod.def(
         "deallocate_buffers",
@@ -110,7 +126,8 @@ namespace ttnn::device {
 void py_device_module_types(nb::module_& m_device) {
     nb::enum_<tt::ARCH>(m_device, "Arch", "Enum of types of Tenstorrent accelerator devices.")
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0)
-        .value("BLACKHOLE", tt::ARCH::BLACKHOLE);
+        .value("BLACKHOLE", tt::ARCH::BLACKHOLE)
+        .value("QUASAR", tt::ARCH::QUASAR);
 
     nb::enum_<tt::tt_metal::DispatchCoreType>(m_device, "DispatchCoreType", "Enum of types of dispatch cores.")
         .value("WORKER", tt::tt_metal::DispatchCoreType::WORKER)
@@ -134,7 +151,10 @@ void py_device_module_types(nb::module_& m_device) {
             nb::init<tt::tt_metal::DispatchCoreType, tt::tt_metal::DispatchCoreAxis>(),
             "Constructor with specified dispatch core type and axis.",
             nb::arg("type"),
-            nb::arg("axis"));
+            nb::arg("axis"))
+        .def_prop_ro("type", [](const tt::tt_metal::DispatchCoreConfig& self) { return self.get_dispatch_core_type(); })
+        .def_prop_ro(
+            "axis", [](const tt::tt_metal::DispatchCoreConfig& self) { return self.get_dispatch_core_axis(); });
 
     nb::class_<SubDevice>(m_device, "SubDevice", "Class describing a sub-device of a Tenstorrent accelerator device.");
 
@@ -163,7 +183,19 @@ void py_device_module_types(nb::module_& m_device) {
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
                 return std::vector<std::string>(record.kernel_sources.begin(), record.kernel_sources.end());
             },
-            "Kernel source paths associated with this runtime ID");
+            "Kernel source paths associated with this runtime ID; valid until the callback returns");
+
+    nb::class_<PythonProgramRealtimeRecordBatch>(
+        m_device, "ProgramRealtimeRecordBatch", "Batch of real-time profiler records delivered to a callback.")
+        .def_ro(
+            "records",
+            &PythonProgramRealtimeRecordBatch::records,
+            "ProgramRealtimeRecord entries in this batch; non-empty, oldest first")
+        .def_ro(
+            "dropped",
+            &PythonProgramRealtimeRecordBatch::dropped,
+            "Records lost since this callback last ran; nonzero if the callback could not keep up with incoming "
+            "profiler data");
 
     nb::class_<tt::tt_metal::detail::MemoryView>(
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
@@ -204,19 +236,33 @@ void device_module(nb::module_& m_device) {
         .def(nb::self != nb::self);
 
     m_device.def(
+        "create_dispatch_core_config",
+        [](std::optional<tt::tt_metal::DispatchCoreType> type,
+           std::optional<tt::tt_metal::DispatchCoreAxis> axis,
+           std::optional<tt::tt_fabric::FabricTensixConfig> fabric_tensix_config) {
+            return ttnn::device::create_cluster_aware_dispatch_config(
+                type, axis, fabric_tensix_config.value_or(tt::tt_fabric::FabricTensixConfig::DISABLED));
+        },
+        nb::kw_only(),
+        nb::arg("type") = nb::none(),
+        nb::arg("axis") = nb::none(),
+        nb::arg("fabric_tensix_config") = nb::none(),
+        "Build a cluster/arch-aware DispatchCoreConfig (TTNN default that prefers maximum available worker cores).");
+
+    m_device.def(
         "CreateDevice",
         [](int device_id,
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
+           const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config,
            size_t worker_l1_size) {
             return MeshDevice::create_unit_mesh(
                 device_id,
                 l1_small_size,
                 trace_region_size,
                 num_command_queues,
-                dispatch_core_config,
+                dispatch_core_config.value_or(ttnn::device::create_cluster_aware_dispatch_config()),
                 /*l1_bank_remap=*/{},
                 worker_l1_size);
         },
@@ -233,7 +279,7 @@ void device_module(nb::module_& m_device) {
         nb::arg("num_command_queues") = 1,
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        nb::arg("DispatchCoreConfig") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
+        nb::arg("DispatchCoreConfig") = nb::none(),
         nb::kw_only(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     m_device.def(
@@ -242,14 +288,14 @@ void device_module(nb::module_& m_device) {
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
+           const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config,
            size_t worker_l1_size) {
             return MeshDevice::create_unit_meshes(
                 device_ids,
                 l1_small_size,
                 trace_region_size,
                 num_command_queues,
-                dispatch_core_config,
+                dispatch_core_config.value_or(ttnn::device::create_cluster_aware_dispatch_config()),
                 /*l1_bank_remap=*/{},
                 worker_l1_size);
         },
@@ -266,10 +312,14 @@ void device_module(nb::module_& m_device) {
         nb::arg("num_command_queues") = 1,
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        nb::arg("DispatchCoreConfig") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
+        nb::arg("DispatchCoreConfig") = nb::none(),
         nb::kw_only(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
-    m_device.def("CloseDevice", [](MeshDevice* device) { device->close(); }, R"doc(
+    m_device.def(
+        "CloseDevice",
+        [](MeshDevice* device) { device->close(); },
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
         +------------------+------------------------+-----------------------+-------------+----------+
@@ -285,6 +335,7 @@ void device_module(nb::module_& m_device) {
                 device_entry.second->close();
             }
         },
+        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
@@ -367,16 +418,28 @@ void device_module(nb::module_& m_device) {
         },
         nb::arg("unpadded_shape"),
         R"doc(
-        Pads the given shape to tile shape based on specified padding options.
+        Pads the given shape to tile shape (rounds last two dims up to multiples of 32).
+
+        .. deprecated::
+            This function is deprecated and will be removed in a future release.
+            Use ``ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)`` which handles
+            tile-alignment automatically.
+
+            If you only need the padded shape without converting layout, align
+            dimensions manually::
+
+                import math
+                TILE = 32
+                shape = list(original_shape)
+                shape[-1] = math.ceil(shape[-1] / TILE) * TILE
+                if len(shape) >= 2:
+                    shape[-2] = math.ceil(shape[-2] / TILE) * TILE
 
         Args:
             unpadded_shape (List of [int]): The original shape of the tensor to pad.
 
         Returns:
             List of [int]: The padded shape.
-
-        Note:
-            This functionality is planned for deprecation in the future.
 
         Example:
             >>> padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2])
@@ -401,14 +464,84 @@ void device_module(nb::module_& m_device) {
             >>> ttnn.device.ClearKernelCache()
     )doc");
     m_device.def(
-        "initialize_fast_dispatch",
-        [](MeshDevice* device) { tt::tt_metal::experimental::DispatchContext::get().initialize_fast_dispatch(device); },
+        "GetOperationTimeoutSeconds",
+        [] { return tt::tt_metal::experimental::GetOperationTimeout().count(); },
+        R"doc(
+        Get the operation timeout in seconds (0 = off), initialized from TT_METAL_OPERATION_TIMEOUT_SECONDS.
+
+        A command queue wait that sees no dispatch progress for this long runs
+        TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE (if set) and raises.
+
+        Example:
+            >>> import ttnn
+            >>> timeout_s = ttnn.device.GetOperationTimeoutSeconds()
+    )doc");
+    m_device.def(
+        "SetOperationTimeoutSeconds",
+        [](float seconds) { tt::tt_metal::experimental::SetOperationTimeout(std::chrono::duration<float>(seconds)); },
+        nb::arg("seconds"),
+        R"doc(
+        Set the operation timeout in seconds (0 = off), overriding TT_METAL_OPERATION_TIMEOUT_SECONDS.
+
+        Each wait reads the value when it starts, so a wait already in progress keeps its old value.
+
+        Args:
+            seconds (float): The new timeout; 0 turns it off.
+
+        Example:
+            >>> import ttnn
+            >>> ttnn.device.SetOperationTimeoutSeconds(300)
+    )doc");
+    m_device.def(
+        "get_dispatch_core_axis",
+        [](MeshDevice* device) {
+            return tt::tt_metal::experimental::DispatchContext::get().get_dispatch_core_axis(device);
+        },
         nb::arg("device").noconvert(),
+        R"doc(
+        Return the axis (ROW or COL) of the device's live dispatch-core configuration.
+
+        COL means dispatch sits on the last column of the worker grid (the Blackhole default); ROW means
+        the last row (Blackhole with fabric tensix enabled, or Wormhole). tt-blaze's two-phase upload uses
+        it to find that edge: cargo shards off the edge are written under Fast Dispatch, and shards on it
+        are written under Slow Dispatch after the session, because dispatch firmware occupies those cores
+        during it.
+
+        Args:
+            device (ttnn.Device): The mesh device to query.
+
+        Returns:
+            ttnn.device.DispatchCoreAxis: ROW or COL.
+    )doc");
+    m_device.def(
+        "initialize_fast_dispatch",
+        [](MeshDevice* device, bool allow_destructive) {
+            tt::tt_metal::experimental::FastDispatchSetupOptions options;
+            options.allow_destructive = allow_destructive;
+            tt::tt_metal::experimental::DispatchContext::get().initialize_fast_dispatch(device, options);
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("allow_destructive") = false,
         R"doc(
         Dynamically enable Fast Dispatch on a MeshDevice that was opened in Slow Dispatch mode.
 
+        Refuses, before any firmware is written, if an L1 or L1_SMALL allocation is resident on a core
+        that Fast Dispatch will claim; dispatch cores may not hold L1 allocations while Fast Dispatch is
+        active.
+
+        Limitations:
+            - Any interleaved L1 buffer resident when the session opens is refused, whatever its size:
+              its pages are spread over every L1 bank.
+            - A non-default sub-device manager still loaded on any view over an active chip is refused,
+              even with allow_destructive: the check sees only the default manager's allocations.
+              Sub-device managers aren't supported with manual Fast Dispatch; loading one during a
+              session raises.
+            - Every active device must be MMIO-attached; otherwise this raises before Fast Dispatch is
+              enabled.
+
         Args:
             device (ttnn.Device): The mesh device to enable Fast Dispatch on.
+            allow_destructive (bool): Warn and proceed instead of refusing. The resident L1 may be corrupted.
     )doc");
     m_device.def(
         "terminate_fast_dispatch",
@@ -524,6 +657,31 @@ void device_module(nb::module_& m_device) {
         nb::arg("buffer_type").noconvert(),
         get_allocator_base_address_doc.data());
 
+    constexpr std::string_view get_l1_occupied_ranges_doc = R"doc(
+        Experimental. Return the occupied L1 ``(start, end)`` byte ranges (end exclusive) on one device of the mesh:
+        lockstep allocations, the core's per-core allocations and persistent L1, sorted and coalesced.
+        With ``core``, returns a list for that core; without it, a dict mapping every L1-bank core to its list.
+        Requires the device to be opened with ``TT_METAL_ALLOCATOR_MODE_HYBRID=1``.
+    )doc";
+    m_device.def(
+        "ExperimentalGetL1OccupiedRanges",
+        [](const MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord, const CoreCoord& core) {
+            return tt::tt_metal::experimental::per_core_allocation::get_l1_occupied_ranges(
+                mesh_device, device_coord, core);
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        nb::arg("core"),
+        get_l1_occupied_ranges_doc.data());
+    m_device.def(
+        "ExperimentalGetL1OccupiedRanges",
+        [](const MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord) {
+            return tt::tt_metal::experimental::per_core_allocation::get_l1_occupied_ranges(mesh_device, device_coord);
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        get_l1_occupied_ranges_doc.data());
+
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
                 If cq_id is provided then only the operations associated with that cq_id are waited for,
@@ -548,7 +706,17 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "synchronize_device",
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            tt::tt_metal::distributed::Synchronize(device, raw_optional(cq_id), sub_device_ids);
+            // Guard before touching mesh_command_queue(): the queues are torn down on close, so looking one up on
+            // an uninitialized device would assert. Synchronize() is a no-op there anyway.
+            if (!device->is_initialized()) {
+                return;
+            }
+            if (cq_id.has_value()) {
+                tt::tt_metal::distributed::Synchronize(
+                    *device, device->mesh_command_queue(cq_id->get()), sub_device_ids);
+            } else {
+                tt::tt_metal::distributed::Synchronize(*device, std::nullopt, sub_device_ids);
+            }
         },
         synchronize_device_doc.data(),
         nb::arg("device"),
@@ -557,6 +725,32 @@ void device_module(nb::module_& m_device) {
         // Release GIL: sync can block a long time; other threads need it to run Python (e.g. real-time profiler
         // callbacks).
         nb::call_guard<nb::gil_scoped_release>());
+    m_device.def(
+        "is_trace_capture_active",
+        [](MeshDevice* device) {
+            if (!device->is_initialized()) {
+                return false;
+            }
+            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+                if (device->mesh_command_queue(cq_id).trace_id().has_value()) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        nb::arg("device"),
+        R"doc(
+                Returns True if a metal trace is currently being captured on any command queue of the device.
+
+                Operations that synchronize with host (event recording, reads, writes) are not supported while a
+                trace is being captured, so callers that would otherwise synchronize must skip doing so.
+
+                Args:
+                    device (ttnn.MeshDevice): The device to query.
+
+                Returns:
+                    `bool`: whether a trace capture is in progress.
+            )doc");
     m_device.def(
         "ReadDeviceProfiler",
         [](MeshDevice* mesh_device) {
@@ -664,11 +858,20 @@ void device_module(nb::module_& m_device) {
             PyObject* raw_cb = callback.ptr();
             Py_INCREF(raw_cb);
 
-            auto handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
-                [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
-                    nb::gil_scoped_acquire gil;
-                    (nb::handle(raw_cb))(nb::cast(record, nb::rv_policy::copy));
-                });
+            uint64_t handle = 0;
+            {
+                nb::gil_scoped_release release;
+                handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
+                    [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
+                        PythonProgramRealtimeRecordBatch py_batch{
+                            .records = std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>(
+                                batch.records.begin(), batch.records.end()),
+                            .dropped = batch.dropped,
+                        };
+                        nb::gil_scoped_acquire gil;
+                        (nb::handle(raw_cb))(nb::cast(std::move(py_batch), nb::rv_policy::move));
+                    });
+            }
 
             python_realtime_callback_refs[handle] = raw_cb;
             return handle;
@@ -676,27 +879,32 @@ void device_module(nb::module_& m_device) {
         nb::arg("callback"),
         R"doc(
             Register a callback to be invoked when real-time profiler data arrives from a device.
-            The callback receives a ProgramRealtimeRecord and is called from the real-time profiler
-            receiver thread.
+            The callback receives a ProgramRealtimeRecordBatch and is called from its own thread.
+            Callbacks that are too slow to keep up with incoming profiler data may miss records;
+            this is reported by ProgramRealtimeRecordBatch.dropped.
 
             Multiple callbacks can be registered.
 
             Args:
-                callback: A callable that accepts a single ProgramRealtimeRecord argument.
+                callback: A callable that accepts a single ProgramRealtimeRecordBatch argument.
 
             Returns:
                 int: A handle that can be passed to UnregisterProgramRealtimeProfilerCallback.
 
             Example:
-                >>> def my_callback(record):
-                ...     print(f"runtime_id={record.runtime_id} on chip {record.chip_id}")
+                >>> def my_callback(batch):
+                ...     for record in batch.records:
+                ...         print(f"runtime_id={record.runtime_id} on chip {record.chip_id}")
                 >>> handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(my_callback)
         )doc");
 
     m_device.def(
         "UnregisterProgramRealtimeProfilerCallback",
         [](uint64_t handle) {
-            tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            {
+                nb::gil_scoped_release release;
+                tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            }
             auto it = python_realtime_callback_refs.find(handle);
             if (it != python_realtime_callback_refs.end()) {
                 Py_DECREF(it->second);
@@ -704,7 +912,6 @@ void device_module(nb::module_& m_device) {
             }
         },
         nb::arg("handle"),
-        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
             Unregister a previously registered real-time profiler callback.
             This call waits for any in-flight invocations of the callback to finish.

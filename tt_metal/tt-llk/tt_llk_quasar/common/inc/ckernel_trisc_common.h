@@ -3,23 +3,36 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <cfg_defines.h>
+#include <ckernel_proj_params.h>
+
 #include <cstdint>
 
-#include "cfg_defines.h"
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
+#include "ckernel_buf_desc.h"
 #include "ckernel_instr_params.h"
-#include "ckernel_proj_params.h"
 #include "ckernel_template.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_reinit_guard.h"
+#include "llk_tdma_guard.h"
 #include "tensix_types.h"
 #include "tensor_shape.h"
 
 namespace ckernel::trisc
 {
-// Num of words in buffer descriptor struct
-constexpr static std::uint32_t BD_NUM_WORDS = 3;
+// Fixed hardware thread ids, matching the DEST section register layout (SEC0..SEC3) and the
+// -DCOMPILE_FOR_TRISC=<n> the build assigns per thread. Use these when a call must address a specific
+// thread's slot rather than the compile-time thread it runs on -- e.g. the unpack-to-dest path, where
+// the unpack thread programs the UNP_DEST producer slot (Unpack) regardless of what it is compiled as.
+enum class TriscID : std::uint8_t
+{
+    Unpack = 0,
+    Math   = 1,
+    Pack   = 2,
+    Sfpu   = 3, // isolate-SFPU
+};
 
 using ckernel::FACE_C_DIM;
 using ckernel::FACE_R_DIM;
@@ -31,6 +44,10 @@ constexpr static std::uint32_t NUM_FACES = 4;
 
 // Default number of tiles processed per one _llk_* execute call
 static constexpr std::uint32_t NUM_TILES = 1;
+
+// SET_SRC/DST_TILE_FACE_ROW_IDX carry an 18-bit value, but under FACE_SEL only 11 bits reach the counter: a larger face
+// index aliases back to an earlier tile.
+constexpr std::uint32_t FACE_SEL_IDX_LIMIT = 1u << 11;
 
 // Number of rows that can fit into Dest
 static constexpr std::uint32_t DEST_REGISTER_FULL_SIZE = 64 * FACE_R_DIM;
@@ -49,13 +66,7 @@ static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE
 constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 5;
 // Mask to extract data format bits
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
-
-// Points to the config space
-std::uint32_t volatile* const cfg = (std::uint32_t volatile*)TENSIX_CFG_BASE;
-// Points to the buffer table
-buffer_descriptor_u volatile* const bd_table = (buffer_descriptor_u volatile* const)(cfg + BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR_ADDR32);
-
-constexpr std::uint32_t NUM_WORDS_TILE_CNT = 8;
+constexpr std::uint32_t NUM_WORDS_TILE_CNT      = 8;
 
 typedef struct
 {
@@ -98,44 +109,6 @@ inline bool _divisible_by_pow_two_(const std::uint32_t value, const std::uint32_
     return ((value & (power_of_two_divisor - 1)) == 0);
 }
 
-/**
- * @brief Helper function to ensure valid tile sizes are programmed into the buffer descriptor.
- * valid tile sizes:
-    1x16: x=16, y=1, z=1
-    2x16: x=16, y=2, z=1
-    4x16: x=16, y=4, z=1
-    8x16: x=16, y=8, z=1
-    16x16: x=16, y=16, z=1
-    32x32: x=16, y=16, z=4
- * @param buf_desc: Contains L1 buffer descriptor information
- */
-inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
-{
-    LLK_ASSERT(buf_desc.f.x_dim == 16, "x_dim must be 16");
-    LLK_ASSERT(
-        buf_desc.f.y_dim == 16 || buf_desc.f.y_dim == 8 || buf_desc.f.y_dim == 4 || buf_desc.f.y_dim == 2 || buf_desc.f.y_dim == 1,
-        "y_dim must be powers of 2 <= 16");
-    LLK_ASSERT(buf_desc.f.z_dim == 1 || buf_desc.f.z_dim == 4, "z_dim must be 1 or 4");
-    if (buf_desc.f.z_dim == 4)
-    {
-        LLK_ASSERT(buf_desc.f.y_dim == 16, "y_dim must be 16 when z_dim is 4");
-    }
-}
-
-/**
- * @brief Populates buffer table entry for TDMA engines
- * @param buf_desc_id: Buffer descriptor id into the buffer descriptor table
- * @param buf_desc: Contains L1 buffer descriptor information
- */
-inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const buffer_descriptor_u& buf_desc)
-{
-    validate_buffer_desc(buf_desc);
-    for (std::uint32_t i = 0; i < BD_NUM_WORDS; i++)
-    {
-        bd_table[buf_desc_id].words[i] = buf_desc.words[i];
-    }
-}
-
 enum class DstTileShape : std::uint8_t
 {
     Tile32x1  = 1,
@@ -145,6 +118,50 @@ enum class DstTileShape : std::uint8_t
     Tile32x16 = 5,
     Tile32x32 = 6
 };
+
+constexpr std::uint32_t get_dest_tile_size_log2(const DstTileShape tile_shape)
+{
+    return ckernel::to_underlying(tile_shape) < ckernel::to_underlying(DstTileShape::Tile32x8) ? ckernel::to_underlying(DstTileShape::Tile32x8)
+                                                                                               : ckernel::to_underlying(tile_shape);
+}
+
+/**
+ * @brief Calculates the maximum number of tiles that fit in the math destination region.
+ *
+ * Destination addressing uses a minimum 16-row footprint for tile shapes smaller
+ * than 32x16.
+ *
+ * @tparam SYNC_MODE: Destination synchronization mode, values = <SyncHalf/SyncFull>
+ * @tparam EN_32BIT_DEST: Whether the Dest register is in 32-bit mode
+ * @tparam TILE_SHAPE: Destination tile shape
+ * @return Maximum number of destination tiles.
+ */
+template <ckernel::DstSync SYNC_MODE, bool EN_32BIT_DEST, DstTileShape TILE_SHAPE>
+constexpr std::uint32_t get_dest_max_tiles()
+{
+    constexpr std::uint32_t DEST_REGISTER_SIZE = SYNC_MODE == ckernel::DstSync::SyncHalf
+                                                     ? (EN_32BIT_DEST ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                                     : (EN_32BIT_DEST ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+
+    return DEST_REGISTER_SIZE >> get_dest_tile_size_log2(TILE_SHAPE);
+}
+
+/**
+ * @brief Maximum number of tiles that fit in the math destination region, at the per-tile stride
+ * the last math init programmed into the TILE_SHAPE_IDX GPR. Only valid for ops that address dest
+ * by rows (_set_dst_write_addr_by_rows_) and whose init programs the GPR.
+ *
+ * @tparam SYNC_MODE: Destination synchronization mode, values = <SyncHalf/SyncFull>
+ * @tparam EN_32BIT_DEST: Whether the Dest register is in 32-bit mode
+ * @return Maximum number of destination tiles.
+ */
+template <ckernel::DstSync SYNC_MODE, bool EN_32BIT_DEST>
+inline std::uint32_t get_dest_max_tiles()
+{
+    constexpr std::uint32_t DEST_REGISTER_SIZE = get_dest_max_tiles<SYNC_MODE, EN_32BIT_DEST, DstTileShape::Tile32x32>()
+                                                 << get_dest_tile_size_log2(DstTileShape::Tile32x32);
+    return DEST_REGISTER_SIZE >> ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX];
+}
 
 /**
  * @brief Sets the destination register base address, each Trisc0/1/2/3 has separate
@@ -157,6 +174,8 @@ enum class DstTileShape : std::uint8_t
 template <std::uint8_t TRISC_ID>
 inline void _set_dest_section_base_(const std::uint32_t base_addr)
 {
+    static_assert(TRISC_ID < 4, "_set_dest_section_base_ takes a per-Neo thread id in [0, 3]");
+
     if constexpr (TRISC_ID == 0)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC0_Offset_ADDR32] = base_addr;
@@ -169,7 +188,7 @@ inline void _set_dest_section_base_(const std::uint32_t base_addr)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC2_Offset_ADDR32] = base_addr;
     }
-    else
+    else if constexpr (TRISC_ID == 3)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC3_Offset_ADDR32] = base_addr;
     }
@@ -263,11 +282,37 @@ inline void _update_dest_register_offset_()
 // Semaphores mapping and trisc space -> tensix space conversion
 struct semaphore
 {
-    constexpr static std::uint32_t MATH_PACK = 1; // math <-> pack sync on dest register
+    // The math thread is the middleman, for regular unpack and for unpack_to_dest.
+    // When unpacking to dest, math thread doesn't produce data, it just bridges UNPACK_MATH -> MATH_PACK.
+    // Packer only listens on MATH_PACK, so something has to translate the unpack completion into a
+    // pack-visible event. Math being the forwarder is also what makes future fused ops cheap:
+    // SFPU/FPU work slots in between the UNPACK_MATH get and the MATH_PACK post.
+    // UNPACK_MATH carries data-ready from unpack to math; MATH_PACK carries it from math to pack and, as in the
+    // regular path, throttles math behind pack (math stalls on its max). Neither gates the unpacker. What keeps the
+    // unpacker from overwriting a DEST bank the packer still reads is UNPACK_PACK: unpack posts it per section written,
+    // pack gets it per section released, and unpack stalls on its max (= number of DEST banks). Two separate counters
+    // cannot express that sum.
+    //
+    // Keep pairwise naming with producer_consumer direction:
+    // - MATH_PACK = math->pack
+    // - UNPACK_MATH = unpack->math
+    // - UNPACK_PACK = unpack->pack
+    // - PACK_UNPACK = pack->unpack
+    // - UNPACK_INIT = unpack->math (startup barrier, see llk_sync.h)
+    constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
+    constexpr static std::uint32_t UNPACK_PACK = 3; // unpack -> pack: DEST sections unpacked and not yet released by pack
+    constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
+    constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
+    // Startup barrier for the unpack-to-dest handshake. Each semaphore is seeded by the thread that posts it, in front of
+    // its first post: MATH_PACK by math, UNPACK_MATH / UNPACK_PACK by unpack. The unpack thread raises this one right
+    // after its seeds, and math passes it before its first wait on UNPACK_MATH, so no SEMWAIT is ever pending on a
+    // semaphore when its SEMINIT lands. Pack needs no barrier: its first get on UNPACK_PACK follows math's first
+    // MATH_PACK post, which follows the unpacker's first UNPACK_MATH post. Rest state 0.
+    constexpr static std::uint32_t UNPACK_INIT = 0; // unpack -> math: the unpack-posted semaphores are seeded
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {
-        return (1 << sem_index);
+        return (1u << sem_index);
     }
 };
 
@@ -276,12 +321,13 @@ struct semaphore
 template <std::uint32_t WaitRes0 = p_stall::NOTHING, std::uint32_t WaitRes1 = p_stall::NOTHING, std::uint32_t WaitRes2 = p_stall::NOTHING>
 inline void t6_semaphore_post(const std::uint8_t index)
 {
-    if constexpr (WaitRes0 != p_stall::NOTHING)
+    // Each slot is independently optional: emit the stall whenever any resource is named.
+    if constexpr (WaitRes0 != p_stall::NOTHING || WaitRes1 != p_stall::NOTHING || WaitRes2 != p_stall::NOTHING)
     {
         TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
     }
 
-    TTI_SEMPOST(0, semaphore::t6_sem(index));
+    TT_SEMPOST(0, semaphore::t6_sem(index));
 }
 
 // Tensix thread semaphore get optionally stalled
@@ -289,12 +335,27 @@ inline void t6_semaphore_post(const std::uint8_t index)
 template <std::uint32_t WaitRes0 = p_stall::NOTHING, std::uint32_t WaitRes1 = p_stall::NOTHING, std::uint32_t WaitRes2 = p_stall::NOTHING>
 inline void t6_semaphore_get(const std::uint8_t index)
 {
-    if constexpr (WaitRes0 != p_stall::NOTHING)
+    // Each slot is independently optional: emit the stall whenever any resource is named.
+    if constexpr (WaitRes0 != p_stall::NOTHING || WaitRes1 != p_stall::NOTHING || WaitRes2 != p_stall::NOTHING)
     {
         TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
     }
 
-    TTI_SEMGET(0, semaphore::t6_sem(index));
+    TT_SEMGET(0, semaphore::t6_sem(index));
+}
+
+// Tensix thread semaphore init optionally stalled
+// Can stall on up to 3 resources at a time
+template <std::uint32_t WaitRes0 = p_stall::NOTHING, std::uint32_t WaitRes1 = p_stall::NOTHING, std::uint32_t WaitRes2 = p_stall::NOTHING>
+inline void t6_semaphore_init(const std::uint8_t index, const std::uint8_t min_value, const std::uint8_t max_value)
+{
+    // Each slot is independently optional: emit the stall whenever any resource is named.
+    if constexpr (WaitRes0 != p_stall::NOTHING || WaitRes1 != p_stall::NOTHING || WaitRes2 != p_stall::NOTHING)
+    {
+        TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
+    }
+
+    TT_SEMINIT(max_value, min_value, 0, semaphore::t6_sem(index));
 }
 
 /**
@@ -310,13 +371,17 @@ inline void _set_packer_dest_registers_()
     static_assert(DST == ckernel::DstSync::SyncHalf || DST == ckernel::DstSync::SyncFull);
     std::uint32_t dest_buffer_base_offset = (DST == ckernel::DstSync::SyncFull) ? 0 : _get_dest_buffer_base_();
 
+    // Masked write of just SRC_ADDR_OFFSET. On PACKER1 this cfg word (ADDR32 65) also holds the
+    // INSTRN_LOOP_COUNT/COUNT auto-loop bits programmed by _llk_pack_srcs_config_ (llk_srcs.h); a
+    // full-word write would zero them (per-tile in SyncHalf, once the SrcS->Packer1 path is wired).
+    // PACKER0's word has no such siblings today, but keep it masked for symmetry.
     if constexpr (PACK_SEL == p_pacr::PACK0)
     {
-        cfg[THCON_PACKER0_REG0_SRC_ADDR_OFFSET_ADDR32] = dest_buffer_base_offset;
+        cfg_rmw(THCON_PACKER0_REG0_SRC_ADDR_OFFSET_RMW, dest_buffer_base_offset);
     }
     else
     {
-        cfg[THCON_PACKER1_REG0_SRC_ADDR_OFFSET_ADDR32] = dest_buffer_base_offset;
+        cfg_rmw(THCON_PACKER1_REG0_SRC_ADDR_OFFSET_RMW, dest_buffer_base_offset);
     }
 }
 
@@ -342,9 +407,10 @@ struct srcs_dims
 };
 
 // SrcS runs in 32-bit element mode when the UNP_S destination format is 32-bit wide.
+// Unpack-to-SrcS cannot convert fp16 to TF32, so Tf32 is not a legal unpack_S_dst here.
 inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
 {
-    return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32;
+    return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32 || unpack_S_dst_format == DataFormat::Tf32;
 }
 
 /**
@@ -356,50 +422,6 @@ inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
 inline std::uint32_t find_max(std::uint32_t input1, std::uint32_t input2)
 {
     return (input1 >= input2) ? input1 : input2;
-}
-
-/**
- * @brief helper function used to compute z-dim for buf_desc from TensorShape.
- * Compares two values, then computes the square of the smaller value.
- *
- * @param input1/input2: values to be compared, then squared
- */
-inline std::uint16_t compute_square_of_min(std::uint8_t input1, std::uint8_t input2)
-{
-    return (input1 < input2) ? input1 * input1 : input2 * input2;
-}
-
-/**
- * @brief Creates a tdma_descriptor_t structure from TensorShape and other needed parameters
- * Currently supported buffer descriptor dimensions are:
- * x=16; y=[1, 2, 4, 8, 16]; z=1; or x=16; y=16; z=4; these are hardware constraints.
- *
- * @param tensor_shape: Tile/face dimensions and shape of input tensor
- * @param base_l1_16B: base address of the buffer in L1
- * @param data_format: L1 data encoding format
- * @param buf_desc_id: buffer descriptor table ID
- * @param reg_data_format: Register data encoding format
- */
-inline tdma_descriptor_t construct_tdma_desc(
-    const TensorShape& tensor_shape, unsigned base_l1_16B, unsigned data_format, std::uint32_t buf_desc_id, unsigned reg_data_format)
-{
-    buffer_descriptor_u buf_desc = {0};
-    buf_desc.f.x_dim             = tensor_shape.face_c_dim;
-    buf_desc.f.y_dim             = tensor_shape.face_r_dim;
-    if (tensor_shape.num_faces_r_dim == tensor_shape.num_faces_c_dim)
-    {
-        buf_desc.f.z_dim = tensor_shape.total_num_faces();
-    }
-    else
-    {
-        buf_desc.f.z_dim = static_cast<std::uint8_t>(compute_square_of_min(tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim));
-    }
-    buf_desc.f.l1_addr_16B  = base_l1_16B;
-    buf_desc.f.format       = static_cast<std::uint8_t>(data_format);
-
-    tdma_descriptor_t tdma_desc = {buf_desc, buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
-
-    return tdma_desc;
 }
 
 } // namespace ckernel::trisc

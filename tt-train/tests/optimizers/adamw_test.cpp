@@ -7,8 +7,23 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <bit>
+#include <cmath>
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <string_view>
+#include <vector>
+
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
+#include "optimizers/adamw_composite.hpp"
+#include "optimizers/adamw_full_precision.hpp"
+#include "optimizers/muon_composite.hpp"
+#include "optimizers/sgd.hpp"
+#include "optimizers/sgd_composite.hpp"
 #include "test_utils/random_data.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
@@ -210,17 +225,10 @@ static void run_step_and_compare(const AdamWCase& pc) {
     {
         auto m0_tensor = autograd::create_tensor(to_tt_bf16(m0), false);
         auto v0_tensor = autograd::create_tensor(to_tt_bf16(v0), false);
-        serialization::StateDict fused_state;
+        auto fused_state = opt_fused.get_state_dict();
         fused_state["exp_avg"] = serialization::NamedParameters{{"theta", m0_tensor}};
         fused_state["exp_avg_sq"] = serialization::NamedParameters{{"theta", v0_tensor}};
         fused_state["steps"] = initial_steps;
-        fused_state["lr"] = pc.lr;
-        fused_state["beta1"] = pc.beta1;
-        fused_state["beta2"] = pc.beta2;
-        fused_state["epsilon"] = pc.epsilon;
-        fused_state["weight_decay"] = pc.weight_decay;
-        fused_state["amsgrad"] = pc.amsgrad;
-        fused_state["stochastic_rounding"] = false;
         if (pc.amsgrad) {
             auto max_v0_tensor = autograd::create_tensor(to_tt_bf16(max_v0), false);
             fused_state["max_exp_avg_sq"] = serialization::NamedParameters{{"theta", max_v0_tensor}};
@@ -305,6 +313,423 @@ static const AdamWCase kWeightDecayCases[] = {
 INSTANTIATE_TEST_SUITE_P(AdamWWeightDecay, AdamWComparisonTest, ::testing::ValuesIn(kWeightDecayCases), CaseName);
 
 // ====================================================================
+// Param group tests
+// Every group is stepped with its own options; params in no group use the
+// defaults. A group with weight_decay = 0 (e.g. RMSNorm gains and biases)
+// must not be weight-decayed, while the default group still is.
+// ====================================================================
+
+class AdamWParamGroupsTest : public ::testing::Test {
+public:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+    }
+};
+
+TEST_F(AdamWParamGroupsTest, ZeroWeightDecayGroupSkipsDecay) {
+    using namespace ttml;
+
+    const std::array<std::size_t, 4> shape_1d = {1, 1, 1, 4096};   // RMSNorm-gain-like
+    const std::array<std::size_t, 4> shape_2d = {1, 1, 128, 256};  // matmul-weight-like
+
+    const float lr = 1e-2f;
+    const float beta1 = 0.9f;
+    const float beta2 = 0.999f;
+    const float epsilon = 1e-8f;
+    // Large wd so the decay term (lr*wd*param) is well above tolerance: makes the "would-be-decayed"
+    // reference clearly separable from the (correctly) undecayed 1-D result.
+    const float weight_decay = 1.0f;
+    const size_t initial_steps = 10;
+
+    autograd::ctx().set_seed(123U);
+    auto& gen = autograd::ctx().get_generator();
+    const uint32_t seed_1d_w = gen();
+    const uint32_t seed_1d_g = gen();
+    const uint32_t seed_1d_m = gen();
+    const uint32_t seed_1d_v = gen();
+    const uint32_t seed_2d_w = gen();
+    const uint32_t seed_2d_g = gen();
+    const uint32_t seed_2d_m = gen();
+    const uint32_t seed_2d_v = gen();
+
+    xt::xarray<float> w1_0 = test_utils::make_uniform_xarray<float>(shape_1d, -1.0F, 1.0F, seed_1d_w);
+    xt::xarray<float> g1_0 = test_utils::make_uniform_xarray<float>(shape_1d, -1.0F, 1.0F, seed_1d_g);
+    xt::xarray<float> m1_0 = test_utils::make_uniform_xarray<float>(shape_1d, -1.0F, 1.0F, seed_1d_m);
+    xt::xarray<float> v1_0 = test_utils::make_uniform_xarray<float>(shape_1d, 0.0F, 1.0F, seed_1d_v);
+
+    xt::xarray<float> w2_0 = test_utils::make_uniform_xarray<float>(shape_2d, -1.0F, 1.0F, seed_2d_w);
+    xt::xarray<float> g2_0 = test_utils::make_uniform_xarray<float>(shape_2d, -1.0F, 1.0F, seed_2d_g);
+    xt::xarray<float> m2_0 = test_utils::make_uniform_xarray<float>(shape_2d, -1.0F, 1.0F, seed_2d_m);
+    xt::xarray<float> v2_0 = test_utils::make_uniform_xarray<float>(shape_2d, 0.0F, 1.0F, seed_2d_v);
+
+    // References: 1-D param stepped WITHOUT weight decay, 2-D param stepped WITH weight decay.
+    xt::xarray<float> w1_no_wd = w1_0;
+    CPUAdamW cpu_1d_no_wd(lr, beta1, beta2, epsilon, /*weight_decay=*/0.0f, /*amsgrad=*/false);
+    cpu_1d_no_wd.set_state(m1_0, v1_0, initial_steps);
+    cpu_1d_no_wd.step(w1_no_wd, g1_0);
+
+    xt::xarray<float> w2_with_wd = w2_0;
+    CPUAdamW cpu_2d_with_wd(lr, beta1, beta2, epsilon, weight_decay, false);
+    cpu_2d_with_wd.set_state(m2_0, v2_0, initial_steps);
+    cpu_2d_with_wd.step(w2_with_wd, g2_0);
+
+    // What the 1-D param WOULD be if it were (incorrectly) decayed — used to prove the decay is
+    // large enough to matter, so the "no decay" match below isn't a vacuous pass.
+    xt::xarray<float> w1_with_wd = w1_0;
+    CPUAdamW cpu_1d_with_wd(lr, beta1, beta2, epsilon, weight_decay, false);
+    cpu_1d_with_wd.set_state(m1_0, v1_0, initial_steps);
+    cpu_1d_with_wd.step(w1_with_wd, g1_0);
+
+    // Device AdamW: both params in one optimizer, only "gain" excluded from weight decay.
+    auto gain = autograd::create_tensor(to_tt_bf16(w1_0), true);
+    gain->set_grad(to_tt_bf16(g1_0));
+    auto weight = autograd::create_tensor(to_tt_bf16(w2_0), true);
+    weight->set_grad(to_tt_bf16(g2_0));
+    serialization::NamedParameters params{{"gain", gain}, {"weight", weight}};
+
+    optimizers::AdamWConfig cfg;
+    cfg.lr = lr;
+    cfg.beta1 = beta1;
+    cfg.beta2 = beta2;
+    cfg.epsilon = epsilon;
+    cfg.weight_decay = weight_decay;
+    optimizers::AdamW opt(params, cfg, {{.params = {"gain"}, .options = {{"weight_decay", 0.0F}}}});
+
+    // Inject momentum state on top of the optimizer's own state dict, which carries its param groups.
+    {
+        auto state = opt.get_state_dict();
+        state["exp_avg"] = serialization::NamedParameters{
+            {"gain", autograd::create_tensor(to_tt_bf16(m1_0), false)},
+            {"weight", autograd::create_tensor(to_tt_bf16(m2_0), false)}};
+        state["exp_avg_sq"] = serialization::NamedParameters{
+            {"gain", autograd::create_tensor(to_tt_bf16(v1_0), false)},
+            {"weight", autograd::create_tensor(to_tt_bf16(v2_0), false)}};
+        state["steps"] = initial_steps;
+        opt.set_state_dict(state);
+    }
+
+    opt.step();
+
+    auto gain_result = core::to_xtensor(gain->get_value());
+    auto weight_result = core::to_xtensor(weight->get_value());
+
+    const float mean_error_tolerance = 1e-3f;
+    const float max_error_tolerance = 1e-2f;
+
+    // 1-D param must match the NO-weight-decay reference.
+    auto gain_metrics = compute_error_metrics(w1_no_wd, gain_result, "gain_1d");
+    EXPECT_LE(gain_metrics.mean_error, mean_error_tolerance) << "1-D param should not be weight-decayed";
+    EXPECT_LE(gain_metrics.max_error, max_error_tolerance) << "1-D param should not be weight-decayed";
+
+    // 2-D param must match the weight-decayed reference.
+    auto weight_metrics = compute_error_metrics(w2_with_wd, weight_result, "weight_2d");
+    EXPECT_LE(weight_metrics.mean_error, mean_error_tolerance) << "2-D param should be weight-decayed";
+    EXPECT_LE(weight_metrics.max_error, max_error_tolerance) << "2-D param should be weight-decayed";
+
+    // Guard against a vacuous pass: the undecayed 1-D result must be clearly distinct from the
+    // would-be-decayed reference, i.e. the weight decay is actually large enough to observe.
+    auto skip_vs_decay = compute_error_metrics(w1_with_wd, gain_result, "gain_skip_vs_decay");
+    EXPECT_GT(skip_vs_decay.mean_error, mean_error_tolerance)
+        << "weight decay too small to distinguish skipping from applying it; test is not meaningful";
+}
+
+TEST_F(AdamWParamGroupsTest, FillsDefaultsAndGroupsUngroupedParams) {
+    using namespace ttml;
+
+    const xt::xarray<float> zeros = xt::zeros<float>({1, 1, 32, 32});
+    serialization::NamedParameters params{
+        {"b", autograd::create_tensor(to_tt_bf16(zeros), true)},
+        {"a", autograd::create_tensor(to_tt_bf16(zeros), true)},
+        {"gamma", autograd::create_tensor(to_tt_bf16(zeros), true)}};
+
+    optimizers::AdamWConfig defaults;
+    defaults.weight_decay = 0.1F;
+    optimizers::AdamW opt(params, defaults, {{.params = {"gamma"}, .options = {{"weight_decay", 0.0F}}}});
+
+    // Ungrouped params form a leading group with the defaults; explicit groups get missing options filled.
+    const auto& groups = opt.get_param_groups();
+    ASSERT_EQ(groups.size(), 2U);
+    EXPECT_EQ(groups[0].params, (std::vector<std::string>{"a", "b"}));
+    EXPECT_EQ(groups[0].options, opt.get_defaults());
+    EXPECT_EQ(groups[1].params, (std::vector<std::string>{"gamma"}));
+    EXPECT_FLOAT_EQ(groups[1].options.at("weight_decay"), 0.0F);
+    EXPECT_FLOAT_EQ(groups[1].options.at("lr"), defaults.lr);
+    EXPECT_FLOAT_EQ(groups[1].options.at("beta1"), defaults.beta1);
+}
+
+TEST_F(AdamWParamGroupsTest, RejectsInvalidGroups) {
+    using namespace ttml;
+
+    const xt::xarray<float> zeros = xt::zeros<float>({1, 1, 32, 32});
+    auto theta = autograd::create_tensor(to_tt_bf16(zeros), true);
+    serialization::NamedParameters params{{"theta", theta}};
+    const optimizers::AdamWConfig defaults;
+
+    // Unknown param name.
+    EXPECT_THROW(
+        optimizers::AdamW(params, defaults, {{.params = {"missing"}, .options = {{"weight_decay", 0.0F}}}}),
+        std::invalid_argument);
+
+    // Same param in two groups.
+    EXPECT_THROW(
+        optimizers::AdamW(
+            params,
+            defaults,
+            {{.params = {"theta"}, .options = {{"weight_decay", 0.0F}}}, {.params = {"theta"}, .options = {}}}),
+        std::invalid_argument);
+
+    // Option that is not a per-group AdamW hyperparameter.
+    EXPECT_THROW(
+        optimizers::AdamW(params, defaults, {{.params = {"theta"}, .options = {{"amsgrad", 1.0F}}}}),
+        std::invalid_argument);
+}
+
+namespace {
+// Two params: "w" in the leading default group, "gamma" in a group with its own lr and weight_decay.
+ttml::serialization::NamedParameters make_grouped_params() {
+    const xt::xarray<float> zeros = xt::zeros<float>({1, 1, 32, 32});
+    return {
+        {"w", ttml::autograd::create_tensor(to_tt_bf16(zeros), true)},
+        {"gamma", ttml::autograd::create_tensor(to_tt_bf16(zeros), true)}};
+}
+
+std::unique_ptr<ttml::optimizers::AdamW> make_grouped_adamw(const ttml::serialization::NamedParameters& params) {
+    ttml::optimizers::AdamWConfig defaults;
+    defaults.lr = 1e-2F;
+    defaults.weight_decay = 0.1F;
+    return std::make_unique<ttml::optimizers::AdamW>(
+        params,
+        defaults,
+        std::vector<ttml::optimizers::ParamGroup>{
+            {.params = {"gamma"}, .options = {{"lr", 2e-2F}, {"weight_decay", 0.0F}}}});
+}
+}  // namespace
+
+TEST_F(AdamWParamGroupsTest, StateDictRestoresEveryGroupsOptions) {
+    using namespace ttml;
+    auto params = make_grouped_params();
+    auto src = make_grouped_adamw(params);
+    (void)src->get_initial_group_lrs();           // a scheduler attaching records the initial LRs
+    src->set_param_group_option(0, "lr", 5e-3F);  // ...and the LRs have moved since
+    src->set_param_group_option(1, "lr", 7e-3F);
+    src->set_param_group_option(1, "beta2", 0.95F);
+    src->set_param_group_option(0, "weight_decay", 0.05F);
+    const auto state = src->get_state_dict();
+
+    auto dst = make_grouped_adamw(params);
+    dst->set_state_dict(state);
+
+    ASSERT_EQ(dst->get_param_groups().size(), src->get_param_groups().size());
+    for (size_t g = 0; g < src->get_param_groups().size(); ++g) {
+        EXPECT_EQ(dst->get_param_groups()[g].options, src->get_param_groups()[g].options) << "group " << g;
+    }
+    EXPECT_EQ(dst->get_initial_group_lrs(), (std::vector<float>{1e-2F, 2e-2F}));
+}
+
+TEST_F(AdamWParamGroupsTest, StateDictRejectsMismatchedGroups) {
+    using namespace ttml;
+    auto params = make_grouped_params();
+    const auto state = make_grouped_adamw(params)->get_state_dict();
+
+    // One group instead of two.
+    optimizers::AdamW one_group(params, optimizers::AdamWConfig{});
+    EXPECT_THROW(one_group.set_state_dict(state), std::runtime_error);
+
+    // Two groups, but with different sizes: {0, 2} params vs the checkpoint's {1, 1}.
+    optimizers::AdamW other_sizes(params, optimizers::AdamWConfig{}, {{.params = {"w", "gamma"}, .options = {}}});
+    EXPECT_THROW(other_sizes.set_state_dict(state), std::runtime_error);
+
+    // Same sizes {1, 1}, but the members swapped ({gamma}, {w} instead of {w}, {gamma}): the saved options would
+    // land on the wrong params, so this is rejected too.
+    optimizers::AdamW swapped(params, optimizers::AdamWConfig{}, {{.params = {"w"}, .options = {}}});
+    ASSERT_EQ(swapped.get_param_groups()[0].params, std::vector<std::string>{"gamma"});
+    EXPECT_THROW(swapped.set_state_dict(state), std::runtime_error);
+}
+
+TEST_F(AdamWParamGroupsTest, StateDictRequiresGroupEntries) {
+    using namespace ttml;
+    auto params = make_grouped_params();
+    auto src = make_grouped_adamw(params);
+    src->set_param_group_option(0, "lr", 5e-3F);
+    src->set_param_group_option(0, "beta1", 0.5F);
+    auto state = src->get_state_dict();
+    state.erase("param_groups.1.initial_lr");
+
+    auto dst = make_grouped_adamw(params);
+    const auto groups_before = dst->get_param_groups();
+    EXPECT_THROW(dst->set_state_dict(state), std::runtime_error);
+    // Group 1 is invalid, so group 0's (valid, different) options must not have been applied either.
+    for (size_t g = 0; g < groups_before.size(); ++g) {
+        EXPECT_EQ(dst->get_param_groups()[g].options, groups_before[g].options) << "group " << g;
+    }
+}
+
+// ====================================================================
+// State-dict restore tests
+// A checkpoint's betas may differ from the constructor config; both the
+// moment updates and the bias correction (beta powers) must follow the
+// restored betas.
+// ====================================================================
+
+class AdamWStateDictTest : public ::testing::Test {
+public:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+    }
+};
+
+// Builds an optimizer whose constructor betas differ from the effective ones, applies the
+// effective betas either through the state dict or through set_group_options, then verifies one
+// step against a CPU reference driven purely by the effective betas.
+static void run_effective_betas_step_and_compare(bool use_beta_setters) {
+    using namespace ttml;
+
+    const float lr = 1e-2f;
+    const float epsilon = 1e-8f;
+    const size_t initial_steps = 10;
+    const float constructor_beta1 = 0.9f;
+    const float constructor_beta2 = 0.999f;
+    const float effective_beta1 = 0.5f;
+    const float effective_beta2 = 0.9f;
+    const std::array<std::size_t, 4> shape = {1, 1, 128, 256};
+
+    autograd::ctx().set_seed(123U);
+    auto& gen = autograd::ctx().get_generator();
+    const uint32_t seed_param = gen();
+    const uint32_t seed_grad = gen();
+    const uint32_t seed_first_moment = gen();
+    const uint32_t seed_second_moment = gen();
+
+    xt::xarray<float> w0 = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed_param);
+    xt::xarray<float> g0 = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed_grad);
+    xt::xarray<float> m0 = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed_first_moment);
+    xt::xarray<float> v0 = test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, seed_second_moment);
+
+    // CPU reference driven purely by the effective betas: the behavior a resumed run must match.
+    xt::xarray<float> w_cpu = w0;
+    CPUAdamW cpu_opt(lr, effective_beta1, effective_beta2, epsilon, /*weight_decay=*/0.0f, /*amsgrad=*/false);
+    cpu_opt.set_state(m0, v0, initial_steps);
+    cpu_opt.step(w_cpu, g0);
+
+    auto theta = autograd::create_tensor(to_tt_bf16(w0), true);
+    theta->set_grad(to_tt_bf16(g0));
+    serialization::NamedParameters params{{"theta", theta}};
+
+    optimizers::AdamWConfig cfg;
+    cfg.lr = lr;
+    cfg.beta1 = constructor_beta1;
+    cfg.beta2 = constructor_beta2;
+    cfg.epsilon = epsilon;
+    cfg.weight_decay = 0.0f;
+    optimizers::AdamW opt(params, cfg);
+
+    // When exercising set_group_options, the state dict carries the constructor betas so that only
+    // it introduces the effective ones.
+    const float state_beta1 = use_beta_setters ? constructor_beta1 : effective_beta1;
+    const float state_beta2 = use_beta_setters ? constructor_beta2 : effective_beta2;
+    {
+        auto state = opt.get_state_dict();
+        state["exp_avg"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_bf16(m0), false)}};
+        state["exp_avg_sq"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_bf16(v0), false)}};
+        state["steps"] = initial_steps;
+        state["param_groups.0.beta1"] = state_beta1;
+        state["param_groups.0.beta2"] = state_beta2;
+        opt.set_state_dict(state);
+    }
+
+    if (use_beta_setters) {
+        opt.set_group_options("beta1", {effective_beta1});
+        opt.set_group_options("beta2", {effective_beta2});
+    }
+
+    EXPECT_EQ(opt.get_steps(), initial_steps);
+    EXPECT_FLOAT_EQ(opt.get_param_groups()[0].options.at("beta1"), effective_beta1);
+    EXPECT_FLOAT_EQ(opt.get_param_groups()[0].options.at("beta2"), effective_beta2);
+
+    opt.step();
+
+    auto result = core::to_xtensor(theta->get_value());
+    auto metrics = compute_error_metrics(w_cpu, result, "effective_betas");
+
+    const float mean_error_tolerance = 1e-3f;
+    const float max_error_tolerance = 1e-2f;
+    EXPECT_LE(metrics.mean_error, mean_error_tolerance) << "bias correction must follow the effective betas";
+    EXPECT_LE(metrics.max_error, max_error_tolerance) << "bias correction must follow the effective betas";
+
+    // Guard against a vacuous pass: a step whose moments follow the effective betas but whose
+    // bias correction still carries the constructor betas' powers must be clearly distinguishable
+    // from the reference.
+    xt::xarray<float> m1 = effective_beta1 * m0 + (1.0f - effective_beta1) * g0;
+    xt::xarray<float> v1 = effective_beta2 * v0 + (1.0f - effective_beta2) * (g0 * g0);
+    const float stale_bias_correction1 =
+        1.0f - std::pow(constructor_beta1, static_cast<float>(initial_steps)) * effective_beta1;
+    const float stale_bias_correction2 =
+        1.0f - std::pow(constructor_beta2, static_cast<float>(initial_steps)) * effective_beta2;
+    xt::xarray<float> w_stale =
+        w0 - lr * (m1 / stale_bias_correction1) / (xt::sqrt(v1 / stale_bias_correction2) + epsilon);
+    auto stale_metrics = compute_error_metrics(w_cpu, w_stale, "stale_bias_correction");
+    EXPECT_GT(stale_metrics.mean_error, mean_error_tolerance)
+        << "constructor and effective betas too close to distinguish; test is not meaningful";
+}
+
+TEST_F(AdamWStateDictTest, RestoredBetasDriveBiasCorrection) {
+    run_effective_betas_step_and_compare(/*use_beta_setters=*/false);
+}
+
+TEST_F(AdamWStateDictTest, BetaSettersRecomputeBiasCorrection) {
+    run_effective_betas_step_and_compare(/*use_beta_setters=*/true);
+}
+
+// ====================================================================
+// Validation tests
+// ====================================================================
+
+using AdamWValidationTest = AdamWStateDictTest;
+
+TEST_F(AdamWValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
+    using namespace ttml;
+
+    // Logical 31x32 and 32x32 both round up to one 32x32 tile, so only logical-shape
+    // validation can tell them apart.
+    const std::array<std::size_t, 4> param_shape = {1, 1, 32, 32};
+    const std::array<std::size_t, 4> grad_shape = {1, 1, 31, 32};
+    auto param = to_tt_bf16(test_utils::make_uniform_xarray<float>(param_shape, -1.0F, 1.0F, 123U));
+    auto grad = to_tt_bf16(test_utils::make_uniform_xarray<float>(grad_shape, -1.0F, 1.0F, 124U));
+    auto exp_avg = to_tt_bf16(test_utils::make_uniform_xarray<float>(param_shape, -1.0F, 1.0F, 125U));
+    auto exp_avg_sq = to_tt_bf16(test_utils::make_uniform_xarray<float>(param_shape, 0.0F, 1.0F, 126U));
+
+    EXPECT_ANY_THROW(ttml::metal::adamw(
+        param,
+        grad,
+        exp_avg,
+        exp_avg_sq,
+        /* max_exp_avg_sq */ std::nullopt,
+        /* lr */ 1e-3f,
+        /* beta1 */ 0.9f,
+        /* beta2 */ 0.999f,
+        /* beta1_pow */ 0.9f,
+        /* beta2_pow */ 0.999f,
+        /* epsilon */ 1e-8f,
+        /* weight_decay */ 0.0f));
+}
+
+// ====================================================================
 // AMSGrad Tests
 // Test AdamW with AMSGrad variant enabled
 // ====================================================================
@@ -326,7 +751,69 @@ INSTANTIATE_TEST_SUITE_P(AdamWAMSGrad, AdamWComparisonTest, ::testing::ValuesIn(
 // Test AdamW with stochastic rounding enabled
 // ====================================================================
 
-// These tests are nondeterministic but should never fail
+static constexpr uint32_t kSrSeed = 0x12345678U;
+static constexpr uint32_t kSrRepeats = 5U;
+static constexpr std::array<size_t, 4> kSrShape = {1, 1, 256, 1024};
+
+static std::vector<uint32_t> to_bits(const ttnn::Tensor& tensor) {
+    auto values = ttml::core::to_xtensor(tensor);
+    std::vector<uint32_t> bits;
+    bits.reserve(values.size());
+    for (float v : values) {
+        bits.push_back(std::bit_cast<uint32_t>(v));
+    }
+    return bits;
+}
+
+static size_t count_mismatches(const std::vector<uint32_t>& a, const std::vector<uint32_t>& b) {
+    size_t n = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        n += static_cast<size_t>(a[i] != b[i]);
+    }
+    return n;
+}
+
+static xt::xarray<float> make_sine_pattern(float base, float amplitude, float freq) {
+    xt::xarray<float> x = xt::zeros<float>(kSrShape);
+    for (size_t i = 0; i < x.size(); ++i) {
+        x.flat(i) = base + amplitude * std::sin(freq * static_cast<float>(i));
+    }
+    return x;
+}
+
+static std::vector<uint32_t> run_adamw_once(ttml::metal::StochasticRounding sr, uint32_t seed = kSrSeed) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto param = ttml::core::from_xtensor(make_sine_pattern(1.0F, 0.25F, 0.37F), device);
+    auto grad = ttml::core::from_xtensor(make_sine_pattern(0.0F, 1.0F, 0.11F), device);
+    auto exp_avg = ttml::core::zeros_like(param);
+    auto exp_avg_sq = ttml::core::zeros_like(param);
+    auto out = ttml::metal::adamw(
+        param,
+        grad,
+        exp_avg,
+        exp_avg_sq,
+        std::nullopt,
+        /*lr=*/1e-3F,
+        /*beta1=*/0.9F,
+        /*beta2=*/0.999F,
+        /*beta1_pow=*/0.9F,
+        /*beta2_pow=*/0.999F,
+        /*epsilon=*/1e-8F,
+        /*weight_decay=*/0.0F,
+        sr,
+        sr == ttml::metal::StochasticRounding::Enabled ? std::optional<uint32_t>{seed} : std::nullopt);
+    return to_bits(out);
+}
+
+static void expect_repeats_identical(std::string_view name, const std::function<std::vector<uint32_t>()>& run) {
+    const auto first = run();
+    for (uint32_t r = 1; r < kSrRepeats; ++r) {
+        const auto again = run();
+        const size_t mismatches = count_mismatches(first, again);
+        EXPECT_EQ(mismatches, 0U) << name << ": repeat " << r << " differs from repeat 0";
+    }
+}
+
 class StochasticRoundingTest : public ::testing::Test {
 public:
     static void SetUpTestSuite() {
@@ -453,4 +940,54 @@ TEST_F(StochasticRoundingTest, NIGHTLY_ErrorComparisonOverMultipleSteps) {
 
     EXPECT_LT(stoch_metrics.mean_error, det_metrics.mean_error);
     EXPECT_LT(stoch_metrics.max_error, det_metrics.max_error);
+}
+
+TEST_F(StochasticRoundingTest, DisabledIsBitIdentical) {
+    expect_repeats_identical("sr_off", [] { return run_adamw_once(ttml::metal::StochasticRounding::Disabled); });
+}
+
+TEST_F(StochasticRoundingTest, SameSeedIsBitIdentical) {
+    expect_repeats_identical("sr_on", [] { return run_adamw_once(ttml::metal::StochasticRounding::Enabled); });
+}
+
+TEST_F(StochasticRoundingTest, DifferentSeedDiffers) {
+    const auto a = run_adamw_once(ttml::metal::StochasticRounding::Enabled, kSrSeed);
+    const auto b = run_adamw_once(ttml::metal::StochasticRounding::Enabled, kSrSeed + 1U);
+    const auto off = run_adamw_once(ttml::metal::StochasticRounding::Disabled);
+    const size_t seed_mismatches = count_mismatches(a, b);
+    const size_t off_mismatches = count_mismatches(a, off);
+    SCOPED_TRACE(fmt::format("mismatches seed vs seed+1={} seed vs off={}", seed_mismatches, off_mismatches));
+    EXPECT_GT(seed_mismatches, 0U) << "a different seed must change the rounding";
+    EXPECT_GT(off_mismatches, 0U) << "stochastic rounding must differ from round-to-nearest";
+}
+
+// ====================================================================
+// param_group_defaults: a config's float fields are its per-group options
+// ====================================================================
+
+TEST(ParamGroupDefaultsTest, FloatFieldsArePerGroupOptions) {
+    using namespace ttml::optimizers;
+    auto keys = [](const ParamGroupOptions& options) {
+        std::vector<std::string> names;
+        for (const auto& [name, value] : options) {
+            names.push_back(name);
+        }
+        std::ranges::sort(names);
+        return names;
+    };
+    const std::vector<std::string> adamw_keys = {"beta1", "beta2", "epsilon", "lr", "weight_decay"};
+    EXPECT_EQ(keys(param_group_defaults(AdamWConfig{})), adamw_keys);  // not amsgrad / stochastic_rounding
+    EXPECT_EQ(keys(param_group_defaults(AdamWFullPrecisionConfig{})), adamw_keys);
+    EXPECT_EQ(keys(param_group_defaults(AdamWCompositeConfig{})), adamw_keys);  // not kahan_summation
+    const std::vector<std::string> sgd_keys = {"dampening", "lr", "momentum", "weight_decay"};
+    EXPECT_EQ(keys(param_group_defaults(SGDConfig{})), sgd_keys);  // not nesterov
+    EXPECT_EQ(keys(param_group_defaults(SGDCompositeConfig{})), sgd_keys);
+    EXPECT_EQ(keys(param_group_defaults(MuonConfig{})), (std::vector<std::string>{"lr", "momentum"}));  // not ns_steps
+
+    AdamWConfig config;
+    config.lr = 0.123F;
+    config.weight_decay = 0.5F;
+    const auto defaults = param_group_defaults(config);
+    EXPECT_FLOAT_EQ(defaults.at("lr"), 0.123F);
+    EXPECT_FLOAT_EQ(defaults.at("weight_decay"), 0.5F);
 }

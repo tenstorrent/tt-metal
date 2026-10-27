@@ -21,6 +21,7 @@ namespace {
 template <typename OutputDataType, typename InputDataType>
 std::vector<OutputDataType> cast_vec(ttsl::Span<const InputDataType> data_to_convert) {
     std::vector<OutputDataType> converted_data;
+    converted_data.reserve(data_to_convert.size());
     for (auto datum : data_to_convert) {
         if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
             converted_data.push_back(static_cast<float>(datum));
@@ -36,9 +37,9 @@ std::vector<OutputDataType> cast_vec(ttsl::Span<const InputDataType> data_to_con
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm {
 
-inline uint32_t get_num_device_cores(IDevice* device) {
-    const auto num_cores_x = static_cast<uint32_t>(device->compute_with_storage_grid_size().x);
-    const auto num_cores_y = static_cast<uint32_t>(device->compute_with_storage_grid_size().y);
+inline uint32_t get_num_device_cores(const MeshDevice& device) {
+    const auto num_cores_x = static_cast<uint32_t>(device.compute_with_storage_grid_size().x);
+    const auto num_cores_y = static_cast<uint32_t>(device.compute_with_storage_grid_size().y);
     return num_cores_x * num_cores_y;
 }
 
@@ -68,12 +69,12 @@ Tensor moreh_clip_grad_norm(
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
 
     // Loop variable
-    const auto max_num_inputs = operations::moreh::moreh_clip_grad_norm::get_num_device_cores(device);
+    const auto max_num_inputs = operations::moreh::moreh_clip_grad_norm::get_num_device_cores(*device);
     const auto total_num_inputs = static_cast<uint32_t>(inputs.size());
     const auto num_iter = (total_num_inputs + max_num_inputs - 1) / max_num_inputs;
     // Store intermediate reduction of Sum[|e|^p]
     auto tmp_pow_sum = create_device_tensor(
-        ttnn::TensorSpec(
+        tt::tt_metal::TensorSpec(
             Shape{static_cast<uint32_t>(inputs.size()), 1, 1},
             tt::tt_metal::TensorLayout(
                 inputs.at(0).dtype(),

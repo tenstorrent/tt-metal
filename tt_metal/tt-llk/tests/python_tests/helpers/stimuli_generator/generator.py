@@ -18,10 +18,11 @@ from ..tile_constants import (
 )
 from .spec import DistributionKind, StimuliSpec
 from .strategies import lookup_strategy
-from .strategies.structured import _enumerate_representable
+from .strategies.structured import ulp_sweep_value_count
 from .utils import (
     _clamp_mx_tensors,
     _get_dtype_for_format,
+    _get_integer_bounds,
     calculate_tile_and_face_counts,
     calculate_tile_and_face_counts_w_tile_dimensions,
 )
@@ -232,7 +233,8 @@ def default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
     """Return the built-in default StimuliSpec for a given data format.
 
     Defaults are chosen to give reasonable value ranges and avoid overflows
-    (e.g. positive ranges for floats, half-range for integers).
+    (e.g. positive ranges for floats, half-range for integers, full range
+    for 4-bit integers).
     """
     if stimuli_format == DataFormat.MxFp8R:
         return StimuliSpec.gaussian(
@@ -248,6 +250,9 @@ def default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
         return StimuliSpec(distribution=_default_bfp4b_face)
     if stimuli_format == DataFormat.Bfp2_b:
         return StimuliSpec(distribution=_default_bfp2b_face)
+    if stimuli_format.is_4bit_integer():
+        int_min, int_max = _get_integer_bounds(stimuli_format)
+        return StimuliSpec.uniform(low=float(int_min), high=float(int_max))
     if stimuli_format.is_integer():
         if stimuli_format == DataFormat.UInt32:
             return StimuliSpec.uniform(low=0.0, high=float(2**32 - 2))
@@ -295,6 +300,7 @@ def generate_stimuli(
         (srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B).
     """
     _spec_B_originally_none = spec_B is None
+    _dims_A_originally_none = input_dimensions_A is None
 
     if input_dimensions_A is None:
         input_dimensions_A = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
@@ -305,11 +311,17 @@ def generate_stimuli(
     if spec_B is None:
         spec_B = default_spec_for_format(stimuli_format_B)
 
-    # ULP_SWEEP: auto-size input_dimensions_A from the count of representable values,
-    # ignoring any caller-supplied value. Mirror B if the caller didn't specify spec_B.
-    if spec_A.distribution == DistributionKind.ULP_SWEEP:
-        _ulp_vals = _enumerate_representable(stimuli_format_A, spec_A.low, spec_A.high)
-        _num_ulp = _ulp_vals.numel()
+    # ULP_SWEEP: if the caller passed input_dimensions_A, use it as-is. Only
+    # auto-size (from the number of representable values) when they didn't.
+    # Mirror B if the caller didn't specify spec_B.
+    if spec_A.distribution == DistributionKind.ULP_SWEEP and _dims_A_originally_none:
+        _num_ulp = ulp_sweep_value_count(stimuli_format_A, spec_A.low, spec_A.high)
+        if _num_ulp > 2**16:
+            raise ValueError(
+                f"ULP_SWEEP range [{spec_A.low}, {spec_A.high}] has {_num_ulp:,} "
+                f"values, too many to auto-size — pass input_dimensions_A or "
+                f"narrow the range."
+            )
         _tile_size = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
         _num_tiles = max(1, math.ceil(_num_ulp / _tile_size))
         # Align to 16 tiles when above the DestSync.Half limit (8) so the layout

@@ -20,7 +20,7 @@ namespace ttnn::operations::experimental::ccl {
 namespace detail::rs_heads_fusion {
 
 std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, tt::tt_fabric::Topology topology) {
-    ttnn::SmallVector<uint32_t> device_order;
+    ttsl::SmallVector<uint32_t> device_order;
     device_order.reserve(ring_size - 1);
     // Add all indices except ring_index
     for (uint32_t i = 0; i < ring_size; i++) {
@@ -196,6 +196,11 @@ uint32_t find_atomic_inc_core(std::vector<std::vector<ReadRequest>> schedule) {
 std::vector<ReadRequest> flatten_schedule(const std::vector<std::vector<ReadRequest>>& schedule) {
     // create a flattened schedule
     std::vector<ReadRequest> schedule_flattened;
+    size_t total_num_requests = 0;
+    for (const auto& chunk : schedule) {
+        total_num_requests += chunk.size();
+    }
+    schedule_flattened.reserve(total_num_requests);
     for (const auto& chunk : schedule) {
         schedule_flattened.insert(schedule_flattened.end(), chunk.begin(), chunk.end());
     }
@@ -287,7 +292,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     // uint32_t num_devices = ring_size;
 
     const auto& input_tensor = tensor_args.input_tensor;
-    // tt::tt_metal::IDevice* device = input_tensor.device();
     uint32_t num_links = operation_attributes.num_links;
 
     auto* mesh_device = input_tensor.device();
@@ -296,16 +300,12 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
 
-    auto* target_device = mesh_device->get_device(mesh_coordinate);
-
     const uint32_t ring_size = operation_attributes.ring_devices;
     const uint32_t num_devices = ring_size;
 
     uint32_t ring_index = 0;  // Initialize device index
 
-    std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
-                                        ? mesh_view.get_devices_on_column(mesh_coordinate[1])
-                                        : mesh_view.get_devices_on_row(mesh_coordinate[0]);
+    const uint32_t coord_index = mesh_coordinate[operation_attributes.cluster_axis];
     const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
                                      ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
                                      : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);
@@ -313,7 +313,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     for (uint32_t i = 0; i < ring_size; ++i) {
-        if (devices.at(i) == target_device) {
+        if (i == coord_index) {
             ring_index = i;
             if (i != 0) {
                 backward_fabric_node_id = fabric_node_ids.at(i - 1);
@@ -408,7 +408,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     tt::tt_metal::Program program{};
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     size_t packet_size_bytes =
         input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
     uint32_t num_blocks_per_packet = packet_size_bytes / input_block_size;
@@ -596,6 +596,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
                                std::optional<uint32_t> num_max_cores = std::nullopt) -> std::vector<CoreCoord> {
         std::vector<CoreCoord> worker_cores;
         auto num_cores = num_max_cores.has_value() ? num_max_cores.value() : cores.size();
+        worker_cores.reserve(num_cores);
         for (uint32_t i = 0; i < num_cores; ++i) {
             const auto& core = cores[i];
             worker_cores.push_back(mesh_device->worker_core_from_logical_core(core));

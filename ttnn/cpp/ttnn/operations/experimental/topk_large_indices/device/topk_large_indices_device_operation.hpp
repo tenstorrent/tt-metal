@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <tuple>
 #include <variant>
 
@@ -32,13 +33,40 @@ struct TopkLargeIndicesDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(const Tensor& input_tensor, uint32_t k);
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        uint32_t k,
+        std::optional<uint32_t> valid_length,
+        const std::optional<Tensor>& valid_length_tensor = std::nullopt,
+        uint32_t valid_length_offset = 0,
+        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+        // Caps the derived search length at ceil32(valid_end); requires valid_length_tensor.
+        const std::optional<Tensor>& valid_end_tensor = std::nullopt,
+        // NoC the reader streams the input from DRAM on (the writer takes the other). nullopt = the arch's
+        // preferred DRAM-read NoC.
+        std::optional<tt::tt_metal::NOC> dram_read_noc = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
 
 namespace ttnn::experimental {
 
-Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k);
+// For trace replay, valid_length_tensor supplies the dynamic value on-device and valid_length_offset supplies
+// an optional constant component. valid_length and valid_length_tensor are mutually exclusive.
+Tensor topk_large_indices(
+    const Tensor& input_tensor,
+    uint32_t k,
+    std::optional<uint32_t> valid_length = std::nullopt,
+    const std::optional<Tensor>& valid_length_tensor = std::nullopt,
+    uint32_t valid_length_offset = 0,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    // Real-token end; caps the search length at ceil32(valid_end) so a partial chunk ranks only the
+    // columns the request wrote. Must match the score op's bound. Requires valid_length_tensor.
+    const std::optional<Tensor>& valid_end_tensor = std::nullopt,
+    // NoC the reader streams the input from DRAM on (the writer takes the other). nullopt = the arch's
+    // preferred DRAM-read NoC. Pick the NoC a concurrently running program uses less.
+    std::optional<tt::tt_metal::NOC> dram_read_noc = std::nullopt);
 
 }  // namespace ttnn::experimental

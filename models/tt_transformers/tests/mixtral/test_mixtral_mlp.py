@@ -5,7 +5,7 @@ import pytest
 import torch
 from loguru import logger
 from transformers.models.mixtral.configuration_mixtral import MixtralConfig
-from transformers.models.mixtral.modeling_mixtral import MixtralBlockSparseTop2MLP, MixtralRMSNorm
+from transformers.models.mixtral.modeling_mixtral import MixtralRMSNorm
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
@@ -15,6 +15,27 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor
 
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_mlp.py::test_mixtral_mlp_inference[wormhole_b0-True-prefill]
+
+
+class RefMixtralExpertMLP(torch.nn.Module):
+    """Reference single-expert Mixtral MLP.
+
+    Replaces ``transformers...MixtralBlockSparseTop2MLP``, which was removed in
+    the transformers 5.x MoE refactor (experts are now fused into a single
+    ``MixtralExperts`` module). This reproduces the old per-expert forward
+    (``w2(silu(w1(x)) * w3(x))``) and keeps the ``w1/w2/w3`` parameter names so
+    the existing state-dict loading is unchanged.
+    """
+
+    def __init__(self, config: MixtralConfig):
+        super().__init__()
+        self.w1 = torch.nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
+        self.w2 = torch.nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+        self.w3 = torch.nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
+        self.act_fn = torch.nn.SiLU()
+
+    def forward(self, hidden_states):
+        return self.w2(self.act_fn(self.w1(hidden_states)) * self.w3(hidden_states))
 
 
 def convert2ref(state_dict):
@@ -36,7 +57,7 @@ def test_mixtral_mlp_inference(mesh_device, reset_seeds, mode):
     }
 
     model_args = ModelArgs(mesh_device)
-    model_args.n_layers = 32
+    model_args.n_layers = 1  # only layer 0 is used below
     # Note: The naming conventions in Hugging Face (HF) Mixtral differ from those in `ModelArgs`.
     # In HF, `hidden_size` refers to the attention dimension, whereas in `ModelArgs`, `hidden_dim` specifies the hidden layer size of the FFN.
     mixtral_cofig = MixtralConfig(hidden_size=model_args.dim, intermediate_size=model_args.hidden_dim)
@@ -51,7 +72,7 @@ def test_mixtral_mlp_inference(mesh_device, reset_seeds, mode):
         k: v for k, v in state_dict.items() if (k.startswith("layers.0.") and "attention" not in k and "norm" not in k)
     }
     partial_state_dict_ref = {k[32:]: v for k, v in partial_state_dict.items() if f"experts.{0}" in k}
-    reference_model = MixtralBlockSparseTop2MLP(mixtral_cofig)
+    reference_model = RefMixtralExpertMLP(mixtral_cofig)
     reference_model.load_state_dict(convert2ref(partial_state_dict_ref))
 
     rms_state_dict = {k[18:]: v for k, v in state_dict.items() if (k.startswith("layers.0.ffn_norm."))}

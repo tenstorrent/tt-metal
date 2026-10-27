@@ -9,6 +9,8 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
 
@@ -22,6 +24,33 @@ LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_pro
     return LayerNormMultiCoreProgramFactory{};
 }
 
+ttsl::hash::hash_t LayerNormDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.input.is_sharded()) {
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<LayerNormDeviceOperation>, operation_attributes, tensor_args);
+    }
+    const auto plan = LayerNormMultiCoreProgramFactory::select_plan(operation_attributes, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<LayerNormDeviceOperation>,
+        operation_attributes,
+        tensor_args,
+        plan.use_welford,
+        plan.large_tensor,
+        plan.compact_fp32_finalizer,
+        plan.fused_pre_add_replay,
+        plan.affine_mcast,
+        plan.width_block_tiles,
+        plan.input_tiles,
+        plan.residual_tiles,
+        plan.output_tiles,
+        plan.centred_tiles,
+        plan.squared_tiles,
+        plan.gamma_tiles,
+        plan.beta_tiles,
+        plan.residual_value_tiles);
+}
+
 void LayerNormDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.input;
@@ -31,11 +60,19 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     const auto& stats = tensor_args.stats;
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
-
     TT_FATAL(
         a.layout() == Layout::TILE || (a.layout() == Layout::ROW_MAJOR && !a.is_sharded()),
         "Input tensor must have TILE layout (ROW_MAJOR is only supported for non-sharded tensors), got: {}",
         a.layout());
+    if (a.layout() == Layout::TILE) {
+        TT_FATAL(
+            tile_height == tt::constants::TILE_HEIGHT && tile_width == tt::constants::TILE_WIDTH,
+            "LayerNorm TILE input requires tile shape {}x{}, got: {}x{}",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            tile_height,
+            tile_width);
+    }
     TT_FATAL(
         !(a.layout() == Layout::ROW_MAJOR && a.is_sharded()), "ROW_MAJOR input is not supported with sharded tensors");
     if (a.layout() == Layout::ROW_MAJOR) {
@@ -55,6 +92,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     if (b.has_value()) {
         TT_FATAL(
             b.value().layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.value().layout());
+        const auto residual_tile = b.value().tensor_spec().tile();
+        TT_FATAL(
+            residual_tile == a.tensor_spec().tile(),
+            "Input and residual tile shapes must match, got input: {}x{} vs residual: {}x{}",
+            tile_height,
+            tile_width,
+            residual_tile.get_height(),
+            residual_tile.get_width());
         TT_FATAL(
             a.logical_shape() == b.value().logical_shape() && a.padded_shape() == b.value().padded_shape(),
             "Input and residual logical and padded shapes must match, got input: logical={} padded={} vs residual: "
@@ -69,6 +114,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
 
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
+            const auto gamma_tile = gamma.value().tensor_spec().tile();
+            TT_FATAL(
+                gamma_tile == a.tensor_spec().tile(),
+                "Input and gamma tile shapes must match, got input: {}x{} vs gamma: {}x{}",
+                tile_height,
+                tile_width,
+                gamma_tile.get_height(),
+                gamma_tile.get_width());
             TT_FATAL(
                 a.padded_shape()[-1] == gamma.value().padded_shape()[-1] &&
                     gamma.value().logical_shape()[-1] >= a.logical_shape()[-1],
@@ -118,6 +171,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
 
     if (beta.has_value()) {
         if (beta.value().layout() == Layout::TILE) {
+            const auto beta_tile = beta.value().tensor_spec().tile();
+            TT_FATAL(
+                beta_tile == a.tensor_spec().tile(),
+                "Input and beta tile shapes must match, got input: {}x{} vs beta: {}x{}",
+                tile_height,
+                tile_width,
+                beta_tile.get_height(),
+                beta_tile.get_width());
             TT_FATAL(
                 a.padded_shape()[-1] == beta.value().padded_shape()[-1] &&
                     beta.value().logical_shape()[-1] >= a.logical_shape()[-1],
@@ -174,19 +235,49 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(b.value().memory_config() == a.memory_config(), "Both a and b should have the same memory config");
         }
         const auto shard_spec = a.shard_spec().value();
+        // The width-block count is derived from this grid and used as a divisor when reducing over the
+        // logical width, so the grid must own at least one core.
+        TT_FATAL(shard_spec.grid.num_cores() >= 1, "Sharded layernorm requires a non-empty shard grid");
         const auto bbox = shard_spec.grid.bounding_box();
-        uint32_t bbox_num_cores =
-            (bbox.end_coord.x - bbox.start_coord.x + 1) * (bbox.end_coord.y - bbox.start_coord.y + 1);
-        TT_FATAL(
-            shard_spec.grid.num_cores() == bbox_num_cores,
-            "Sharded layernorm does not support non-rectangular core grids. "
-            "The shard spec grid has {} cores but its bounding box spans {} cores ({} x {}).",
-            shard_spec.grid.num_cores(),
-            bbox_num_cores,
-            bbox.end_coord.x - bbox.start_coord.x + 1,
-            bbox.end_coord.y - bbox.start_coord.y + 1);
+        const CoreCoord bbox_grid_size = {
+            bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1};
+        uint32_t bbox_num_cores = bbox_grid_size.x * bbox_grid_size.y;
+        if (shard_spec.grid.num_cores() != bbox_num_cores) {
+            const uint32_t M = a.physical_volume() / a.padded_shape()[-1];
+            const auto& sharded_pc =
+                std::get<LayerNormShardedMultiCoreProgramConfig>(operation_attributes.program_config);
+            TT_FATAL(
+                M == sharded_pc.block_h * tile_height,
+                "Sharded layernorm supports a non-rectangular core grid only when the whole height fits on "
+                "one core (M == block_h), got M {} and block_h {} tiles.",
+                M,
+                sharded_pc.block_h);
+            TT_FATAL(
+                operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+                "Sharded layernorm does not support a non-rectangular core grid for distributed norm.");
+            const CoreRangeSet shard_order_prefix = num_cores_to_corerangeset_in_subcoregrids(
+                bbox.start_coord,
+                shard_spec.grid.num_cores(),
+                CoreRangeSet(bbox),
+                shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+            for (const auto& core : corerange_to_cores(shard_order_prefix)) {
+                TT_FATAL(
+                    shard_spec.grid.contains(core),
+                    "Sharded layernorm requires a non-rectangular core grid to fill its {} x {} bounding box in "
+                    "shard order, leaving the unused cores at the end. Got grid {}, which is missing core "
+                    "({}, {}).",
+                    bbox_grid_size.x,
+                    bbox_grid_size.y,
+                    shard_spec.grid.str(),
+                    core.x,
+                    core.y);
+            }
+        }
 
         const auto& sharded_pc = std::get<LayerNormShardedMultiCoreProgramConfig>(operation_attributes.program_config);
+        // block_w is the per-core width in tiles and is used as a modulo divisor when indexing the
+        // per-tile column mask, so it must be at least one tile.
+        TT_FATAL(sharded_pc.block_w >= 1, "Sharded layernorm requires block_w >= 1 (per-core width in tiles)");
         ttnn::operations::normalization::detail::validate_sharded_input(a, sharded_pc.compute_with_storage_grid_size);
     }
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||
@@ -225,23 +316,28 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
             "Fused activation is not supported for distributed layernorm");
     }
+
+    const bool use_welford = std::visit(
+        [](const auto& program_config) { return program_config.use_welford; }, operation_attributes.program_config);
+    if (use_welford) {
+        TT_FATAL(
+            a.device()->arch() != tt::ARCH::QUASAR,
+            "LayerNorm with use_welford=True is not supported on Quasar; the two-pass SFPU implementation "
+            "currently supports Wormhole and Blackhole only.");
+        TT_FATAL(
+            a.layout() == Layout::TILE,
+            "LayerNorm with use_welford=True requires TILE input; the SFPU two-pass kernels do not implement "
+            "ROW_MAJOR input tilization.");
+        TT_FATAL(
+            operation_attributes.norm_type != LayerNormType::RMSNORM,
+            "Welford's algorithm is not supported for RMSNorm");
+    }
+
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
-                if (program_config.use_welford) {
-                    TT_FATAL(
-                        operation_attributes.norm_type != LayerNormType::RMSNORM,
-                        "Welford's algorithm is not supported for RMSNorm");
-                }
-                if (operation_attributes.norm_type == LayerNormType::RMSNORM) {
-                    TT_FATAL(!program_config.use_welford, "Welford's algorithm is not supported for RMSNorm");
-                }
-            } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
-                if (program_config.use_welford) {
-                    TT_FATAL(
-                        operation_attributes.norm_type != LayerNormType::RMSNORM,
-                        "Welford's algorithm is not supported for RMSNorm");
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+                if (use_welford) {
                     TT_FATAL(
                         operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
                         "Welford's algorithm is not supported for distributed layernorm");
@@ -272,6 +368,9 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 uint32_t block_h = program_config.block_h * tile_height;
                 const auto shard_spec = a.shard_spec().value();
                 // check dims
+                // subblock_w == 0 would make the divisibility check below a modulo by zero on the host,
+                // which kills the process with SIGFPE instead of raising, so it is rejected first.
+                TT_FATAL(program_config.subblock_w > 0, "subblock_w must be greater than 0.");
                 TT_FATAL(
                     program_config.block_w % program_config.subblock_w == 0,
                     "block_w must be divisible by subblock_w.");
@@ -382,7 +481,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.program_config);
 }
 
-TensorSpec LayerNormDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto output_shape = input_tensor.logical_shape();
@@ -408,7 +507,7 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         operation_attributes.output_mem_config.memory_layout(),
                         operation_attributes.output_mem_config.buffer_type(),
                         shard_spec);
-                    return TensorSpec(
+                    return tt::tt_metal::TensorSpec(
                         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
                 }
                 if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
@@ -429,7 +528,7 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         mem_config.memory_layout(), mem_config.buffer_type(), input_tensor.shard_spec());
                 }
 
-                return ttnn::TensorSpec(
+                return tt::tt_metal::TensorSpec(
                     output_shape,
                     TensorLayout::fromPaddedShape(
                         operation_attributes.dtype.value_or(input_tensor.dtype()),
@@ -439,7 +538,7 @@ TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         output_padded_shape));
             } else {
                 const auto output_layout = input_tensor.layout();
-                return TensorSpec(
+                return tt::tt_metal::TensorSpec(
                     output_shape,
                     TensorLayout(
                         input_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));

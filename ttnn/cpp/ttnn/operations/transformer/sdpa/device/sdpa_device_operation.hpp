@@ -18,7 +18,7 @@ namespace ttnn::prim {
 struct SDPAOperation {
     using operation_attributes_t = SDPAParams;
     using tensor_args_t = SDPAInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct SDPAProgramFactory {
@@ -36,7 +36,6 @@ struct SDPAOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& attrs, const tensor_args_t&);
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
 };
@@ -57,6 +56,12 @@ Tensor sdpa(
     std::optional<uint32_t> head_dim_v,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config);
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const std::optional<Tensor>& cu_window_seqlens = std::nullopt,
+    uint32_t windowed_q_token_offset = 0,
+    const std::optional<Tensor>& windowed_q_token_offset_tensor = std::nullopt,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
+    bool output_concat_heads = false,
+    const std::optional<Tensor>& attn_mask_block_map = std::nullopt);
 
 }  // namespace ttnn::prim

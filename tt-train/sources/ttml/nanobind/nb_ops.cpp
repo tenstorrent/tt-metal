@@ -3,21 +3,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
 #include <span>
+#include <string>
 #include <ttnn/distributed/distributed_tensor.hpp>
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
+#include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
+#include "metal/ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/conv3d_op.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/distributed/losses.hpp"
 #include "ops/dropout_op.hpp"
@@ -26,7 +33,11 @@
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
-#include "ops/mla_qkv_assemble_op.hpp"
+#include "ops/mla_kv_assemble_op.hpp"
+#include "ops/mla_q_rope.hpp"
+#include "ops/moe_ffn_swiglu_op.hpp"
+#include "ops/moe_group_op.hpp"
+#include "ops/moe_ungroup_op.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/polynorm_op.hpp"
 #include "ops/rand_op.hpp"
@@ -37,6 +48,7 @@
 #include "ops/sampling_op.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 #include "ops/swiglu_op.hpp"
+#include "ops/swiglu_packed_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::nanobind::ops {
@@ -46,6 +58,7 @@ void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ReduceType>(m);
 
     m.def_submodule("binary");
+    m.def_submodule("conv");
     m.def_submodule("distributed");
     m.def_submodule("dropout");
     m.def_submodule("embedding");
@@ -61,12 +74,17 @@ void py_module_types(nb::module_& m) {
 
     m.def_submodule("matmul");
     m.def_submodule("mla");
+    {
+        auto py_moe = m.def_submodule("moe");
+        nb::class_<ttml::ops::MoEGroupOutputs>(py_moe, "MoEGroupOutputs");
+    }
     m.def_submodule("multi_head_utils");
     m.def_submodule("attention");
     m.def_submodule("reshape");
     m.def_submodule("rmsnorm");
     m.def_submodule("sample");
     m.def_submodule("swiglu");
+    m.def_submodule("swiglu_packed");
     m.def_submodule("unary");
     m.def_submodule("metal");
 }
@@ -116,6 +134,35 @@ void py_module(nb::module_& m) {
             nb::arg("b"));
         py_binary.def("min", &ttml::ops::min, nb::arg("a"), nb::arg("b"));
         py_binary.def("max", &ttml::ops::max, nb::arg("a"), nb::arg("b"));
+    }
+
+    {
+        auto py_conv = static_cast<nb::module_>(m.attr("conv"));
+        py_conv.def(
+            "conv3d",
+            [](const autograd::TensorPtr& input,
+               const autograd::TensorPtr& weight,
+               std::optional<autograd::TensorPtr> bias,
+               const ttml::ops::Conv3dDims& stride,
+               const ttml::ops::Conv3dDims& padding,
+               const ttml::ops::Conv3dDims& dilation) -> autograd::TensorPtr {
+                return ttml::ops::conv3d(input, weight, bias.value_or(nullptr), stride, padding, dilation);
+            },
+            nb::arg("input"),
+            nb::arg("weight"),
+            nb::arg("bias") = nb::none(),
+            nb::arg("stride") = ttml::ops::Conv3dDims{1, 1, 1},
+            nb::arg("padding") = ttml::ops::Conv3dDims{0, 0, 0},
+            nb::arg("dilation") = ttml::ops::Conv3dDims{1, 1, 1},
+            "Dense, zero-padded 3D convolution with autograd for input, weight and optional bias.\n"
+            "input:  [N, D, H, W, C_in] channels-last (not PyTorch's NCDHW); float, on device. Float tensors are\n"
+            "        read at autograd's bf16 precision, so float32 parameters are computed in bf16.\n"
+            "weight: [C_out, C_in, kD, kH, kW] (PyTorch layout).\n"
+            "bias:   any shape with volume C_out and last dim C_out, or None.\n"
+            "Returns [N, D_out, H_out, W_out, C_out] in the input's layout; gradients come back in the layout of\n"
+            "the tensor they belong to.\n"
+            "Constraints (ValueError): stride, dilation >= 1; padded input >= effective kernel on every spatial\n"
+            "axis. C_in and C_out are zero padded to the kernel's channel blocks on device and sliced back.");
     }
 
     {
@@ -249,8 +296,77 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_moe = static_cast<nb::module_>(m.attr("moe"));
+        auto py_moe_group_outputs = static_cast<nb::class_<ttml::ops::MoEGroupOutputs>>(py_moe.attr("MoEGroupOutputs"));
+        py_moe_group_outputs.def_ro("grouped", &ttml::ops::MoEGroupOutputs::grouped);
+        py_moe_group_outputs.def_ro("grouped_scores", &ttml::ops::MoEGroupOutputs::grouped_scores);
+        py_moe_group_outputs.def_ro("k_slot", &ttml::ops::MoEGroupOutputs::k_slot);
+        py_moe_group_outputs.def_ro("counts", &ttml::ops::MoEGroupOutputs::counts);
+        py_moe_group_outputs.def_ro("offsets", &ttml::ops::MoEGroupOutputs::offsets);
+        py_moe_group_outputs.def_ro("plan", &ttml::ops::MoEGroupOutputs::plan);
+
+        py_moe.def(
+            "moe_group_op",
+            &ttml::ops::moe_group_op,
+            nb::arg("dispatched"),
+            nb::arg("metadata"),
+            nb::arg("scores"),
+            nb::arg("local_expert_ids"),
+            nb::arg("e_local"),
+            nb::arg("k"),
+            "Autograd wrapper around metal::moe_group. Forward gathers tokens by\n"
+            "local expert and per-token routing weights into grouped layout.\n"
+            "Backward uses metal::moe_ungroup to scatter d(grouped) back to\n"
+            "d(dispatched) (H = hidden_dim) and d(grouped_scores) back to\n"
+            "d(scores) (H = K, via K-wide one-hot expansion of k_slot).");
+
+        py_moe.def(
+            "moe_ungroup_op",
+            &ttml::ops::moe_ungroup_op,
+            nb::arg("expert_out"),
+            nb::arg("grouped_scores"),
+            nb::arg("metadata"),
+            nb::arg("local_expert_ids"),
+            nb::arg("plan"),
+            nb::arg("offsets"),
+            nb::arg("e_local"),
+            nb::arg("k"),
+            nb::arg("d"),
+            nb::arg("b"),
+            nb::arg("s"),
+            "Autograd wrapper around metal::moe_ungroup. Forward scatters expert\n"
+            "outputs back to dense [D,B,S,H], fused with the per-token weight\n"
+            "scaling baked into grouped_scores. Backward gathers d(ungrouped)\n"
+            "via metal::moe_group, multiplies by grouped_scores to produce\n"
+            "d(expert_out), and reduces expert_out * grad_grouped along H to\n"
+            "produce d(grouped_scores).");
+
+        py_moe.def(
+            "moe_ffn_swiglu_fw",
+            &ttml::ops::moe_ffn_swiglu_fw,
+            nb::arg("grouped"),
+            nb::arg("offsets"),
+            nb::arg("w_gate"),
+            nb::arg("w_up"),
+            nb::arg("w_down"),
+            "Per-expert SwiGLU FFN on grouped layout. For each local expert e:\n"
+            "  Y_e = (SiLU(X_e @ W_gate_e) * (X_e @ W_up_e)) @ W_down_e\n"
+            "where X_e = grouped[offsets[e] : offsets[e+1], :].\n"
+            "Returns Y [1, 1, T_cap, H] with autograd through grouped and the\n"
+            "per-expert weight lists.");
+    }
+
+    {
         auto py_multi_head_utils = static_cast<nb::module_>(m.attr("multi_head_utils"));
         py_multi_head_utils.def("heads_creation", &ttml::ops::heads_creation, nb::arg("qkv"), nb::arg("num_heads"));
+        py_multi_head_utils.def(
+            "split_heads",
+            &ttml::ops::split_heads,
+            nb::arg("x"),
+            nb::arg("num_heads"),
+            "Split a single separately-projected tensor into heads.\n"
+            "(B, 1, S, num_heads * head_dim) -> (B, num_heads, S, head_dim).\n"
+            "head_dim must be a multiple of 32. The input must not be sharded.");
         py_multi_head_utils.def("heads_fusion", &ttml::ops::heads_fusion, nb::arg("x"));
         py_multi_head_utils.def(
             "grouped_heads_creation",
@@ -264,15 +380,16 @@ void py_module(nb::module_& m) {
     {
         auto py_mla = static_cast<nb::module_>(m.attr("mla"));
         py_mla.def(
-            "qkv_assemble",
-            &ttml::ops::mla_qkv_assemble,
-            nb::arg("q_pre"),
+            "kv_assemble",
+            &ttml::ops::mla_kv_assemble,
             nb::arg("kv_up"),
             nb::arg("k_pe"),
             nb::arg("n_heads"),
             nb::arg("qk_nope_dim"),
             nb::arg("qk_rope_dim"),
-            nb::arg("v_dim"));
+            nb::arg("v_dim"),
+            "Fused MLA KV assembly: demuxes kv_up and broadcasts k_pe into head-major K/V.\n"
+            "Q head-split + RoPE is handled by rope.mla_q_rope.");
     }
 
     {
@@ -291,13 +408,13 @@ void py_module(nb::module_& m) {
             nb::arg("value"),
             nb::arg("mask") = std::nullopt);
         // Overload 2: mask as ttnn.Tensor (or None) - wrap it in autograd::Tensor
-        // ttnn.Tensor wraps tt::tt_metal::Tensor, so we accept that type
+        // ttnn.Tensor wraps ttnn::Tensor, so we accept that type
         py_attention.def(
             "scaled_dot_product_attention",
             [](const autograd::TensorPtr& query,
                const autograd::TensorPtr& key,
                const autograd::TensorPtr& value,
-               const std::optional<tt::tt_metal::Tensor>& mask) -> autograd::TensorPtr {
+               const std::optional<ttnn::Tensor>& mask) -> autograd::TensorPtr {
                 std::optional<autograd::TensorPtr> mask_ptr = std::nullopt;
                 if (mask.has_value()) {
                     mask_ptr = autograd::create_tensor(mask.value(), false);
@@ -326,6 +443,17 @@ void py_module(nb::module_& m) {
     {
         auto py_rope = static_cast<nb::module_>(m.attr("rope"));
         py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"), nb::arg("token_position") = 0);
+        py_rope.def(
+            "mla_q_rope",
+            &ttml::ops::mla_q_rope,
+            nb::arg("q_pre"),
+            nb::arg("rope_params"),
+            nb::arg("qk_nope_dim"),
+            nb::arg("qk_rope_dim"),
+            "MLA Q RoPE + head-split with autograd: packed q_pre -> head-major q_roped "
+            "(backward uses neg cos/sin and packs dq_pre).\n"
+            "q_pre: [B, 1, S, n_heads * (qk_nope_dim + qk_rope_dim)] TILE bf16. "
+            "Requires qk_rope_dim <= 128.");
         py_rope.def(
             "gen_freqs",
             &ttml::ops::gen_freqs,
@@ -448,13 +576,25 @@ void py_module(nb::module_& m) {
 
     {
         auto py_sample = static_cast<nb::module_>(m.attr("sample"));
+        // `seed_axes` (optional): the mesh axes across which the caller wants DISTINCT per-device
+        // noise -- i.e. the axes over which the logits/batch are sharded (data-distinct). Axes not
+        // listed are seeded identically (replicated). The CALLER owns this decision: only pass axes
+        // whose devices hold different data (dp / fsdp), and NEVER a replicated axis (tp).
+        //  seed_axes=None (default): every device draws the same noise (original single-seed behavior).
         py_sample.def(
             "sample_op",
             &ttml::ops::sample_op,
             nb::arg("logits"),
             nb::arg("temperature"),
             nb::arg("seed"),
-            nb::arg("logits_padding_mask") = nb::none());
+            nb::arg("logits_mask") = nb::none(),
+            nb::arg("seed_axes") = nb::none(),
+            // `positions` (optional): a [B, 1, 1, 1] UINT32 ROW_MAJOR tensor, one token position per
+            // batch row, sharded with the SAME mapper as the batch. Prefill should pass the index of
+            // each sequence's last real prompt token; the op then samples only those rows and
+            // returns [B, 1, 1, 1]. Passing a plain list now raises TypeError -- deliberately loud,
+            // since a silently ignored list would sample every row instead.
+            nb::arg("positions") = nb::none());
     }
 
     {
@@ -471,9 +611,26 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_swiglu_packed = static_cast<nb::module_>(m.attr("swiglu_packed"));
+        py_swiglu_packed.def(
+            "swiglu_packed",
+            &ttml::ops::swiglu_packed,
+            nb::arg("packed"),
+            "Packed-SwiGLU gating: `packed` [.., R, 2*I] (gate|up) -> h = silu(gate) * up "
+            "[.., R, I].");
+    }
+
+    {
         auto py_unary = static_cast<nb::module_>(m.attr("unary"));
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
-        py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
+        py_unary.def(
+            "gelu",
+            &ttml::ops::gelu,
+            nb::arg("tensor"),
+            nb::kw_only(),
+            nb::arg("variant") = GeluVariant::ACCURATE,
+            "GELU activation. `variant` takes a ttnn.GeluVariant. Unlike ttnn, the FastLut variant is\n"
+            "not supported.");
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
         py_unary.def("exp", &ttml::ops::exp, nb::arg("tensor"));
         py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));
@@ -509,7 +666,7 @@ void py_module(nb::module_& m) {
     }
 
     {
-        auto py_metal = m.def_submodule("metal");
+        auto py_metal = static_cast<nb::module_>(m.attr("metal"));
         py_metal.def(
             "moe_group",
             &ttml::metal::moe_group,
@@ -544,6 +701,21 @@ void py_module(nb::module_& m) {
             "output in moe_group's grouped layout; plan/offsets/grouped_scores\n"
             "are direct outputs of moe_group (grouped_scores already encodes\n"
             "scores[plan[i], k_slot] per row). Returns ungrouped [D,B,S,H].");
+        py_metal.def(
+            "swiglu_packed_fw",
+            &ttml::metal::swiglu_packed_fw,
+            nb::arg("packed"),
+            nb::arg("preallocated_output") = nb::none(),
+            "Fused packed-SwiGLU forward: packed [.., R, 2*I] = [gate|up] -> h = silu(gate)*up "
+            "[.., R, I].");
+        py_metal.def(
+            "swiglu_packed_bw",
+            &ttml::metal::swiglu_packed_bw,
+            nb::arg("packed"),
+            nb::arg("dL_dh"),
+            nb::arg("preallocated_dL_dpacked") = nb::none(),
+            "Backward of swiglu_packed_fw: (packed [gate|up], dL_dh [.., R, I]) -> "
+            "dL/dpacked [.., R, 2*I] = [dgate|dup].");
     }
 }
 

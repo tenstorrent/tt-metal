@@ -4,8 +4,12 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
-constexpr uint32_t cb_combine_input = tt::CBIndex::c_0;
+constexpr uint32_t cb_combine_input_id = tt::CBIndex::c_0;
 
 constexpr uint32_t num_experts = get_compile_time_arg_val(0);
 // Number of tile-sized CB pages needed to hold one row of emb_dim elements
@@ -26,8 +30,8 @@ constexpr bool has_residual = get_compile_time_arg_val(res_base) != 0;
 constexpr uint32_t out_tiles = get_compile_time_arg_val(res_base + 1);
 constexpr uint32_t row_tiles = get_compile_time_arg_val(res_base + 2);
 constexpr auto residual_accessor_args = TensorAccessorArgs<res_base + 3>();
-constexpr uint32_t cb_residual = tt::CBIndex::c_5;
-constexpr uint32_t cb_local_mask = tt::CBIndex::c_4;
+constexpr uint32_t cb_residual_id = tt::CBIndex::c_5;
+constexpr uint32_t cb_local_mask_id = tt::CBIndex::c_4;
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
@@ -39,52 +43,70 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t residual_addr = get_arg_val<uint32_t>(4);
     [[maybe_unused]] const uint32_t col_tile_start = get_arg_val<uint32_t>(5);
 
+    Noc noc;
+    CircularBuffer cb_combine_input(cb_combine_input_id);
+    CircularBuffer cb_residual(cb_residual_id);
+    CircularBuffer cb_local_mask(cb_local_mask_id);
+
     const auto combine_addrg = TensorAccessor(combine_accessor_args, combine_addr);
+    const uint32_t slot_bytes = emb_dim_cb_tiles * cb_combine_input.get_tile_size();
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         if constexpr (has_residual) {
-            const auto res = TensorAccessor(residual_accessor_args, residual_addr, get_tile_size(cb_residual));
-            cb_reserve_back(cb_residual, out_tiles);
-            const uint32_t l1 = get_write_ptr(cb_residual);
+            const uint32_t residual_tile_size = cb_residual.get_tile_size();
+            const auto res = TensorAccessor(residual_accessor_args, residual_addr, residual_tile_size);
+            cb_residual.reserve_back(out_tiles);
             const uint32_t first = (token_start_idx / TOKENS_PER_CHUNK) * row_tiles + col_tile_start;
             for (uint32_t j = 0; j < out_tiles; ++j) {
-                noc_async_read_page(first + j, res, l1 + j * get_tile_size(cb_residual));
+                noc.async_read(
+                    res,
+                    cb_residual,
+                    residual_tile_size,
+                    {.page_id = first + j},
+                    {.offset_bytes = j * residual_tile_size});
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_residual, out_tiles);
+            noc.async_read_barrier();
+            cb_residual.push_back(out_tiles);
         }
         volatile tt_l1_ptr uint8_t* mask = nullptr;
         if constexpr (use_local_mask) {
-            cb_wait_front(cb_local_mask, 1);
-            mask = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(get_read_ptr(cb_local_mask));
+            cb_local_mask.wait_front(1);
+            mask = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb_local_mask.get_read_ptr());
         }
         for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CHUNK; ++token_idx) {
             uint32_t global_token_idx = token_start_idx + token_idx;
 
             // one batch per token: issue every slot's read, then one barrier (the compute consumes slot by slot)
-            cb_reserve_back(cb_combine_input, num_experts * emb_dim_cb_tiles);
-            const uint32_t base = get_write_ptr(cb_combine_input);
-            constexpr uint32_t slot_bytes = emb_dim_cb_tiles * get_tile_size(cb_combine_input);
+            cb_combine_input.reserve_back(num_experts * emb_dim_cb_tiles);
             for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
-                const uint32_t cb_write_addr = base + expert_idx * slot_bytes;
+                const uint32_t slot_off = expert_idx * slot_bytes;
                 const uint32_t m = use_local_mask ? mask[token_idx * num_experts + expert_idx] : 1;
                 if (m == 1) {
                     uint32_t expert_page_idx = global_token_idx * num_experts + expert_idx;
-                    uint64_t noc_addr = combine_addrg.get_noc_addr(expert_page_idx) + col_off_bytes;
-                    noc_async_read(noc_addr, cb_write_addr, emb_dim_bytes);
+                    noc.async_read(
+                        combine_addrg,
+                        cb_combine_input,
+                        emb_dim_bytes,
+                        {.page_id = expert_page_idx, .offset_bytes = col_off_bytes},
+                        {.offset_bytes = slot_off});
                 } else if (m == 2) {
-                    const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+                    const uint32_t cb_write_addr = cb_combine_input.get_write_ptr() + slot_off;
                     for (uint32_t off = 0; off < emb_dim_bytes; off += MEM_ZEROS_SIZE) {
                         const uint32_t n = emb_dim_bytes - off < MEM_ZEROS_SIZE ? emb_dim_bytes - off : MEM_ZEROS_SIZE;
-                        noc_async_read(zeros, cb_write_addr + off, n);
+                        noc.async_read(
+                            UnicastEndpoint{},
+                            CoreLocalMem<uint32_t>(cb_write_addr + off),
+                            n,
+                            {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = MEM_ZEROS_BASE},
+                            {});
                     }
                 }
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_combine_input, num_experts * emb_dim_cb_tiles);
+            noc.async_read_barrier();
+            cb_combine_input.push_back(num_experts * emb_dim_cb_tiles);
         }
         if constexpr (use_local_mask) {
-            cb_pop_front(cb_local_mask, 1);
+            cb_local_mask.pop_front(1);
         }
         token_start_idx += TOKENS_PER_CHUNK;
     }

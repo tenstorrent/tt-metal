@@ -29,51 +29,62 @@
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
+template <
+    typename ExpCbRawOtherDFB,
+    typename ExpCbLlkPostDFB,
+    typename ExpCbPreLhsDFB,
+    typename ExpCbPostLhsDFB,
+    typename ExpCbPreRhsDFB,
+    typename ExpCbPostRhsDFB,
+    typename ExpCbOutDFB>
 ALWI void process_tile(
-    tt::CBIndex cb_pre_lhs,
-    tt::CBIndex cb_post_lhs,
-    tt::CBIndex cb_pre_rhs,
-    tt::CBIndex cb_post_rhs,
-    tt::CBIndex cb_out,
+    ExpCbRawOtherDFB& exp_cb_raw_other,
+    ExpCbLlkPostDFB& exp_cb_llk_post,
+    ExpCbPreLhsDFB& exp_cb_pre_lhs,
+    ExpCbPostLhsDFB& exp_cb_post_lhs,
+    ExpCbPreRhsDFB& exp_cb_pre_rhs,
+    ExpCbPostRhsDFB& exp_cb_post_rhs,
+    ExpCbOutDFB& exp_cb_out,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle ISCLOSE_RT_ARG_PARAMS) {
     using namespace ckernel;
-    CircularBuffer exp_cb_out(cb_out);
+    const uint32_t cb_post_lhs = exp_cb_post_lhs.get_id();
+    const uint32_t cb_post_rhs = exp_cb_post_rhs.get_id();
+    const uint32_t cb_out = exp_cb_out.get_id();
 
 #if BCAST_INPUT  // ROW_A_COL_B
-#define CB_PRE_BCAST cb_pre_rhs
-#define CB_POST_BCAST cb_post_rhs
-#define CB_POST_OTHER cb_post_lhs
+#define EXP_CB_PRE_BCAST exp_cb_pre_rhs
+    auto& exp_cb_post_bcast = exp_cb_post_rhs;
+    auto& exp_cb_post_other = exp_cb_post_lhs;
     constexpr auto cb_raw_other = tt::CBIndex::c_0;
     constexpr auto cb_llk_post = tt::CBIndex::c_5;
     auto cb_left = cb_post_lhs;
     auto cb_right = cb_post_rhs;
 #else  // ROW_B_COL_A
-#define CB_PRE_BCAST cb_pre_lhs
-#define CB_POST_BCAST cb_post_lhs
-#define CB_POST_OTHER cb_post_rhs
+#define EXP_CB_PRE_BCAST exp_cb_pre_lhs
+    auto& exp_cb_post_bcast = exp_cb_post_lhs;
+    auto& exp_cb_post_other = exp_cb_post_rhs;
     constexpr auto cb_raw_other = tt::CBIndex::c_1;
     constexpr auto cb_llk_post = tt::CBIndex::c_6;
     auto cb_left = cb_post_lhs;
     auto cb_right = cb_post_rhs;
 #endif
 
-    CircularBuffer exp_cb_raw_other(cb_raw_other);
-    CircularBuffer exp_cb_llk_post(cb_llk_post);
-    CircularBuffer exp_cb_post_bcast(CB_POST_BCAST);
-    CircularBuffer exp_cb_post_other(CB_POST_OTHER);
-
-    unary_op_init_common(cb_left, cb_out);
-    PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
+    // compute_kernel_hw_startup is hoisted to kernel_main (must be the first Compute API call and run
+    // exactly once); process_tile is called per iteration, so it only re-inits the copy op here.
+    copy_init(cb_left);
+    PREPROCESS(BCAST_OP, EXP_CB_PRE_BCAST, exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
     exp_cb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_cb_raw_other.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
-        unary_bcast_init<BroadcastType::ROW>(cb_raw_other, cb_llk_post);
+        reconfig_data_format(cb_raw_other, cb_raw_other);
+        unary_bcast_init<BroadcastType::ROW>(cb_raw_other);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(cb_raw_other, 0, 0);
@@ -86,9 +97,8 @@ ALWI void process_tile(
         exp_cb_raw_other.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_raw_other);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 
-        PREPROCESS(OTHER_OP, CircularBuffer(cb_llk_post), exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, exp_cb_llk_post, exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_other.wait_front(num_tiles_per_cycle);
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);
@@ -96,11 +106,13 @@ ALWI void process_tile(
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
-        copy_tile_to_dst_init_short_with_dt(cb_right, cb_left);
+        // Startup and preprocessing preserve the physical-LHS SrcA format.
+        copy_init(cb_left);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_left, i, i * 2);
         }
-        copy_tile_to_dst_init_short_with_dt(cb_left, cb_right);
+        reconfig_data_format_srca(cb_left, cb_right);
+        copy_init(cb_right);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_right, i, i * 2 + 1);
 
@@ -114,6 +126,7 @@ ALWI void process_tile(
 #endif
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
+        reconfig_data_format_srca(cb_right, cb_left);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -145,12 +158,14 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_2;
 
 #if BCAST_INPUT  // ROW_A_COL_B: A=row bcast, B=col bcast
+    constexpr auto cb_raw_other = tt::CBIndex::c_0;
     constexpr auto cb_llk_post = tt::CBIndex::c_5;
     constexpr auto cb_pre_lhs = cb_llk_post;
     constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_llk_post;
     constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : tt::CBIndex::c_1;
 #else  // ROW_B_COL_A: B=row bcast, A=col bcast
+    constexpr auto cb_raw_other = tt::CBIndex::c_1;
     constexpr auto cb_llk_post = tt::CBIndex::c_6;
     constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
     constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0;
@@ -158,8 +173,33 @@ void kernel_main() {
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
 #endif
 
+    DataflowBuffer exp_cb_out(cb_out);
+    DataflowBuffer exp_cb_raw_other(cb_raw_other);
+    DataflowBuffer exp_cb_llk_post(cb_llk_post);
+#if BCAST_INPUT
+    auto& exp_cb_pre_lhs = exp_cb_llk_post;
+    DataflowBuffer exp_cb_pre_rhs(cb_pre_rhs);
+#else
+    DataflowBuffer exp_cb_pre_lhs(cb_pre_lhs);
+    auto& exp_cb_pre_rhs = exp_cb_llk_post;
+#endif
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer exp_cb_post_lhs(cb_post_lhs);
+#else
+    auto& exp_cb_post_lhs = exp_cb_pre_lhs;
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer exp_cb_post_rhs(cb_post_rhs);
+#else
+    auto& exp_cb_post_rhs = exp_cb_pre_rhs;
+#endif
+
+    // One-time hardware startup: must be the first Compute API call and run exactly once. cb_left
+    // inside process_tile is always cb_post_lhs, so configure the pipeline for that here.
+    compute_kernel_hw_startup(cb_post_lhs, cb_out);
+
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
@@ -171,11 +211,13 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
-            cb_pre_lhs,
-            cb_post_lhs,
-            cb_pre_rhs,
-            cb_post_rhs,
-            cb_out,
+            exp_cb_raw_other,
+            exp_cb_llk_post,
+            exp_cb_pre_lhs,
+            exp_cb_post_lhs,
+            exp_cb_pre_rhs,
+            exp_cb_post_rhs,
+            exp_cb_out,
             tile_freq,
             tile_start,
             num_tiles_per_cycle ISCLOSE_RT_ARG_FWD);
@@ -183,11 +225,13 @@ void kernel_main() {
 
     if (remaining_iterations > 0) {
         process_tile(
-            cb_pre_lhs,
-            cb_post_lhs,
-            cb_pre_rhs,
-            cb_post_rhs,
-            cb_out,
+            exp_cb_raw_other,
+            exp_cb_llk_post,
+            exp_cb_pre_lhs,
+            exp_cb_post_lhs,
+            exp_cb_pre_rhs,
+            exp_cb_post_rhs,
+            exp_cb_out,
             remaining_iterations,
             tile_start,
             num_tiles_per_cycle ISCLOSE_RT_ARG_FWD);

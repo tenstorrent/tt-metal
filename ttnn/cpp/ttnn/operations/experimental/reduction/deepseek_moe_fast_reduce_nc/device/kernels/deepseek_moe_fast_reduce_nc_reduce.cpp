@@ -23,14 +23,14 @@ void kernel_main() {
     CircularBuffer cb_compute_input_1(compute_input_cb_id_1);
     CircularBuffer cb_compute_output(compute_output_cb_id);
 
-    binary_op_init_common(compute_input_cb_id_0, compute_input_cb_id_1, compute_output_cb_id);
+    compute_kernel_hw_startup(compute_input_cb_id_0, compute_input_cb_id_1, compute_output_cb_id);
 
     // For each assigned output tile, process the input tiles in a doubly nested loop.
     // The inner loop processes the number of tiles specified by input_granularity.
     // The outer loop executes reduction_dim_size / input_granularity times.
     cb_compute_input_1.wait_front(one_tile);
     for (uint32_t i = 0; i < num_output_tiles_to_process; i++) {
-        add_tiles_init(compute_input_cb_id_0, compute_input_cb_id_1, true);
+        add_init(compute_input_cb_id_0, compute_input_cb_id_1, true);
         reconfig_data_format(compute_input_cb_id_0, compute_input_cb_id_1);
         tile_regs_acquire();
 

@@ -4,10 +4,11 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs.hpp"
@@ -30,7 +31,7 @@ void sigmoid(uint32_t cb_in_scores, uint32_t cb_sigmoid_scores, uint32_t width_t
         tile_regs_acquire();
         reconfig_data_format_srca(cb_in_scores);
         // copy tile from scores cb to destination register 0
-        copy_tile_to_dst_init_short(cb_in_scores);
+        copy_init(cb_in_scores);
         copy_tile(cb_in_scores, 0, 0);
         // perform sigmoid on tile
         sigmoid_tile_init();
@@ -52,7 +53,7 @@ void add_bias(uint32_t cb_sigmoid_scores, uint32_t cb_in_bias, uint32_t cb_biase
     CircularBuffer cb_bias(cb_in_bias);
     CircularBuffer cb_biased(cb_biased_scores);
     // Perform add bias on sigmoid scores
-    add_tiles_init(cb_sigmoid_scores, cb_in_bias, false);
+    add_init(cb_sigmoid_scores, cb_in_bias, false);
     cb_sigmoid.wait_front(width_tiles);
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_bias.wait_front(1);
@@ -90,15 +91,15 @@ void process_and_sort_tiles(
         tile_regs_acquire();
         // transpose and unpack into dest regs
         reconfig_data_format_srca(cb_biased_scores);
-        transpose_wh_init_short(cb_biased_scores);
-        transpose_wh_tile(cb_biased_scores, wt, 0);
-        transpose_wh_tile(cb_biased_scores, wt + 1, 1);
+        transpose_init(cb_biased_scores);
+        transpose_tile(cb_biased_scores, wt, 0);
+        transpose_tile(cb_biased_scores, wt + 1, 1);
 
         // transpose and unpack into dest regs
         reconfig_data_format_srca(cb_expert_index_template);
-        transpose_wh_init_short(cb_expert_index_template);
-        transpose_wh_tile(cb_expert_index_template, wt, 2);
-        transpose_wh_tile(cb_expert_index_template, wt + 1, 3);
+        transpose_init(cb_expert_index_template);
+        transpose_tile(cb_expert_index_template, wt, 2);
+        transpose_tile(cb_expert_index_template, wt + 1, 3);
 
         // llk_topk_sort -> inplace
         ckernel::topk_local_sort(0, (int)ascending, end_phase);
@@ -138,8 +139,8 @@ void sum_top_experts_per_group(
     CircularBuffer cb_top_experts(cb_top_experts_per_group);
     CircularBuffer cb_group_summed(cb_group_summed_scores);
     // sum the top experts_per_group rows for each group
-    binary_op_init_common(cb_top_experts_per_group, cb_top_experts_per_group, cb_group_summed_scores);
-    add_tiles_init(cb_top_experts_per_group, cb_top_experts_per_group, true);
+    reconfig_data_format(cb_top_experts_per_group, cb_top_experts_per_group);
+    add_init(cb_top_experts_per_group, cb_top_experts_per_group, true);
     cb_top_experts.wait_front(summed_experts_per_group);
 
     tile_regs_acquire();
@@ -153,6 +154,7 @@ void sum_top_experts_per_group(
     cb_group_summed.reserve_back(1);
 
     tile_regs_wait();
+    pack_reconfig_data_format(cb_group_summed_scores);
     pack_tile(0, cb_group_summed_scores);
     tile_regs_release();
 
@@ -178,9 +180,10 @@ void topk_group_scores(
 
     tile_regs_acquire();
     // copy scores tiles to dest reg 0 and index tiles to dest reg 2
-    copy_tile_to_dst_init_short(cb_group_summed_scores);
+    copy_init(cb_group_summed_scores);
     copy_tile(cb_group_summed_scores, 0, 0);
-    copy_tile_to_dst_init_short_with_dt(cb_group_summed_scores, cb_group_index_template);
+    reconfig_data_format_srca(cb_group_summed_scores, cb_group_index_template);
+    copy_init(cb_group_index_template);
     copy_tile(cb_group_index_template, 0, 2);
 
     // llk_topk_sort -> inplace
@@ -206,13 +209,13 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
     CircularBuffer cb_input(input_cb_index);
     CircularBuffer cb_output(output_cb_index);
     reconfig_data_format_srca(input_cb_index);
-    transpose_wh_init_short(input_cb_index);
+    transpose_init(input_cb_index);
     pack_reconfig_data_format(output_cb_index);
     for (uint32_t i = 0; i < tiles; i++) {
         cb_input.wait_front(1);
 
         tile_regs_acquire();
-        transpose_wh_tile(input_cb_index, 0, 0);
+        transpose_tile(input_cb_index, 0, 0);
         tile_regs_commit();
 
         cb_input.pop_front(1);
@@ -252,15 +255,15 @@ void topk(
 
     // transpose and unpack into dest regs
     reconfig_data_format_srca(cb_winning_group_scores);
-    transpose_wh_init_short(cb_winning_group_scores);
-    transpose_wh_tile(cb_winning_group_scores, 0, 0);
-    transpose_wh_tile(cb_winning_group_scores, 1, 1);
+    transpose_init(cb_winning_group_scores);
+    transpose_tile(cb_winning_group_scores, 0, 0);
+    transpose_tile(cb_winning_group_scores, 1, 1);
 
     // transpose and unpack into dest regs
     reconfig_data_format_srca(cb_winning_group_indices);
-    transpose_wh_init_short(cb_winning_group_indices);
-    transpose_wh_tile(cb_winning_group_indices, 0, 2);
-    transpose_wh_tile(cb_winning_group_indices, 1, 3);
+    transpose_init(cb_winning_group_indices);
+    transpose_tile(cb_winning_group_indices, 0, 2);
+    transpose_tile(cb_winning_group_indices, 1, 3);
     // llk_topk_sort -> inplace
     ckernel::topk_local_sort(0, (int)ascending, 4);
     ckernel::topk_merge(0, 0, 32);
@@ -269,12 +272,12 @@ void topk(
     // Compare upper half with the next tile; insert into correct position
     for (uint32_t j = 2; j < tiles; j++) {
         reconfig_data_format_srca(cb_winning_group_scores);
-        transpose_wh_init_short(cb_winning_group_scores);
-        transpose_wh_tile(cb_winning_group_scores, j, 1);
+        transpose_init(cb_winning_group_scores);
+        transpose_tile(cb_winning_group_scores, j, 1);
 
         reconfig_data_format_srca(cb_winning_group_indices);
-        transpose_wh_init_short(cb_winning_group_indices);
-        transpose_wh_tile(cb_winning_group_indices, j, 3);
+        transpose_init(cb_winning_group_indices);
+        transpose_tile(cb_winning_group_indices, j, 3);
 
         ckernel::topk_local_sort(0, (int)ascending, 4);
         ckernel::topk_merge(0, 0, 32);
@@ -326,7 +329,7 @@ void normalize_scores() {
     reconfig_data_format(cb_reduce_intermediate, cb_epsilon_scalar);
 
     tile_regs_acquire();
-    add_bcast_scalar_init_short(cb_reduce_intermediate, cb_epsilon_scalar);
+    add_bcast_scalar_init(cb_reduce_intermediate, cb_epsilon_scalar);
     add_tiles_bcast<BroadcastType::SCALAR>(cb_reduce_intermediate, cb_epsilon_scalar, 0, 0, 0);
 
     // 4. Recip
@@ -350,7 +353,7 @@ void normalize_scores() {
     cb_reciprocal.wait_front(1);
 
     tile_regs_acquire();
-    mul_bcast_cols_init_short(cb_gathered_sigmoid, cb_reciprocal_sums);
+    mul_bcast_cols_init(cb_gathered_sigmoid, cb_reciprocal_sums);
     mul_tiles_bcast<BroadcastType::COL>(cb_gathered_sigmoid, cb_reciprocal_sums, 0, 0, 0);  // tile *= 1/(sum_col(tile))
     tile_regs_commit();
 
@@ -373,7 +376,7 @@ void scale(const uint32_t cb_normalized_scores, const uint32_t cb_route_scale_sc
     CircularBuffer cb_out(cb_out_weights);
     cb_normalized.wait_front(1);
     cb_route_scale.wait_front(1);
-    mul_tiles_bcast_scalar_init_short(cb_normalized_scores, cb_route_scale_scalar);
+    mul_bcast_scalar_init(cb_normalized_scores, cb_route_scale_scalar);
 
     tile_regs_acquire();
     mul_tiles_bcast<BroadcastType::SCALAR>(cb_normalized_scores, cb_route_scale_scalar, 0, 0, 0);
@@ -438,7 +441,7 @@ void kernel_main() {
 
     const uint32_t start_height_tile = get_arg_val<uint32_t>(0);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(1);
-    binary_op_init_common(cb_in_scores, cb_in_bias, cb_biased_scores);
+    compute_kernel_hw_startup(cb_in_scores, cb_in_bias, cb_biased_scores);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         blocks::sigmoid(cb_in_scores, cb_sigmoid_scores, width_tiles);

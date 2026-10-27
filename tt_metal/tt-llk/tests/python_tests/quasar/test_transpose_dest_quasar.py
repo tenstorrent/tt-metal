@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     DataCopyGolden,
@@ -16,35 +17,49 @@ from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
+    PerfRunType,
     Transpose,
     UnpackerEngine,
     format_dict,
 )
 from helpers.param_config import (
-    generate_unary_input_dimensions,
+    BlocksCalculationAlgorithm,
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
+    runtime,
+    select_perf_input_dimensions,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     MATH_TRANSPOSE_FACES,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
+    NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
+    generate_input_dim,
 )
+from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.utils import passed_test
+
+TILE_DIMENSIONS = [32, 32]
 
 
 def generate_qsr_transpose_dest_combinations(
     formats_list: List[FormatConfig],
+    *,
+    is_perf=False,
 ):
     """
     Generate transpose dest combinations for Quasar tests.
@@ -90,17 +105,38 @@ def generate_qsr_transpose_dest_combinations(
             return False
         return True
 
-    dimensions_cache = {
-        (dest_acc, dest_sync): tuple(
-            generate_unary_input_dimensions(dest_acc, dest_sync)
-        )
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-        for dest_sync in (DestSync.Half, DestSync.Full)
+    # Curated dimensions: some fit in one bank (no switching), some require
+    # multiple blocks (triggering dest bank switches with DstSync.Half).
+    # DstSync.Half capacity: 8 tiles (16-bit dest) / 4 tiles (32-bit dest)
+    # DstSync.Full capacity: 16 tiles (16-bit dest) / 8 tiles (32-bit dest)
+    dimensions_by_mode = {
+        (DestAccumulation.No, DestSync.Half): [
+            [32, 32],  # 1 tile  → 1 block (no switch)
+            [32, 128],  # 4 tiles → 1 block (no switch)
+            [32, 256],  # 8 tiles → 1 block (fills half-dest exactly)
+            [32, 512],  # 16 tiles → 2 blocks (1 bank switch)
+            [64, 384],  # 24 tiles → 3 blocks (2 bank switches)
+        ],
+        (DestAccumulation.No, DestSync.Full): [
+            [32, 32],  # 1 tile  → 1 block
+            [32, 512],  # 16 tiles → 1 block (fills full-dest exactly)
+            [64, 512],  # 32 tiles → 2 blocks
+        ],
+        (DestAccumulation.Yes, DestSync.Half): [
+            [32, 32],  # 1 tile  → 1 block (no switch)
+            [32, 128],  # 4 tiles → 1 block (fills half-dest exactly)
+            [32, 256],  # 8 tiles → 2 blocks (1 bank switch)
+            [64, 192],  # 12 tiles → 3 blocks (2 bank switches)
+        ],
+        (DestAccumulation.Yes, DestSync.Full): [
+            [32, 32],  # 1 tile  → 1 block
+            [32, 256],  # 8 tiles → 1 block (fills full-dest exactly)
+            [32, 512],  # 16 tiles → 2 blocks
+        ],
     }
 
-    dest_sync_modes = (DestSync.Half, DestSync.Full)
+    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
     transpose_faces_modes = (Transpose.No, Transpose.Yes)
-
     combinations = []
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format
@@ -112,14 +148,39 @@ def generate_qsr_transpose_dest_combinations(
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
                 for dest_sync in dest_sync_modes:
                     for math_transpose_faces in transpose_faces_modes:
-                        for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
+                        if is_perf:
+                            mode_dimensions = dimensions_by_mode[(dest_acc, dest_sync)]
+                            perf_dimensions = select_perf_input_dimensions(
+                                mode_dimensions,
+                                use_largest_fallback=False,
+                            )
+                            # Dest-full vs 2-block is selected via PERF_INPUT_DIMENSIONS.
+                            # Keep the 3-block / 2-switch case when the mode defines it.
+                            three_block = [64, 384]
+                            if (
+                                three_block in mode_dimensions
+                                and three_block not in perf_dimensions
+                            ):
+                                perf_dimensions.append(three_block)
+                            for dimensions in perf_dimensions:
+                                combinations.append(
+                                    (
+                                        fmt,
+                                        dest_acc,
+                                        dest_sync,
+                                        math_transpose_faces,
+                                        runtime(dimensions),
+                                    )
+                                )
+                            continue
+                        for dimensions in dimensions_by_mode[(dest_acc, dest_sync)]:
                             combinations.append(
                                 (
                                     fmt,
                                     dest_acc,
                                     dest_sync,
                                     math_transpose_faces,
-                                    dimensions,
+                                    runtime(dimensions),
                                 )
                             )
 
@@ -134,10 +195,15 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
+    # The MX pair here is on the output side: the transpose happens inside Dest at
+    # math precision, so the packer re-derives the block exponents from the
+    # post-transpose layout. That interaction is specific to this test -- the pack
+    # test never transposes -- so it is the pair worth keeping.
+) + quasar_mx_smoke(DataFormat.Float16_b, DataFormat.MxInt8)
+PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
+    TRANSPOSE_DEST_FORMATS,
+    is_perf=True,
 )
 
 
@@ -146,18 +212,36 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
     formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
         TRANSPOSE_DEST_FORMATS
     ),
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
 )
 def test_transpose_dest_quasar(
     formats_dest_acc_sync_transpose_dims,
-    implied_math_format,
+    run_types,
+    loop_factor,
+    *,
+    is_perf=False,
+    perf_report=None,
 ):
     (formats, dest_acc, dest_sync, math_transpose_faces, input_dimensions) = (
         formats_dest_acc_sync_transpose_dims
     )
 
     data_copy_type = DataCopyType.A2D
-    num_faces = 4
+    tile_rows, tile_cols = TILE_DIMENSIONS
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
+        [tile_rows, tile_cols]
+    )
+    num_faces = num_faces_r_dim * num_faces_c_dim
+
+    output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -231,16 +315,15 @@ def test_transpose_dest_quasar(
             golden_tensor.to(torch.bfloat16), formats.output_format
         )
 
-    unpack_to_dest = (
-        True
-        if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        else False
-    )
-    configuration = TestConfig(
-        "sources/quasar/transpose_dest_quasar_test.cpp",
-        formats,
-        templates=[
-            IMPLIED_MATH_FORMAT(implied_math_format),
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
+
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/transpose_dest_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             DATA_COPY_TYPE(data_copy_type),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
@@ -248,13 +331,27 @@ def test_transpose_dest_quasar(
             DEST_SYNC(dest_sync),
             MATH_TRANSPOSE_FACES(math_transpose_faces),
         ],
-        runtimes=[
+        "runtimes": [
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
-            TEST_FACE_DIMS(),
+            NUM_TILES_IN_BLOCK(
+                output_tiles_in_block,
+                input_num_tiles_in_block=output_tiles_in_block,
+                output_num_tiles_in_block=output_tiles_in_block,
+            ),
+            NUM_BLOCKS(
+                output_num_blocks,
+                input_num_blocks=output_num_blocks,
+                output_num_blocks=output_num_blocks,
+            ),
+            TEST_FACE_DIMS(face_r_dim=face_r_dim, face_c_dim=FACE_C_DIM),
+            NUM_FACES_R_DIM(num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim),
             DEST_INDEX(),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -264,10 +361,22 @@ def test_transpose_dest_quasar(
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
+            face_r_dim=face_r_dim,
+            tile_dimensions=TILE_DIMENSIONS,
+            use_dense_tile_dimensions=True,
         ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+        "dest_acc": dest_acc,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 

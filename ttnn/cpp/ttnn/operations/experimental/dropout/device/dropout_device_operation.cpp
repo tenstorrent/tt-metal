@@ -66,13 +66,13 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (preallocated_output_tensor.has_value()) {
-        const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
-        const auto preallocated_output_shape = preallocated_output_tensor.value().logical_shape();
+        // Match the input. compute_output_specs returns the preallocated tensor.
+        const auto preallocated_output_shape = preallocated_output_tensor->logical_shape();
         TT_FATAL(
-            preallocated_output_shape == computed_output_shape,
-            "When preallocted output tensor is used, Dropout operation requires its shape to match the computed "
-            "shape. Computed shape: {}, Shape in preallocated output tensor: {}",
-            computed_output_shape,
+            preallocated_output_shape == input_tensor.logical_shape(),
+            "When preallocated output tensor is used, Dropout operation requires its shape to match the input "
+            "shape. Input shape: {}, Shape in preallocated output tensor: {}",
+            input_tensor.logical_shape(),
             preallocated_output_shape);
 
         if (!input_tensor.is_sharded()) {
@@ -83,7 +83,7 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec DropoutDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec DropoutDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -95,7 +95,8 @@ TensorSpec DropoutDeviceOperation::compute_output_specs(
     }
 
     const auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
 }
 
 Tensor DropoutDeviceOperation::create_output_tensors(
@@ -104,23 +105,6 @@ Tensor DropoutDeviceOperation::create_output_tensors(
         return *tensor_args.preallocated_output;
     }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
-}
-
-ttsl::hash::hash_t DropoutDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.padded_shape();
-    auto args_without_seed = args;
-    args_without_seed.seed = 0;
-    auto program_factory = select_program_factory(args, tensor_args);
-    operation::Hash hash = operation::hash_operation<DropoutDeviceOperation>(
-        args_without_seed,
-        program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_shape.volume());
-
-    return hash;
 }
 
 }  // namespace ttnn::experimental::prim

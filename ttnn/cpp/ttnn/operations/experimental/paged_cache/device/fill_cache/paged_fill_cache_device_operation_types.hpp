@@ -31,6 +31,13 @@ struct PagedFillCacheInputs {
     Tensor input_tensor;
     Tensor page_table;
     std::optional<Tensor> batch_idx_tensor_opt;
+    // Optional per-request valid fill length (block-aligned, in tokens) as a 1-element
+    // int device tensor. Read by the writer kernel at runtime, so it survives trace
+    // capture/replay: for a bounded (cache_position_modulo) fill of a padded prompt,
+    // the writer restricts the surviving ring window to the last capacity_t *real*
+    // tiles (ending at valid_seq_len) instead of the padded end, matching the
+    // host-side fill cap but per-request under a captured prefill trace.
+    std::optional<Tensor> valid_seq_len_tensor_opt;
 };
 
 }  // namespace ttnn::experimental::prim

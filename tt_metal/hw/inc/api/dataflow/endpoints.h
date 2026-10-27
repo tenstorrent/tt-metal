@@ -17,6 +17,34 @@ struct UnicastEndpoint {
 };
 
 /**
+ * @brief Endpoint for a fully composed unicast NoC address (e.g. a TensorAccessor or
+ * get_noc_addr result, optionally offset within the target). The address is treated as
+ * opaque - it is never decomposed into coordinates - so callers stay independent of the
+ * active NoC address backend.
+ */
+struct PrecomposedUnicastEndpoint {};
+
+template <>
+struct noc_traits_t<PrecomposedUnicastEndpoint> {
+    struct src_args_type {
+        uint64_t noc_addr{};
+    };
+    struct dst_args_type {
+        uint64_t noc_addr{};
+    };
+    template <Noc::AddressType address_type>
+    static auto src_addr(const PrecomposedUnicastEndpoint&, const Noc&, const src_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC);
+        return args.noc_addr;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr(const PrecomposedUnicastEndpoint&, const Noc&, const dst_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC);
+        return args.noc_addr;
+    }
+};
+
+/**
  * @brief Wrapper around calculating multicast noc address given 2D multicast rectangle and address. This
  * allows direct address to be supplied to NoC apis
  */
@@ -31,6 +59,9 @@ struct MulticastEndpoint {
 /**
  * @brief Wrapper around calculating noc address targeting a bank managed by the allocator (either DRAM or
  * L1) given bank id and address. This allows direct address to be supplied to NoC apis
+ *
+ * Legacy: takes an absolute bank address, for buffers not bound as a tensor. For a tensor use
+ * BankView(accessor) (api/tensor/noc_traits.h), which takes an offset into the tensor instead.
  */
 enum class AllocatorBankType { L1, DRAM };
 
@@ -58,7 +89,8 @@ struct noc_traits_t<UnicastEndpoint> {
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             return args.addr;
         } else {
-            uint64_t noc_addr = src.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            uint64_t noc_addr =
+                src.get_noc_unicast_addr(args.noc_x, args.noc_y, Noc::l1_cached_view(args.addr), noc.get_noc_id());
             return noc_addr;
         }
     }
@@ -67,7 +99,8 @@ struct noc_traits_t<UnicastEndpoint> {
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             return args.addr;
         } else {
-            uint64_t noc_addr = dst.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            uint64_t noc_addr =
+                dst.get_noc_unicast_addr(args.noc_x, args.noc_y, Noc::l1_cached_view(args.addr), noc.get_noc_id());
             return noc_addr;
         }
     }
@@ -86,7 +119,12 @@ struct noc_traits_t<MulticastEndpoint> {
     static auto dst_addr_mcast(const MulticastEndpoint& dst, const Noc& noc, const dst_args_mcast_type& args) {
         static_assert(address_type == Noc::AddressType::NOC);
         uint64_t noc_addr = dst.get_noc_multicast_addr(
-            args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, args.addr, noc.get_noc_id());
+            args.noc_x_start,
+            args.noc_y_start,
+            args.noc_x_end,
+            args.noc_y_end,
+            Noc::l1_cached_view(args.addr),
+            noc.get_noc_id());
         return noc_addr;
     }
 };

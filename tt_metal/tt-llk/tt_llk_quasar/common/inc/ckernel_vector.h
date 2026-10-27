@@ -190,7 +190,7 @@ template <vreg vec_reg_no, typename T, vdatasz data_size = type_to_datasz(T)>
 inline void vector_load(T const *addr)
 {
     std::uint32_t constexpr e_val = vdatasz_asm_nums[data_size];
-    asm volatile("vle%c[e_val].v v%c[vec_reg_no], (%[addr]) \n" : : [e_val] "i"(e_val), [vec_reg_no] "i"(vec_reg_no), [addr] "r"(addr));
+    asm volatile("vle%c[e_val].v v%c[vec_reg_no], (%[addr]) \n" : : [e_val] "i"(e_val), [vec_reg_no] "i"(vec_reg_no), [addr] "r"(addr) : "memory");
 }
 
 // For backwards compatibility
@@ -198,14 +198,14 @@ template <vdatasz data_size, vreg vec_reg_no, typename T>
 inline void vector_load(T const *addr)
 {
     std::uint32_t constexpr e_val = vdatasz_asm_nums[data_size];
-    asm volatile("vle%c[e_val].v v%c[vec_reg_no], (%[addr]) \n" : : [e_val] "i"(e_val), [vec_reg_no] "i"(vec_reg_no), [addr] "r"(addr));
+    asm volatile("vle%c[e_val].v v%c[vec_reg_no], (%[addr]) \n" : : [e_val] "i"(e_val), [vec_reg_no] "i"(vec_reg_no), [addr] "r"(addr) : "memory");
 }
 
 template <vreg vec_reg_no, typename T, vdatasz data_size = type_to_datasz(T)>
 inline void vector_store(T *addr)
 {
     std::uint32_t constexpr e_val = vdatasz_asm_nums[data_size];
-    asm volatile("vse%c[e_val].v v%c[vec_reg_no], (%[addr]) \n" : : [e_val] "i"(e_val), [vec_reg_no] "i"(vec_reg_no), [addr] "r"(addr));
+    asm volatile("vse%c[e_val].v v%c[vec_reg_no], (%[addr]) \n" : : [e_val] "i"(e_val), [vec_reg_no] "i"(vec_reg_no), [addr] "r"(addr) : "memory");
 }
 
 // For backwards compatibility
@@ -213,7 +213,7 @@ template <vdatasz data_size, vreg vec_reg_no, typename T>
 inline void vector_store(T *addr)
 {
     std::uint32_t constexpr e_val = vdatasz_asm_nums[data_size];
-    asm volatile("vse%c[e_val].v v%c[vec_reg_no], (%[addr]) \n" : : [e_val] "i"(e_val), [vec_reg_no] "i"(vec_reg_no), [addr] "r"(addr));
+    asm volatile("vse%c[e_val].v v%c[vec_reg_no], (%[addr]) \n" : : [e_val] "i"(e_val), [vec_reg_no] "i"(vec_reg_no), [addr] "r"(addr) : "memory");
 }
 
 template <vreg dest_vec_reg_no, vreg src_vec_reg_no, int shift_amt>
@@ -258,7 +258,7 @@ inline void vector_iota()
         asm volatile("v" #op ".vx v%c[dst], v%c[src1], %[val] \n" : : [dst] "i"(dest_vec_reg_no), [src1] "i"(src1_vec_reg_no), [val] "r"(val));     \
     }                                                                                                                                               \
     template <vreg dest_vec_reg_no, vreg src1_vec_reg_no, std::int32_t imm>                                                                         \
-    inline void vector_##op()                                                                                                                       \
+    inline void vector_##op##_imm()                                                                                                                 \
     {                                                                                                                                               \
         if (imm < -16 || imm > 15)                                                                                                                  \
         {                                                                                                                                           \

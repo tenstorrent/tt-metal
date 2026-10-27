@@ -77,26 +77,30 @@ endif()
 # Generate protobuf files for KvChunkAddressTable serialization
 include(protobuf)
 GENERATE_PROTO_FILES(
-    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/disaggregation/protobuf/kv_chunk_address_table.proto
-    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/experimental/disaggregation
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/protobuf/kv_chunk_address_table.proto
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/internal/disaggregation
 )
 list(APPEND IMPL_SRC ${PROTO_SRCS})
 
 # Serializer free-functions (export_to_protobuf_file / import_from_protobuf_file).
 # protobuf::libprotobuf is already linked below and the generated pb.h include
 # dir is already on this target, so this is the natural home for it.
-list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/experimental/disaggregation/kv_chunk_address_table_protobuf.cpp)
-
-if(TT_METAL_USE_EMULE)
-    list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp)
-endif()
+list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_address_table_protobuf.cpp)
 
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
+# Keep the reload extension from perturbing the established unity source batches.
+set_source_files_properties(
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/reload_table.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            TRUE
+)
+
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(impl)
-target_precompile_headers(impl REUSE_FROM metal_common_pch)
+tt_reuse_precompile_headers(impl metal_common_pch)
 
 target_link_libraries(
     impl
@@ -125,10 +129,12 @@ target_include_directories(
         debug
         profiler
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
+        # internal/profiler/perf_counters.hpp includes the shared tt-llk counter headers
+        ${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tools/include
         ${CMAKE_CURRENT_BINARY_DIR}
 )
 target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
-target_include_directories(impl SYSTEM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/experimental/disaggregation)
+target_include_directories(impl SYSTEM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/internal/disaggregation)
 
 # Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)
@@ -154,9 +160,10 @@ if(TT_METAL_USE_EMULE)
     target_link_libraries(
         impl
         PRIVATE
-            tt-emule::headers
+            tt_emule_runtime
             dl
     )
+    target_include_directories(impl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulation)
 endif()
 
 # Generate Inspector RPC stub file

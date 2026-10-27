@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "sfpi.h"
 
@@ -37,6 +38,14 @@ inline void _sfpu_load_config32_(const std::uint32_t dest, const std::uint32_t u
 inline void _init_sfpu_config_reg()
 {
     TTI_SFPCONFIG(0, 0xF, 1);
+}
+
+// LCONST_neg1 (LREG11) is a core-wide constant other SFPU kernels read as -1.0. A kernel that reprograms LREG11
+// through SFPCONFIG calls this before it returns.
+inline void _restore_lconst_neg1_()
+{
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0xBF80); // bf16 0xBF80 << 16 == fp32 -1.0
+    TTI_SFPCONFIG(0x5555, /*LREG11=*/11, /*MOD1_IMM16_IS_LANE_MASK=*/8);
 }
 
 } // namespace sfpu

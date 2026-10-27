@@ -6,9 +6,9 @@
 // (RISCV_0, NOC 1)
 //
 // Three paths:
-//   Sender: wait for compute partial → NOC write to worker's CB2 → signal sem
+//   Sender: wait for compute partial → NOC write to worker's partial_recv → signal sem
 //   Worker (non-collector): generate index tile → wait for sender partials →
-//     push to compute → wait for logit+index output → NOC write to collector's CB8/CB9 → signal sem
+//     push to compute → wait for logit+index output → NOC write to collector's gathered_val/gathered_ind → signal sem
 //   Collector: generate index/mask/scaler tiles → wait for sender partials →
 //     push to compute → wait for logit+index output → copy own to gathered →
 //     wait for other workers' results → push gathered to compute →
@@ -17,6 +17,13 @@
 #include <cstdint>
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 inline uint32_t tile_elem_idx(uint32_t row, uint32_t col) {
     uint32_t face = ((row >= 16) ? 2u : 0u) + ((col >= 16) ? 1u : 0u);
@@ -59,87 +66,77 @@ void generate_index_tile(volatile tt_l1_ptr uint32_t* tile32, uint32_t base) {
 }
 
 void kernel_main() {
-    // Compile-time args
-    constexpr uint32_t tile_size = get_named_compile_time_arg_val("tile_size_bf16");
-    constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
-    constexpr uint32_t topk_k = get_named_compile_time_arg_val("topk_k");
-    constexpr uint32_t k_padded = get_named_compile_time_arg_val("k_padded");
-    constexpr uint32_t collector_phys_x = get_named_compile_time_arg_val("collector_physical_x");
-    constexpr uint32_t collector_phys_y = get_named_compile_time_arg_val("collector_physical_y");
+    Noc noc;
 
-    // Tensor accessors (compile-time args from TensorAccessorArgs)
-    constexpr auto input_accessor_args = TensorAccessorArgs<0>();
-    constexpr auto weight_accessor_args = TensorAccessorArgs<input_accessor_args.next_compile_time_args_offset()>();
-    constexpr auto bias_accessor_args = TensorAccessorArgs<weight_accessor_args.next_compile_time_args_offset()>();
-    constexpr auto indices_rm_accessor_args = TensorAccessorArgs<bias_accessor_args.next_compile_time_args_offset()>();
-    constexpr auto weights_rm_accessor_args =
-        TensorAccessorArgs<indices_rm_accessor_args.next_compile_time_args_offset()>();
+    // Compile-time args
+    constexpr uint32_t tile_size = get_arg(args::tile_size_bf16);
+    constexpr uint32_t num_groups = get_arg(args::num_groups);
+    constexpr uint32_t num_senders = get_arg(args::num_senders);
+    constexpr uint32_t topk_k = get_arg(args::topk_k);
+    constexpr uint32_t k_padded = get_arg(args::k_padded);
+    constexpr uint32_t collector_phys_x = get_arg(args::collector_physical_x);
+    constexpr uint32_t collector_phys_y = get_arg(args::collector_physical_y);
 
     // Run-time arguments (shared layout with dm0 and compute)
-    uint32_t argidx = 0;
-    const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
-    const auto vchannel = get_arg_val<uint32_t>(argidx++);
-    const auto weight_addr = get_arg_val<uint32_t>(argidx++);
-    const auto input_addr = get_arg_val<uint32_t>(argidx++);
-    const auto bias_addr = get_arg_val<uint32_t>(argidx++);
-    const auto sem_partial_ready = get_arg_val<uint32_t>(argidx++);
-    const auto is_sender = get_arg_val<uint32_t>(argidx++);
-    const auto is_worker = get_arg_val<uint32_t>(argidx++);
-    const auto is_collector = get_arg_val<uint32_t>(argidx++);
-    const auto num_k_tiles = get_arg_val<uint32_t>(argidx++);
-    const auto k_tile_offset = get_arg_val<uint32_t>(argidx++);
-    const auto n_tile_id = get_arg_val<uint32_t>(argidx++);
-    const auto worker_phys_x = get_arg_val<uint32_t>(argidx++);
-    const auto worker_phys_y = get_arg_val<uint32_t>(argidx++);
-    const auto sender_slot = get_arg_val<uint32_t>(argidx++);
-    const auto worker_gather_slot = get_arg_val<uint32_t>(argidx++);
-    const auto sem_topk_ready = get_arg_val<uint32_t>(argidx++);
-    const auto indices_rm_addr = get_arg_val<uint32_t>(argidx++);
-    const auto weights_rm_addr = get_arg_val<uint32_t>(argidx++);
-    const auto aligned_page_size = get_arg_val<uint32_t>(argidx++);
+    const auto dram_bank_id = get_arg(args::dram_bank_id);
+    const auto vchannel = get_arg(args::vchannel);
+    const auto is_sender = get_arg(args::is_sender);
+    const auto is_worker = get_arg(args::is_worker);
+    const auto is_collector = get_arg(args::is_collector);
+    const auto num_k_tiles = get_arg(args::num_k_tiles);
+    const auto k_tile_offset = get_arg(args::k_tile_offset);
+    const auto n_tile_id = get_arg(args::n_tile_id);
+    const auto worker_phys_x = get_arg(args::worker_phys_x);
+    const auto worker_phys_y = get_arg(args::worker_phys_y);
+    const auto sender_slot = get_arg(args::sender_slot);
+    const auto worker_gather_slot = get_arg(args::worker_gather_slot);
 
-    // CBs
-    constexpr auto cb_partial_recv = tt::CBIndex::c_2;
-    constexpr auto cb_local_out = tt::CBIndex::c_3;
-    constexpr auto cb_index = tt::CBIndex::c_5;
-    constexpr auto cb_topk_val = tt::CBIndex::c_6;
-    constexpr auto cb_gathered_val = tt::CBIndex::c_8;
-    constexpr auto cb_gathered_ind = tt::CBIndex::c_9;
-    constexpr auto cb_softmax_mask = tt::CBIndex::c_12;
-    constexpr auto cb_bcast_scaler = tt::CBIndex::c_15;
-    constexpr auto cb_final_out = tt::CBIndex::c_16;
-    constexpr auto cb_dispatch = tt::CBIndex::c_19;
+    // DFBs
+    DataflowBuffer dfb_partial_recv(dfb::partial_recv);
+    DataflowBuffer dfb_local_out(dfb::local_out);
+    DataflowBuffer dfb_index(dfb::index);
+    DataflowBuffer dfb_topk_val(dfb::topk_val);
+    DataflowBuffer dfb_gathered_val(dfb::gathered_val);
+    DataflowBuffer dfb_gathered_ind(dfb::gathered_ind);
+    DataflowBuffer dfb_softmax_mask(dfb::softmax_mask);
+    DataflowBuffer dfb_bcast_scaler(dfb::bcast_scaler);
+    DataflowBuffer dfb_final_out(dfb::final_out);
+    DataflowBuffer dfb_dispatch(dfb::dispatch);
 
     constexpr uint32_t tile_u32 = tile_size / sizeof(uint32_t);
 
-    // Pre-compute the cb_partial_recv base address.
-    // All cores have identical CB layout (CB0-CB3 same sizes), so the base
-    // address of CB2 is at the same L1 offset on every core. We read it from
-    // our own CB interface — valid because we allocated CB2 on all cores.
+    // Pre-compute the partial_recv base address.
+    // All cores have identical DFB layout (every DFB is placed on all cores), so the base
+    // address of partial_recv is at the same L1 offset on every core. We read it from
+    // our own DFB interface — valid because partial_recv is allocated on all cores.
     // Then we use this stable base + slot offset for NOC writes to the worker.
-    const uint32_t cb2_base_addr = get_write_ptr(cb_partial_recv);
+    const uint32_t partial_recv_base_addr = dfb_partial_recv.get_write_ptr();
 
     if (is_sender) {
         // ============================================================
         // SENDER PATH
         // ============================================================
-        cb_wait_front(cb_local_out, 1);
-        uint32_t local_out_l1 = get_read_ptr(cb_local_out);
+        dfb_local_out.wait_front(1);
+        uint32_t local_out_l1 = dfb_local_out.get_read_ptr();
 
-        // NOC write partial tile to worker's CB2 at our sender_slot.
-        // cb2_base_addr is the same L1 address on all cores due to uniform CB layout.
-        uint32_t worker_recv_l1 = cb2_base_addr + sender_slot * tile_size;
-        uint64_t worker_recv_noc = get_noc_addr(worker_phys_x, worker_phys_y, worker_recv_l1);
+        // NOC write partial tile to worker's partial_recv at our sender_slot.
+        // partial_recv_base_addr is the same L1 address on all cores due to uniform DFB layout.
+        uint32_t worker_recv_l1 = partial_recv_base_addr + sender_slot * tile_size;
 
-        noc_async_write(local_out_l1, worker_recv_noc, tile_size);
-        noc_async_write_barrier();
+        noc.async_write(
+            CoreLocalMem<uint32_t>(local_out_l1),
+            UnicastEndpoint{},
+            tile_size,
+            {},
+            {.noc_x = worker_phys_x, .noc_y = worker_phys_y, .addr = worker_recv_l1});
+        noc.async_write_barrier();
 
         // Signal worker that this sender's partial is ready
-        uint64_t worker_sem_noc = get_noc_addr(worker_phys_x, worker_phys_y, get_semaphore(sem_partial_ready));
-        noc_semaphore_inc(worker_sem_noc, 1);
-        noc_async_atomic_barrier();
+        Semaphore<> worker_sem(sem::partial_ready);
+        worker_sem.up(noc, worker_phys_x, worker_phys_y, 1);
+        noc.async_atomic_barrier();
 
-        cb_pop_front(cb_local_out, 1);
+        dfb_local_out.pop_front(1);
         return;
     }
 
@@ -149,20 +146,20 @@ void kernel_main() {
 
     // 1. Generate index template tile (expert_base + 0..31)
     uint32_t expert_base = n_tile_id * 32;
-    cb_reserve_back(cb_index, 1);
+    dfb_index.reserve_back(1);
     {
-        uint32_t index_l1 = get_write_ptr(cb_index);
+        uint32_t index_l1 = dfb_index.get_write_ptr();
         volatile tt_l1_ptr uint32_t* tile32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_l1);
         generate_index_tile(tile32, expert_base);
     }
-    cb_push_back(cb_index, 1);
+    dfb_index.push_back(1);
 
     // Collector also generates softmax helper tiles
     if (is_collector) {
         // Softmax mask: cols 0..k-1 = 0.0, cols k..31 = -inf
-        cb_reserve_back(cb_softmax_mask, 1);
+        dfb_softmax_mask.reserve_back(1);
         {
-            uint32_t mask_l1 = get_write_ptr(cb_softmax_mask);
+            uint32_t mask_l1 = dfb_softmax_mask.get_write_ptr();
             volatile tt_l1_ptr uint32_t* mask32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_l1);
             constexpr uint32_t neg_inf_packed = 0xFF80FF80u;
             for (uint32_t i = 0; i < tile_u32; i++) {
@@ -176,60 +173,67 @@ void kernel_main() {
                 }
             }
         }
-        cb_push_back(cb_softmax_mask, 1);
+        dfb_softmax_mask.push_back(1);
 
         // Broadcast scaler: all 1.0
-        cb_reserve_back(cb_bcast_scaler, 1);
+        dfb_bcast_scaler.reserve_back(1);
         {
-            uint32_t scaler_l1 = get_write_ptr(cb_bcast_scaler);
+            uint32_t scaler_l1 = dfb_bcast_scaler.get_write_ptr();
             volatile tt_l1_ptr uint32_t* scaler32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scaler_l1);
             constexpr uint32_t one_packed = 0x3F803F80u;
             for (uint32_t i = 0; i < tile_u32; i++) {
                 scaler32[i] = one_packed;
             }
         }
-        cb_push_back(cb_bcast_scaler, 1);
+        dfb_bcast_scaler.push_back(1);
     }
 
-    // 2. Reserve space in CB2 for the 2 incoming partial tiles
-    cb_reserve_back(cb_partial_recv, 2);
+    // 2. Reserve space in partial_recv for the incoming partial tiles
+    dfb_partial_recv.reserve_back(num_senders);
 
-    // Wait for both senders' partials to arrive
-    volatile tt_l1_ptr uint32_t* partial_sem =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_partial_ready));
-    noc_semaphore_wait(partial_sem, 2);
-    noc_semaphore_set(partial_sem, 0);
+    // Wait for all senders' partials to arrive
+    Semaphore<> partial_sem(sem::partial_ready);
+    partial_sem.wait(num_senders);
+    partial_sem.set(0);
 
-    cb_push_back(cb_partial_recv, 2);
+    dfb_partial_recv.push_back(num_senders);
 
-    // 3. Wait for compute to produce logit output (cb_topk_val).
-    cb_wait_front(cb_topk_val, 1);
+    // 3. Wait for compute to produce logit output (topk_val).
+    dfb_topk_val.wait_front(1);
 
     if (!is_collector) {
         // Non-collector worker: send logit+index tiles to collector
-        uint32_t val_l1 = get_read_ptr(cb_topk_val);
-        uint32_t ind_l1 = get_read_ptr(cb_index);
+        uint32_t val_l1 = dfb_topk_val.get_read_ptr();
+        uint32_t ind_l1 = dfb_index.get_read_ptr();
 
-        // Use our own CB8/CB9 base addresses — identical L1 layout on all worker cores
-        uint32_t coll_val_base = get_write_ptr(cb_gathered_val);
+        // Use our own gathered_val/gathered_ind base addresses — identical L1 layout on all worker cores
+        uint32_t coll_val_base = dfb_gathered_val.get_write_ptr();
         uint32_t coll_val_dst_l1 = coll_val_base + worker_gather_slot * tile_size;
-        uint64_t coll_val_noc = get_noc_addr(collector_phys_x, collector_phys_y, coll_val_dst_l1);
-        noc_async_write(val_l1, coll_val_noc, tile_size);
+        noc.async_write(
+            CoreLocalMem<uint32_t>(val_l1),
+            UnicastEndpoint{},
+            tile_size,
+            {},
+            {.noc_x = collector_phys_x, .noc_y = collector_phys_y, .addr = coll_val_dst_l1});
 
-        uint32_t coll_ind_base = get_write_ptr(cb_gathered_ind);
+        uint32_t coll_ind_base = dfb_gathered_ind.get_write_ptr();
         uint32_t coll_ind_dst_l1 = coll_ind_base + worker_gather_slot * tile_size;
-        uint64_t coll_ind_noc = get_noc_addr(collector_phys_x, collector_phys_y, coll_ind_dst_l1);
-        noc_async_write(ind_l1, coll_ind_noc, tile_size);
+        noc.async_write(
+            CoreLocalMem<uint32_t>(ind_l1),
+            UnicastEndpoint{},
+            tile_size,
+            {},
+            {.noc_x = collector_phys_x, .noc_y = collector_phys_y, .addr = coll_ind_dst_l1});
 
-        noc_async_write_barrier();
+        noc.async_write_barrier();
 
         // Signal collector
-        uint64_t coll_sem_noc = get_noc_addr(collector_phys_x, collector_phys_y, get_semaphore(sem_topk_ready));
-        noc_semaphore_inc(coll_sem_noc, 1);
-        noc_async_atomic_barrier();
+        Semaphore<> coll_sem(sem::topk_ready);
+        coll_sem.up(noc, collector_phys_x, collector_phys_y, 1);
+        noc.async_atomic_barrier();
 
-        cb_pop_front(cb_topk_val, 1);
-        cb_pop_front(cb_index, 1);
+        dfb_topk_val.pop_front(1);
+        dfb_index.pop_front(1);
         return;
     }
 
@@ -237,16 +241,16 @@ void kernel_main() {
     // COLLECTOR PATH (continues from worker)
     // ============================================================
 
-    // 4. Copy own logit+index tiles to gathered CB at slot 0 (collector = group 0)
+    // 4. Copy own logit+index tiles to gathered DFBs at slot 0 (collector = group 0)
     {
-        uint32_t own_val_l1 = get_read_ptr(cb_topk_val);
-        uint32_t own_ind_l1 = get_read_ptr(cb_index);
+        uint32_t own_val_l1 = dfb_topk_val.get_read_ptr();
+        uint32_t own_ind_l1 = dfb_index.get_read_ptr();
 
-        cb_reserve_back(cb_gathered_val, num_groups);
-        cb_reserve_back(cb_gathered_ind, num_groups);
+        dfb_gathered_val.reserve_back(num_groups);
+        dfb_gathered_ind.reserve_back(num_groups);
 
-        uint32_t gathered_val_base = get_write_ptr(cb_gathered_val);
-        uint32_t gathered_ind_base = get_write_ptr(cb_gathered_ind);
+        uint32_t gathered_val_base = dfb_gathered_val.get_write_ptr();
+        uint32_t gathered_ind_base = dfb_gathered_ind.get_write_ptr();
 
         volatile tt_l1_ptr uint32_t* src_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own_val_l1);
         volatile tt_l1_ptr uint32_t* dst_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gathered_val_base);
@@ -260,29 +264,28 @@ void kernel_main() {
             dst_ind[w] = src_ind[w];
         }
 
-        cb_pop_front(cb_topk_val, 1);
-        cb_pop_front(cb_index, 1);
+        dfb_topk_val.pop_front(1);
+        dfb_index.pop_front(1);
     }
 
     // 5. Wait for other 3 workers' topk results
-    volatile tt_l1_ptr uint32_t* topk_sem =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_topk_ready));
-    noc_semaphore_wait(topk_sem, num_groups - 1);
-    noc_semaphore_set(topk_sem, 0);
+    Semaphore<> topk_sem(sem::topk_ready);
+    topk_sem.wait(num_groups - 1);
+    topk_sem.set(0);
 
-    cb_push_back(cb_gathered_val, num_groups);
-    cb_push_back(cb_gathered_ind, num_groups);
+    dfb_gathered_val.push_back(num_groups);
+    dfb_gathered_ind.push_back(num_groups);
 
-    // 6. Wait for compute to produce final output (2 tiles in cb_final_out)
-    cb_wait_front(cb_final_out, 2);
-    uint32_t final_out_l1 = get_read_ptr(cb_final_out);
+    // 6. Wait for compute to produce final output (2 tiles in final_out)
+    dfb_final_out.wait_front(2);
+    uint32_t final_out_l1 = dfb_final_out.get_read_ptr();
 
     // 7. Produce dispatch outputs: indices (uint16 RM) + weights (bf16 RM)
     constexpr uint32_t data_size = k_padded * 2;
 
-    // Use cb_dispatch as scratch storage.
-    cb_reserve_back(cb_dispatch, 1);
-    uint32_t scratch = get_write_ptr(cb_dispatch);
+    // Use dispatch as scratch storage.
+    dfb_dispatch.reserve_back(1);
+    uint32_t scratch = dfb_dispatch.get_write_ptr();
     uint32_t idx_base = scratch;
     uint32_t wgt_base = scratch + 32 * k_padded * 2;
 
@@ -305,22 +308,20 @@ void kernel_main() {
         }
     }
 
-    // Complete the CB reserve/push lifecycle
-    cb_push_back(cb_dispatch, 1);
+    // Complete the DFB reserve/push lifecycle
+    dfb_dispatch.push_back(1);
 
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
-    const auto idx_ag = TensorAccessor(indices_rm_accessor_args, indices_rm_addr, aligned_page_size);
-    const auto wgt_ag = TensorAccessor(weights_rm_accessor_args, weights_rm_addr, aligned_page_size);
+    const auto idx_ag = TensorAccessor(tensor::indices_rm);
+    const auto wgt_ag = TensorAccessor(tensor::weights_rm);
     for (uint32_t p = 0; p < 32; p++) {
-        noc_async_write_page(p, idx_ag, idx_base + p * data_size);
-        noc_async_write_page(p, wgt_ag, wgt_base + p * data_size);
+        noc.async_write(CoreLocalMem<uint32_t>(idx_base + p * data_size), idx_ag, data_size, {}, {.page_id = p});
+        noc.async_write(CoreLocalMem<uint32_t>(wgt_base + p * data_size), wgt_ag, data_size, {}, {.page_id = p});
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 
-    // Clean up CB lifecycle
-    cb_wait_front(cb_dispatch, 1);
-    cb_pop_front(cb_dispatch, 1);
+    // Clean up DFB lifecycle
+    dfb_dispatch.wait_front(1);
+    dfb_dispatch.pop_front(1);
 
-    cb_pop_front(cb_final_out, 2);
+    dfb_final_out.pop_front(2);
 }

@@ -13,13 +13,14 @@
 #include "ttnn/types.hpp"
 #include <tt_stl/span.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::data_movement {
 
 struct PermuteDeviceOperation {
     struct operation_attributes_t {
-        const SmallVector<uint32_t> dims;
+        const ttsl::SmallVector<uint32_t> dims;
         const MemoryConfig output_mem_config;
         const float pad_value = 0.0f;
     };
@@ -28,13 +29,13 @@ struct PermuteDeviceOperation {
         std::optional<Tensor> optional_output_tensor;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
 
     using tensor_return_value_t = Tensor;
 
     // Row-major tensor where the last dimension is not moved in the permutation.
     struct MultiCoreRowInvariant {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -42,7 +43,7 @@ struct PermuteDeviceOperation {
 
     // Row-major tensor where the last dimension is moved in the permutation.
     struct MultiCoreBlockedGeneric {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -51,7 +52,7 @@ struct PermuteDeviceOperation {
     // Tiled tensor where both tile dimensions stay in the last two positions
     // (either identity or WH swap).
     struct MultiCoreTileInvariant {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -60,7 +61,7 @@ struct PermuteDeviceOperation {
     // Tiled tensor where only one of the tile dimensions is moved out of the
     // last two positions.
     struct MultiCoreTileRowInvariant {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -68,7 +69,7 @@ struct PermuteDeviceOperation {
 
     // Tiled tensor where both tile dimensions are moved in the permutation.
     struct MultiCoreTiledGeneric {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -90,7 +91,6 @@ struct PermuteDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 };
@@ -99,7 +99,7 @@ struct PermuteDeviceOperation {
 namespace ttnn::prim {
 ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t permute(
     const Tensor& input_tensor,
-    const SmallVector<uint32_t>& dims,
+    const ttsl::SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
     float pad_value = 0.0f);

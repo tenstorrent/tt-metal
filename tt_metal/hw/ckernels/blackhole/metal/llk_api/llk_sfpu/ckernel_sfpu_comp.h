@@ -4,22 +4,57 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_is_fp16_zero.h"
+#include "llk_math_eltwise_unary_sfpu.h"
+#include "ckernel_sfpu_is_fp16_zero.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
+#include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_sfpu_types.h"
+#include "sfpi.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
+inline void equal_zero_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+inline void greater_than_equal_zero_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+inline void greater_than_zero_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+inline void less_than_equal_zero_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+inline void less_than_zero_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+inline void not_equal_zero_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp() {
-    constexpr uint V = p_sfpu::LREG0;
-    constexpr uint ABS_V = p_sfpu::LREG2;
-    constexpr uint INF = p_sfpu::LREG5;
-    constexpr uint BFLOAT16_INF = 0x7f80;
+    constexpr std::uint32_t V = p_sfpu::LREG0;
+    constexpr std::uint32_t ABS_V = p_sfpu::LREG2;
+    constexpr std::uint32_t INF = p_sfpu::LREG5;
+    constexpr std::uint32_t BFLOAT16_INF = 0x7f80;
 
     if constexpr (
         COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_equal_zero ||
@@ -150,51 +185,51 @@ inline void calculate_comp_int() {
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_uint16() {
     static_assert((COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero));
-    constexpr int check = ((COMP_MODE == SfpuType::equal_zero) ? SFPSETCC_MOD1_LREG_EQ0 : SFPSETCC_MOD1_LREG_NE0);
+    // UInt16 values live in the low 16 bits of the dest word; DataLayout::U16 loads/stores them
+    // directly (SFPLOAD/SFPSTORE mod = UINT16), matching the InstrModLoadStore::LO16 path.
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // load in conditional uint16 value
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
-        // initially put 0 into output
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-        // if (REG0 == 0)
-        TTI_SFPSETCC(0, 0, 0, check);
-        // load in (int) 1
-        TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x0001);
-        // end_if
-        TTI_SFPENCC(0, 0, 0, 0);
-        // store result
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
+        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U16>();
+        if constexpr (COMP_MODE == SfpuType::equal_zero) {
+            vUInt r = 0;
+            v_if(v == 0) { r = 1; }
+            v_endif;
+            dst_reg[0].mode<sfpi::DataLayout::U16>() = r;
+        } else {
+            vUInt r = 1;
+            v_if(v == 0) { r = 0; }
+            v_endif;
+            dst_reg[0].mode<sfpi::DataLayout::U16>() = r;
+        }
         dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_eqz_uint32() {
-    int scalar = -5;  // used for shift operation
-    _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
+    // UInt32 values occupy the full dest word; DataLayout::U32 loads/stores them
+    // directly (SFPLOAD/SFPSTORE mod = UINT32). eqz/nez are representation-agnostic
+    // (only a compare against the all-zero word), so a plain unsigned compare works.
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_SFPLZ(0, 0, 1, 4);    // result in lreg1 is leading zero count
-        TTI_SFPSHFT(0, 2, 1, 0);  // 32 >> 5 = 1 else 0
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
+        vUInt r = 0;
+        v_if(v == 0) { r = 1; }
+        v_endif;
+        dst_reg[0].mode<sfpi::DataLayout::U32>() = r;
         dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_nez_uint32() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        // initially put 0 into output
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-        // if (REG0 != 0)
-        TTI_SFPSETCC(0, 0, 0, SFPSETCC_MOD1_LREG_NE0);
-        // load in (int) 1
-        TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x0001);
-        // end_if
-        TTI_SFPENCC(0, 0, 0, 0);
-        // store result
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        vUInt v = dst_reg[0].mode<sfpi::DataLayout::U32>();
+        vUInt r = 0;
+        v_if(v != 0) { r = 1; }
+        v_endif;
+        dst_reg[0].mode<sfpi::DataLayout::U32>() = r;
         dst_reg++;
     }
 }
@@ -221,5 +256,240 @@ inline void calculate_comp_unary_int(int scalar) {
     }
 }
 
+template <SfpuType COMP_MODE>
+sfpi_inline void apply_unary_int_comp(sfpi::vInt& v, int scalar, sfpi::vInt& out_val);
+
+// a[i] != scalar
+template <>
+sfpi_inline void apply_unary_int_comp<SfpuType::unary_ne>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
+{
+    v_if (v != scalar)
+    {
+        out_val = 1;
+    }
+    v_endif;
+}
+
+// a[i] == scalar
+template <>
+sfpi_inline void apply_unary_int_comp<SfpuType::unary_eq>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
+{
+    v_if (v == scalar)
+    {
+        out_val = 1;
+    }
+    v_endif;
+}
+
+// a[i] > scalar
+template <>
+sfpi_inline void apply_unary_int_comp<SfpuType::unary_gt>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
+{
+    const sfpi::vInt s = scalar;
+    v_if (v >= 0 && s < 0)
+    {
+        out_val = 1;
+    }
+    v_elseif (v < 0 && s >= 0)
+    {
+        out_val = 0;
+    }
+    v_elseif (v > s)
+    {
+        out_val = 1;
+    }
+    v_endif;
+}
+
+// a[i] < scalar
+template <>
+sfpi_inline void apply_unary_int_comp<SfpuType::unary_lt>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
+{
+    const sfpi::vInt s = scalar;
+    v_if (v >= 0 && s < 0)
+    {
+        out_val = 0;
+    }
+    v_elseif (v < 0 && s >= 0)
+    {
+        out_val = 1;
+    }
+    v_elseif (v < s)
+    {
+        out_val = 1;
+    }
+    v_endif;
+}
+
+// a[i] >= scalar
+template <>
+sfpi_inline void apply_unary_int_comp<SfpuType::unary_ge>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
+{
+    const sfpi::vInt s = scalar;
+    v_if (v >= 0 && s < 0)
+    {
+        out_val = 1;
+    }
+    v_elseif (v < 0 && s >= 0)
+    {
+        out_val = 0;
+    }
+    v_elseif (v >= s)
+    {
+        out_val = 1;
+    }
+    v_endif;
+}
+
+// a[i] <= scalar
+template <>
+sfpi_inline void apply_unary_int_comp<SfpuType::unary_le>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
+{
+    const sfpi::vInt s = scalar;
+    v_if (v < 0 && s >= 0)
+    {
+        out_val = 1;
+    }
+    v_elseif (v >= 0 && s < 0)
+    {
+        out_val = 0;
+    }
+    v_elseif (v <= s)
+    {
+        out_val = 1;
+    }
+    v_else
+    {
+        out_val = 0;
+    }
+    v_endif;
+}
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+sfpi_inline void _calculate_comp_unary_int_(int scalar)
+{
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        sfpi::vInt v   = sfpi::dst_reg[0];
+        sfpi::vInt val = 0;
+
+        apply_unary_int_comp<COMP_MODE>(v, scalar, val);
+
+        sfpi::dst_reg[0] = val;
+        sfpi::dst_reg++;
+    }
+}
+
+template <SfpuType COMP_MODE>
+sfpi_inline void apply_unary_float_comp(sfpi::vFloat v, sfpi::vFloat scalar, sfpi::vFloat& out_val);
+
+// a[i] == scalar
+template <>
+sfpi_inline void apply_unary_float_comp<SfpuType::unary_eq>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
+{
+    v_if (v == s)
+    {
+        out_val = 1.0f;
+    }
+    v_else
+    {
+        out_val = 0.0f;
+    }
+    v_endif;
+}
+
+// a[i] != scalar
+template <>
+sfpi_inline void apply_unary_float_comp<SfpuType::unary_ne>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
+{
+    v_if (v == s)
+    {
+        out_val = 0.0f;
+    }
+    v_else
+    {
+        out_val = 1.0f;
+    }
+    v_endif;
+}
+
+// a[i] > scalar
+template <>
+sfpi_inline void apply_unary_float_comp<SfpuType::unary_gt>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
+{
+    v_if (v > s)
+    {
+        out_val = 1.0f;
+    }
+    v_else
+    {
+        out_val = 0.0f;
+    }
+    v_endif;
+}
+
+// a[i] < scalar
+template <>
+sfpi_inline void apply_unary_float_comp<SfpuType::unary_lt>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
+{
+    v_if (v < s)
+    {
+        out_val = 1.0f;
+    }
+    v_else
+    {
+        out_val = 0.0f;
+    }
+    v_endif;
+}
+
+// a[i] >= scalar
+template <>
+sfpi_inline void apply_unary_float_comp<SfpuType::unary_ge>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
+{
+    v_if (v >= s)
+    {
+        out_val = 1.0f;
+    }
+    v_else
+    {
+        out_val = 0.0f;
+    }
+    v_endif;
+}
+
+// a[i] <= scalar
+template <>
+sfpi_inline void apply_unary_float_comp<SfpuType::unary_le>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
+{
+    v_if (v <= s)
+    {
+        out_val = 1.0f;
+    }
+    v_else
+    {
+        out_val = 0.0f;
+    }
+    v_endif;
+}
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+sfpi_inline void _calculate_comp_unary_(std::uint32_t value)
+{
+    const sfpi::vFloat s = Converter::as_float(value); // value is the threshold's fp32 bit pattern
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        sfpi::vFloat v   = sfpi::dst_reg[0];
+        sfpi::vFloat val = 0.0f;
+
+        apply_unary_float_comp<COMP_MODE>(v, s, val);
+
+        sfpi::dst_reg[0] = val;
+        sfpi::dst_reg++;
+    }
+}
 }  // namespace sfpu
 }  // namespace ckernel

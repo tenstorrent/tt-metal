@@ -13,6 +13,8 @@ This guide helps developers migrate from legacy data movement APIs to the new De
    - [Circular Buffer Operations](#circular-buffer-operations)
    - [Semaphore Operations](#semaphore-operations)
    - [Memory Access](#memory-access)
+     - [Local-to-Local Copies (NoC Loopback)](#local-to-local-copies-noc-loopback)
+     - [Addressing a Tensor by Bank](#addressing-a-tensor-by-bank)
    - [Zeroing Memory](#zeroing-memory)
 5. [Complete Migration Examples](#complete-migration-examples)
 6. [Troubleshooting](#troubleshooting)
@@ -74,8 +76,9 @@ CoreLocalMem<uint32_t> mem(address);
 mem[0] = value;              // Array-style access
 auto val = *mem;             // Dereference
 mem++;                       // Pointer arithmetic
-auto addr = mem.get_address();
 ```
+
+`CoreLocalMem<T>` (like `Scratchpad<T>` and `LocalTensorAccessor<T>`) does not expose its raw address; see [Raw Addresses](#raw-addresses).
 
 ### `Semaphore`
 
@@ -95,7 +98,9 @@ Endpoints are used as sources or destinations for the `Noc` interface. Depending
 
 - `UnicastEndpoint` - For unicast NoC addresses
 - `MulticastEndpoint` - For multicast NoC addresses
-- `AllocatorBank<AllocatorBankType>` - For DRAM/L1 bank addressing
+- `PageView(accessor)` / `ShardView(accessor)` - For a tensor by page id / shard id
+- `BankView(accessor)` - For a tensor by allocator bank: `{.bank_id, .offset_bytes}`; see [Addressing a Tensor by Bank](#addressing-a-tensor-by-bank)
+- `AllocatorBank<AllocatorBankType>` - Legacy raw bank addressing (`{.bank_id, .addr}` with an absolute bank address), for buffers not bound as a tensor. Prefer `BankView`.
 
 ---
 
@@ -501,12 +506,78 @@ CoreLocalMem<uint32_t> mem(base_addr);
 // Navigate through memory
 auto mid = mem + offset;           // Offset by elements
 auto diff = mid - mem;             // Difference in elements
-auto addr = mid.get_address();     // Get raw address
 
 // Iteration
 for (auto ptr = mem; ptr < end; ++ptr) {
     *ptr = value;
 }
+```
+
+#### Raw Addresses
+
+`CoreLocalMem<T>`, `Scratchpad<T>` and `LocalTensorAccessor<T>` have no raw-address getter. Instead of extracting the address:
+
+- **Element access:** `mem[i]`, `*mem`, `mem->field`. Use `&mem[i]` where an API needs a `T*` (e.g. `__atomic_*` builtins).
+- **Pointer arithmetic:** `pad.local_mem()` returns the region as a `CoreLocalMem<T>`, so `pad.local_mem() + i` points at element `i`.
+- **NoC transfers:** pass the handle itself as either endpoint, with `{.offset_bytes = off}` (bytes). See [Local-to-Local Copies](#local-to-local-copies-noc-loopback) for copies within this core.
+
+#### Local-to-Local Copies (NoC Loopback)
+
+To copy between two buffers in this core's L1 using the NoC, pass the local handles (`CoreLocalMem<T>`, `Scratchpad<T>`, `LocalTensorAccessor<T>`) directly as both endpoints. Do **not** build a loopback `UnicastEndpoint` from this core's own coordinates (`{.noc_x = my_x[...], .noc_y = my_y[...], .addr = ...}`): that needs the raw address, and the handle already says it is local.
+
+A local handle means "this core's L1" in either position:
+- **Local side** (write source / read destination): the handle's L1 address.
+- **NoC side** (read source / write destination): the same region addressed through the NoC from this core, i.e. a loopback.
+
+A `DataflowBuffer` / `CircularBuffer` can be the local side of such a copy, but not the NoC side.
+
+**Legacy API** (loopback read out of a scratchpad into a CB):
+```cpp
+uint32_t pad_addr = ...;
+noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], pad_addr + off), get_write_ptr(cb_id), size_bytes);
+```
+
+**Avoid** (Device 2.0 API, but hand-built loopback endpoint):
+```cpp
+noc.async_read(UnicastEndpoint{}, dfb, size_bytes,
+               {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = pad_addr + off}, {});
+```
+
+**New API:**
+```cpp
+Scratchpad<uint32_t> pad(scratch::my_pad);
+noc.async_read(pad, dfb, size_bytes, {.offset_bytes = off}, {});          // pad -> DFB entry
+noc.async_write(dfb, pad, size_bytes, {}, {.offset_bytes = off});         // DFB entry -> pad
+noc.async_read(pad, CoreLocalMem<uint32_t>(dst_addr), size_bytes, {}, {}); // pad -> any local region
+```
+
+#### Addressing a Tensor by Bank
+
+When a kernel already works in allocator banks (for example the host hands it a bank id and an offset per transfer, as
+DRAM-sharded matmul and reshard do), address the tensor with `BankView`. Pass the bank id and the byte offset **into the
+tensor** in that bank. The bank's location (an L1 bank's worker core, or a DRAM bank and its per-bank offset) comes from
+the bank tables, and the tensor's memory type selects L1 vs DRAM. The kernel never handles the tensor's base address
+or DRAM coordinates. `BankView` can only be the NoC side of a transfer, and it works with the stateful
+`set_async_read_state` / `async_read_with_state` calls.
+
+**Legacy API:**
+```cpp
+uint32_t base = ...;  // tensor base address
+uint64_t src = get_noc_addr_from_bank_id<true>(bank_id, base + offset);
+noc_async_read(src, l1_dst_addr, size_bytes);
+```
+
+**Avoid** (Device 2.0 API, but a raw bank address):
+```cpp
+AllocatorBank<AllocatorBankType::DRAM> bank;
+noc.async_read(bank, dst, size_bytes, {.bank_id = bank_id, .addr = base + offset}, {});
+```
+
+**New API:**
+```cpp
+const auto in1 = TensorAccessor(tensor::in1);
+const BankView in1_bank(in1);
+noc.async_read(in1_bank, dst, size_bytes, {.bank_id = bank_id, .offset_bytes = offset}, {});
 ```
 
 ---
@@ -539,13 +610,45 @@ noc.write_zeros_l1_barrier();              // wait for completion before consumi
 dfb.push_back(1);
 ```
 
-`async_write_zeros(dst, size_bytes, {.offset_bytes = off})` zeroes `size_bytes` starting at `dst.get_write_ptr() + off` (`off` defaults to `0`). `dst` must be a `CircularBuffer` or `DataflowBuffer`.
+`async_write_zeros(dst, size_bytes, {.offset_bytes = off})` zeroes `size_bytes` starting at the destination's base plus `off` (`off` defaults to `0`). `dst` may be a `CircularBuffer`, `DataflowBuffer`, `CoreLocalMem<T>`, `Scratchpad<T>`, or `LocalTensorAccessor<T>`, and the base is:
 
-Zeroing a CB/DFB entry is the common case: legacy kernels obtained the zero target's address from a CB (e.g. `get_write_ptr(cb_id)`), so the migrated form zeroes that same CB/DFB entry directly.
+| `dst` | base |
+|---|---|
+| `CircularBuffer` / `DataflowBuffer` | `get_write_ptr()` |
+| `Scratchpad<T>` / `LocalTensorAccessor<T>` | start of the local region |
+| `CoreLocalMem<T>` | where the handle points |
+
+`offset_bytes` is in **bytes** for every type, including the typed handles whose `operator[]` indexes in elements.
+
+Zeroing a CB/DFB entry is the common case: legacy kernels obtained the zero target's address from a CB (e.g. `get_write_ptr(cb_id)`), so the migrated form zeroes that same CB/DFB entry directly. The raw L1 handles cover the case where the kernel has no CB/DFB to borrow:
+
+```cpp
+Noc noc;
+
+Scratchpad<uint32_t> pad(scratch::my_pad);
+noc.async_write_zeros(pad, pad.size_in_bytes());           // whole region
+noc.async_write_zeros(pad, 64, {.offset_bytes = 128});     // sub-range
+
+LocalTensorAccessor<uint32_t> lta(tensor::my_local_tensor);
+noc.async_write_zeros(lta, bytes);
+
+CoreLocalMem<uint32_t> mem(addr);
+noc.async_write_zeros(mem, bytes);
+
+noc.write_zeros_l1_barrier();                              // one barrier covers the batch
+```
+
+#### Alignment and bounds
+
+- **Destination bytes are undefined until the barrier returns.** Do not read or write the zeroed window between `async_write_zeros` and `write_zeros_l1_barrier()`.
+- **Alignment:** on Wormhole/Blackhole the zero is a NoC loopback read from the 32B-aligned hardware zeros region, so the destination address (base + `offset_bytes`) must be `NOC_L1_READ_ALIGNMENT_BYTES` (**16**) aligned. On Quasar the zero is an overlay iDMA transaction rather than a NoC transfer, so the NoC alignment constants do not apply and there is no alignment requirement.
+- **Bounds:** `offset_bytes + size_bytes` must stay inside the region — this is the caller's responsibility and is not checked. `Scratchpad` asserts that `offset_bytes` alone is in range, but no destination type checks it against the transfer length, so an oversized `size_bytes` will run past the end of the region into whatever is next in L1.
 
 #### Zero pages of a DRAM tensor
 
-The DRAM overload streams zeros from a pre-zeroed L1 source, read from its **front (read) pointer**. A CB/DFB is required to source the zeros (the reserved L1 zeros region is reclaimed on Quasar). **Reuse a `DataflowBuffer` (or `CircularBuffer`) the kernel already has** — do not allocate one solely for this if possible, since CB/DFB consumes Quasar tile counter resources. Zero one entry, `push_back`/`wait_front` it to the front before streaming, then `pop_front` to release:
+The DRAM overload streams zeros from a pre-zeroed L1 source (the reserved L1 zeros region is reclaimed on Quasar). The `scratch` argument accepts the same five types as the local-L1 overload.
+
+For a **`CircularBuffer` or `DataflowBuffer`** the zeros are read from its **front (read) pointer**, while overload (1) writes its **write** pointer — hence the `push_back`/`wait_front` handoff below. **Reuse a `DataflowBuffer` (or `CircularBuffer`) the kernel already has** — do not allocate one solely for this if possible, since CB/DFB consumes Quasar tile counter resources. Zero one entry, `push_back`/`wait_front` it to the front before streaming, then `pop_front` to release:
 ```cpp
 Noc noc;
 DataflowBuffer dfb(dfb_id);              // a DFB the kernel already owns
@@ -572,7 +675,23 @@ dfb.pop_front(1);                        // release; the buffer is left as it wa
 
 **Each call zeroes within a single page:** `offset_bytes + size_bytes` must not exceed the tensor's aligned page size. Zero a multi-page region by looping over `page_id`.
 
-Any buffer the kernel already owns can be reused (i.e. it needn't be one dedicated to zeroing). The pre-zeroed prefix must cover at least `min(page_size, NOC_MAX_BURST_SIZE)` bytes. This overload pairs with `write_zeros_dram_barrier()`.
+For the **raw L1 handles** (`CoreLocalMem`, `Scratchpad`, `LocalTensorAccessor`) the source and destination addresses are the same, so neither the read/write-pointer distinction nor the handoff applies — zero it, barrier, then pass the same handle. This is the only single-kernel form available on Quasar, where a DM kernel cannot self-loop a DFB:
+
+```cpp
+Noc noc;
+Scratchpad<uint32_t> pad(scratch::pad);
+const auto out = TensorAccessor(tensor::out);
+
+noc.async_write_zeros(pad, pad.size_in_bytes());   // 1. pre-zero the L1 source
+noc.write_zeros_l1_barrier();
+
+for (uint32_t p = page_start; p < page_end; ++p) { // 2. stream it to DRAM pages
+    noc.async_write_zeros(out, page_size, {.page_id = p}, pad);
+}
+noc.write_zeros_dram_barrier();
+```
+
+Any buffer the kernel already owns can be reused (i.e. it needn't be one dedicated to zeroing). The pre-zeroed prefix must cover at least `min(page_size, NOC_MAX_BURST_SIZE)` bytes; this is asserted for a `DataflowBuffer` (via `get_entry_size()`) and is the caller's responsibility for the other scratch types. This overload pairs with `write_zeros_dram_barrier()`.
 
 #### Barriers and the Quasar command-buffer contract
 

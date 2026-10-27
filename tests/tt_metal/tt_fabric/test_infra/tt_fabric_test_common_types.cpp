@@ -19,7 +19,7 @@ std::string format_device_label(const FabricNodeId& node_id) {
     auto tray_id = psd.get_tray_id(asic_id);
     auto asic_location = psd.get_asic_location(asic_id);
     auto hostname = psd.get_host_name_for_asic(asic_id);
-    auto rank = psd.get_rank_for_hostname(hostname);
+    auto rank = psd.get_mpi_rank_for_asic(asic_id);
     return fmt::format("{} [{}(R{})/T{}/N{}]", node_id, hostname, rank, *tray_id, *asic_location);
 }
 

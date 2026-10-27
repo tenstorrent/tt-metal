@@ -10,6 +10,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail {
 
@@ -39,9 +40,15 @@ struct RingStridedReduceScatterMeshWorkloadFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
+}  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail
+
+// Defined in namespace ttnn (strided_reduce_scatter_async_program.cpp). The detail factory calls these.
+namespace ttnn {
+
 // Builder function for ring topology - creates program artifacts
-StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_program_artifacts(
-    tt::tt_metal::Program& program,
+operations::experimental::ccl::strided_reduce_scatter_async::detail::StridedReduceScatterProgramArtifacts
+build_ring_strided_reduce_scatter_async_program_artifacts(
+    tt::tt_metal::ProgramDescriptor& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
@@ -67,11 +74,21 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     uint32_t mm_block_wt,
     std::optional<uint32_t> mm_N_full_block_wt,
     std::optional<uint32_t> chunk_width_in_mm_blocks,
+    // Rolling L1 window over the fused matmul's output, in M blocks. When set, the input tensor
+    // holds only mm_window_blocks M blocks per core (slot m % mm_window_blocks) instead of the whole
+    // matmul result, so its height no longer describes the reduce-scatter's geometry — pass the true
+    // height in tiles as mm_logical_Ht. Both unset = the input tensor is the full matmul output.
+    std::optional<uint32_t> mm_window_blocks = std::nullopt,
+    std::optional<uint32_t> mm_logical_Ht = std::nullopt,
+    // Caller-owned RS->MM credit array for the rolling window; allocated per program when absent.
+    const std::optional<const Tensor>& mm_credit_counters = std::nullopt,
     // Optional fused addcmul at the final RS write step.
     // output = addcmul_a + fused_ternary_scalar * rs_result * addcmul_b
     std::optional<float> fused_ternary_scalar = std::nullopt,
-    const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,   // residual a [M, D/tp]
-    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt);  // gate b [1, D/tp]
+    const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,  // residual a [M, D/tp]
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,  // gate b [1, D/tp]
+    // Caller-owned scratch for the per-MM-core progress counters (fused MM->RS signaling only): uint32
+    const std::optional<const Tensor>& mm_progress_counters = std::nullopt);
 
 // Override runtime arguments helper for ring topology
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
@@ -93,4 +110,4 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     const std::optional<const Tensor>& addcmul_a = std::nullopt,
     const std::optional<const Tensor>& addcmul_b = std::nullopt);
 
-}  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail
+}  // namespace ttnn

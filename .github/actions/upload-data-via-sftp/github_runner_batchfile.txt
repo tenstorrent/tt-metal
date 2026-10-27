@@ -1,0 +1,2 @@
+put -r generated/github_runner/*.json
+ls -hal

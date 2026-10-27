@@ -14,5 +14,6 @@ set(TTNN_OP_CORE_API_HEADERS
     to_dtype/to_dtype_op.hpp
     to_layout/to_layout_op.hpp
     compute_kernel/compute_kernel_config.hpp
+    data_movement_kernel/datamovement_kernel_config.hpp
     to_memory_config/to_memory_config_op.hpp
 )

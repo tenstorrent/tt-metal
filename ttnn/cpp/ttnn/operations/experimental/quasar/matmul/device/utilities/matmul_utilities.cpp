@@ -76,7 +76,7 @@ uint32_t estimate_interm_tile_size(
     return result;
 }
 
-uint32_t get_max_l1_space(const tt::tt_metal::Tensor& input_tensor_a) {
+uint32_t get_max_l1_space(const ttnn::Tensor& input_tensor_a) {
     auto* device = input_tensor_a.device();
     auto lowest_address = device->lowest_occupied_compute_l1_address();
     uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
@@ -142,7 +142,7 @@ ttnn::Shape compute_matmul_output_shape(
 
     // Handle the vector matmul case: if a_rank == 1, remove the second-to-last dimension
     if (a_rank == 1 && output_shape.rank() > 1) [[unlikely]] {
-        ttnn::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
+        ttsl::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
         // Copy all elements except the second-to-last dimension
         size_t dst_idx = 0;
         for (size_t src_idx = 0; src_idx < output_shape.rank(); ++src_idx) {
@@ -155,7 +155,7 @@ ttnn::Shape compute_matmul_output_shape(
 
     // Handle the case where b_rank == 1, remove the last dimension
     if (b_rank == 1) [[unlikely]] {
-        ttnn::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
+        ttsl::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
         for (auto index = 0; index < output_shape.rank() - 1; ++index) {
             new_shape[index] = output_shape[index];
         }
@@ -340,19 +340,23 @@ tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const tt
 }
 
 void get_max_page_size_and_num_pages(
-    tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages) {
+    const tt::tt_metal::distributed::MeshDevice& device,
+    uint32_t num_tiles,
+    uint32_t tile_size,
+    uint32_t& page_size,
+    uint32_t& num_pages) {
     uint64_t total_size = static_cast<uint64_t>(num_tiles) * tile_size;
 
     // TODO(#32477): Remove hardcoding when NOC_MAX_BURST_SIZE is available from HAL
     uint32_t noc_max_page_size;
-    if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+    if (device.arch() == tt::ARCH::WORMHOLE_B0) {
         noc_max_page_size = 8192;
-    } else if (device->arch() == tt::ARCH::BLACKHOLE) {
+    } else if (device.arch() == tt::ARCH::BLACKHOLE) {
         noc_max_page_size = 16384;
     } else {
         TT_THROW(
             "Unsupported architecture for DRAM sharded matmul. Only Wormhole and Blackhole are supported. Got: {}",
-            device->arch());
+            device.arch());
     }
 
     page_size = (noc_max_page_size / tile_size) * tile_size;
@@ -362,28 +366,28 @@ void get_max_page_size_and_num_pages(
     num_pages = total_size / page_size;
 }
 
-void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2, std::vector<CoreCoord>& commons) {
-    for (const CoreCoord& item : v2) {
+void move_common_entries(std::vector<tt::tt_metal::CoreCoord>& v1, std::vector<tt::tt_metal::CoreCoord>& v2, std::vector<tt::tt_metal::CoreCoord>& commons) {
+    for (const tt::tt_metal::CoreCoord& item : v2) {
         if (std::find(v1.begin(), v1.end(), item) != v1.end()) {
             commons.push_back(item);
         }
     }
 
-    for (const CoreCoord& item : commons) {
+    for (const tt::tt_metal::CoreCoord& item : commons) {
         v2.erase(std::remove(v2.begin(), v2.end(), item), v2.end());
     }
 }
 
 void get_optimal_dram_bank_to_reader_assignment(
-    tt::tt_metal::IDevice* device,
-    std::vector<CoreCoord>& all_worker_cores_ordered,
-    CoreRangeSet& all_worker_cores,
+    const tt::tt_metal::distributed::MeshDevice& device,
+    std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
+    tt::tt_metal::CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc) {
-    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
-    std::set<CoreRange> all_cores_set;
+    all_worker_cores_ordered = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    std::set<tt::tt_metal::CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
-        all_cores_set.insert(CoreRange(worker_core));
+        all_cores_set.insert(tt::tt_metal::CoreRange(worker_core));
     }
-    all_worker_cores = CoreRangeSet(all_cores_set);
+    all_worker_cores = tt::tt_metal::CoreRangeSet(all_cores_set);
 }
 }  // namespace ttnn::prim::qsr::dram_sharded_helpers

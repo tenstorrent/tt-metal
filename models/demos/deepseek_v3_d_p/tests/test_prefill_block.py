@@ -7,10 +7,12 @@ Test for TtPrefillBlock — verifies composition of norm → MLA → residual �
 
 Validates output shapes and PCC against torch reference.
 
-Uses HF DeepseekV3Model layer as the reference: creates a model with random weights,
-extracts those weights into our TT state_dict format, and compares forward passes.
+Reference: when a pretrained checkpoint is available the layer's input/output come from a real
+forward over layers 0..layer_idx (as in test_prefill_transformer); otherwise it falls back to a
+randomly-initialized HF reference layer so the test still runs without weights.
 """
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,40 +23,49 @@ from loguru import logger
 from transformers import DynamicCache
 
 import ttnn
-from models.common.utility_functions import hf_cache_layer_kv, is_blackhole, profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import pretrained_mla_weights
+from models.demos.deepseek_v3_d_p.reference.glm_5_3.block import glm_decoder_layer_reference
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
+from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
-    ABC_1K_PATH,
     PROMPT_5K_PATH,
-    PROMPT_25K_PATH,
     create_hf_model,
+    decoder_layer_kwargs,
     extract_layer_state_dict,
     get_4d_causal_mask,
+    load_and_compute_layer_by_layer,
+    mla_kvpe_width,
+    reference_kvpe_for_layer,
     tokenize_prompt_to_isl,
 )
 
-_PROMPT_PATHS = {"abc_1k": ABC_1K_PATH, "prompt_5k": PROMPT_5K_PATH, "prompt_25k": PROMPT_25K_PATH}
-from tests.ttnn.utils_for_testing import comp_pcc
+_PROMPT_PATHS = {"prompt_5k": PROMPT_5K_PATH}
+from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 
 @dataclass(frozen=True)
 class PrefillBlockThresholds:
     dense: float = 0.996
     moe_gate_host: float = 0.996
-    moe_gate_device: float = 0.992
+    # Floor set just under the measured 0.999895 (pcc-prompt_5k, mesh-8x4, deepseek_v3, balanced).
+    moe_gate_device_fp32: float = 0.999
     kvpe_kv: float = 0.999
     kvpe_pe: float = 0.999
 
@@ -81,26 +92,31 @@ def run_model(
     pcc_validation,
     input_source,
     tokenizer,
+    request,
     is_ci_env,
     is_ci_v2_env,
     thresholds: PrefillBlockThresholds,
     determinism_check: bool = False,
     num_iterations: int = 1,
+    use_pretrained: bool = False,
 ):
     if (is_ci_env or is_ci_v2_env) and pcc_validation == False and not determinism_check:
         pytest.skip("Skip non-PCC test in CI to save time")
-    # Kimi's parametrize has no `balanced` entry today (only non_balanced).
-    # Applying this skip would zero out Kimi's CI coverage for this test.
-    # Remove this exception once there's need to test both balanced and non_balanced for Kimi.
-    if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_6":
+    # The routing family this row drives must match the one the adapter declares; crossing
+    # families applies a different affinity function with no error (see the assert).
+    assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
+    # Kimi parametrizes no `balanced` entry (only non_balanced); applying this skip would zero
+    # out its CI coverage. Mistral moved to test_prefill_block_chunked.py. Remove once the
+    # variant gains a balanced row: RotarySetup asserts indexed rope is incompatible with
+    # is_balanced (rope.py).
+    if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_7":
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
 
-    # The 25k-ISL cases only fit L1 on the full 8x4 mesh. There sp_factor=8 keeps the per-chip
-    # sequence at 3200 tokens, so the shared-expert down-projection matmul runs with per_core_M=2.
-    # On the smaller 2x4 meshes the per-chip sequence is 12800 tokens, pushing per_core_M to 5 and
-    # growing the down-matmul output circular buffer to ~2.9 MB — beyond the 1.5 MB L1 (OOM).
-    if isl_total == 25 * 1024 and tuple(mesh_device.shape) != (8, 4):
-        pytest.skip("25k ISL only fits L1 on the full 8x4 mesh; skipping on smaller meshes")
+    # host_gate_all is a local testing aid for sub-256-expert configs (e.g. the 4x4 sub-torus,
+    # where the device grouped-gate's hard 256-expert requirement forces the host gate). It is not CI
+    # coverage; the real device gate already covers the 256-expert meshes that run in CI.
+    if (is_ci_env or is_ci_v2_env) and gate_fallback_mode == GateComputeMode.HOST_ALL:
+        pytest.skip("host_gate_all is a local-only testing aid (sub-256-expert); not run in CI")
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -124,106 +140,182 @@ def run_model(
         f"input_source={input_source}"
     )
 
-    # --- Cache setup ---
-    is_dense = layer_idx < config.first_k_dense_replace
-    cache_root = os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp")
-    balanced_tag = "balanced" if is_balanced else "non_balanced"
-    gate_tag = gate_fallback_mode.value if gate_fallback_mode else "no_gate_fallback"
-    cache_dir = Path(
-        f"{cache_root}/{variant.name}_prefill_block/"
-        f"{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl_{balanced_tag}_{gate_tag}"
-    )
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    # When use_pretrained is requested, load real pretrained weights (mirrors test_prefill_transformer):
+    # load_and_compute_layer_by_layer loads the real layers 0..layer_idx, builds the shared TTNN weight
+    # cache, and returns per-layer snapshots used as the block's input/output reference. Otherwise the
+    # random-weight path below runs, and model_path is never resolved -> no HuggingFace download.
+    if use_pretrained and not variant.supports_pretrained:
+        pytest.skip(f"{variant.name}: pretrained weights not wired")
 
-    init_checker(cache_dir)
-    ttnn_cache_complete = TtPrefillBlock.check_cache_complete(cache_dir, layer_idx, is_dense)
-    torch_ref_cache = cache_dir / f"torch_reference_{input_source}.pt"
+    if use_pretrained:
+        model_path = request.getfixturevalue("model_path")
+        weight_cache_path = request.getfixturevalue("weight_cache_path")
+        is_dense = layer_idx < config.first_k_dense_replace
+        num_layers = layer_idx + 1
+        torch_output = None
+        ref_kvpe = None
+        hf_model = None
 
-    ref_cache_loadable = torch_ref_cache.exists() and (pcc_validation or input_source in _PROMPT_PATHS)
-    need_hf_model = not ttnn_cache_complete or (
-        (pcc_validation or input_source in _PROMPT_PATHS) and not ref_cache_loadable
-    )
-    logger.info(
-        f"Cache status: TTNN={ttnn_cache_complete}, ref_cache={torch_ref_cache.exists()}, "
-        f"need_hf_model={need_hf_model}"
-    )
+        cache_dir = weight_cache_path / f"{sp_factor}x{tp_factor}"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        init_checker(cache_dir)
+        state_dict = {}  # weights come from the prebuilt cache
+        experts_per_chip = variant.model_config.NUM_ROUTED_EXPERTS // (sp_factor * tp_factor)
+        ttnn_cache_complete = TtPrefillBlock.check_cache_complete(cache_dir, layer_idx, is_dense, experts_per_chip)
 
-    # --- Build HF reference model and extract weights ---
-    num_layers = layer_idx + 1
-    hf_model = None
-    if need_hf_model:
-        profiler.start("weights_creation")
-        torch.manual_seed(42)
-        hf_model = create_hf_model(variant, config, num_layers)
-        hf_sd = hf_model.state_dict()
-        state_dict = extract_layer_state_dict(variant, hf_sd, layer_idx, hf_model.layers[layer_idx])
-        profiler.end("weights_creation")
-    else:
-        logger.info("TTNN cache complete, skipping torch weight creation")
-        state_dict = {}
-
-    # --- Resolve torch_input and torch reference (single decision point for ref_cache) ---
-    torch_output = None
-    ref_kvpe = None
-    if ref_cache_loadable:
-        logger.info(f"Loading cached reference from {torch_ref_cache}")
-        profiler.start("reference_loading")
-        ref_cached = torch.load(torch_ref_cache, weights_only=True)
-        torch_input = ref_cached["torch_input"]
-        if pcc_validation:
-            torch_output = ref_cached["torch_output"]
-            ref_kvpe = ref_cached["ref_kvpe"]
-        profiler.end("reference_loading")
-    elif input_source in _PROMPT_PATHS:
-        profiler.start("tokenization")
-        prompt_path = _PROMPT_PATHS[input_source]
-        prompts = load_prompts_from_json(str(prompt_path))
-        prompt_text = prompts[0] if isinstance(prompts, list) else prompts
-        token_ids, attention_mask, tokens = tokenize_prompt_to_isl(
-            tokenizer, max_isl=isl_total, prompt_text=prompt_text
-        )
-        attention_mask = get_4d_causal_mask(attention_mask, causal_only=True)
-        profiler.end("tokenization")
-        logger.info(
-            f"Tokenized {input_source} input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}"
-        )
-        with torch.no_grad():
-            torch_input = hf_model.embed_tokens(token_ids).to(torch.bfloat16)
-        logger.info(f"Embedded input shape: {torch_input.shape}")
-    else:
-        torch.manual_seed(123)
-        torch_input = torch.randn(1, isl_total, emb_dim, dtype=torch.bfloat16)
-
-    if pcc_validation and torch_output is None:
-        profiler.start("torch_reference")
-        logger.info("Running torch reference forward...")
-        position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
-        attention_mask = get_4d_causal_mask(torch.ones(1, isl_total), causal_only=True).to(torch.bfloat16)
-        ref_cache = DynamicCache()
-        with torch.no_grad():
-            layer_out = hf_model.layers[layer_idx](
-                torch_input,
+        if pcc_validation or not ttnn_cache_complete:
+            if input_source in _PROMPT_PATHS:
+                prompts = load_prompts_from_json(str(_PROMPT_PATHS[input_source]))
+                prompt_text = prompts[0] if isinstance(prompts, list) else prompts
+                token_ids, attention_mask, _ = tokenize_prompt_to_isl(
+                    tokenizer, max_isl=isl_total, prompt_text=prompt_text
+                )
+            else:
+                token_ids = torch.randint(0, config.vocab_size, (1, isl_total), dtype=torch.int64)
+                attention_mask = torch.ones(1, isl_total, dtype=torch.int64)
+            result = load_and_compute_layer_by_layer(
+                variant=variant,
+                model_path=model_path,
+                config=config,
+                num_layers=num_layers,
+                token_ids=token_ids,
                 attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=ref_cache,
-                use_cache=True,
+                compute_reference=pcc_validation,
+                build_ttnn_cache=not ttnn_cache_complete,
+                weight_cache_path=cache_dir,
+                mesh_device=mesh_device,
+                seq_len=isl_total,
+                num_links=num_links,
+                topology=topology,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                gate_fallback_mode=gate_fallback_mode,
             )
-            torch_output = layer_out[0]
-        logger.info(f"Torch reference output shape: {torch_output.shape}")
-        if ref_cache is not None:
-            ref_kvpe = hf_cache_layer_kv(ref_cache, layer_idx)[0]
-            logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
-        profiler.end("torch_reference")
+            ttnn_cache_complete = True
+            if pcc_validation:
+                # snapshots are [embed, layer_0_out, ...]: input to layer L is snapshot[L], output snapshot[L+1].
+                torch_input = result.ref_snapshots[layer_idx].to(torch.bfloat16)
+                torch_output = result.ref_snapshots[layer_idx + 1]
+                ref_kvpe = result.ref_kvpe_list[layer_idx]
+        if not pcc_validation:
+            torch.manual_seed(123)
+            torch_input = torch.randn(1, isl_total, emb_dim, dtype=torch.bfloat16)
+    else:
+        # --- Cache setup ---
+        is_dense = layer_idx < config.first_k_dense_replace
+        cache_root = os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp")
+        balanced_tag = "balanced" if is_balanced else "non_balanced"
+        gate_tag = gate_fallback_mode.value if gate_fallback_mode else "no_gate_fallback"
+        cache_dir = Path(
+            f"{cache_root}/{variant.name}_prefill_block/"
+            f"{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl_{balanced_tag}_{gate_tag}"
+        )
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"Saving reference to {torch_ref_cache}")
-        torch.save(
-            {"torch_input": torch_input, "torch_output": torch_output, "ref_kvpe": ref_kvpe},
-            torch_ref_cache,
+        init_checker(cache_dir)
+        ttnn_cache_complete = TtPrefillBlock.check_cache_complete(cache_dir, layer_idx, is_dense)
+        torch_ref_cache = cache_dir / f"torch_reference_{input_source}.pt"
+
+        ref_cache_loadable = torch_ref_cache.exists() and (pcc_validation or input_source in _PROMPT_PATHS)
+        # A cache written before the KVPE fix holds the reference's EXPANDED per-head keys, not the
+        # compressed latent the device stores. Existence alone would reuse it and keep reporting the
+        # -1.0 rows this change removes, so check the stored width and recompute if it is stale --
+        # otherwise the fix is silently bypassed on every cache a developer already has.
+        if ref_cache_loadable and pcc_validation:
+            expected_kvpe_width = mla_kvpe_width(config)
+            if expected_kvpe_width is not None:
+                probe = torch.load(torch_ref_cache, weights_only=True).get("ref_kvpe")
+                if probe is not None and probe.shape[-1] != expected_kvpe_width:
+                    logger.warning(
+                        f"Cached reference at {torch_ref_cache} stores KVPE of width "
+                        f"{probe.shape[-1]}, expected {expected_kvpe_width} (pre-fix expanded keys); "
+                        f"recomputing the reference instead of reusing it."
+                    )
+                    ref_cache_loadable = False
+        need_hf_model = not ttnn_cache_complete or (
+            (pcc_validation or input_source in _PROMPT_PATHS) and not ref_cache_loadable
+        )
+        logger.info(
+            f"Cache status: TTNN={ttnn_cache_complete}, ref_cache={torch_ref_cache.exists()}, "
+            f"need_hf_model={need_hf_model}"
         )
 
-    # Free HF model early
-    if hf_model is not None:
-        del hf_model
+        # --- Build HF reference model and extract weights ---
+        num_layers = layer_idx + 1
+        hf_model = None
+        if need_hf_model:
+            profiler.start("weights_creation")
+            torch.manual_seed(42)
+            hf_model = create_hf_model(variant, config, num_layers)
+            hf_sd = hf_model.state_dict()
+            state_dict = extract_layer_state_dict(variant, hf_sd, layer_idx, hf_model.layers[layer_idx])
+            profiler.end("weights_creation")
+        else:
+            logger.info("TTNN cache complete, skipping torch weight creation")
+            state_dict = {}
+
+        # --- Resolve torch_input and torch reference (single decision point for ref_cache) ---
+        torch_output = None
+        ref_kvpe = None
+        if ref_cache_loadable:
+            logger.info(f"Loading cached reference from {torch_ref_cache}")
+            profiler.start("reference_loading")
+            ref_cached = torch.load(torch_ref_cache, weights_only=True)
+            torch_input = ref_cached["torch_input"]
+            if pcc_validation:
+                torch_output = ref_cached["torch_output"]
+                ref_kvpe = ref_cached["ref_kvpe"]
+            profiler.end("reference_loading")
+        elif input_source in _PROMPT_PATHS:
+            profiler.start("tokenization")
+            prompt_path = _PROMPT_PATHS[input_source]
+            prompts = load_prompts_from_json(str(prompt_path))
+            prompt_text = prompts[0] if isinstance(prompts, list) else prompts
+            token_ids, attention_mask, tokens = tokenize_prompt_to_isl(
+                tokenizer, max_isl=isl_total, prompt_text=prompt_text
+            )
+            attention_mask = get_4d_causal_mask(attention_mask, causal_only=True)
+            profiler.end("tokenization")
+            logger.info(
+                f"Tokenized {input_source} input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}"
+            )
+            with torch.no_grad():
+                torch_input = hf_model.embed_tokens(token_ids).to(torch.bfloat16)
+            logger.info(f"Embedded input shape: {torch_input.shape}")
+        else:
+            torch.manual_seed(123)
+            torch_input = torch.randn(1, isl_total, emb_dim, dtype=torch.bfloat16)
+
+        if pcc_validation and torch_output is None:
+            profiler.start("torch_reference")
+            logger.info("Running torch reference forward...")
+            position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
+            attention_mask = get_4d_causal_mask(torch.ones(1, isl_total), causal_only=True).to(torch.bfloat16)
+            ref_cache = DynamicCache()
+            # Bound to the layer's own signature, and reused below for the KVPE line.
+            layer_kwargs = decoder_layer_kwargs(
+                hf_model.layers[layer_idx], hf_model, torch_input, attention_mask, position_ids, ref_cache
+            )
+            with torch.no_grad():
+                layer_out = hf_model.layers[layer_idx](torch_input, **layer_kwargs)
+                torch_output = layer_out[0] if isinstance(layer_out, (tuple, list)) else layer_out
+            logger.info(f"Torch reference output shape: {torch_output.shape}")
+            if ref_cache is not None:
+                ref_kvpe = reference_kvpe_for_layer(
+                    hf_model.layers[layer_idx], layer_idx, torch_input, layer_kwargs, ref_cache, config
+                )
+                logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
+            profiler.end("torch_reference")
+
+            logger.info(f"Saving reference to {torch_ref_cache}")
+            torch.save(
+                {"torch_input": torch_input, "torch_output": torch_output, "ref_kvpe": ref_kvpe},
+                torch_ref_cache,
+            )
+
+        # Free HF model early
+        if hf_model is not None:
+            del hf_model
 
     # --- Build TTNN cache if needed ---
     if not ttnn_cache_complete:
@@ -286,9 +378,9 @@ def run_model(
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
 
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=isl_total,
         mesh_shape=mesh_shape,
@@ -370,8 +462,8 @@ def run_model(
         if layer_type == "dense":
             pcc_threshold = thresholds.dense
         else:
-            if gate_fallback_mode == GateComputeMode.DEVICE:
-                pcc_threshold = thresholds.moe_gate_device
+            if gate_fallback_mode == GateComputeMode.DEVICE_FP32:
+                pcc_threshold = thresholds.moe_gate_device_fp32
             else:
                 pcc_threshold = thresholds.moe_gate_host
 
@@ -389,6 +481,45 @@ def run_model(
             _, pe_pcc = comp_pcc(ref_kvpe[:, :, :, kv_lora_rank:].float(), tt_kvpe[:, :, :, kv_lora_rank:].float())
             logger.info(f"KVPE cache KV part PCC: {kv_pcc:.6f} (threshold: {thresholds.kvpe_kv})")
             logger.info(f"KVPE cache PE part PCC: {pe_pcc:.6f} (threshold: {thresholds.kvpe_pe})")
+
+            # A single PCC over the whole tensor cannot say WHERE the error is, and the two failure
+            # shapes need different fixes: a uniform miss is precision/convention, a localised one is
+            # a boundary (last partial chunk, padding tail, final tile). Set KVPE_POSITION_BREAKDOWN=1
+            # to print per-band PCC. Diagnostic only -- off by default, asserts nothing.
+            if os.environ.get("KVPE_POSITION_BREAKDOWN"):
+                ref_pe = ref_kvpe[0, 0, :, kv_lora_rank:].float()
+                dev_pe = tt_kvpe[0, 0, :, kv_lora_rank:].float()
+                ref_kv = ref_kvpe[0, 0, :, :kv_lora_rank].float()
+                dev_kv = tt_kvpe[0, 0, :, :kv_lora_rank].float()
+                seq = ref_pe.shape[0]
+                sp = mesh_shape[sp_axis]
+                per_chip = seq // sp
+                logger.info(f"KVPE position breakdown: seq={seq} sp={sp} per_chip={per_chip} tile=32")
+                logger.info(f"{'band':>16} {'PE PCC':>10} {'KV PCC':>10} {'|ref|max':>10} {'|dev|max':>10}")
+                bands = [
+                    (i * per_chip, (i + 1) * per_chip, f"chip{i} {i*per_chip}-{(i+1)*per_chip}") for i in range(sp)
+                ]
+                # the last chip again, split fine: a tile- or tail-sized error hides inside a 640-row band
+                last = seq - per_chip
+                bands += [
+                    (last + k, min(last + k + 64, seq), f"  tail {last+k}-{min(last+k+64, seq)}")
+                    for k in range(0, per_chip, 128)
+                ]
+                chip_pe_pcc = []
+                for idx, (lo, hi, label) in enumerate(bands):
+                    if hi <= lo:
+                        continue
+                    p = comp_pcc(ref_pe[lo:hi], dev_pe[lo:hi], 0.0)[1]
+                    k = comp_pcc(ref_kv[lo:hi], dev_kv[lo:hi], 0.0)[1]
+                    if idx < sp:  # the per-chip bands come first; the tail bands overlap the last one
+                        chip_pe_pcc.append((float(p), idx))
+                    logger.info(
+                        f"{label:>16} {float(p):>10.6f} {float(k):>10.6f} "
+                        f"{ref_pe[lo:hi].abs().max():>10.3f} {dev_pe[lo:hi].abs().max():>10.3f}"
+                    )
+                worst = min(chip_pe_pcc)[1]
+                logger.info(f"KVPE worst SP band: chip{worst} (rows {worst*per_chip}-{(worst+1)*per_chip})")
+
             assert kv_pcc > thresholds.kvpe_kv, f"KVPE KV PCC {kv_pcc:.6f} below threshold {thresholds.kvpe_kv}"
             assert pe_pcc > thresholds.kvpe_pe, f"KVPE PE PCC {pe_pcc:.6f} below threshold {thresholds.kvpe_pe}"
 
@@ -410,206 +541,302 @@ def run_model(
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
 
 
+# ---------------------------------------------------------------------------
+# GLM-5.3 block test
+# ---------------------------------------------------------------------------
+# Every GLM layer runs sparse DSA (lightning-indexer top-2048 + sparse SDPA); "dense"/"moe" here refers
+# only to the FFN — layers 0-2 have a dense FFN, layers 3-77 a 256-expert MoE. Both block types exercise
+# sparse SDPA (via ttMLA's DSA path); they differ only in the FFN.
+#
+# GLM has no runnable HF reference model wired (adapter reference_model_cls is None), so it can't use
+# run_model()/create_hf_model() like the DeepSeek/Kimi block tests. Instead it COMPOSES the CPU
+# references GLM already owns (reference.glm_5_3.block.glm_decoder_layer_reference): x + MLA_cpu(attn_norm(x))
+# then + FFN(ffn_norm(x+mla_out)) — exactly TtPrefillBlock.forward.
+# Why not generalize run_model to take this composed ref? run_model's PCC path is built around
+# create_hf_model() + a single HF module; GLM's only full HF module (GlmMoeDsaModel) is non-absorbed
+# (256-expert, dense attention) and too slow to run per-block (~15-25h) — the absorbed CPU composition
+# runs in ~7s/layer. Folding this in would mean adding a pluggable "reference callable" seam to the
+# shared runner; a fair future cleanup, but out of scope here (keeps the fast path off the shared path).
+#
+# Weights (like the transformer tests): LOAD real weights from the prebuilt ttnn cache when present &
+# complete (device) + matching host weights from the checkpoint (reference); else RANDOM for both. Never
+# (re)builds the cache (slow: 256-expert conversion / FP8 dequant — a separate staging step).
+GLM_BLOCK_OUTPUT_PCC = 0.98
+
+
+def _first_full_moe_layer(config):
+    # First MoE layer (>= first_k_dense_replace) that OWNS a full indexer. A GLM-5.3 "shared" indexer
+    # layer reuses a prior full layer's top-k, which an isolated single block cannot supply; a full
+    # layer computes its own. glm_5_3 layers 3-5 are shared -> returns 6.
+    idx = config.first_k_dense_replace
+    while indexer_layer_is_reused(config, idx):
+        idx += 1
+    return idx
+
+
+def _glm_norm_weight(hidden, seed):
+    return (torch.randn(hidden, generator=torch.Generator().manual_seed(seed)) * 0.1 + 1.0).to(torch.bfloat16)
+
+
+def _glm_random_dense_ffn_weights(hidden, intermediate, seed):
+    g = torch.Generator().manual_seed(seed)
+    return {
+        "gate_proj": (torch.randn(intermediate, hidden, generator=g) * hidden**-0.5).to(torch.bfloat16),
+        "up_proj": (torch.randn(intermediate, hidden, generator=g) * hidden**-0.5).to(torch.bfloat16),
+        "down_proj": (torch.randn(hidden, intermediate, generator=g) * intermediate**-0.5).to(torch.bfloat16),
+    }
+
+
+def _glm_random_moe_weights(hidden, moe_intermediate, n_routed, seed):
+    g = torch.Generator().manual_seed(seed)
+    hs, ds = hidden**-0.5, moe_intermediate**-0.5
+
+    def _expert():
+        return {
+            "gate_proj": (torch.randn(moe_intermediate, hidden, generator=g) * hs).to(torch.bfloat16),
+            "up_proj": (torch.randn(moe_intermediate, hidden, generator=g) * hs).to(torch.bfloat16),
+            "down_proj": (torch.randn(hidden, moe_intermediate, generator=g) * ds).to(torch.bfloat16),
+        }
+
+    gate_weights = {
+        "weight": (torch.randn(n_routed, hidden, generator=g) * hs).to(torch.bfloat16),
+        "e_score_correction_bias": (torch.randn(n_routed, generator=g) * 0.01).to(torch.float32),
+    }
+    return gate_weights, [_expert() for _ in range(n_routed)], _expert()
+
+
+def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
+    """Load layer-``layer_idx`` host weights from a local checkpoint dir; fp8 tensors are block-dequantized."""
+    from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.weights import _dequant_fp8
+
+    model_dir = str(model_dir)
+    prefix = f"model.layers.{layer_idx}."
+    # MLA + indexer via the sparse-MLA loader (resolve this layer's local shards; dequant is a no-op for bf16).
+    weight_map = json.load(open(Path(model_dir) / "model.safetensors.index.json"))["weight_map"]
+    shards = sorted({v for k, v in weight_map.items() if k.startswith(prefix)})
+    mla_weights = pretrained_mla_weights(
+        config, layer=layer_idx, checkpoint_path=[str(Path(model_dir) / s) for s in shards]
+    )
+    norms = load_hf_state_dict_filtered(model_dir, [f"{prefix}input_layernorm.", f"{prefix}post_attention_layernorm."])
+    attn_norm_w = norms[f"{prefix}input_layernorm.weight"].to(torch.bfloat16)
+    ffn_norm_w = norms[f"{prefix}post_attention_layernorm.weight"].to(torch.bfloat16)
+    if is_moe:
+        routed, shared = load_moe_weights_from_hf(model_dir, layer_idx, GLM53Config.NUM_ROUTED_EXPERTS)
+        g = load_hf_state_dict_filtered(model_dir, [f"{prefix}mlp.gate."])
+        gate_weights = {
+            "weight": g[f"{prefix}mlp.gate.weight"].to(torch.bfloat16),
+            "e_score_correction_bias": g[f"{prefix}mlp.gate.e_score_correction_bias"].float(),
+        }
+        moe_weights = {
+            "gate_weights": gate_weights,
+            "routed_expert_weights": routed,
+            "shared_expert_weights": shared,
+        }
+        return mla_weights, attn_norm_w, ffn_norm_w, moe_weights, None
+    f = load_hf_state_dict_filtered(
+        model_dir, [f"{prefix}mlp.gate_proj.", f"{prefix}mlp.up_proj.", f"{prefix}mlp.down_proj."]
+    )
+
+    def _ffn(p):
+        # The device cache stores dequantized weights; the reference must match, so undo the fp8 block-scale here.
+        w = f[f"{prefix}mlp.{p}.weight"]
+        if w.dtype == torch.float8_e4m3fn:
+            w = _dequant_fp8(w, f[f"{prefix}mlp.{p}.weight_scale_inv"])
+        return w.to(torch.bfloat16)
+
+    ffn_weights = {p: _ffn(p) for p in ("gate_proj", "up_proj", "down_proj")}
+    return mla_weights, attn_norm_w, ffn_norm_w, None, ffn_weights
+
+
 @pytest.mark.parametrize(
-    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
+    "mesh_device, device_params, num_links",
     [
-        ("random", False, 1024, 8),
-        ("prompt_25k", False, 25 * 1024, 8),
-        ("abc_1k", True, 1024, 8),
-    ],
-    ids=["smoke-random", "perf-prompt_25k", "pcc-abc_1k"],
-)
-@pytest.mark.parametrize(
-    "layer_type, gate_fallback_mode",
-    [("dense", None), ("moe", GateComputeMode.DEVICE)],
-    ids=["dense", "moe-gate_device"],
-)
-@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+            ),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
-@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
-@pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
-@pytest.mark.timeout(600)
-def test_ds_prefill_block(
+@pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
+@pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
+# KV dedup through TtPrefillBlock -> ttMLA (the whole norm/attn/FFN stack, not just the MLA-level tests
+# in tests/sparse_mla/).
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm_prefill_block(
     variant,
     config_only,
     mesh_device,
     device_params,
-    is_balanced,
-    isl_total,
-    dispatch_buffer_capacity_factor,
-    layer_type,
-    gate_fallback_mode,
     num_links,
-    topology,
-    pcc_validation,
-    input_source,
-    tokenizer,
-    is_ci_env,
-    is_ci_v2_env,
-    determinism_check,
-    num_iterations,
+    seq_len,
+    layer_type,
+    model_path,
+    weight_cache_path,
 ):
-    run_model(
-        variant,
-        config_only,
-        mesh_device,
-        device_params,
-        is_balanced,
-        isl_total,
-        dispatch_buffer_capacity_factor,
-        layer_type,
-        gate_fallback_mode,
-        num_links,
-        topology,
-        pcc_validation,
-        input_source,
-        tokenizer,
-        is_ci_env,
-        is_ci_v2_env,
-        determinism_check=determinism_check,
-        num_iterations=num_iterations,
-        thresholds=DSV3_THRESHOLDS,
+    """One fused GLM decoder block (sparse-SDPA MLA + norm/residual + dense|MoE FFN) vs composed CPU ref."""
+    topology = per_axis_topology(device_params["fabric_config"])
+    is_moe = layer_type == "moe"
+    config = config_only
+    config.max_seq_len = seq_len
+    # MoE runs at the first FULL-indexer MoE layer so the block owns its top-k: a GLM-5.3 "shared"
+    # indexer layer reuses a prior full layer's indices, which an isolated single block cannot supply
+    # (ReuseIndexer.forward raises). glm_5_3 -> 6 (3-5 shared).
+    layer_idx = _first_full_moe_layer(config) if is_moe else 0
+    hidden = config.hidden_size
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+
+    # Weight source: use the prebuilt ttnn tensorbin cache when present AND complete -> real weights (device
+    # LOADS from the cache; reference uses matching host weights from the checkpoint). Else RANDOM for both.
+    # Never (re)build the cache here.
+    sp_factor, tp_factor = mesh_shape[sp_axis], mesh_shape[tp_axis]
+    experts_per_chip = GLM53Config.NUM_ROUTED_EXPERTS // (sp_factor * tp_factor)
+    effective_cache = (weight_cache_path / f"{sp_factor}x{tp_factor}") if weight_cache_path is not None else None
+    # The isolated MoE block is only meaningful on RANDOM weights, so it never consults the ttnn cache:
+    # a random block input drives GLM's trained near-degenerate top-8 gate to pick different experts on
+    # device vs the CPU reference (block PCC collapses to ~0.1), though the same layer scores ~0.995
+    # in-context in test_glm_prefill_transformer — a real-weight-gate x random-input artifact, not an
+    # op/weight bug. On random weights the gate is non-degenerate and the block matches (~0.99). Forcing
+    # random here keeps the MoE path exercised regardless of what the cache holds; real-weight MoE-gate
+    # coverage lives in test_glm_prefill_transformer and test_ttnn_moe. The dense case still loads real
+    # weights when the cache is complete.
+    use_pretrained = False
+    if effective_cache is not None:
+        effective_cache.mkdir(parents=True, exist_ok=True)
+        init_checker(effective_cache)  # required before check_cache_complete / pattern_exists
+        if not is_moe:
+            use_pretrained = TtPrefillBlock.check_cache_complete(effective_cache, layer_idx, True, experts_per_chip)
+    logger.info(f"[glm block {layer_type}] use_pretrained={use_pretrained} (ttnn cache={effective_cache})")
+
+    if use_pretrained:
+        # Device loads real weights from the cache; reference uses matching host weights from the checkpoint.
+        mla_weights, attn_norm_w, ffn_norm_w, moe_weights, ffn_weights = _glm_pretrained_weights(
+            config, model_path, layer_idx, is_moe
+        )
+        device_state_dict, device_cache = {}, effective_cache
+    else:
+        # Random weights for both device (built from host) and reference.
+        mla_weights, _ = build_weights(variant, config, seed=42)
+        attn_norm_w, ffn_norm_w = _glm_norm_weight(hidden, 1), _glm_norm_weight(hidden, 2)
+        if is_moe:
+            gate_weights, routed, shared = _glm_random_moe_weights(
+                hidden, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, seed=3
+            )
+            moe_weights = {
+                "gate_weights": gate_weights,
+                "routed_expert_weights": routed,
+                "shared_expert_weights": shared,
+            }
+            ffn_weights = None
+        else:
+            ffn_weights = _glm_random_dense_ffn_weights(hidden, config.intermediate_size, seed=3)
+            moe_weights = None
+        device_state_dict = {"attn_norm_weight": attn_norm_w, "mla_weights": mla_weights, "ffn_norm_weight": ffn_norm_w}
+        if is_moe:
+            device_state_dict.update(
+                gate_weights=moe_weights["gate_weights"],
+                routed_expert_weights=moe_weights["routed_expert_weights"],
+                shared_expert_weights=moe_weights["shared_expert_weights"],
+            )
+        else:
+            device_state_dict["ffn_weights"] = ffn_weights
+        device_cache = None
+
+    # --- device block ---
+    logger.info(
+        f"[glm block {layer_type}] building TtPrefillBlock layer_idx={layer_idx} seq_len={seq_len} mesh={mesh_shape}"
+    )
+    block = TtPrefillBlock(
+        mesh_device=mesh_device,
+        config=config,
+        model_cfg=GLM53Config,
+        state_dict=device_state_dict,
+        layer_idx=layer_idx,
+        seq_len=seq_len,
+        num_links=num_links,
+        topology=topology,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        weight_cache_path=device_cache,
+        # single-block test: layer_num=1 so the sparse single-shot cache write (update_padded_kv_cache,
+        # num_layers=layer_num) gets a valid count, not the None default.
+        layer_num=1,
+        # the config enables fusion only for chunked prefill, so this single-shot block opts in explicitly
+        use_fused_rmsnorm=True,
+    )
+    kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM,
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+        tp_axis=tp_axis,
+    )
+    # Sparse (DSA) MLA single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
+    # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked path.
+    # GLM attention is always sparse, so this is unconditional here. The cache is strided by the compacted
+    # full-indexer count (num_full_indexer_layers) — >1 for glm_5_3 cross-layer reuse — matching the
+    # indexer's cache_batch stride; falls back to 1 when there is no indexer_types map.
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+        cache_seq_len_global=seq_len, chunk_size_global=seq_len
+    )
+    index_kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
+        num_users=1,
+        dtype=ttnn.bfloat8_b,
+        tp_axis=tp_axis,
     )
 
-
-@pytest.mark.parametrize(
-    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
-    [
-        ("random", False, 1024, 8),
-        ("random", False, 5 * 1024, 8),
-        ("random", False, 25 * 1024, 8),
-        ("abc_1k", True, 1024, 8),
-        ("prompt_5k", True, 5 * 1024, 8),
-        ("prompt_25k", True, 25 * 1024, 8),
-    ],
-    ids=["smoke-random", "perf-random-5k", "perf-random-25k", "pcc-abc_1k", "pcc-prompt_5k", "pcc-prompt_25k"],
-)
-@pytest.mark.parametrize(
-    "layer_type, gate_fallback_mode",
-    [("dense", None), ("moe", GateComputeMode.DEVICE_FP32)],
-    ids=["dense", "moe_gate_device"],
-)
-@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
-@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
-@pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
-@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
-@pytest.mark.timeout(900)
-def test_kimi_prefill_block(
-    variant,
-    config_only,
-    mesh_device,
-    device_params,
-    is_balanced,
-    isl_total,
-    dispatch_buffer_capacity_factor,
-    layer_type,
-    gate_fallback_mode,
-    num_links,
-    topology,
-    pcc_validation,
-    input_source,
-    tokenizer,
-    is_ci_env,
-    is_ci_v2_env,
-    determinism_check,
-    num_iterations,
-):
-    run_model(
-        variant,
-        config_only,
-        mesh_device,
-        device_params,
-        is_balanced,
-        isl_total,
-        dispatch_buffer_capacity_factor,
-        layer_type,
-        gate_fallback_mode,
-        num_links,
-        topology,
-        pcc_validation,
-        input_source,
-        tokenizer,
-        is_ci_env,
-        is_ci_v2_env,
-        determinism_check=determinism_check,
-        num_iterations=num_iterations,
-        thresholds=KIMI_THRESHOLDS,
+    # --- input (full, host) + sharded device copy ---
+    torch.manual_seed(7)
+    x = torch.randn(1, seq_len, hidden, dtype=torch.bfloat16)
+    shard_dims = [None, None]
+    shard_dims[tp_axis] = -1
+    shard_dims[sp_axis] = -2
+    tt_x = ttnn.from_torch(
+        x.unsqueeze(0),  # [1, 1, seq, hidden]
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
+
+    logger.info(f"[glm block {layer_type}] running device block")
+    out = block.forward(
+        tt_x, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, actual_isl=seq_len, index_kv_cache=index_kv_cache
+    )
+    if isinstance(out, tuple):
+        out = out[0]
+    tt_out = ttnn.to_torch(
+        out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+    ).to(torch.bfloat16)
+
+    # --- composed reference (reference/glm_5_3): assembles MLA + norm/residual + FFN ---
+    logger.info(
+        f"[glm block {layer_type}] composing CPU reference via reference.glm_5_3.block.glm_decoder_layer_reference"
+    )
+    ref, _ = glm_decoder_layer_reference(
+        config, mla_weights, attn_norm_w, ffn_norm_w, x, seq_len, ffn_weights=ffn_weights, moe_weights=moe_weights
+    )
+
+    _, pcc_msg = assert_with_pcc(ref.unsqueeze(0), tt_out, GLM_BLOCK_OUTPUT_PCC)
+    logger.info(f"[glm block {layer_type}] block output PCC: {pcc_msg}")
+    ttnn.synchronize_device(mesh_device)

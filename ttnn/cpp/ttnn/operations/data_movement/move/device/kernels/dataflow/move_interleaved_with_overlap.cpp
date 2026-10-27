@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 
@@ -34,14 +34,14 @@ void kernel_main() {
     uint32_t range_2_end_noc_x = get_arg_val<uint32_t>(21);
     uint32_t range_2_end_noc_y = get_arg_val<uint32_t>(22);
     uint32_t range_2_size = get_arg_val<uint32_t>(23);
-    bool do_third_multicast = get_arg_val<uint32_t>(24) == 1;
+    uint32_t num_multicast_regions = get_arg_val<uint32_t>(24);
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     Noc noc;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer dfb(cb_id);
 
     // if controller core then this local address will be incremented by remote cores,
     // otherwise controller core will set this to signal that write to dst can be done once controller core sees
@@ -56,25 +56,30 @@ void kernel_main() {
     const auto dst_addrgen = TensorAccessor(dst_args, dst_addr);
 
     // read a ublock of tiles from src to CB
-    cb.reserve_back(num_tiles);
+    dfb.reserve_back(num_tiles);
     uint32_t cb_write_offset = 0;
     for (uint32_t i = start_id; i < start_id + num_tiles; i += ublock_size_tiles) {
         noc.async_read(
-            src_addrgen, cb, tile_bytes, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = cb_write_offset});
+            src_addrgen, dfb, tile_bytes, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = cb_write_offset});
         noc.async_read_barrier();
         cb_write_offset += tile_bytes;
     }
-    cb.push_back(num_tiles);
+    dfb.push_back(num_tiles);
 
     if (is_controller) {
         sem.wait(control_value);
 
-        // signal to cores that write to dst can begin
-        sem.set_multicast<NocOptions::DEFAULT>(
-            noc, range_0_start_noc_x, range_0_start_noc_y, range_0_end_noc_x, range_0_end_noc_y, range_0_size);
-        sem.set_multicast<NocOptions::DEFAULT>(
-            noc, range_1_start_noc_x, range_1_start_noc_y, range_1_end_noc_x, range_1_end_noc_y, range_1_size);
-        if (do_third_multicast) {
+        // signal to cores that write to dst can begin. A single-row/single-column shard grid or a lone
+        // controller core can leave fewer than 3 regions non-empty, so only multicast the real ones.
+        if (num_multicast_regions > 0) {
+            sem.set_multicast<NocOptions::DEFAULT>(
+                noc, range_0_start_noc_x, range_0_start_noc_y, range_0_end_noc_x, range_0_end_noc_y, range_0_size);
+        }
+        if (num_multicast_regions > 1) {
+            sem.set_multicast<NocOptions::DEFAULT>(
+                noc, range_1_start_noc_x, range_1_start_noc_y, range_1_end_noc_x, range_1_end_noc_y, range_1_size);
+        }
+        if (num_multicast_regions > 2) {
             sem.set_multicast<NocOptions::DEFAULT>(
                 noc, range_2_start_noc_x, range_2_start_noc_y, range_2_end_noc_x, range_2_end_noc_y, range_2_size);
         }
@@ -85,13 +90,13 @@ void kernel_main() {
         sem.wait(control_value);
     }
 
-    cb.wait_front(num_tiles);
+    dfb.wait_front(num_tiles);
     uint32_t cb_read_offset = 0;
     for (uint32_t i = start_id; i < start_id + num_tiles; i += ublock_size_tiles) {
         noc.async_write(
-            cb, dst_addrgen, tile_bytes, {.offset_bytes = cb_read_offset}, {.page_id = i, .offset_bytes = 0});
+            dfb, dst_addrgen, tile_bytes, {.offset_bytes = cb_read_offset}, {.page_id = i, .offset_bytes = 0});
         noc.async_write_barrier();
         cb_read_offset += tile_bytes;
     }
-    cb.pop_front(num_tiles);
+    dfb.pop_front(num_tiles);
 }

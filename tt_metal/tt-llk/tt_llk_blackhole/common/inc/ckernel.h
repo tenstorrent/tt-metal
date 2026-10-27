@@ -136,20 +136,20 @@ inline volatile void *memcpy_blocking(volatile void *dst, const volatile void *s
 
 /**
  * @brief Issues a load transaction that will block the core until the transaction is completed.
- * @tparam T 32-bit type to load
+ * @tparam T 16-bit or 32-bit type to load
  * @param ptr address to read from
  * @return value read from the address
  */
 template <typename T, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>>
 inline T load_blocking(volatile T *ptr)
 {
-    static_assert(sizeof(T) == sizeof(std::uint32_t), "load_blocking: operand must be 32-bit");
+    static_assert(sizeof(T) == sizeof(std::uint16_t) || sizeof(T) == sizeof(std::uint32_t), "load_blocking: operand must be 16-bit or 32-bit");
 
     // https://github.com/tenstorrent/tt-isa-documentation/tree/main/BlackholeA0/TensixTile/BabyRISCV/MemoryOrdering.md
 
     // this code provides a blocking load by doing the following:
     // - issue a LOAD transaction to the address
-    //     - actual load that was requested
+    //     - actual load that was requested (lw for 32-bit, lhu for 16-bit)
     // - issue an instruction that requires the data from the LOAD transaction
     //     - block the pipeline until the LOAD transaction completes
     // - memory clobber
@@ -157,12 +157,24 @@ inline T load_blocking(volatile T *ptr)
 
     std::uint32_t raw;
 
-    asm volatile(
-        "lw %[raw], (%[ptr])\n\t"
-        "and x0, x0, %[raw]"
-        : [raw] "=r"(raw)
-        : [ptr] "r"(ptr)
-        : "memory");
+    if constexpr (sizeof(T) == sizeof(std::uint16_t))
+    {
+        asm volatile(
+            "lhu %[raw], (%[ptr])\n\t"
+            "and x0, x0, %[raw]"
+            : [raw] "=r"(raw)
+            : [ptr] "r"(ptr)
+            : "memory");
+    }
+    else
+    {
+        asm volatile(
+            "lw %[raw], (%[ptr])\n\t"
+            "and x0, x0, %[raw]"
+            : [raw] "=r"(raw)
+            : [ptr] "r"(ptr)
+            : "memory");
+    }
 
     T val;
     std::memcpy(&val, &raw, sizeof(T));
@@ -311,9 +323,15 @@ inline void t6_semaphore_wait_on_zero(const std::uint8_t index)
     TTI_SEMWAIT(WaitRes, semaphore::t6_sem(index), p_stall::STALL_ON_ZERO);
 }
 
-// Tensix thread semaphore get optionally stalled
+// Tensix thread semaphore init optionally stalled
+template <std::uint32_t WaitRes = p_stall::NONE>
 inline void t6_semaphore_init(const std::uint8_t index, const std::uint8_t min_value, const std::uint8_t max_value)
 {
+    if constexpr (WaitRes != p_stall::NONE)
+    {
+        TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes);
+    }
+
     TTI_SEMINIT(max_value, min_value, semaphore::t6_sem(index));
 }
 
@@ -531,10 +549,10 @@ inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
     mailbox_base[thread][0] = data;
 }
 
-// Blocking read
-inline std::uint32_t mailbox_read(const std::uint8_t thread)
+// Blocking read: returns only once the message has arrived, even when the caller never uses the value.
+[[nodiscard]] inline std::uint32_t mailbox_read(const std::uint8_t thread)
 {
-    return mailbox_base[thread][0];
+    return load_blocking(&mailbox_base[thread][0]);
 }
 
 inline bool mailbox_not_empty(const std::uint8_t thread)
@@ -845,6 +863,22 @@ constexpr std::uint32_t get_dest_max_tiles()
 }
 
 /**
+ * @brief Runtime variant of get_dest_max_tiles for assert sites. Reads dest
+ *        accumulation mode from llk_assert_fp32_dest_acc_en rather than a
+ *        template parameter. Only ever evaluated inside LLK_ASSERT (compiled
+ *        out in production via sizeof).
+ */
+template <DstSync SYNC_MODE, DstTileShape TILE_SHAPE>
+inline std::uint32_t get_dest_max_tiles_rt()
+{
+    const bool accum_mode = llk_assert_fp32_dest_acc_en;
+    const std::uint32_t dest_register_size =
+        SYNC_MODE == DstSync::SyncHalf ? (accum_mode ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                       : (accum_mode ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+    return dest_register_size >> DstTileSizeLog2[static_cast<int>(TILE_SHAPE)];
+}
+
+/**
  * @brief Returns the maximum number of tiles that fit in the packer's dest region
  *        based on the currently configured W-stride (read from the hardware config register).
  *
@@ -853,11 +887,11 @@ constexpr std::uint32_t get_dest_max_tiles()
  * even when kernels reconfigure the stride for non-standard tile dimensions (e.g. 8x32).
  *
  * Byte capacity of the dest sync region (DEST_REGISTER_{HALF,FULL}_SIZE_BYTES) is constant
- * regardless of ACCUM_MODE because FP32 halves the row count but doubles the datum size,
+ * regardless of dest accumulation mode because FP32 halves the row count but doubles the datum size,
  * which cancels out against the doubled x_stride already baked into the configured W-stride.
  * W-stride from the packer config is in the same byte-oriented addressing units.
  */
-template <DstSync SYNC_MODE, bool ACCUM_MODE>
+template <DstSync SYNC_MODE>
 __attribute__((noinline)) std::uint32_t get_pack_dest_max_tiles()
 {
     constexpr std::uint32_t dest_sync_region_size_bytes = SYNC_MODE == DstSync::SyncHalf ? DEST_REGISTER_HALF_SIZE_BYTES : DEST_REGISTER_FULL_SIZE_BYTES;

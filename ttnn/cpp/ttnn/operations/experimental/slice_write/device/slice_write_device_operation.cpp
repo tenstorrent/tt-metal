@@ -4,7 +4,9 @@
 
 #include "slice_write_device_operation.hpp"
 
+#include <algorithm>
 #include <tt_stl/assert.hpp>
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 using namespace tt::tt_metal;
@@ -14,13 +16,10 @@ namespace ttnn::experimental::prim {
 SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
-    bool has_step = false;
-    for (unsigned int step_val : operation_attributes.step) {
-        if (step_val != 1) {
-            has_step = true;
-            break;
-        }
-    }
+    const bool has_step =
+        std::any_of(operation_attributes.step.cbegin(), operation_attributes.step.cend(), [](uint32_t step_val) {
+            return step_val != 1;
+        });
 
     // Logic from slice_write_multi_core
     if (input.is_sharded()) {
@@ -84,19 +83,22 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
         input_tensor.padded_shape().rank());
 }
 
-TensorSpec SliceWriteDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return tensor_args.output.tensor_spec();
-}
-
 ttsl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "SliceWriteDeviceOperation::compute_program_hash is called");
+    const auto factory = select_program_factory(args, tensor_args);
+    // The interleaved factory derives every outer-dim start offset in its runtime args, which
+    // override_runtime_arguments recomputes on a hit; only the last-dim start is compiled in.
+    // The sharded factories bake the whole start into shared state, so they keep the full key.
+    if (std::holds_alternative<SliceWriteRMInterleavedProgramFactory>(factory)) {
+        return ttsl::hash::hash_objects_with_default_seed(
+            factory.index(), args.slice_start[-1], args.step, tensor_args);
+    }
+    return ttsl::hash::hash_objects_with_default_seed(factory.index(), args, tensor_args);
+}
 
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<SliceWriteDeviceOperation>(
-        args, tensor_args, program_factory.index());
+tt::tt_metal::TensorSpec SliceWriteDeviceOperation::compute_output_specs(
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    return tensor_args.output.tensor_spec();
 }
 
 Tensor SliceWriteDeviceOperation::create_output_tensors(

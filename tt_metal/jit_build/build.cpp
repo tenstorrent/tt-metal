@@ -8,6 +8,11 @@
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
 
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -15,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -22,7 +28,10 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
+
+#include "hostdev/profiler_zone_id.h"
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/base.h>
@@ -36,16 +45,18 @@
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "llrt/rtoptions.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build/depend.hpp"
 #include "jit_build_settings.hpp"
 #include "jit_build_utils.hpp"
+#include "pch.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace fs = std::filesystem;
 
@@ -54,6 +65,77 @@ using namespace std;
 namespace tt::tt_metal {
 
 namespace {
+
+// Hands out the tu_id half of a structural zone id (hostdev/profiler_zone_id.h) as -DTT_PROFILER_TU_ID.
+// Ids must be unique across TUs and stable across runs (a cached ELF keeps the id in its .tt_zone_meta),
+// hence a file. The key is source identity plus build target: one source compiled for BRISC vs NCRISC can
+// number its zones differently. Compile-time args are left out to keep the registry bounded; two
+// define-variants of one source then share a tu_id, which the host reports as a collision rather than
+// mis-naming. Append-only "<source_id>\t<tu_id>" lines, lowest free id; flock() covers parallel builds
+// sharing a cache root, the mutex covers the JIT's own thread pool.
+uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const std::string& source_id) {
+    static std::mutex mtx;
+    std::lock_guard<std::mutex> lk(mtx);
+
+    struct RegistryLock {
+        int fd;
+        explicit RegistryLock(const std::string& path) : fd(::open(path.c_str(), O_RDWR | O_CREAT, 0644)) {
+            TT_FATAL(fd >= 0, "Failed to open profiler zone tu-id registry '{}': {}", path, std::strerror(errno));
+            if (::flock(fd, LOCK_EX) != 0) {
+                int err = errno;
+                ::close(fd);
+                TT_THROW("Failed to lock profiler zone tu-id registry '{}': {}", path, std::strerror(err));
+            }
+        }
+        ~RegistryLock() {
+            ::flock(fd, LOCK_UN);
+            ::close(fd);
+        }
+    } registry_lock(registry_path);
+
+    std::vector<bool> taken(TT_ZONE_TU_COUNT, false);
+    {
+        std::ifstream in(registry_path);
+        std::string line;
+        while (std::getline(in, line)) {
+            auto tab = line.rfind('\t');
+            if (tab == std::string::npos) {
+                continue;
+            }
+            uint32_t entry_id = 0;
+            try {
+                entry_id = static_cast<uint32_t>(std::stoul(line.substr(tab + 1)));
+            } catch (const std::exception&) {
+                continue;
+            }
+            if (entry_id >= TT_ZONE_TU_COUNT) {
+                continue;  // assigned when the tu split was wider
+            }
+            if (line.compare(0, tab, source_id) == 0) {
+                return entry_id;
+            }
+            taken[entry_id] = true;
+        }
+    }
+
+    taken[TT_ZONE_RESERVED_TU] = true;
+    uint32_t id = 0;
+    while (id < TT_ZONE_TU_COUNT && taken[id]) {
+        ++id;
+    }
+    TT_FATAL(
+        id < TT_ZONE_TU_COUNT,
+        "Profiler zone tu-id space ({} ids) is exhausted. Delete '{}' to compact it; ids are re-derived from "
+        "each build's ELFs, so nothing is lost by resetting it.",
+        TT_ZONE_TU_COUNT,
+        registry_path);
+
+    std::ofstream out(registry_path, std::ios::app);
+    out << source_id << '\t' << id << '\n';
+    out.flush();
+    TT_FATAL(out.good(), "Failed to persist profiler zone tu-id registry entry to '{}'", registry_path);
+    return id;
+}
 
 void report_result(const string& target_name, string_view op, const string& cmd, const string& log_file, bool result) {
     if (!result) {
@@ -80,8 +162,28 @@ void report_result(const string& target_name, string_view op, const string& cmd,
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
     std::error_code ec;
     std::filesystem::create_hard_link(target, link, ec);
+    if (!ec) {
+        return;
+    }
+    // Fall back to copying, but use the non-throwing overload so a failure is
+    // reported with both paths and both error codes instead of escaping as a bare
+    // std::filesystem_error.
+    //
+    // Note we deliberately do NOT treat an already-existing `link` as reusable, even
+    // when it is already equivalent to `target`. Temp object names are per-process
+    // (see FileRenamer::generate_temp_path) and the caller removes them once linking
+    // finishes, so adopting another process's temp file would let that process delete
+    // it while our LTO link still has it open.
+    const std::error_code link_ec = ec;
+    ec.clear();
+    std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing, ec);
     if (ec) {
-        std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing);
+        TT_THROW(
+            "Failed to hard link or copy {} to {}: copy failed with '{}' (hard link failed with '{}')",
+            target.string(),
+            link.string(),
+            ec.message(),
+            link_ec.message());
     }
 }
 
@@ -96,7 +198,56 @@ std::string get_default_root_path() {
     return "/tmp/tt-metal-cache/";
 }
 
+std::string get_cache_root(const llrt::RunTimeOptions& rtoptions) {
+    return rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
+}
+
 JitBuildEnv::JitBuildEnv() = default;
+
+// Bits 16-24 of TT_METAL_PROFILE_PERF_COUNTERS select the Quasar l1_client event counter, subport*8 + event; 0 is
+// off because event 0 is never valid. perf_counters.hpp decodes the same field from PROFILE_PERF_COUNTERS.
+constexpr uint32_t PERF_COUNTER_L1_CLIENT_SHIFT = 16;
+constexpr uint32_t PERF_COUNTER_GROUP_MASK = (1u << PERF_COUNTER_L1_CLIENT_SHIFT) - 1;
+
+// Quasar has no L1 counter unit: valid groups are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32). The tracy frontend sends
+// the tt-1xx "all" mask (47), so map it to the Quasar mask (39) instead of rejecting it. The l1_client checks mirror
+// llk::perf::l1_client_selection_is_valid in tt-llk/tools/include/perf_counters/quasar.h (37 subports, 8 events).
+static uint32_t quasar_perf_counter_mode(uint32_t mode) {
+    constexpr uint32_t quasar_groups = 0x27;
+    constexpr uint32_t tt1xx_all_groups = 0x2F;
+    uint32_t groups = mode & PERF_COUNTER_GROUP_MASK;
+    const uint32_t sel = mode >> PERF_COUNTER_L1_CLIENT_SHIFT;
+    if (groups == tt1xx_all_groups) {
+        groups = quasar_groups;
+    }
+    TT_FATAL(
+        (groups & ~quasar_groups) == 0,
+        "TT_METAL_PROFILE_PERF_COUNTERS={} selects perf counter groups that do not exist on Quasar; valid bits are "
+        "FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32), 'all' = 39",
+        mode);
+    if (sel != 0) {
+        constexpr uint32_t num_events = 8;
+        constexpr uint32_t num_selections = 37 * num_events;
+        TT_FATAL(
+            sel < num_selections,
+            "TT_METAL_PROFILE_PERF_COUNTERS={}: l1_client selection {} (bits 16-24) is out of range; it encodes "
+            "subport*8 + event with 37 subports and 8 events",
+            mode,
+            sel);
+        TT_FATAL(
+            sel % num_events != 0,
+            "TT_METAL_PROFILE_PERF_COUNTERS={}: l1_client selection {} is event 0, which is unused in the L1 RTL",
+            mode,
+            sel);
+        TT_FATAL(
+            !(sel / num_events == 4 && sel % num_events <= 3),
+            "TT_METAL_PROFILE_PERF_COUNTERS={}: l1_client selection {} is a THCON event 1-3, the TRISC port's SBank 0 "
+            "counters already exposed by selections 1-3",
+            mode,
+            sel);
+    }
+    return groups | (sel << PERF_COUNTER_L1_CLIENT_SHIFT);
+}
 
 void JitBuildEnv::init(
     uint64_t build_key,
@@ -106,15 +257,16 @@ void JitBuildEnv::init(
     this->rtoptions_ = &rtoptions;
     // Paths
     this->root_ = rtoptions.get_root_dir();
-    this->out_root_ = rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
+    this->out_root_ = get_cache_root(rtoptions);
 
     this->arch_ = config.arch;
-    this->max_cbs_ = config.max_cbs;
+    this->max_dfbs_ = config.max_dfbs;
 
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
-        this->gpp_ = "ccache ";
+        // ccache requires sloppiness settings for both PCH creation and consumption
+        this->gpp_ = "ccache sloppiness=pch_defines,time_macros ";
     } else {
         this->gpp_ = "";
     }
@@ -141,8 +293,22 @@ void JitBuildEnv::init(
 
     // Flags
     string common_flags =
-        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
-        "-flto=auto -ffast-math "
+        // Use C++17, plus some specific C++20 features we've enabled
+        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
+        // Ban dynamic initializations, via a check we've added
+        "-ftt-no-dyninit "
+        // Rely on Link Time Optimization (removes globally unreachable code).
+        // Partitioning and job count are pinned rather than left to -flto=auto: the JIT
+        // scheduler already builds ~30 kernels at once, and with no make jobserver to
+        // consult 'auto' resolves to the host CPU count, letting each of those links fan
+        // out on top of it. A single partition is what kernels this size already produce,
+        // so pinning holds current behavior instead of leaving it to a size threshold.
+        "-flto=1 -flto-partition=one "
+        // Fast math allows non-IEEE compliant optimizations ...
+        "-ffast-math "
+        // ... but we require these IEEE behaviors
+        "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
+        // No exceptions or rtti emission, and no using cxa-atexit for cleanups
         "-fno-exceptions -fno-rtti -fno-use-cxa-atexit ";
 
     if (rtoptions.get_jit_analytics_enabled()) {
@@ -156,11 +322,28 @@ void JitBuildEnv::init(
     this->cflags_ = common_flags;
     this->cflags_ +=
         "-MMD "
+        // Extra warnings and make them fatal
         "-Wall -Werror "
+        // But don't die for these warnings
         "-Wno-error=deprecated-declarations "
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
-        "-Wno-error=unused-but-set-variable -Wno-unused-variable "
-        "-Wno-unused-function ";
+        "-Wno-error=unused-but-set-variable "
+        // And don't detect these issues
+        "-Wno-unused-variable -Wno-unused-function "
+        // Firmware and kernels access mailboxes and MMIO through pointers
+        // formed from small literal addresses (e.g. MEM_MAILBOX_BASE is 16
+        // on Wormhole). On these bare-metal cores the bottom of the address
+        // space is ordinary L1 memory, but GCC assumes no object can live in
+        // the first page and -Warray-bounds diagnoses such accesses as
+        // "source object is likely at address zero", which -Werror makes
+        // fatal. (With -flto the literal address is not visible during
+        // per-TU compilation, so today this only fires if LTO is disabled;
+        // see issue #54692.) min-pagesize=0 tells GCC that constant
+        // addresses from zero up are valid objects, disabling exactly that
+        // heuristic while keeping -Warray-bounds active for genuine
+        // out-of-bounds accesses. It is a diagnostics-only parameter with no
+        // effect on generated code.
+        "--param=min-pagesize=0 ";
 
     // Defines
     this->defines_ = "";
@@ -180,10 +363,33 @@ void JitBuildEnv::init(
         if (rtoptions.get_profiler_sum()) {
             profiler_options |= PROFILER_OPT_DO_SUM;
         }
+        if (rtoptions.get_profiler_accumulate()) {
+            profiler_options |= PROFILER_OPT_DO_ACCUMULATE;
+        }
         this->defines_ += "-DPROFILE_KERNEL=" + std::to_string(profiler_options) + " ";
 
         this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +
                           std::to_string(config.profiler_dram_bank_size_per_risc_bytes) + " ";
+    }
+    if (rtoptions.get_streaming_profiler_enabled()) {
+        // Streaming profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
+        // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
+        // DeviceZoneScopedN / DeviceTimestampedData site compiled; PROFILE_STREAMING makes
+        // api/debug/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of
+        // the DRAM one. No DRAM options (dispatch cores, trace-only, sum, accumulate) apply here.
+        TT_FATAL(
+            this->arch_ != tt::ARCH::QUASAR,
+            "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC "
+            "drainer, which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
+        this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
+        if (rtoptions.get_streaming_profiler_sync_events_enabled()) {
+            // Enable synchronization-event instrumentation (internal/profiler/synchronization_event_profiler.hpp)
+            // Note: only enabled with streaming profiler.
+            this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
+        }
+        if (rtoptions.get_streaming_profiler_inline_enabled()) {
+            this->defines_ += "-DPROFILE_INLINE_ENABLED=1 ";
+        }
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled
@@ -198,7 +404,17 @@ void JitBuildEnv::init(
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
         // force profiler on if perf counters are being captured
         TT_ASSERT(rtoptions.get_profiler_enabled());
-        this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(rtoptions.get_profiler_perf_counter_mode()) + " ";
+        uint32_t perf_counter_mode = rtoptions.get_profiler_perf_counter_mode();
+        if (this->arch_ == tt::ARCH::QUASAR) {
+            perf_counter_mode = quasar_perf_counter_mode(perf_counter_mode);
+        } else {
+            TT_FATAL(
+                (perf_counter_mode >> PERF_COUNTER_L1_CLIENT_SHIFT) == 0,
+                "TT_METAL_PROFILE_PERF_COUNTERS={}: bits 16-24 select the Quasar l1_client event counter, which this "
+                "architecture does not have",
+                perf_counter_mode);
+        }
+        this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(perf_counter_mode) + " ";
     }
 
     if (rtoptions.get_watcher_enabled()) {
@@ -232,6 +448,10 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_kernels_early_return()) {
         this->defines_ += "-DDEBUG_EARLY_RETURN_KERNELS ";
+    }
+
+    if (rtoptions.get_measure_dfb_init_time_enabled()) {
+        this->defines_ += "-DDFB_INIT_TIMING_ENABLED ";
     }
 
     if (rtoptions.get_watcher_debug_delay()) {
@@ -275,12 +495,6 @@ void JitBuildEnv::init(
     if (san.enabled) {
         this->defines_ += "-DLLK_SAN_ENABLE ";
 
-        if (san.method == tt::llrt::SanitizerReportMethod::Assert) {
-            this->defines_ += "-DLLK_SAN_SETTING_ASSERT ";
-        } else if (san.method == tt::llrt::SanitizerReportMethod::Print) {
-            this->defines_ += "-DLLK_SAN_SETTING_PRINT ";
-        }
-
         auto add_sanitizer_toggle = [&](const std::optional<bool>& opt, std::string_view name) {
             if (opt.has_value()) {
                 this->defines_ += "-DLLK_SAN_SETTING_" + std::string(name) + "=" + std::to_string(*opt) + " ";
@@ -307,9 +521,9 @@ void JitBuildEnv::init(
         root_,
         root_ + "ttnn",
         root_ + "ttnn/cpp",
-        root_ + "tt_metal",
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/tt-llk/common",
+        root_ + "tt_metal/tt-llk/tools/include",
         root_ + "tt_metal/hostdevcommon/api",
         root_ + "tt_metal/api/"};
 
@@ -334,19 +548,8 @@ void JitBuildEnv::init(
         // Do not hash compiler version when generating compiler logs
         // so that we may compare them between different compilers
         // without undue difficulty.
-    } else if (FILE* pipe = popen(fmt::format("exec {} --version", this->gpp_).c_str(), "r")) {
-        // Read the sfpi compiler version directly from the compiler
-        // we're using.  Compiler changes invalidate the cache.
-
-        // First line is typically about 65 chars on a branch (and
-        // less on main):
-
-        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.40.0-dce-27298[490]) 15.1.0
-        char buf[100];
-        if (fgets(buf, sizeof(buf), pipe)) {
-            hasher.update(std::string_view{buf});
-        }
-        pclose(pipe);
+    } else {
+        hasher.update(tt::jit_build::utils::compiler_version(gpp_));
     }
 
     build_key_ = hasher.digest();
@@ -390,12 +593,22 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     const auto& jit_build_query = hal.get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
+    // Per-kernel opt-in flags (applied in export_target_recipe); empty when unsupported.
+    this->rvv_cflags_ = jit_build_query.rvv_compile_flags(params);
     // Includes
     {
         auto it = std::back_inserter(this->includes_);
         for (const auto& include : jit_build_query.includes(params)) {
             fmt::format_to(it, "-I{}{} ", env_.root_, include);
         }
+    }
+    if (build_config.is_fw && build_config.core_type == HalProgrammableCoreType::TENSIX &&
+        build_config.processor_class == HalProcessorClassType::DM && build_config.processor_id == 0 &&
+        env_.get_rtoptions().get_brisc_firmware_variant() == llrt::BriscFirmwareVariant::Blaze) {
+        fmt::format_to(
+            std::back_inserter(this->includes_),
+            "-I{} ",
+            std::filesystem::path(env_.get_rtoptions().get_brisc_firmware_header()).parent_path().string());
     }
     // Defines
     {
@@ -404,6 +617,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
             fmt::format_to(it, "-D{} ", define);
         }
         fmt::format_to(it, "-DDISPATCH_MESSAGE_ADDR={} ", build_config.dispatch_message_addr);
+        if (build_config.fds_signalling) {
+            fmt::format_to(it, "-DFDS_SIGNALLING=1 ");
+        }
     }
     if (this->is_fw_) {
         this->defines_ += "-DFW_BUILD ";
@@ -433,9 +649,13 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         this->temp_objs_.push_back(jit_build::utils::FileRenamer::generate_temp_path(obj_path));
     }
 
-    // Prepend root path to srcs, but not to outputs (objs) due to device dependency
+    // Prepend root path to srcs, but not to outputs (objs) due to device dependency.
+    // An absolute source path is complete already; that is how an out-of-tree firmware source is
+    // named.
     for (string& src : this->srcs_) {
-        src = env_.root_ + src;
+        if (src.empty() || src.front() != '/') {
+            src = env_.root_ + src;
+        }
     }
 
     // Append hw build objects compiled offline
@@ -484,6 +704,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         }
         hasher.update(default_compile_opt_level_);
         hasher.update(default_linker_opt_level_);
+        // Not part of default recipes, but a change to the HAL's RVV flag string must still
+        // invalidate cached opted-in kernels.
+        hasher.update(rvv_cflags_);
         build_state_hash_ = hasher.digest();
     }
 }
@@ -515,86 +738,157 @@ void JitBuildState::write_build_state_hash(const string& out_dir) const {
     file << build_state_hash_;
 }
 
-void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
-    // ZoneScoped;
-
-    string cmd{"cd " + out_dir + " && " + env_.gpp_};
-    string defines = this->defines_;
-
-    if (env_.get_rtoptions().get_build_map_enabled()) {
-        cmd += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
+bool JitBuildState::warmed_elf_reusable(std::string_view kernel_name) const {
+    // TT_METAL_FORCE_JIT_COMPILE bypasses all reuse; both the local fast path and the remote gate
+    // (remote_kernel_cached) consult this predicate, so both recompile when it is set.
+    if (env_.get_rtoptions().get_force_jit_compile()) {
+        return false;
     }
+    // Derive the ELF path from the canonical accessor (the same path the preprocess-and-ship client
+    // writes the ELF + sidecar to), so local and remote reuse agree on both location and validity.
+    const fs::path elf_path = get_target_out_path(std::string(kernel_name));
+    // The sidecar is a sibling of the ELF (<elf>.fulldephash); build_state_matches() appends
+    // BUILD_STATE_HASH_FILE to out_dir, so keep the trailing separator.
+    const std::string full_dephash = elf_path.string() + std::string(jit_build::FULL_DEPHASH_SUFFIX);
+    const std::string out_dir = elf_path.parent_path().string() + "/";
+    return fs::exists(elf_path) && fs::exists(full_dephash) && build_state_matches(out_dir) &&
+           jit_build::dependencies_up_to_date_file(full_dephash);
+}
 
-    if (settings) {
-        defines += fmt::format(R"(-DFULL_KERNEL_NAME="\"{}\"" )", settings->get_full_kernel_name());
+void JitBuildState::write_reuse_cache(std::string_view kernel_name) const {
+    // Write the reuse cache (source-complete FULL_DEPHASH_SUFFIX sidecar + ".build_state") that lets a
+    // later run reuse this ELF with no intermediate object. Called only after a successful compile, so
+    // the cache never validates against a missing or stale ELF. The dependencies come from the .d files
+    // the preprocess-and-ship -E step left in the target dir (which is hash-qualified, so it holds only
+    // this build's sources) plus the link inputs, which only this build state knows.
+    const fs::path elf_path = get_target_out_path(std::string(kernel_name));
+    const std::string out_dir = elf_path.parent_path().string() + "/";
 
-        // Append user args
-        if (process_defines_at_compile_) {
-            settings->process_defines([&defines](const string& define, const string& value) {
-                defines += fmt::format("-D{}='{}' ", define, value);
-            });
+    std::vector<std::string> deps;
+    for (const auto& entry : fs::directory_iterator(elf_path.parent_path())) {
+        if (entry.path().extension() != ".d") {
+            continue;
         }
+        std::ifstream d_file(entry.path());
+        if (!d_file.is_open()) {
+            continue;
+        }
+        for (auto& [key, dep_list] : jit_build::parse_dependency_file(d_file)) {
+            deps.insert(deps.end(), std::make_move_iterator(dep_list.begin()), std::make_move_iterator(dep_list.end()));
+        }
+    }
+    // Link inputs also gate reuse: a changed linker script, firmware, or offline-compiled link object
+    // must invalidate the ELF even when no source changed. weakened_firmware_name_ is the real on-disk
+    // path (the recipe carries only the bare filename, which the server resolves from its own cache).
+    if (!linker_script_.empty()) {
+        deps.push_back(linker_script_);
+    }
+    if (!weakened_firmware_name_.empty()) {
+        deps.push_back(weakened_firmware_name_);
+    }
+    // extra_link_objs_ are offline-built objects linked into the ELF (e.g. Quasar CRT / substitutes);
+    // hash their contents so rebuilding one at the same path invalidates the warmed ELF. Stored as a
+    // space-separated list of real on-disk paths.
+    for (auto& obj : jit_build::utils::tokenize_flags(extra_link_objs_)) {
+        deps.push_back(std::move(obj));
+    }
+    if (deps.empty()) {
+        return;
+    }
+    std::sort(deps.begin(), deps.end());
+    deps.erase(std::unique(deps.begin(), deps.end()), deps.end());
 
-        settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
-            if (values.empty()) {
-                return;
-            }
-            defines += fmt::format("-DKERNEL_COMPILE_TIME_ARGS={} ", fmt::join(values, ","));
-        });
+    const std::string elf = elf_path.string();
+    const std::string full_dephash = elf + std::string(jit_build::FULL_DEPHASH_SUFFIX);
+    jit_build::ParsedDependencies deps_map{{elf, std::move(deps)}};
+    std::ofstream hash_file(full_dephash);
+    jit_build::write_dependency_hashes(deps_map, out_dir, elf, hash_file);
+    hash_file.close();
+    if (hash_file.fail()) {
+        // A genuinely unreadable dependency drops the sidecar, correctly forcing a later recompile.
+        fs::remove(full_dephash);
+        return;
+    }
+    write_build_state_hash(out_dir);
+}
 
-        // This creates a command-line define for named compile time args
-        // Ex. for named_args like {"buffer_size": 1024, "num_tiles": 64}
-        // This generates:
-        // -DKERNEL_COMPILE_TIME_ARG_MAP="{{\"buffer_size\",1024}, {\"num_tiles\",64}} "
-        // The macro expansion is defined in tt_metal/hw/inc/compile_time_args.h
-        settings->process_named_compile_time_args(
-            [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
-                if (named_args.empty()) {
-                    return;
-                }
-                std::ostringstream ss;
-                ss << "-DKERNEL_COMPILE_TIME_ARG_MAP=\"";
-                for (const auto& [name, value] : named_args) {
-                    ss << "{\\\"" << name << "\\\"," << value << "}, ";
-                }
-                ss << "\"";
-                defines += ss.str() + " ";
-            });
+void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
+    TTZoneScopedD(JIT);
 
-        cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
-    } else {
-        cmd += fmt::format("-{} ", this->default_compile_opt_level_);
+    // Use the shared recipe and argv builder to pass defines verbatim without shell escaping.
+    const tt::jit_build::TargetRecipe recipe = export_target_recipe(settings);
+
+    std::string cflags = recipe.cflags;
+    if (env_.get_rtoptions().get_build_map_enabled()) {
+        cflags += " -save-temps=obj -fdump-tree-all -fdump-rtl-all";
     }
 
-    // Append common args provided by the build state
-    std::string obj_path = out_dir + this->objs_[src_index];
-    std::string obj_temp_path = out_dir + this->temp_objs_[src_index];
-    std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
-    cmd += this->cflags_;
-    cmd += this->includes_;
-    // Add kernel-specific include paths (e.g., kernel source directory for relative includes)
-    if (settings) {
-        settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
+    // Add the machine-local PCH here so exported recipes remain portable.
+    // Exclude build-map dump flags from the PCH profile.
+    const std::string pch = tt::jit_build::ensure_pch(
+        env_.gpp_,
+        recipe.compiler_opt_level,
+        recipe.cflags,
+        recipe.pch_umbrella,
+        fs::path(env_.out_root_) / "pch");
+
+    // Preserve the recipe's defines for watcher logging.
+    std::vector<std::string> defines = recipe.defines;
+    if (!pch.empty()) {
+        // Load the PCH before any other force-included header emits C++ tokens.
+        defines.insert(defines.begin(), {"-include", pch});
+        // Warn if GCC rejects the PCH, while allowing textual fallback.
+        cflags += " -Winvalid-pch -Wno-error=invalid-pch";
     }
-    cmd += fmt::format("-c -o {} {} -MF {} ", obj_temp_path, this->srcs_[src_index], temp_d_path);
-    cmd += defines;
+
+    // Per-TU half of the structural device zone id (STREAMING profiler only; the DRAM profiler's 16-bit
+    // hash ids need no registry). Kept out of `defines_`/`build_key_` on purpose: a tu_id is a property of
+    // the SOURCE, not of the build recipe, so folding it into the cache key would split the cache for no
+    // reason. It is stable for a given source identity, so a cached object never disagrees with a freshly
+    // compiled one.
+    if (env_.get_rtoptions().get_streaming_profiler_enabled()) {
+        // Firmware has no JitBuildSettings; its source identity is the source path itself plus the target,
+        // which is stable across build configs (out_dir is not -- it carries the build key, and keying on it
+        // would mint a fresh tu_id per config for the same source).
+        const std::string source_id = (settings != nullptr)
+                                          ? settings->get_profiler_zone_src_id() + '\x1f' + this->target_name_
+                                          : "fw\x1f" + this->srcs_[src_index] + '\x1f' + this->target_name_;
+        const uint32_t tu_id =
+            get_or_assign_profiler_tu_id(env_.get_out_root_path() + ".profiler_zone_tu_ids", source_id);
+        defines.push_back(fmt::format("-DTT_PROFILER_TU_ID={}", tu_id));
+    }
+
+    const std::string obj_path = out_dir + this->objs_[src_index];
+    const std::string obj_temp_path = out_dir + this->temp_objs_[src_index];
+    const std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
+
+    std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
+        env_.gpp_,
+        recipe.compiler_opt_level,
+        cflags,
+        recipe.includes,
+        defines,
+        this->srcs_[src_index],
+        tt::jit_build::utils::GppAction::Compile,
+        obj_temp_path,
+        temp_d_path);
 
     if (env_.get_rtoptions().get_log_kernels_compilation_commands()) {
-        log_info(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
+        log_info(tt::LogBuildKernels, "    g++ compile cmd: {}", fmt::join(args, " "));
     }
 
     if (env_.get_rtoptions().get_watcher_enabled() && settings) {
-        log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
+        log_kernel_defines_and_args(
+            out_dir, settings->get_full_kernel_name(), fmt::format("{}", fmt::join(defines, " ")));
     }
 
     // log file and dephash file can be renamed after compilation, but the .o file
     // needs to be renamed after link step to avoid LTO reading inconsistent object files.
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
-    bool result =
-        tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands());
-    report_result(this->target_name_, "compile", cmd, log_file.path(), result);
-    jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
+    bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
+    report_result(this->target_name_, "compile", fmt::format("{}", fmt::join(args, " ")), log_file.path(), result);
+    jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash", recipe.pch_umbrella);
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
@@ -605,7 +899,7 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
 
 std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
     const string& out_dir, const JitBuildSettings* settings, bool state_changed) const {
-    // ZoneScoped;
+    TTZoneScopedD(JIT);
     TT_FATAL(
         this->srcs_.size() <= kMaxBuildBitset,
         "Number of source files ({}) exceeds kMaxBuildBitset ({})",
@@ -693,7 +987,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
 // strong so to propagate link addresses
 void JitBuildState::weaken(const string& out_dir) const {
-    // ZoneScoped;
+    TTZoneScopedD(JIT);
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
     jit_build::utils::FileRenamer out_file(this->weakened_firmware_name_);
@@ -713,7 +1007,7 @@ void JitBuildState::weaken(const string& out_dir) const {
 }
 
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
-    // ZoneScoped;
+    TTZoneScopedD(JIT);
     static std::atomic<bool> new_log = true;
     // Mutex to serialize concurrent writes to the shared zone src locations log file.
     // Multiple kernels are compiled in parallel; without serialization their grep outputs
@@ -736,8 +1030,11 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
 }
 
 void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets) const {
-    // ZoneScoped;
-    auto t0_build = std::chrono::steady_clock::now();
+    TTZoneScopedD(JIT);
+    // Widens the process-wide JIT build window to cover this call, on every exit path -- including
+    // the warmed-ELF early return below, which is build activity even though it compiles nothing.
+    ScopedBuildWindow build_window;
+    const auto t0_build = build_window.start();
     auto kernel_name = settings ? std::string_view{settings->get_full_kernel_name()} : "";
     std::string out_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);
 
@@ -754,7 +1051,25 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     // have changed, force full recompilation and relinking.
     bool state_changed = !build_state_matches(out_dir);
 
-    auto compiled = compile(out_dir, settings, state_changed);
+    // Preprocess-and-ship reuse: a warmed cache (produced by an AOT preprocess-and-ship pass) ships
+    // only each ELF plus a source-complete FULL_DEPHASH_SUFFIX sidecar and a ".build_state". When
+    // every target has a matching recipe and a valid sidecar, reuse the ELFs directly -- no object is
+    // needed. Ordinary local builds never write the sidecar, so this stays inert for them.
+    // Firmware never uses the warmed-ELF reuse path; force-recompile is handled inside
+    // warmed_elf_reusable, which both reuse paths call.
+    if (!this->is_fw_) {
+        const bool all_reusable = std::all_of(link_targets.begin(), link_targets.end(), [&](const auto* target) {
+            return target->warmed_elf_reusable(kernel_name);
+        });
+        if (all_reusable) {
+            BuildCacheTelemetry::inst().record_compile(static_cast<uint32_t>(num_objs), 0);
+            extract_zone_src_locations(out_dir);
+            return;
+        }
+    }
+
+    static auto& tok_compile = BuildCacheTelemetry::inst().get_or_register_metric("JitBuildState::compile");
+    auto compiled = record_elapsed(tok_compile, [&] { return compile(out_dir, settings, state_changed); });
 
     string link_objs;
     // Populate link_objs once only when anything needs to be linked
@@ -788,10 +1103,32 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         fs::create_directories(target_out_dir);
         if (state_changed || compiled.any() || target->need_link(target_out_dir)) {
             populate_link_objs();
-            target->link(target_out_dir, settings, link_objs);
+            // target_name_ alone does not distinguish firmware from kernels, and firmware images are
+            // much larger/slower to link than a typical kernel -- sharing a key would let firmware set
+            // max and drag mean up, so the numbers would no longer describe kernels.
+            const std::string_view target_kind = target->is_fw_ ? "fw" : "kernel";
+            // Only link() is per-target work (compile() and populate_link_objs() are shared across
+            // targets), and only this branch links at all -- cache hits would record ~0 ms noise.
+            record_elapsed(
+                per_target_telemetry_token(fmt::format("{}_link_time", target_kind), target->target_name_, "ms"),
+                [&] { target->link(target_out_dir, settings, link_objs); });
             if (target->is_fw_) {
                 target->weaken(target_out_dir);
             }
+
+            // Inside the link branch so count is "binaries produced", not "times build() was called":
+            // on a warm cache every target would otherwise re-stat and re-record the same ELF.
+            // This is the on-disk ELF, which is neither stripped nor loaded as-is: it carries debug
+            // info when riscv_debug_info_enabled is set and relocations from -Wl,--emit-relocs, so it
+            // tracks build settings more than the device footprint and will not match
+            // program_config_size.kernel_text.
+            std::error_code elf_size_ec;
+            const auto elf_size = fs::file_size(target_out_dir + target->target_name_ + ".elf", elf_size_ec);
+            if (!elf_size_ec) {
+                per_target_telemetry_token(fmt::format("{}_elf_size", target_kind), target->target_name_, "B")
+                    .record(static_cast<double>(elf_size));
+            }
+
             // Record the build state used for linking so that future runs can detect
             // when link-affecting flags (lflags, linker script, etc.) change.
             target->write_build_state_hash(target_out_dir);
@@ -821,14 +1158,32 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     extract_zone_src_locations(out_dir);
 
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_build).count();
-    static auto& tok_build = BuildCacheTelemetry::inst().register_metric("JitBuildState::build");
+    static auto& tok_build = BuildCacheTelemetry::inst().get_or_register_metric("JitBuildState::build");
     tok_build.record(elapsed_ms);
+
+    // Per-kernel compile time makes a slow/stuck compile visible instead of silent, but a workload
+    // can compile 10k+ kernels, so it is off by default (TT_METAL_LOG_KERNEL_COMPILE=1 opts in;
+    // models/tt_dit sets it for every DiT run). Read once, lazily, so an importer that sets the env
+    // before the first compile is honored; only when something actually compiled (cache hits are noise).
+    if (compiled.any() && !kernel_name.empty()) {
+        static const bool log_compile = tt::parse_env<bool>("TT_METAL_LOG_KERNEL_COMPILE", false);
+        if (log_compile) {
+            log_info(tt::LogBuildKernels, "compiled {} in {:.0f} ms", kernel_name, elapsed_ms);
+        }
+    }
 }
 
 tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSettings* settings) const {
     tt::jit_build::TargetRecipe target;
     target.target_name = target_name_;
     target.cflags = cflags_;
+    target.pch_umbrella = (fs::path(env_.root_) / jit_build::PCH_UMBRELLA).string();
+    // Per-kernel RVV opt-in: only processors the HAL gives vector flags to (TRISC2 on Blackhole,
+    // TRISC0 on Quasar) change; the kernel's other compiles are unchanged. Compile-only: lflags_ is
+    // untouched, so the link stays stock (the -fno-lto object simply opts out of LTO).
+    if (settings != nullptr && settings->get_rvv_enabled()) {
+        target.cflags += this->rvv_cflags_;
+    }
     target.lflags = lflags_;
     target.linker_script = linker_script_;
     target.extra_link_objs = extra_link_objs_;
@@ -859,20 +1214,26 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
         });
     }
     if (settings) {
+        // FULL_KERNEL_NAME: consumed by the LLK sanitizer (CTSTR(FULL_KERNEL_NAME)). Emitted
+        // shell-free as one verbatim argv element with literal quotes (the unified/remote-JIT
+        // path does no shell expansion).
+        defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
         settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
             if (!values.empty()) {
                 defines.push_back(fmt::format("-DKERNEL_COMPILE_TIME_ARGS={}", fmt::join(values, ",")));
             }
         });
+        // KERNEL_COMPILE_TIME_ARG_MAP arrives as a force-included header (written by genfiles,
+        // see write_named_ct_arg_map_header) rather than a -D define, because one define is one
+        // argv element and the map alone can exceed the per-element MAX_ARG_STRLEN. Two argv
+        // elements, and the bare filename resolves via the "-I.." every compile carries -- so this
+        // recipe stays valid verbatim on the remote compile server, where a client-side absolute
+        // path would not resolve. See NAMED_CT_ARG_MAP_HEADER.
         settings->process_named_compile_time_args(
             [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
                 if (!named_args.empty()) {
-                    std::string compile_time_arg_map = "-DKERNEL_COMPILE_TIME_ARG_MAP=";
-                    auto it = std::back_inserter(compile_time_arg_map);
-                    for (const auto& [name, value] : named_args) {
-                        fmt::format_to(it, "{{\"{}\",{}}},", name, value);
-                    }
-                    defines.push_back(std::move(compile_time_arg_map));
+                    defines.emplace_back("-include");
+                    defines.emplace_back(tt::jit_build::utils::NAMED_CT_ARG_MAP_HEADER);
                 }
             });
     }
@@ -889,22 +1250,16 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
-    // ZoneScoped;
-    auto t0 = std::chrono::steady_clock::now();
-    build.build(settings);
-    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build");
-    tok.record(elapsed_ms);
+    TTZoneScopedD(JIT);
+    static auto& tok = BuildCacheTelemetry::inst().get_or_register_metric("jit_build");
+    record_elapsed(tok, [&] { build.build(settings); });
 }
 
 void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
     TT_ASSERT(!targets.empty());
-    auto t0 = std::chrono::steady_clock::now();
     const JitBuildState& primary = *targets[0];
-    primary.build(settings, targets);
-    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build_for_processors");
-    tok.record(elapsed_ms);
+    static auto& tok = BuildCacheTelemetry::inst().get_or_register_metric("jit_build_for_processors");
+    record_elapsed(tok, [&] { primary.build(settings, targets); });
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
@@ -922,8 +1277,27 @@ void launch_build_step(const std::function<void()>& build_func, std::vector<std:
 }
 
 void sync_build_steps(std::vector<std::shared_future<void>>& events) {
+    // Join EVERY build step before returning, even when one throws.
+    //
+    // A build_func runs asynchronously and captures locals BY REFERENCE — e.g.
+    // jit_build_subset's `[&build, settings]` over the by-value `build_subset`, and
+    // JitBuildState::compile's `[this, &out_dir, ...]`. Those locals are destroyed as soon as
+    // the enclosing scope unwinds. If we let the first exception propagate straight out of this
+    // loop, the remaining in-flight tasks keep running against references that are about to be
+    // freed (shared_future's destructor does not wait) — a use-after-scope. So we wait on all
+    // futures first, stash the first exception, and rethrow it only once nothing is still running.
+    std::exception_ptr first_error;
     for (auto& event : events) {
-        event.get();
+        try {
+            event.get();
+        } catch (...) {
+            if (!first_error) {
+                first_error = std::current_exception();
+            }
+        }
+    }
+    if (first_error) {
+        std::rethrow_exception(first_error);
     }
 }
 
@@ -931,6 +1305,15 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
     if (!JitBuildCache::inst().build_once(hash, build_fn)) {
         BuildCacheTelemetry::inst().record_jit_once_dedup();
     }
+}
+
+bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn) {
+    const auto status = JitBuildCache::inst().build_once_no_wait(hash, build_fn);
+    // An in-progress caller records its dedup later, when it joins through jit_build_once().
+    if (status == JitBuildCache::BuildOnceStatus::AlreadyBuilt) {
+        BuildCacheTelemetry::inst().record_jit_once_dedup();
+    }
+    return status != JitBuildCache::BuildOnceStatus::InProgress;
 }
 
 void jit_build_cache_clear() {

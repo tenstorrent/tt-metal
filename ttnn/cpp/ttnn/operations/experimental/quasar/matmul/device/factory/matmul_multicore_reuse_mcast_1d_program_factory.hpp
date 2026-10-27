@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/matmul_1d_type.hpp"
@@ -22,6 +23,11 @@ struct matmul_mcast_1d_common_override_variables_t {
     ttnn::prim::qsr::Matmul1DType type{};
 };
 
+// Ported to the Metal 2.0 host API (create_program_artifacts / ProgramArtifacts) for the resnet50
+// mcast paths (mcast_in0 / mcast_in1, interleaved + sharded). The legacy ProgramDescriptor
+// create_descriptor entry point and its pybind-only core_range_set parameter have been removed; the
+// shared mcast/compute kernels are served from _metal2-suffixed forks so the not-yet-ported sibling
+// factories (dram_sharded / batched_hs / sparse / gather_in0 MeshWorkload) keep using the originals.
 struct MatmulMultiCoreReuseMcast1DProgramFactory {
     using shared_variables_t = matmul_mcast_1d_common_override_variables_t;
 
@@ -32,11 +38,10 @@ struct MatmulMultiCoreReuseMcast1DProgramFactory {
         const ttnn::prim::qsr::MatmulInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ttnn::prim::qsr::MatmulParams& operation_attributes,
         const ttnn::prim::qsr::MatmulInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value,
-        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
+        std::vector<ttnn::Tensor>& tensor_return_value);
 };
 
 struct MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory {

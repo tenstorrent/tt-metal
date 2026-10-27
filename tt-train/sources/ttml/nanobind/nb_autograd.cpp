@@ -68,7 +68,7 @@ void py_module(nb::module_& m) {
         py_tensor.def(nb::init<>());
         py_tensor.def(nb::init<const Tensor&>());
         py_tensor.def(nb::init<Tensor&&>());
-        py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
+        py_tensor.def(nb::init<const ttnn::Tensor&, bool>());
         py_tensor.def_prop_ro(
             "tensor",
             [](const TensorPtr& self) -> TensorPtr { return self; },
@@ -112,7 +112,9 @@ void py_module(nb::module_& m) {
         py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized, "Check if gradient is initialized");
         py_tensor.def(
             "assign",
-            [](const TensorPtr& self, const TensorPtr& other) { self->set_value(other->get_value()); },
+            [](const TensorPtr& self, const TensorPtr& other) {
+                self->assign(other->get_value(PreferredPrecision::NATIVE));
+            },
             nb::arg("other"));
         py_tensor.def_static(
             "from_numpy",
@@ -147,16 +149,24 @@ void py_module(nb::module_& m) {
             "to_numpy",
             [](const Tensor& tensor,
                std::optional<tt::tt_metal::DataType> new_type,
-               ttnn::distributed::MeshToTensor* composer) {
-                return ttml::nanobind::util::make_numpy_tensor(
-                    tensor.get_value(PreferredPrecision::FULL), new_type, composer);
+               ttnn::distributed::MeshToTensor* composer,
+               std::optional<PreferredPrecision> precision) {
+                // By default, read the tensor as stored and convert a bf16 tensor to a float32 array on the host:
+                // the same array a FULL read gives, without creating an fp32 copy on the device.
+                const auto& value = tensor.get_value(precision.value_or(PreferredPrecision::NATIVE));
+                if (!precision && !new_type && value.dtype() == ttnn::DataType::BFLOAT16) {
+                    new_type = ttnn::DataType::FLOAT32;
+                }
+                return ttml::nanobind::util::make_numpy_tensor(value, new_type, composer);
             },
             nb::arg("new_type") = std::nullopt,
             nb::arg("composer") = nullptr,
-            "Construct a numpy tensor from a Tensor");
+            nb::arg("precision") = std::nullopt,
+            "Construct a numpy tensor from a Tensor. By default a bf16 tensor gives a float32 array, converted on the "
+            "host; precision= reads that view (HALF, FULL or NATIVE) without the conversion.");
         py_tensor.def(
             "to_string",
-            [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::FULL).write_to_string(); },
+            [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::NATIVE).write_to_string(); },
             "Return string representation of the Tensor");
         py_tensor.def(
             "shape",
@@ -171,8 +181,8 @@ void py_module(nb::module_& m) {
             "Get Tensor shape as list");
         py_tensor.def(
             "dtype",
-            [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::FULL).dtype(); },
-            "Get Tensor data type");
+            [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::NATIVE).dtype(); },
+            "Get the dtype the Tensor is stored in");
         py_tensor.def(
             "__add__",
             [](const TensorPtr& self, const AutocastTensor& other) { return ttml::ops::operator+(self, other); },
@@ -220,6 +230,13 @@ void py_module(nb::module_& m) {
             "get_instance", &AutoContext::get_instance, nb::rv_policy::reference, "Get singleton AutoContext instance");
         py_auto_context.def("set_seed", &AutoContext::set_seed, nb::arg("seed"), "Set seed");
         py_auto_context.def("get_seed", &AutoContext::get_seed, "Get seed");
+        py_auto_context.def(
+            "get_generator_state", &AutoContext::get_generator_state, "Serialize the RNG generator state");
+        py_auto_context.def(
+            "set_generator_state",
+            &AutoContext::set_generator_state,
+            nb::arg("state"),
+            "Restore the RNG generator state");
         py_auto_context.def(
             "add_backward_node",
             [](AutoContext& self, GradFunction grad_function, std::optional<nb::list> links_obj) {
@@ -352,12 +369,10 @@ void py_module(nb::module_& m) {
     // Module-level create_tensor functions for creating autograd tensors
     m.def(
         "create_tensor",
-        [](const tt::tt_metal::Tensor& value, bool requires_grad) -> TensorPtr {
-            return create_tensor(value, requires_grad);
-        },
+        [](const ttnn::Tensor& value, bool requires_grad) -> TensorPtr { return create_tensor(value, requires_grad); },
         nb::arg("value"),
         nb::arg("requires_grad") = true,
-        "Create an autograd Tensor from a tt::tt_metal::Tensor");
+        "Create an autograd Tensor from a ttnn::Tensor");
 
     m.def("create_tensor", []() -> TensorPtr { return create_tensor(); }, "Create an empty autograd Tensor");
 

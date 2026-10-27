@@ -4,8 +4,27 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "moe_ring_common.h"
+
+namespace {
+// LOCAL_OUTPUT: the e_t and final-output TensorAccessor args follow the three matmul tensors in the
+// compile-time args. They exist only when the mode is on; the disabled form parses the (always
+// present) first accessor so the never-taken branch stays well-formed.
+template <bool Enable, uint32_t Base>
+struct LocalOutputArgs {
+    static constexpr auto e_t_args = TensorAccessorArgs<0>();
+    static constexpr auto out_args = TensorAccessorArgs<0>();
+};
+template <uint32_t Base>
+struct LocalOutputArgs<true, Base> {
+    static constexpr auto e_t_args = TensorAccessorArgs<Base>();
+    static constexpr auto out_args = TensorAccessorArgs<e_t_args.next_compile_time_args_offset()>();
+};
+}  // namespace
 
 void kernel_main() {
     constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
@@ -48,19 +67,29 @@ void kernel_main() {
     // matmul<->combine semaphore wait/inc (no consumer to coordinate with).
     constexpr bool compute_only = get_named_compile_time_arg_val("compute_only") == 1;
 
+    // LOCAL_OUTPUT (a cluster axis of extent 1): no combine kernels. Each token row slice this core
+    // produces goes straight into the final [k, T, H] row-major output, page k * T + t, where (t, k)
+    // are the expert's e_t entries (word 0 token id, word 1 k slot) that the tilize drain publishes
+    // before it releases the matmul cores; dm1 fetches one chunk's entries per chunk. Only the rows
+    // of the experts this device holds are written; the other rows keep what the buffer held.
+    constexpr bool local_output = get_named_compile_time_arg_val("local_output") == 1;
+    // The matmul<->combine handshake exists only when combine kernels are built.
+    constexpr bool has_combine = !compute_only && !local_output;
+
     // Posted writes for matmul->combine output: in production, the matmul<->combine semaphore
     // handshake (noc_async_write barrier of `combine_semaphore_inc`) provides receiver-side
     // ordering, so posted writes are safe + faster. In compute_only there is no consumer to
     // coordinate with, and on Blackhole the host can read matmul_output_tensor before posted
     // writes have committed in destination L1 -> uninitialized bf16 -> NaN/Inf in PCC.
     // Use non-posted writes + ACK barrier in compute_only to guarantee destination commit.
-    constexpr bool kPostedWrite = !compute_only;
+    constexpr bool kPostedWrite = has_combine;
 
     std::array<uint32_t, 2 * height_shard_dim * width_shard_dim> output_shard_core_map = OUTPUT_SHARD_CORE_MAP;
 
     constexpr auto w0_w1_args = TensorAccessorArgs<0>();
     constexpr auto w2_args = TensorAccessorArgs<w0_w1_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
+    using LoArgs = LocalOutputArgs<local_output, out_args.next_compile_time_args_offset()>;
 
     // Run-time arguments
     uint32_t argidx = 0;
@@ -73,24 +102,45 @@ void kernel_main() {
     const auto ring_core_id = get_arg_val<uint32_t>(argidx++);
     const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
+    // LOCAL_OUTPUT: the final output and e_t addresses trail dm0's num_banks-entry shard_to_bank table.
+    uint32_t local_output_addr = 0;
+    uint32_t e_t_addr = 0;
+    if constexpr (local_output) {
+        constexpr uint32_t num_banks = get_named_compile_time_arg_val("num_banks");
+        argidx += num_banks;
+        local_output_addr = get_arg_val<uint32_t>(argidx++);
+        e_t_addr = get_arg_val<uint32_t>(argidx++);
+    }
+
+    Noc noc_obj(noc_index);
+    Noc noc1_obj(1);
 
     // CBs
-    constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_3;  // cb_r2c_w0
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_4;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_5;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_6;
-    constexpr auto cb_w2c_md = tt::CBIndex::c_7;
+    constexpr auto cb_s2c_in_id = tt::CBIndex::c_0;     // tilize_output_cb_id
+    constexpr auto cb_r2c_w0_w1_id = tt::CBIndex::c_3;  // cb_r2c_w0
+    constexpr auto cb_c2w_rdy_id = tt::CBIndex::c_4;
+    constexpr auto cb_w2c_rdy_id = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in2_id = tt::CBIndex::c_6;
+    constexpr auto cb_w2c_md_id = tt::CBIndex::c_7;
 
     // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
+    constexpr auto cb_c2s_out_id = tt::CBIndex::c_1;  // matmul_writer_cb_id
+    constexpr auto cb_r2c_w2_id = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
+
+    // CircularBuffer typed wrappers
+    CircularBuffer cb_s2c_in(cb_s2c_in_id);
+    CircularBuffer cb_c2w_rdy(cb_c2w_rdy_id);
+    CircularBuffer cb_w2c_rdy(cb_w2c_rdy_id);
+    CircularBuffer cb_s2c_in2(cb_s2c_in2_id);
+    CircularBuffer cb_w2c_md(cb_w2c_md_id);
+    CircularBuffer cb_c2s_out(cb_c2s_out_id);
+    CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
 
     // Tile sizes
-    [[maybe_unused]] constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
-    [[maybe_unused]] constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1);
-    [[maybe_unused]] constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
-    constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
+    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in_id);
+    constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1_id);
+    constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2_id);
+    constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2_id);
 
     // Pre-computed shard lookup tables — same LUT definitions as compute.cpp.
     constexpr auto shard_tiles_lut = moe_ring::make_shard_lut<Nt, num_cores>();
@@ -107,15 +157,38 @@ void kernel_main() {
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
         token_expert_row_offset * combine_shard_width_tiles * tile_width_size_bytes;
-    cb_reserve_back(cb_s2c_in, 1);
-    const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
-    cb_push_back(cb_s2c_in, 1);
+    cb_s2c_in.reserve_back(1);
+    const uint32_t output_base_l1_addr = cb_s2c_in.get_write_ptr();
+    cb_s2c_in.push_back(1);
     constexpr uint32_t source_width_tiles = Cfg::w2_tiles_per_expert_w;
     const uint32_t output_width_tiles_core = w2_shard_tiles_lut[ring_core_id];
     const uint32_t width_tile_base = w2_offset_lut[ring_core_id];
-    constexpr uint32_t RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim;
-    const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
+    // Combine columns this core's w2 width slice feeds; empty when the slice is (moe_ring_common.h).
+    // Must match the per-combine-core contributor lists built by the program factory.
+    const uint32_t combine_col_begin = moe_ring::w2_combine_col_begin(width_tile_base, combine_shard_width_tiles);
+    const uint32_t combine_col_end =
+        moe_ring::w2_combine_col_end(width_tile_base, output_width_tiles_core, combine_shard_width_tiles);
+    const uint32_t num_combine_cols = combine_col_end - combine_col_begin;
+    Semaphore<> combine_sem(matmul_combine_sync_semaphore_id);
+    // Device 2.0 migration: legacy primitive retained: raw L1 semaphore address used as the
+    // base for multicast destination addresses (safe_get_noc_addr below)
     const auto combine_semaphore_addr = get_semaphore(matmul_combine_sync_semaphore_id);
+
+    // LOCAL_OUTPUT geometry: this core's slice of every token row is output_width_tiles_core tiles of
+    // the hidden dim starting at tile width_tile_base; the map scratch holds one e_t entry per token
+    // of the current chunk.
+    [[maybe_unused]] constexpr uint32_t total_tokens = get_named_compile_time_arg_val("total_tokens");
+    [[maybe_unused]] constexpr uint32_t e_t_entry_size = get_named_compile_time_arg_val("e_t_entry_size");
+    [[maybe_unused]] constexpr uint32_t e_t_entry_words = e_t_entry_size / sizeof(uint32_t);
+    static_assert(e_t_entry_size >= 2 * sizeof(uint32_t), "an e_t entry holds the token id and the k slot");
+    [[maybe_unused]] const uint32_t local_output_row_bytes = output_width_tiles_core * tile_width_size_bytes;
+    [[maybe_unused]] const uint32_t local_output_col_offset_bytes = width_tile_base * tile_width_size_bytes;
+    uint32_t local_output_map_addr = 0;
+    if constexpr (local_output) {
+        CircularBuffer cb_local_output_map(get_named_compile_time_arg_val("local_output_map_cb_id"));
+        cb_local_output_map.reserve_back(1);
+        local_output_map_addr = cb_local_output_map.get_write_ptr();
+    }
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -127,8 +200,9 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Ring NoC setup
     //-------------------------------------------------------------------------
+    Semaphore<> ring_sem(ring_semaphore_id);
     uint32_t semaphore_addr = get_semaphore(ring_semaphore_id);
-    volatile tt_l1_ptr uint32_t* my_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
+    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     const uint64_t neighbor_semaphore_noc_addr =
         get_noc_addr(ring_neighbor_physical_x, ring_neighbor_physical_y, semaphore_addr);
 
@@ -144,7 +218,8 @@ void kernel_main() {
     constexpr uint32_t a2a_remainder_size = a2a_remainder_tiles * in2_tile_size;
 
     // Source and destination addresses for the all2all
-    const uint32_t local_base_addr = get_write_ptr(cb_s2c_in2);
+    const uint32_t local_base_addr = cb_s2c_in2.get_write_ptr();
+    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     const uint64_t neighbor_base_addr =
         get_noc_addr(ring_neighbor_physical_x, ring_neighbor_physical_y, local_base_addr);
 
@@ -160,8 +235,8 @@ void kernel_main() {
     //-------------------------------------------------------------------------
 
     // Receive number of tokens per expert from the tilize cores
-    uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
+    Semaphore<> metadata_ready_sem(metadata_ready_semaphore_id);
+    metadata_ready_sem.wait_min(1);
 
     // Signal to the compute core that num_tokens_per_expert has arrived.
     // We also use this CB to transfer (from the writer to compute) 2 semaphore addresses:
@@ -169,16 +244,16 @@ void kernel_main() {
     // - 1: address of semaphore used to notify matmuls cores that tilized chunks have arrived
 
     // Read per-expert token counts from CB
-    const auto num_tokens_per_expert_addr = get_read_ptr(per_expert_total_tokens_cb_id);
+    const auto num_tokens_per_expert_addr = cb_per_expert_total_tokens.get_read_ptr();
     volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(num_tokens_per_expert_addr);
 
+    cb_w2c_md.reserve_back(2);
     volatile tt_l1_ptr uint32_t* cb_w2c_md_write_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_w2c_md));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md.get_write_ptr());
     cb_w2c_md_write_ptr[0] = num_tokens_per_expert_addr;
     cb_w2c_md_write_ptr[1] = get_semaphore(matmul_chunk_ready_semaphore_id);
-    cb_reserve_back(cb_w2c_md, 2);
-    cb_push_back(cb_w2c_md, 2);
+    cb_w2c_md.push_back(2);
 
     // Precompute NUM_CHUNKS_PER_EXPERT
     uint32_t NUM_TOKENS_PER_EXPERT[num_experts];
@@ -190,28 +265,30 @@ void kernel_main() {
     }
 
     // Tilize core we signal to that tilize cores can send another chunk of tiles
+    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     uint64_t matmul_chunk_available_semaphore_noc_addr = get_noc_addr(
         tilize_drain_core_noc_x, tilize_drain_core_noc_y, get_semaphore(matmul_chunk_available_semaphore_id));
 
     // Signal to combine cores that chunk is available
     auto combine_semaphore_inc = [&](const uint32_t inc = 1) {
-        for (uint32_t y = 0; y < height_shard_dim; ++y) {
-            const uint32_t idx = combine_core_x + y * width_shard_dim;
-            const uint64_t dest_sem_noc_addr = safe_get_noc_addr(
-                output_shard_core_map[2 * idx],
-                output_shard_core_map[2 * idx + 1],
-                combine_semaphore_addr,
-                /*noc_id=*/1);
-            noc_semaphore_inc</*posted=*/true>(dest_sem_noc_addr, inc, /*noc_id=*/1, vchannel);
-        };
-        noc_async_posted_writes_flushed(/*noc=*/1);
+        for (uint32_t x = combine_col_begin; x < combine_col_end; ++x) {
+            for (uint32_t y = 0; y < height_shard_dim; ++y) {
+                const uint32_t idx = x + y * width_shard_dim;
+                const uint64_t dest_sem_noc_addr = safe_get_noc_addr(
+                    output_shard_core_map[2 * idx],
+                    output_shard_core_map[2 * idx + 1],
+                    combine_semaphore_addr,
+                    /*noc_id=*/1);
+                noc_semaphore_inc</*posted=*/true>(dest_sem_noc_addr, inc, /*noc_id=*/1, vchannel);
+            }
+        }
+        noc1_obj.async_writes_flushed<NocOptions::POSTED>();
     };
 
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
     bool output_buffer_idx = 0;
-    auto* combine_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(combine_semaphore_addr);
     // both sections of the double buffer are initially free
     uint32_t combine_semaphore_val = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
@@ -225,14 +302,32 @@ void kernel_main() {
         uint32_t shard_row_start = 0;
 
         // required to prevent a race with combine writer (only relevant in production:
-        // compute_only has no combine writer to coordinate with).
-        if constexpr (!compute_only) {
+        // compute_only and local_output have no combine writer to coordinate with).
+        if constexpr (has_combine) {
             if (num_expert_chunks == 0) {
-                noc_semaphore_wait(combine_semaphore_ptr, combine_semaphore_val);
+                combine_sem.wait(combine_semaphore_val);
             }
         }
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
+            const uint32_t num_tokens_block = std::min(tile_height, active_tokens - chunk * tile_height);
+            if constexpr (local_output) {
+                // Fetch this chunk's (token id, k slot) e_t entries; the read completes under the ring
+                // A2A below and is waited for right before the output writes. A core with an empty w2
+                // slice (hidden_tiles < ring size) owns no output columns and neither reads nor writes.
+                if (output_width_tiles_core > 0) {
+                    const auto e_t_accessor = TensorAccessor(LoArgs::e_t_args, e_t_addr);
+                    noc_async_read(
+                        e_t_accessor.get_noc_addr(expert_id, chunk * tile_height * e_t_entry_size, /*noc=*/1),
+                        local_output_map_addr,
+                        num_tokens_block * e_t_entry_size,
+                        /*noc=*/1);
+                }
+            }
+
+            // Device 2.0 migration: legacy primitives retained: state-machine setup
+            // (noc_async_write_one_packet_set_state, noc_inline_dw_write_set_state) has no
+            // Device 2.0 wrappers
             if constexpr (a2a_full_packets == 0 || a2a_remainder_tiles == 0) {
                 // Set only once here if there is only 1 type of packet: either all full with none partial, or none full
                 // with one partial
@@ -256,8 +351,8 @@ void kernel_main() {
 #endif
 
             // Wait for compute core to tell us that all mm01 data is ready
-            cb_wait_front(cb_c2w_rdy, 1);
-            cb_pop_front(cb_c2w_rdy, 1);
+            cb_c2w_rdy.wait_front(1);
+            cb_c2w_rdy.pop_front(1);
 
             // Take the data in cb_s2c_in2 and send it to the next core in the ring
             // Ring synchronization: all cores participate regardless of whether they had CB work
@@ -265,21 +360,18 @@ void kernel_main() {
                 for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
                     if constexpr (a2a_full_packets > 0 && a2a_remainder_tiles > 0) {
                         // Resetting required as both full and partial packets exist
+                        // Device 2.0 migration: legacy primitive retained: state-machine setup
+                        // (noc_async_write_one_packet_set_state) has no Device 2.0 wrapper
                         noc_async_write_one_packet_set_state</*posted=*/true>(
                             neighbor_base_addr, a2a_full_packet_size, /*noc=*/1, vchannel);
                     }
 
                     // Wait for current data to be ready in cb_s2c_in2
-#if !defined(ARCH_BLACKHOLE)
-                    while ((*my_semaphore_ptr) < semaphore_value) {
-                    };
-#else
-                    // on BH we use standard semaphore APIs AND require the cache invalidation they provide
-                    noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value);
-#endif
+                    ring_sem.wait_min(semaphore_value);
+
                     // Signal to compute core that data is ready
-                    cb_reserve_back(cb_w2c_rdy, 1);
-                    cb_push_back(cb_w2c_rdy, 1);
+                    cb_w2c_rdy.reserve_back(1);
+                    cb_w2c_rdy.push_back(1);
 
                     // Write tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
                     // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
@@ -305,16 +397,20 @@ void kernel_main() {
                     }
 
                     // Signal neighbor that data is ready (increment their semaphore value).
-                    // Receiver waits via `while ((*my_semaphore_ptr) < semaphore_value)`; both
-                    // arches advance `semaphore_value` by 1 here, just by different mechanisms.
+                    // Receiver waits via Semaphore<>::wait_min(semaphore_value); both arches
+                    // advance `semaphore_value` by 1 here, just by different mechanisms.
 #if defined(ARCH_BLACKHOLE)
                     // BH-safe: noc_inline_dw_write_with_state to L1 hangs on BH
                     // (dataflow_api.h:2140,2181). Use atomic-increment pattern instead;
                     // receiver-side wait condition is value-equivalent.
+                    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
+                    // (neighbor_semaphore_noc_addr) cannot be wrapped by Semaphore<>::inc
                     noc_semaphore_inc</*posted=*/true>(neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, vchannel);
                     ++semaphore_value;
 #else
                     // WH: original stateful path.
+                    // Device 2.0 migration: legacy primitive retained: paired with
+                    // noc_inline_dw_write_set_state above
                     noc_inline_dw_write_with_state<
                         /*update_addr_lo=*/false,
                         /*update_counter=*/true,
@@ -324,117 +420,154 @@ void kernel_main() {
 #endif
 
                     // Ensure writes have left the core before continuing
-                    noc_async_posted_writes_flushed(1);
+                    noc1_obj.async_writes_flushed<NocOptions::POSTED>();
                 }
             }
 
-            uint32_t width_tiles_to_send = output_width_tiles_core;  // split width of hidden dim, maybe padded
-            uint32_t width_tiles_sent = 0;
+            cb_c2s_out.wait_front(num_w0_w1_tiles_h);
 
-            const uint32_t num_tokens_block = std::min(tile_height, active_tokens - chunk * tile_height);
-
-            cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
-
-            const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
+            const uint32_t source_base_l1_addr = cb_c2s_out.get_read_ptr();
             [[maybe_unused]] const uint32_t elts_per_page = source_width_tiles * tile_width;
 
-            while (width_tiles_to_send > 0) {
-                const uint32_t width_tile_start = width_tile_base + width_tiles_sent;
-                const uint32_t dest_width_shard = width_tile_start / combine_shard_width_tiles;
-                const uint32_t dest_width_offset_tiles = width_tile_start % combine_shard_width_tiles;
-
-                const uint32_t dest_width_offset_bytes = dest_width_offset_tiles * tile_width_size_bytes;
-
-                const uint32_t width_transfer_tiles = std::min(
-                    combine_shard_width_tiles - dest_width_offset_tiles, output_width_tiles_core - width_tiles_sent);
-                const uint32_t width_transfer_bytes = width_transfer_tiles * tile_width_size_bytes;
-
-                // In production: at each expert's first chunk, wait for combine to signal that the
-                // buffer segment is available. The wait also acts as an implicit barrier between
-                // experts -- `noc_async_write_one_packet_set_state` sets a global size state for
-                // subsequent posted writes, and consecutive experts may use different
-                // `width_transfer_bytes`. Without the inter-expert barrier, queued writes from a
-                // prior expert could be issued with the next expert's state.
-                // In compute_only there's no consumer to wait for, so we explicitly flush previous
-                // chunk's writes before reissuing set_state for this chunk.
-                if constexpr (compute_only) {
-                    noc_async_writes_flushed(/*noc=*/1);  // non-posted in compute_only; use NON-posted flush API
-                } else if (chunk == 0) {
-                    noc_semaphore_wait(combine_semaphore_ptr, combine_semaphore_val);
-                }
-
-                uint32_t dest_height_shard = dest_height_shard_start;
-                uint32_t shard_row = shard_row_start;
-                for (uint32_t bt = 0; bt < num_tokens_block; ++bt) {
-                    const uint32_t shard_row_offset_bytes =
-                        shard_row * combine_shard_width_tiles * tile_width_size_bytes;
-
-                    const auto dest_noc_x =
-                        output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard)];
-                    const auto dest_noc_y =
-                        output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard) + 1];
-
-                    const uint64_t dest_noc_addr_base = get_noc_addr(dest_noc_x, dest_noc_y, output_base_l1_addr, 1);
-                    noc_async_write_one_packet_set_state</*posted=*/kPostedWrite>(
-                        dest_noc_addr_base, width_transfer_bytes, /*noc=*/1, vchannel);
-
-                    const uint32_t dest_l1_addr = output_base_l1_addr + output_buffer_offset_bytes +
-                                                  dest_width_offset_bytes + shard_row_offset_bytes;
-
-                    const uint32_t source_l1_addr =
-                        source_base_l1_addr + (bt * source_width_tiles + width_tiles_sent) * tile_width_size_bytes;
-
-                    noc_async_write_one_packet_with_state</*posted=*/kPostedWrite>(source_l1_addr, dest_l1_addr);
-
-                    if (++shard_row == ((dest_height_shard < tokens_per_height_shard_rem)
-                                            ? tokens_per_height_shard_chunk + 1
-                                            : tokens_per_height_shard_chunk)) {
-                        ++dest_height_shard;
-                        shard_row = 0;
+            if constexpr (local_output) {
+                // Final output rows: row bt of this chunk belongs to token (t, k) of the expert's e_t
+                // page; this core's slice of it lands in page k * T + t of [k, T, H] at the core's
+                // column offset. Non-posted writes; the flush before pop_front below frees the source.
+                if (output_width_tiles_core > 0) {
+                    noc_async_read_barrier(/*noc=*/1);
+                    volatile tt_l1_ptr uint32_t* map =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_output_map_addr);
+                    const auto output_accessor = TensorAccessor(LoArgs::out_args, local_output_addr);
+                    for (uint32_t bt = 0; bt < num_tokens_block; ++bt) {
+                        const uint32_t token_id = map[bt * e_t_entry_words];
+                        const uint32_t k_slot = map[bt * e_t_entry_words + 1];
+                        const uint64_t dst_noc_addr = output_accessor.get_noc_addr(
+                            k_slot * total_tokens + token_id, local_output_col_offset_bytes, /*noc=*/1);
+                        noc_async_write(
+                            source_base_l1_addr + bt * source_width_tiles * tile_width_size_bytes,
+                            dst_noc_addr,
+                            local_output_row_bytes,
+                            /*noc=*/1);
                     }
                 }
-                width_tiles_sent += width_transfer_tiles;
-                width_tiles_to_send -= width_transfer_tiles;
+            } else {
+                // Staging ring rows for the fused combine (or the kernel-less combine cores' L1 in
+                // compute_only).
+                uint32_t width_tiles_to_send = output_width_tiles_core;  // split width of hidden dim, maybe padded
+                uint32_t width_tiles_sent = 0;
 
-                if (width_tiles_to_send == 0) {
-                    dest_height_shard_start = dest_height_shard;
-                    shard_row_start = shard_row;
+                while (width_tiles_to_send > 0) {
+                    const uint32_t width_tile_start = width_tile_base + width_tiles_sent;
+                    const uint32_t dest_width_shard = width_tile_start / combine_shard_width_tiles;
+                    const uint32_t dest_width_offset_tiles = width_tile_start % combine_shard_width_tiles;
+
+                    const uint32_t dest_width_offset_bytes = dest_width_offset_tiles * tile_width_size_bytes;
+
+                    const uint32_t width_transfer_tiles = std::min(
+                        combine_shard_width_tiles - dest_width_offset_tiles,
+                        output_width_tiles_core - width_tiles_sent);
+                    const uint32_t width_transfer_bytes = width_transfer_tiles * tile_width_size_bytes;
+
+                    // In production: at each expert's first chunk, wait for combine to signal that the
+                    // buffer segment is available. The wait also acts as an implicit barrier between
+                    // experts -- `noc_async_write_one_packet_set_state` sets a global size state for
+                    // subsequent posted writes, and consecutive experts may use different
+                    // `width_transfer_bytes`. Without the inter-expert barrier, queued writes from a
+                    // prior expert could be issued with the next expert's state.
+                    // In compute_only there's no consumer to wait for, so we explicitly flush previous
+                    // chunk's writes before reissuing set_state for this chunk.
+                    if constexpr (compute_only) {
+                        noc1_obj.async_writes_flushed();  // non-posted in compute_only; use NON-posted flush API
+                    } else if (chunk == 0) {
+                        combine_sem.wait(combine_semaphore_val);
+                    }
+
+                    uint32_t dest_height_shard = dest_height_shard_start;
+                    uint32_t shard_row = shard_row_start;
+                    for (uint32_t bt = 0; bt < num_tokens_block; ++bt) {
+                        const uint32_t shard_row_offset_bytes =
+                            shard_row * combine_shard_width_tiles * tile_width_size_bytes;
+
+                        const auto dest_noc_x =
+                            output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard)];
+                        const auto dest_noc_y =
+                            output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard) + 1];
+
+                        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
+                        // used as state-machine base
+                        const uint64_t dest_noc_addr_base =
+                            get_noc_addr(dest_noc_x, dest_noc_y, output_base_l1_addr, 1);
+                        // Device 2.0 migration: legacy primitive retained: state-machine setup
+                        // (noc_async_write_one_packet_set_state) has no Device 2.0 wrapper
+                        noc_async_write_one_packet_set_state</*posted=*/kPostedWrite>(
+                            dest_noc_addr_base, width_transfer_bytes, /*noc=*/1, vchannel);
+
+                        const uint32_t dest_l1_addr = output_base_l1_addr + output_buffer_offset_bytes +
+                                                      dest_width_offset_bytes + shard_row_offset_bytes;
+
+                        const uint32_t source_l1_addr =
+                            source_base_l1_addr + (bt * source_width_tiles + width_tiles_sent) * tile_width_size_bytes;
+
+                        // Device 2.0 migration: legacy primitive retained: paired with
+                        // noc_async_write_one_packet_set_state above
+                        noc_async_write_one_packet_with_state</*posted=*/kPostedWrite>(source_l1_addr, dest_l1_addr);
+
+                        if (++shard_row == ((dest_height_shard < tokens_per_height_shard_rem)
+                                                ? tokens_per_height_shard_chunk + 1
+                                                : tokens_per_height_shard_chunk)) {
+                            ++dest_height_shard;
+                            shard_row = 0;
+                        }
+                    }
+                    width_tiles_sent += width_transfer_tiles;
+                    width_tiles_to_send -= width_transfer_tiles;
+
+                    if (width_tiles_to_send == 0) {
+                        dest_height_shard_start = dest_height_shard;
+                        shard_row_start = shard_row;
+                    }
                 }
-            }
+            }  // staging ring rows
 
             // Source CB recycle barrier: must wait for NIU to finish READING source L1 before
-            // cb_pop_front recycles those pages. compute_only path uses non-posted writes
-            // (kPostedWrite=false), so the posted-write counter is 0 -> posted-flush is a no-op
-            // and cb_pop_front would race with in-flight reads -> source clobber.
-            if constexpr (compute_only) {
-                noc_async_writes_flushed(/*noc=*/1);  // non-posted: flush issuer queue for non-posted writes
+            // cb_pop_front recycles those pages. compute_only and local_output use non-posted
+            // writes (kPostedWrite=false), so the posted-write counter is 0 -> posted-flush is a
+            // no-op and cb_pop_front would race with in-flight reads -> source clobber.
+            if constexpr (!has_combine) {
+                noc1_obj.async_writes_flushed();  // non-posted: flush issuer queue for non-posted writes
             } else {
-                noc_async_posted_writes_flushed(/*noc=*/1);  // production: original posted flush
+                noc1_obj.async_writes_flushed<NocOptions::POSTED>();  // production: original posted flush
             }
-            cb_pop_front(cb_c2s_out, num_w0_w1_tiles_h);
+            cb_c2s_out.pop_front(num_w0_w1_tiles_h);
 
             // Signal to tilize cores that they can send another chunk of tiles
+            // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
+            // (matmul_chunk_available_semaphore_noc_addr) cannot be wrapped by Semaphore<>::inc
             noc_semaphore_inc</*posted=*/true>(
                 matmul_chunk_available_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
         }
-        if constexpr (!compute_only) {
+        if constexpr (has_combine) {
             combine_semaphore_inc();
-            combine_semaphore_val += height_shard_dim;
+            // Every combine core we signalled releases us once per expert.
+            combine_semaphore_val += height_shard_dim * num_combine_cols;
         }
         // (compute_only branch: nothing to do -- the next expert's first chunk flushes any
         //  in-flight writes via the inter-chunk flush before its set_state. Output buffer
-        //  toggle below picks the other half so there's no destination overlap either.)
+        //  toggle below picks the other half so there's no destination overlap either.
+        //  local_output: every chunk's writes were flushed before pop_front; the commit of the
+        //  output is waited for once at the end.)
         output_buffer_idx = !output_buffer_idx;
     }
 
-    if constexpr (compute_only) {
-        // Non-posted matmul->combine writes need ACK-barrier (not just issuer-queue flush)
-        // so destination L1 is committed before host reads matmul_output_tensor.
-        noc_async_write_barrier(/*noc=*/1);
+    if constexpr (!has_combine) {
+        // Non-posted writes need the ACK barrier (not just the issuer-queue flush) so the
+        // destination (compute_only: the matmul output L1; local_output: the final output tensor)
+        // is committed before the host or the next op reads it.
+        noc1_obj.async_full_barrier();
     } else {
         // wait for combine to do its final semaphore increment before resetting. Otherwise, leads to hang.
-        noc_semaphore_wait(combine_semaphore_ptr, combine_semaphore_val);
-        noc_semaphore_set(combine_semaphore_ptr, 0);
-        noc_async_posted_writes_flushed(/*noc=*/1);
+        combine_sem.wait(combine_semaphore_val);
+        combine_sem.set(0);
+        noc1_obj.async_writes_flushed<NocOptions::POSTED>();
     }
 }

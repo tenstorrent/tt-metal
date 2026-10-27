@@ -13,7 +13,6 @@ import os
 from pathlib import Path
 from typing import Dict
 
-import ml_dtypes
 import numpy as np
 
 import ttnn
@@ -68,21 +67,6 @@ def _pad_and_resize(arr: np.ndarray, tgt_rows: int, tgt_cols: int) -> np.ndarray
     return out
 
 
-def _to_bf16_4d(arr: np.ndarray) -> np.ndarray:
-    """Convert to bfloat16 and reshape to 4D [1, 1, *, *]."""
-    if arr.ndim == 1:
-        arr = arr.reshape(1, 1, 1, -1)
-    elif arr.ndim == 2:
-        arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
-    return arr.astype(ml_dtypes.bfloat16)
-
-
-def _assign_tensor(param, arr_4d: np.ndarray, mapper=None) -> None:
-    """Overwrite *param* with a TTML tensor built from *arr_4d*, optionally sharded via *mapper*."""
-    restored = ttml.autograd.Tensor.from_numpy(arr_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper=mapper)
-    param.assign(restored)
-
-
 def _make_tp_mapper(shard_type):
     """Create a shard-to-mesh mapper for the given shard type, or ``None`` if replicated.
 
@@ -94,6 +78,31 @@ def _make_tp_mapper(shard_type):
         return None
     dim = 2 if shard_type == "col_w" else 3
     return ttml.mesh().axis_mapper("tp", tdim=dim)
+
+
+def _param_tp_shard_type(param):
+    """Shard type of *param* along the 'tp' mesh axis, read from its live layout.
+
+    Mirrors ``checkpointing._load_params``: instead of hard-coding which module
+    produced the weight, ask the destination parameter how it is sharded.
+      - sharded on dim 2 (rows / output features) -> ``"col_w"``
+      - sharded on dim 3 (cols / hidden features)  -> ``"row_w"``
+      - replicated, or no 'tp' axis                -> ``None``
+    """
+    placements = ttml.Sharding.from_tensor(param).placements
+    if placements is None:  # unit mesh / no topology
+        return None
+    tp_axis = ttml.mesh().axis_index("tp")
+    if tp_axis >= len(placements):
+        return None
+    p = placements[tp_axis]
+    if not isinstance(p, ttnn.PlacementShard):  # replicated on the tp axis
+        return None
+    if p.dim == 2:
+        return "col_w"
+    if p.dim == 3:
+        return "row_w"
+    raise ValueError(f"weight is sharded on dim {p.dim} over the 'tp' axis; expected dim 2 (rows) or dim 3 (hidden).")
 
 
 def load_from_safetensors(
@@ -164,20 +173,45 @@ def load_from_safetensors(
         k = k_staged.pop(layer_idx)
         v = v_staged.pop(layer_idx)
 
-        combined = np.concatenate([k, v], axis=0)
+        # Ensure K/V have shape [kv_out, hidden] (rows = output features) so the shard axis
+        # (rows / dim 2) matches ColumnParallelLinear. full_rows is the fused
+        # kv_linear row count (2*kv_out), so full_rows // 2 == kv_out.
+        if k.shape[0] != full_rows // 2 or k.shape[1] != full_cols:
+            raise RuntimeError(
+                f"Unexpected k_proj shape {tuple(k.shape)} at layer {layer_idx}: expected "
+                f"[kv_out, hidden] = [{full_rows // 2}, {full_cols}]. Check that the "
+                f"LlamaConfig matches the checkpoint."
+            )
+
+        # Fused KV layout under ColumnParallel TP: the kv_linear output rows are
+        # sharded CONTIGUOUSLY across tp devices, and per device grouped_heads_creation
+        # splits the LOCAL kv width at its midpoint into [K_local | V_local]. A naive
+        # [all-K ; all-V] concat puts the K/V boundary at the GLOBAL midpoint, which
+        # does not line up with the per-device local midpoints for tp>1 (device 0 gets
+        # all K, device 1 all V, etc.). So group the rows PER SHARD as
+        # [K_s0, V_s0, K_s1, V_s1, ...]: then contiguous shard s = [K_shard_s | V_shard_s]
+        # lands on device s as exactly [K_local | V_local]. At tp_size=1 this reduces to
+        # the plain [K ; V] concat.
+        kv_out = k.shape[0]
+        if kv_out % tp_size != 0:
+            raise RuntimeError(f"kv_out {kv_out} not divisible by tp_size {tp_size} at layer {layer_idx}")
+        per = kv_out // tp_size
+        hidden = k.shape[1]
+        k_blk = k.reshape(tp_size, per, hidden)
+        v_blk = v.reshape(tp_size, per, hidden)
+        # stack -> [tp, 2, per, hidden]; row-major flatten -> K_s0, V_s0, K_s1, V_s1, ...
+        combined = np.stack([k_blk, v_blk], axis=1).reshape(2 * kv_out, hidden)
+
         cr, cc = combined.shape
         if cr != full_rows or cc != full_cols:
-            if cc == full_rows and cr == full_cols:
-                combined = combined.T
-            else:
-                raise RuntimeError(
-                    f"KV concat shape mismatch at layer {layer_idx}: "
-                    f"combined=({cr}x{cc}), target=({full_rows}x{full_cols})"
-                )
+            raise RuntimeError(
+                f"KV combine shape mismatch at layer {layer_idx}: "
+                f"combined=({cr}x{cc}), target=({full_rows}x{full_cols})"
+            )
 
         mapper = _make_tp_mapper(shard_type)
-        _assign_tensor(param, _to_bf16_4d(combined), mapper=mapper)
-        print(f"  Combined k_proj + v_proj -> kv_linear for layer {layer_idx}")
+        ttml.autograd.assign_numpy(param, combined, mapper=mapper)
+        print(f"  Combined k_proj + v_proj -> kv_linear (per-shard interleave, tp={tp_size}) for layer {layer_idx}")
 
     weight_tying = config.weight_tying
 
@@ -194,11 +228,16 @@ def load_from_safetensors(
         ):
             from ttml.models import WeightTyingType
 
-            emb_param_name = "Llama/fc/weight" if weight_tying == WeightTyingType.Enabled else "Llama/tok_emb/weight"
+            tied = weight_tying == WeightTyingType.Enabled
+            emb_param_name = "Llama/fc/weight" if tied else "Llama/tok_emb/weight"
             param = get_param(emb_param_name)
             tgt = param.shape()
-            resized = _pad_and_resize(hf_arr, tgt[-2], tgt[-1])
-            _assign_tensor(param, _to_bf16_4d(resized))
+            shard_type = _param_tp_shard_type(param) if use_tp else None
+            full_rows = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
+            full_cols = tgt[-1] * tp_size if shard_type == "row_w" else tgt[-1]
+            resized = _pad_and_resize(hf_arr, full_rows, full_cols)
+            mapper = _make_tp_mapper(shard_type)
+            ttml.autograd.assign_numpy(param, resized, mapper=mapper)
             continue
 
         # ── LM head ──
@@ -212,13 +251,13 @@ def load_from_safetensors(
                 full_rows = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
                 resized = _pad_and_resize(hf_arr, full_rows, tgt[-1])
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(resized), mapper=mapper)
+                ttml.autograd.assign_numpy(param, resized, mapper=mapper)
             continue
 
         # ── Final RMSNorm ──
         if hf_name in ("model.norm.weight", "norm.weight"):
             param = get_param("Llama/ln_fc/gamma")
-            _assign_tensor(param, _to_bf16_4d(hf_arr))
+            ttml.autograd.assign_numpy(param, hf_arr)
             continue
 
         # ── Per-layer weights ──
@@ -233,7 +272,7 @@ def load_from_safetensors(
                 f"{pfx2}.input_layernorm.weight",
             ):
                 param = get_param(f"Llama/blocks/{i}/attention_norm/gamma")
-                _assign_tensor(param, _to_bf16_4d(hf_arr))
+                ttml.autograd.assign_numpy(param, hf_arr)
                 matched = True
                 break
 
@@ -243,7 +282,7 @@ def load_from_safetensors(
                 f"{pfx2}.post_attention_layernorm.weight",
             ):
                 param = get_param(f"Llama/blocks/{i}/mlp_norm/gamma")
-                _assign_tensor(param, _to_bf16_4d(hf_arr))
+                ttml.autograd.assign_numpy(param, hf_arr)
                 matched = True
                 break
 
@@ -262,11 +301,11 @@ def load_from_safetensors(
                 if r == tr and c == tc:
                     pass
                 elif c == tr and r == tc:
-                    w = w.T
+                    w = np.ascontiguousarray(w.T)
                 else:
                     raise RuntimeError(f"q_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
+                ttml.autograd.assign_numpy(param, w, mapper=mapper)
                 matched = True
                 break
 
@@ -305,11 +344,11 @@ def load_from_safetensors(
                 if r == tr and c == tc:
                     pass
                 elif c == tr and r == tc:
-                    w = w.T
+                    w = np.ascontiguousarray(w.T)
                 else:
                     raise RuntimeError(f"o_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
+                ttml.autograd.assign_numpy(param, w, mapper=mapper)
                 matched = True
                 break
 
@@ -328,11 +367,11 @@ def load_from_safetensors(
                 if r == tr and c == tc:
                     pass
                 elif c == tr and r == tc:
-                    w = w.T
+                    w = np.ascontiguousarray(w.T)
                 else:
                     raise RuntimeError(f"gate_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
+                ttml.autograd.assign_numpy(param, w, mapper=mapper)
                 matched = True
                 break
 
@@ -351,11 +390,11 @@ def load_from_safetensors(
                 if r == tr and c == tc:
                     pass
                 elif c == tr and r == tc:
-                    w = w.T
+                    w = np.ascontiguousarray(w.T)
                 else:
                     raise RuntimeError(f"up_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
+                ttml.autograd.assign_numpy(param, w, mapper=mapper)
                 matched = True
                 break
 
@@ -374,11 +413,11 @@ def load_from_safetensors(
                 if r == tr and c == tc:
                     pass
                 elif c == tr and r == tc:
-                    w = w.T
+                    w = np.ascontiguousarray(w.T)
                 else:
                     raise RuntimeError(f"down_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
+                ttml.autograd.assign_numpy(param, w, mapper=mapper)
                 matched = True
                 break
 

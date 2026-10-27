@@ -9,14 +9,12 @@
 #include "accumulation_device_operation_types.hpp"
 
 #include <optional>
-#include <type_traits>
 #include <variant>
 
-#include "hostdevcommon/kernel_structs.h"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -26,16 +24,10 @@ using namespace ttsl;
 struct AccumulationDeviceOperation {
     using operation_attributes_t = AccumulationParams;
     using tensor_args_t = AccumulationInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct AccumulationProgramFactory {
-        enum class AccumulationCB : std::underlying_type_t<tt::CBIndex> {
-            SRC = tt::CBIndex::c_0,
-            DST = tt::CBIndex::c_1,
-            ACC = tt::CBIndex::c_2
-        };
-
         static constexpr std::array<const char*, 3> KERNEL_PATHS{
             "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
             "accumulation_reader.cpp",
@@ -43,7 +35,17 @@ struct AccumulationDeviceOperation {
             "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
             "accumulation_writer.cpp"};
 
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        // Scans along one of the two tile axes (H or W) in place; see is_tile_axis_accumulation.
+        static constexpr const char* TILE_AXIS_COMPUTE_KERNEL_PATH =
+            "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/compute/"
+            "accumulation_tile_axis_compute.cpp";
+
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static ttnn::device_operation::ProgramArtifacts create_tile_axis_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -60,9 +62,14 @@ struct AccumulationDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
+
+// True when the accumulation can run along `dim` without first permuting it to dim 0: `dim` is
+// one of the two tile axes (H or W) and the scan is a forward bf16 or fp32 cumsum or cumprod on
+// 32x32 tiles (only bf16 cumsum on Quasar). Every other combination still goes through the permute
+// (#24824 tracks the rest).
+bool is_tile_axis_accumulation(
+    const Tensor& input_tensor, int32_t dim, DataType output_dtype, bool flip, AccumulationOp op);
 
 ttnn::Tensor accumulation(
     const Tensor& input_tensor,
@@ -71,6 +78,7 @@ ttnn::Tensor accumulation(
     const bool& reverse_order,
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config,
-    AccumulationOp op);
+    AccumulationOp op,
+    bool disable_compensation = false);
 
 }  // namespace ttnn::prim

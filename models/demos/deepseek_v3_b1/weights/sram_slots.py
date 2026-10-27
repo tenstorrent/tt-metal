@@ -183,8 +183,10 @@ def per_core_l1_lowest_addr_on_cores(
 
     Lockstep tensors (the common case for attention weights) report the
     same address on every core in their grid via ``buffer_address()``.
-    Per-core-allocated tensors report a distinct address per core via
-    ``experimental_per_core_buffer_address(core)``.
+    Per-core-allocated tensors report a distinct address per (device, core) via
+    ``experimental_per_core_buffer_address(device_coord, core)``.  This reads the
+    tensor's first device only, so the headroom below describes that device; it
+    assumes the address is the same on every device, and does not check.
 
     Tensors that are not on device (host-only) are silently skipped --
     address queries are only meaningful post-allocation.
@@ -217,7 +219,9 @@ def per_core_l1_lowest_addr_on_cores(
             if c_xy not in target:
                 continue
             if is_per_core:
-                addr = tt_tensor.experimental_per_core_buffer_address(ttnn.CoreCoord(c_xy[0], c_xy[1]))
+                addr = tt_tensor.experimental_per_core_buffer_address(
+                    tt_tensor.device_coords()[0], ttnn.CoreCoord(c_xy[0], c_xy[1])
+                )
             else:
                 addr = tt_tensor.buffer_address()
             prev = lowest.get(c_xy)

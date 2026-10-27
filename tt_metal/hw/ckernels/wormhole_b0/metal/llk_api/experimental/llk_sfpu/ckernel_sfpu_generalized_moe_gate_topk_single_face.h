@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "sfpu/experimental/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
 
 using namespace sfpi;
@@ -28,6 +29,12 @@ inline void generalized_moe_gate_top8(uint32_t eps, uint32_t scale) {
     _generalized_moe_gate_top8<APPROXIMATION_MODE, is_fp32_dest_acc_en>(eps, scale);
 }
 
+// Keep the two-argument functor above callable through SFPU_UNARY_CALL unchanged.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void generalized_moe_gate_top8_scaled(uint32_t eps, uint32_t scale, uint32_t extra_scale) {
+    _generalized_moe_gate_top8<APPROXIMATION_MODE, is_fp32_dest_acc_en, true>(eps, scale, extra_scale);
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, uint32_t read_base, uint32_t store_lo, uint32_t store_hi>
 inline void generalized_moe_gate_merge4_top8() {
     _gmg_merge4_top8<is_fp32_dest_acc_en, read_base, store_lo, store_hi>();
@@ -38,20 +45,13 @@ inline void generalized_moe_gate_merge16_to_run() {
     _gmg_merge16_to_run<APPROXIMATION_MODE, is_fp32_dest_acc_en, store_lo, store_hi, idx_offset>();
 }
 
-template <
-    bool APPROXIMATION_MODE,
-    bool is_fp32_dest_acc_en,
-    uint32_t from_lo,
-    uint32_t from_hi,
-    uint32_t to_lo,
-    uint32_t to_hi>
+template <bool APPROXIMATION_MODE, uint32_t from_lo, uint32_t from_hi, uint32_t to_lo, uint32_t to_hi>
 inline void generalized_moe_gate_copy_topk_run() {
     _gmg_copy_topk_run<from_lo, from_hi, to_lo, to_hi>();
 }
 
 template <
     bool APPROXIMATION_MODE,
-    bool is_fp32_dest_acc_en,
     uint32_t field,
     uint32_t src_lo,
     uint32_t src_hi,
@@ -68,6 +68,7 @@ inline void generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scale
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void generalized_moe_gate_topk_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     _init_generalized_moe_gate_topk<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
 }
 

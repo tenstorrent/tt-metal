@@ -8,7 +8,6 @@ name: PR Gate
 #   PRs only care about the latest commit and multiple pushes may happen in quick succession.
 # - End-to-end (excluding wait times for runners) must be less than 5mins.
 #   This includes the cost of checking out the code, preparing a runner, etc.
-# - Individual test cases must be less than 1s.
 
 run-name: >-
   ${{ github.event_name == 'merge_group' &&
@@ -76,6 +75,7 @@ permissions:
   pull-requests: write
   checks: write
   packages: write
+  actions: read
 
 jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml and build-artifact.yaml internally.
@@ -85,6 +85,8 @@ jobs:
   check-harbor:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/check-harbor.yaml
+    with:
+      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
   # Single docker build job - deduplicates container builds across asan-build, build, and clang-tidy
   build-docker-images:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -123,7 +125,7 @@ jobs:
       ${{
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-        (github.event_name != 'pull_request' || needs.find-changed-files.outputs.any-code-changed == 'true')
+        ((github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.find-changed-files.outputs.any-code-changed == 'true')
       }}
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     uses: ./.github/workflows/build-artifact.yaml
@@ -135,11 +137,20 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       build-type: 'ASan'
-      build-wheel: true
+      # No manylinux wheel in the PR gate: build-docs imports ttnn in-place
+      # from the lean ttnn-import artifact instead (no duplicate compile).
+      build-wheel: false
+      build-ttnn-import-artifact: true
       publish-artifact: false
       publish-package: true
-      tracy: true
+      tracy: false
       skip-tt-train: false
+      # CI-internal only: consumers of these packages all run in docker images that
+      # already stage SFPI, so skip the redundant download. Never set for release builds.
+      use-system-sfpi: true
+      # Treeless clone: skip the trees/blobs that dominate the tag fetch, but keep commits + tags
+      # so git describe still yields a real version. Depth stays at the default.
+      checkout-filter: tree:0
       # Use the merge commit (github.sha) — see build-docker-images job for rationale.
       # Pass pre-built docker images to avoid duplicate builds
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
@@ -148,11 +159,13 @@ jobs:
       basic-dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.basic-dev-docker-image }}
       basic-ttnn-runtime-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.basic-ttnn-runtime-docker-image }}
       manylinux-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.manylinux-docker-image }}
+      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
   find-changed-files:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
+      run-clang-tidy: ${{ steps.find-changes.outputs.run-clang-tidy }}
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
       cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
       tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
@@ -167,7 +180,9 @@ jobs:
       llk-quasar-changed: ${{ steps.find-changes.outputs.llk-quasar-changed }}
       llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
+      llk-hardware-free-changed: ${{ steps.find-changes.outputs.llk-hardware-free-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
+      ttsim-ci-changed: ${{ steps.find-changes.outputs.ttsim-ci-changed }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -177,25 +192,137 @@ jobs:
       - id: find-changes
         uses: ./.github/actions/find-changed-files
 
-  metalium-smoke-tests:
-    needs: [asan-build, find-changed-files]
+  # The ONE place team time budgets are enforced. It has to see every tests yaml
+  # at once: several yamls charge the same (team, budget_type, sku) budget, so the
+  # allowance is the sum across all of them. The per-pipeline checks this replaced
+  # each saw a single yaml, which let every yaml claim the full budget on its own.
+  verify-time-budgets:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 5
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      # A cmd block that records a failed test command and runs the next one starts that
+      # command on devices nothing has reset (#57706). Runs from this job's own checkout.
+      - name: Lint pipeline cmd blocks
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          git show FETCH_HEAD:.github/pipeline_cmd_lint_baseline.yaml > "${RUNNER_TEMP}/base_baseline.yaml" 2>/dev/null || : > "${RUNNER_TEMP}/base_baseline.yaml"
+          python3 .github/scripts/utils/lint_pipeline_cmds.py --base-baseline "${RUNNER_TEMP}/base_baseline.yaml"
+      - name: Verify test timeouts against team time budgets
+        uses: tenstorrent/tt-metal/.github/actions/verify-time-budget@main
+        with:
+          # The action is pinned to @main so the check logic is always current, but that
+          # means GITHUB_ACTION_PATH resolves inside a separate main-pinned checkout, not
+          # this job's own checkout above. Point it explicitly at $GITHUB_WORKSPACE so it
+          # verifies this branch's test yamls and budget file, not main's.
+          args: >-
+            --tests-dir "$GITHUB_WORKSPACE/tests/pipeline_reorg"
+            --budget-file "$GITHUB_WORKSPACE/.github/time_budget.yaml"
+            --comment-file "${{ runner.temp }}/budget-report.md"
+      # Every failure kind gets explained on the PR, not just an over-budget bucket:
+      # a missing budget_type or an undeclared bucket is just as opaque to the author.
+      # One comment is kept up to date across pushes rather than stacking per run, and
+      # a run that passes edits an existing comment to say so instead of leaving a
+      # stale failure behind. A pass with no prior comment posts nothing.
+      - name: Explain a time budget failure on the PR
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          REPO: ${{ github.repository }}
+          BODY_FILE: ${{ runner.temp }}/budget-report.md
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "$BODY_FILE" ]; then
+            echo "No report was written (the check did not get far enough); nothing to post."
+            exit 0
+          fi
+
+          if [ -z "${PR_NUMBER:-}" ]; then
+            PR_NUMBER=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+              --json number --jq '.[0].number // empty')
+          fi
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "No open PR for '$BRANCH'; nothing to post."
+            exit 0
+          fi
+
+          existing=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+              --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- time-budget-check"))) | .id] | first // empty')
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$existing" \
+              -F "body=@$BODY_FILE" >/dev/null
+            echo "Updated time-budget comment $existing on PR #$PR_NUMBER."
+          elif grep -q "status=fail" "$BODY_FILE"; then
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$BODY_FILE"
+            echo "Posted a new time-budget comment on PR #$PR_NUMBER."
+          else
+            echo "Check passed and no existing comment to clear; nothing to post."
+          fi
+
+  build-runtime-smoke-image:
+    needs: [asan-build, build-docker-images, find-changed-files]
     if: ${{
       github.ref_name == 'main' ||
       needs.find-changed-files.outputs.cmake-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      base-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-metalium
+
+  runtime-smoke-tests:
+    needs: [asan-build, build-docker-images, find-changed-files, build-runtime-smoke-image]
+    # Gate on asan-build rather than on nothing having failed. A skipped image
+    # build (forks) or a failed one (a registry or buildx blip) must still let
+    # smoke run on the artifact path: it is in optional-jobs, and
+    # workflow-status counts a skipped optional job as success, so skipping here
+    # would take hardware coverage out of the gate without failing it.
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+      github.ref_name == 'main' ||
+      needs.find-changed-files.outputs.cmake-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
+      }}
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
+      # Empty on forks, where smoke falls back to downloading the artifact.
+      prebuilt-image: ${{ needs.build-runtime-smoke-image.outputs.image }}
       docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
+      # github_hosted_cpu runs on ubuntu-latest (external runner) — no harbor access.
+      # Use raw GHCR tag from build-docker-images, not the harbor-prefixed ref from
+      # asan-build (same as build-docs below).
+      cpu-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
-      enabled-skus: wh_n150_civ2
       product: tt-metalium
+      test-category: pr_gate
       upload-coverage: false
       enable-kernel-ccache: true
-  ttnn-smoke-tests:
-    needs: [asan-build, find-changed-files]
+  # A second image because the tag reflects build-args, and smoke installs a
+  # different package set per product. The two builds run in parallel, so this
+  # costs no extra time on the critical path.
+  build-ttnn-smoke-image:
+    needs: [asan-build, build-docker-images, find-changed-files]
     if: ${{
       github.ref_name == 'main' ||
       needs.find-changed-files.outputs.cmake-changed == 'true' ||
@@ -203,13 +330,41 @@ jobs:
       needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      base-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-nn
+
+  ttnn-smoke-tests:
+    needs: [asan-build, build-docker-images, find-changed-files, build-ttnn-smoke-image]
+    # Gate on asan-build rather than on nothing having failed. A skipped image
+    # build (forks) or a failed one (a registry or buildx blip) must still let
+    # smoke run on the artifact path: it is in optional-jobs, and
+    # workflow-status counts a skipped optional job as success, so skipping here
+    # would take hardware coverage out of the gate without failing it.
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+      github.ref_name == 'main' ||
+      needs.find-changed-files.outputs.cmake-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
+      }}
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
+      # Empty on forks, where smoke falls back to downloading the artifact.
+      prebuilt-image: ${{ needs.build-ttnn-smoke-image.outputs.image }}
       docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
-      enabled-skus: wh_n150_civ2
       product: tt-nn
+      test-category: pr_gate
       upload-coverage: false
       enable-kernel-ccache: true
 
@@ -224,47 +379,88 @@ jobs:
       # build-docs runs on ubuntu-latest (external runner) — no harbor access.
       # Use raw GHCR tag from build-docker-images, not the harbor-prefixed ref from asan-build.
       docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
-      wheel-artifact-name: ${{ needs.asan-build.outputs.wheel-artifact-name }}
+      ttnn-import-artifact-id: ${{ needs.asan-build.outputs.ttnn-import-artifact-id }}
       build-type: 'ASan'
 
-  metalium-examples:
-    needs: [ asan-build, find-changed-files ]
+  build-runtime-examples-image:
+    needs: [ asan-build, build-docker-images, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-changed == 'true'
       }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ["N150-viommu"]
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: |
+        PRODUCT=tt-metalium
+        PROFILE=examples
+
+  runtime-examples:
+    needs: [ asan-build, find-changed-files, build-docker-images, build-runtime-examples-image ]
+    # Not !failure(): a failed image build must still let examples use the artifact.
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true')
+      }}
     uses: ./.github/workflows/sdk-examples.yaml
     with:
+      # Empty on forks or a failed build; examples then use the artifact.
+      prebuilt-image: ${{ needs.build-runtime-examples-image.outputs.image }}
       docker-image: ${{ needs.asan-build.outputs.basic-dev-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
       product: tt-metalium
       build-type: 'ASan'
       enable-kernel-ccache: true
     secrets: inherit
 
-  ttnn-examples:
-    needs: [ asan-build, find-changed-files ]
+  build-ttnn-examples-image:
+    needs: [ asan-build, build-docker-images, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
         needs.find-changed-files.outputs.tt-nn-changed == 'true'
       }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ["N150-viommu"]
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
+      base-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: |
+        PRODUCT=tt-nn
+        PROFILE=examples
+
+  ttnn-examples:
+    needs: [ asan-build, find-changed-files, build-docker-images, build-ttnn-examples-image ]
+    # Not !failure(): a failed image build must still let examples use the artifact.
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-nn-changed == 'true')
+      }}
     uses: ./.github/workflows/sdk-examples.yaml
     with:
+      # Empty on forks or a failed build; examples then use the artifact.
+      prebuilt-image: ${{ needs.build-ttnn-examples-image.outputs.image }}
       docker-image: ${{ needs.asan-build.outputs.basic-dev-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
       product: tt-nn
       build-type: 'ASan'
       enable-kernel-ccache: true
@@ -275,7 +471,7 @@ jobs:
   model-charts-sync:
     needs: [find-changed-files]
     if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
     - name: Checkout repo
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -292,12 +488,13 @@ jobs:
 
   # Full clang-tidy scan (same checks enforced at merge gate).
   # force-scan=true → single full-scan job (avoids 4-way per-target split with high setup overhead).
-  # Gated on any-code-changed so docs/workflow-only PRs are skipped entirely.
+  # Gated on run-clang-tidy so docs-only PRs and workflow-only PRs that cannot
+  # affect the scan (see find-changed-files.sh's explicit key-workflow list) are skipped entirely.
   code-analysis:
     needs: [build-docker-images, find-changed-files]
     if: >-
       ${{
-        needs.find-changed-files.outputs.any-code-changed == 'true' &&
+        needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
         ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group')
       }}
     uses: ./.github/workflows/code-analysis.yaml
@@ -308,6 +505,30 @@ jobs:
       dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
       force-scan: true
       post-pr-suggestions: ${{ github.event_name == 'pull_request' }}
+      check-harbor-runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
+
+  # Shadow run: times a clang-tidy 23 full scan (check set matched to v20, see
+  # cmake/clang-tidy.d/.clang-tidy.v23-new-checks.yaml) against real PR
+  # traffic. Informational only — left out of workflow-status's `needs:`
+  # below so it can't affect PR Gate Status.
+  code-analysis-shadow-clang-tidy-23:
+    needs: [build-docker-images, find-changed-files]
+    if: >-
+      ${{
+        needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
+        (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+      }}
+    uses: ./.github/workflows/code-analysis.yaml
+    secrets: inherit
+    with:
+      platform: "Ubuntu 24.04"
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      force-scan: true
+      post-pr-suggestions: false
+      publish-annotations: false
+      clang-tidy-version: "23"
+      check-harbor-runs-on: tt-ubuntu-light
 
   # LLK PR Labeling — auto-apply labels based on which LLK directories changed
   llk-label-pr:
@@ -324,11 +545,12 @@ jobs:
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-hardware-free-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
          needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
          needs.find-changed-files.outputs.llk-quasar-changed == 'true')
       }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Sync LLK labels based on changes
         uses: actions/github-script@v7
@@ -341,6 +563,7 @@ jobs:
             if ("${{ needs.find-changed-files.outputs.llk-common-changed }}" === "true") expectedLabels.add("llk:common");
             if ("${{ needs.find-changed-files.outputs.llk-sfpi-changed }}" === "true") expectedLabels.add("sfpi");
             if ("${{ needs.find-changed-files.outputs.llk-tests-changed }}" === "true") expectedLabels.add("llk:test-infra");
+            if ("${{ needs.find-changed-files.outputs.llk-hardware-free-changed }}" === "true") expectedLabels.add("llk:test-infra");
             if ("${{ needs.find-changed-files.outputs.llk-ci-changed }}" === "true") expectedLabels.add("llk:ci");
             if ("${{ needs.find-changed-files.outputs.llk-perf-changed }}" === "true") expectedLabels.add("llk:performance");
             if ("${{ needs.find-changed-files.outputs.llk-quasar-changed }}" === "true") expectedLabels.add("llk:quasar");
@@ -380,68 +603,106 @@ jobs:
               ));
             }
 
-  # LLK Functional Unit Tests on Wormhole (PR gate - runs on wormhole/common/sfpi/test/ci changes)
-  llk-test-wormhole:
+  # Copilot PR type labeler — auto-label PRs by change type (feat/fix/docs/etc.)
+  copilot-pr-labeler:
+    if: ${{ github.event_name == 'pull_request' && github.event.action == 'opened' }}
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      copilot-requests: write
+    runs-on: ubuntu-slim
+    steps:
+      - uses: tenstorrent/tt-github-actions/.github/actions/copilot-pr-labeler@629b4727fa0dff3d43895601dd538e303880ecbc # main (tt-github-actions#144)
+
+  # PR-gate LLK python_tests matrix (tests/pipeline_reorg/llk_pr_gate_tests.yaml).
+  # SKU coverage is narrowed via sku-allowlist from find-changed-files.
+  # merge_group prio routing is via prepare_test_matrix --event + sku_config.
+  llk-smoke-tests:
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     if: ${{
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-ci-changed == 'true')
-      }}
-    uses: ./.github/workflows/llk-smoke-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-      enabled-skus: wh_n150_civ2
-      pytest-markers: "not perf and not nightly and not quasar"
-
-  # LLK Functional Unit Tests on Blackhole (PR gate - runs on blackhole/common/sfpi/test/ci changes)
-  llk-test-blackhole:
-    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
-    if: ${{
-        github.event.action != 'destroyed' &&
-        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-        (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-ci-changed == 'true')
+         needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-perf-changed == 'true')
       }}
     uses: ./.github/workflows/llk-smoke-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-      enabled-skus: bh_p150b_civ2
-      pytest-markers: "not perf and not nightly and not quasar"
+      enabled-skus: ALL_SKUS_IN_TESTS
+      # "*" = no allowlist filter; empty = skip all; else CSV of logical SKUs.
+      sku-allowlist: ${{
+          (github.ref_name == 'main'
+           || needs.find-changed-files.outputs.llk-common-changed == 'true'
+           || needs.find-changed-files.outputs.llk-sfpi-changed == 'true'
+           || needs.find-changed-files.outputs.llk-tests-changed == 'true'
+           || needs.find-changed-files.outputs.llk-ci-changed == 'true'
+           || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true'
+               && needs.find-changed-files.outputs.llk-blackhole-changed == 'true'))
+          && '*'
+          || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
+          || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2_viommu')
+          || (needs.find-changed-files.outputs.llk-perf-changed == 'true' && 'wh_n150_civ2')
+          || '' }}
+      pytest-markers: "not perf and not nightly and not quasar and not accuracy"
 
-  # LLK Quasar Build Check (compile-only, no hardware needed)
-  llk-build-quasar:
+  # Quasar LLK tests on ttsim, two shards (llk_pr_gate_tests.yaml, sim_quasar_xl).
+  # Sanity runs the same shards. The skip list is the script default.
+  # Disabled on merge_group: it was holding up the merge queue for too long.
+  # Still runs on PR gate and push-to-main.
+  llk-quasar-tests:
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     if: ${{
         github.event.action != 'destroyed' &&
+        github.event_name != 'merge_group' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-quasar-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-ci-changed == 'true')
+         needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
+         needs.find-changed-files.outputs.ttsim-ci-changed == 'true')
       }}
-    runs-on: tt-ubuntu-2204-xlarge-stable
-    timeout-minutes: 80
-    container:
-      image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-      - uses: ./.github/actions/llk-compile-quasar
-        with:
-          pytest-markers: "quasar"
+    uses: ./.github/workflows/llk-ttsim-pr-gate-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+
+  # Host-only LLK tests (tests/pipeline_reorg/llk_hardware_free_tests.yaml, cpu_xlarge).
+  # Same change set as llk-smoke-tests, plus a hardware-free-only change and a
+  # Quasar change: the stall-wrapper probe used to run inside the Quasar compile
+  # job because it lived under python_tests/quasar.
+  # Disabled on merge_group: cpu_xlarge (tt-ubuntu-2204-xlarge-stable) has no
+  # merge-queue prio pool, same contended-runner issue as llk-quasar-tests. Still
+  # runs on PR gate and push-to-main.
+  llk-hardware-free-tests:
+    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'merge_group' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-hardware-free-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-quasar-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-hardware-free-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
@@ -458,16 +719,18 @@ jobs:
       }}
     needs:
       - asan-build
-      - metalium-smoke-tests
+      - runtime-smoke-tests
       - ttnn-smoke-tests
-      - metalium-examples
+      - runtime-examples
+      - ttnn-examples
       - code-analysis
       - model-charts-sync
       - build-docs
-      - llk-test-wormhole
-      - llk-test-blackhole
-      - llk-build-quasar
-    runs-on: ubuntu-latest
+      - llk-smoke-tests
+      - llk-quasar-tests
+      - llk-hardware-free-tests
+      - verify-time-budgets
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 5
@@ -476,11 +739,13 @@ jobs:
       - name: Check if all jobs passed
         uses: ./.github/actions/workflow-status
         with:
-          required-jobs: ""
+          # verify-time-budgets is required, not optional: it has no build dependency
+          # and never skips, so a skip would mean it silently stopped gating.
+          required-jobs: "verify-time-budgets"
           optional-jobs: >-
             asan-build, code-analysis,
-            metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
+            runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
-            llk-test-wormhole, llk-test-blackhole, llk-build-quasar
+            llk-smoke-tests, llk-quasar-tests, llk-hardware-free-tests
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"

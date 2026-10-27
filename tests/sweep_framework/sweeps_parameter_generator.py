@@ -188,7 +188,7 @@ def _format_hw_mesh_suffix(group_key):
         suffix = ""
     else:
         suffix = format_hardware_suffix(*hw_tuple)
-    if mesh_tuple and mesh_tuple != (1, 1):
+    if mesh_tuple:
         suffix += format_mesh_suffix(mesh_tuple)
     return suffix
 

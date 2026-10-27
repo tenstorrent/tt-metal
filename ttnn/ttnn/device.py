@@ -4,7 +4,6 @@
 
 import contextlib
 from typing import Optional, List
-import os
 
 import ttnn
 from loguru import logger
@@ -14,6 +13,7 @@ from loguru import logger
 Device = ttnn._ttnn.multi_device.MeshDevice
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 DispatchCoreAxis = ttnn._ttnn.device.DispatchCoreAxis
+_DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig
 Arch = ttnn._ttnn.device.Arch
 DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
@@ -26,6 +26,20 @@ get_optimal_dram_bank_to_logical_worker_assignment = (
 enable_asynchronous_slow_dispatch = ttnn._ttnn.device.enable_asynchronous_slow_dispatch
 disable_asynchronous_slow_dispatch = ttnn._ttnn.device.disable_asynchronous_slow_dispatch
 is_asynchronous_slow_dispatch_enabled = ttnn._ttnn.device.is_asynchronous_slow_dispatch_enabled
+
+
+class DispatchCoreConfig(_DispatchCoreConfig):
+    def __init__(
+        self,
+        type: Optional[DispatchCoreType] = None,
+        axis: Optional[DispatchCoreAxis] = None,
+        fabric_tensix_config=None,
+    ):
+        resolved_config = ttnn._ttnn.device.create_dispatch_core_config(
+            type=type, axis=axis, fabric_tensix_config=fabric_tensix_config
+        )
+        super().__init__(resolved_config.type, resolved_config.axis)
+
 
 open_device = ttnn._ttnn.device.open_device
 init_device_compute_kernel_config = ttnn._ttnn.operations.core.init_device_compute_kernel_config
@@ -60,6 +74,7 @@ def close_device(device: "ttnn.device.Device"):
 
 
 synchronize_device = ttnn._ttnn.device.synchronize_device
+is_trace_capture_active = ttnn._ttnn.device.is_trace_capture_active
 SetRootDir = ttnn._ttnn.device.SetRootDir
 GetDefaultDevice = ttnn._ttnn.device.GetDefaultDevice
 SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice
@@ -81,80 +96,6 @@ def is_blackhole(device=None):
     return "blackhole" in ARCH_NAME
 
 
-def get_default_dispatch_core_type():
-    eth_default_dispatch_clusters = [
-        ttnn._ttnn.cluster.ClusterType.N300,
-        ttnn._ttnn.cluster.ClusterType.T3K,
-        ttnn._ttnn.cluster.ClusterType.N300_2x2,
-    ]
-    return (
-        ttnn._ttnn.device.DispatchCoreType.ETH
-        if ttnn._ttnn.cluster.get_cluster_type() in eth_default_dispatch_clusters
-        else ttnn._ttnn.device.DispatchCoreType.WORKER
-    )
-
-
-def get_default_dispatch_core_axis(fabric_tensix_config=None):
-    """Get default dispatch core axis, considering fabric tensix config if available."""
-    if is_blackhole():
-        # On Blackhole, if fabric tensix MUX is enabled, use ROW; otherwise use COL
-        if fabric_tensix_config == ttnn.FabricTensixConfig.MUX:
-            return DispatchCoreAxis.ROW
-        else:
-            return DispatchCoreAxis.COL
-    else:
-        # Non-Blackhole architectures default to ROW
-        return DispatchCoreAxis.ROW
-
-
-class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
-    def __init__(self, type: DispatchCoreType = None, axis: DispatchCoreAxis = None, fabric_tensix_config=None):
-        # Validate user provided args
-        if type:
-            if not isinstance(type, DispatchCoreType):
-                valid_values = [e for e in DispatchCoreType.__members__.values()]
-                raise ValueError(f"Invalid dispatch core type: {type}. Valid values are: {valid_values}")
-            if type == DispatchCoreType.ETH and axis == DispatchCoreAxis.COL:
-                raise ValueError("COL axis is not supported for ETH dispatch core type")
-        if axis:
-            if not isinstance(axis, DispatchCoreAxis):
-                valid_values = [e for e in DispatchCoreAxis.__members__.values()]
-                raise ValueError(f"Invalid dispatch core axis: {axis}. Valid values are: {valid_values}")
-            if axis == DispatchCoreAxis.ROW and is_blackhole() and fabric_tensix_config != ttnn.FabricTensixConfig.MUX:
-                raise ValueError(
-                    "ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX is enabled"
-                )
-        if type and axis:
-            # User provided both valid type and axis, check if they are compatible
-            self.type = type
-            self.axis = axis
-        elif type:
-            # User provided only valid type
-            self.type = type
-            self.axis = get_default_dispatch_core_axis(fabric_tensix_config)
-            logger.debug(f"Using default dispatch core axis for this system: {self.axis}")
-        elif axis:
-            self.axis = axis
-            # User provided only valid axis
-            if self.axis == DispatchCoreAxis.COL:
-                # COL axis is not supported for ETH dispatch core type, default to WORKER
-                self.type = DispatchCoreType.WORKER
-                logger.info(
-                    f"{self.axis} axis is only supported on WORKER dispatch core type, defaulting to {self.type}"
-                )
-            elif self.axis == DispatchCoreAxis.ROW:
-                # ROW axis is supported for all dispatch core types, use default type for their system
-                self.type = get_default_dispatch_core_type()
-                logger.debug(f"Using default dispatch core type for this system: {self.type}")
-        else:
-            # User provided no valid type or axis, use default for their system
-            self.type = get_default_dispatch_core_type()
-            logger.debug(f"Using default dispatch core type for this system: {self.type}")
-            self.axis = get_default_dispatch_core_axis(fabric_tensix_config)
-            logger.debug(f"Using default dispatch core axis for this system: {self.axis}")
-        super().__init__(self.type, self.axis)
-
-
 def CreateDevice(
     device_id: int,
     num_command_queues: int = 1,
@@ -169,7 +110,7 @@ def CreateDevice(
         num_command_queues,
         l1_small_size,
         trace_region_size,
-        dispatch_core_config or DispatchCoreConfig(),
+        dispatch_core_config,
         worker_l1_size=worker_l1_size,
     )
 
@@ -188,7 +129,7 @@ def CreateDevices(
         num_command_queues,
         l1_small_size,
         trace_region_size,
-        dispatch_core_config or DispatchCoreConfig(),
+        dispatch_core_config,
         worker_l1_size=worker_l1_size,
     )
 
@@ -203,6 +144,8 @@ def ReadDeviceProfiler(device):
 
 GetNumAvailableDevices = ttnn._ttnn.device.GetNumAvailableDevices
 ClearKernelCache = ttnn._ttnn.device.ClearKernelCache
+GetOperationTimeoutSeconds = ttnn._ttnn.device.GetOperationTimeoutSeconds
+SetOperationTimeoutSeconds = ttnn._ttnn.device.SetOperationTimeoutSeconds
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers
@@ -233,19 +176,37 @@ def manage_device(device_id: int) -> "ttnn.device.Device":
         close_device(device)
 
 
+get_dispatch_core_axis = ttnn._ttnn.device.get_dispatch_core_axis
 initialize_fast_dispatch = ttnn._ttnn.device.initialize_fast_dispatch
 terminate_fast_dispatch = ttnn._ttnn.device.terminate_fast_dispatch
 
 
 @contextlib.contextmanager
-def setup_fast_dispatch(device):
+def setup_fast_dispatch(device, *, allow_destructive=False):
     """
     Context manager that enables Fast Dispatch for the duration of the block.
     The device must have been opened in Slow Dispatch mode (e.g. TT_METAL_SLOW_DISPATCH_MODE=1).
     On exit, Fast Dispatch is terminated and the device returns to Slow Dispatch.
 
+    Entering refuses, before any firmware is written, if an L1 or L1_SMALL
+    allocation is resident on a core that Fast Dispatch will claim: dispatch
+    cores may not hold L1 allocations while Fast Dispatch is active.
+
+    Limitations:
+        - Any interleaved L1 buffer resident when the session opens is refused,
+          whatever its size: its pages are spread over every L1 bank.
+        - A non-default sub-device manager still loaded on any view over an
+          active chip is refused, even with allow_destructive: the check sees
+          only the default manager's allocations. Sub-device managers aren't
+          supported with manual Fast Dispatch; loading one inside the block
+          raises.
+        - Every active device must be MMIO-attached; otherwise entering raises
+          before Fast Dispatch is enabled.
+
     Args:
         device: The device to enable Fast Dispatch on.
+        allow_destructive: If True, proceed with a warning instead of refusing.
+            The resident L1 may be corrupted.
 
     Yields:
         None: Use the device inside the block; it is in Fast Dispatch mode.
@@ -257,7 +218,7 @@ def setup_fast_dispatch(device):
         ...     pass
         >>> # FD terminated; device is back in Slow Dispatch
     """
-    initialize_fast_dispatch(device)
+    initialize_fast_dispatch(device, allow_destructive=allow_destructive)
     try:
         yield
     finally:
@@ -282,7 +243,15 @@ def get_allocator_base_address(device, buffer_type):
     return ttnn._ttnn.device.GetAllocatorBaseAddress(device, buffer_type)
 
 
-pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
+def experimental_get_l1_occupied_ranges(mesh_device, device_coord, core=None):
+    """Occupied L1 ``(start, end)`` ranges on ``core`` of one mesh device, or a dict over every L1-bank core.
+
+    Covers lockstep, per-core and persistent L1; requires the HYBRID allocator.
+    """
+    if core is None:
+        return ttnn._ttnn.device.ExperimentalGetL1OccupiedRanges(mesh_device, device_coord)
+    return ttnn._ttnn.device.ExperimentalGetL1OccupiedRanges(mesh_device, device_coord, core)
+
 
 SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceId = ttnn._ttnn.device.SubDeviceId
@@ -290,12 +259,14 @@ SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
 
 # Real-time profiler callbacks (experimental)
 ProgramRealtimeRecord = ttnn._ttnn.device.ProgramRealtimeRecord
+ProgramRealtimeRecordBatch = ttnn._ttnn.device.ProgramRealtimeRecordBatch
 RegisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.RegisterProgramRealtimeProfilerCallback
 UnregisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.UnregisterProgramRealtimeProfilerCallback
 IsProgramRealtimeProfilerActive = ttnn._ttnn.device.IsProgramRealtimeProfilerActive
 
 __all__ = [
     "ProgramRealtimeRecord",
+    "ProgramRealtimeRecordBatch",
     "RegisterProgramRealtimeProfilerCallback",
     "UnregisterProgramRealtimeProfilerCallback",
     "IsProgramRealtimeProfilerActive",

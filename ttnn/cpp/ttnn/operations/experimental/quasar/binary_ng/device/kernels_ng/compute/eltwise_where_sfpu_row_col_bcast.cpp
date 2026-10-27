@@ -12,23 +12,30 @@
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
+template <typename ExpCbIn0DFB, typename ExpCbIn1DFB, typename ExpCbLlkPostDFB, typename ExpCbOutDFB>
 ALWI void process_tile(
-    tt::CBIndex cb_in0,
-    tt::CBIndex cb_in1,
-    tt::CBIndex cb_out,
+    ExpCbIn0DFB& exp_cb_in0,
+    ExpCbIn1DFB& exp_cb_in1,
+    ExpCbLlkPostDFB& exp_cb_llk_post,
+    ExpCbOutDFB& exp_cb_out,
     const uint32_t scalar_value,
     const float* scalar_val,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
-    CircularBuffer exp_cb_out(cb_out);
+    const uint32_t cb_in0 = exp_cb_in0.get_id();
+    const uint32_t cb_in1 = exp_cb_in1.get_id();
+    const uint32_t cb_out = exp_cb_out.get_id();
 
 #if BCAST_INPUT  // ROW_A_COL_B
                  // BCAST_INPUT == 1 : input B ( true or false tensor) is broadcasted
 #define CB_BCAST cb_in1
 #define CB_OTHER cb_in0
+    auto& exp_cb_bcast = exp_cb_in1;
+    auto& exp_cb_other = exp_cb_in0;
     constexpr auto cb_llk_post = tt::CBIndex::c_5;
     constexpr auto cb_left = tt::CBIndex::c_5;
     auto cb_right = cb_in1;
@@ -36,16 +43,16 @@ ALWI void process_tile(
     // BCAST_INPUT == 0 : input A (condition tensor)  is broadcasted
 #define CB_BCAST cb_in0
 #define CB_OTHER cb_in1
+    auto& exp_cb_bcast = exp_cb_in0;
+    auto& exp_cb_other = exp_cb_in1;
     constexpr auto cb_llk_post = tt::CBIndex::c_6;
     auto cb_left = cb_in0;
     constexpr auto cb_right = tt::CBIndex::c_6;
 #endif
 
-    CircularBuffer exp_cb_bcast(CB_BCAST);
-    CircularBuffer exp_cb_other(CB_OTHER);
-    CircularBuffer exp_cb_llk_post(cb_llk_post);
-
-    unary_op_init_common(cb_left, cb_out);
+    // compute_kernel_hw_startup is hoisted to kernel_main (must be the first Compute API call and run
+    // exactly once); process_tile is called per iteration, so it only re-inits the op here.
+    copy_init(cb_left);
     BINARY_SFPU_INIT
 
     exp_cb_bcast.wait_front(num_tiles_per_cycle);
@@ -54,7 +61,8 @@ ALWI void process_tile(
         exp_cb_other.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
-        unary_bcast_init<BroadcastType::ROW>(CB_OTHER, cb_llk_post);
+        reconfig_data_format(CB_OTHER, CB_OTHER);
+        unary_bcast_init<BroadcastType::ROW>(CB_OTHER);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(CB_OTHER, 0, 0);
@@ -68,18 +76,17 @@ ALWI void process_tile(
         exp_cb_other.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(CB_OTHER);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);
         exp_cb_llk_post.wait_front(num_tiles_per_cycle);
 
         tile_regs_acquire();
 
-        copy_tile_to_dst_init_short(cb_left);
+        copy_init(cb_left);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_left, i, i * 3);
         }
-        copy_tile_to_dst_init_short(cb_right);
+        copy_init(cb_right);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
 // TTS: tensor is true value, goes to dst_reg 1
 #if WHERE_TTS
@@ -140,20 +147,48 @@ void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
+#if BCAST_INPUT
+    constexpr auto cb_llk_post = tt::CBIndex::c_5;
+#else
+    constexpr auto cb_llk_post = tt::CBIndex::c_6;
+#endif
+
+    DataflowBuffer exp_cb_in0(cb_in0);
+    DataflowBuffer exp_cb_in1(cb_in1);
+    DataflowBuffer exp_cb_llk_post(cb_llk_post);
+    DataflowBuffer exp_cb_out(cb_out);
+
+    // One-time hardware startup: must be the first Compute API call and run exactly once. Match the
+    // cb_left process_tile configures the copy from (c_5 when the bcast input is B, else cb_in0).
+#if BCAST_INPUT
+    constexpr auto cb_startup_lhs = tt::CBIndex::c_5;
+#else
+    constexpr auto cb_startup_lhs = cb_in0;
+#endif
+    compute_kernel_hw_startup(cb_startup_lhs, cb_out);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
-            cb_in0, cb_in1, cb_out, scalar_value, scalar_value_ptr, tile_freq, tile_start, num_tiles_per_cycle);
+            exp_cb_in0,
+            exp_cb_in1,
+            exp_cb_llk_post,
+            exp_cb_out,
+            scalar_value,
+            scalar_value_ptr,
+            tile_freq,
+            tile_start,
+            num_tiles_per_cycle);
     }
 
     if (remaining_iterations > 0) {
         process_tile(
-            cb_in0,
-            cb_in1,
-            cb_out,
+            exp_cb_in0,
+            exp_cb_in1,
+            exp_cb_llk_post,
+            exp_cb_out,
             scalar_value,
             scalar_value_ptr,
             remaining_iterations,

@@ -19,6 +19,7 @@ import logging
 import ttnn
 from ttnn import UnpackToDestMode
 
+from models.experimental.ops.descriptors.fusion.common import _cb_backing_address, _cb_has_backing, _copy_cb_backing
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
 logger = logging.getLogger(__name__)
@@ -702,7 +703,7 @@ class CBPoolAllocator:
             if rep_cb is not None:
                 new_cb.address_offset = rep_cb.address_offset
             if buffer_source_cb is not None:
-                new_cb.set_buffer_from_cb(buffer_source_cb)
+                _copy_cb_backing(new_cb, buffer_source_cb)
 
             merged.append(new_cb)
             if buffer_source_ref is not None:
@@ -876,7 +877,7 @@ def extract_cb_info(
                 data_format=data_format,
                 page_size=fmt_desc.page_size,
                 core_ranges=cb_desc.core_ranges,
-                has_buffer=cb_desc.has_buffer(),
+                has_buffer=_cb_has_backing(cb_desc),
                 unpack_to_dest_mode=utd_mode,
                 tile=tile,
                 alias_group=cb_group_id,
@@ -903,19 +904,20 @@ def _extract_remote_cb_indices(descriptor: "ttnn.ProgramDescriptor") -> Set[int]
     return indices
 
 
-# Convention: CB-reference named compile-time args MUST start with this prefix
-# and have a value in range [0, 31]. Non-CB args MUST NOT use this prefix.
-CB_ARG_PREFIX = "cb_"
+# Convention: CB/DFB-reference named compile-time args use one of these
+# prefixes and have a non-negative integer value. Other named args, such as
+# ``dfb_length``, must not use a recognized ID prefix.
+CB_ARG_PREFIXES = ("cb_", "dfb_id_")
 
 
 def _is_cb_named_arg(name: str, value: Any) -> bool:
     """Check if a named compile-time arg refers to a CB index.
 
-    Returns True if the name starts with CB_ARG_PREFIX and the value
-    is a non-negative integer.  The actual slot bound is validated by
-    the pool allocator, not here.
+    Returns True if the name starts with a recognized CB/DFB ID prefix
+    and the value is a non-negative integer. The actual slot bound is
+    validated by the pool allocator, not here.
     """
-    if not name.startswith(CB_ARG_PREFIX):
+    if not name.startswith(CB_ARG_PREFIXES):
         return False
     if not isinstance(value, int) or value < 0:
         return False
@@ -1042,8 +1044,8 @@ def _compute_rebind_info(
             for fmt_desc in cb_desc.format_descriptors:
                 orig_idx = fmt_desc.buffer_index
                 slot_idx = remap.get(orig_idx, orig_idx)
-                if cb_desc.has_buffer():
-                    addr = cb_desc.buffer_address()
+                if _cb_has_backing(cb_desc):
+                    addr = _cb_backing_address(cb_desc)
                     if addr is not None:
                         addrs[slot_idx] = (addr, cb_desc.total_size)
         phase_slot_addrs.append(addrs)

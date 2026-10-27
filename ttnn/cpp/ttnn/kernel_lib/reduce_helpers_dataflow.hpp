@@ -5,8 +5,11 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "llk_defs.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
+#include <type_traits>
+#include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 
 namespace dataflow_kernel_lib {
 
@@ -14,7 +17,7 @@ using ckernel::PoolType;
 using ckernel::ReduceDim;
 
 // Default reduce factor for SUM and MAX pool types (scaler is always 1.0).
-// Named constant to use when you need to pass reduce_factor explicitly to reach compute_uses_reduce_tile.
+// Named constant for SUM and MAX where reduce_factor is unused.
 constexpr uint32_t SUM_AND_MAX_REDUCE_FACTOR = 1;
 
 // =============================================================================
@@ -42,29 +45,30 @@ constexpr uint32_t SUM_AND_MAX_REDUCE_FACTOR = 1;
  *
  * Converts the float scaler to the appropriate bit representation based on
  * the DataflowBuffer's data format, then fills the tile with the scaler in
- * the layout required by the reduction:
- *   - Row-0 fill (reduce LLK path): used for REDUCE_COL, REDUCE_SCALAR, and MAX
- *   - Col-0 fill (matmul path): used for REDUCE_ROW with SUM or AVG
+ * the row-0 layout required by the reduce LLK.
  *
  * Data format and tile shape (half/full) are deduced from the DataflowBuffer.
  *
  * @tparam dfb_id DataflowBuffer ID to write the entry to (must be constexpr)
- * @tparam pool_type Type of pooling operation (SUM, AVG, MAX). Default MAX selects row-0 fill.
- * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR).
- *         Default REDUCE_COL selects row-0 fill.
- * @tparam compute_uses_reduce_tile When true, forces row-0 fill (reduce LLK layout) even for
- *         SUM/AVG + REDUCE_ROW combinations that would normally use col-0 fill (matmul layout).
- *         Set to true when the compute kernel uses reduce_tile LLK directly instead of
- *         compute_kernel_lib::reduce (which auto-switches to matmul for REDUCE_ROW SUM/AVG).
+ * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
+ * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
+ * @param dfb The kernel's DataflowBuffer for dfb_id. Construct it once at kernel scope and pass it
+ *        by reference: on Quasar a DataflowBuffer drains when it goes out of scope, so a helper-owned
+ *        one would block here until the consumer pops the scaler.
  * @param scaler_f Float scaler value to fill the entry with
  * @param valid_reduce_dim_elements_in_tile Number of valid elements along the reduce dimension
  *        in the tile (1-32, default 32 = full tile). When the last tile along the reduce
  *        dimension is partially filled, this specifies how many row or column elements contain
  *        valid data; the remaining positions are zeroed out so they do not affect the result.
  */
-template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, bool compute_uses_reduce_tile = false>
+template <
+    uint32_t dfb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    typename DFB,
+    std::enable_if_t<is_dataflow_buffer_v<std::remove_cv_t<DFB>>, int> = 0>
 FORCE_INLINE void prepare_reduce_scaler(
-    float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
+    DFB& dfb, float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
 /**
  * @brief Generate a reduce scaler tile with format and tile shape deduced from dfb_id
@@ -82,10 +86,7 @@ FORCE_INLINE void prepare_reduce_scaler(
  * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
  * @tparam reduce_factor Number of elements being reduced (N). Must be set for AVG;
  *         use SUM_AND_MAX_REDUCE_FACTOR (default) for SUM and MAX.
- * @tparam compute_uses_reduce_tile When true, forces row-0 fill (reduce LLK layout) even for
- *         SUM/AVG + REDUCE_ROW combinations that would normally use col-0 fill (matmul layout).
- *         Set to true when the compute kernel uses reduce_tile LLK directly instead of
- *         compute_kernel_lib::reduce (which auto-switches to matmul for REDUCE_ROW SUM/AVG).
+ * @param dfb The kernel's DataflowBuffer for dfb_id (see prepare_reduce_scaler).
  * @param valid_reduce_dim_elements_in_tile Number of valid elements along the reduce dimension
  *        in the tile (1-32, default 32 = full tile). When the last tile along the reduce
  *        dimension is partially filled, this specifies how many row or column elements contain
@@ -96,9 +97,26 @@ template <
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR,
-    bool compute_uses_reduce_tile = false>
+    typename DFB,
+    std::enable_if_t<is_dataflow_buffer_v<std::remove_cv_t<DFB>>, int> = 0>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler(
-    uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
+    DFB& dfb, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
+
+// The id-only forms: build the DataflowBuffer from the id and run the forms above. See id_only_helpers.hpp.
+template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim>
+KERNEL_LIB_ID_ONLY_HELPER FORCE_INLINE void prepare_reduce_scaler(
+    float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH) {
+    DataflowBuffer dfb(dfb_id);
+    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(dfb, scaler_f, valid_reduce_dim_elements_in_tile);
+}
+
+template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR>
+KERNEL_LIB_ID_ONLY_HELPER FORCE_INLINE void calculate_and_prepare_reduce_scaler(
+    uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH) {
+    DataflowBuffer dfb(dfb_id);
+    calculate_and_prepare_reduce_scaler<dfb_id, pool_type, reduce_dim, reduce_factor>(
+        dfb, valid_reduce_dim_elements_in_tile);
+}
 
 }  // namespace dataflow_kernel_lib
 

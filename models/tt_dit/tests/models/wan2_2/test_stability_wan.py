@@ -68,17 +68,18 @@ def test_stability(
     iteration = 0
     print(f"Starting stability loop for up to {duration_seconds // 3600} hours with {len(prompts)} prompts")
 
+    # sp_axis/tp_axis come from the per-mesh preset, which the parametrization matches.
     pipeline = WanPipeline.create_pipeline(
         mesh_device=mesh_device,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        num_links=num_links,
-        dynamic_load=dynamic_load,
-        topology=topology,
-        is_fsdp=is_fsdp,
         height=height,
         width=width,
         num_frames=num_frames,
+        config_overrides={
+            "num_links": num_links,
+            "dynamic_load": dynamic_load,
+            "topology": topology,
+            "is_fsdp": is_fsdp,
+        },
     )
 
     while True:

@@ -1,0 +1,44 @@
+# Unary max/min at the default scalar 0.0 (the fuser cannot set it); negative scalars are covered by
+# test_unary_max_min_scalar_quasar. Finite points only: the fuser cannot express inf, NaN, -0 or denormals.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b, Float16, Float32]
+    stimuli:
+      include:
+        - [-8.0, -2.01]
+        - [-1.99, -0.51]
+        - [-0.49, -0.001]
+        - [0.001, 0.49]
+        - [0.51, 1.99]
+        - [2.01, 8.0]
+        - -65000.0
+        - -100.0
+        - -2.0
+        - -1.0
+        - -0.5
+        - -0.0001
+        - 0.0
+        - 0.0001
+        - 0.5
+        - 1.0
+        - 2.0
+        - 100.0
+        - 65000.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [UnaryMax, UnaryMin]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}

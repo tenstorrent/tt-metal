@@ -20,8 +20,8 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
     }
     const auto& shard_spec = input.shard_spec().value();
 
-    tt::DataFormat act_df = datatype_to_dataformat_converter(args.input_dtype);
-    tt::DataFormat out_df = datatype_to_dataformat_converter(args.output_dtype);
+    tt::DataFormat act_df = cb_dataformat_for(args.input_dtype);
+    tt::DataFormat out_df = cb_dataformat_for(args.output_dtype);
 
     if (tt::tile_size(act_df) != tt::tile_size(out_df)) {
         return false;
@@ -96,6 +96,18 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.buffer() != nullptr,
         "Operands to Typecast need to be allocated in buffers on the device. Buffer is null.");
 
+    // Quasar: UInt32/UInt16 are not supported DFB formats (is_supported_quasar, tt_backend_api_types.cpp), and
+    // the generic Quasar typecast LLK path has no uint32/uint16 store mode. Remapping the output DFB to the
+    // byte-size-equal RawUInt32/RawUInt16 lets the program build but the SFPU->pack conversion produces WRONG
+    // values (verified: all-zero for uint32, bit-garbage for uint16). Reject here with a clear message instead
+    // of silent wrong output. Cast to INT32 instead (supported on Quasar), or add a uint32/uint16 SFPU store
+    // mode to the Quasar LLK. INT32/FLOAT32/BFLOAT16 outputs are unaffected.
+    TT_FATAL(
+        !(input_tensor.device()->arch() == tt::ARCH::QUASAR &&
+          (args.output_dtype == DataType::UINT32 || args.output_dtype == DataType::UINT16)),
+        "Typecast to {} is not supported on Quasar (no uint32/uint16 LLK store mode); cast to INT32 instead.",
+        args.output_dtype);
+
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
             args.sub_core_grids.has_value() == false,
@@ -134,7 +146,7 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec TypecastDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec TypecastDeviceOperation::compute_output_specs(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -143,44 +155,15 @@ TensorSpec TypecastDeviceOperation::compute_output_specs(
     const Layout output_layout = tensor_args.input.layout();
 
     const Shape output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
 }
 
 Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args, const TypecastInputs& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
     }
-    return tt::tt_metal::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
-}
-
-ttsl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
-    const TypecastParams& args, const TypecastInputs& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.padded_shape();
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    operation::Hash hash;
-
-    // For tile layout, only volume matters. For row-major, actual shape dimensions matter.
-    if (input_tensor.layout() == Layout::TILE) {
-        hash = operation::hash_operation<TypecastDeviceOperation>(
-            args,
-            program_factory.index(),
-            input_tensor.dtype(),
-            input_tensor.memory_config(),
-            input_shape.volume(),
-            input_tensor.layout());
-    } else {
-        hash = operation::hash_operation<TypecastDeviceOperation>(
-            args,
-            program_factory.index(),
-            input_tensor.dtype(),
-            input_tensor.memory_config(),
-            input_shape,
-            input_tensor.layout());
-    }
-    return hash;
+    return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 bool TypecastDeviceOperation::skip_launch(

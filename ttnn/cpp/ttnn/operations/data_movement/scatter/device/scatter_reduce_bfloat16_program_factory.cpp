@@ -7,15 +7,18 @@
 #include "scatter_common.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
-ProgramDescriptor ScatterReduceBfloat16ProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::create_program_artifacts(
     const ScatterParams& args, const ScatterInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor{tensor_args.input_tensor};
     const auto& input_shape{input_tensor.logical_shape()};
@@ -24,11 +27,6 @@ ProgramDescriptor ScatterReduceBfloat16ProgramFactory::create_descriptor(
     const auto& src_tensor{tensor_args.src_tensor};
     const auto& src_shape{src_tensor.logical_shape()};
     const auto& output_shape{output_tensor.logical_shape()};
-
-    auto* input_buffer = input_tensor.buffer();
-    auto* index_buffer = index_tensor.buffer();
-    auto* src_buffer = src_tensor.buffer();
-    auto* output_buffer = output_tensor.buffer();
 
     const uint32_t input_stick_size = input_shape[-1];
     const uint32_t index_stick_size = index_shape[-1];
@@ -42,10 +40,7 @@ ProgramDescriptor ScatterReduceBfloat16ProgramFactory::create_descriptor(
     const uint32_t output_datum_size = output_tensor.element_size();
     const uint32_t fp32_temp_datum_size = sizeof(float);
 
-    // input row byte sizes
-    const uint32_t input_stick_size_bytes = input_stick_size * input_datum_size;
-    const uint32_t index_stick_size_bytes = index_stick_size * index_datum_size;
-    const uint32_t source_stick_size_bytes = source_stick_size * source_datum_size;
+    // output row byte size (the writer walks each output stick in chunks of this many bytes)
     const uint32_t output_stick_size_bytes = output_stick_size * output_datum_size;
 
     // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
@@ -76,30 +71,6 @@ ProgramDescriptor ScatterReduceBfloat16ProgramFactory::create_descriptor(
     constexpr const char* writer_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/writer_bf16_reduction_scatter.cpp";
 
-    std::vector<uint32_t> compile_time_args{
-        input_buffer->address(),
-        index_buffer->address(),
-        src_buffer->address(),
-        output_buffer->address(),
-        static_cast<uint32_t>(ScatterCB::INPUT),
-        static_cast<uint32_t>(ScatterCB::INDEX),
-        static_cast<uint32_t>(ScatterCB::SRC),
-        static_cast<uint32_t>(ScatterCB::DST),
-        static_cast<uint32_t>(ScatterCB::FP32_TEMP),
-        input_stick_size,
-        index_stick_size,
-        source_stick_size,
-        output_stick_size,
-        input_stick_size_bytes,
-        index_stick_size_bytes,
-        source_stick_size_bytes,
-        output_stick_size_bytes,
-        input_shape.rank()};
-    TensorAccessorArgs(*input_buffer).append_to(compile_time_args);
-    TensorAccessorArgs(*index_buffer).append_to(compile_time_args);
-    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
-    TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
-
     auto* device = input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t work_units = input_tensor.logical_volume() / input_stick_size;
@@ -109,45 +80,122 @@ ProgramDescriptor ScatterReduceBfloat16ProgramFactory::create_descriptor(
                 ? tt::tt_metal::split_work_to_cores(*args.sub_core_grid, work_units)
                 : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, work_units);
 
-    const auto fp32_temp_dtype = DataType::FLOAT32;
     const auto farthest_x_y =
         args.sub_core_grid.has_value() ? args.sub_core_grid->bounding_box().end_coord : compute_with_storage_grid_size;
     const uint32_t all_cores_in_bounding_box = (farthest_x_y.x + 1) * (farthest_x_y.y + 1);
 
-    ProgramDescriptor desc;
+    // Metal 2.0 resource names. Declared local (not at namespace scope) so the sibling factory in
+    // the same unity-build translation unit can reuse the same identifiers without collision.
+    const ScratchpadSpecName INPUT_SCRATCH{"input"};
+    const ScratchpadSpecName INDEX_SCRATCH{"index"};
+    const ScratchpadSpecName SRC_SCRATCH{"source"};
+    const DFBSpecName DST_DFB{"output"};
+    const ScratchpadSpecName FP32_TEMP_SCRATCH{"fp32_temp"};
+    const TensorParamName INPUT_TENSOR{"input"};
+    const TensorParamName INDEX_TENSOR{"index"};
+    const TensorParamName SRC_TENSOR{"source"};
+    const TensorParamName OUTPUT_TENSOR{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
 
-    auto add_cb = [&](ScatterCB scatter_cb, DataType dtype, uint32_t page_size_bytes) {
-        const uint32_t cb_id = static_cast<uint32_t>(scatter_cb);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = page_size_bytes,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_id),
-                .data_format = datatype_to_dataformat_converter(dtype),
-                .page_size = page_size_bytes,
-            }}},
-        });
+    // The output DFB holds exactly one chunk page (num_entries = 1; entry_size is the 32-aligned
+    // chunk byte size). It carries no data format: both kernels are data movement, and the writer gets
+    // the output element size as a compile-time arg.
+    Group<DataflowBufferSpec> dataflow_buffers{
+        DataflowBufferSpec{
+            .unique_id = DST_DFB,
+            .entry_size = output_page_size_bytes,
+            .num_entries = 1,
+        },
     };
 
-    add_cb(ScatterCB::INPUT, input_tensor.dtype(), input_page_size_bytes);
-    add_cb(ScatterCB::INDEX, index_tensor.dtype(), index_page_size_bytes);
-    add_cb(ScatterCB::SRC, src_tensor.dtype(), source_page_size_bytes);
-    add_cb(ScatterCB::DST, output_tensor.dtype(), output_page_size_bytes);
-    add_cb(ScatterCB::FP32_TEMP, fp32_temp_dtype, fp32_temp_page_size_bytes);
+    // The reader alone fills and reads INPUT/INDEX/SRC, each one 32-aligned chunk page, and the
+    // FP32_TEMP accumulator, all as private scratchpads; it produces DST, which the writer consumes. A
+    // scratchpad carries no data format, so the reader gets its index element size as a compile-time
+    // arg instead (input is always bfloat16 in this factory).
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = reader_kernel_path,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = DST_DFB, .accessor_name = "output", .endpoint_type = DFBEndpointType::PRODUCER},
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = INPUT_SCRATCH, .accessor_name = "input"},
+                ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH, .accessor_name = "index"},
+                ScratchpadBinding{.scratchpad_spec_name = SRC_SCRATCH, .accessor_name = "source"},
+                ScratchpadBinding{.scratchpad_spec_name = FP32_TEMP_SCRATCH, .accessor_name = "fp32_temp"},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "input"},
+                TensorBinding{.tensor_parameter_name = INDEX_TENSOR, .accessor_name = "index"},
+                TensorBinding{.tensor_parameter_name = SRC_TENSOR, .accessor_name = "source"},
+            },
+        .compile_time_args =
+            {
+                {"input_stick_size", input_stick_size},
+                {"index_stick_size", index_stick_size},
+                {"source_stick_size", source_stick_size},
+                {"input_rank", static_cast<uint32_t>(input_shape.rank())},
+                {"index_element_size", index_datum_size},
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names =
+                    {"start_stick_id",
+                     "sticks_for_core",
+                     "input_and_output_chunk_size",
+                     "index_chunk_size",
+                     "source_chunk_size",
+                     "scatter_reduction_type"},
+            },
+        .hw_config = ttnn::create_reader_datamovement_config(),
+        // Per-dimension shape extents (input dims then index dims). N = rank-1 per tensor; the
+        // count varies with rank across instantiations, so these are delivered as runtime varargs.
+        .advanced_options =
+            {.num_runtime_varargs = static_cast<uint32_t>((input_shape.rank() - 1) + (index_shape.rank() - 1))},
+    };
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = reader_kernel_path;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = compile_time_args;
-    reader_desc.config = ReaderConfigDescriptor{};
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = writer_kernel_path,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = DST_DFB, .accessor_name = "output", .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"},
+            },
+        .compile_time_args =
+            {
+                {"output_stick_size_bytes", output_stick_size_bytes},
+                {"output_element_size", output_datum_size},
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"start_stick_id", "sticks_for_core", "input_and_output_chunk_size"},
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = writer_kernel_path;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    // Per-dimension shape extents are the same on every node; build once and bind per node.
+    std::vector<uint32_t> shape_varargs;
+    shape_varargs.reserve((input_shape.rank() - 1) + (index_shape.rank() - 1));
+    for (const auto* it = input_shape.cbegin(); it != input_shape.cend() - 1; ++it) {
+        shape_varargs.push_back(static_cast<uint32_t>(*it));
+    }
+    for (const auto* it = index_shape.cbegin(); it != index_shape.cend() - 1; ++it) {
+        shape_varargs.push_back(static_cast<uint32_t>(*it));
+    }
+
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
+    AdvancedKernelRunArgs reader_run_advanced;
 
     uint32_t stick_offset = 0;
     for (uint32_t i = 0; i < all_cores_in_bounding_box; ++i) {
@@ -161,37 +209,70 @@ ProgramDescriptor ScatterReduceBfloat16ProgramFactory::create_descriptor(
             continue;
         }
 
-        // Buffer* entries become BufferBinding slots; addresses are patched on cache hits
-        // without rebuilding the descriptor.
-        KernelDescriptor::RTArgList reader_runtime_args;
-        reader_runtime_args.reserve(9 + (input_shape.rank() - 1) + (index_shape.rank() - 1));
-        reader_runtime_args.push_back(input_buffer);
-        reader_runtime_args.push_back(index_buffer);
-        reader_runtime_args.push_back(src_buffer);
-        reader_runtime_args.push_back(stick_offset);
-        reader_runtime_args.push_back(sticks_per_core);
-        reader_runtime_args.push_back(input_and_output_chunk_size);
-        reader_runtime_args.push_back(index_chunk_size);
-        reader_runtime_args.push_back(source_chunk_size);
-        reader_runtime_args.push_back(static_cast<uint32_t>(args.opt_reduction));
-        for (const auto* it = input_shape.cbegin(); it != input_shape.cend() - 1; ++it) {
-            reader_runtime_args.push_back(static_cast<uint32_t>(*it));
-        }
-        for (const auto* it = index_shape.cbegin(); it != index_shape.cend() - 1; ++it) {
-            reader_runtime_args.push_back(static_cast<uint32_t>(*it));
-        }
-        reader_desc.emplace_runtime_args(core, reader_runtime_args);
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {{"start_stick_id", stick_offset},
+             {"sticks_for_core", sticks_per_core},
+             {"input_and_output_chunk_size", input_and_output_chunk_size},
+             {"index_chunk_size", index_chunk_size},
+             {"source_chunk_size", source_chunk_size},
+             {"scatter_reduction_type", static_cast<uint32_t>(args.opt_reduction)}});
+        reader_run_advanced.runtime_varargs.emplace(core, shape_varargs);
 
-        writer_desc.emplace_runtime_args(
-            core, {output_buffer, stick_offset, sticks_per_core, input_and_output_chunk_size});
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {{"start_stick_id", stick_offset},
+             {"sticks_for_core", sticks_per_core},
+             {"input_and_output_chunk_size", input_and_output_chunk_size}});
 
         stick_offset += sticks_per_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    ProgramSpec spec;
+    spec.name = "scatter_reduce_bfloat16";
+    spec.kernels = {reader, writer};
+    spec.dataflow_buffers = std::move(dataflow_buffers);
+    spec.scratchpads = {
+        ScratchpadSpec{.unique_id = INPUT_SCRATCH, .size_per_node = input_page_size_bytes},
+        ScratchpadSpec{.unique_id = INDEX_SCRATCH, .size_per_node = index_page_size_bytes},
+        ScratchpadSpec{.unique_id = SRC_SCRATCH, .size_per_node = source_page_size_bytes},
+        ScratchpadSpec{.unique_id = FP32_TEMP_SCRATCH, .size_per_node = fp32_temp_page_size_bytes},
+    };
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = INPUT_TENSOR, .spec = input_tensor.tensor_spec()},
+        TensorParameter{.unique_id = INDEX_TENSOR, .spec = index_tensor.tensor_spec()},
+        TensorParameter{.unique_id = SRC_TENSOR, .spec = src_tensor.tensor_spec()},
+        TensorParameter{.unique_id = OUTPUT_TENSOR, .spec = output_tensor.tensor_spec()},
+    };
+    spec.work_units = {WorkUnitSpec{
+        .name = "scatter_reduce_bfloat16",
+        .kernels = {READER, WRITER},
+        .target_nodes = all_cores,
+    }};
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values = std::move(reader_node_args),
+            .advanced_options = std::move(reader_run_advanced),
+        },
+        KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = std::move(writer_node_args),
+        },
+    };
+    run_args.tensor_args.emplace(INPUT_TENSOR, input_tensor.mesh_tensor());
+    run_args.tensor_args.emplace(INDEX_TENSOR, index_tensor.mesh_tensor());
+    run_args.tensor_args.emplace(SRC_TENSOR, src_tensor.mesh_tensor());
+    run_args.tensor_args.emplace(OUTPUT_TENSOR, output_tensor.mesh_tensor());
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::prim

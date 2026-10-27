@@ -4,10 +4,11 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
-#include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -15,12 +16,13 @@
 #include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt_stl/strong_type.hpp>
+#include <tt-metalium/kernel_types.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -34,10 +36,12 @@ namespace tt::tt_metal::experimental {
 //
 // A KernelSpec describes a *compiled kernel*: it specializes a kernel for
 // compilation, baking in the kernel's compile-time arguments and compiler options.
-// A compiled kernel may run as several cooperating threads (see num_threads) — a
-// small number of independent threads that each run the whole kernel function and
-// coordinate explicitly. How those threads map onto the node's physical RISC-V
-// cores — and how many binaries the kernel compiles to — is an implementation
+//
+// A compiled kernel may run as multiple threads (see num_threads), following the
+// SPMD (single-program, multiple-data) model: a small number of independent
+// threads that each run the whole kernel function, each with its own thread
+// index, coordinating explicitly. How those threads map onto the node's physical
+// RISC-V cores — and how many binaries the kernel compiles to — is an implementation
 // detail the programming model hides.
 //
 // The KernelSpec describes all the properties of a kernel:
@@ -58,12 +62,17 @@ namespace tt::tt_metal::experimental {
 //   runtime arguments (see ProgramRunArgs) — so sibling instances can do different
 //   work from the same binary.
 //
-// PLACEMENT: The nodes the kernel runs on is derived from WorkUnitSpec membership.
+// PLACEMENT: The nodes the kernel runs on are derived from WorkUnitSpec membership.
 //
 // ============================================================================
 
 // A name identifying a KernelSpec within a ProgramSpec.
 using KernelSpecName = ttsl::StrongType<std::string, struct KernelSpecNameTag>;
+
+// Maximum length of a resource binding's accessor_name (DFB, semaphore, scratchpad, tensor).
+//
+// MAINTAINER: This constant is in sync with MAX_TEMPLATE_STRING_LEN on device side.
+inline constexpr std::size_t MAX_ACCESSOR_NAME_LENGTH = 64;
 
 //------------------------------------------------
 // KernelSpec
@@ -78,8 +87,8 @@ struct KernelSpec {
     KernelSpecName unique_id;
 
     // Kernel source: either a path to a source file, or the source code itself.
-    // String literals bind directly to the path variant alternative; wrap inline
-    // source code with SourceCode{...}.
+    // To pass inline source code, wrap it in KernelSpec::SourceCode{...}.
+    // (A string literal binds directly to the path variant alternative.)
     struct SourceCode {
         std::string code;
     };
@@ -88,8 +97,12 @@ struct KernelSpec {
     // NOTE: The kernel's target node set is a DERIVED property, based on the
     //       WorkUnitSpec(s) that include this kernel.
 
-    // Kernel threading:
-    // Number of kernel threads
+    // Kernel threading: the number of SPMD threads this kernel has.
+    //
+    // The legality rules for num_threads are architecture and kernel-type dependent:
+    //  - 1st-gen architectures (1xx; Wormhole, Blackhole) support single-threaded kernels only.
+    //  - 2nd-gen architectures (2xx; Quasar) support num_threads > 1.
+    //    Different rules apply for compute vs data-movement kernels.
     uint32_t num_threads = 1;
 
     // Kernel type (methods)
@@ -107,56 +120,70 @@ struct KernelSpec {
         IncludePaths include_paths;         // -I <path>
         Defines defines;                    // -D <name>=<value>
         OptLevel opt_level = OptLevel::O2;  // -O<level>
-        // Can add more options here as needed
     };
     CompilerOptions compiler_options = {};
 
     ///////////////////////////////////////////////////////////////////
-    // Resource bindings (immutable Program parameters)
-    //////////////////////////////////////////////////////////////////
+    // Program-scope resource bindings
+    ///////////////////////////////////////////////////////////////////
 
     // DFB bindings
     // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<accessor_name>)
+    // The kernel constructs a DataflowBuffer from the binding token:
+    //   DataflowBuffer(dfb::<accessor_name>)
     struct DFBBinding {
         // Endpoint role this binding plays for the DFB.
         enum class EndpointType { PRODUCER, CONSUMER };
-        // How the kernel's threads iterate over the DFB's entries.
+        // How the kernel's threads iterate over the DFB's entries. (Only meaningful
+        // for multi-threaded kernels; at num_threads == 1 all patterns are equivalent.)
         //   STRIDED: a kernel thread accesses every N-th entry (where N = num_threads)
         //   ALL:     each kernel thread accesses every DFB entry
-        //   BLOCKED: a kernel thread accesses blocks of N entries, in strides of N blocks
+        //   BLOCKED: a kernel thread accesses a contiguous block of block_size entries, then
+        //            strides by block_size * num_threads to its next block
         enum class AccessPattern { STRIDED, ALL, BLOCKED };
 
         DFBSpecName dfb_spec_name;   // identify the DFB within the ProgramSpec
         std::string accessor_name;   // DFB accessor name (used in the kernel source code)
         EndpointType endpoint_type;  // producer or consumer
         AccessPattern access_pattern = AccessPattern::STRIDED;
+        uint32_t block_size = 0;  // number of DFB entries per block
+                                  // only meaningful when access_pattern == BLOCKED;
+                                  // set to 0 otherwise.
     };
     Group<DFBBinding> dfb_bindings;
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via SemaphoreAccessor(sem::<accessor_name>)
+    // The kernel constructs a Semaphore from the binding token: Semaphore(sem::<accessor_name>)
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
     };
     Group<SemaphoreBinding> semaphore_bindings;
 
+    // Scratchpad bindings
+    // Declares that this kernel uses a scratchpad resource (declared at the ProgramSpec level)
+    // The kernel constructs a Scratchpad from the binding token, naming the element type:
+    //   Scratchpad<uint32_t>(scratch::<accessor_name>)
+    struct ScratchpadBinding {
+        ScratchpadSpecName scratchpad_spec_name;  // identify the scratchpad within the ProgramSpec
+        std::string accessor_name;                // scratchpad accessor name (used in the kernel source code)
+    };
+    Group<ScratchpadBinding> scratchpad_bindings;
+
+    ///////////////////////////////////////////////////////////////////
+    // Program parameter bindings (user-managed resources)
+    ///////////////////////////////////////////////////////////////////
+
     // Tensor bindings
     // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via TensorAccessor(tensor::<accessor_name>)
+    // The kernel constructs a TensorAccessor (or LocalTensorAccessor) from the binding token:
+    //   TensorAccessor(tensor::<accessor_name>)
     struct TensorBinding {
-        TensorParamName tensor_parameter_name;      // identify the TensorBinding within the ProgramSpec
-        std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
+        TensorParamName tensor_parameter_name;  // identify the TensorParameter within the ProgramSpec
+        std::string accessor_name;              // tensor accessor name (used in the kernel source code)
     };
     Group<TensorBinding> tensor_bindings;
-
-    // Additional resource binding types:
-    //  - Scratchpad bindings (Program-local memory resource)
-    //  - Buffer bindings (User-managed memory resource)
-    //  - GlobalSemaphore bindings (User-managed resource)
-    //  - GlobalDataflowBuffer bindings (User-managed resource)
 
     //////////////////////////////////////////////////////////////////////////////
     // Kernel arguments
@@ -167,7 +194,6 @@ struct KernelSpec {
     // (Bound argument values cannot be changed between Program executions)
     using CompileTimeArgs = Table<std::string, uint32_t>;
     CompileTimeArgs compile_time_args;
-    // TODO -- extend to support arbitrary POD types, including user-defined structs.
 
     //----------------------------------------------------------------------------
     // Runtime argument schema (declaration)
@@ -210,6 +236,7 @@ using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
 using DFBBinding = KernelSpec::DFBBinding;
 using TensorBinding = KernelSpec::TensorBinding;
 using SemaphoreBinding = KernelSpec::SemaphoreBinding;
+using ScratchpadBinding = KernelSpec::ScratchpadBinding;
 
 //------------------------------------------------
 // Convenience factories for DFBBinding
@@ -225,6 +252,19 @@ inline DFBBinding ProducerOf(DFBSpecName dfb_spec_name, std::string accessor_nam
         .accessor_name = std::move(accessor_name),
         .endpoint_type = DFBEndpointType::PRODUCER,
         .access_pattern = DFBAccessPattern::STRIDED};
+}
+
+// Creates a DFB producer binding with a BLOCKED access pattern.
+// block_size is the number of contiguous entries a thread accesses before striding
+// by block_size * num_threads; it must be > 0.
+inline DFBBinding BlockedProducerOf(DFBSpecName dfb_spec_name, std::string accessor_name, uint32_t block_size) {
+    return DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::PRODUCER,
+        .access_pattern = DFBAccessPattern::BLOCKED,
+        .block_size = block_size,
+    };
 }
 
 // Creates a DFB consumer binding (with a default-STRIDED access pattern)
@@ -261,17 +301,17 @@ inline DFBBinding AllConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_
     };
 }
 
-// Creates a DFB consumer binding with a BLOCKED access pattern
-// Uncomment when BLOCKED support is added (currently TT_FATALs)
-/*
-inline DFBBinding BlockedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+// Creates a DFB consumer binding with a BLOCKED access pattern.
+// block_size is the number of contiguous entries a thread accesses before striding
+// by block_size * num_threads; it must be > 0.
+inline DFBBinding BlockedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name, uint32_t block_size) {
     return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
         .endpoint_type = DFBEndpointType::CONSUMER,
         .access_pattern = DFBAccessPattern::BLOCKED,
+        .block_size = block_size,
     };
 }
-*/
 
 }  // namespace tt::tt_metal::experimental

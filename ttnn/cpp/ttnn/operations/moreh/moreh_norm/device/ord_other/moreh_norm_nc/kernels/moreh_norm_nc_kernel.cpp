@@ -1,138 +1,79 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"  // Abs, Negative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/minmax.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/predicates.hpp"  // UnaryNe
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"     // Optional
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    int i{0};
-    const auto num_output_tiles_per_core = get_arg_val<uint32_t>(i++);
-    const auto num_reduced_tiles_along_dim = get_arg_val<uint32_t>(i++);
+    const auto num_output_tiles_per_core = get_arg(args::num_output_tiles_per_core);
+    const auto num_reduced_tiles_along_dim = get_arg(args::num_reduced_tiles_along_dim);
 
-    std::uint8_t input_id{tt::CB::c_in0};
-    const auto cb_x = input_id++;
-    CircularBuffer cb_x_obj(cb_x);  // input
-    const auto cb_one = input_id++;
-    CircularBuffer cb_one_obj(cb_one);  // one
-
-    std::uint8_t output_id{tt::CB::c_out0};
-    const auto cb_y = output_id++;
-    CircularBuffer cb_y_obj(cb_y);  // output
-
-    std::uint8_t intermed_id{tt::CB::c_intermed0};
-    const auto cb_tmp0 = intermed_id++;
-    const auto cb_tmp1 = intermed_id++;
-
-    const auto cb_val = cb_tmp0;
-    CircularBuffer cb_val_obj(cb_val);  // f(x)
-    const auto cb_cal = cb_tmp1;
-    CircularBuffer cb_cal_obj(cb_cal);  // calculate f(x) over dimensions
+    DataflowBuffer dfb_one_obj(dfb::one);
+    DataflowBuffer dfb_x_obj(dfb::x);
+    DataflowBuffer dfb_val_obj(dfb::val);
+    DataflowBuffer dfb_cal_obj(dfb::cal);
+    DataflowBuffer dfb_y_obj(dfb::y);
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
 
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
+    compute_kernel_hw_startup(dfb::x, dfb::x, dfb::y);
 
-    cb_one_obj.wait_front(onetile);  // comes from the reader
+    dfb_one_obj.wait_front(onetile);  // comes from the reader
 
+#ifdef MINUS_INF
+    constexpr bool minus_inf = true;
+#else
+    constexpr bool minus_inf = false;
+#endif
+#ifdef IS_ZERO
+    constexpr bool is_zero = true;
+#else
+    constexpr bool is_zero = false;
+#endif
+    // Compute-private intermediates (dfb::val, dfb::cal): this kernel is their only toucher, so each is
+    // self-looped on the host (bound PRODUCER and CONSUMER under one accessor name).
     for (uint32_t outer_idx = 0; outer_idx < num_output_tiles_per_core; ++outer_idx) {
         for (uint32_t inner_idx = 0; inner_idx < num_reduced_tiles_along_dim; ++inner_idx) {
             // x != 0
-            tile_regs_acquire();
-            cb_x_obj.wait_front(onetile);  // comes from the reader
-            cb_val_obj.reserve_back(onetile);
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(onetile),
+                ckl::CopyTile<ckl::input(dfb::x)>{dfb_x_obj},
+                ckl::Optional<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},
+                ckl::Optional<!is_zero, ckl::Abs<ckl::Dst::D0>>{},
+                ckl::Optional<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
+                ckl::PackTile<ckl::output(dfb::val)>{dfb_val_obj});
 
-            copy_tile_init_with_dt(cb_x);
-            copy_tile(cb_x, 0, dst0);
-#ifdef IS_ZERO
-            unary_ne_tile_init();
-            unary_ne_tile(dst0, 0);
-#else
-            abs_tile_init();
-            abs_tile(dst0);
-#endif
-
-#ifdef MINUS_INF
-            negative_tile_init();
-            negative_tile(dst0);
-#endif
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_val);
-            tile_regs_release();
-
-            cb_x_obj.pop_front(onetile);
-            cb_val_obj.push_back(onetile);
-
-            // Add(x != 0)
+            // calculate f(x) over dimensions
             if (inner_idx == 0) {
-                tile_regs_acquire();
-                cb_val_obj.wait_front(onetile);
-                cb_cal_obj.reserve_back(onetile);
-
-                copy_tile_init_with_dt(cb_val);
-                copy_tile(cb_val, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_cal);
-                tile_regs_release();
-
-                cb_val_obj.pop_front(onetile);
-                cb_cal_obj.push_back(onetile);
-
+                ckl::copy<ckl::input(dfb::val), ckl::output(dfb::cal)>(
+                    ckl::IterationShape::tiles(onetile), dfb_val_obj, dfb_cal_obj);
             } else {
-                tile_regs_acquire();
-                cb_val_obj.wait_front(onetile);
-                cb_cal_obj.wait_front(onetile);
-                cb_cal_obj.reserve_back(onetile);
 #ifdef IS_ZERO
-                add_tiles_init_with_dt(cb_val, cb_cal);
-                add_tiles(cb_val, cb_cal, 0, 0, dst0);
+                ckl::add<ckl::input(dfb::val), ckl::input(dfb::cal), ckl::output(dfb::cal)>(
+                    ckl::IterationShape::tiles(onetile), dfb_val_obj, dfb_cal_obj, dfb_cal_obj);
 #else
-                copy_tile_init_with_dt(cb_val);
-                copy_tile(cb_val, 0, dst0);
-
-                copy_tile_init_with_dt(cb_cal);
-                copy_tile(cb_cal, 0, dst1);
-
-                binary_max_tile_init();
-                binary_max_tile(dst0, dst1, dst0);
+                ckl::binary_sfpu<ckl::BinaryMax<>, ckl::input(dfb::val), ckl::input(dfb::cal), ckl::output(dfb::cal)>(
+                    ckl::IterationShape::tiles(onetile), dfb_val_obj, dfb_cal_obj, dfb_cal_obj);
 #endif
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_cal);
-                tile_regs_release();
-
-                cb_val_obj.pop_front(onetile);
-                cb_cal_obj.pop_front(onetile);
-                cb_cal_obj.push_back(onetile);
             }
         }
 
-        // Compute cb_y
-        tile_regs_acquire();
-
-        cb_cal_obj.wait_front(onetile);
-        cb_y_obj.reserve_back(onetile);
-
-        copy_tile_init_with_dt(cb_cal);
-        copy_tile(cb_cal, 0, dst0);
-#ifdef MINUS_INF
-        negative_tile_init();
-        negative_tile(dst0);
-#endif
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_y);
-        tile_regs_release();
-
-        cb_cal_obj.pop_front(onetile);
-        cb_y_obj.push_back(onetile);
+        // Compute dfb::y
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(onetile),
+            ckl::CopyTile<ckl::input(dfb::cal)>{dfb_cal_obj},
+            ckl::Optional<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
+            ckl::PackTile<ckl::output(dfb::y)>{dfb_y_obj});
     }
-    cb_one_obj.pop_front(onetile);
+    dfb_one_obj.pop_front(onetile);
 }

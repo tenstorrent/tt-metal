@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include <cstdint>
 #include "llk_assert.h"
 #include "llk_math_common_api.h"
 #include "experimental/llk_math_eltwise_binary_custom.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK MATH ELTWISE BINARY CUSTOM - blocked bcast-col paths
@@ -24,6 +26,7 @@
 template <MathFidelity math_fidelity>
 inline void llk_math_eltwise_binary_sub_bcast_cols_init_custom(
     const std::uint32_t operandA, const std::uint32_t operandB) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operandA);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
@@ -33,36 +36,64 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_init_custom(
 /**
  * @brief SDPA blocked bcast-col SUB over ct_dim column tiles starting at dst_index.
  *
- * @tparam is_fp32_dest_acc_en: Whether dest accumulates in fp32 (selects the dest tile budget).
  * @param dst_index: First destination tile index.
  * @param ct_dim: Number of column tiles written, into dest range [dst_index, dst_index + ct_dim).
  * @note Run @ref llk_math_eltwise_binary_sub_bcast_cols_init_custom first.
  */
-template <bool is_fp32_dest_acc_en = false>
-inline void llk_math_eltwise_binary_sub_bcast_cols_custom(const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
+inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
+    const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT(
-        (dst_index + ct_dim <= get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        (dst_index + ct_dim <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "dst range out of bounds");
 
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    _llk_math_sub_bcast_cols_reuse_custom_(ct_dim);
-    math::clear_dst_reg_addr();
+    const std::uint32_t operand_id = get_operand_id(operandA);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+
+    // dst_index is the absolute base dest tile slot; the LLK helper writes ct_dim
+    // consecutive tiles from there and restores the dest base on exit.
+    _llk_math_sub_bcast_cols_reuse_custom_(ct_dim, tensor_shape, dst_index);
+}
+
+/**
+ * @brief Initialises the cancellation-resistant LayerNorm column subtraction.
+ * @note Run before @ref llk_math_sub_bcast_cols_compensated on this thread.
+ */
+inline void llk_math_sub_bcast_cols_compensated_init() { _llk_math_sub_bcast_cols_compensated_init_(); }
+
+/**
+ * @brief Runs cancellation-resistant column subtraction over consecutive destination tiles.
+ * @param operandA CB id of the input tiles; its tile shape configures the FPU traversal.
+ * @param dst_index First destination tile index.
+ * @param ct_dim Number of consecutive destination tiles to process.
+ * @note Call @ref llk_math_sub_bcast_cols_compensated_init first. The destination range must fit in the acquired bank.
+ */
+inline void llk_math_sub_bcast_cols_compensated(
+    const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim) {
+    LLK_ASSERT(
+        (dst_index + ct_dim <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "dst range out of bounds");
+    const auto tensor_shape = get_operand_tensor_shape(get_operand_id(operandA));
+    _llk_math_sub_bcast_cols_compensated_(ct_dim, tensor_shape, dst_index);
 }
 
 /**
  * @brief Init the math (FPU) thread for the indexer_score blocked bcast-col MUL path.
  *
+ * @tparam math_fidelity: FPU fidelity phases, values = <LoFi/HiFi2/HiFi3/HiFi4>; the MUL honours it like
+ *                        the canonical mul_bcast_cols path.
  * @param operandA: CB id of srcA; its num_faces drives the addr-mod setup.
  * @param operandB: CB id of srcB (the bcast-col operand).
- * @note No fidelity template arg (unlike the SUB init): the COL bcast init doesn't take one. Run before
- *       @ref llk_math_eltwise_binary_mul_bcast_cols_custom on this thread.
+ * @note Run before @ref llk_math_eltwise_binary_mul_bcast_cols_custom (same math_fidelity) on this thread.
  */
+template <MathFidelity math_fidelity>
 inline void llk_math_eltwise_binary_mul_bcast_cols_init_custom(
     const std::uint32_t operandA, const std::uint32_t operandB) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operandA);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
-    _llk_math_eltwise_binary_init_custom_<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(num_faces);
+    _llk_math_eltwise_binary_init_custom_<EltwiseBinaryType::ELWMUL, BroadcastType::COL, math_fidelity>(num_faces);
 }
 
 /**
@@ -71,17 +102,20 @@ inline void llk_math_eltwise_binary_mul_bcast_cols_init_custom(
  * Column j MACs onto dest[dst_index + j], so calling once per head into the same dst_index reduces
  * heads in place (see @ref _llk_math_bcast_cols_reuse_custom_).
  *
+ * @tparam math_fidelity: FPU fidelity phases, values = <LoFi/HiFi2/HiFi3/HiFi4>.
  * @param dst_index: First destination tile index.
  * @param ct_dim: Number of column tiles written, into dest range [dst_index, dst_index + ct_dim).
- * @note Run @ref llk_math_eltwise_binary_mul_bcast_cols_init_custom first.
+ * @note Run @ref llk_math_eltwise_binary_mul_bcast_cols_init_custom (same math_fidelity) first.
  */
+template <MathFidelity math_fidelity>
 inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
     const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT(
-        (dst_index + ct_dim <= get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        (dst_index + ct_dim <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "dst range out of bounds");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWMUL>(ct_dim);
+    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWMUL, math_fidelity>(ct_dim);
     math::clear_dst_reg_addr();
 }

@@ -6,14 +6,15 @@
 
 #include "fill_pad_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <array>
 #include <bit>
+#include <cstdint>
 
 namespace ttnn::prim::detail {
 
-inline const std::map<ttnn::DataType, uint32_t> data_type_to_size = {
+inline const std::map<ttnn::DataType, std::uint32_t> data_type_to_size = {
     {ttnn::DataType::BFLOAT16, 2},
     {ttnn::DataType::FLOAT32, 4},
     {ttnn::DataType::UINT16, 2},
@@ -25,13 +26,13 @@ inline const std::map<ttnn::DataType, uint32_t> data_type_to_size = {
 // Width is deduced from the parameter type: 4-byte types take their raw bit pattern,
 // 2-byte integer types are duplicated across both halves of the 32-bit word.
 template <typename T>
-inline uint32_t pack_fill_value(T fill_value) {
+inline std::uint32_t pack_fill_value(T fill_value) {
     static_assert(sizeof(T) == 2 || sizeof(T) == 4, "pack_fill_value: unsupported size");
     if constexpr (sizeof(T) == 4) {
-        return std::bit_cast<uint32_t>(fill_value);
+        return std::bit_cast<std::uint32_t>(fill_value);
     } else {
         using U16 = std::uint16_t;
-        const uint32_t v = static_cast<uint32_t>(std::bit_cast<U16>(fill_value));
+        const std::uint32_t v = static_cast<std::uint32_t>(std::bit_cast<U16>(fill_value));
         return (v << 16) | v;
     }
 }
@@ -41,17 +42,17 @@ inline uint32_t pack_fill_value(T fill_value) {
 // Float DataTypes (FLOAT32, BFLOAT16) keep the full float32 bit pattern — the
 // compute kernel reconstructs it via fill_tile_bitcast and the downstream
 // packer handles the bf16 narrowing.
-inline uint32_t pack_fill_value_for_dtype(ttnn::DataType dtype, const tt::tt_metal::PadValue& pad_value) {
+inline std::uint32_t pack_fill_value_for_dtype(ttnn::DataType dtype, const ttnn::PadValue& pad_value) {
     // PadValue's uint32_t arm carries an integer value / raw 32-bit pattern (e.g. reduce's int32 pad
     // sentinels, which are not float-representable); the float arm carries a numeric float value (the
     // default for prod, reshape, slice, ...). Mirrors tilize_with_val_padding's get_packed_value.
-    if (std::holds_alternative<uint32_t>(pad_value)) {
-        const uint32_t fill_value = std::get<uint32_t>(pad_value);
+    if (std::holds_alternative<std::uint32_t>(pad_value)) {
+        const std::uint32_t fill_value = std::get<std::uint32_t>(pad_value);
         switch (dtype) {
             // 32-bit integers: the value is already the native bit pattern.
             case ttnn::DataType::INT32:
             case ttnn::DataType::UINT32: return fill_value;
-            case ttnn::DataType::UINT16: return pack_fill_value(static_cast<uint16_t>(fill_value));
+            case ttnn::DataType::UINT16: return pack_fill_value(static_cast<std::uint16_t>(fill_value));
             case ttnn::DataType::BFLOAT16:
             case ttnn::DataType::FLOAT32: return pack_fill_value(static_cast<float>(fill_value));
             default: TT_THROW("fill_pad: unsupported dtype"); return 0u;
@@ -61,9 +62,9 @@ inline uint32_t pack_fill_value_for_dtype(ttnn::DataType dtype, const tt::tt_met
     switch (dtype) {
         case ttnn::DataType::FLOAT32:
         case ttnn::DataType::BFLOAT16: return pack_fill_value(fill_value);
-        case ttnn::DataType::UINT16: return pack_fill_value(static_cast<uint16_t>(fill_value));
-        case ttnn::DataType::UINT32: return pack_fill_value(static_cast<uint32_t>(fill_value));
-        case ttnn::DataType::INT32: return pack_fill_value(static_cast<int32_t>(fill_value));
+        case ttnn::DataType::UINT16: return pack_fill_value(static_cast<std::uint16_t>(fill_value));
+        case ttnn::DataType::UINT32: return pack_fill_value(static_cast<std::uint32_t>(fill_value));
+        case ttnn::DataType::INT32: return pack_fill_value(static_cast<std::int32_t>(fill_value));
         default: TT_THROW("fill_pad: unsupported dtype"); return 0u;
     }
 }
@@ -80,6 +81,18 @@ inline std::string get_where_data_fmt(ttnn::DataType dtype) {
     }
 }
 
+// Product of all dimensions except the last two (H, W). Matches fill_implicit_tile_padding's rank-3 collapse.
+inline std::uint32_t num_slice_batches(const tt::tt_metal::Shape& logical_shape) {
+    if (logical_shape.rank() <= 2) {
+        return 1u;
+    }
+    std::uint32_t n_slices = 1u;
+    for (std::uint32_t i = 0; i < logical_shape.rank() - 2; ++i) {
+        n_slices *= logical_shape[i];
+    }
+    return n_slices;
+}
+
 }  // namespace ttnn::prim::detail
 
 namespace ttnn::prim {
@@ -94,7 +107,7 @@ namespace ttnn::prim {
 // with num == 0 are skipped. A single compute kernel binary covers all cores
 // (CT has_right_pad / has_bottom_pad gate the phase branches at compile time).
 struct FillPadProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& tensor_return_value);
 };
 
@@ -102,7 +115,7 @@ struct FillPadProgramFactory {
 // Unlike `FillPadProgramFactory` which gives each core a comparable number of borders,
 // with FillPadL1ShardedProgramFactory, each core only processes its own local L1 data (no balancing).
 struct FillPadL1ShardedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& tensor_return_value);
 };
 

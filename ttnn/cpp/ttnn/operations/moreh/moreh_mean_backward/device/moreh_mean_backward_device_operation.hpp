@@ -6,17 +6,18 @@
 
 #include <cstdint>
 #include <optional>
+#include <variant>
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::moreh::moreh_mean_backward {
 struct MorehMeanBackwardOperation {
     struct operation_attributes_t {
-        const ttnn::SmallVector<int64_t> dims;
+        const ttsl::SmallVector<int64_t> dims;
         const bool keepdim;
         const std::optional<ttnn::Shape> input_grad_shape;
         const MemoryConfig memory_config;
@@ -27,13 +28,18 @@ struct MorehMeanBackwardOperation {
         const std::optional<Tensor>& input_grad;
     };
 
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output);
+    // Metal 2.0 program factory (MetalV2FactoryConcept).
+    struct MorehMeanBackwardProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    using program_factory_t = std::variant<MorehMeanBackwardProgramFactory>;
 
     static void validate_tensors(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -46,7 +52,7 @@ struct MorehMeanBackwardOperation {
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackwardOperation::tensor_return_value_t moreh_mean_backward(
     const Tensor& output_grad,
-    const ttnn::SmallVector<int64_t>& dims,
+    const ttsl::SmallVector<int64_t>& dims,
     bool keepdim,
     const std::optional<ttnn::Shape>& input_grad_shape,
     const std::optional<Tensor>& input_grad,

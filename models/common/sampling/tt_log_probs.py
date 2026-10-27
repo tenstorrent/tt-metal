@@ -178,19 +178,19 @@ class LogProbsCalculator:
 
         num_devices = self.mesh_device.get_num_devices()
 
-        # Determine the TP dimension: for 2D meshes, logits are sharded across
-        # the larger dimension (TP). For 1D or single-device, use all devices.
-        if self.cluster_shape[0] > 1 and self.cluster_shape[1] > 1:
-            # 2D mesh: TP axis is the larger dimension
-            tp_axis = 0 if self.cluster_shape[0] >= self.cluster_shape[1] else 1
+        # Determine the TP dimension: logits are sharded across the mesh axis that
+        # holds multiple devices. Handles 2D (e.g. 8×4), 1×N (T3K), and N×1 meshes.
+        if num_devices > 1:
+            if self.cluster_shape[0] > 1 and self.cluster_shape[1] > 1:
+                tp_axis = 0 if self.cluster_shape[0] >= self.cluster_shape[1] else 1
+            elif self.cluster_shape[0] > 1:
+                tp_axis = 0
+            else:
+                # num_devices > 1 implies at least one dim > 1; here dim0 == 1 → 1×N (T3K)
+                tp_axis = 1
             num_devices_for_sharding = self.cluster_shape[tp_axis]
             self._all_gather_cluster_axis = tp_axis
-        elif num_devices > 1:
-            # 1D mesh
-            num_devices_for_sharding = num_devices
-            self._all_gather_cluster_axis = None
         else:
-            # Single device
             num_devices_for_sharding = num_devices
             self._all_gather_cluster_axis = None
 
@@ -228,11 +228,9 @@ class LogProbsCalculator:
                 torch.arange(num_devices_for_sharding).unsqueeze(1).expand(num_devices_for_sharding, batch_size)
             )
 
-            if self.cluster_shape[0] > 1 and self.cluster_shape[1] > 1:
+            if self._all_gather_cluster_axis is not None:
                 dims = (0, None) if self._all_gather_cluster_axis == 0 else (None, 0)
                 mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
-            elif num_devices > 1:
-                mesh_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
             else:
                 mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
 
@@ -254,6 +252,37 @@ class LogProbsCalculator:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
+    def release(self) -> None:
+        """Best-effort release of unique calculator-owned tensors."""
+        field_names = (
+            "global_max",
+            "global_exp_sum",
+            "mask",
+            "output_tensor",
+            "topk_logprobs_output",
+            "topk_indices_output",
+        )
+        groups = {}
+        for name in field_names:
+            value = getattr(self, name, None)
+            if value is not None:
+                groups.setdefault(id(value), (value, []))[1].append(name)
+
+        failures = []
+        for value, names in groups.values():
+            try:
+                ttnn.deallocate(value)
+            except BaseException as error:
+                failures.append(error)
+            else:
+                for name in names:
+                    setattr(self, name, None)
+        if failures:
+            primary = failures[0]
+            previous = tuple(getattr(primary, "cleanup_failures", ()))
+            primary.cleanup_failures = previous + tuple(failures[1:])
+            raise primary
+
     def _perform_all_gather(self, tensor: ttnn.Tensor, dim: int, num_links: int, buffer_key: str = None):
         if callable(self._line_all_gather):
             kwargs = {
@@ -269,24 +298,22 @@ class LogProbsCalculator:
         return ttnn.all_gather(
             tensor,
             dim=dim,
-            num_links=num_links,
             memory_config=tensor.memory_config(),
             cluster_axis=self._all_gather_cluster_axis,
-            topology=ttnn.Topology.Linear,
         )
 
     def set_log_probs_mode(
         self,
-        enable_log_probs: bool | list[bool] = False,
-        num_logprobs: int | list[int] | None = None,
+        enable_log_probs: bool | list[bool] | tuple[bool, ...] = False,
+        num_logprobs: int | list[int] | tuple[int, ...] | None = None,
         empty_slots: list[int] | None = None,
     ):
         """Set logprobs mode for the current batch.
 
         Args:
-            enable_log_probs: Boolean or per-user boolean list. If any user has logprobs
+            enable_log_probs: Boolean or per-user boolean list/tuple. If any user has logprobs
                 enabled, the entire batch runs logprobs computation.
-            num_logprobs: Integer or per-user integer list (0-20). Specifies how many
+            num_logprobs: Integer or per-user integer list/tuple (0-20). Specifies how many
                 top logprobs to return per user. 0 means sampled token logprob only.
                 Values > 0 trigger top-k logprobs computation on device.
             empty_slots: Optional list of batch indices at which to apply the new
@@ -295,7 +322,7 @@ class LogProbsCalculator:
         """
         if empty_slots is not None:
             # Partial update: only modify the specified batch positions
-            if isinstance(enable_log_probs, list):
+            if isinstance(enable_log_probs, (list, tuple)):
                 for i, slot in enumerate(empty_slots):
                     self.logprobs_enabled[slot] = enable_log_probs[i]
             else:
@@ -303,7 +330,7 @@ class LogProbsCalculator:
                     self.logprobs_enabled[slot] = enable_log_probs
 
             if num_logprobs is not None:
-                if isinstance(num_logprobs, list):
+                if isinstance(num_logprobs, (list, tuple)):
                     for i, slot in enumerate(empty_slots):
                         self.num_logprobs[slot] = num_logprobs[i]
                 else:
@@ -311,13 +338,13 @@ class LogProbsCalculator:
                         self.num_logprobs[slot] = num_logprobs
         else:
             # Full batch update
-            if isinstance(enable_log_probs, list):
+            if isinstance(enable_log_probs, (list, tuple)):
                 self.logprobs_enabled = list(enable_log_probs)
             else:
                 self.logprobs_enabled = [enable_log_probs] * self.batch_size
 
             if num_logprobs is not None:
-                if isinstance(num_logprobs, list):
+                if isinstance(num_logprobs, (list, tuple)):
                     self.num_logprobs = list(num_logprobs)
                 else:
                     self.num_logprobs = [num_logprobs] * self.batch_size
@@ -346,15 +373,19 @@ class LogProbsCalculator:
         # Calculate local max
         local_max_tensor = ttnn.max(logits_tensor, dim=-1, keepdim=True, **self.common_args)
 
-        gathered_max_tensors = self._perform_all_gather(
-            local_max_tensor,
-            dim=1,
-            num_links=1,
-            buffer_key="LOGPROBS_MAX_REDUCTION",
-        )
+        if self.num_devices_for_sharding == 1:
+            gathered_max_tensors = local_max_tensor
+        else:
+            gathered_max_tensors = self._perform_all_gather(
+                local_max_tensor,
+                dim=1,
+                num_links=1,
+                buffer_key="LOGPROBS_MAX_REDUCTION",
+            )
         # Convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
         gathered_max_tensors = ttnn.to_layout(gathered_max_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        ttnn.deallocate(local_max_tensor)
+        if gathered_max_tensors is not local_max_tensor:
+            ttnn.deallocate(local_max_tensor)
         D = self.num_devices_for_sharding
         B = gathered_max_tensors.shape[2]
         gathered_max_tensors = ttnn.reshape(gathered_max_tensors, (1, 1, D, B), **self.common_args)
@@ -374,14 +405,18 @@ class LogProbsCalculator:
         sum_exp_tensor = ttnn.sum(exp_tensor, dim=-1, keepdim=True, **self.common_args)
         ttnn.deallocate(exp_tensor)
 
-        gathered_sum_exp_tensors = self._perform_all_gather(
-            sum_exp_tensor,
-            dim=1,
-            num_links=1,
-            buffer_key="LOGPROBS_SUM_EXP_REDUCTION",
-        )
+        if self.num_devices_for_sharding == 1:
+            gathered_sum_exp_tensors = sum_exp_tensor
+        else:
+            gathered_sum_exp_tensors = self._perform_all_gather(
+                sum_exp_tensor,
+                dim=1,
+                num_links=1,
+                buffer_key="LOGPROBS_SUM_EXP_REDUCTION",
+            )
         gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        ttnn.deallocate(sum_exp_tensor)
+        if gathered_sum_exp_tensors is not sum_exp_tensor:
+            ttnn.deallocate(sum_exp_tensor)
         B_sum = gathered_sum_exp_tensors.shape[2]
         gathered_sum_exp_tensors = ttnn.reshape(gathered_sum_exp_tensors, (1, 1, D, B_sum), **self.common_args)
         gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.TILE_LAYOUT, **self.common_args)
@@ -392,11 +427,9 @@ class LogProbsCalculator:
     def _is_supported(self):
         """Check if logprobs computation is supported on this device configuration."""
         num_devices = self.mesh_device.get_num_devices()
-        if num_devices not in (8, 32):
-            return False
-        if self.num_devices_for_sharding < 2:
-            return False
-        return True
+        if num_devices == 1:
+            return self.num_devices_for_sharding == 1
+        return num_devices in (8, 32) and self.num_devices_for_sharding >= 2
 
     # -----------------------------------------------------------------------
     # Old path (backward compat for non-gpt-oss models)
@@ -413,15 +446,6 @@ class LogProbsCalculator:
 
         # TODO: Raise an issue on this since for UINT_32 ttnn.div produces incorrect output (all zeros)
         global_idx_tilized_tensor = ttnn.typecast(global_idx_tilized_tensor, ttnn.float32, **self.common_args)
-
-        # Get chip_id for each user based on global_idx values in global_idx_tensor
-        chip_ids_tensor = ttnn.div(
-            global_idx_tilized_tensor,
-            size_per_device,
-            rounding_mode="floor",
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **self.common_args,
-        )
 
         # Get local index for each user based on global_idx values in global_idx_tensor
         remainder_tensor = ttnn.remainder(
@@ -447,6 +471,23 @@ class LogProbsCalculator:
         batch_vol_s = selected_logits_tensor.shape[2] * selected_logits_tensor.shape[3]
         selected_logits_tensor = ttnn.reshape(selected_logits_tensor, (1, 1, 1, batch_vol_s), **self.common_args)
         selected_logits_tensor = ttnn.to_layout(selected_logits_tensor, ttnn.TILE_LAYOUT, **self.common_args)
+
+        # A single-device mesh owns the entire vocabulary. The gathered form
+        # above already has the [1, 1, 1, batch] shape consumed by
+        # _calculate_log_probs, so no chip mask or collective is necessary.
+        if self.num_devices_for_sharding == 1:
+            return selected_logits_tensor
+
+        # Multi-device only: compute per-user chip id to mask-out logits from the wrong chip.
+        # ttnn.div is deferred until here so single-device skips the floor-div entirely.
+        chip_ids_tensor = ttnn.div(
+            global_idx_tilized_tensor,
+            size_per_device,
+            rounding_mode="floor",
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **self.common_args,
+        )
+
         # Compare mask to chip_ids tensor and select correct positions for each user on all chips inplace
         ttnn.eq_(chip_ids_tensor, self.mask, **self.common_args)
 
@@ -482,6 +523,28 @@ class LogProbsCalculator:
         # Subtract and put result to self.output_tensor
         ttnn.subtract(out, log_global_exp_sum, output_tensor=self.output_tensor, **self.common_args)
 
+    def _release_global_stats(self) -> None:
+        """Free the per-call global stats so they do not outlive the call.
+
+        `_compute_global_stats` parks `global_max`/`global_exp_sum` on the instance so the
+        later log-softmax steps can read them, but they are CALL-SCOPED: every call
+        overwrites them and nothing reads them across calls. Left on the instance they keep
+        two device buffers alive indefinitely -- and prefill sampling is UNTRACED, so they are
+        allocated while the prefill/decode traces are live and are still alive at
+        execute_trace. That is the allocation-behind-a-live-trace hazard of #52176, and the
+        trace-allocation tracker (TT_METAL_TRACE_ALLOC_TRACKING=1) names exactly these two
+        buffers: "Found 2 device buffer(s) still alive before trace replay".
+        """
+        for name in ("global_max", "global_exp_sum"):
+            tensor = getattr(self, name, None)
+            if tensor is None:
+                continue
+            try:
+                ttnn.deallocate(tensor)
+            except BaseException as error:  # best-effort, mirrors release()
+                logger.debug(f"Failed to deallocate {name}: {error}")
+            setattr(self, name, None)
+
     def calculate_log_probs(
         self,
         logits_tensor: ttnn.Tensor,
@@ -489,8 +552,9 @@ class LogProbsCalculator:
     ):
         """
         Calculate log-probs for a given logits tensor and indices tensor.
-        Returns None if log-probs are not requested, not supported, or the device count is not 8 or 32.
-        (Old path — backward compat for non-gpt-oss models)
+        Returns None if log-probs are not requested or the mesh topology is
+        unsupported. The old path supports a complete vocabulary on one device
+        and tensor-parallel vocabularies on the established 8/32-device meshes.
         """
         if not self.enable_log_probs:
             return None
@@ -510,6 +574,8 @@ class LogProbsCalculator:
 
         # Calculate log-probs for each user on each chip and stores in self.output_tensor
         self._calculate_log_probs(relevant_logits)
+
+        self._release_global_stats()
 
         return self.output_tensor
 
@@ -609,6 +675,8 @@ class LogProbsCalculator:
         self._calculate_topk_log_probs_from_values(topk_local_values)
         ttnn.deallocate(topk_local_values)
 
+        self._release_global_stats()
+
         return LogProbsResult(
             topk_logprobs=self.topk_logprobs_output,
             topk_indices=self.topk_indices_output,
@@ -660,15 +728,19 @@ class LogProbsCalculator:
         mesh_composer = self._build_mesh_composer()
 
         topk_logprobs_host = ttnn.to_torch(
-            log_probs_result.topk_logprobs_host
-            if log_probs_result.topk_logprobs_host is not None
-            else log_probs_result.topk_logprobs,
+            (
+                log_probs_result.topk_logprobs_host
+                if log_probs_result.topk_logprobs_host is not None
+                else log_probs_result.topk_logprobs
+            ),
             mesh_composer=mesh_composer,
         )
         topk_indices_host = ttnn.to_torch(
-            log_probs_result.topk_indices_host
-            if log_probs_result.topk_indices_host is not None
-            else log_probs_result.topk_indices,
+            (
+                log_probs_result.topk_indices_host
+                if log_probs_result.topk_indices_host is not None
+                else log_probs_result.topk_indices
+            ),
             mesh_composer=mesh_composer,
         )
         # Remove replicas

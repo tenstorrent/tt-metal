@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="3" failures="0" disabled="3" errors="0" time="1.5" timestamp="2026-07-30T13:24:31.000" name="AllTests">
+  <testsuite name="RealFixture" tests="1" failures="0" disabled="0" skipped="0" errors="0" time="1.5" timestamp="2026-07-30T13:24:31.500">
+    <testcase name="RunsForReal" file="/work/tests/foo_test.cpp" line="10" status="run" result="completed" time="1.5" timestamp="2026-07-30T13:24:31.500" classname="RealFixture" />
+  </testsuite>
+  <testsuite name="MemoryUtilsTest" tests="1" failures="0" disabled="1" skipped="0" errors="0" time="0" timestamp="1970-01-01T00:00:00">
+    <testcase name="DISABLED_L1Usage" file="/work/tests/utils/memory_utils_test.cpp" line="20" status="notrun" result="suppressed" time="0" timestamp="1970-01-01T00:00:00" classname="MemoryUtilsTest" />
+  </testsuite>
+  <testsuite name="DISABLED_MemoryUtilsTest" tests="1" failures="0" disabled="1" skipped="0" errors="0" time="0" timestamp="1970-01-01T00:00:00">
+    <testcase name="SnapshotFeature" file="/work/tests/utils/memory_utils_test.cpp" line="30" status="notrun" result="suppressed" time="0" timestamp="1970-01-01T00:00:00" classname="DISABLED_MemoryUtilsTest" />
+  </testsuite>
+</testsuites>

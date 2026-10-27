@@ -9,11 +9,13 @@
 #include <tt-metalium/mesh_buffer.hpp>
 
 #include "impl/buffers/semaphore.hpp"
+#include "impl/experimental/blaze/named_kernel_args_impl.hpp"
 #include "tt_stl/overloaded.hpp"
 #include <tt_stl/reflection.hpp>
 
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <bitset>
 
 namespace tt::tt_metal {
 
@@ -47,6 +49,12 @@ namespace {
 // (different kernels like reader/writer/compute can legitimately run on the same cores)
 std::vector<CoreRange> collect_all_kernel_core_ranges(const ProgramDescriptor& desc) {
     std::vector<CoreRange> all_ranges;
+    size_t total_ranges = 0;
+    for (const auto& kernel : desc.kernels) {
+        total_ranges += kernel.core_ranges.ranges().size();
+    }
+    all_ranges.reserve(total_ranges);
+
     for (const auto& kernel : desc.kernels) {
         for (const auto& range : kernel.core_ranges.ranges()) {
             all_ranges.push_back(range);
@@ -115,6 +123,9 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
         for (const auto& cb : other.cbs) {
             result.cbs.push_back(cb);
         }
+
+        // One launch message per merged program, so one reload table; two different ones is an error.
+        result.reload_table = internal::merge_reload_tables(result.reload_table, other.reload_table);
     }
 
     // Custom program hash is invalidated after merge
@@ -136,6 +147,9 @@ static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& 
         kernel.compiler_include_paths,
         kernel.common_runtime_args.size(),
         kernel.runtime_args.size(),
+        // Blaze-only experimental named args (issue #50953): hash compile-time names/values
+        // and the runtime-arg schema. Runtime values do not affect the JIT build.
+        experimental::blaze::hash_named_args_schema(kernel.blaze_named_args),
         kernel.config.index(),
         kernel.config);
 }
@@ -173,6 +187,11 @@ static inline ttsl::hash::hash_t hash_semaphore_descriptor(const SemaphoreDescri
 }
 
 void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& desc) {
+    // Compare every merged count, including empty and omitted cores, before writing any arg.
+    for (uint32_t k = 0; k < desc.kernels.size(); ++k) {
+        experimental::blaze::validate_cached_runtime_arg_counts(program, desc.kernels[k], k);
+    }
+
     for (uint32_t k = 0; k < desc.kernels.size(); ++k) {
         const auto& kernel = desc.kernels[k];
         for (const auto& [core, args] : kernel.runtime_args) {
@@ -193,6 +212,20 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
                 common_args[i] = kernel.common_runtime_args[i];
             }
         }
+
+        ////////////////////////////////////////////////////////////
+        // Blaze-only experimental named args
+        // Removal is tracked by issue #50953
+        // process_named_args merged the named VALUES into the program's runtime
+        // args at construction, but they live outside the descriptor-visible
+        // runtime_args/common_runtime_args copied above, and the descriptor
+        // hashers intentionally exclude them from the cache key.  Re-apply the
+        // current descriptor's named values or a same-schema/different-values
+        // cache hit silently executes with the first invocation's values.
+        if (!kernel.blaze_named_args.empty()) {
+            experimental::blaze::apply_named_runtime_args(program, kernel, k);
+        }
+        ////////////////////////////////////////////////////////////
     }
 
     auto program_cbs = program.circular_buffers();
@@ -316,12 +349,12 @@ void KernelDescriptor::emplace_common_runtime_args(const RTArgList& args) {
 
 std::size_t std::hash<tt::tt_metal::TileDescriptor>::operator()(
     const tt::tt_metal::TileDescriptor& tile_desc) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(tile_desc.height, tile_desc.width, tile_desc.transpose);
+    return ttsl::hash::hash_objects_with_default_seed(tile_desc.height, tile_desc.width, tile_desc.transpose);
 }
 
 std::size_t std::hash<tt::tt_metal::FaceGeometry>::operator()(
     const tt::tt_metal::FaceGeometry& face_geometry) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(face_geometry.face_r_dim, face_geometry.num_faces);
+    return ttsl::hash::hash_objects_with_default_seed(face_geometry.face_r_dim, face_geometry.num_faces);
 }
 
 std::size_t std::hash<tt::tt_metal::ProgramDescriptor>::operator()(

@@ -6,232 +6,145 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/welford.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
+#include "api/compute/transpose_dest.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+
+// SFPU multiply-by-scalar (mul_unary_tile) applied to the reduced output. See issue #45222.
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_compute_common.hpp"
 
 void kernel_main() {
     // Runtime args:
     // Total number of outer-loop iterations (N * C * Ht),
     // i.e. how many independent row-reductions this core must perform.
-    uint32_t NCHt = get_arg_val<uint32_t>(0);
+    const uint32_t NCHt = get_arg(args::NCHt);
 
     // Compile-time args:
     // Number of tiles along the W (reduction) dimension.
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr auto Wt = get_arg(args::Wt);
     // The actual number of elements along W (before tiling).
-    constexpr uint32_t W = get_compile_time_arg_val(1);
+    constexpr auto W = get_arg(args::W);
     // Number of elements per tile in the W dimension
     // (typically 32, but can be smaller for narrow tiles).
-    constexpr uint32_t tile_width = get_compile_time_arg_val(2);
-    // Whether input scaling is required.
-    constexpr bool do_scale = get_compile_time_arg_val(3) != 0;
-    // Whether to apply Bessel's correction (divide by N-1 instead of N).
-    constexpr bool correction = get_compile_time_arg_val(4) != 0;
+    constexpr auto tile_width = get_arg(args::tile_width);
+    // Packed fp32 post-multiplier applied to the reduced output via mul_unary_tile (SFPU).
+    // For var this is scalar^2, for std it is |scalar| (see welford_reduce_program_factory).
+    const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+    const bool apply_post_mul = post_mul_scaler_bits != k_identity_scaler_bits;
     // Whether to compute standard deviation (sqrt of variance) instead of variance.
-    constexpr bool is_std = get_compile_time_arg_val(5) != 0;
+    constexpr bool is_std = get_arg(args::is_std) != 0;
 
     constexpr uint32_t onetile = 1;
 
-    // Circular buffer that the reader kernel fills with input tiles.
-    // For FP32 input + do_scale=false: c_0 is flagged UnpackToDestFp32 by the program factory
-    // so the welford SFPU intake (transpose_wh_tile) reads with full FP32 precision.
-    // For FP32 input + do_scale=true: c_0 stays Default for the FPU mul SrcA read; precision
-    // preservation lives on cb_scaled (c_20) below.
-    // For BF16 input: c_0 is Default regardless.
-    constexpr auto cb_in = tt::CBIndex::c_0;
-    // True when input is FP32; gates full hw_configure pairs in the do_scale Wt-inner loop
-    // to flip UNPACK between cb_in (Default, for FPU mul) and cb_scaled (UnpackToDestFp32,
-    // for welford-intake transpose). On BF16 input neither CB carries UnpackToDestFp32, so
-    // _init_short calls suffice.
-    constexpr bool welford_fp32_input = get_named_compile_time_arg_val("welford_fp32_input") != 0;
-    // Scalar tile produced by the reader via generate_reduce_scaler.
-    // Used to scale every input tile before Welford processing.
-    constexpr auto cb_scalar = tt::CBIndex::c_2;
-    // Circular buffer where the final variance output tile is written
-    // for the writer kernel to consume.
-    constexpr auto cb_out = tt::CBIndex::c_16;
-    // Scratch circular buffer used to hold the variance tile between
-    // the two transpose steps (Welford produces row-oriented results;
-    // we transpose back to column orientation via this buffer,
-    // and transpose operation can't take data from the DST register).
-    constexpr auto cb_var = tt::CBIndex::c_19;
-    // 1-tile intermediate: holds the scaled input tile between the
-    // mul_tiles_bcast_scalar (scale step) and transpose_wh_tile (Welford step).
-    // Only used when do_scale is true.
-    // The reason this is needed is because mul_tiles_bcast_scalar writes data
-    // to the DST register, but transpose_wh_tile is an unpack operation, so
-    // it expects data in a CB. Thus, this CB is used to hold the scaled input tile.
-    constexpr auto cb_scaled = tt::CBIndex::c_20;
+    // For FP32 input dfb::in is flagged UnpackToDest by the program factory so the statistics SFPU
+    // intake (transpose_tile) reads with full FP32 precision. For BF16 input it is UnpackToSrc.
+    constexpr auto two_pass_mean_reciprocal = get_arg(args::two_pass_mean_reciprocal);
+    constexpr auto two_pass_variance_reciprocal = get_arg(args::two_pass_variance_reciprocal);
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_out(dfb::out);
 
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_scalar_obj(cb_scalar);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_var_obj(cb_var);
-    CircularBuffer cb_scaled_obj(cb_scaled);
-
-    // Destination register indices inside the Tensix DST register file.
-    // Welford's LLK uses three adjacent dst registers:
-    //   input_dst (0) – scratch for the current transposed input tile,
-    //   mean_dst  (1) – running / final mean accumulator,
-    //   var_dst   (2) – running / final variance accumulator.
+    // Statistics accumulate in LREGs. The variance-only finaliser writes the
+    // tile after mean_dst, leaving mean_dst available for retained input.
     constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;
     constexpr uint32_t var_dst = 2;
+    constexpr uint32_t retained_input_dst = 3;
+    constexpr uint32_t num_front_retained_limit = 2;
 
     // The number of valid columns in the last tile in width dimension.
-    // Because the Welford's llk is given transposed data, skip some rows when
+    // Because the statistics LLK is given transposed data, skip some rows when
     // we want to skip some columns from getting processed.
     constexpr uint32_t last_tile_rows = ((W % tile_width) == 0) ? tile_width : (W % tile_width);
 
-    compute_kernel_hw_startup(cb_in, cb_out);
-    pack_reconfig_data_format(cb_out);
-
-    if constexpr (do_scale) {
-        // Scalar tile stays resident across all rows
-        cb_scalar_obj.wait_front(onetile);
-    }
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    pack_reconfig_data_format(dfb::out);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm.
-        // When do_scale is true, each input tile is first multiplied by the scalar,
-        // packed to cb_scaled, then transposed and fed to welford_update.
-        // When do_scale is false, input tiles are transposed directly from cb_in.
-        // The Welford SFPU state (running mean in LREG4, M2 in LREG5) persists
-        // across tile_regs_release/acquire cycles because LREGs are SFPU registers,
-        // separate from the DST register file managed by tile_regs_acquire/release.
-
-        // start_N is the cumulative sample count across tiles processed so far;
-        // passed to the Welford LLK so it can compute the correct 1/(N+1) reciprocal
-        // for each sample's running-mean update.
-        uint32_t start_N = 0;
-
-        // Programs SFPU replay buffer + clears LREG4/5
-        welford_init();
-
-        // When scaling, DST must be acquired/released per tile because
-        // the FPU mul is incompatible with SFPU Welford. The scaled
-        // result is packed to cb_scaled so that transpose_wh_tile (an
-        // unpack operation) can read it back.
-        // Without scaling, transpose and welford (both SFPU-compatible)
-        // can share a single DST window for the entire loop.
-        // On the do_scale path, transpose_wh_init_short(cb_scaled) runs before each
-        // welford_update; it re-inits UNPACK and MATH via llk_math_eltwise_unary_datacopy_init,
-        // so a separate UNPACK/MATH reinit after the FPU mul is not required here.
-        if constexpr (!do_scale) {
-            reconfig_data_format_srca(cb_in);
-            // cb_in's UnpackToDestFp32 mode (FP32 input only) was already programmed by
-            // compute_kernel_hw_startup(cb_in, cb_out) at kernel entry, so _init_short is
-            // enough here. For BF16 input cb_in is Default mode and the same call works.
-            transpose_wh_init_short(cb_in);
-            tile_regs_acquire();
-        }
-        // In contrast, on do_scale path, full init_bcast and full transpose_wh_init happen inside
-        // the Wt loop (each iteration) to pair UNPACK mode flips for cb_in (Default, FPU mul SrcA)
-        // and cb_scaled (UnpackToDestFp32, unpack-to-DEST consumer for the welford-intake transpose).
-        // The first iteration's init_bcast also resets the leaked UnpackToDest mode from the
-        // previous NCHt iteration's final transpose_wh_init(cb_var, cb_out), so no separate
-        // outer-loop reset is needed.
-
-        // Welford SFPU state (running mean in LREG4, M2 in LREG5)
-        // persists across DST cycles because LREGs are separate from
-        // the DST register file managed by tile_regs_acquire/release.
-        for (uint32_t wt = 0; wt < Wt; ++wt) {
-            if constexpr (do_scale) {
-                // --- Scale step: multiply input tile by scalar ---
-                cb_in_obj.wait_front(onetile);
-                tile_regs_acquire();
-                reconfig_data_format_srca(cb_in);
-                mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
-                mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
-                tile_regs_commit();
-                cb_in_obj.pop_front(1);
-                cb_scaled_obj.reserve_back(onetile);
-                tile_regs_wait();
-                pack_reconfig_data_format(cb_scaled);
-                pack_tile(input_dst, cb_scaled);
-                tile_regs_release();
-                cb_scaled_obj.push_back(onetile);
-
-                // --- Transpose scaled tile back into DST ---
-                cb_scaled_obj.wait_front(onetile);
-                tile_regs_acquire();
-                reconfig_data_format_srca(cb_scaled);
-                transpose_wh_init_short(cb_scaled);
-                transpose_wh_tile(cb_scaled, 0, input_dst);
-                cb_scaled_obj.pop_front(onetile);
-            } else {
-                cb_in_obj.wait_front(onetile);
-                if constexpr (welford_fp32_input) {
-                    // Re-records the transpose-dest setup at math-thread replay slots [16, 32).
-                    transpose_wh_init_short(cb_in);
-                }
-                transpose_wh_tile(cb_in, 0, input_dst);
-                cb_in_obj.pop_front(onetile);
-            }
-
-            // For fp32 input, transpose_wh_tile takes the UnpackToDest path whose math-side init
-            // overwrites the upper half of the SFPU replay buffer (slots [16, 32)), clobbering
-            // welford's recurrence. welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots without
-            // clearing LREG4/5 (which would lose the running mean/M2 accumulator). UNPACK A is left in transpose=1 by
-            // transpose_wh_tile; welford_update is pure SFPU and does not consume that state, and the next iteration's
-            // transpose_wh_init[_short] reprograms it.
-            //
-            // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_wh_tile routes
-            // through SrcA without touching the SFPU replay buffer, so the recovery is gated out.
-            if constexpr (welford_fp32_input) {
-                welford_init<WelfordInitMode::PreserveStats>();
-            }
-
-            if (wt < (Wt - 1)) {
-                welford_update<0>(input_dst, start_N, {});
-                if constexpr (do_scale) {
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    tile_regs_release();
-                }
-            } else {
-                // Last tile: finalize and keep DST acquired for variance packing
-                welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
-                // scale_idx controls the divisor for M2 -> variance conversion:
-                //   correction=false: scale_idx = W-1, reciprocal = 1/W  (population variance)
-                //   correction=true:  scale_idx = W-2, reciprocal = 1/(W-1) (sample variance)
-                constexpr uint32_t scale_idx = correction ? (W - 2) : (W - 1);
-                welford_finalize_to_row<0>(mean_dst, scale_idx, {});
-                tile_regs_commit();
-            }
-            start_N += tile_width;
-        }
-
-        // Pack variance and transpose back to column format
-        cb_var_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_var);
-        pack_tile(var_dst, cb_var);
-        tile_regs_release();
-        cb_var_obj.push_back(onetile);
-
-        cb_var_obj.wait_front(onetile);
-        reconfig_data_format_srca(cb_var);
-        transpose_wh_init_short(cb_var);
+        reconfig_data_format_srca(dfb::in);
+        transpose_init(dfb::in);
         tile_regs_acquire();
-        transpose_wh_tile(cb_var, 0, var_dst);
+        two_pass_stats_init_shifted();
+
+        for (uint32_t wt = 0; wt < Wt; ++wt) {
+#ifdef WELFORD_TWO_PASS_L1_REPLAY
+            // Do not pop pass-one tiles: the enlarged CB holds the complete
+            // reduction row so pass two can index the same L1 pages directly.
+            dfb_in.wait_front(wt + 1);
+            transpose_tile(dfb::in, wt, input_dst);
+            constexpr uint32_t stats_input_dst = input_dst;
+#else
+            dfb_in.wait_front(onetile);
+            const uint32_t stats_input_dst =
+                (wt < num_front_retained_limit) ? ((wt == 0) ? retained_input_dst : mean_dst) : input_dst;
+            transpose_tile(dfb::in, 0, stats_input_dst);
+            dfb_in.pop_front(onetile);
+#endif
+            if (wt == 0) {
+                two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum, TwoPassAnchor::Initialise>(
+                    stats_input_dst, 0, (wt == Wt - 1) ? last_tile_rows : tile_width);
+            } else {
+                two_pass_stats_update_shifted_rows<TwoPassAccumulation::ShiftedSum>(
+                    stats_input_dst, 0, (wt == Wt - 1) ? last_tile_rows : tile_width);
+            }
+        }
+        two_pass_stats_finish_shifted_mean(two_pass_mean_reciprocal);
+
+#ifdef WELFORD_TWO_PASS_L1_REPLAY
+        for (uint32_t wt = 0; wt < Wt; ++wt) {
+            transpose_tile(dfb::in, wt, input_dst);
+            two_pass_stats_update_rows(input_dst, 0, (wt == Wt - 1) ? last_tile_rows : tile_width);
+        }
+        dfb_in.pop_front(Wt);
+#else
+        // Keep the first two tiles in otherwise idle DEST slots and the final pass-one
+        // tile in input_dst. var_dst must stay clean because finalization writes only
+        // the result row. Replay retained tiles in order, using the now-free retained
+        // slot for any middle tiles.
+        constexpr uint32_t num_front_retained = (Wt < num_front_retained_limit) ? Wt : num_front_retained_limit;
+        for (uint32_t wt = 0; wt < num_front_retained; ++wt) {
+            const uint32_t stats_input_dst = (wt == 0) ? retained_input_dst : wt;
+            two_pass_stats_update_rows(stats_input_dst, 0, (wt == Wt - 1) ? last_tile_rows : tile_width);
+        }
+        if constexpr (Wt > num_front_retained) {
+            for (uint32_t wt = num_front_retained; wt < Wt - 1; ++wt) {
+                dfb_in.wait_front(onetile);
+                transpose_tile(dfb::in, 0, retained_input_dst);
+                dfb_in.pop_front(onetile);
+                two_pass_stats_update_rows(retained_input_dst, 0, tile_width);
+            }
+            two_pass_stats_update_rows(input_dst, 0, last_tile_rows);
+        }
+#endif
+        two_pass_stats_finalize_to_row<true, false /* store_mean */>(mean_dst, two_pass_variance_reciprocal);
+        // Orient variance in DEST, avoiding a pack/reload round trip through L1.
+        // MOVD2B honours DST row-valid bits, so the transpose materialises zeros
+        // in untouched padding before tile-wide SFPU post-processing. Unlike H
+        // reduction's direct SFPU reads, this path does not need a physical fill.
+        transpose_dest_init<DST_ACCUM_MODE>();
+        transpose_dest<DST_ACCUM_MODE>(var_dst);
         if constexpr (is_std) {
             sqrt_tile_init();
             sqrt_tile(var_dst);
         }
+        // Apply the user scalar to the reduced output: var(s*x)=s^2 var(x), std(s*x)=|s| std(x).
+        // mul_unary_tile is an SFPU op operating on DEST at full fp32 precision.
+        if (apply_post_mul) {
+            binop_with_scalar_tile_init();
+            mul_unary_tile(var_dst, post_mul_scaler_bits);
+        }
         tile_regs_commit();
-        cb_var_obj.pop_front(onetile);
 
-        // Pack transposed variance to output
-        cb_out_obj.reserve_back(onetile);
+        // Pack column-oriented variance directly to output.
+        dfb_out.reserve_back(onetile);
         tile_regs_wait();
-        pack_reconfig_data_format(cb_out);
-        pack_tile(var_dst, cb_out);
+        pack_tile(var_dst, dfb::out);
         tile_regs_release();
-        cb_out_obj.push_back(onetile);
+        dfb_out.push_back(onetile);
 
     }  // NCHt loop
 }

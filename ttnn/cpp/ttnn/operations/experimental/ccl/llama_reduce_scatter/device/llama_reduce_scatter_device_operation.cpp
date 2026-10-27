@@ -9,6 +9,7 @@
 #include "llama_reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
@@ -84,7 +85,7 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
     auto output_shape = input_shape;
     output_shape[attributes.dim] = final_width;
     if (attributes.output_mem_config.has_value()) {
-        return {TensorSpec(
+        return {tt::tt_metal::TensorSpec(
             Shape(output_shape),
             TensorLayout(
                 input_tensor.dtype(), PageConfig(input_tensor.layout()), attributes.output_mem_config.value()))};
@@ -104,7 +105,7 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
     tt::tt_metal::MemoryConfig out_memory_config =
         tt::tt_metal::MemoryConfig(input_mem_config.memory_layout(), input_mem_config.buffer_type(), shard_spec);
 
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         Shape(output_shape), TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), out_memory_config))};
 }
 
@@ -114,6 +115,16 @@ LlamaReduceScatterDeviceOperation::tensor_return_value_t LlamaReduceScatterDevic
 
     auto tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
     return tensor;
+}
+
+std::vector<tt::tt_metal::TensorTopology> LlamaReduceScatterDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // The output holds this device's `dim` slice of the sum along `cluster_axis`: Shard{dim} on the cluster axis, the
+    // input's placement on the other axis. The intermediate packet buffer is caller-owned scratch outside the return
+    // value. With no honest label (nullopt, already reported) the output keeps the input's label.
+    const auto output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
+        tensor_args.input_tensor, attributes.cluster_axis, static_cast<int32_t>(attributes.dim));
+    return {output_topology.value_or(tensor_args.input_tensor.tensor_topology())};
 }
 
 }  // namespace ttnn::operations::experimental::ccl

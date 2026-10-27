@@ -4,14 +4,16 @@
 
 #include "mesh_partition_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tuple>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_metal2_names.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::ccl {
 namespace detail {
@@ -124,43 +126,41 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
 
     SliceOp::validate_on_program_cache_miss(slice_attrs, slice_tensor_args);
     auto program_factory = SliceOp::select_program_factory(slice_attrs, slice_tensor_args);
+
+    // Slice's factories are on Metal 2.0, so they hand back a ProgramSpec plus its run args rather
+    // than a Program. MeshPartition builds one Program per mesh coordinate itself, so it performs
+    // here the two steps TTNN's Metal 2.0 adapter would otherwise perform for a single-program op.
     Program program = std::visit(
         [&](auto&& factory) -> Program {
             using Factory = std::decay_t<decltype(factory)>;
-            auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
-            return Program{descriptor};
+            auto artifacts = Factory::create_program_artifacts(slice_attrs, slice_tensor_args, tensor_return_value);
+            Program p =
+                tt::tt_metal::experimental::MakeProgramFromSpec(*tensor_args.input_tensor.device(), artifacts.spec);
+            tt::tt_metal::experimental::SetProgramRunArgs(p, artifacts.run_params);
+            return p;
         },
         program_factory);
 
-    return {std::move(program), shared_variables_t{.slice_program_factory = program_factory}};
+    return {std::move(program), shared_variables_t{}};
 }
 
 void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    using namespace ttnn::prim::slice_metal2;
+    // Partition attributes, tensor specs and coordinates are in the cache key. Each coordinate
+    // owns its program, so its slice geometry and work split stay fixed across calls. Metal 2.0
+    // updates both tensor accessor bindings and any borrowed sharded DFBs through this API.
+    const tt::tt_metal::experimental::
+        Table<tt::tt_metal::experimental::TensorParamName, tt::tt_metal::experimental::TensorArgument>
+            bindings{{INPUT, tensor_args.input_tensor.mesh_tensor()}, {OUTPUT, tensor_return_value.mesh_tensor()}};
+    // All coordinate programs declare the same tensor specs. Validate fresh buffers once per call.
+    bool validated = false;
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_variables = cached_workload.shared_variables.at(range);
-
-        // Get the mesh coordinate from the range (assuming single device per range)
-        auto mesh_coordinate = *range.begin();
-        auto [slice_attrs, slice_tensor_args] =
-            compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
-
-        // Re-build the descriptor for this coord and let the framework copy
-        // its per-core / common runtime args (and patch dynamic CB addresses)
-        // onto the cached Program — same scheme as the legacy
-        // override_runtime_args path, but driven by ProgramDescriptor.  CB
-        // total_size/page_size are not re-applied on cache hit, so any sizing
-        // that varies across calls must be folded into compute_program_hash().
-        std::visit(
-            [&](auto&& program_factory) {
-                using Factory = std::decay_t<decltype(program_factory)>;
-                auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
-                tt::tt_metal::apply_descriptor_runtime_args(program, descriptor);
-            },
-            shared_variables.slice_program_factory);
+        tt::tt_metal::experimental::UpdateTensorArgs(program, bindings, /*skip_validation=*/validated);
+        validated = true;
     }
 }
 

@@ -10,6 +10,7 @@
 #include <array>
 #include <experimental/type_traits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <reflect>
@@ -30,6 +31,7 @@
 #include <tt_stl/type_name.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <cstdint>
 
 // NOLINTBEGIN(bugprone-multi-level-implicit-pointer-conversion)
 
@@ -313,6 +315,34 @@ constexpr bool supports_compile_time_attributes_v = std::experimental::is_detect
 template <typename T>
 constexpr bool supports_conversion_to_string_v =
     detail::supports_to_string_v<T> or detail::supports_compile_time_attributes_v<T>;
+
+// A std::shared_ptr whose pointee asked to be traversed through the pointer, by declaring
+//
+//     static constexpr bool ttsl_reflect_through_shared_ptr = true;
+//
+// Such a pointer is hashed, encoded and printed as the object it points at -- see the
+// std::shared_ptr branches of hash_object, append_canonical and to_json_t -- because what identifies
+// a handle held behind a shared_ptr is its contents, not where its control block happens to sit.
+//
+// Declaring it, rather than inferring it from the pointee being reflectable, is deliberate: several
+// reflectable types describe geometry only (GlobalSemaphore's attributes are its cores and buffer
+// type), and for those the pointer's address is the more discriminating key. Silently swapping one
+// for the other would turn a program-cache key that distinguishes two live objects into one that
+// does not. A type opts in when its attributes identify the object.
+template <typename T>
+using has_reflect_through_shared_ptr_t = std::enable_if_t<T::ttsl_reflect_through_shared_ptr>;
+
+template <typename T>
+struct is_reflective_shared_ptr : std::false_type {};
+
+template <typename T>
+struct is_reflective_shared_ptr<std::shared_ptr<T>>
+    : std::bool_constant<
+          std::experimental::is_detected_v<has_reflect_through_shared_ptr_t, T> and
+          supports_compile_time_attributes_v<T>> {};
+
+template <typename T>
+constexpr bool is_reflective_shared_ptr_v = is_reflective_shared_ptr<T>::value;
 }  // namespace detail
 
 template <typename T>
@@ -817,8 +847,8 @@ template <typename T>
 struct update_object_of_type_t;
 
 /**
-* Recursively visits all elements in `object` that are instances of `object_t`,
-* calls the `callback` function with those instance in anticipation for an inplace modification.
+ * Recursively visits all elements in `object` that are instances of `object_t`,
+ * calls the `callback` function with those instance in anticipation for an inplace modification.
  */
 template <typename object_t, typename T>
 void update_object_of_type(auto&& callback, T& object) {
@@ -1195,6 +1225,20 @@ struct get_first_object_of_type_t<T> {
     }
 };
 
+// A reflective handle held behind a shared_ptr prints as what it points at, matching how
+// hash_object, append_canonical and to_json_t traverse it. Declared after the operator<< it calls so
+// that lookup finds that one.
+template <typename T>
+    requires detail::is_reflective_shared_ptr_v<std::shared_ptr<T>>
+std::ostream& operator<<(std::ostream& os, const std::shared_ptr<T>& pointer) {
+    if (pointer == nullptr) {
+        os << "nullptr";
+    } else {
+        os << *pointer;
+    }
+    return os;
+}
+
 }  // namespace reflection
 
 // operator<< for SmallVector lives in namespace ttsl (same as SmallVector)
@@ -1252,6 +1296,19 @@ struct fmt::formatter<T> {
     }
 };
 
+template <typename T>
+    requires ttsl::reflection::detail::is_reflective_shared_ptr_v<std::shared_ptr<T>>
+struct fmt::formatter<std::shared_ptr<T>> {
+    constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const std::shared_ptr<T>& object, fmt::format_context& ctx) const -> fmt::format_context::iterator {
+        using ttsl::reflection::operator<<;
+        std::stringstream ss;
+        ss << object;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
 namespace ttsl::hash {
 
 namespace detail {
@@ -1263,6 +1320,13 @@ struct is_std_hashable<T, std::void_t<decltype(std::declval<std::hash<T>>()(std:
 
 template <typename T>
 constexpr bool is_std_hashable_v = is_std_hashable<T>::value;
+
+template <typename Range>
+inline hash_t hash_sized_range(const Range& range) noexcept {
+    hash_t hash = hash_objects(hash_t{0}, range.size());
+    std::for_each(std::begin(range), std::end(range), [&](const auto& element) { hash = hash_objects(hash, element); });
+    return hash;
+}
 
 template <typename T, std::size_t N>
 inline hash_t hash_object(const std::array<T, N>& array) noexcept {
@@ -1305,6 +1369,17 @@ inline hash_t hash_object(const T& object) noexcept {
             fmt::print("Hashing integer of type {}: {}\n", get_type_name<T>(), object);
         }
         return object;
+    } else if constexpr (ttsl::reflection::detail::is_reflective_shared_ptr_v<T>) {
+        // Ahead of the std::hash branch on purpose: std::hash<std::shared_ptr<T>> exists and hashes
+        // the address, which would key a reflective handle on where it was allocated. Null hashes to
+        // 0, as an empty std::optional does.
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::shared_ptr of type {}\n", get_type_name<T>());
+        }
+        if (object == nullptr) {
+            return 0;
+        }
+        return hash_object(*object);
     } else if constexpr (detail::is_std_hashable_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing {} using std::hash: {}\n", get_type_name<T>(), object);
@@ -1356,37 +1431,24 @@ inline hash_t hash_object(const T& object) noexcept {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);
         }
-        hash_t hash = 0;
-        for (const auto& element : object) {
-            hash = hash_objects(hash, element);
-        }
-        return hash;
+        return hash_sized_range(object);
     } else if constexpr (is_span_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::span of type {}\n", get_type_name<T>());
         }
-        hash_t hash = 0;
-        for (const auto& element : object) {
-            hash = hash_objects(hash, element);
-        }
-        return hash;
+        return hash_sized_range(object);
     } else if constexpr (is_specialization_v<T, std::set>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::set of type {}: {}\n", get_type_name<T>(), object);
         }
-        hash_t hash = 0;
-        for (const auto& element : object) {
-            hash = hash_objects(hash, element);
-        }
-        return hash;
+        return hash_sized_range(object);
     } else if constexpr (is_specialization_v<T, std::map>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing std::map of type {}: {}\n", get_type_name<T>(), object);
         }
-        hash_t hash = 0;
-        for (const auto& [key, value] : object) {
-            hash = hash_objects(hash, key, value);
-        }
+        hash_t hash = hash_objects(hash_t{0}, object.size());
+        std::for_each(
+            object.begin(), object.end(), [&](const auto& kv) { hash = hash_objects(hash, kv.first, kv.second); });
         return hash;
     } else if constexpr (is_specialization_v<T, std::unordered_map>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
@@ -1400,10 +1462,10 @@ inline hash_t hash_object(const T& object) noexcept {
         }
         std::sort(iterators.begin(), iterators.end(), [](const auto& a, const auto& b) { return a->first < b->first; });
 
-        hash_t hash = 0;
-        for (const auto& it : iterators) {
+        hash_t hash = hash_objects(hash_t{0}, object.size());
+        std::for_each(iterators.begin(), iterators.end(), [&](const auto& it) {
             hash = hash_objects(hash, it->first, it->second);
-        }
+        });
         return hash;
     } else if constexpr (is_specialization_v<T, std::optional>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
@@ -1471,9 +1533,7 @@ inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
 // The one lossy leaf is a type exposing ONLY to_hash(): its 8 hash bytes are appended, so for
 // such a type equality degrades to hash equality -- no worse than today, and none occur on the
 // tensor/shape path (TensorSpec is walked structurally down to the shape integers).
-inline void append_bytes(std::string& out, const void* p, std::size_t n) {
-    out.append(static_cast<const char*>(p), n);
-}
+inline void append_bytes(std::string& out, const void* p, std::size_t n) { out.append(static_cast<const char*>(p), n); }
 
 template <typename T>
 inline void append_canonical(std::string& out, const T& object);
@@ -1486,13 +1546,11 @@ inline void append_canonical_all(std::string& out, const Types&... args) {
 template <typename T>
 inline void append_canonical(std::string& out, const T& object) {
     out.push_back('\x1f');  // unit separator: disambiguates adjacent leaves/fields
-    if constexpr (std::numeric_limits<T>::is_integer) {
+    if constexpr (std::numeric_limits<T>::is_integer || std::is_floating_point_v<T>) {
         append_bytes(out, &object, sizeof(object));
     } else if constexpr (std::is_enum_v<T>) {
         const auto v = static_cast<std::underlying_type_t<T>>(object);
         append_bytes(out, &v, sizeof(v));
-    } else if constexpr (std::is_floating_point_v<T>) {
-        append_bytes(out, &object, sizeof(object));
     } else if constexpr (std::is_same_v<T, std::string>) {
         const std::uint64_t n = object.size();
         append_bytes(out, &n, sizeof(n));
@@ -1516,6 +1574,14 @@ inline void append_canonical(std::string& out, const T& object) {
         std::visit([&out](const auto& value) { append_canonical(out, value); }, object);
     } else if constexpr (is_specialization_v<T, std::reference_wrapper>) {
         append_canonical(out, object.get());
+    } else if constexpr (ttsl::reflection::detail::is_reflective_shared_ptr_v<T>) {
+        // Descend into the pointee, so a reflective handle contributes its own values rather than
+        // the address bytes the is_std_hashable_v fallback below would emit.
+        const char has = object == nullptr ? 0 : 1;
+        out.push_back(has);
+        if (object != nullptr) {
+            append_canonical(out, *object);
+        }
     } else if constexpr (std::is_same_v<T, std::vector<bool>>) {
         // std::vector<bool> is a bit-packed specialization: iterating yields a proxy reference
         // (not bool&), so it can't go through the generic vector branch.
@@ -1546,21 +1612,19 @@ inline void append_canonical(std::string& out, const T& object) {
         for (auto it = object.begin(); it != object.end(); ++it) {
             iterators.push_back(it);
         }
-        std::sort(iterators.begin(), iterators.end(), [](const auto& a, const auto& b) {
-            return a->first < b->first;
-        });
+        std::sort(iterators.begin(), iterators.end(), [](const auto& a, const auto& b) { return a->first < b->first; });
         const std::uint64_t n = object.size();
         append_bytes(out, &n, sizeof(n));
         for (const auto& it : iterators) {
             append_canonical(out, it->first);
             append_canonical(out, it->second);
         }
-    } else if constexpr (ttsl::concepts::Reflectable<T>) {
-        reflect::for_each([&out, &object](auto I) { append_canonical(out, reflect::get<I>(object)); }, object);
     } else if constexpr (ttsl::reflection::detail::supports_to_hash_v<T>) {
         const hash_t h = object.to_hash();  // lossy leaf (see note above)
         append_bytes(out, &h, sizeof(h));
-    } else if constexpr (detail::is_std_hashable_v<T>) {
+    } else if constexpr (ttsl::concepts::Reflectable<T>) {
+        reflect::for_each([&out, &object](auto I) { append_canonical(out, reflect::get<I>(object)); }, object);
+    } else if constexpr (detail::is_std_hashable_v<T>) {  // order matters, is_std_hashable_v must be after Reflectable
         const std::size_t h = std::hash<T>{}(object);  // lossy fallback
         append_bytes(out, &h, sizeof(h));
     } else {
@@ -1605,11 +1669,7 @@ void hash_combine(std::size_t& seed, const T& value) {
 template <typename T, size_t PREALLOCATED_SIZE>
 struct std::hash<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
     size_t operator()(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vec) const noexcept {
-        size_t hash = 0;
-        for (const auto& element : vec) {
-            hash = ttsl::hash::detail::hash_objects(hash, element);
-        }
-        return hash;
+        return static_cast<size_t>(ttsl::hash::detail::hash_sized_range(vec));
     }
 };
 
@@ -1741,6 +1801,17 @@ struct to_json_t<std::reference_wrapper<T>> {
 };
 
 template <typename T>
+    requires ttsl::reflection::detail::is_reflective_shared_ptr_v<std::shared_ptr<T>>
+struct to_json_t<std::shared_ptr<T>> {
+    nlohmann::json operator()(const std::shared_ptr<T>& pointer) noexcept {
+        if (pointer == nullptr) {
+            return nullptr;
+        }
+        return to_json(*pointer);
+    }
+};
+
+template <typename T>
 struct to_json_t<std::optional<T>> {
     nlohmann::json operator()(const std::optional<T>& optional) noexcept {
         if (optional.has_value()) {
@@ -1775,6 +1846,7 @@ template <typename T>
 struct from_json_t<std::vector<T>> {
     std::vector<T> operator()(const nlohmann::json& json_object) noexcept {
         std::vector<T> vector;
+        vector.reserve(json_object.size());
         for (const auto& element : json_object) {
             vector.push_back(from_json<T>(element));
         }
@@ -1839,7 +1911,7 @@ struct to_json_t<std::unordered_map<K, V>> {
 
 template <typename K, typename V>
 struct from_json_t<std::unordered_map<K, V>> {
-    std::map<K, V> operator()(const nlohmann::json& json_object) {
+    std::unordered_map<K, V> operator()(const nlohmann::json& json_object) {
         std::unordered_map<K, V> object;
         for (const auto& [key, value] : json_object.items()) {
             object[from_json<K>(nlohmann::json::parse(key))] = from_json<V>(value);
@@ -1967,11 +2039,5 @@ struct to_json_t {
 };
 
 }  // namespace ttsl::json
-
-namespace tt {
-namespace [[deprecated("Use ttsl namespace instead")]] stl {
-using namespace ::ttsl;
-}  // namespace stl
-}  // namespace tt
 
 // NOLINTEND(bugprone-multi-level-implicit-pointer-conversion)

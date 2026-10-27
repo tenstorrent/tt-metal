@@ -48,8 +48,8 @@ constexpr auto kGradValueAccumCbIndex = tt::CBIndex::c_8;
 constexpr auto kGradKeyAccumCbIndex = tt::CBIndex::c_9;
 constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_10;
 constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_11;
-constexpr auto kGradScoresCbIndex = tt::CBIndex::c_12;
-constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_13;
+constexpr auto kGradScoresTransposedCbIndex = tt::CBIndex::c_12;   // dS^T, packed directly from DST
+constexpr auto kAttnWeightsTransposedCbIndex = tt::CBIndex::c_13;  // P^T, packed directly from DST
 constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_14;
 constexpr auto kGradKeyCbIndex = tt::CBIndex::c_15;
 constexpr auto kGradValueCbIndex = tt::CBIndex::c_16;
@@ -109,65 +109,6 @@ struct SDPABackwardKVKernels {
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
  *        for each core in the grid.
  */
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const SDPABackwardKVKernels& kernels,
-    const tt::tt_metal::Buffer* grad_output_buffer,
-    const tt::tt_metal::Buffer* query_buffer,
-    const tt::tt_metal::Buffer* key_buffer,
-    const tt::tt_metal::Buffer* value_buffer,
-    const tt::tt_metal::Buffer* mask_buffer,
-    const tt::tt_metal::Buffer* intermediates_buffer,
-    const tt::tt_metal::Buffer* u_scaler_buffer,
-    const tt::tt_metal::Buffer* grad_key_buffer,
-    const tt::tt_metal::Buffer* grad_value_buffer,
-    const uint32_t num_cores,
-    const uint32_t num_cores_y,
-    const uint32_t num_rows_per_core_group_1,
-    const uint32_t num_rows_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        uint32_t num_rows_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_2;
-        } else {
-            TT_FATAL(false, "Core not in specified core ranges");
-        }
-
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {grad_output_buffer->address(),
-             query_buffer->address(),
-             key_buffer->address(),
-             value_buffer->address(),
-             mask_buffer != nullptr ? mask_buffer->address() : 0U,
-             intermediates_buffer->address(),
-             u_scaler_buffer->address(),
-             num_rows_per_core,
-             num_rows_written});
-
-        // Writer kernel runtime args
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {grad_key_buffer->address(), grad_value_buffer->address(), num_rows_per_core, num_rows_written});
-
-        // Compute kernel runtime args - needed for causal mask to know global position
-        auto compute_kernel = core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2;
-        SetRuntimeArgs(program, compute_kernel, core, {num_rows_written});
-
-        num_rows_written += num_rows_per_core;
-    }
-}
-
 /**
  * Set up the runtime arguments for balanced parallelism mode.
  * Work is distributed by pairs rather than rows.
@@ -355,10 +296,10 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     [[maybe_unused]] auto cb_grad_key_accum = create_circular_buffer(
         program, all_cores, kGradKeyAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, kWt);
 
-    [[maybe_unused]] auto cb_transpose_wh = create_circular_buffer(
+    [[maybe_unused]] auto cb_attn_weights_transposed = create_circular_buffer(
         program,
         all_cores,
-        kTransposeWhCbIndex,
+        kAttnWeightsTransposedCbIndex,
         precise_data_format,
         float32_single_tile_size_bytes,
         kSingleTileBuffer);
@@ -379,14 +320,13 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         float32_single_tile_size_bytes,
         kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_grad_scores =  // CBIndex::c_15
-        create_circular_buffer(
-            program,
-            all_cores,
-            kGradScoresCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kSingleTileBuffer);
+    [[maybe_unused]] auto cb_grad_scores_transposed = create_circular_buffer(
+        program,
+        all_cores,
+        kGradScoresTransposedCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kSingleTileBuffer);
 
     [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_17
         create_circular_buffer(
@@ -493,6 +433,12 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         std::vector<tt::tt_metal::UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
         mode[tt::CBIndex::c_8] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // kGradValueAccumCbIndex
         mode[tt::CBIndex::c_9] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // kGradKeyAccumCbIndex
+        // P (c_10) is consumed only via copy-to-dest in the compute kernel (never through a
+        // Src-register unpack), so unpack-to-dest keeps it at full FP32 through the
+        // elementwise dS chain. dS never leaves DST untransposed: P^T and dS^T are produced
+        // by in-DST transpose_dest and packed directly to c_13/c_12, which stay Default —
+        // they feed matmul Src registers, where Float32 unpack is not supported.
+        mode[tt::CBIndex::c_10] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // kAttentionWeightsCbIndex
         return mode;
     };
 
@@ -598,24 +544,36 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             num_cores_y,
             pair_distribution);
     } else {
-        assign_per_core_runtime_args(
-            program,
-            kernels,
-            grad_output_buffer,
-            query_buffer,
-            key_buffer,
-            value_buffer,
-            mask_buffer,
-            intermediates_buffer,
-            u_scaler_buffer,
-            grad_key_buffer,
-            grad_value_buffer,
+        for_each_core_with_work(
             num_cores,
             num_cores_y,
+            core_group_1,
+            core_group_2,
             num_rows_per_core_group_1,
             num_rows_per_core_group_2,
-            core_group_1,
-            core_group_2);
+            [&](const CoreWork& work) {
+                const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+                SetRuntimeArgs(
+                    program,
+                    kernels.reader,
+                    core,
+                    {grad_output_buffer->address(),
+                     query_buffer->address(),
+                     key_buffer->address(),
+                     value_buffer->address(),
+                     mask_buffer != nullptr ? mask_buffer->address() : 0U,
+                     intermediates_buffer->address(),
+                     u_scaler_buffer->address(),
+                     num_rows,
+                     start_row});
+                SetRuntimeArgs(
+                    program,
+                    kernels.writer,
+                    core,
+                    {grad_key_buffer->address(), grad_value_buffer->address(), num_rows, start_row});
+                SetRuntimeArgs(
+                    program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {start_row});
+            });
     }
 
     // -------------------------------------------------------------------------
@@ -661,9 +619,7 @@ void SDPABackwardKVProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_bw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_bw_writer_kernel);
 
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
+    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
             runtime_args[kReaderGradOutputIdx] = grad_output_buffer->address();
@@ -680,7 +636,7 @@ void SDPABackwardKVProgramFactory::override_runtime_arguments(
             runtime_args[kGradKeyBufferIdx] = grad_key_buffer->address();
             runtime_args[kGradValueBufferIdx] = grad_value_buffer->address();
         }
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::sdpa_bw::device

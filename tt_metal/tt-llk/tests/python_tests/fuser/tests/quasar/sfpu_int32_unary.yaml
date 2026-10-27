@@ -1,0 +1,57 @@
+# Int32 unary SFPU kernels from the Blackhole SFPI port on the whole non-negative range: logical_not,
+# right shift by 3, bitwise and / or / xor with 0x70FF00F5, rsub from INT_MAX, remainder_uint32 (x mod
+# 1000), identity (the bit-exact vUInt copy), abs_int32 and fill with 5. Points 0, 1, 7, 999-1001, 2**16 +- 1, 2**28 +- 1, 2**30,
+# INT_MAX; ranges near 0, mid-range and next to INT_MAX.
+# Int32 must be unpacked straight to Dest and needs a 32-bit Dest. The harness stores Int32 in L1
+# as sign-magnitude while these kernels compute in two's complement (tt-metal's Int32 encoding), so
+# only non-negative inputs with non-negative results are checked; negative values need a
+# two's-complement Int32 option in the fuser.
+#
+# Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
+# dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
+# the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
+# Special points sit outside the random ranges, so each is drawn about as often as a unit of range.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Int32]
+    stimuli:
+      include:
+        - [2.0, 6.0]
+        - [8.0, 40.0]
+        - [1000000.0, 1000030.0]
+        - [123456000.0, 123456030.0]
+        - [1073741800.0, 1073741823.0]
+        - [1073741825.0, 1073741850.0]
+        - [2147483600.0, 2147483646.0]
+        - 0.0
+        - 1.0
+        - 7.0
+        - 999.0
+        - 1000.0
+        - 1001.0
+        - 65535.0
+        - 65536.0
+        - 268435455.0
+        - 268435456.0
+        - 1073741824.0
+        - 2147483647.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Int32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [LogicalNotUnary, RightShift, UnaryBitwiseAnd, UnaryBitwiseOr, UnaryBitwiseXor, RsubScalarInt32, RemainderUint32, Identity, AbsInt32, Fill]
+        approximation_mode: false
+        iterations: 32
+        # Exercise forwarding a non-default fill constant to both kernel and golden.
+        fill_const_value: 7.0
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}

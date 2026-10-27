@@ -9,6 +9,7 @@
 #include <limits>
 
 #include "ckernel_sfpu_exp.h"
+#include "cmath_common.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -35,9 +36,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
     r = 0x1.41cp-13f;
     r = r * f + 0x1.5f4p-10f;
     r = r * f + 0x1.3b4p-7f;
-    i = sfpi::abs(sfpi::reinterpret<sfpi::vInt>(sm));
+    i = sfpi::abs(sfpi::as<sfpi::vInt>(sm));
     y = r * f + sfpi::vConstFloatPrgm2;
-    i = sfpi::reinterpret<sfpi::vInt>(sfpi::copysgn(sfpi::reinterpret<sfpi::vFloat>(i), j));
+    i = sfpi::as<sfpi::vInt>(sfpi::copysgn(sfpi::as<sfpi::vFloat>(i), j));
     r = y * f + sfpi::vConstFloatPrgm1;
     y *= std::numeric_limits<float>::infinity();
     r = r * f + sfpi::vConstFloatPrgm0;
@@ -46,20 +47,17 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
 
     // Exclude -NaN: abs(-NaN) remains negative.
     v_if(abs_x >= 0.0f) {
-        sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
+        sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::Biased);
         e += i;
-        // e < 255
-        v_block {
-            sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
+        v_if(sfpi::nearby(e < 255)) {
             y = sfpi::setexp(r, e);
-            // e < 1
-            v_if(e_lt_255 < -254) {
+            v_if(sfpi::nearby(e < 1)) {
                 // Underflow, including subnormals.
                 y = 0.0f;
             }
             v_endif;
         }
-        v_endblock;
+        v_endif;
     }
     v_endif;
 
@@ -76,31 +74,34 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
 // tensor ever reaches the SFPU (see the "NaN is packed as inf for ttnn.bfloat16"
 // xfails on fmod / remainder / where / rdiv), so a device-side NaN guard here
 // would be dead code.
-sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
+//
+// The overload taking c0, c1 and c2 is for a caller that evaluates it once per element
+// (logaddexp2): as with _sfpu_exp_21f_bf16_unsafe_, it can load the fractional-part
+// coefficients once, before its loop, and pass the registers. Each may be a float or a
+// vFloat, so the one-argument form below, which passes floats, compiles as before.
+template <typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x, C0 c0, C1 c1, C2 c2) {
     // Map x → xlog2 such that 2^x has biased exponent floor(xlog2) and the
     // fractional mantissa supplies the (xlog2 - floor) refinement.
     sfpi::vFloat xlog2 = x + 127.f;
 
     // Clamp to [0, 255]. Boundary inputs land on the +inf / +0 encodings after
     // setexp + bf16 round.
-    sfpi::vFloat threshold_low = 0.f;
-    sfpi::vFloat threshold_high = sfpi::vFloat(255.f);
-    sfpi::vec_min_max(threshold_low, xlog2);
-    sfpi::vec_min_max(xlog2, threshold_high);
+    xlog2 = sfpi::clamp(xlog2, 0.0f, 255.0f);
 
     // Decompose xlog2 in [0, 255] into:
     //   exponential_part = floor(xlog2)             (integer in [0, 255])
     //   fractional_part  = (xlog2 - floor) * 2^23   (integer in [0, 2^23))
     sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
 
-    sfpi::vInt exponential_part = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
-    sfpi::vMag fractional_part = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));
+    sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::Biased);
+    sfpi::vMag fractional_part = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
     // Refine 2^x_f on x_f to [0, 2^23). Same minimax coefficients as the
     // production exp_21f kernel (≤ 3 fp32 ULP, well under 1 bf16 ULP).
-    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+    frac = PolynomialEvaluator::eval(frac, c0, c1, c2);
 
     // Recombine: 2^x = (1.frac_mantissa) * 2^(exponential_part - 127).
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
@@ -112,23 +113,35 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
     return sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
+    return _sfpu_exp2_bf16_(x, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_exp2() {
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-
-        if constexpr (is_fp32_dest_acc_en) {
+    if constexpr (is_fp32_dest_acc_en) {
+        // fp32 path is a hand-scheduled ILP-interleaved body — leave it rolled so
+        // the compiler keeps its per-row schedule (unrolling only bloats it).
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat v = sfpi::dst_reg[0];
             sfpi::dst_reg[0] = _sfpu_exp2_fp32_accurate_(v);
-        } else {
-            sfpi::dst_reg[0] = _sfpu_exp2_bf16_(v);
+            sfpi::dst_reg++;
         }
-
-        sfpi::dst_reg++;
+    } else {
+        // bf16 body is a dependent format-conversion chain (convert/exexp/setexp);
+        // unrolling overlaps independent iterations to hide that latency.
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat v = sfpi::dst_reg[0];
+            sfpi::dst_reg[0] = _sfpu_exp2_bf16_(v);
+            sfpi::dst_reg++;
+        }
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void exp2_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (is_fp32_dest_acc_en) {
         // Coefficients for minimax polynomial.
         sfpi::vConstFloatPrgm0 = 0x1.62e42ep-1f;

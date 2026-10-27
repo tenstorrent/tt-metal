@@ -174,24 +174,15 @@ Creating buffers and circular buffers in Metalium is similar to the single core 
 
     // Allocate DRAM buffers (shared resources on the device). Nothing changes here.
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
-    auto src0_dram_buffer = CreateBuffer({
-        .device = device,
-        .size = single_tile_size * Mt * Kt,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM
-    });
-    auto src1_dram_buffer = CreateBuffer({
-        .device = device,
-        .size = single_tile_size * Nt * Kt,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM
-    });
-    auto dst_dram_buffer = CreateBuffer({
-        .device = device,
-        .size = single_tile_size,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM
-    });
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config_A{.size = single_tile_size * Mt * Kt};
+    distributed::ReplicatedBufferConfig buffer_config_B{.size = single_tile_size * Nt * Kt};
+    distributed::ReplicatedBufferConfig buffer_config_C{.size = single_tile_size * Mt * Nt};
+
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
 
     // Create circular buffers on all participating cores
     const auto cb_data_format = tt::DataFormat::Float16_b;
@@ -258,7 +249,8 @@ The compute kernel does not handle IO directly and is not concerned with how wor
         constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
         constexpr tt::CBIndex cb_out = tt::CBIndex::c_16;
 
-        mm_init(cb_in0, cb_in1, cb_out);
+        compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out);
+        matmul_init(cb_in0, cb_in1);
 
         // Instead of processing all tiles, we process only the assigned amount of tiles.
         for (uint32_t i = 0; i < num_output_tiles; ++i) {
@@ -355,7 +347,7 @@ With the work distribution calculated, you can now create the kernels and set up
 
 .. code-block:: cpp
 
-    MathFidelity math_fidelity = MathFidelity::HiFi4;  // High fidelity math for accurate results
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;  // High fidelity math for accurate results
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);

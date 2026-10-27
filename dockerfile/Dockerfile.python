@@ -23,7 +23,7 @@ ARG PYTHON_VERSION=''
 # Fallback UV_IMAGE for standalone `docker build` without Bake.
 # The single source of truth is docker-bake.hcl variable "UV_IMAGE".
 # When upgrading uv, update docker-bake.hcl first, then sync this default.
-ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
+ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b
 
 #############################################################
 # uv layer - copy from official distroless image
@@ -81,6 +81,7 @@ RUN if [ -n "${PYTHON_VERSION}" ]; then \
 # Install Python with uv and create relocatable virtual environment with base packages.
 # umask 000 ensures the venv is world-writable for multi-host NFS access.
 # MAKEFLAGS accelerates builds for packages that compile with make.
+# auditwheel/patchelf are needed to repair the in-place-built wheel (bundle transitive libs).
 RUN source /tmp/python-version.env && \
     export MAKEFLAGS="-j$(nproc)" && \
     umask 000 && \
@@ -88,7 +89,7 @@ RUN source /tmp/python-version.env && \
     uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1) && \
     uv venv --link-mode copy --relocatable --managed-python --python "${DETECTED_PYTHON_VERSION}" ${PYTHON_ENV_DIR} && \
     source ${PYTHON_ENV_DIR}/bin/activate && \
-    uv pip install --no-cache uv build numpy setuptools==80 && \
+    uv pip install --no-cache uv build numpy setuptools==80 auditwheel==6.7.0 patchelf==0.17.2.4 && \
     uv clean --force
 
 # Export as scratch image with only the venv

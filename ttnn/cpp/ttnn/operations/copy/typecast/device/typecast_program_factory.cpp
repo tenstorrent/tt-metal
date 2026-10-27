@@ -4,31 +4,92 @@
 
 #include "typecast_program_factory.hpp"
 
+#include <string>
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_align.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim {
 
 using namespace tt::constants;
+using namespace tt::tt_metal::experimental;
 
-tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
+namespace {
+
+// Kernel sources shared by both factories in this file. The two interleaved dataflow kernels are the
+// shared eltwise/unary Metal 2.0 forks, so their binding names (dfb::in / dfb::out, tensor::src /
+// tensor::dst, args::num_pages / args::start_id) are those kernels' interface, not this op's choice.
+constexpr const char* kReaderSource =
+    "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id_metal2.cpp";
+constexpr const char* kWriterSource =
+    "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp";
+constexpr const char* kComputeSource =
+    "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
+
+// Legacy set unpack_to_dest_mode[in_cb] = UnpackToDestFp32 when preserve_fp32_precision (a no-op in
+// the JIT unless the format is Float32), leaving every other CB at Default. The named equivalent is
+// an UnpackToDest entry for the input DFB. Metal 2.0 additionally *requires* an explicit entry for a
+// consumed Float32 DFB when enable_32_bit_dest is set, where legacy silently defaulted — so supply
+// the legacy default (UnpackToSrc, which lowers to UnpackToDestMode::Default) in that case.
+ComputeHardwareConfig::ComputeUnpackModes make_unpack_modes(
+    const TypecastParams& args, const DFBSpecName& in_dfb, tt::DataFormat input_data_format) {
+    ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
+    if (args.preserve_fp32_precision) {
+        unpack_modes.emplace(in_dfb, tt::tt_metal::UnpackMode::UnpackToDest);
+    } else if (args.fp32_dest_acc_en && input_data_format == tt::DataFormat::Float32) {
+        unpack_modes.emplace(in_dfb, tt::tt_metal::UnpackMode::UnpackToSrc);
+    }
+    return unpack_modes;
+}
+
+// The legacy ComputeConfigDescriptor field values, carried over one-for-one:
+//   math_fidelity=HiFi4 -> fpu_math_fidelity; fp32_dest_acc_en -> enable_32_bit_dest;
+//   bfp8_pack_precise -> bfp_pack_precision_mode; math_approx_mode=false -> sfpu_precision_mode.
+// dst_full_sync_en was left at its legacy default (false), which is double_buffer_dest = true (the
+// Metal 2.0 default), so it needs no explicit setting.
+// On Quasar (TT-2.x.x) bfp_pack_precision_mode does not exist (MXFP replaces BFP), so it is simply
+// omitted there. WH/BH keep the byte-identical legacy config, with the BFP pack knob in config_1xx.
+ComputeHardwareConfig make_compute_config(
+    tt::ARCH arch, const TypecastParams& args, ComputeHardwareConfig::ComputeUnpackModes unpack_modes) {
+    if (arch == tt::ARCH::QUASAR) {
+        return ComputeHardwareConfig{
+            .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
+            .enable_32_bit_dest = args.fp32_dest_acc_en,
+            .unpack_modes = std::move(unpack_modes),
+        };
+    }
+    return ComputeHardwareConfig{
+        .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+        .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
+        .enable_32_bit_dest = args.fp32_dest_acc_en,
+        .unpack_modes = std::move(unpack_modes),
+        .config_1xx =
+            ComputeHardwareConfig::Compute1XXConfig{
+                .bfp_pack_precision_mode =
+                    args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise : tt::tt_metal::Precision::Approximate,
+            },
+    };
+}
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_artifacts(
     const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
     const Tensor& input = tensor_args.input;
-    const DataType& input_dtype = args.input_dtype;
-    const DataType& output_dtype = args.output_dtype;
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
 
-    tt::tt_metal::ProgramDescriptor desc;
-
-    const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat cb_data_format_input = cb_dataformat_for(input.dtype());
     const uint32_t single_tile_size_input = tt::tile_size(cb_data_format_input);
-    const tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat cb_data_format_output = cb_dataformat_for(output.dtype());
     const uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     const auto* device = input.device();
@@ -36,133 +97,127 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     // Get number of pages (tiles for TILE layout, rows for ROW_MAJOR layout)
     const uint32_t num_pages = input.buffer()->num_pages();
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
-
-    // Set CB page size correctly based on layout
-    // - For TILE layout: page = one 32x32 tile
-    // - For ROW_MAJOR layout: page = one full row including padding
-    const uint32_t input_page_size = is_row_major ? src_buffer->page_size() : single_tile_size_input;
-    const uint32_t output_page_size = is_row_major ? dst_buffer->page_size() : single_tile_size_output;
+    // Each DFB entry holds one tile, because the compute kernel unpacks and packs whole tiles.
+    // A ROW_MAJOR page can be shorter or longer than a tile, so it takes as many entries as it needs.
+    const uint32_t input_page_size = is_row_major ? input.buffer()->page_size() : single_tile_size_input;
+    const uint32_t output_page_size = is_row_major ? output.buffer()->page_size() : single_tile_size_output;
+    // Each input page is written to the output page at the same index.
+    if (is_row_major) {
+        const uint32_t input_elements_per_page = input_page_size / tt::datum_size(cb_data_format_input);
+        const uint32_t output_elements_per_page = output_page_size / tt::datum_size(cb_data_format_output);
+        TT_FATAL(
+            input.buffer()->num_pages() == output.buffer()->num_pages() &&
+                input_elements_per_page == output_elements_per_page,
+            "Row-major typecast requires matching page geometry, got input {} pages of {} elements and output {} "
+            "pages of {} elements",
+            input.buffer()->num_pages(),
+            input_elements_per_page,
+            output.buffer()->num_pages(),
+            output_elements_per_page);
+    }
+    const uint32_t entries_per_page =
+        is_row_major ? tt::div_up(input_page_size / tt::datum_size(cb_data_format_input), TILE_HW) : 1u;
 
     const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_items_per_core_group_1, num_items_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages, is_row_major);
     (void)num_cores;
 
-    constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
+    // ---- Resource names ----
+    const DFBSpecName IN_DFB{"in"};    // legacy CBIndex::c_0
+    const DFBSpecName OUT_DFB{"out"};  // legacy CBIndex::c_2
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_GROUP_1{"compute_group_1"};
+    const KernelSpecName COMPUTE_GROUP_2{"compute_group_2"};
+
     constexpr uint32_t num_input_pages = 2;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = num_input_pages * input_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
-            .data_format = cb_data_format_input,
-            .page_size = input_page_size,
-        }}},
-    });
-
-    constexpr uint8_t output_cb_index = tt::CBIndex::c_2;
     constexpr uint32_t num_output_pages = 2;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = num_output_pages * output_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = cb_data_format_output,
-            .page_size = output_page_size,
-        }}},
-    });
+    const DataflowBufferSpec in_dfb{
+        .unique_id = IN_DFB,
+        .entry_size = single_tile_size_input,
+        .num_entries = num_input_pages * entries_per_page,
+        .data_format_metadata = cb_data_format_input,
+    };
+    const DataflowBufferSpec out_dfb{
+        .unique_id = OUT_DFB,
+        .entry_size = single_tile_size_output,
+        .num_entries = num_output_pages * entries_per_page,
+        .data_format_metadata = cb_data_format_output,
+    };
 
-    std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    const TensorParameter input_param{.unique_id = INPUT, .spec = input.tensor_spec()};
+    const TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
 
-    tt::tt_metal::KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
-    reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
+    const KernelSpec reader{
+        .unique_id = READER,
+        .source = kReaderSource,
+        .compiler_options =
+            {.defines =
+                 {{"ENTRIES_PER_PAGE", std::to_string(entries_per_page)},
+                  {"PAGE_BYTES", std::to_string(input_page_size)}}},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
 
-    tt::tt_metal::KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-    writer_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
+    const KernelSpec writer{
+        .unique_id = WRITER,
+        .source = kWriterSource,
+        .compiler_options =
+            {.defines =
+                 {{"ENTRIES_PER_PAGE", std::to_string(entries_per_page)},
+                  {"PAGE_BYTES", std::to_string(output_page_size)}}},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
 
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        num_items_per_core_group_1,  // per_core_block_cnt
-        1,                           // per_core_block_dim (always 1, works for both tiled and row-major)
-        src0_cb_index,
-        output_cb_index};
+    const auto make_compute = [&](const KernelSpecName& id, uint32_t per_core_block_cnt) {
+        return KernelSpec{
+            .unique_id = id,
+            .source = kComputeSource,
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .dfb_bindings =
+                {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
+                 DFBBinding{
+                     .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
+            .compile_time_args =
+                {{"per_core_block_cnt", per_core_block_cnt},
+                 {"per_core_block_dim", entries_per_page},
+                 {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
+                 {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
+            .hw_config =
+                make_compute_config(device->arch(), args, make_unpack_modes(args, IN_DFB, cb_data_format_input)),
+        };
+    };
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (args.preserve_fp32_precision) {
-        unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
-
-    constexpr bool math_approx_mode = false;
-
-    std::map<std::string, std::string> unary_defines;
-    unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
-        "typecast_tile_init<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
-    unary_defines["TYPECAST_LLK"] = fmt::format(
-        "typecast_tile<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
-
-    const char* const path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
-
-    tt::tt_metal::KernelDescriptor compute_desc_group_1;
-    compute_desc_group_1.kernel_source = path;
-    compute_desc_group_1.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc_group_1.core_ranges = core_group_1;
-    compute_desc_group_1.compile_time_args = compute_kernel_args_group_1;
-    for (const auto& [name, value] : unary_defines) {
-        compute_desc_group_1.defines.emplace_back(name, value);
-    }
-    compute_desc_group_1.config = tt::tt_metal::ComputeConfigDescriptor{
-        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-        .fp32_dest_acc_en = args.fp32_dest_acc_en,
-        .unpack_to_dest_mode = unpack_to_dest_mode,
-        .bfp8_pack_precise = args.bfp8_pack_precise,
-        .math_approx_mode = math_approx_mode};
-
-    std::optional<tt::tt_metal::KernelDescriptor> compute_desc_group_2;
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_kernel_args_group_2 = {
-            num_items_per_core_group_2,  // per_core_block_cnt
-            1,                           // per_core_block_dim (always 1)
-            src0_cb_index,
-            output_cb_index};
-
-        compute_desc_group_2.emplace();
-        compute_desc_group_2->kernel_source = path;
-        compute_desc_group_2->source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc_group_2->core_ranges = core_group_2;
-        compute_desc_group_2->compile_time_args = compute_kernel_args_group_2;
-        for (const auto& [name, value] : unary_defines) {
-            compute_desc_group_2->defines.emplace_back(name, value);
-        }
-        compute_desc_group_2->config = tt::tt_metal::ComputeConfigDescriptor{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = args.fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .bfp8_pack_precise = args.bfp8_pack_precise,
-            .math_approx_mode = math_approx_mode};
+    // One KernelSpec per legacy compute KernelDescriptor: the per-group item count stays a
+    // compile-time arg, so the work-split multiplicity is preserved.
+    Group<KernelSpec> kernels = {reader, writer};
+    Group<WorkUnitSpec> work_units;
+    kernels.push_back(make_compute(COMPUTE_GROUP_1, num_items_per_core_group_1));
+    work_units.push_back(WorkUnitSpec{
+        .name = "typecast_group_1", .kernels = {READER, WRITER, COMPUTE_GROUP_1}, .target_nodes = core_group_1});
+    const bool has_group_2 = !core_group_2.ranges().empty();
+    if (has_group_2) {
+        kernels.push_back(make_compute(COMPUTE_GROUP_2, num_items_per_core_group_2));
+        work_units.push_back(WorkUnitSpec{
+            .name = "typecast_group_2", .kernels = {READER, WRITER, COMPUTE_GROUP_2}, .target_nodes = core_group_2});
     }
 
     // Convert CoreRangeSet to vector of cores in the correct order
     // Use row_wise=true for row-major layout to match row distribution, false for tile layout
     auto cores_vec = corerange_to_cores(all_cores, std::nullopt, is_row_major);
 
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
     uint32_t num_items_written = 0;
     for (const auto& core : cores_vec) {
         uint32_t num_items_per_core = 0;
@@ -174,40 +229,50 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
             TT_THROW("Core not in specified core ranges");
         }
 
-        reader_desc.emplace_runtime_args(core, {src_buffer, num_items_per_core, num_items_written});
-        writer_desc.emplace_runtime_args(core, {dst_buffer, num_items_per_core, num_items_written});
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"num_pages", num_items_per_core}, {"start_id", num_items_written}});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"num_pages", num_items_per_core}, {"start_id", num_items_written}});
         num_items_written += num_items_per_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc_group_1));
-    if (compute_desc_group_2.has_value()) {
-        desc.kernels.push_back(std::move(*compute_desc_group_2));
-    }
+    ProgramSpec spec{
+        .name = "typecast",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = {in_dfb, out_dfb},
+        .tensor_parameters = {input_param, output_param},
+        .work_units = std::move(work_units),
+    };
 
-    return desc;
+    // The compute kernels have no runtime args, so they need no KernelRunArgs entry.
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args = {{INPUT, input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 // For sub_core_grids
-tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_program_artifacts(
     const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input;
-    const auto& input_dtype = args.input_dtype;
-    const auto& output_dtype = args.output_dtype;
     const auto& sub_core_grids = args.sub_core_grids;
 
     TT_FATAL(sub_core_grids.has_value(), "sub_core_grids cannot be null");
 
-    tt::tt_metal::ProgramDescriptor desc;
-
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat cb_data_format = cb_dataformat_for(input.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat cb_data_format_output = cb_dataformat_for(output.dtype());
     uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
+
+    const auto* device = input.device();
 
     uint32_t ntiles = input.physical_volume() / tt::constants::TILE_HW;
     uint32_t ncores = sub_core_grids->num_cores();
@@ -229,108 +294,94 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
         all_cores = ttnn::CoreRangeSet(ttnn::CoreRange(cores[0]));
     }
 
-    constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
+    // ---- Resource names ----
+    const DFBSpecName IN_DFB{"in"};    // legacy CBIndex::c_0
+    const DFBSpecName OUT_DFB{"out"};  // legacy CBIndex::c_2
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+
     constexpr uint32_t num_input_tiles = 2;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = num_input_tiles * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t output_cb_index = tt::CBIndex::c_2;
     constexpr uint32_t num_output_tiles = 2;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = num_output_tiles * single_tile_size_output,
-        .core_ranges = all_cores,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = cb_data_format_output,
-            .page_size = single_tile_size_output,
-        }}},
-    });
+    const DataflowBufferSpec in_dfb{
+        .unique_id = IN_DFB,
+        .entry_size = single_tile_size,
+        .num_entries = num_input_tiles,
+        .data_format_metadata = cb_data_format,
+    };
+    const DataflowBufferSpec out_dfb{
+        .unique_id = OUT_DFB,
+        .entry_size = single_tile_size_output,
+        .num_entries = num_output_tiles,
+        .data_format_metadata = cb_data_format_output,
+    };
 
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
+    const TensorParameter input_param{.unique_id = INPUT, .spec = input.tensor_spec()};
+    const TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
 
-    std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    const KernelSpec reader{
+        .unique_id = READER,
+        .source = kReaderSource,
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
 
-    tt::tt_metal::KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
-    reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
-
-    tt::tt_metal::KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-    writer_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
+    const KernelSpec writer{
+        .unique_id = WRITER,
+        .source = kWriterSource,
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
 
     uint32_t ntiles_per_core = ntiles / ncores;
-    std::vector<uint32_t> compute_kernel_args = {
-        static_cast<uint32_t>(ntiles_per_core),  // per_core_block_cnt
-        1,                                       // per_core_block_dim
-        src0_cb_index,
-        output_cb_index};
+    const KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = kComputeSource,
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .compile_time_args =
+            {{"per_core_block_cnt", static_cast<uint32_t>(ntiles_per_core)},
+             {"per_core_block_dim", 1u},
+             {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
+             {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
+        .hw_config = make_compute_config(device->arch(), args, make_unpack_modes(args, IN_DFB, cb_data_format)),
+    };
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (args.preserve_fp32_precision) {
-        unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
-
-    bool math_approx_mode = false;
-
-    std::map<std::string, std::string> unary_defines;
-    unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
-        "typecast_tile_init<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
-    unary_defines["TYPECAST_LLK"] = fmt::format(
-        "typecast_tile<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
-
-    const auto* path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
-
-    tt::tt_metal::KernelDescriptor compute_desc;
-    compute_desc.kernel_source = path;
-    compute_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = compute_kernel_args;
-    for (const auto& [name, value] : unary_defines) {
-        compute_desc.defines.emplace_back(name, value);
-    }
-    compute_desc.config = tt::tt_metal::ComputeConfigDescriptor{
-        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-        .fp32_dest_acc_en = args.fp32_dest_acc_en,
-        .unpack_to_dest_mode = unpack_to_dest_mode,
-        .bfp8_pack_precise = args.bfp8_pack_precise,
-        .math_approx_mode = math_approx_mode};
-
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
     uint32_t tile_start_id = 0;
-
     for (auto core : cores) {
-        reader_desc.emplace_runtime_args(core, {src_buffer, ntiles_per_core, tile_start_id});
-        writer_desc.emplace_runtime_args(core, {dst_buffer, ntiles_per_core, tile_start_id});
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values, core, {{"num_pages", ntiles_per_core}, {"start_id", tile_start_id}});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values, core, {{"num_pages", ntiles_per_core}, {"start_id", tile_start_id}});
         tile_start_id += ntiles_per_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    ProgramSpec spec{
+        .name = "typecast_subgrid",
+        .kernels = {reader, writer, compute},
+        .dataflow_buffers = {in_dfb, out_dfb},
+        .tensor_parameters = {input_param, output_param},
+        .work_units = {WorkUnitSpec{
+            .name = "typecast_subgrid", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}},
+    };
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args = {{INPUT, input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

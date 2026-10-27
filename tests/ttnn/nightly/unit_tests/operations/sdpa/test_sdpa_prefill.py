@@ -12,14 +12,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole, is_slow_dispatch
-
-
-def fa_rand(*shape):
-    normal_1 = torch.randn(shape)
-    normal_2 = torch.randn(shape) * 10
-    bernoulli = torch.bernoulli(torch.full(shape, 0.001))
-    return normal_1 + normal_2 * bernoulli
+from tt_py_test_utils_common.utility_functions import is_slow_dispatch
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import run_sdpa_block_mask
 
 
 def is_watcher_enabled():
@@ -1064,9 +1058,6 @@ def test_joint_sdpa_program_cache(device, b, nh, seq_len, joint_seq_len, d, q_ch
         run_test_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, dummy_tensors)
 
 
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.perf.device_perf_utils import run_device_perf_detailed
-
 from tracy.process_model_log import run_device_profiler, get_latest_ops_log_filename
 
 
@@ -1181,14 +1172,9 @@ def test_combine():
 @pytest.mark.skip()
 def test_sdpa_benchmark_detailed():
     command = "pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_scaled_dot_product_attention.py::test_sdpa_benchmark"
-    cols = ["ATTRIBUTES", "INPUT_0_W", "INPUT_0_Z", "INPUT_0_Y", "INPUT_0_X", "DEVICE KERNEL DURATION [ns]"]
-    op_name = "ScaledDotProductAttention"
-    warmup_iters = 0  # 5 iterations per device
-    step_name = "SDPA"
     subdir = "sdpa"
 
     run_device_profiler(command, subdir)
-    # r = post_process_ops_log(subdir, cols, sum_vals=False)
     filename = get_latest_ops_log_filename(subdir)
     import pandas as pd
 
@@ -1343,7 +1329,7 @@ def test_sdpa_benchmark(device):
                             exp_approx_mode=True,
                         )
                         try:
-                            tt_back = ttnn.transformer.scaled_dot_product_attention(
+                            _tt_back = ttnn.transformer.scaled_dot_product_attention(
                                 tt_Q,
                                 tt_K,
                                 tt_V,
@@ -2116,3 +2102,94 @@ def test_sdpa_noncausal_partial_k_reduce_trigger(device, sk, d):
     # the partial-tile mask stamp. Coverage for that interaction (the row-max reduce only sets the
     # softmax stability offset, so the partial mask need not gate the trigger); must stay correct.
     run_sdpa_noncausal_partial_k_near_uniform(device, sk, d, q_chunk_size=256, k_chunk_size=256)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
+@pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
+@pytest.mark.parametrize("is_causal", [True, False], ids=["causal", "noncausal"])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
+@pytest.mark.parametrize("b, nh, s, d", ([1, 8, 2048, 128],), ids=["nh8_s2048"])
+def test_sdpa_large_score_precision(
+    device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype, is_causal, fp32_dest_acc_en
+):
+    torch.manual_seed(0)
+
+    Q = fa_rand(b, nh, s, d)
+    K = fa_rand(b, nh, s, d)
+    V = fa_rand(b, nh, s, d)
+
+    # Large k bias which is the same for every key. Mirrors Qwen2.5-VL, which first exposed this.
+    K = K + torch.randn([b, nh, 1, d]) * 100.0
+
+    Q = Q.bfloat16().float()
+    K = K.bfloat16().float()
+    V = V.bfloat16().float()
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=False,
+    )
+
+    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_back = ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=is_causal,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    tt_back = ttnn.to_torch(tt_back)
+
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=is_causal)
+
+    pcc_threshold = 0.998 if fp32_dest_acc_en else 0.92
+    out_pass, out_pcc = comp_pcc(gt, tt_back, pcc_threshold)
+    logger.debug(f"python vs pytorch: {out_pcc}")
+    rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
+    logger.debug(f"rmse: {rmse}")
+    assert out_pass
+
+
+def _zero_div_tensors(device, count, heads=1):
+    return [
+        ttnn.from_torch(torch.randn(1, heads, 64, 64).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(count)
+    ]
+
+
+# Chunk sizes and the K head count are used as host-side divisors, so zero must raise a RuntimeError.
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size, name", [(0, 32, "q_chunk_size"), (32, 0, "k_chunk_size")])
+def test_sdpa_zero_chunk_size(device, expect_error, q_chunk_size, k_chunk_size, name):
+    q, k, v = _zero_div_tensors(device, 3)
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(1, 1), q_chunk_size=q_chunk_size, k_chunk_size=k_chunk_size
+    )
+    with expect_error(RuntimeError, f"{name} must be a positive multiple of TILE_SIZE"):
+        ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, program_config=program_config)
+
+
+def test_sdpa_zero_k_heads(device, expect_error):
+    (q,) = _zero_div_tensors(device, 1)
+    k, v = _zero_div_tensors(device, 2, heads=0)
+    with expect_error(RuntimeError, "Q num_heads must be >= K num_heads"):
+        ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
+
+
+@pytest.mark.parametrize("p_masked", [0.25, 0.5, 0.75])
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(128, 128), (128, 256)])
+@pytest.mark.parametrize("s, nkv, bcast_heads", [(2048, 8, True), (4096, 2, False)])
+def test_sdpa_noncausal_block_mask_sweep(device, s, nkv, bcast_heads, q_chunk_size, k_chunk_size, p_masked):
+    run_sdpa_block_mask(device, 1, 8, nkv, s, 128, q_chunk_size, k_chunk_size, p_masked, bcast_heads)

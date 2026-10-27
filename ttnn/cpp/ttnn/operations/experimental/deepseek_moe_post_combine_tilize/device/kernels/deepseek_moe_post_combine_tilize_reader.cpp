@@ -5,34 +5,43 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "tt-metalium/constants.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+#include "api/tile_constants.h"
 
 void kernel_main() {
-    constexpr uint32_t tilize_input_cb_id = get_named_compile_time_arg_val("tilize_input_cb_id");
-    constexpr uint32_t bytes_to_read_per_row = get_named_compile_time_arg_val("bytes_to_read_per_row");
+    Noc noc;
 
-    uint32_t rt_args_idx = 0;
-    const uint32_t intra_row_byte_offset = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t row_page_offset = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
+    constexpr uint32_t bytes_to_read_per_row = get_arg(args::bytes_to_read_per_row);
 
-    constexpr auto input_tensor_accessor_args = TensorAccessorArgs<0>();
-    const auto input_tensor_accessor = TensorAccessor(input_tensor_accessor_args, input_tensor_address);
+    const uint32_t intra_row_byte_offset = get_arg(args::intra_row_byte_offset);
+    const uint32_t row_page_offset = get_arg(args::row_page_offset);
+
+    const auto input_tensor_accessor = TensorAccessor(tensor::input);
 
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
-    cb_reserve_back(tilize_input_cb_id, tile_height);
-    uint32_t l1_write_addr = get_write_ptr(tilize_input_cb_id);
+    DataflowBuffer dfb_tilize_input(dfb::tilize_input);
+
+    dfb_tilize_input.reserve_back(tile_height);
+    uint32_t l1_write_addr = dfb_tilize_input.get_write_ptr();
 
     uint32_t page_id = row_page_offset;
     for (uint32_t row = 0; row < tile_height; ++row) {
-        uint64_t noc_addr = input_tensor_accessor.get_noc_addr(page_id, intra_row_byte_offset);
-        noc_async_read(noc_addr, l1_write_addr, bytes_to_read_per_row);
+        noc.async_read(
+            input_tensor_accessor,
+            CoreLocalMem<uint32_t>(l1_write_addr),
+            bytes_to_read_per_row,
+            {.page_id = page_id, .offset_bytes = intra_row_byte_offset},
+            {});
 
         l1_write_addr += bytes_to_read_per_row;
         page_id++;
     }
 
-    noc_async_read_barrier();
-    cb_push_back(tilize_input_cb_id, tile_height);
+    noc.async_read_barrier();
+    dfb_tilize_input.push_back(tile_height);
 }

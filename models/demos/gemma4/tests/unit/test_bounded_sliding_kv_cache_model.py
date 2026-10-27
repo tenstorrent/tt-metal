@@ -105,15 +105,33 @@ def test_build_hybrid_page_tables_shapes_and_padding():
                 assert torch.equal(pt[u], expected)
 
 
-def test_build_hybrid_page_tables_rejects_non_multiple_sliding_window():
-    with pytest.raises(ValueError, match="must be a multiple of block_size"):
+def test_build_hybrid_page_tables_rejects_non_multiple_sliding_window(expect_error):
+    """A ring smaller than one block cannot be paged. Kept reachable by using a
+    POWER-OF-TWO window: bounded_ring_modulo screens the ring first, so a window
+    like 100 never reaches this check (see the power-of-two test below)."""
+    with expect_error(ValueError, "must be a multiple of block_size"):
         build_hybrid_page_tables(
             num_layers=1,
             sliding_layers_mask=[True],
             num_users=1,
             block_size=32,
             max_seq_len=256,
-            sliding_window=100,  # not a multiple of 32
+            sliding_window=16,  # power of two, but not a multiple of 32
+        )
+
+
+def test_build_hybrid_page_tables_rejects_non_power_of_two_ring(expect_error):
+    """bounded_ring_modulo rejects a ring with an odd factor before the
+    block_size check: chunk starts must be multiples of BOTH the ring and SDPA's
+    q_chunk_size, which an odd factor makes nearly unsatisfiable."""
+    with expect_error(ValueError, "must be a power of two"):
+        build_hybrid_page_tables(
+            num_layers=1,
+            sliding_layers_mask=[True],
+            num_users=1,
+            block_size=32,
+            max_seq_len=256,
+            sliding_window=100,  # not a power of two
         )
 
 
@@ -434,7 +452,7 @@ def test_attention_decode_bounded_vs_unbounded_parity(cache_len, mesh_device, re
     assert passing_pair, f"bounded vs unbounded (cache_len={cache_len}): {msg_pair}"
 
 
-def test_bounded_pool_rejects_without_modulo(device):
+def test_bounded_pool_rejects_without_modulo(device, expect_error):
     """The relaxed paged_update_cache validation only allows page_table.shape[1] >
     cache.shape[0] when cache_position_modulo is set. Confirm the strict legacy
     check still fires when a caller forgets the kwarg — keeps the bounded layout
@@ -471,7 +489,7 @@ def test_bounded_pool_rejects_without_modulo(device):
 
     # page_table.shape[1] (max_blocks=16) > cache.shape[0] (sliding_blocks=4) → strict check fires
     assert max_blocks > cache_blocks
-    with pytest.raises(RuntimeError, match="max_num_blocks_per_seq must be less than max_num_blocks"):
+    with expect_error(RuntimeError, "max_num_blocks_per_seq must be less than max_num_blocks"):
         ttnn.experimental.paged_update_cache(
             cache_tt,
             xt,

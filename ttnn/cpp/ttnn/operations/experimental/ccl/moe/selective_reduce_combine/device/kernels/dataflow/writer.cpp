@@ -4,18 +4,31 @@
 
 #include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+
+#ifndef LOCAL_COMBINE
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
 using tt::tt_fabric::NocUnicastCommandHeader;
-using tt::tt_fabric::WorkerToFabricEdmSender;
 using namespace ttnn::operations::ccl::common;
+
+// Fabric Mux V2 client, opened blocking. Eager staging would only hide the mux setup time, and the first data send
+// waits on compute, which takes longer. The buffer count comes from the runtime args.
+using MuxSender = tt::tt_fabric::FabricMuxV2Sender<>;
+#endif
 
 // packet size bytes 4352
 namespace detail {
 
+#ifndef LOCAL_COMBINE
 template <
     uint32_t LinearizedMeshCoord,
     uint32_t TokensPerDevice,
@@ -36,6 +49,7 @@ inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
         return device_in_group * MeshCols + LinearizedMeshCoord % MeshCols;
     }
 }
+#endif
 
 // output is [select_experts_k ,tokens, hidden]
 template <uint32_t TokensPerDevice>
@@ -51,6 +65,7 @@ private:
 
 public:
     DoubleBuffer(
+        const Noc& /*noc*/,
         const uint32_t /*compute_cores_per_combine_core*/,
         const uint32_t /*sync_semaphore_addr*/,
         size_t& /*rt_arg_count*/) :
@@ -67,6 +82,7 @@ public:
 template <>
 struct DoubleBuffer<true> {
 private:
+    const Noc& noc;
     const uint32_t compute_cores_per_combine_core;
     const uint32_t sync_semaphore_addr;
     volatile tt_l1_ptr uint32_t* core_coords_ptr;
@@ -74,8 +90,13 @@ private:
     bool idx;
 
 public:
+    // Runtime args: [x0, y0, x1, y1, ...] for each of the compute_cores_per_combine_core cores.
     DoubleBuffer(
-        const uint32_t compute_cores_per_combine_core, const uint32_t sync_semaphore_addr, size_t& rt_arg_count) :
+        const Noc& noc,
+        const uint32_t compute_cores_per_combine_core,
+        const uint32_t sync_semaphore_addr,
+        size_t& rt_arg_count) :
+        noc(noc),
         compute_cores_per_combine_core(compute_cores_per_combine_core),
         sync_semaphore_addr(sync_semaphore_addr),
         core_coords_ptr(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(rt_arg_count))),
@@ -84,7 +105,7 @@ public:
     };
 
     DoubleBuffer& operator++() {
-        noc_async_writes_flushed(/*noc=*/1);
+        noc.async_writes_flushed();
 
         for (uint32_t c = 0; c < compute_cores_per_combine_core; ++c) {
             const uint64_t sem_noc_addr = safe_get_noc_addr(
@@ -92,6 +113,8 @@ public:
                 core_coords_ptr[2 * c + 1],
                 sync_semaphore_addr,
                 /*noc_id=*/1);
+            // Device 2.0 migration: legacy primitive retained: sync_semaphore_addr is a
+            // fabric-mux sync address.
             noc_semaphore_inc</*posted=*/true>(sem_noc_addr, 1, /*noc_id=*/1);
         }
         idx = !idx;
@@ -101,17 +124,64 @@ public:
     auto operator*() { return idx; }
 };
 
-template <uint8_t NumBuffers, uint8_t NumDirections>
-void mux_channel_writes_flushed(
+#ifndef LOCAL_COMBINE
+// Build one V2 mux client per open direction from the trailing runtime args (11 args each, in `directions` index
+// order, which is the host's `neighbors` order). rt_arg_idx is advanced past the consumed args.
+template <uint8_t NumDirections>
+inline void build_mux_connections(
     const std::array<bool, NumDirections>& directions,
-    const std::array<WorkerToFabricMuxSender<NumBuffers>, NumDirections>& connections) {
+    std::array<MuxSender, NumDirections>& connections,
+    size_t& rt_arg_idx) {
     for (uint8_t d = 0; d < NumDirections; ++d) {
         if (directions[d]) {
-            while (connections[d].get_num_free_write_slots() != NumBuffers) {
+            connections[d] = MuxSender::build_from_args(rt_arg_idx);
+        }
+    }
+}
+
+// Blocking open of every direction's V2 connection (waits for the mux's READY status, publishes this worker's
+// location, requests the channel). Returns each channel's free-slot capacity, sampled right after the open (all
+// slots free): the reference value mux_channel_writes_flushed spins for, without a compile-time buffer count.
+template <uint8_t NumDirections>
+inline std::array<uint32_t, NumDirections> open_mux_connections(
+    const std::array<bool, NumDirections>& directions, std::array<MuxSender, NumDirections>& connections) {
+    std::array<uint32_t, NumDirections> capacity{};
+    for (uint8_t d = 0; d < NumDirections; ++d) {
+        if (directions[d]) {
+            connections[d].open();
+            capacity[d] = connections[d].get_num_free_write_slots();
+        }
+    }
+    return capacity;
+}
+
+// Close request + wait for the manager's teardown ack, per open direction. The V2 mux terminates on its own once
+// all of its clients have closed: no termination master, no terminate signal.
+template <uint8_t NumDirections>
+inline void close_mux_connections(
+    const std::array<bool, NumDirections>& directions, std::array<MuxSender, NumDirections>& connections) {
+    for (uint8_t d = 0; d < NumDirections; ++d) {
+        if (directions[d]) {
+            connections[d].close();
+        }
+    }
+}
+
+// Spin until every packet this worker handed to the mux has been forwarded downstream: the manager republishes
+// its read counter as the forwarder's writes are sent, so free slots return to the capacity sampled at open.
+template <uint8_t NumDirections>
+inline void mux_channel_writes_flushed(
+    const std::array<bool, NumDirections>& directions,
+    const std::array<MuxSender, NumDirections>& connections,
+    const std::array<uint32_t, NumDirections>& capacity) {
+    for (uint8_t d = 0; d < NumDirections; ++d) {
+        if (directions[d]) {
+            while (connections[d].get_num_free_write_slots() != capacity[d]) {
             };
         }
     }
 }
+#endif
 
 }  // namespace detail
 
@@ -123,15 +193,9 @@ void kernel_main() {
     constexpr uint32_t data_cb_id = get_named_compile_time_arg_val("data_cb_id");
     constexpr uint32_t token_activations_cb_id = get_named_compile_time_arg_val("token_activations_cb_id");
     constexpr uint32_t activations_stride_elm = get_named_compile_time_arg_val("activations_stride_elm");
-    constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
     constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
-    constexpr uint32_t num_workers_per_link = get_named_compile_time_arg_val("num_workers_per_link");
     constexpr bool use_init_semaphore = get_named_compile_time_arg_val("use_init_semaphore") == 1;
-    constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
-    constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
-    constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
-    constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
     constexpr uint32_t num_local_experts = get_named_compile_time_arg_val("num_local_experts");
     constexpr uint32_t global_num_tokens = get_named_compile_time_arg_val("global_num_tokens");  // global token size
     constexpr uint32_t source_token_segment_buffer_size_bytes =
@@ -139,6 +203,20 @@ void kernel_main() {
     constexpr uint32_t source_block_size_bytes = get_named_compile_time_arg_val("source_expert_block_size_bytes");
     constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
     constexpr uint32_t alignment = get_named_compile_time_arg_val("alignment");
+    constexpr uint32_t compute_sync_semaphore_id = get_named_compile_time_arg_val("compute_sync_semaphore_id");
+    constexpr bool double_buffer_source = get_named_compile_time_arg_val("double_buffer_source") == 1;
+
+#ifdef LOCAL_COMBINE
+    // Single-device local combine: tokens_per_device = global_num_tokens (1 device).
+    constexpr uint32_t tokens_per_device = global_num_tokens;
+    constexpr auto output_ta_args = TensorAccessorArgs<0>();
+#else
+    constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
+    constexpr uint32_t num_workers_per_link = get_named_compile_time_arg_val("num_workers_per_link");
+    constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
+    constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
+    constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
+    constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
     constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
     constexpr uint32_t src_chip_id = get_named_compile_time_arg_val("src_chip_id");
     constexpr uint32_t mesh_rows = get_named_compile_time_arg_val("mesh_rows");
@@ -146,18 +224,9 @@ void kernel_main() {
     constexpr uint32_t fabric_max_packet_size_bytes = get_named_compile_time_arg_val("fabric_max_packet_size_bytes");
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
     constexpr auto topology = tt::tt_fabric::Topology(get_named_compile_time_arg_val("topology"));
-    constexpr uint32_t num_mux_workers_per_link = get_named_compile_time_arg_val("num_mux_workers_per_link");
-    constexpr uint32_t compute_sync_semaphore_id = get_named_compile_time_arg_val("compute_sync_semaphore_id");
-    constexpr uint32_t compute_cores_per_combine_core =
-        get_named_compile_time_arg_val("compute_cores_per_combine_core");
-    constexpr bool double_buffer_source = get_named_compile_time_arg_val("double_buffer_source") == 1;
-    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
-    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(2);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(3);
-    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(4);
 
-    constexpr auto output_ta_args = TensorAccessorArgs<5>();
+    // No worker-side mux compile-time args: the V2 mux client is built entirely from runtime args.
+    constexpr auto output_ta_args = TensorAccessorArgs<0>();
 
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
     constexpr uint32_t replicate_factor = (replicate_axis == ReplicateGroup::COLS) ? mesh_cols : mesh_rows;
@@ -171,45 +240,60 @@ void kernel_main() {
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
     const std::array<bool, Num_Directions> directions = DIRECTIONS;
+#endif
 
     size_t rt_arg_count = 0;
     const auto output_base_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto source_token_segment_size_bytes = get_arg_val<uint32_t>(rt_arg_count++);
     const auto dest_token_segment_offset_bytes = get_arg_val<uint32_t>(rt_arg_count++);
+    // Device 2.0 migration: legacy primitive retained: init_semaphore_addr is a GlobalSemaphore address.
     const auto init_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const bool is_init_sync_core = get_arg_val<uint32_t>(rt_arg_count++);
+
+    Noc noc1_obj(1);
+    CircularBuffer cb_token_counts(token_counts_cb_id);
+    CircularBuffer cb_data(data_cb_id);
+    CircularBuffer cb_dense_token_maps(dense_token_maps_cb_id);
+    CircularBuffer cb_token_activations(token_activations_cb_id);
+    Semaphore<> compute_sync_sem(compute_sync_semaphore_id);
+
     const auto compute_sync_semaphore_addr = get_semaphore(compute_sync_semaphore_id);
+
+    // Double-buffered source only: number of compute cores feeding this combine core. It varies per
+    // combine core because a compute core's width slice may straddle combine columns.
+    const uint32_t compute_cores_per_combine_core = double_buffer_source ? get_arg_val<uint32_t>(rt_arg_count++) : 0;
 
     // rt_arg_count is incremented
     detail::DoubleBuffer<double_buffer_source> db(
-        compute_cores_per_combine_core, compute_sync_semaphore_addr, rt_arg_count);
-
-    // rt_arg_count does not get incremented
-    MuxSyncCoreArgs sync_args(rt_arg_count);
-
-    std::array<WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>, Num_Directions> fabric_connections;
-
-    // rt_arg_count does not get incremented
-    open_direction_connections_async<
-        Num_Directions,
-        fabric_mux_num_buffers_per_channel,
-        fabric_mux_channel_buffer_size_bytes,
-        fabric_mux_status_address>(directions, fabric_connections, rt_arg_count);
+        noc1_obj, compute_cores_per_combine_core, compute_sync_semaphore_addr, rt_arg_count);
 
     const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr);
 
+#ifndef LOCAL_COMBINE
+    CircularBuffer cb_packet_header(packet_header_cb_id);
+
+    // Intra-link barrier args: worker 0 of each link is the link sync core (it sends the final barrier atomic inc
+    // once every worker of the link has drained its mux channel).
+    const bool is_link_sync_core = get_arg_val<uint32_t>(rt_arg_count++);
+    const uint32_t link_sync_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(rt_arg_count++));
+    const uint32_t link_sync_core_noc_x = get_arg_val<uint32_t>(rt_arg_count++);
+    const uint32_t link_sync_core_noc_y = get_arg_val<uint32_t>(rt_arg_count++);
+
+    // One V2 mux client per open direction; the trailing runtime args are consumed here.
+    std::array<MuxSender, Num_Directions> fabric_connections;
+    detail::build_mux_connections<Num_Directions>(directions, fabric_connections, rt_arg_count);
+
     volatile PACKET_HEADER_TYPE* packet_headers[3];
     for (uint8_t i = 0; i < 3; ++i) {
-        cb_reserve_back(packet_header_cb_id, 1);
-        const uint32_t packet_header_addr = get_write_ptr(packet_header_cb_id);
+        cb_packet_header.reserve_back(1);
+        const uint32_t packet_header_addr = cb_packet_header.get_write_ptr();
         packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
-        cb_push_back(packet_header_cb_id, 1);
+        cb_packet_header.push_back(1);
     }
 
-    // mux_rt_arg_count does not get incremented
-    open_direction_connections_barrier<Num_Directions, fabric_mux_num_buffers_per_channel, fabric_mux_status_address>(
-        directions, fabric_connections, rt_arg_count);
+    // Blocking open: waits for each mux to be READY, then requests the connection.
+    const auto mux_channel_capacity = detail::open_mux_connections<Num_Directions>(directions, fabric_connections);
 
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
     if (is_init_sync_core && use_init_semaphore) {
@@ -222,9 +306,10 @@ void kernel_main() {
             replicate_axis,
             num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
     }
+#endif
 
-    cb_wait_front(token_counts_cb_id, 1);
-    const uint32_t token_counts_l1_addr = get_write_ptr(token_counts_cb_id);
+    cb_token_counts.wait_front(1);
+    const uint32_t token_counts_l1_addr = cb_token_counts.get_write_ptr();
     auto* token_counts_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_counts_l1_addr);
     uint32_t token_split_offsets[num_local_experts];
     uint32_t token_split_counts[num_local_experts];
@@ -234,22 +319,28 @@ void kernel_main() {
         token_split_counts[e] = token_counts_l1_ptr[num_local_experts + num_local_experts + e];
         token_activation_offsets[e] = token_counts_l1_ptr[num_local_experts + 2 * num_local_experts + e];
     }
-    cb_pop_front(token_counts_cb_id, 1);
+    cb_token_counts.pop_front(1);
 
-    cb_reserve_back(data_cb_id, 1);
-    const uint32_t src_data_l1_base_addr = get_write_ptr(data_cb_id);
+    cb_data.reserve_back(1);
+    const uint32_t src_data_l1_base_addr = cb_data.get_write_ptr();
 
-    cb_wait_front(dense_token_maps_cb_id, num_local_experts);
-    const uint32_t dense_token_maps_l1_addr = get_write_ptr(dense_token_maps_cb_id);
+    cb_dense_token_maps.wait_front(num_local_experts);
+    const uint32_t dense_token_maps_l1_addr = cb_dense_token_maps.get_write_ptr();
     auto* dense_token_maps_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dense_token_maps_l1_addr);
 
-    cb_wait_front(token_activations_cb_id, 1);
-    const uint32_t token_activations_l1_addr = get_write_ptr(token_activations_cb_id);
+    cb_token_activations.wait_front(1);
+    const uint32_t token_activations_l1_addr = cb_token_activations.get_write_ptr();
     auto* token_activations_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_activations_l1_addr);
 
+#ifdef LOCAL_COMBINE
+    // Local combine: skip the init semaphore entirely. In single-device mode there is no
+    // cross-device coordination needed; the compute_sync_semaphore and CB waits handle
+    // all necessary synchronization between matmul, reader, and writer.
+#else
     if constexpr (use_init_semaphore) {
         auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
         if (is_init_sync_core) {
+            // Device 2.0 migration: legacy primitive retained: init_semaphore_addr is a GlobalSemaphore address.
             noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
             // swap start/end coordinates because this kernel is using NOC1
             const uint64_t semaphore_mc_addr =
@@ -260,21 +351,21 @@ void kernel_main() {
                 num_token_parallel_cores * num_data_parallel_cores - 1,
                 /*linked=*/false,
                 /*noc=*/1);
-            noc_async_writes_flushed(/*noc=*/1);
+            noc1_obj.async_writes_flushed();
 
         } else {
             noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
         }
         noc_semaphore_set(init_semaphore_ptr, 0);
     }
+#endif
 
-    auto* compute_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(compute_sync_semaphore_addr);
     uint32_t compute_sync_semaphore_val = compute_cores_per_combine_core;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
         auto* expert_token_activations_ptr =
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
 
-        noc_semaphore_wait(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
+        compute_sync_sem.wait(compute_sync_semaphore_val);
 
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr
@@ -292,6 +383,16 @@ void kernel_main() {
             const uint32_t src_data_l1_addr =
                 src_data_l1_base_addr + *db * source_block_size_bytes + dt * source_token_segment_buffer_size_bytes;
 
+#ifdef LOCAL_COMBINE
+            // Local combine: all writes are local NOC writes (single device).
+            noc1_obj.async_write(
+                CoreLocalMem<uint8_t>(src_data_l1_addr),
+                output_addrgen,
+                source_token_segment_size_bytes,
+                {},
+                {.page_id = output_page_idx, .offset_bytes = dest_token_segment_offset_bytes});
+            noc1_obj.async_writes_flushed();
+#else
             // figure out which device to send data to and routing
             const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<
                 linearized_mesh_coord,
@@ -301,10 +402,13 @@ void kernel_main() {
                 replicate_axis>(st);
 
             if (dest_device_idx == linearized_mesh_coord) {
-                const uint64_t output_noc_addr =
-                    output_addrgen.get_noc_addr(output_page_idx, dest_token_segment_offset_bytes, /*noc=*/1);
-                noc_async_write(src_data_l1_addr, output_noc_addr, source_token_segment_size_bytes, /*noc=*/1);
-                noc_async_writes_flushed(/*noc=*/1);
+                noc1_obj.async_write(
+                    CoreLocalMem<uint8_t>(src_data_l1_addr),
+                    output_addrgen,
+                    source_token_segment_size_bytes,
+                    {},
+                    {.page_id = output_page_idx, .offset_bytes = dest_token_segment_offset_bytes});
+                noc1_obj.async_writes_flushed();
             } else {
                 fabric_send_chip_unicast_noc_unicast_1d<
                     linearized_mesh_coord,
@@ -322,30 +426,31 @@ void kernel_main() {
                     alignment,
                     dest_token_segment_offset_bytes);
             }
+#endif
         }
         compute_sync_semaphore_val += compute_cores_per_combine_core;
         ++db;
     }
 
-    noc_semaphore_set(compute_sync_semaphore_ptr, 0);
+    compute_sync_sem.set(0);
 
-    cb_pop_front(dense_token_maps_cb_id, num_local_experts);
-    cb_pop_front(token_activations_cb_id, 1);
-    cb_push_back(data_cb_id, 1);
+    cb_dense_token_maps.pop_front(num_local_experts);
+    cb_token_activations.pop_front(1);
+    cb_data.push_back(1);
 
-    noc_async_write_barrier(/*noc=*/1);
+    noc1_obj.async_write_barrier();
 
+#ifndef LOCAL_COMBINE
     // In order to ensure that the barrier semaphores land after all of the data has arrived we must wait for the mux
     // cores to send off all of their transactions to the EDM.
-    detail::mux_channel_writes_flushed<fabric_mux_num_buffers_per_channel, Num_Directions>(
-        directions, fabric_connections);
+    detail::mux_channel_writes_flushed<Num_Directions>(directions, fabric_connections, mux_channel_capacity);
 
-    if (sync_args.is_sync_core) {
-        auto* termination_sync_semaphore_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
+    if (is_link_sync_core) {
+        auto* link_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(link_sync_semaphore_addr);
 
-        noc_semaphore_wait(termination_sync_semaphore_ptr, num_workers_per_link - 1);
-        noc_semaphore_set(termination_sync_semaphore_ptr, 0);
+        // Every other worker of this link has drained its mux channel (and closed its connection).
+        noc_semaphore_wait(link_sync_semaphore_ptr, num_workers_per_link - 1);
+        noc_semaphore_set(link_sync_semaphore_ptr, 0);
 
         const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr, /*noc=*/1);
 
@@ -364,14 +469,12 @@ void kernel_main() {
 
         auto* semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
 
-        noc_async_write_barrier(/*noc=*/1);
-        noc_async_atomic_barrier(/*noc=*/1);
+        noc1_obj.async_write_barrier();
+        noc1_obj.async_atomic_barrier();
 
-        close_direction_connections<
-            Num_Directions,
-            fabric_mux_num_buffers_per_channel,
-            fabric_mux_termination_signal_address,
-            num_mux_workers_per_link>(directions, fabric_connections, true, rt_arg_count);
+        // The barrier packets sit in the mux channel; after the last client closes, the mux forwards every pending
+        // packet before it terminates.
+        detail::close_mux_connections<Num_Directions>(directions, fabric_connections);
 
         // Ring + DoubleAntipodalAtomicInc=true: each device receives `replicate_group_devices` inc's
         //   (the antipodal device is incremented from both directions, summing to N senders).
@@ -382,20 +485,18 @@ void kernel_main() {
         noc_semaphore_wait(semaphore_ptr, expected_dispatch_device_inc);
         noc_semaphore_set(semaphore_ptr, 0);
     } else {
-        // get sync core semaphore noc address
-        close_direction_connections<
-            Num_Directions,
-            fabric_mux_num_buffers_per_channel,
-            fabric_mux_termination_signal_address>(directions, fabric_connections, false);
+        // Close this worker's connections (close request + manager ack), then tell the link sync core that this
+        // worker's data has left the mux.
+        detail::close_mux_connections<Num_Directions>(directions, fabric_connections);
 
-        const uint64_t safe_termination_sync_address = safe_get_noc_addr(
-            sync_args.termination_master_noc_x,
-            sync_args.termination_master_noc_y,
-            sync_args.termination_sync_address,
-            /*noc=*/1);
-        noc_semaphore_inc(safe_termination_sync_address, 1, /*noc=*/1);
+        const uint64_t link_sync_noc_addr =
+            safe_get_noc_addr(link_sync_core_noc_x, link_sync_core_noc_y, link_sync_semaphore_addr, /*noc=*/1);
+        // Device 2.0 migration: legacy primitive retained: link_sync_semaphore_addr is a get_semaphore(id) address on
+        // a remote core.
+        noc_semaphore_inc(link_sync_noc_addr, 1, /*noc=*/1);
 
-        noc_async_write_barrier(/*noc=*/1);
-        noc_async_atomic_barrier(/*noc=*/1);
+        noc1_obj.async_write_barrier();
+        noc1_obj.async_atomic_barrier();
     }
+#endif
 }

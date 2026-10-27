@@ -6,10 +6,11 @@
 
 // needed for private members
 #include "system_memory_cq_interface.hpp"
-#include <umd/device/pcie/tlb_window.hpp>            // for tt::umd::TlbWindow
-#include <umd/device/types/xy_pair.hpp>           // for tt_cxy_pair
+#include <tt-umd/io_window/io_window.hpp>     // for tt::umd::IoWindow
+#include <tt-umd/types/xy_pair.hpp>           // for tt_cxy_pair
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -20,6 +21,10 @@ using ChipId = int;
 namespace tt::tt_metal {
 
 class Buffer;
+class MetalContext;
+
+// True when the host can't pin D2H memory (no 64-bit PCIe addressing and no IOMMU).
+bool d2h_uses_hugepage_fallback(const MetalContext& ctx);
 
 class SystemMemoryManager {
 public:
@@ -126,10 +131,12 @@ private:
     std::vector<uint32_t> cq_to_last_completed_event;
     mutable std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
-    std::vector<tt::umd::TlbWindow*> prefetch_q_windows;
-    std::vector<tt::umd::TlbWindow*> completion_q_windows;
+    std::vector<std::unique_ptr<tt::umd::IoWindow>> prefetch_q_windows;
+    std::vector<std::unique_ptr<tt::umd::IoWindow>> completion_q_windows;
     std::vector<uint32_t> prefetch_q_dev_ptrs;
     std::vector<uint32_t> prefetch_q_dev_fences;
+    // Phase bit value for the current lap of each fetch queue, used when the prefetcher polls it through its cache.
+    std::vector<uint32_t> prefetch_q_phases;
 
     bool bypass_enable = false;
     std::vector<uint32_t> bypass_buffer;

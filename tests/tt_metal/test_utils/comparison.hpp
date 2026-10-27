@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 
 namespace tt::test_utils {
@@ -50,13 +51,12 @@ bool is_close_vectors(
         vec_a.size(),
         vec_b.size());
 
-    for (unsigned int i = 0; i < vec_a.size(); i++) {
-        if (not comparison_function(vec_a.at(i), vec_b.at(i))) {
-            if (argfail) {
-                *argfail = i;
-            }
-            return false;
+    auto it = std::mismatch(vec_a.begin(), vec_a.end(), vec_b.begin(), comparison_function);
+    if (it.first != vec_a.end()) {
+        if (argfail) {
+            *argfail = static_cast<int>(std::distance(vec_a.begin(), it.first));
         }
+        return false;
     }
     return true;
 }

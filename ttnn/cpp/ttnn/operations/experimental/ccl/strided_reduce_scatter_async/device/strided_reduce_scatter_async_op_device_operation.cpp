@@ -5,6 +5,7 @@
 #include "strided_reduce_scatter_async_op_device_operation.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -127,11 +128,11 @@ spec_return_value_t StridedReduceScatterAsyncDeviceOperation::compute_output_spe
     output_shape[operation_attributes.dim] /= operation_attributes.ring_size;
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             inter_shape,
             TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), adjusted_intermediate_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             output_shape,
             TensorLayout(
                 input_tensor.dtype(),
@@ -156,11 +157,22 @@ tensor_return_value_t StridedReduceScatterAsyncDeviceOperation::create_output_te
     return {intermediate_buffer, output_buffer};
 }
 
-tt::stl::hash::hash_t StridedReduceScatterAsyncDeviceOperation::compute_program_hash(
+std::vector<tt::tt_metal::TensorTopology> StridedReduceScatterAsyncDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // [0] intermediate: ring scratch over the input, keeps the input's label; [1] output: `dim` sharded along
+    // `cluster_axis`, the other axes as the input had them. Caller-supplied persistent buffers are those two tensors
+    // and take the same labels. With no honest label (nullopt, already reported) the output keeps the input's label.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    const auto output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
+        tensor_args.input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.dim));
+    return {input_topology, output_topology.value_or(input_topology)};
+}
+
+ttsl::hash::hash_t StridedReduceScatterAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
-    return tt::stl::hash::hash_objects(
+    return ttsl::hash::hash_objects(
         operation_attributes.dim,
         operation_attributes.num_links,
         operation_attributes.ring_size,

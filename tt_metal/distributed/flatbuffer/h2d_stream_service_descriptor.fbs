@@ -60,7 +60,15 @@ table H2DStreamServiceDescriptor {
 
     // Mirrored from Config for connector parity.
     socket_buffer_type: uint32;   // BufferType enum
-    socket_mode:        uint32;   // H2DMode enum
+
+    // Shared writer-completion state. The owner creates and pins this SHM
+    // region; connectors map it and use the same issued/completed counters for
+    // barrier().
+    completion_shm_name: string;
+    completion_shm_size: uint64;
+    completion_issued_offset: uint32;
+    completion_completed_offset: uint32;
+    completion_completed_stride: uint32;
 
     per_coord_entries: [PerCoordEntry];
 }

@@ -12,6 +12,8 @@
 #include "noc/noc_parameters.h"
 #include "hostdevcommon/fabric_common.h"
 
+static_assert(MEM_DM_LOCAL_SIZE % 2048 == 0, "DM local size must be a multiple of 2 kB (D$ set alignment)");
+
 // Validate assumptions on mailbox layout on host compile
 // Constexpr definitions allow for printing of breaking values at compile time
 static_assert(MEM_MAILBOX_BASE + sizeof(mailboxes_t) <= MEM_MAILBOX_END);
@@ -21,6 +23,9 @@ static constexpr uint32_t TENSIX_PROFILER_CHECK =
     (MEM_MAILBOX_BASE + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
 static_assert(TENSIX_LAUNCH_CHECK == 0);
 static_assert(TENSIX_PROFILER_CHECK == 0);
+static_assert(
+    MaxProcessorsPerCoreType <= kernel_profiler::PROFILER_MAX_RISC_COUNT,
+    "PROFILER_MAX_RISC_COUNT must be >= MaxProcessorsPerCoreType");
 static_assert(sizeof(launch_msg_t) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert(offsetof(subordinate_map_t, dm1) == 0);
 

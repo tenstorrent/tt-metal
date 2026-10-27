@@ -6,7 +6,10 @@
 GPT-OSS specific implementation of create_tt_model that's compatible with tt_transformers
 """
 
+from loguru import logger
+
 import ttnn
+from models.demos.gpt_oss.utils.lazy_state_dict import GptOssLazyStateDict
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -29,6 +32,7 @@ def create_tt_model(
     Uses clean MeshConfig abstraction for optimal device parallelization
     """
     from models.demos.gpt_oss.config import MeshConfig
+    from models.demos.gpt_oss.tt.fused_decode.config import dense_moe_decode_supported, fused_decode_supported
     from models.demos.gpt_oss.tt.model import Model
     from models.demos.gpt_oss.tt.model_config import ModelArgs
 
@@ -50,14 +54,62 @@ def create_tt_model(
         gpt_oss_model_args.hf_config.num_hidden_layers = num_layers
         gpt_oss_model_args.n_layers = num_layers
 
-    # Avoid loading state_dict for every DP model. An empty dict is intentional
-    # when --skip-model-load is used.
-    if state_dict is None:
-        state_dict = gpt_oss_model_args.load_state_dict(
-            weights_path=gpt_oss_model_args.model_path,
-            dummy_weights=gpt_oss_model_args.dummy_weights,
-            convert_to_meta_format=True,
+    # Decide whether the HF weights are still needed on host. When the ttnn weight cache for
+    # this (model, dtype, mesh shape) was already fully built on a previous run, ttnn.as_tensor
+    # loads every weight from disk and the state_dict is never read -- so skip the expensive
+    # from_pretrained host load entirely. This is what spares the e2e demo the prefill host-OOM
+    # (#48509) on warm-cache runs, without relying on the manual --skip-model-load flag.
+    #
+    # state_dict is None  -> decide here (warm cache => {} skip, else cold load).
+    # state_dict == {}     -> explicit skip (--skip-model-load) or a prior DP model already skipped.
+    # state_dict populated -> reuse across DP models (avoid reloading for every submesh).
+    # The fused decode layers (fused_decode/) cache extra decode-only weights; a cache is only complete for
+    # them if a fused build wrote it.
+    fused_decode = fused_decode_supported(
+        mesh_device,
+        mesh_config,
+        gpt_oss_model_args.hf_config,
+        use_throughput_experts,
+        gpt_oss_model_args.max_local_batch_size,
+    )
+    # Likewise the batched dense decode MoE (experts dense_decode_*).
+    dense_moe = dense_moe_decode_supported(
+        mesh_device,
+        mesh_config,
+        gpt_oss_model_args.hf_config,
+        use_throughput_experts,
+        gpt_oss_model_args.max_local_batch_size,
+    )
+    if (
+        state_dict is not None
+        and not state_dict
+        and fused_decode
+        and not gpt_oss_model_args.dummy_weights
+        and num_layers is None
+        and not gpt_oss_model_args.weight_cache_is_complete(dtype, fused_decode=True)
+    ):
+        # Explicit skip of the HF load (--skip-model-load): every weight must come from the cache, and a cache that
+        # was not written by a fused build lacks the fused decode weights (attention *_stream_*, router weight_stream_*,
+        # experts *_stream_decode_i768), which would otherwise fail later in ttnn.as_tensor(None, ...).
+        raise RuntimeError(
+            f"The weight cache {gpt_oss_model_args.weight_cache_path(dtype)} has no marker for the fused decode "
+            f"weights (format {gpt_oss_model_args.WEIGHT_CACHE_FORMAT_VERSION}, fused_decode_weights v{gpt_oss_model_args.FUSED_DECODE_WEIGHTS_VERSION}); rebuild it "
+            "once with the HF weights loaded (no --skip-model-load, or GPT_OSS_FORCE_MODEL_LOAD=1)."
         )
+    loaded_real_weights = False
+    if state_dict is None:
+        if not gpt_oss_model_args.dummy_weights and gpt_oss_model_args.weight_cache_is_complete(
+            dtype, fused_decode=fused_decode, dense_moe=dense_moe
+        ):
+            logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
+            state_dict = {}
+        else:
+            state_dict = gpt_oss_model_args.load_state_dict(
+                weights_path=gpt_oss_model_args.model_path,
+                dummy_weights=gpt_oss_model_args.dummy_weights,
+                convert_to_meta_format=True,
+            )
+            loaded_real_weights = bool(state_dict) and not gpt_oss_model_args.dummy_weights
 
     # Create GPT-OSS model using transformer-compatible constructor
     model = Model.create_transformer_compatible(
@@ -72,6 +124,20 @@ def create_tt_model(
         users_row_sharded=users_row_sharded,
         use_throughput_experts=use_throughput_experts,
     )
+
+    # If this run populated the cache from a cold host load, record completion so future runs
+    # can skip the load. Only for full-model builds (a num_layers override produces a partial
+    # cache that must not satisfy the completeness check).
+    assert all(layer.fused_decode == fused_decode for layer in model.layers), "fused decode predicate mismatch"
+    if loaded_real_weights and num_layers is None:
+        gpt_oss_model_args.mark_weight_cache_complete(dtype, fused_decode=fused_decode, dense_moe=dense_moe)
+
+    # A lazy state dict re-reads and re-dequantizes every tensor on access. With data parallel the
+    # caller passes the returned state_dict to the next submesh, which has the same mesh shape and
+    # therefore the same tensor cache this build just wrote, so hand back {} and let it load from
+    # the cache instead of repeating the host prep.
+    if isinstance(state_dict, GptOssLazyStateDict):
+        state_dict = {}
 
     # Extract tt_kv_cache like tt_transformers does
     tt_kv_cache = []

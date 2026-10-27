@@ -20,7 +20,7 @@ from ttml.datasets.hf_dataloader import InMemoryDataloader, sft_collate_fn
 
 
 class _FakeTensor:
-    """Minimal stand-in for ttml.autograd.Tensor used in dataloader tests."""
+    """Minimal stand-in for ttml.autograd.Tensor used in dataloader and trainer tests."""
 
     def __init__(self, arr):
         self._arr = np.asarray(arr, dtype=np.float32)
@@ -38,13 +38,14 @@ class _FakeTensor:
 
     __rmul__ = __mul__
 
+    def backward(self, retain_graph):
+        pass
+
 
 @pytest.fixture(autouse=True)
 def patch_tensor(monkeypatch):
     """Replace Tensor.from_numpy with a device-free stub for every test."""
-    monkeypatch.setattr(
-        ttml.autograd.Tensor, "from_numpy", staticmethod(_FakeTensor.from_numpy)
-    )
+    monkeypatch.setattr(ttml.autograd.Tensor, "from_numpy", staticmethod(_FakeTensor.from_numpy))
 
 
 # ---------------------------------------------------------------------------
@@ -64,8 +65,8 @@ def test_batch_fields():
 # ---------------------------------------------------------------------------
 
 
-def test_ttml_dataloader_is_abstract():
-    with pytest.raises(TypeError):
+def test_ttml_dataloader_is_abstract(expect_error):
+    with expect_error(TypeError, "abstract class TTMLDataloader"):
         TTMLDataloader(dataset=[], collate_fn=lambda x: x, batch_size=1)
 
 
@@ -137,14 +138,21 @@ def test_sft_collate_fn_prompt_zeroed_completion_nonzero():
 
 
 def _sft_examples(n):
-    return [
-        {"input_ids": list(range(i, i + 4)), "labels": [-100, i + 1, i + 2, i + 3]}
-        for i in range(n)
-    ]
+    return [{"input_ids": list(range(i, i + 4)), "labels": [-100, i + 1, i + 2, i + 3]} for i in range(n)]
 
 
 def _collate(examples):
     return sft_collate_fn(examples, max_seq_len=8, pad_token_id=0)
+
+
+def _lead_token(batch):
+    """First token of a batch's lead example — a per-batch identifier (assumes the identity `lambda x: x` collate)."""
+    return batch[0]["input_ids"][0]
+
+
+def _batch_order(loader):
+    """Sequence of per-batch lead tokens — a fingerprint of the loader's iteration order."""
+    return [_lead_token(batch) for batch in loader]
 
 
 def test_in_memory_dataloader_len():
@@ -161,16 +169,50 @@ def test_in_memory_dataloader_yields_batch_objects():
 
 
 def test_in_memory_dataloader_shuffle_changes_order():
+    """Order is a pure function of the loader's seed — independent of the global np.random."""
     data = _sft_examples(20)
 
-    np.random.seed(0)
-    loader = InMemoryDataloader(data, lambda x: x, batch_size=1, shuffle=True)
-    order_a = [b[0]["input_ids"][0] for b in loader]
+    order_a = _batch_order(InMemoryDataloader(data, lambda x: x, batch_size=1, shuffle=True, seed=0))
+    order_b = _batch_order(InMemoryDataloader(data, lambda x: x, batch_size=1, shuffle=True, seed=99))
+    order_a_again = _batch_order(InMemoryDataloader(data, lambda x: x, batch_size=1, shuffle=True, seed=0))
 
-    np.random.seed(99)
-    order_b = [b[0]["input_ids"][0] for b in loader]
+    assert order_a != order_b  # different seed -> different order
+    assert order_a == order_a_again  # same seed -> reproducible epoch-0 order
 
-    assert order_a != order_b
+
+def test_in_memory_dataloader_resume_matches_uninterrupted():
+    """Saving (epoch, position) mid-epoch and restoring into a fresh loader reproduces the exact
+    remaining batch sequence — first_k + resumed_remainder == one uninterrupted epoch."""
+    data = _sft_examples(20)
+
+    uninterrupted = _batch_order(InMemoryDataloader(data, lambda x: x, batch_size=2, shuffle=True, seed=7))
+
+    k = 3
+    partial_loader = InMemoryDataloader(data, lambda x: x, batch_size=2, shuffle=True, seed=7)
+    it = iter(partial_loader)
+    first = [_lead_token(next(it)) for _ in range(k)]
+    state = partial_loader.get_state_dict()
+
+    # Built with a deliberately wrong seed: set_state_dict must restore seed=7 from the state, or the
+    # resumed order wouldn't line up with the uninterrupted run.
+    resumed = InMemoryDataloader(data, lambda x: x, batch_size=2, shuffle=True, seed=999)
+    resumed.set_state_dict(state)
+    remainder = _batch_order(resumed)
+
+    assert first + remainder == uninterrupted
+
+
+def test_dataloader_state_dict_roundtrip():
+    """get_state_dict -> set_state_dict carries (seed, epoch, position) onto a fresh loader."""
+    loader = InMemoryDataloader(_sft_examples(8), lambda x: x, batch_size=2, shuffle=True, seed=5)
+    it = iter(loader)
+    next(it)
+    state = loader.get_state_dict()
+    assert state == {"seed": 5, "epoch": 0, "position": 1}
+
+    restored = InMemoryDataloader(_sft_examples(8), lambda x: x, batch_size=2, seed=0)
+    restored.set_state_dict(state)
+    assert restored.get_state_dict() == state
 
 
 # ---------------------------------------------------------------------------
@@ -230,3 +272,73 @@ def test_sft_config_custom_values():
     cfg = SFTConfig(max_grad_norm=1.0, log_interval=10)
     assert cfg.max_grad_norm == 1.0
     assert cfg.log_interval == 10
+
+
+# ---------------------------------------------------------------------------
+# SFTTrainer LR schedule
+# ---------------------------------------------------------------------------
+
+
+def _stepped_lrs(monkeypatch, start_step=0, lr=1.0, **lr_kwargs):
+    """LRs a 4-step SFTTrainer run steps its optimizer with, from start_step on (as after load_checkpoint)."""
+    from ttml.modules import AbstractModuleBase
+    from ttml.trainers import SFTConfig, SFTTrainer
+
+    class NoParamsModel(AbstractModuleBase):
+        def forward(self, input_ids, attention_mask):
+            return None
+
+    class MockOptimizer(ttml.optimizers.OptimizerBase):
+        """One param group; records the LR of every step()."""
+
+        def __init__(self):
+            super().__init__(ttml.NamedParameters())
+            self.lr, self.stepped_lrs = lr, []
+
+        def zero_grad(self):
+            pass
+
+        def step(self):
+            self.stepped_lrs.append(self.lr)
+
+        def get_group_lrs(self):
+            return [self.lr]
+
+        def set_group_lrs(self, lrs):
+            (self.lr,) = lrs
+
+    monkeypatch.setattr(SFTTrainer, "_build_loss_fn", lambda self: None)  # needs a device mesh; unused here
+    monkeypatch.setattr("ttml.trainers.sft_trainer.profiler_marker", lambda *args, **kwargs: None)
+    optimizer = MockOptimizer()
+    trainer = SFTTrainer(
+        NoParamsModel(),
+        [Batch(input_ids=None, labels=None, loss_mask=None)],
+        None,
+        SFTConfig(max_steps=4, eval_interval=0, save_interval=0, disable_progress_bar=True),
+        optimizer=optimizer,
+        compute_loss_func=lambda logits, batch: _FakeTensor(1.0),
+        loss_composer=object(),
+        **lr_kwargs,
+    )
+    trainer.step = start_step
+    trainer.train()
+    return optimizer.stepped_lrs
+
+
+def test_sft_trainer_lr_lambda_per_step_and_on_resume(monkeypatch):
+    """Each step trains with lr_lambda(step), also after a resume, and never calls it with max_steps."""
+    factors = [0.25, 0.5, 0.75, 1.0]  # defined on [0, max_steps) only
+    lr_lambda = lambda step: factors[step]
+    assert _stepped_lrs(monkeypatch, lr_lambda=lr_lambda) == factors
+    assert _stepped_lrs(monkeypatch, start_step=2, lr_lambda=lr_lambda) == factors[2:]
+    assert _stepped_lrs(monkeypatch, start_step=4, lr_lambda=lr_lambda) == []
+
+
+def test_sft_trainer_deprecated_lr_schedule(monkeypatch, expect_error):
+    """The deprecated lr_schedule gives the same LRs, warns, and can't be combined with lr_lambda."""
+    factors = [0.25, 0.5, 0.75, 1.0]
+    absolute_lrs = [0.5 * f for f in factors]
+    with pytest.warns(DeprecationWarning, match="lr_schedule"):
+        assert _stepped_lrs(monkeypatch, lr=0.5, lr_schedule=lambda step: absolute_lrs[step]) == absolute_lrs
+    with expect_error(ValueError, "not both"):
+        _stepped_lrs(monkeypatch, lr_lambda=lambda step: 1.0, lr_schedule=lambda step: 1.0)

@@ -180,7 +180,8 @@ void matmul_multi_core(
     // - Writer kernel: Handles writing output data from circular buffers back to DRAM
     // - Compute kernel: Performs the actual matrix multiplication computation
     // All kernels run across all cores to enable parallel execution
-    MathFidelity math_fidelity = MathFidelity::HiFi4;  // High fidelity math for accurate results
+    tt::tt_metal::MathFidelity math_fidelity =
+        tt::tt_metal::MathFidelity::HiFi4;  // High fidelity math for accurate results
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
@@ -289,7 +290,7 @@ int main() {
 
         // Calculate buffer sizes needed for each matrix in bytes
         constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;  // 2 * 32 * 32 = 2048 bytes
-        uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt;  // num_tiles of FP16_B
+        uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt;                           // num_tiles of FP16_B
 
         // Create random input vectors for matrices A and B
         std::mt19937 rng(std::random_device{}());

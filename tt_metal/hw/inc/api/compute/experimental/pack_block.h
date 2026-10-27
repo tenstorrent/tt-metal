@@ -59,8 +59,9 @@ ALWI void pack_block_contiguous_init(uint32_t ocb) { PACK((llk_pack_block_contig
  * | Function   | num_tiles | Number of tiles to pack from DEST to CB           | uint32_t | 1 to 8                                                 | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_block_contiguous(uint32_t ifrom_dst, uint32_t ocb, uint32_t num_tiles) {
-    PACK((llk_pack_block_contiguous<DST_ACCUM_MODE>(ifrom_dst, ocb, num_tiles)));
+    PACK((llk_pack_block_contiguous<is_fp32_dest_acc_en>(ifrom_dst, ocb, num_tiles)));
 }
 
 #endif

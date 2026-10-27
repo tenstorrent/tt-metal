@@ -100,6 +100,13 @@ constexpr auto leids_args = TensorAccessorArgs<offsets_args.next_compile_time_ar
 constexpr auto scores_args = TensorAccessorArgs<leids_args.next_compile_time_args_offset()>();
 constexpr auto gs_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
 constexpr auto ks_args = TensorAccessorArgs<gs_args.next_compile_time_args_offset()>();
+// The accessor chain must consume the host's CT-arg stream exactly; a host
+// built against a different arg table shifts every accessor base and can
+// silently parse page sizes as config words.
+static_assert(
+    ks_args.next_compile_time_args_offset() == kernel_compile_time_args.size(),
+    "moe_group_combined_kernel: compile-time arg count differs from host emission — "
+    "rebuild the ttml host library to match this kernel source");
 
 constexpr uint32_t md_aligned_page = decltype(metadata_args)::AlignedPageSize;
 constexpr uint32_t sc_aligned_page = decltype(scores_args)::AlignedPageSize;
@@ -151,7 +158,11 @@ void kernel_main() {
 
     // ---- Address generators ----
     const auto plan_addrgen = TensorAccessor(plan_args, plan_addr);
-    const auto dispatched_addrgen = TensorAccessor(dispatched_args, dispatched_addr, h * 2U);
+    // Default page stride (AlignedPageSize): row pages sit at
+    // round_up(h*2, DRAM_ALIGN) intervals within a bank, so passing the raw
+    // h*2 here would misaddress every row after the first whenever h*2 isn't
+    // DRAM-aligned.
+    const auto dispatched_addrgen = TensorAccessor(dispatched_args, dispatched_addr);
     const auto md_addrgen = TensorAccessor(metadata_args, metadata_addr);
     const auto cnt_addrgen = TensorAccessor(counts_args, counts_addr);
     const auto off_addrgen = TensorAccessor(offsets_args, offsets_addr);
@@ -359,6 +370,10 @@ void kernel_main() {
         // Write counts and offsets to DRAM (use stage as staging)
         for (uint32_t e = 0; e < e_local; ++e) stage[e] = counts[e];
         noc_async_write((uint32_t)stage, cnt_addrgen.get_noc_addr(0), cnt_page_bytes);
+        // noc_async_write is zero-copy: the NIU reads stage at packet transmit,
+        // not call time. Flush the counts write out of L1 before restaging
+        // offsets over the same bytes; the barrier below covers completion.
+        noc_async_writes_flushed();
         for (uint32_t e = 0; e <= e_local; ++e) stage[e] = offsets[e];
         noc_async_write((uint32_t)stage, off_addrgen.get_noc_addr(0), off_page_bytes);
         noc_async_write_barrier();

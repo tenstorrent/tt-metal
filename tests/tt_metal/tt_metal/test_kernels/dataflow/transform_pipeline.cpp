@@ -26,14 +26,14 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_elements; i++) {
 #if defined(INCOMING_SEM)
-        sem_in.down(1);
+        sem_in.wait_min(i + 1);
 #endif
         const uint32_t val = a[i];
         const uint32_t new_val = val + 1;
         b[i] = new_val;
         DPRINT("Read the value {} and wrote the value {}\n", val, new_val);
 #if defined(OUTGOING_SEM)
-        sem_out.up(1);
+        sem_out.set(i + 1);
 #endif
     }
 }

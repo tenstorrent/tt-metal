@@ -3,17 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#define TT_ALWAYS_INLINE    inline __attribute__((always_inline))
-#define NOINLINE            __attribute__((noinline))
-#define NOCLONE             __attribute__((noclone))
-#define tt_l1_ptr           __attribute__((rvtt_l1_ptr))
-#define tt_reg_ptr          __attribute__((rvtt_reg_ptr))
+#define TT_ALWAYS_INLINE inline __attribute__((always_inline))
+#define NOINLINE         __attribute__((noinline))
+#define NOCLONE          __attribute__((noclone))
+#define tt_l1_ptr        __attribute__((rvtt_l1_ptr))
+#define tt_reg_ptr       __attribute__((rvtt_reg_ptr))
+#include <ckernel_ops.h>
+
 #include <cstdint>
 
 #include "ckernel_addrmod.h"
 #include "ckernel_fence.h"
 #include "ckernel_include.h"
-#include "ckernel_ops.h"
 // #include "fw_debug.h"
 #include "llk_defs.h"
 #include "t6_debug_map.h"
@@ -37,14 +38,10 @@ constexpr std::uint8_t TENSIX_PERF_SEMAPHORE = p_stall::SEMAPHORE_2;
 constexpr std::uint8_t MATH_SEMAPHORE        = 1;
 constexpr std::uint8_t PC_BUF_SEMAPHORE_BASE = 32; // base address for semaphores in PC buffer. FIXME: must be kept in sync with SEM_COUNT parameter... ugly...
 constexpr std::uint8_t STREAM_SEMAPHORE      = 5;  // semaphore used by unpack thread to sync between trisc and unpacker
-constexpr std::uint8_t TENSIX_STREAM_SEMAPHORE                = p_stall::SEMAPHORE_5; // semaphore used by unpack thread to sync between trisc and unpacker
-constexpr std::uint8_t PARAM_ITERATIONS                       = 0;
-constexpr std::uint8_t TENSIX_UNPACK_TO_DEST_UNPACK_SEMAPHORE = p_stall::SEMAPHORE_4;
-constexpr std::uint8_t UNPACK_TO_DEST_UNPACK_SEMAPHORE        = 4;
-constexpr std::uint8_t TENSIX_PACK_STREAM_SEMAPHORE           = p_stall::SEMAPHORE_6;
-constexpr std::uint8_t PACK_STREAM_SEMAPHORE                  = 6;
-constexpr std::uint8_t TENSIX_UNPACK_TO_DEST_PACK_SEMAPHORE   = p_stall::SEMAPHORE_7;
-constexpr std::uint8_t UNPACK_TO_DEST_PACK_SEMAPHORE          = 7;
+constexpr std::uint8_t TENSIX_STREAM_SEMAPHORE      = p_stall::SEMAPHORE_5; // semaphore used by unpack thread to sync between trisc and unpacker
+constexpr std::uint8_t PARAM_ITERATIONS             = 0;
+constexpr std::uint8_t TENSIX_PACK_STREAM_SEMAPHORE = p_stall::SEMAPHORE_6;
+constexpr std::uint8_t PACK_STREAM_SEMAPHORE        = 6;
 
 volatile std::uint32_t *const reg_base        = (volatile std::uint32_t *)0xFFB10000;
 volatile std::uint32_t *const pc_buf_base     = (volatile std::uint32_t *)PC_BUF_BASE;
@@ -102,6 +99,14 @@ inline void reg_write(std::uint32_t addr, std::uint32_t data)
     p_reg[0]                                 = data;
 }
 
+inline std::uint64_t read_wall_clock()
+{
+    volatile t6_debug_regs_t *t6dbg = RISCV_DEBUG_REGS;
+    std::uint32_t timestamp_low     = t6dbg->WALL_CLOCK_0;
+    std::uint32_t timestamp_high    = t6dbg->WALL_CLOCK_1_AT;
+    return (static_cast<std::uint64_t>(timestamp_high) << 32) | timestamp_low;
+}
+
 //
 //
 // inline void wait_math_semaphores()
@@ -155,6 +160,11 @@ inline void tensix_sync()
 
     // Now read -- this read will block until we're idle
     *fooptr = pc_buf_base[1];
+}
+
+inline void invalidate_data_cache()
+{
+    asm volatile("fence" ::: "memory");
 }
 
 inline void mop_sync()
@@ -254,23 +264,6 @@ inline void cfg_rmw(std::uint32_t cfg_addr32, std::uint32_t cfg_shamt, std::uint
 // 	TTI_WRCFG(tmp_gpr2,p_cfg::WRCFG_32b,cfg_addr32);
 // }
 
-// CHECKME: does this need to change now that BRISC is gone?
-inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
-{
-    mailbox_base[thread][0] = data;
-}
-
-// Blocking read
-inline std::uint32_t mailbox_read(const std::uint8_t thread)
-{
-    return mailbox_base[thread][0];
-}
-
-inline bool mailbox_not_empty(const std::uint8_t thread)
-{
-    return mailbox_base[thread][1] > 0;
-}
-
 // If the TRACK_x bit is set, then the Tensix hardware will automatically
 // stall TRISC memory accesses and/or Tensix instructions to x in order
 // to guarantee correct ordering. This should eliminate most cases where
@@ -297,7 +290,7 @@ template <std::uint32_t bitmask>
 inline void set_ttsync_enables(std::uint32_t thread_id = 0xdeadface)
 {
     static_assert((bitmask & ~TRACK_ALL) == 0, "The given bitmask targets bits outside the allowable range");
-    auto t6dbg = RISCV_DEBUG_REGS;
+    volatile t6_debug_regs_t *t6dbg = RISCV_DEBUG_REGS;
 
     if (thread_id > 3)
     {
@@ -456,6 +449,54 @@ inline void csr_write(std::uint32_t val)
         asm volatile("fence");
     }
     asm volatile("csrw %[csr_num], %[val] \n" : : [csr_num] "i"(csr_num), [val] "r"(val));
+}
+
+// llk_assert.h (when ENABLE_LLK_ASSERT is set) pulls in api/debug/assert.h -> risc_common.h, whose
+// TRISC-side setup_isr_csrs() references ckernel::csr_read<CSR::TRISC_ID>() -- this include must
+// stay below the CSR/csr_read/csr_write definitions above, or that reference fails to compile.
+// It must also stay OUTSIDE namespace ckernel (which spans most of this file): with ENABLE_LLK_ASSERT
+// set, everything llk_assert.h transitively includes would otherwise be nested into ckernel::, and
+// global-scope users of those declarations (e.g. trisck.cc) would stop resolving.
+} // namespace ckernel
+
+#include "llk_assert.h"
+
+namespace ckernel
+{
+
+// NOTE: loopback (a thread writing or reading its OWN mailbox slot) is legal hardware behavior,
+// but these helpers exist to synchronize threads with one another -- in that scenario loopback
+// must be avoided: every slot is written and read by threads OTHER than its owner, and an
+// accidental self-loopback (from stale slot numbering) is what tripped the Watcher IB-interrupt
+// fault (0x19), not the MMIO access mechanism itself. The self-check below only applies to TRISC
+// callers (COMPILE_FOR_TRISC); a DM-context caller (COMPILE_FOR_DM) is never one of the 4 TRISC
+// roles this ThreadId enum represents, so it can never collide with itself here.
+// COMPILE_FOR_TRISC is the cluster-global processor id (NEO_n_COMPUTE_m = n*4 + m, see
+// QuasarComputeProcessor), while mailbox slots are indexed by NEO-cluster-local role (0..3), so the
+// self-check compares against the local id, COMPILE_FOR_TRISC % 4.
+inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
+{
+#ifdef COMPILE_FOR_TRISC
+    LLK_ASSERT(thread != COMPILE_FOR_TRISC % 4, "mailbox_write: self-loopback not valid for inter-thread sync");
+#endif
+    mailbox_base[thread][0] = data;
+}
+
+// Blocking read
+inline std::uint32_t mailbox_read(const std::uint8_t thread)
+{
+#ifdef COMPILE_FOR_TRISC
+    LLK_ASSERT(thread != COMPILE_FOR_TRISC % 4, "mailbox_read: self-loopback not valid for inter-thread sync");
+#endif
+    return mailbox_base[thread][0];
+}
+
+inline bool mailbox_not_empty(const std::uint8_t thread)
+{
+#ifdef COMPILE_FOR_TRISC
+    LLK_ASSERT(thread != COMPILE_FOR_TRISC % 4, "mailbox_not_empty: self-loopback not valid for inter-thread sync");
+#endif
+    return mailbox_base[thread][1] > 0;
 }
 
 union qstatus_u
@@ -747,6 +788,37 @@ void set_up_dest_dvalid_per_thread(dest_dvalid_client const (&clients)[N])
     {
         cfg[ctrl_regs[static_cast<int>(clients[N - 1])]] = mk_dest_dvalid_reg<0b0001, 0b0001, 0b0001>::val << (N - 2);
     }
+}
+
+// Seeds each SFPU lane PRNG directly through the seed override (PRNG_SEED_OVERRIDE_CTRL/DATA) instead of
+// the HW seeder, whose sweep has no busy flag and reaches the SFPU clients only ~1.5k cycles after the write.
+// Each lane gets its own mixed seed, so lane streams are not shifted copies of one LFSR as with the seeder.
+inline void init_prng_seed(const std::uint32_t seed)
+{
+    // SFPU PRNG client ids are 128 + {row[1:0], col[3:0]} on the seed bus.
+    constexpr std::uint32_t PRNG_SFPU_CID_START = 128;
+    constexpr std::uint32_t PRNG_SFPU_NUM_CIDS  = 64;
+    // All ones is the XNOR-LFSR lock-up state.
+    constexpr std::uint32_t PRNG_LFSR_LOCKUP_SEED = 0xFFFFFFFF;
+    auto cfg                                      = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+    for (std::uint32_t i = 0; i < PRNG_SFPU_NUM_CIDS; i++)
+    {
+        // murmur3 fmix32 of seed + i * golden ratio, so neighbouring lanes get unrelated seeds.
+        std::uint32_t lane_seed = seed + i * 0x9E3779B9;
+        lane_seed ^= lane_seed >> 16;
+        lane_seed *= 0x85EBCA6B;
+        lane_seed ^= lane_seed >> 13;
+        lane_seed *= 0xC2B2AE35;
+        lane_seed ^= lane_seed >> 16;
+        // The override drives the bus while enabled, so point it at the next lane before changing the data:
+        // that lane briefly loads the previous seed and is then overwritten, the previous lane is untouched.
+        cfg[PRNG_SEED_OVERRIDE_CTRL_prng_id_ADDR32] =
+            (1u << PRNG_SEED_OVERRIDE_CTRL_override_en_SHAMT) | (PRNG_SFPU_CID_START + i);
+        cfg[PRNG_SEED_OVERRIDE_DATA_seed_override_ADDR32] = (lane_seed == PRNG_LFSR_LOCKUP_SEED) ? lane_seed - 1 : lane_seed;
+    }
+    cfg[PRNG_SEED_OVERRIDE_CTRL_prng_id_ADDR32] = 0;
+    // Read back so the override is off before any later SFPU instruction reads the PRNG.
+    (void)cfg[PRNG_SEED_OVERRIDE_CTRL_prng_id_ADDR32];
 }
 
 // d e e p e s t l o r e

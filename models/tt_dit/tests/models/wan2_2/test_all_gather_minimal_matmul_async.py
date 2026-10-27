@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
@@ -56,6 +57,7 @@ def run_test_linear_impl(
     activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
+    dst_full_sync_en=False,
     num_iters=1,
     enable_trace=False,
     use_persistent_buffers=True,
@@ -69,7 +71,13 @@ def run_test_linear_impl(
     torch_addcmul_b=None,
     addcmul_scalar=1.0,
     chunks=1,
+    chunk_sizes=None,
     broadcast_gate=True,
+    fuse_swiglu=False,
+    residual_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    num_buffers_per_channel=48,
+    share_addcmul_inputs=False,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -85,6 +93,9 @@ def run_test_linear_impl(
     M = torch_input.shape[2] if use_non_fused else torch_input.shape[0]
     K = torch_input.shape[3] if use_non_fused else torch_input.shape[1]
     N = weight_input.shape[3] if use_non_fused else weight_input.shape[1]
+    if fuse_swiglu:
+        # weight is the packed [gate|up] of width 2*out_N; the fused op emits out_N.
+        N = N // 2
     per_device_M = M // device.shape[sp_axis]
     if use_persistent_buffers:
         persistent_output_buffers = [
@@ -125,16 +136,24 @@ def run_test_linear_impl(
             dtype=input_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            memory_config=residual_memory_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
         )
         if broadcast_gate:
-            tt_addcmul_b = ttnn.from_torch(torch_addcmul_b, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+            tt_addcmul_b = ttnn.from_torch(
+                torch_addcmul_b,
+                dtype=input_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=gate_memory_config,
+            )
         else:
             tt_addcmul_b = ttnn.from_torch(
                 torch_addcmul_b,
                 dtype=input_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
+                memory_config=gate_memory_config,
                 mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
             )
     else:
@@ -142,17 +161,29 @@ def run_test_linear_impl(
         tt_addcmul_b = None
         addcmul_scalar = None
 
+    if fuse_addcmul and share_addcmul_inputs:
+        assert not broadcast_gate, "Aliased addcmul inputs require full-size ternary tensors"
+        tt_addcmul_b = tt_addcmul_a
+        torch_addcmul_b = torch_addcmul_a
+
     with torch.no_grad():
         torch_output = torch_input @ weight_input
         if bias_input is not None:
             torch_output = torch_output + bias_input
+        if fuse_swiglu:
+            first, second = torch.chunk(torch_output, 2, dim=-1)
+            torch_output = first * torch.nn.functional.silu(second)
         if fuse_addcmul:
             torch_output = torch.addcmul(torch_addcmul_a, torch_output, torch_addcmul_b, value=addcmul_scalar)
 
         if activation == "gelu":
             torch_output = torch.nn.functional.gelu(torch_output)
 
-        torch_output = torch.chunk(torch_output, chunks, dim=-1)
+        # Variable-width chunks split at the given per-device widths
+        if chunk_sizes:
+            torch_output = torch.split(torch_output, list(chunk_sizes), dim=-1)
+        else:
+            torch_output = torch.chunk(torch_output, chunks, dim=-1)
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -160,6 +191,7 @@ def run_test_linear_impl(
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_acc,
         packer_l1_acc=True,
+        dst_full_sync_en=dst_full_sync_en,
     )
 
     matmul_config = ttnn.MinimalMatmulConfig(
@@ -240,11 +272,13 @@ def run_test_linear_impl(
                 barrier_semaphore=barrier_semaphore_handles[0] if not use_persistent_buffers else None,
                 force_transpose=force_transpose,
                 num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=48,
+                num_buffers_per_channel=num_buffers_per_channel,
                 scalar=addcmul_scalar,
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
                 chunks=chunks,
+                chunk_sizes=list(chunk_sizes) if chunk_sizes else [],
+                fuse_swiglu=fuse_swiglu,
             )
 
         return tt_output
@@ -309,7 +343,9 @@ def run_test_linear_impl(
             for i in range(device.shape[sp_axis]):
                 for j in range(device.shape[tp_axis]):
                     m_slice = slice(i * per_device_M, (i + 1) * per_device_M)
-                    n_slice = slice(j * (N // chunks), (j + 1) * (N // chunks))
+                    # For chunk c the concatenated tensor is [M_global, width_c * TP]
+                    chunk_width = chunk_sizes[c] if chunk_sizes else (N // chunks)
+                    n_slice = slice(j * chunk_width, (j + 1) * chunk_width)
 
                     if use_non_fused:
                         idx = (slice(None), slice(None), m_slice, n_slice)
@@ -361,6 +397,7 @@ def run_test_linear(
     activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
+    dst_full_sync_en=False,
     dtype=ttnn.bfloat16,
     weight_dtype=None,
     bias_dtype=None,
@@ -374,23 +411,32 @@ def run_test_linear(
     fuse_addcmul=False,
     addcmul_scalar=1.0,
     chunks=1,
+    chunk_sizes=None,
     broadcast_gate=True,
+    fuse_swiglu=False,
+    residual_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    num_buffers_per_channel=48,
+    share_addcmul_inputs=False,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
 
+    # For fused SwiGLU the weight packs [gate|up] -> width 2N; the op emits out width N.
+    weight_N = 2 * N if fuse_swiglu else N
+
     if use_non_fused:
         torch_input = torch.randn((1, 1, M, K), dtype=torch_dtype)
-        weight_input = torch.randn((1, 1, K, N), dtype=torch_dtype)
+        weight_input = torch.randn((1, 1, K, weight_N), dtype=torch_dtype)
     else:
         torch_input = torch.randn((M, K), dtype=torch_dtype)
-        weight_input = torch.randn((K, N), dtype=torch_dtype)
+        weight_input = torch.randn((K, weight_N), dtype=torch_dtype)
     bias_input = None
     if use_bias:
         if use_non_fused:
-            bias_input = torch.randn((1, 1, 1, N), dtype=torch_dtype)
+            bias_input = torch.randn((1, 1, 1, weight_N), dtype=torch_dtype)
         else:
-            bias_input = torch.randn((1, N), dtype=torch_dtype)
+            bias_input = torch.randn((1, weight_N), dtype=torch_dtype)
 
     if fuse_addcmul:
         if use_non_fused:
@@ -428,10 +474,21 @@ def run_test_linear(
         mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
     )
 
-    tt_weight = ttnn.from_torch(weight_input, dtype=weight_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    # Fused SwiGLU: tile-pair interleave the (replicated) weight/bias so each ring device's
+    # N-slice holds whole [second(silu'd), first] pairs. ndev = ring size (cluster_axis).
+    weight_to_load = weight_input
+    bias_to_load = bias_input
+    if fuse_swiglu:
+        ring_size = device.shape[cluster_axis]
+        weight_2d = weight_input.reshape(K, weight_input.shape[-1])
+        weight_to_load = prepare_for_fused_swiglu(weight_2d, ndev=ring_size).reshape(weight_input.shape)
+        if use_bias:
+            bias_to_load = prepare_for_fused_swiglu(bias_input.reshape(1, -1), ndev=ring_size).reshape(bias_input.shape)
+
+    tt_weight = ttnn.from_torch(weight_to_load, dtype=weight_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
     tt_bias = None
     if use_bias:
-        tt_bias = ttnn.from_torch(bias_input, dtype=bias_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_bias = ttnn.from_torch(bias_to_load, dtype=bias_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
 
     return run_test_linear_impl(
         device=device,
@@ -449,6 +506,7 @@ def run_test_linear(
         activation=activation,
         math_fidelity=math_fidelity,
         fp32_acc=fp32_acc,
+        dst_full_sync_en=dst_full_sync_en,
         core_grid=core_grid,
         input_dtype=dtype,
         num_devices=device.get_num_devices(),
@@ -468,7 +526,13 @@ def run_test_linear(
         torch_addcmul_b=torch_addcmul_b,
         addcmul_scalar=addcmul_scalar,
         chunks=chunks,
+        chunk_sizes=chunk_sizes,
         broadcast_gate=broadcast_gate,
+        fuse_swiglu=fuse_swiglu,
+        residual_memory_config=residual_memory_config,
+        gate_memory_config=gate_memory_config,
+        num_buffers_per_channel=num_buffers_per_channel,
+        share_addcmul_inputs=share_addcmul_inputs,
     )
 
 
@@ -1366,6 +1430,92 @@ def test_linear_k_tail(
     for c in range(1):
         for i in range(submesh.get_num_devices()):
             assert check_result[0][c][i]["pcc"] > 0.999_500
+            assert check_result[0][c][i]["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
+    [
+        [
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            2,
+            6,
+            1,
+            0,
+            12,
+            9,
+            0,
+        ],
+    ],
+    ids=["bh4x8links2"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "bias"])
+@pytest.mark.parametrize(
+    "M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        (3072, 5120, 1280, 8, 8, 8, 2, 1),
+        (3072, 5120, 3840, 8, 8, 8, 2, 2),
+    ],
+    ids=["3072x5120x1280", "3072x5120x3840"],
+)
+def test_linear_swiglu(
+    mesh_device,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    topology,
+    core_grid_x,
+    core_grid_y,
+    num_workers_per_link,
+    num_links,
+    sp_axis,
+    tp_axis,
+    cluster_axis,
+    use_bias,
+):
+    """Ring-fused all_gather_minimal_matmul_async with FUSE_SWIGLU.
+
+    The (replicated) weight is the packed [gate|up] of width 2N, tile-pair interleaved so each
+    ring device's N-slice holds whole pairs; the op emits silu(gate)*up of width N in one matmul.
+    N here is the OUTPUT width (weight width is 2N).
+    """
+    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
+    check_result = run_test_linear(
+        submesh,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        topology,
+        core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+        num_workers_per_link=num_workers_per_link,
+        num_links=num_links,
+        force_transpose=True,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        use_bias=use_bias,
+        cluster_axis=cluster_axis,
+        fuse_swiglu=True,
+    )
+    for c in range(1):
+        for i in range(submesh.get_num_devices()):
+            assert check_result[0][c][i]["pcc"] > 0.999_000
             assert check_result[0][c][i]["relative_rmse"] < 0.02
 
 

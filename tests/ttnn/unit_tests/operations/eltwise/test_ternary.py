@@ -12,30 +12,15 @@ from math import isnan
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_equal
 
 
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_mac_all_tensors(device, h, w):
-    torch.manual_seed(0)
+def test_where_golden_treats_negative_predicates_as_true():
+    predicate = torch.tensor([-2, 0, 3, -1], dtype=torch.int32)
+    true_values = torch.tensor([10, 20, 30, 40], dtype=torch.int32)
+    false_values = torch.tensor([1, 2, 3, 4], dtype=torch.int32)
+    golden_function = ttnn.get_golden_function(ttnn.where)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_input_tensor1 = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_input_tensor2 = torch.rand((h, w), dtype=torch.bfloat16)
+    output = golden_function(predicate, true_values, false_values)
 
-    golden_fn = ttnn.get_golden_function(ttnn.mac)
-    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.to_device(input_tensor, device)
-    input_tensor1 = ttnn.from_torch(torch_input_tensor1, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor1 = ttnn.to_device(input_tensor1, device)
-    input_tensor2 = ttnn.from_torch(torch_input_tensor2, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.to_device(input_tensor2, device)
-    output_tensor = ttnn.mac(input_tensor, input_tensor1, input_tensor2)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+    assert torch.equal(output, torch.tensor([10, 2, 30, 40], dtype=torch.int32))
 
 
 @pytest.mark.parametrize("h", [64])
@@ -60,7 +45,7 @@ def test_mac_tensor_with_2_scalaras(device, h, w, scalar1, scalar2):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 def assert_where_exact(torch_input_tensor, torch_input1, torch_input2, device):
@@ -114,37 +99,6 @@ def test_where_bcast(device, dtype, hc, ht, hf, wc, wt, wf):
     torch_input_tensor2 = torch.rand((hf, wf), dtype=dtype).uniform_(-100, 100)
 
     assert_where_exact(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, device)
-
-
-def run_ternary_test_value(device, h, w, value, ttnn_function, pcc=0.9999):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-    torch_input_tensor1 = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-    torch_input_tensor2 = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, value=value)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.to_device(input_tensor, device)
-    input_tensor1 = ttnn.from_torch(torch_input_tensor1, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor1 = ttnn.to_device(input_tensor1, device)
-    input_tensor2 = ttnn.from_torch(torch_input_tensor2, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.to_device(input_tensor2, device)
-    output_tensor = ttnn_function(input_tensor, input_tensor1, input_tensor2, value=value)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("value", [15.5])
-def test_addcdiv(device, h, w, value):
-    run_ternary_test_value(device, h, w, value, ttnn.addcdiv)
 
 
 @pytest.mark.parametrize(
@@ -269,7 +223,7 @@ def test_addcmul(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
     golden_fn = ttnn.get_golden_function(ttnn.addcmul)
     golden_tensor = golden_fn(in_data1, in_data2, in_data3, value=value)
 
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -376,7 +330,115 @@ def test_addcdiv(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
             output_tensor,
         )
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1, allow_nonfinite=True)
+
+
+_MIXED_INPUT_CASES = [
+    (ttnn.bfloat16, ttnn.float32, None),
+    (ttnn.float32, ttnn.bfloat16, None),
+]
+_MIXED_OUTPUT_CASES = [
+    (ttnn.float32, ttnn.float32, ttnn.bfloat16),
+    (ttnn.bfloat16, ttnn.bfloat16, ttnn.float32),
+]
+_TO_TORCH_DTYPE = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
+
+
+def _mixed_dtype_case_id(a_dtype, bc_dtype, out_dtype):
+    name = {ttnn.bfloat16: "bf16", ttnn.float32: "fp32"}
+    return f"a_{name[a_dtype]}-bc_{name[bc_dtype]}-out_{name[out_dtype or a_dtype]}"
+
+
+def _assert_ternary_close(expected, result, out_dtype):
+    if out_dtype == ttnn.float32:
+        assert torch.allclose(result, expected, rtol=1e-5, atol=1e-5)
+    else:
+        assert_with_ulp(expected_result=expected.to(torch.bfloat16), actual_result=result, ulp_threshold=1)
+
+
+@pytest.mark.parametrize(
+    "op, a_dtype, bc_dtype, out_dtype",
+    [
+        pytest.param(op, *case, id=f"{op}-{_mixed_dtype_case_id(*case)}")
+        for op in ["lerp", "addcdiv", "mac", "addcmul", "snake_beta"]
+        # addcmul and snake_beta require all inputs to share a dtype.
+        for case in (
+            _MIXED_OUTPUT_CASES if op in ("addcmul", "snake_beta") else _MIXED_INPUT_CASES + _MIXED_OUTPUT_CASES
+        )
+    ],
+)
+@pytest.mark.parametrize("bc_shape", [(1, 1, 64, 128), (1, 1, 1, 128)], ids=["no_bcast", "row_bcast"])
+def test_ternary_mixed_dtypes(device, op, a_dtype, bc_dtype, out_dtype, bc_shape):
+    # Regression for #60223: fp32 operands or output require an fp32 DEST and per-CB unpack formats.
+    torch.manual_seed(0)
+    a = torch.randn((1, 1, 64, 128), dtype=_TO_TORCH_DTYPE[a_dtype])
+    b = torch.randn(bc_shape, dtype=_TO_TORCH_DTYPE[bc_dtype])
+    c = (torch.rand(bc_shape) + 0.5).to(_TO_TORCH_DTYPE[bc_dtype])
+    tt_a, tt_b, tt_c = (
+        ttnn.from_torch(x, dtype=d, layout=ttnn.TILE_LAYOUT, device=device)
+        for x, d in ((a, a_dtype), (b, bc_dtype), (c, bc_dtype))
+    )
+    output_tensor = None
+    if out_dtype is not None:
+        output_tensor = ttnn.from_torch(torch.zeros(a.shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    A, B, C = a.float(), b.float(), c.float()
+    if op == "lerp":
+        output = ttnn.lerp(tt_a, tt_b, tt_c, output_tensor=output_tensor)
+        expected = A + C * (B - A)
+    elif op == "addcdiv":
+        output = ttnn.addcdiv(tt_a, tt_b, tt_c, value=0.5, output_tensor=output_tensor)
+        expected = A + 0.5 * B / C
+    elif op == "addcmul":
+        output = ttnn.addcmul(tt_a, tt_b, tt_c, value=0.5, output_tensor=output_tensor)
+        expected = A + 0.5 * B * C
+    elif op == "snake_beta":
+        output = ttnn.snake_beta(tt_a, tt_b, tt_c, output_tensor=output_tensor)
+        expected = A + torch.sin(B * A) ** 2 / C
+    else:
+        output = ttnn.mac(tt_a, tt_b, tt_c, output_tensor=output_tensor)
+        expected = A * B + C
+
+    out_dtype = out_dtype or a_dtype
+    assert output.dtype == out_dtype
+    _assert_ternary_close(expected, ttnn.to_torch(output), out_dtype)
+
+
+@pytest.mark.parametrize(
+    "op",
+    ["lerp_tts", "mac_tts", "mac_tst"],
+)
+@pytest.mark.parametrize(
+    "a_dtype, t_dtype",
+    [(ttnn.bfloat16, ttnn.float32), (ttnn.float32, ttnn.bfloat16)],
+    ids=["a_bf16-t_fp32", "a_fp32-t_bf16"],
+)
+@pytest.mark.parametrize(
+    "t_shape",
+    [(1, 1, 64, 128), (1, 1, 64, 1), (1, 1, 1, 1), (1, 1, 1, 128)],
+    ids=["no_bcast", "col_bcast", "scalar_bcast", "row_bcast"],
+)
+def test_ternary_scalar_mixed_dtypes(device, op, a_dtype, t_dtype, t_shape):
+    # Tensor-scalar variants share the predicate/tensor CB pair, which can hold different dtypes (#60223).
+    torch.manual_seed(0)
+    a = torch.randn((1, 1, 64, 128), dtype=_TO_TORCH_DTYPE[a_dtype])
+    t = torch.randn(t_shape, dtype=_TO_TORCH_DTYPE[t_dtype])
+    tt_a = ttnn.from_torch(a, dtype=a_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_t = ttnn.from_torch(t, dtype=t_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    A, T = a.float(), t.float()
+    if op == "lerp_tts":
+        output = ttnn.lerp(tt_a, tt_t, 0.25)
+        expected = A + 0.25 * (T - A)
+    elif op == "mac_tts":
+        output = ttnn.mac(tt_a, tt_t, 1.5)
+        expected = A * T + 1.5
+    else:
+        output = ttnn.mac(tt_a, 1.5, tt_t)
+        expected = A * 1.5 + T
+
+    assert output.dtype == a_dtype
+    _assert_ternary_close(expected, ttnn.to_torch(output), a_dtype)
 
 
 def test_ternary_scalar_distinguishes_cache_entries(device):
@@ -430,5 +492,99 @@ def test_ternary_scalar_distinguishes_cache_entries(device):
         "a different scalar must change the output (scalar re-patched on the fast path). Identical "
         "output here means the cache hit reused the first call's frozen scalar runtime arg."
     )
+
+    device.disable_and_clear_program_cache()
+
+
+def test_ternary_addcmul_cache_hit_refreshes_operand_addresses(device):
+    """Regression guard for the ternary buffer-address static/dynamic contract (cache-hit bug).
+
+    Two same-shaped addcmul calls reuse the same cached program (correct), but the cache-hit path
+    must re-patch the runtime args holding the operand/output buffer ADDRESSES. Before the fix, the
+    second same-shaped call whose operand lived in a DIFFERENT buffer ran against the first call's
+    stale addresses and returned silent garbage (PCC ~0). Here the operands are distinct
+    ttnn.chunk() slices of a single parent tensor, so they are the same shape but different buffers.
+    TernaryDeviceOperation::get_dynamic_runtime_args() must refresh reader slots 0/1/2 and writer
+    slot 0 on every dispatch.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    torch.manual_seed(0)
+    N, H = 32, 64
+
+    base_t = torch.rand((1, 1, N, H), dtype=torch.bfloat16)
+    chunks_t = torch.rand((1, 1, 1, 4 * H), dtype=torch.bfloat16)
+
+    base = ttnn.from_torch(base_t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    chunks = ttnn.from_torch(chunks_t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    chunk = ttnn.chunk(chunks, 4, -1)  # 4 shape-identical operands in different buffers
+
+    def reference(i):
+        return base_t + base_t * chunks_t[..., i * H : (i + 1) * H]
+
+    # Pre-allocate BOTH outputs and keep them alive across both calls, passing each via
+    # output_tensor. This forces the two dispatches to write to DISTINCT, simultaneously-live output
+    # buffers, so the second call's writer slot 0 must be re-patched to out1's address -- otherwise it
+    # writes into out0 and out1 stays zero. Without two live outputs the allocator could hand the
+    # second call out0's just-freed address, masking a missing writer-address patch.
+    out0 = ttnn.from_torch(
+        torch.zeros((1, 1, N, H), dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    out1 = ttnn.from_torch(
+        torch.zeros((1, 1, N, H), dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+
+    # First call compiles the addcmul program.
+    ttnn.addcmul(base, base, chunk[0], value=1.0, output_tensor=out0)
+    entries_after_first = device.num_program_cache_entries()
+
+    # Cache hit with a different-buffer operand AND a different output buffer of identical shape: the
+    # addcmul program must be reused (no new cache entry), yet the stale-address regression made this
+    # return ~0 PCC.
+    ttnn.addcmul(base, base, chunk[2], value=1.0, output_tensor=out1)
+    assert (
+        device.num_program_cache_entries() == entries_after_first
+    ), "same-shaped addcmul must reuse the cached program (no new cache entry)"
+
+    assert_with_pcc(reference(0), ttnn.to_torch(out0).float(), 0.99)
+    assert_with_pcc(reference(2), ttnn.to_torch(out1).float(), 0.99)
+
+    device.disable_and_clear_program_cache()
+
+
+def test_ternary_cache_miss_different_alignment(device):
+    """Same logical shape, over-padded TILE vs default padding, must be two cache entries."""
+    device.enable_program_cache()
+
+    logical = (1, 1, 32, 32)
+    padded = [1, 1, 64, 32]
+    torch.manual_seed(0)
+
+    def make(overpad):
+        tensors = []
+        for _ in range(3):
+            host = torch.rand(logical, dtype=torch.bfloat16)
+            if overpad:
+                tt = ttnn.tilize_with_val_padding(
+                    ttnn.from_torch(host, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16),
+                    padded,
+                    0.0,
+                )
+            else:
+                tt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            tensors.append(tt)
+        return tensors
+
+    over = make(True)
+    normal = make(False)
+    assert list(over[0].shape) == list(normal[0].shape)
+    assert list(over[0].padded_shape) != list(normal[0].padded_shape)
+
+    device.clear_program_cache()
+    ttnn.addcmul(*over, value=1.0)
+    assert device.num_program_cache_entries() == 1
+    ttnn.addcmul(*normal, value=1.0)
+    assert device.num_program_cache_entries() == 2
 
     device.disable_and_clear_program_cache()

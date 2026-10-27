@@ -4,6 +4,8 @@
 
 #include "narrow.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace ttnn {
 
@@ -80,7 +82,7 @@ ttnn::Tensor narrow(
 
     // Handle INTERLEAVED DRAM buffers
     if (input_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM &&
-        input_tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED) {
+        input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         // For DRAM interleaved, narrowing is only supported on the first non-trivial dimension
         // (dimensions with size > 1). All preceding dimensions must be of size 1.
         bool all_preceding_dims_trivial = true;
@@ -125,15 +127,17 @@ ttnn::Tensor narrow(
             storage.get_mesh_buffer().device(),
             storage.get_mesh_buffer().address() + offset_bytes);
 
-        TensorSpec subtensor_spec = TensorSpec(
+        tt::tt_metal::TensorSpec subtensor_spec = tt::tt_metal::TensorSpec(
             output_tensor_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(),
                 input_tensor.tensor_spec().page_config(),
                 input_tensor.tensor_spec().memory_config()));
 
-        tt::tt_metal::DeviceStorage subtensor_storage(
-            storage, tt::tt_metal::MeshTensor(subtensor_mesh, subtensor_spec, input_tensor.tensor_topology()));
+        ttnn::DeviceStorage subtensor_storage(
+            storage,
+            tt::tt_metal::mesh_tensor_from_buffer_with_topology(
+                std::move(*subtensor_mesh), subtensor_spec, input_tensor.tensor_topology()));
         return Tensor(std::move(subtensor_storage));
     }
 
@@ -236,8 +240,12 @@ ttnn::Tensor narrow(
         }
 
         // Create new core grid
+        // Block sharding requires a single rectangular grid, so merge the cores for it. Height/width sharding keeps
+        // one range per core for COL_MAJOR: merging would change the core order the shard spec walks.
+        // Data placement is driven by filtered_cores via BufferDistributionSpec.
         CoreRangeSet new_core_grid;
-        if (shard_spec_buffer.orientation() == ShardOrientation::ROW_MAJOR) {
+        if (shard_spec_buffer.orientation() == ShardOrientation::ROW_MAJOR ||
+            sharding_args.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             new_core_grid = CoreRangeSet(filtered_cores);
         } else {
             std::vector<CoreRange> core_ranges;
@@ -258,7 +266,8 @@ ttnn::Tensor narrow(
         }
 
         // Create new shard specifications
-        tt::tt_metal::ShardSpec narrowed_shard_spec(new_core_grid, narrowed_shard_shape, ShardOrientation::ROW_MAJOR);
+        tt::tt_metal::ShardSpec narrowed_shard_spec(
+            new_core_grid, narrowed_shard_shape, shard_spec_buffer.orientation());
         tt::tt_metal::ShardSpecBuffer narrowed_shard_spec_buffer =
             tt::tt_metal::ShardSpecBuffer(narrowed_shard_spec, shard_spec_buffer.page_shape, narrowed_pages_shape);
 
@@ -286,13 +295,15 @@ ttnn::Tensor narrow(
         auto narrowed_memory_config =
             MemoryConfig(input_tensor.memory_config().memory_layout(), BufferType::L1, narrowed_shard_spec);
 
-        TensorSpec subtensor_spec = TensorSpec(
+        tt::tt_metal::TensorSpec subtensor_spec = tt::tt_metal::TensorSpec(
             output_tensor_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), narrowed_memory_config));
 
-        tt::tt_metal::DeviceStorage subtensor_storage(
-            storage, tt::tt_metal::MeshTensor(subtensor_mesh, subtensor_spec, input_tensor.tensor_topology()));
+        ttnn::DeviceStorage subtensor_storage(
+            storage,
+            tt::tt_metal::mesh_tensor_from_buffer_with_topology(
+                std::move(*subtensor_mesh), subtensor_spec, input_tensor.tensor_topology()));
         return Tensor(std::move(subtensor_storage));
     }
 

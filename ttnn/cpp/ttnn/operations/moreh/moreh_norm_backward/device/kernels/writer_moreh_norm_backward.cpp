@@ -6,39 +6,34 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // compile time args
-    constexpr auto input_grad_args = TensorAccessorArgs<0>();
-
-    int i{0};
-    const auto input_grad_addr = get_arg_val<uint32_t>(i++);
-    const auto num_input_tiles_per_core = get_arg_val<uint32_t>(i++);
-    const auto tile_offset = get_arg_val<uint32_t>(i++);
-
-    uint32_t cb_id{16};
-    const auto cb_id_input_grad = cb_id++;
+    // runtime args
+    // input_grad base address is injected by its TensorBinding (TensorAccessor(tensor::input_grad)).
+    const auto num_input_tiles_per_core = get_arg(args::num_input_tiles_per_core);
+    const auto tile_offset = get_arg(args::tile_offset);
 
     // input_grad
-    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr);
+    const auto input_grad_addrg = TensorAccessor(tensor::input_grad);
 
     Noc noc;
-    CircularBuffer cb_input_grad(cb_id_input_grad);
-    const auto input_grad_tile_bytes = get_tile_size(cb_id_input_grad);
+    DataflowBuffer dfb_input_grad(dfb::input_grad);
+    const auto input_grad_tile_bytes = dfb_input_grad.get_tile_size();
 
     auto input_grad_tile_idx = tile_offset;
     for (uint32_t idx = 0; idx < num_input_tiles_per_core; ++idx) {
-        cb_input_grad.wait_front(1);
+        dfb_input_grad.wait_front(1);
         noc.async_write(
-            cb_input_grad,
+            dfb_input_grad,
             input_grad_addrg,
             input_grad_tile_bytes,
             {.offset_bytes = 0},
             {.page_id = input_grad_tile_idx});
         noc.async_write_barrier();
-        cb_input_grad.pop_front(1);
+        dfb_input_grad.pop_front(1);
         input_grad_tile_idx++;
     }
 

@@ -11,9 +11,9 @@
 #include <tt-metalium/program_descriptors.hpp>
 
 // Exports symbols
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 
-namespace tt::tt_metal {
+namespace ttnn {
 
 // Returns true if tensor has Host storage.
 bool is_cpu_tensor(const Tensor& tensor);
@@ -29,11 +29,11 @@ bool is_device_tensor(const Tensor& tensor);
 //
 // The returned reference borrows from the Tensor inside `opt`; the caller must
 // keep `opt` alive for as long as the returned reference is used.
-ttsl::optional_reference<const MeshTensor> as_optional_mesh_tensor(const std::optional<Tensor>& opt);
+ttsl::optional_reference<const tt::tt_metal::MeshTensor> as_optional_mesh_tensor(const std::optional<Tensor>& opt);
 
 // Returns the optimal worker cores for a sharded tensor.
-std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(
-    const Tensor& tensor, NOC noc = NOC::RISCV_0_default);
+std::vector<tt::tt_metal::CoreCoord> get_optimal_worker_cores_for_sharded_tensor(
+    const Tensor& tensor, tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default);
 
 /**
  * @brief Creates a CBDescriptor from a sharded tensor.
@@ -69,28 +69,19 @@ std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(
  *   CBDescriptor cb = cb_descriptor_from_sharded_tensor(in_cb_id, device_input_tensor);
  * @endcode
  */
-CBDescriptor cb_descriptor_from_sharded_tensor(
+tt::tt_metal::CBDescriptor cb_descriptor_from_sharded_tensor(
     uint8_t cb_index,
     const Tensor& tensor,
     uint32_t address_offset = 0,
     uint32_t total_size = 0,
-    const std::optional<CoreRangeSet>& core_ranges = std::nullopt);
+    const std::optional<tt::tt_metal::CoreRangeSet>& core_ranges = std::nullopt);
 
 /**
- * @brief Get the L1 byte address of a CB descriptor.
+ * @brief Get the L1 byte address a CB descriptor is programmed at.
  *
- * Returns buffer->address() + address_offset when a buffer is present,
- * or just address_offset when no buffer is set (manually placed CB).
+ * Returns the backing buffer's address on the CB's cores + address_offset, or just address_offset when
+ * no buffer is set. TT_FATALs if a per-core-allocated buffer's address differs across the CB's cores.
  */
-inline uint32_t get_cb_address(const CBDescriptor& desc) {
-    auto addr_offset = desc.address_offset;
-    if (desc.buffer != nullptr) {
-        return desc.buffer->address() + addr_offset;
-    }
-    if (desc.tensor != nullptr) {
-        return desc.tensor->address() + addr_offset;
-    }
-    return addr_offset;
-}
+uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc);
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

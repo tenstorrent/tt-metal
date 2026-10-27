@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import numpy as np
 import pytest
 import torch
 import ttnn
@@ -12,7 +13,9 @@ import ttml
 DEFAULT_SHAPE = (32, 32)
 # Use a large shape so statistical checks are meaningful
 STAT_SHAPE = (1024, 1024)
-# Bypass AutocastTensor's default HALF precision to get the original dtype
+# The value as stored, for the dtype checks
+NATIVE_PRECISION = ttml.autograd.PreferredPrecision.NATIVE
+# The value in fp32, for the shape, layout and value checks
 FULL_PRECISION = ttml.autograd.PreferredPrecision.FULL
 
 
@@ -56,10 +59,9 @@ def check_normal_distribution(data, expected_mean=0.0, expected_std=1.0, sigma_t
 class TestRandn:
     # --- default behaviour ---
 
-    @pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
     def test_randn_defaults(self):
         tensor = ttml.ops.randn(DEFAULT_SHAPE)
-        ttnn_tensor = tensor.get_value(precision=FULL_PRECISION)
+        ttnn_tensor = tensor.get_value(precision=NATIVE_PRECISION)
 
         assert ttnn_tensor.dtype == ttnn.DataType.BFLOAT16
         assert ttnn_tensor.layout == ttnn.Layout.TILE
@@ -78,10 +80,8 @@ class TestRandn:
 
     @pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
     def test_randn_dtype(self, dtype):
-        if dtype == ttnn.DataType.BFLOAT16:
-            pytest.skip("Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
         tensor = ttml.ops.randn(DEFAULT_SHAPE, dtype=dtype)
-        ttnn_tensor = tensor.get_value(precision=FULL_PRECISION)
+        ttnn_tensor = tensor.get_value(precision=NATIVE_PRECISION)
         assert ttnn_tensor.dtype == dtype
         assert tuple(ttnn_tensor.shape) == tuple(DEFAULT_SHAPE)
 
@@ -147,9 +147,26 @@ class TestRandn:
             ttnn.to_torch(t2.get_value(precision=FULL_PRECISION)),
         ), "Different seeds should produce different tensors"
 
+    # --- generator state (checkpoint resume) ---
+
+    def test_generator_state_roundtrip(self):
+        """Restoring the serialized generator state reproduces the RNG stream, not just the seed."""
+        ctx = ttml.autograd.AutoContext.get_instance()
+        ctx.set_seed(0)
+
+        state = ctx.get_generator_state()
+        assert isinstance(state, str) and state, "generator state should be a non-empty string"
+
+        a = ttml.ops.randn(DEFAULT_SHAPE, dtype=ttnn.DataType.FLOAT32).to_numpy(ttnn.DataType.FLOAT32)
+        assert ctx.get_generator_state() != state, "drawing from the generator should advance its state"
+
+        ctx.set_generator_state(state)
+        b = ttml.ops.randn(DEFAULT_SHAPE, dtype=ttnn.DataType.FLOAT32).to_numpy(ttnn.DataType.FLOAT32)
+        np.testing.assert_array_equal(a, b, err_msg="restored generator state should reproduce the same draw")
+
     # --- invalid args ---
 
-    def test_randn_invalid_args(self):
-        with pytest.raises(Exception):
+    def test_randn_invalid_args(self, expect_error):
+        with expect_error(RuntimeError, "stddev must be non-negative"):
             # negative std must be rejected
             ttml.ops.randn(DEFAULT_SHAPE, std=-1.0)

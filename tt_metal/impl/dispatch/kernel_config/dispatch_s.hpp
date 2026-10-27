@@ -7,7 +7,7 @@
 
 #include "fd_kernel.hpp"
 #include "impl/context/context_descriptor.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 
@@ -20,17 +20,20 @@ struct dispatch_s_static_config_t {
     std::optional<uint32_t> dispatch_s_sync_sem_base_addr;
 
     std::optional<uint32_t> mcast_go_signal_addr;
-    std::optional<uint32_t> unicast_go_signal_addr;
     std::optional<uint32_t> distributed_dispatcher;
     std::optional<uint32_t> first_stream_used;
+    std::optional<uint32_t> completion_counter_offset;
     std::optional<uint32_t> max_num_worker_sems;
-    std::optional<uint32_t> max_num_go_signal_noc_data_entries;
 
     // Dispatch-core-local L1 address of the realtime_profiler_msg_t block (includes the
     // program-id handoff FIFO consumed by this kernel). Assigned by DispatchMemMap via
     // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Must match the value passed to the
     // co-located DispatchKernel and to the RT-profiler core kernels.
     std::optional<uint32_t> realtime_profiler_msg_addr;
+
+    std::optional<uint32_t> dispatch_telemetry_addr;
+    std::optional<bool> dispatch_telemetry_disabled;
+    std::optional<uint32_t> dispatch_telemetry_control_addr;
 
     // Configuration for DEVICE_PRINT dispatch. Populated only when the dprint server
     // exists and dispatch_s_enabled() is true. enabled stays 0 otherwise and the kernel
@@ -67,7 +70,6 @@ public:
         dispatch_core_manager& dispatch_core_manager,
         const GetControlPlaneFn& get_control_plane = {},
         const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
-        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
 
     void CreateKernel() override;

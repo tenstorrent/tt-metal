@@ -11,13 +11,17 @@
 
 namespace ttnn::operations::ternary {
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec) {
     return tensor_spec.memory_config().shard_spec();
 }
 
-bool is_uneven(const TensorSpec& t) {
+bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (not t.memory_config().is_sharded()) {
         return false;
+    }
+    // An ND-sharded tensor has no 2D shard spec, so it cannot take the native L1 sharding path.
+    if (not get_shard_spec(t).has_value()) {
+        return true;
     }
     const auto& shape = t.padded_shape();
     const auto& shard = get_shard_spec(t)->shape;
@@ -29,8 +33,31 @@ bool is_uneven(const TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
 }
 
+static bool has_empty_shards(const tt::tt_metal::TensorSpec& t, const tt::tt_metal::MemoryConfig& c) {
+    using namespace tt::tt_metal;
+    if (not c.shard_spec().has_value()) {
+        return false;
+    }
+    const auto& shape = t.padded_shape();
+    const auto& spec = *c.shard_spec();
+    uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(shape.rank()) - 1; ++i) {
+        volume_except_last *= shape[i];
+    }
+    const uint64_t shards_h = (volume_except_last + spec.shape[0] - 1) / spec.shape[0];
+    const uint64_t shards_w = (shape[-1] + spec.shape[1] - 1) / spec.shape[1];
+    uint64_t num_shards = shards_h * shards_w;
+    if (c.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        num_shards = shards_h;
+    } else if (c.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        num_shards = shards_w;
+    }
+    return num_shards < spec.grid.num_cores();
+}
+
 // Check based on input specs and output memory config (two tensors, same shape and memory config).
-static bool is_native_L1_sharding(const TensorSpec& a, const TensorSpec& b, const tt::tt_metal::MemoryConfig& c) {
+static bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const tt::tt_metal::MemoryConfig& c) {
     using namespace tt::tt_metal;
     if (a.logical_shape() != b.logical_shape() || a.memory_config() != b.memory_config()) {
         return false;
@@ -60,16 +87,16 @@ static bool is_native_L1_sharding(const TensorSpec& a, const TensorSpec& b, cons
     if (b.memory_config().is_sharded() && b.memory_config().buffer_type() == BufferType::L1) {
         return true;
     }
-    if (c.is_sharded() && c.buffer_type() == BufferType::L1) {
+    if (c.is_sharded() && c.buffer_type() == BufferType::L1 && !has_empty_shards(a, c)) {
         return true;
     }
     return false;
 }
 
 bool is_native_L1_sharding(
-    const TensorSpec& predicate_spec,
-    const std::optional<TensorSpec>& true_spec,
-    const std::optional<TensorSpec>& false_spec,
+    const tt::tt_metal::TensorSpec& predicate_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& true_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& false_spec,
     const tt::tt_metal::MemoryConfig& output_memory_config) {
     using namespace tt::tt_metal;
     if (!output_memory_config.is_sharded()) {
@@ -125,7 +152,8 @@ bool is_native_L1_sharding(
         if (false_spec->memory_config().is_sharded() && false_spec->memory_config().buffer_type() == BufferType::L1) {
             return true;
         }
-        if (output_memory_config.buffer_type() == BufferType::L1) {
+        if (output_memory_config.buffer_type() == BufferType::L1 &&
+            !has_empty_shards(predicate_spec, output_memory_config)) {
             return true;
         }
     }
@@ -263,6 +291,53 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::SNAKE_BETA, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
      {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+
+    // TTT configurations for MAC - same kernels as LERP, different compute operation
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
+     {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::SCALAR_BCAST},
+     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    // TTT ROW_COL_BCAST for MAC
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
+
+    // TTS configurations for MAC (a * b + scalar) - reuse same kernels as WHERE/LERP TTS
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
+     {KernelName::ReaderColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::SCALAR_A_BCAST},
+     {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::SCALAR_B_BCAST},
+     {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+
+    // TST configurations for MAC (a * scalar + c) - reuse same kernels as WHERE/LERP TST
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::COL_BCAST},
+     {KernelName::ReaderColBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::SCALAR_A_BCAST},
+     {KernelName::ReaderScalarBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::SCALAR_B_BCAST},
+     {KernelName::ReaderScalarBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
 
     // TTS configurations for LERP
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
@@ -422,6 +497,16 @@ std::map<std::string, std::string> make_dataflow_defines(
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE"] = "fill_with_val<1024, uint32_t>";
+    } else if (dtype == DataType::BFLOAT8_B) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfp8";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfp8";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfp8";
+        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+    } else if (dtype == DataType::BFLOAT4_B) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfp4";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfp4";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfp4";
+        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
@@ -445,6 +530,16 @@ std::map<std::string, std::string> make_dataflow_defines(
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, uint32_t>";
+    } else if (b_dtype == DataType::BFLOAT8_B) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp8";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp8";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp8";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
+    } else if (b_dtype == DataType::BFLOAT4_B) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp4";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp4";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp4";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfloat16";
@@ -468,6 +563,16 @@ std::map<std::string, std::string> make_dataflow_defines(
             defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
             defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<uint32_t>";
             defines["FILL_WITH_VALUE_C"] = "fill_with_val<1024, uint32_t>";
+        } else if (c_dtype == DataType::BFLOAT8_B) {
+            defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column_bfp8";
+            defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row_bfp8";
+            defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element_bfp8";
+            defines["FILL_WITH_VALUE_C"] = "fill_with_val_bfloat16";
+        } else if (c_dtype == DataType::BFLOAT4_B) {
+            defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column_bfp4";
+            defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row_bfp4";
+            defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element_bfp4";
+            defines["FILL_WITH_VALUE_C"] = "fill_with_val_bfloat16";
         } else {
             defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column_bfloat16";
             defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row_bfloat16";
@@ -489,6 +594,8 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
                 defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Float32>";
             } else if (dtype == DataType::INT32) {
                 defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Int32>";
+            } else if (dtype == DataType::UINT32) {
+                defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::UInt32>";
             } else {
                 defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Float16_b>";
             }
@@ -512,6 +619,12 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
             defines["TERNARY_SFPU_OP_INIT"] = "snake_beta_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "snake_beta_tile<DataFormat::Float32>"
                                                                            : "snake_beta_tile<DataFormat::Float16_b>";
+            break;
+        case TernaryOpType::MAC:
+            defines["TERNARY_SFPU_OP_INIT"] = (dtype == DataType::FLOAT32) ? "mac_tile_init<DataFormat::Float32>"
+                                                                          : "mac_tile_init<DataFormat::Float16_b>";
+            defines["TERNARY_SFPU_OP_FUNC"] =
+                (dtype == DataType::FLOAT32) ? "mac_tile<DataFormat::Float32>" : "mac_tile<DataFormat::Float16_b>";
             break;
         default: TT_FATAL(false, "Unsupported ternary operation type");
     }
@@ -818,14 +931,13 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     uint32_t from_volume_except_width = 1;
     uint32_t to_volume_except_width = 1;
 
-    const int rank = std::max(from_shape.rank(), to_shape.rank());
-
-    // Accumulate all dimensions except the last
-    for (int i = 0; i < rank - 1; ++i) {
-        uint32_t from_dim = (i < from_shape.rank()) ? from_shape[i] : 1;
-        uint32_t to_dim = (i < to_shape.rank()) ? to_shape[i] : 1;
-        from_volume_except_width *= from_dim;
-        to_volume_except_width *= to_dim;
+    // Each shape over its own rank: the two can differ in rank, and a shared left-aligned loop would
+    // fold the shorter shape's width into its height volume.
+    for (int i = 0; i < static_cast<int>(from_shape.rank()) - 1; ++i) {
+        from_volume_except_width *= from_shape[i];
+    }
+    for (int i = 0; i < static_cast<int>(to_shape.rank()) - 1; ++i) {
+        to_volume_except_width *= to_shape[i];
     }
 
     // Get width dimensions

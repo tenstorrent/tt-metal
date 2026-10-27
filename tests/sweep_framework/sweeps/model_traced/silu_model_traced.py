@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
+from typing import Optional, Tuple
+
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -18,7 +21,11 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     reconcile_golden_to_actual,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_named_tensor_kwargs,
+    parse_dict_value,
+)
 
 TIMEOUT = 300
 
@@ -38,6 +45,31 @@ parameters = {
 
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+_DTYPE_BYTES = {"BFLOAT16": 2, "BFLOAT8_B": 1, "BFLOAT4_B": 1, "FLOAT32": 4, "UINT32": 4, "INT32": 4, "UINT16": 2}
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    # Trace-validation replicates a shard-placement tensor in full on every chip.
+    # A few video-model configs are ~1.09B elements (e.g. (21,1,407040,128)),
+    # which only fit when genuinely sharded 1/8 across the mesh; replicated per
+    # chip they need >2 GB and overflow device DRAM ("Out of Memory ... DRAM
+    # buffer"). Skip configs whose full tensor can't be replicated on one chip.
+    shp = test_vector.get("input_a_shape")
+    if isinstance(shp, str):
+        try:
+            shp = tuple(int(x) for x in shp.strip("()[] ").split(",") if x.strip())
+        except Exception:
+            return False, None
+    if not isinstance(shp, (list, tuple)) or not shp:
+        return False, None
+    numel = math.prod(int(d) for d in shp)
+    dt = str(test_vector.get("input_a_dtype", "")).rsplit(".", 1)[-1]
+    nbytes = numel * _DTYPE_BYTES.get(dt, 2)
+    if nbytes > 1_500_000_000:
+        return True, f"silu: full tensor {tuple(shp)} ({nbytes} B) exceeds per-chip DRAM when replicated for validation"
+    return False, None
 
 
 def mesh_device_fixture():
@@ -63,7 +95,14 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config, device=device)
+
+    # Forward an explicit memory_config kwarg when the master recorded one
+    # (build_op_kwargs handles output_memory_config but strips a bare
+    # memory_config; dropping it is a memory_config extra_key diff vs master).
+    _mc = kwargs.get("memory_config")
+    if "memory_config" not in op_kwargs and _mc is not None and _mc != "__ABSENT__":
+        op_kwargs["memory_config"] = parse_dict_value("memory_config", _mc) if isinstance(_mc, dict) else _mc
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -95,6 +134,34 @@ def run(
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+
+    # Reconstruct a pre-allocated output_tensor when the master passed one
+    # (in-place silu); dropping it is an output_tensor extra_key diff vs master.
+    output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
+    if output_tensor_info and output_tensor_info.get("shape"):
+        ot_shape = tuple(output_tensor_info["shape"])
+        ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
+        if isinstance(ot_dtype, dict):
+            ot_dtype = parse_dict_value("dtype", ot_dtype) or input_a_dtype
+        ot_layout = output_tensor_info.get("layout") or input_a_layout
+        if isinstance(ot_layout, dict):
+            ot_layout = parse_dict_value("layout", ot_layout) or input_a_layout
+        ot_mem_cfg_raw = output_tensor_info.get("memory_config")
+        ot_mem_cfg = (
+            parse_dict_value("memory_config", ot_mem_cfg_raw)
+            if isinstance(ot_mem_cfg_raw, dict)
+            else (ot_mem_cfg_raw or input_a_memory_config)
+        )
+        ot_placement = output_tensor_info.get("tensor_placement")
+        torch_out_alloc = torch.zeros(ot_shape, dtype=torch.float32)
+        if is_mesh_device and ot_placement:
+            op_kwargs["output_tensor"] = create_tensor_on_mesh(
+                torch_out_alloc, device, ot_dtype, ot_layout, ot_mem_cfg, ot_placement
+            )
+        elif not is_host:
+            op_kwargs["output_tensor"] = ttnn.from_torch(
+                torch_out_alloc, dtype=ot_dtype, layout=ot_layout, device=device, memory_config=ot_mem_cfg
+            )
 
     start_time = start_measuring_time()
     output_tensor = ttnn.silu(input_tensor_a, **op_kwargs)

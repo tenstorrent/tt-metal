@@ -6,9 +6,19 @@
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/eltwise_unary/addcdiv.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_copy_init.hpp"
+
+// Operands in c_0's formats share its copy init, which leaves the SFPU state the op init set, so the inits run once.
+#ifndef ARCH_QUASAR
+constexpr bool init_once =
+    !DST_ACCUM_MODE && copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
+#else
+constexpr bool init_once = false;
+#endif
 
 ALWI void process_tile(
     uint32_t cb_in0_id,
@@ -21,83 +31,88 @@ ALWI void process_tile(
     uint32_t scalar_arg) {
     using namespace ckernel;
 
-    CircularBuffer cb_in0(cb_in0_id);
-    CircularBuffer cb_in1(cb_in1_id);
-    CircularBuffer cb_in2(cb_in2_id);
-    CircularBuffer cb_out(cb_out_id);
+    DataflowBuffer dfb_in0(cb_in0_id);
+    DataflowBuffer dfb_in1(cb_in1_id);
+    DataflowBuffer dfb_in2(cb_in2_id);
+    DataflowBuffer dfb_out(cb_out_id);
 
     // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
 #if BCAST_A
-    cb_in0.wait_front(num_tiles_per_cycle);  // input_a is broadcast
+    dfb_in0.wait_front(num_tiles_per_cycle);  // input_a is broadcast
 #endif
 #if BCAST_B
-    cb_in1.wait_front(num_tiles_per_cycle);  // input_b is broadcast
+    dfb_in1.wait_front(num_tiles_per_cycle);  // input_b is broadcast
 #endif
 #if BCAST_C
-    cb_in2.wait_front(num_tiles_per_cycle);  // input_c is broadcast
+    dfb_in2.wait_front(num_tiles_per_cycle);  // input_c is broadcast
 #endif
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         // Wait for non-broadcast CBs inside loop
 #if !BCAST_A
-        cb_in0.wait_front(num_tiles_per_cycle);
+        dfb_in0.wait_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_B
-        cb_in1.wait_front(num_tiles_per_cycle);
+        dfb_in1.wait_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_C
-        cb_in2.wait_front(num_tiles_per_cycle);
+        dfb_in2.wait_front(num_tiles_per_cycle);
 #endif
 
-        cb_out.reserve_back(num_tiles_per_cycle);
+        dfb_out.reserve_back(num_tiles_per_cycle);
 
         tile_regs_acquire();
 
         // Load all three inputs into DST registers
-        copy_tile_init(cb_in0.get_cb_id());
-        copy_tile(cb_in0.get_cb_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
+        copy_init_unless<init_once>(dfb_in0.get_id());
+        copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_tile_init(cb_in1.get_cb_id());
-        copy_tile(cb_in1.get_cb_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
+        reconfig_data_format_srca(dfb_in0.get_id(), dfb_in1.get_id());
+        copy_init_unless<init_once>(dfb_in1.get_id());
+        copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_tile_init(cb_in2.get_cb_id());
-        copy_tile(cb_in2.get_cb_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
+        reconfig_data_format_srca(dfb_in1.get_id(), dfb_in2.get_id());
+        copy_init_unless<init_once>(dfb_in2.get_id());
+        copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
+        reconfig_data_format_srca(dfb_in2.get_id(), dfb_in0.get_id());
 
         // Use direct addcmul kernel: computes input_a + scalar_arg * input_b * input_c -> DST[0]
-        TERNARY_SFPU_OP_INIT();
+        if constexpr (!init_once) {
+            TERNARY_SFPU_OP_INIT();
+        }
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);
 
         tile_regs_commit();
         tile_regs_wait();
 
         // Pack the result from DST[0] to output
-        pack_tile(0, cb_out.get_cb_id());
+        pack_tile(0, dfb_out.get_id());
 
         tile_regs_release();
 
-        cb_out.push_back(num_tiles_per_cycle);
+        dfb_out.push_back(num_tiles_per_cycle);
 
         // Pop non-broadcast CBs inside loop
 #if !BCAST_A
-        cb_in0.pop_front(num_tiles_per_cycle);
+        dfb_in0.pop_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_B
-        cb_in1.pop_front(num_tiles_per_cycle);
+        dfb_in1.pop_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_C
-        cb_in2.pop_front(num_tiles_per_cycle);
+        dfb_in2.pop_front(num_tiles_per_cycle);
 #endif
     }
 
     // Pop broadcast CBs outside loop
 #if BCAST_A
-    cb_in0.pop_front(num_tiles_per_cycle);
+    dfb_in0.pop_front(num_tiles_per_cycle);
 #endif
 #if BCAST_B
-    cb_in1.pop_front(num_tiles_per_cycle);
+    dfb_in1.pop_front(num_tiles_per_cycle);
 #endif
 #if BCAST_C
-    cb_in2.pop_front(num_tiles_per_cycle);
+    dfb_in2.pop_front(num_tiles_per_cycle);
 #endif
 }
 
@@ -118,7 +133,11 @@ void kernel_main() {
     constexpr auto cb_in2_id = tt::CBIndex::c_2;  // input_c
     constexpr auto cb_out_id = tt::CBIndex::c_3;  // output
 
-    unary_op_init_common(cb_in0_id, cb_out_id);
+    compute_kernel_hw_startup(cb_in0_id, cb_out_id);
+    copy_init(cb_in0_id);
+    if constexpr (init_once) {
+        TERNARY_SFPU_OP_INIT();
+    }
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;

@@ -5,21 +5,107 @@ on:
     # Run every night at 3AM UTC
     - cron: '0 3 * * *'
   workflow_dispatch:
+    inputs:
+      architecture:
+        description: "Architecture to run performance tests on"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - wormhole
+          - blackhole
+          - quasar
+      pipeline:
+        description: "Label these runs as this pipeline: nightly, baseline or pr (blank = infer)"
+        required: false
+        default: ""
+        type: string
+      speed-of-light:
+        description: "Enable --speed-of-light for LLK performance tests"
+        required: false
+        default: true
+        type: boolean
+      upload-to-warehouse:
+        description: "Upload the run's Parquet to the perf warehouse over SFTP"
+        required: false
+        default: false
+        type: boolean
+      offload-compile:
+        description: "With shadow-compile-runner: the board measures the CPU build and does not compile"
+        required: false
+        default: false
+        type: boolean
+      debug-symbols:
+        description: "Build the ELFs with -g (the nightly builds without)"
+        required: false
+        default: false
+        type: boolean
+      shadow-compile-runner:
+        description: "Shadow compile on this CPU runner and compare (blank = off)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
+  actions: read
   checks: write
   contents: read
   packages: write
+  pull-requests: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
-    github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.architecture || 'all' }}-${{
+    github.ref_protected && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
   llk-perf-tests:
     name: "LLK perf tests"
     uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      # Scheduled runs have no dispatch inputs, so retain the existing behavior.
+      architecture: ${{ inputs.architecture || 'all' }}
+      # L1_CONGESTION is not gated and costs a fifth of the build.
+      perf-run-types: ALL_MODES
+      # A scheduled run is the nightly by definition; a manual run says so.
+      pipeline: ${{ github.event_name == 'schedule' && 'nightly' || inputs.pipeline }}
+      # Nightly runs always use speed-of-light; manual runs use the checkbox.
+      speed-of-light: ${{ github.event_name == 'schedule' || inputs.speed-of-light }}
+      debug-symbols: ${{ github.event_name != 'schedule' && inputs.debug-symbols }}
+      # Nightly runs always publish; manual runs use the checkbox.
+      upload-to-warehouse: ${{ github.event_name == 'schedule' || inputs.upload-to-warehouse }}
+      # Report-only shadow compile on CPU runners (#60901).
+      shadow-compile-runner: ${{ github.event_name == 'schedule' && 'tt-ubuntu-2204-xlarge-stable' || inputs.shadow-compile-runner }}
+      offload-compile: ${{ github.event_name == 'schedule' || inputs.offload-compile }}
+    secrets: inherit
+
+  gate:
+    name: "Gate ${{ matrix.arch }} (speed of light)"
+    needs: llk-perf-tests
+    if: ${{ !cancelled() && github.event_name == 'schedule' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: blackhole
+            threshold: 0.02
+            run_types: L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE,MATH_ISOLATE
+          - arch: wormhole
+            threshold: 0.03
+            module_thresholds: perf_matmul=0.10,perf_math_matmul=0.10
+            run_types: L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE
+    uses: ./.github/workflows/llk-perf-gate-impl.yaml
+    with:
+      arch: ${{ matrix.arch }}
+      baseline_pipeline: baseline
+      speed_of_light: "true"
+      run_types: ${{ matrix.run_types }}
+      threshold: ${{ matrix.threshold }}
+      min_cycles: 30
+      module_thresholds: ${{ matrix.module_thresholds }}
+      measure_result: ${{ needs.llk-perf-tests.result }}
+      fail_on_regression: false
     secrets: inherit
 
   llk-perf-summary:
@@ -27,7 +113,7 @@ jobs:
     if: always()
     needs:
       - llk-perf-tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Check perf test results
         uses: re-actors/alls-green@release/v1
@@ -36,7 +122,7 @@ jobs:
 
   report-status:
     name: "Report status"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: always()
     needs: llk-perf-summary
     steps:

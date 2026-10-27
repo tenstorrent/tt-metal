@@ -3,40 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     using namespace tt::constants;
-    uint32_t i = 0;
-    auto target_addr = get_arg_val<uint32_t>(i++);
-    auto weight_addr = get_arg_val<uint32_t>(i++);
-    auto ignore_index = static_cast<int32_t>(get_arg_val<uint32_t>(i++));
-    auto num_units_per_core = get_arg_val<uint32_t>(i++);
-    auto start_id = get_arg_val<uint32_t>(i++);
-    auto C = get_arg_val<uint32_t>(i++);
-    auto weight_num_tile = get_arg_val<uint32_t>(i++);
-    auto element_size = get_arg_val<uint32_t>(i++);
-    auto target_element_size = get_arg_val<uint32_t>(i++);
-
-    constexpr uint32_t cb_target = tt::CBIndex::c_0;
-    constexpr uint32_t cb_weight = tt::CBIndex::c_1;
-
-    constexpr uint32_t cb_output = tt::CBIndex::c_16;
+    auto ignore_index = static_cast<int32_t>(get_arg(args::ignore_index));
+    auto num_units_per_core = get_arg(args::num_units_per_core);
+    auto start_id = get_arg(args::start_id);
+    auto C = get_arg(args::C);
+    auto weight_num_tile = get_arg(args::weight_num_tile);
 
     // ublocks size defined in tiles
 
-    constexpr bool weight_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr auto target_args = TensorAccessorArgs<1>();
-    constexpr auto weight_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
+    constexpr bool weight_has_value = get_arg(args::weight_has_value) == 1;
 
-    const auto addrg_target = TensorAccessor(target_args, target_addr);
+    const auto addrg_target = TensorAccessor(tensor::target);
 
+    DataflowBuffer dfb_target_obj(dfb::target);
+    DataflowBuffer dfb_output_obj(dfb::output);
 #if defined(WEIGHT)
-    const uint32_t weight_tile_bytes = get_tile_size(cb_weight);
+    DataflowBuffer dfb_weight_obj(dfb::weight);
+    const uint32_t weight_tile_bytes = dfb_weight_obj.get_tile_size();
     auto weight_element_size = weight_tile_bytes / 1024;
-    const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
+    const auto addrg_weight = TensorAccessor(tensor::weight);
 #endif
 
     constexpr uint32_t onetile = 1;
@@ -48,22 +40,16 @@ void kernel_main() {
     const auto u16_one = uint16_t(one.u >> 16);
     const auto u16_zero = uint16_t(zero.u >> 16);
 
-    CircularBuffer cb_target_obj(cb_target);
-    CircularBuffer cb_output_obj(cb_output);
-#if defined(WEIGHT)
-    CircularBuffer cb_weight_obj(cb_weight);
-#endif
-
     uint32_t end_id = start_id + num_units_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
         uint32_t target_noc_id = i;
-        read_tile(cb_target, addrg_target, target_noc_id);
+        read_tile(dfb_target_obj, addrg_target, target_noc_id);
 
-        cb_output_obj.reserve_back(onetile);
-        cb_target_obj.wait_front(onetile);
+        dfb_output_obj.reserve_back(onetile);
+        dfb_target_obj.wait_front(onetile);
 
-        CoreLocalMem<volatile uint16_t> output_l1_ptr(cb_output_obj.get_write_ptr());
-        CoreLocalMem<volatile int32_t> target_l1_ptr(cb_target_obj.get_read_ptr());
+        CoreLocalMem<volatile uint16_t> output_l1_ptr(dfb_output_obj.get_write_ptr());
+        CoreLocalMem<volatile int32_t> target_l1_ptr(dfb_target_obj.get_read_ptr());
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
@@ -76,14 +62,14 @@ void kernel_main() {
 
                         uint32_t noc_id = target_idx / TILE_WIDTH;
                         uint32_t weight_tilized_idx = get_tilized_idx(0, target_idx);
-                        read_value(cb_weight, addrg_weight, noc_id, weight_tilized_idx);
+                        read_value(dfb_weight_obj, addrg_weight, noc_id, weight_tilized_idx);
 
-                        cb_weight_obj.wait_front(onetile);
-                        CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
+                        dfb_weight_obj.wait_front(onetile);
+                        CoreLocalMem<volatile uint16_t> weight_l1_ptr(dfb_weight_obj.get_read_ptr());
 
                         output_l1_ptr[inout_idx] = weight_l1_ptr[weight_tilized_idx];
 
-                        cb_weight_obj.pop_front(onetile);
+                        dfb_weight_obj.pop_front(onetile);
 #else
                         output_l1_ptr[inout_idx] = u16_one;
 #endif
@@ -95,8 +81,8 @@ void kernel_main() {
                 }
             }
         }
-        cb_output_obj.push_back(onetile);
+        dfb_output_obj.push_back(onetile);
 
-        cb_target_obj.pop_front(onetile);
+        dfb_target_obj.pop_front(onetile);
     }
 }

@@ -7,6 +7,7 @@
 #if defined(TT_UMD_BUILD_SIMULATION)
 
 #include "llrt/rtoptions.hpp"
+#include "impl/dispatch/host_device_transfer.hpp"
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/span.hpp>
@@ -34,11 +35,11 @@ bool is_direct_write_enabled(const DirectWriteGuard& guard, const void* src, con
 
 void write_shard(
     Buffer& shard_view, const void* src, const BufferRegion& region, const CoreRangeSet* logical_core_filter) {
-    auto payload = tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src), static_cast<size_t>(region.size));
+    auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src), static_cast<size_t>(region.size));
     if (logical_core_filter != nullptr) {
         experimental::core_subset_write::WriteToBuffer(shard_view, payload, *logical_core_filter);
     } else {
-        detail::WriteToBuffer(shard_view, payload);
+        slow_dispatch::WriteToBuffer(shard_view, payload);
     }
 }
 

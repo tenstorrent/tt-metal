@@ -41,23 +41,26 @@ struct DramSenderStateBlock {
     uint32_t num_receivers;
     uint32_t buffer_address;
     uint32_t fifo_size_per_receiver;
-    // Bank-local slab index of this sender's first receiver. Lets two DRISC cores split
-    // one bank's receiver set: the kernel reads slab (recv_index_base + r) for its local
-    // receiver r. 0 for a single sender / the first of a pair.
-    uint32_t recv_index_base;
     // ----- Followed in L1 by the receiver NOC XY table -----
     // 2 * num_receivers uint32s (x0, y0, x1, y1, ...), appended by the caller after
     // this struct's bytes since its length is dynamic; pointed to by receiver_noc_xy_ptr.
+    //
+    // (The per-receiver ring-index (g_r) rotation table that used to follow the NOC XY table is
+    // gone: the streaming rotation is now host-owned and carried per-tensor in the request page,
+    // not stamped into L1. So is this sender's bank-local slab base, which rides every layout slot
+    // of its request page. Nothing carries a set-wide receiver maximum any more -- an entry names
+    // its layout slot by byte offset. See tensor_prefetcher_request.hpp.)
 } __attribute__((packed));
 
-static_assert(sizeof(DramSenderStateBlock) == 11 * sizeof(uint32_t), "DramSenderStateBlock layout drift");
+static_assert(sizeof(DramSenderStateBlock) == 10 * sizeof(uint32_t), "DramSenderStateBlock layout drift");
 static_assert(
     offsetof(DramSenderStateBlock, is_sender) == 6 * sizeof(uint32_t),
     "config block must stay contiguous right after the loaded interface fields");
 
 // Total L1 footprint of one block: the fixed struct plus the variable-length
-// receiver NOC XY table.
-inline constexpr uint32_t dram_sender_state_block_size(uint32_t num_receivers) {
+// receiver NOC XY table (2 * num_receivers). The per-receiver g_r rotation table no
+// longer lives here (rotation is host-owned, carried in the request page).
+constexpr uint32_t dram_sender_state_block_size(uint32_t num_receivers) {
     return sizeof(DramSenderStateBlock) + 2u * num_receivers * sizeof(uint32_t);
 }
 

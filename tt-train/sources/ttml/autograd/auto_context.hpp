@@ -7,6 +7,7 @@
 #include <core/ttnn_all_includes.hpp>
 #include <memory>
 #include <random>
+#include <string>
 
 #include "core/distributed/ccl_resources.hpp"
 #include "core/distributed/socket_manager.hpp"
@@ -79,6 +80,9 @@ public:
 
     std::mt19937& get_generator();
     void set_generator(const std::mt19937& generator);
+
+    [[nodiscard]] std::string get_generator_state() const;
+    void set_generator_state(const std::string& state);
 
     void set_seed(uint32_t seed);
 

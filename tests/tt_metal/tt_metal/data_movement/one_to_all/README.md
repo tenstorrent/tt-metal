@@ -3,7 +3,7 @@
 This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions from one master core to all subordinate cores.
 
 ## Mesh Device API Support
-This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `GenericMeshDeviceFixture` and run on single-device unit meshes.
+This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `UnitMeshFastDispatchFixture` and run on single-device unit meshes.
 
 **Note**: The Mesh Device API only supports fast dispatch mode internally and does not support slow dispatch mode. This provides optimal performance for data movement operations.
 
@@ -54,7 +54,7 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
    - Support for linked/chained transactions
    - Support for loopback operations
 
-3. **Advanced Multicast Schemes**: Tests different multicast implementation strategies for optimal performance across various grid sizes and communication patterns.
+3. **Advanced Multicast Schemes**: Tests different multicast implementation strategies for optimal performance across various grid sizes and communication patterns. A description of the multicast schemes tested can be found [here](https://github.com/tenstorrent/tt-low-level-documentation/blob/main/data_movement_doc/multicast_schemes/Multicast%20Schemes.md).
 
 ## Device 2.0 API Tests
 This test suite now includes tests using the new device 2.0 NOC API. These tests provide the same functionality as the original tests but use an updated API design.
@@ -75,4 +75,4 @@ The semaphore-based tests use additional kernels for sender-receiver synchroniza
 Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as a validation and performance comparison for the new API.
 
 ## Quasar Notes
-`TensixDataMovementOneToAllUnicastDirectedIdeal` includes a Quasar-specific code path inside `GenericMeshDeviceFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1`, the Quasar simulator, and a grid with at least 2 columns (e.g. `emu-quasar-2x3`).
+`TensixDataMovementOneToAllUnicastDirectedIdeal` includes a Quasar-specific code path inside `UnitMeshFastDispatchFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1`, the Quasar simulator, and a grid with at least 2 columns (e.g. `emu-quasar-2x3`).

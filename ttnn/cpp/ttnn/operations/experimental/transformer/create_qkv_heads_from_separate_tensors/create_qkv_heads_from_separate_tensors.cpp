@@ -19,6 +19,15 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> create_qkv_heads_from_separ
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::array<Tensor, 3>>& optional_output_tensors) {
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_q_heads);
+    TT_FATAL(num_q_heads > 0, "num_q_heads must be greater than 0");
+    TT_FATAL(num_kv_heads_val > 0, "num_kv_heads must be greater than 0");
+    // Every head takes at least one column; this bound also keeps the device check's `2 * num_kv_heads` from
+    // wrapping to 0.
+    TT_FATAL(
+        2 * uint64_t{num_kv_heads_val} <= input_tensor_kv.padded_shape()[3],
+        "2 * num_kv_heads ({}) exceeds the KV hidden dimension ({})",
+        num_kv_heads_val,
+        input_tensor_kv.padded_shape()[3]);
     TT_FATAL(
         input_tensor_q.padded_shape()[3] % num_q_heads == 0,
         "Flattened Q hidden dimension {} must be a multiple of Q heads {}",

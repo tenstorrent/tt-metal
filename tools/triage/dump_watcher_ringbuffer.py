@@ -5,11 +5,15 @@
 
 """
 Usage:
-    dump_watcher_ringbuffer
+    dump_watcher_ringbuffer [--skip-watcher-enabled-check]
+
+Options:
+    --skip-watcher-enabled-check  Dump the ring buffer without checking whether watcher was enabled in the run.
 
 Description:
     Dump watcher ring buffer contents for all cores, skipping cores with empty buffers. This ringbuffer can be written
     into by using the WATCHER_RING_BUFFER_PUSH macro in a kernel.
+    Skipped by default when watcher was not enabled; use --skip-watcher-enabled-check to run anyway.
 
 Owner:
     jbaumanTT
@@ -20,7 +24,9 @@ from triage import ScriptConfig, triage_field, run_script
 from run_checks import run as get_run_checks, RunChecks
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
+from configuration_provider import run as get_configuration
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.hardware.risc_debug import RiscLocation
 from ttexalens.context import Context
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
@@ -37,22 +43,21 @@ class DumpRingBufferData:
 
 
 def read_ring_buffer(
-    location: OnChipCoordinate,
+    risc_location: RiscLocation,
     block_type: str,
-    risc_name: str,
     dispatcher_data: DispatcherData,
     elf_cache: ElfsCache,
 ):
     """Read watcher ring buffer for the core. Returns None if ring buffer is empty or unreadable."""
     try:
-        fw_path = dispatcher_data.get_cached_core_data(location, risc_name).firmware_path
+        fw_path = dispatcher_data.get_cached_core_data(risc_location).firmware_path
     except TimeoutDeviceRegisterError:
         raise
     except Exception:
         return None
 
     fw_elf = elf_cache[fw_path]
-    mailboxes = dispatcher_data.get_cached_core_data(location, risc_name).mailboxes
+    mailboxes = dispatcher_data.get_cached_core_data(risc_location).mailboxes
     assert mailboxes is not None, "mailboxes could not be read for this core"
 
     current_ptr = int(mailboxes.watcher.debug_ring_buf.current_ptr)
@@ -98,16 +103,21 @@ def read_ring_buffer_for_block(
     except Exception:
         return None
 
-    risc_name = location.noc_block.risc_names[0]
+    risc_location = location.noc_block.all_riscs[0].risc_location
 
-    if not dispatcher_data.risc_enabled(risc_name):
+    if not dispatcher_data.risc_enabled(risc_location.risc_name):
         return None
 
-    return read_ring_buffer(location, block_type, risc_name, dispatcher_data, elf_cache)
+    return read_ring_buffer(risc_location, block_type, dispatcher_data, elf_cache)
 
 
 def run(args, context: Context):
     """Entry point for triage framework."""
+    if not args["--skip-watcher-enabled-check"]:
+        config = get_configuration(args, context)
+        if not config.get_bool("watcher_enabled"):
+            return None
+
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)

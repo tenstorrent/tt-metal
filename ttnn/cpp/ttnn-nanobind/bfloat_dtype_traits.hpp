@@ -26,7 +26,7 @@ struct dtype_traits<::bfloat16> {
 };
 
 template <>
-struct dtype_traits<tt::tt_metal::tensor_impl::bfloat8_b> {
+struct dtype_traits<ttnn::tensor_impl::bfloat8_b> {
     static constexpr dlpack::dtype value{
         static_cast<std::uint8_t>(nanobind::dlpack::dtype_code::Bfloat),  // type code
         8,                                                                // size in bits
@@ -36,7 +36,7 @@ struct dtype_traits<tt::tt_metal::tensor_impl::bfloat8_b> {
 };
 
 template <>
-struct dtype_traits<tt::tt_metal::tensor_impl::bfloat4_b> {
+struct dtype_traits<ttnn::tensor_impl::bfloat4_b> {
     static constexpr dlpack::dtype value{
         static_cast<std::uint8_t>(nanobind::dlpack::dtype_code::Bfloat),  // type code
         4,                                                                // size in bits

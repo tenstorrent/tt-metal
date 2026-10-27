@@ -119,7 +119,7 @@ void PadDeviceOperation::validate_on_program_cache_miss(
     auto padded_rank = input_tensor.padded_shape().rank();
     TT_FATAL(logical_rank == padded_rank, "ttnn.pad: logical and padded shapes must have the same rank");
     TT_FATAL(input_tensor.logical_shape().rank() <= 4, "ttnn.pad: input tensor rank currently must be 4 or less");
-    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operand to pad needs to be on device!");
+    TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
     TT_FATAL(
         input_tensor.layout() == tt::tt_metal::Layout::TILE || input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
@@ -210,10 +210,10 @@ void PadDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-ttnn::TensorSpec PadDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec PadDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         operation_attributes.output_logical_shape,
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),

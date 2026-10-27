@@ -146,7 +146,7 @@ In the previous example (DRAM loopback), we used a single kernel to perform the 
         program,
         "eltwise_binary/kernels/compute/tiles_add.cpp",
         core,
-        ComputeConfig{.math_fidelity = MathFidelity::HiFi4});
+        ComputeConfig{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4});
 
 Notice the ``ComputeConfig`` object. This indicates to the framework that a compute kernel should be created. There's a plethora of settings that can be set here. The most important one is the ``math_fidelity`` setting. This controls how accurate certain floating point operations are on the FPU specifically. Other operations (like the ones in the vector engine) are _not_ affected by this setting.
 
@@ -202,8 +202,8 @@ The compute kernel performs the actual elementwise addition. It initializes the 
 
         constexpr uint32_t dst_reg_id = 0;
 
-        binary_op_init_common(cb_in0, cb_in1, cb_out0);
-        add_tiles_init(cb_in0, cb_in1);
+        compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
+        add_init(cb_in0, cb_in1);
 
         // Loop over all the tiles and perform the computation
         for (uint32_t i = 0; i < n_tiles; i++) {

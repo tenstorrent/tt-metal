@@ -5,8 +5,10 @@
 """Configuration classes for transformer training."""
 import os
 import yaml
+from dataclasses import dataclass
 from typing import Union
 from ttml.common.utils import get_tt_metal_runtime_root
+from ttml.fsdp import _compile_replicate_patterns
 
 
 class DeviceConfig:
@@ -28,7 +30,22 @@ class DeviceConfig:
         self.device_ids = device_config.get("device_ids", None)
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
+        # MoE expert-parallel axis index in `mesh_shape`. -1 (default)
+        # disables MoE-only EP; 0/1/... selects which mesh axis to partition the
+        # MoE experts across. The axis is registered on the mesh under the name
+        # "moe_ep" and is used by sparse_ep (SparseMoEEP).
+        self.moe_axis = int(device_config.get("moe_axis", -1))
         self.enable_fsdp = device_config.get("enable_fsdp", False)
+        # Defaults to True: build as deferred metadata -> fully_shard -> materialize already-sharded,
+        # so large models (e.g. 32B) never materialize a full replicated copy on one chip.
+        # Set to false to opt into the eager (full-replicated, then shard) path.
+        self.lazy_parameter_init = device_config.get("lazy_parameter_init", True)
+        # Regex patterns of parameters FSDP keeps replicated, passed to ``fully_shard(replicate=...)``.
+        # Validated here so a bad pattern fails at config load.
+        replicate = device_config.get("fsdp_replicate_params")
+        replicate = [] if replicate is None else replicate
+        _compile_replicate_patterns(replicate, what="device_config.fsdp_replicate_params")
+        self.fsdp_replicate_params = list(replicate)
 
     def total_devices(self) -> int:
         """Get total number of devices in mesh.
@@ -116,28 +133,38 @@ class TransformerConfig:
             self.low_freq_factor = self.rope.get("low_freq_factor", None)
             self.original_context_length = self.rope.get("original_context_length", None)
 
+        # Qwen3-specific
+        self.head_dim = tc.get("head_dim", None)
 
-class SchedulerConfig:
+
+@dataclass
+class SpeedrunSchedulerConfig:
     """Configuration for learning rate scheduler."""
 
-    def __init__(self, yaml_config: dict):
-        """Initialize scheduler configuration from YAML config.
+    max_lr: float = 0.001
+    min_lr: float = 0.0
+    warmup_steps: int = 100
+    hold_steps: int = 0
+    total_steps: int = 1000
+    # optional momentum warmup (beta1 ramp)
+    beta1_start: float = 0.85
+    beta1_end: float = 0.95
+    beta1_warmup_steps: int = 0
 
-        Args:
-            yaml_config: Dictionary containing configuration
-        """
+    @classmethod
+    def from_yaml(cls, yaml_config: dict) -> "SpeedrunSchedulerConfig":
         sc = yaml_config.get("scheduler_config", {})
         tc = yaml_config.get("training_config", {})
-        self.max_lr = float(sc.get("max_lr", 0.001))
-        self.min_lr = float(sc.get("min_lr", 0.0))
-        self.warmup_steps = int(sc.get("warmup_steps", 100))
-        self.hold_steps = int(sc.get("hold_steps", 0))
-        self.total_steps = int(tc.get("total_steps", 1000))
-
-        # optional momentum warmup (beta1 ramp)
-        self.beta1_start = float(sc.get("beta1_start", 0.85))
-        self.beta1_end = float(sc.get("beta1_end", 0.95))
-        self.beta1_warmup_steps = int(sc.get("beta1_warmup_steps", 0))
+        return cls(
+            max_lr=float(sc.get("max_lr", 0.001)),
+            min_lr=float(sc.get("min_lr", 0.0)),
+            warmup_steps=int(sc.get("warmup_steps", 100)),
+            hold_steps=int(sc.get("hold_steps", 0)),
+            total_steps=int(tc.get("total_steps", 1000)),
+            beta1_start=float(sc.get("beta1_start", 0.85)),
+            beta1_end=float(sc.get("beta1_end", 0.95)),
+            beta1_warmup_steps=int(sc.get("beta1_warmup_steps", 0)),
+        )
 
 
 class PipelineParallelHostConfig:
@@ -265,15 +292,10 @@ def get_model_config(
     return model_config
 
 
-def get_multihost_config(
-    multihost_config_src: str,
-    configs_root: str = None,
-) -> MultiHostConfig:
-    """Load multihost configuration given its filename."""
-    if configs_root is None:
-        configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/multihost_configs/"
-
-    multihost_config = load_config(multihost_config_src, configs_root)
-    multihost_config = MultiHostConfig(multihost_config)
-
-    return multihost_config
+def resolve_multihost_config(yaml_config: dict) -> MultiHostConfig:
+    """Multihost config of a full training config: the YAML that ``training_config.multihost_config`` points to,
+    or an empty (disabled) config if it is not set."""
+    tc = yaml_config.get("training_config", {})
+    if "multihost_config" in tc:
+        return MultiHostConfig(load_config(tc["multihost_config"]))
+    return MultiHostConfig({})

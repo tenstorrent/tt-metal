@@ -312,17 +312,17 @@ def test_all_to_all_dispatch_quad_host_mesh(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 500000,
+            "trace_region_size": 7500000,
         },
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 500000,
+            "trace_region_size": 750000,
         },
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "trace_region_size": 500000,
+            "trace_region_size": 750000,
         },
     ],
     ids=["fabric_1d_line", "fabric_1d_ring", "fabric_2d"],
@@ -339,14 +339,8 @@ def test_all_to_all_dispatch_quad_host_mesh(
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
-    [
-        (2, 40, 10),
-        # (128, 10, 5) #32564
-    ],
-    ids=[
-        "decode",
-        # "prefill"
-    ],
+    [(2, 40, 10), (128, 10, 5)],
+    ids=["decode", "prefill"],
 )
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("topology", [None])
@@ -421,14 +415,8 @@ def test_all_to_all_dispatch_trace(
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
-    [
-        (1, 40, 10),
-        # (128, 10, 5) #32564
-    ],
-    ids=[
-        "decode",
-        # "prefill"
-    ],
+    [(1, 40, 10)],
+    ids=["decode"],
 )
 @pytest.mark.parametrize("num_links", [4])
 @pytest.mark.parametrize("topology", [None])
@@ -535,7 +523,6 @@ def test_prefill_perf(
     input_memory_config,
     output_memory_config,
 ):
-    pytest.skip("Issue 32564")
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
     else:

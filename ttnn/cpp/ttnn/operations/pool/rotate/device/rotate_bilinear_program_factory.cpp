@@ -49,7 +49,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
 
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::tt_metal::IDevice* const device = output_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* const device = output_tensor.device();
 
     const auto& input_shape = input_tensor.padded_shape();
     const auto& output_shape = output_tensor.padded_shape();
@@ -361,10 +361,10 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             start_stick_id = sticks_processed;
         }
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                input_tensor.buffer()->address(),
+            {
+                input_tensor.buffer(),
                 num_sticks,
                 start_stick_id,
                 static_cast<uint32_t>(cos_angle_q16),
@@ -375,10 +375,10 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             });
 
         if (!any_sharded && writer_desc.has_value()) {
-            writer_desc->runtime_args.emplace_back(
+            writer_desc->emplace_runtime_args(
                 core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    output_tensor.buffer()->address(),
+                {
+                    output_tensor.buffer(),
                     num_sticks,
                     start_stick_id,
                 });

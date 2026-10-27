@@ -5,9 +5,10 @@ import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import PerfRunType, Transpose
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
@@ -17,7 +18,7 @@ from helpers.test_variant_parameters import (
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
-        [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Int32],
+        [DataFormat.Bfp8_b, DataFormat.Float16_b, DataFormat.Int32],
     ),
     unpack_transpose_faces=[Transpose.No, Transpose.Yes],
     unpack_transpose_within_face=[Transpose.No, Transpose.Yes],
@@ -42,10 +43,10 @@ def test_perf_unpack_transpose(
         ):
             pytest.skip("Transpose not supported for Int32")
 
-    # Packer: Bfp8_b and Float16 cannot convert to Int32 in this test matrix.
+    # Packer: Bfp8_b and Float16_b cannot convert to Int32 in this test matrix.
     if formats.output_format == DataFormat.Int32 and formats.input_format in [
         DataFormat.Bfp8_b,
-        DataFormat.Float16,
+        DataFormat.Float16_b,
     ]:
         pytest.skip(
             f"{formats.input_format.name} -> Int32 conversion not supported (packer limitation)"
@@ -70,6 +71,7 @@ def test_perf_unpack_transpose(
             TILE_COUNT(tile_count),
             UNPACK_TRANS_FACES(unpack_transpose_faces),
             UNPACK_TRANS_WITHIN_FACE(unpack_transpose_within_face),
+            LOOP_FACTOR(32),
         ],
         variant_stimuli=StimuliConfig(
             None,

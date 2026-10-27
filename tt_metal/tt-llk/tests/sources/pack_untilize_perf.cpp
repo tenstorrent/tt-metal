@@ -49,7 +49,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0, 0, FACE_R_DIM, 4, formats.unpack_A_src, formats.unpack_A_dst);
+            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
@@ -210,22 +210,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
                 }
             }
-            PROFILER_SYNC();
-            return;
         }
-
-        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+        else
         {
-            for (std::uint32_t i = 0; i < TILE_CNT; i += BLOCK_CT_DIM)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_packer_wait_for_math_done_();
-                _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(
-                    PERF_ADDRESS(PERF_OUTPUT, i), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
-                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                for (std::uint32_t i = 0; i < TILE_CNT; i += BLOCK_CT_DIM)
+                {
+                    _llk_packer_wait_for_math_done_();
+                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(
+                        PERF_ADDRESS(PERF_OUTPUT, i), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
+                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                }
             }
         }
         PROFILER_SYNC();
     }
+
+    _llk_pack_untilize_uninit_wrapper_(formats.pack_src, FACE_R_DIM);
 }
 
 #endif

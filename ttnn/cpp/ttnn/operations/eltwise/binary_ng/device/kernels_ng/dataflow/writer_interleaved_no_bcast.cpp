@@ -6,8 +6,11 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#if COL_GROUP_B
+#include "ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/col_group_walk.hpp"
+#endif
 
 void kernel_main() {
     uint32_t index = 0;
@@ -27,11 +30,11 @@ void kernel_main() {
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
 
     Noc noc;
-    CircularBuffer cb_dst(cb_id_dst);
+    DataflowBuffer dfb_dst(cb_id_dst);
 
 #if !DST_SHARDED
     constexpr auto dst_args = TensorAccessorArgs<0, 0>();
-    const uint32_t dst_tile_bytes = cb_dst.get_tile_size();
+    const uint32_t dst_tile_bytes = dfb_dst.get_entry_size();
     const auto dst = TensorAccessor(dst_args, dst_addr);
 #endif
 
@@ -54,6 +57,25 @@ void kernel_main() {
     uint32_t start_tw = offset_c % Wt;
     uint32_t end_tw = has_sharding ? start_tw + dst_shard_width : Wt;
 
+#if COL_GROUP_B
+    // Same column-group order as the reader; 0 = page order.
+    const uint32_t group = get_arg_val<uint32_t>(10);
+    if (group != 0) {
+        uint32_t channel_base = start_tile_id / HtWt * HtWt;
+        ColGroupWalk walk(start_tile_id % HtWt, Ht, Wt, group);
+        for (uint32_t i = 0; i < dst_num_tiles; ++i) {
+            dfb_dst.wait_front(onetile);
+            noc.async_write(dfb_dst, dst, dst_tile_bytes, {}, {.page_id = channel_base + walk.th * Wt + walk.tw()});
+            // Full barrier per tile: with many writes in flight, cores far from DRAM fall behind.
+            noc.async_write_barrier();
+            dfb_dst.pop_front(onetile);
+            if (walk.next()) {
+                channel_base += HtWt;
+            }
+        }
+        return;
+    }
+#endif
     uint32_t num_tiles_written = 0;
     uint32_t dst_tile_offset = start_tile_id;
 
@@ -66,11 +88,11 @@ void kernel_main() {
                              ++tw, ++num_tiles_written) {
 #if !DST_SHARDED
                             //  write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
-                            cb_dst.wait_front(onetile);
+                            dfb_dst.wait_front(onetile);
                             noc.async_write(
-                                cb_dst, dst, dst_tile_bytes, {}, {.page_id = dst_tile_offset + num_tiles_written});
+                                dfb_dst, dst, dst_tile_bytes, {}, {.page_id = dst_tile_offset + num_tiles_written});
                             noc.async_write_barrier();
-                            cb_dst.pop_front(onetile);
+                            dfb_dst.pop_front(onetile);
 #endif
                         }
                         if constexpr (has_sharding) {

@@ -97,7 +97,7 @@ ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
 }
 
 std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
-    tt::ARCH, const DeviceComputeKernelConfig compute_kernel_config) {
+    tt::ARCH, const DeviceComputeKernelConfig& compute_kernel_config) {
     return std::make_tuple(
         compute_kernel_config.math_fidelity,
         compute_kernel_config.math_approx_mode,
@@ -107,11 +107,21 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 }
 
 tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(const ComputeKernelConfig& config) {
+    // Translate the universal TTNN ComputeKernelConfig (legacy scalar vocabulary) into the
+    // Metal 2.0 vocabulary. Two representation changes are worth calling out:
+    //   - double_buffer_dest is the logical inverse of the legacy dst_full_sync_en.
+    //   - the approximate/precise bool becomes a Precision enum.
+    const tt::tt_metal::Precision sfpu_precision_mode =
+        config.math_approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise;
+
     return tt::tt_metal::experimental::ComputeHardwareConfig{
-        .math_fidelity = config.math_fidelity,
-        .fp32_dest_acc_en = config.fp32_dest_acc_en,
-        .dst_full_sync_en = config.dst_full_sync_en,
-        .math_approx_mode = config.math_approx_mode,
+        .fpu_math_fidelity = config.math_fidelity,
+        .sfpu_precision_mode = sfpu_precision_mode,
+        .enable_32_bit_dest = config.fp32_dest_acc_en,
+        .double_buffer_dest = !config.dst_full_sync_en,
+        // Per-DFB unpack_modes is left default for the program factory to set.
+        // bfp_pack_precision_mode is left default (Approximate). Unused on 2xx.
+        .config_1xx = tt::tt_metal::experimental::ComputeHardwareConfig::Compute1XXConfig{},
     };
 }
 

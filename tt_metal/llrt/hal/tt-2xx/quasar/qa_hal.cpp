@@ -2,12 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <filesystem>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <enchantum/enchantum.hpp>
 #include <numeric>
+#include <optional>
 #include <string>
+#include <string_view>
 
+#include "quasar/qa_att_windows.hpp"
 #include "quasar/qa_hal.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
@@ -15,9 +20,9 @@
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
+#include "rtoptions.hpp"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
-#include "overlay/meta/registers/overlay_reg_defines_core.h"
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 
@@ -91,28 +96,65 @@ public:
     using HalJitBuildQueryBase::HalJitBuildQueryBase;
     std::string linker_flags(const Params& params) const override {
         std::string flags;
+        // Quasar XIP (QuasarDataMovementKernel::read_binaries -> ElfFile::Impl::XIPify) pairs each
+        // R_RISCV_HI20 with its R_RISCV_LO12 and throws "HI20 has no matching LO12" if it can't.
+        // Linker relaxation can orphan a crt0 TLS-init __tdata_lma HI20 (its LO12 lands past a JAL in a
+        // different basic block), which trips that check on essentially every kernel. Disable linker
+        // relaxation so HI20/LO12 stay paired/adjacent. The assembler still emits R_RISCV_RELAX relocs
+        // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
+        flags += "-Wl,--no-relax ";
         if (params.processor_class == HalProcessorClassType::DM) {
+            const DeviceAddr dm_global_base = params.core_type == HalProgrammableCoreType::DISPATCH
+                                                  ? MEM_DISPATCH_DM_GLOBAL_BASE
+                                                  : MEM_DM_GLOBAL_BASE;
+            const DeviceAddr dm_local_base =
+                params.core_type == HalProgrammableCoreType::DISPATCH ? MEM_DISPATCH_DM_LOCAL_BASE : MEM_DM_LOCAL_BASE;
+            const DeviceAddr dm_local_size =
+                params.core_type == HalProgrammableCoreType::DISPATCH ? MEM_DISPATCH_DM_LOCAL_SIZE : MEM_DM_LOCAL_SIZE;
             if (params.is_fw) {
-                flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_DM_FIRMWARE_BASE);
+                const DeviceAddr dm_firmware_base = params.core_type == HalProgrammableCoreType::DISPATCH
+                                                        ? MEM_DISPATCH_DM_FIRMWARE_BASE
+                                                        : MEM_DM_FIRMWARE_BASE;
+                flags += fmt::format("-Wl,--defsym=__fw_text={} ", dm_firmware_base);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_FIRMWARE_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__fw_data={} ", dm_global_base);
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", dm_local_base);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", dm_local_size);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
-                flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", dm_local_base);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", dm_local_size);
             } else {
-                flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
+                DeviceAddr kn_text = MEM_KERNEL_BASE;
+                if (params.core_type == HalProgrammableCoreType::DISPATCH) {
+                    static constexpr DeviceAddr dispatch_dm_kernel_bases[] = {
+                        MEM_DISPATCH_DM0_KERNEL_BASE,
+                        MEM_DISPATCH_DM1_KERNEL_BASE,
+                        MEM_DISPATCH_DM2_KERNEL_BASE,
+                        MEM_DISPATCH_DM3_KERNEL_BASE,
+                        MEM_DISPATCH_DM4_KERNEL_BASE,
+                        MEM_DISPATCH_DM5_KERNEL_BASE,
+                        MEM_DISPATCH_DM6_KERNEL_BASE,
+                        MEM_DISPATCH_DM7_KERNEL_BASE,
+                    };
+                    static_assert(std::size(dispatch_dm_kernel_bases) == NUM_DM_CORES);
+                    if (params.processor_id >= NUM_DM_CORES) {
+                        TT_THROW("Invalid dispatch DM processor id {}", params.processor_id);
+                    }
+                    kn_text = dispatch_dm_kernel_bases[params.processor_id];
+                }
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", kn_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__kn_data={} ", MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
+                flags += fmt::format("-Wl,--defsym=__fw_data={} ", dm_global_base);
+                flags += fmt::format(
+                    "-Wl,--defsym=__kn_data={} ",
+                    dm_global_base + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", dm_local_base);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", dm_local_size);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
-                flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", dm_local_base);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", dm_local_size);
             }
         } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
             if (params.is_fw) {
@@ -234,6 +276,8 @@ public:
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        // Upper bound: crt0-tls.o, crt0.o, noc.o and substitutes.o.
+        objs.reserve(4);
         std::string_view cpu = params.processor_class == HalProcessorClassType::DM ? "tt-qsr64" : "tt-qsr32";
         std::string_view dir = "runtime/hw/lib/quasar";
         objs.push_back(fmt::format("{}/{}-crt0-tls.o", dir, cpu));
@@ -253,8 +297,21 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
+        // Upper bound: 11 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(14);
 
         // Common includes for all core types
+        // A Quasar IP variant's LLK headers go first so they shadow the base ones under tt_llk_quasar.
+        auto variant = hal_.quasar_arch_variant_;
+        const std::string lower_variant = [&]() {
+            std::string result = std::string(enchantum::to_string(variant));
+            std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+            return result;
+        }();
+        const std::string variant_llk_dir = "tt_metal/tt-llk/tt_llk_quasar/arch/" + lower_variant;
+        if (std::filesystem::is_directory(params.rtoptions.get_root_dir() + variant_llk_dir)) {
+            includes.push_back(variant_llk_dir);
+        }
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
         includes.push_back("tt_metal/hw/inc/internal");
@@ -262,6 +319,13 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
+        if (variant == IpVariant::GRENDEL) {
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
+        } else if (variant == IpVariant::HORIZON) {
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
+        } else if (variant == IpVariant::TRINITY) {
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.2/meta");
+        }
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/llk_lib");
@@ -281,6 +345,12 @@ public:
                 break;
             }
             case HalProgrammableCoreType::IDLE_ETH: break;
+            case HalProgrammableCoreType::DISPATCH:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::DM: break;
+                    case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
+                }
+                break;
             default:
                 TT_THROW(
                     "Unsupported programmable core type {} to query includes", enchantum::to_string(params.core_type));
@@ -292,6 +362,39 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
+        // emulation by the same .so test.
+        if (params.rtoptions.get_simulator_path().extension() == ".so") {
+            defines.push_back("TT_METAL_TTSIM");
+        }
+        // The map comes from RunTimeOptions (TT_METAL_NOC_ATT, or the qsr.s1 default MetalEnvImpl
+        // installs) and is fixed for the process, so the firmware and kernel builds see the same map.
+        if (const std::optional<std::string_view> att_map = params.rtoptions.get_noc_att_map();
+            att_map.has_value()) {
+            // ATT enabled => the ATT backend and the V3 API everywhere, one map
+            // per build. The defines reach the JIT build key through the
+            // define hash, so toggling can never reuse stale binaries.
+            const quasar_att::MapInfo* map_info = quasar_att::find_map(*att_map);
+            if (map_info == nullptr) {
+                TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected {})", *att_map, quasar_att::KNOWN_MAP_NAMES);
+            }
+            defines.push_back(std::string(map_info->config_define));
+            // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
+            // reject non-DRAM-backed CQs at compile time). The watcher, including its
+            // NoC sanitizer, runs under ATT: the sanitizer classifies operands through
+            // the map (debug/sanitize.h) instead of decoding XY fields.
+            defines.push_back("NOC_ATT_ENABLED");
+            defines.push_back("NOC_API_V3");
+            static const bool att_program_for_test = std::getenv("TT_METAL_ATT_PROGRAM_FOR_TEST") != nullptr;
+            if (params.is_fw && att_program_for_test) {
+                // Firmware-only bring-up hook: replay the generated ATT image
+                // during noc_init on targets whose boot leaves the tables
+                // unprogrammed (the emulator).
+                defines.push_back("ATT_PROGRAM_FOR_TEST");
+            }
+        } else {
+            defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
+        }
         return defines;
     }
 
@@ -320,6 +423,25 @@ public:
         return cflags;
     }
 
+    std::string rvv_compile_flags(const Params& params) const override {
+        if (!hal_.get_supports_rvv(params.core_type, params.processor_class, params.processor_id)) {
+            return {};
+        }
+        // -march: the tt-qsr32-tensix base ISA plus zve32f and zvl128b (VLEN >= 128).
+        //   Appended after common_flags' -mcpu, so it overrides the arch while keeping the
+        //   tt-qsr32-tensix tuning.
+        // -fno-lto: with -flto the RVV builtins are re-expanded by the link-stage LTRANS units,
+        //   which do not carry the vector -march, breaking codegen at link time (observed on
+        //   Blackhole with sfpi 7.70.0). Compile-only: the link stays stock, this object just
+        //   opts out of LTO.
+        // -Wno-error=array-bounds: RVV intrinsic loads/stores through casted L1 pointers tripped
+        //   -Warray-bounds false positives at -O3 under -Werror (also observed on Blackhole).
+        // -fno-tree-vectorize -fno-tree-slp-vectorize: the vector unit is only reached through
+        //   explicit intrinsics; keep the auto-vectorizers off scalar kernel/LLK code.
+        return "-march=rv32im_zmmul_zaamo_zve32f_zvl128b_xtttensixqsr_xttzbkb -fno-lto "
+               "-fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
+    }
+
     bool firmware_is_kernel_object(const Params&) const override { return true; }
     std::string linker_script(const Params& params) const override {
         switch (params.core_type) {
@@ -327,8 +449,7 @@ public:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_dm.ld",
-                            params.is_fw ? "firmware" : "kernel");
+                            "runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(
@@ -347,6 +468,14 @@ public:
                         return params.is_fw ? "runtime/hw/toolchain/quasar/firmware_subordinate_ierisc.ld"
                                             : "runtime/hw/toolchain/quasar/kernel_subordinate_ierisc.ld";
                     default: TT_THROW("Invalid processor id {}", params.processor_id);
+                }
+            case HalProgrammableCoreType::DISPATCH:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::DM: {
+                        return fmt::format(
+                            "runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
+                    }
+                    case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
                 }
             default:
                 TT_THROW(
@@ -371,22 +500,31 @@ public:
     }
 };
 
-void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq) {
+void Hal::initialize_qa(
+    std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq, IpVariant quasar_arch_variant) {
     using namespace quasar;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
+    static_assert(
+        static_cast<int>(HalProgrammableCoreType::DISPATCH) == static_cast<int>(ProgrammableCoreType::DISPATCH));
 
-    HalCoreInfoType tensix_mem_map = quasar::create_tensix_mem_map();
-    this->core_info_.push_back(tensix_mem_map);
-
-    HalCoreInfoType active_eth_mem_map = quasar::create_active_eth_mem_map();
-    this->core_info_.push_back(active_eth_mem_map);
-
-    HalCoreInfoType idle_eth_mem_map = quasar::create_idle_eth_mem_map();
-    this->core_info_.push_back(idle_eth_mem_map);
+    this->quasar_arch_variant_ = quasar_arch_variant;
+    this->core_info_.push_back(quasar::create_tensix_mem_map());
+    this->core_info_.push_back(quasar::create_active_eth_mem_map());
+    this->core_info_.push_back(quasar::create_idle_eth_mem_map());
+    ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] = quasar::create_dispatch_mem_map();
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::TENSIX)].num_physical_riscs_ =
+        static_cast<uint32_t>(TensixProcessorTypes::COUNT);
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::ACTIVE_ETH)].num_physical_riscs_ =
+        static_cast<uint32_t>(EthProcessorTypes::COUNT);
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::IDLE_ETH)].num_physical_riscs_ =
+        static_cast<uint32_t>(EthProcessorTypes::COUNT);
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)].num_physical_riscs_ =
+        static_cast<uint32_t>(DispatchEngineProcessorTypes::COUNT);
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
@@ -479,6 +617,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
             case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER: return false;
             default: TT_THROW("Invalid Quasar dispatch feature {}", static_cast<int>(feature));
         }
     };
@@ -497,7 +636,13 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->noc_stream_remote_dest_buf_start_reg_index_ = 0;                   // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
+    this->noc_stream_remote_dest_words_free_width_ = 0;                      // TODO: add correct value
+    this->noc_stream_remote_src_reg_index_ = 0;                              // TODO: add correct value
     this->has_stream_registers_ = false;
+    this->risc_soft_reset_addr_ = 0;                                         // TODO: add correct value
+    this->wall_clock_low_addr_ = 0;                                          // TODO: add correct value
+    this->wall_clock_high_addr_ = 0;                                         // TODO: add correct value
+    this->supports_fds_ = true;
     this->noc_topology_ = NoCTopologyType::MESH;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
@@ -508,6 +653,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         dev_msgs::AddressableCoreType::ETH,
         dev_msgs::AddressableCoreType::PCIE,
         dev_msgs::AddressableCoreType::DRAM};
+    this->virtualizes_non_worker_cores_ = true;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = true;
     this->supports_implicit_dfb_sync_ = true;
@@ -531,6 +677,11 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->eps_ = EPS_QA;
     this->nan_ = NAN_QA;
     this->inf_ = INF_QA;
+
+    // Values found in PCIe tile spec
+    this->pcie_addr_lower_bound_ = 0x0000'0000'0000'0000ULL;
+    this->pcie_addr_upper_bound_ = 0x1FFF'FFFF'FFFF'FFFFULL;
+    this->supports_64_bit_pcie_addressing_ = true;
 
     this->noc_x_id_translate_table_ = {};
 

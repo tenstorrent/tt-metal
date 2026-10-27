@@ -39,7 +39,7 @@ struct MoeGroupTensorArgs {
 //   k_slot         : [1, 1, 1, T_cap]  ROW_MAJOR uint16 — k-slot in metadata[t,:K]
 //                                                          per active row
 // Both are 0 / 0xFFFF respectively in pad/sentinel slots.
-using MoeGroupSpecReturn = std::vector<ttnn::TensorSpec>;
+using MoeGroupSpecReturn = std::vector<tt::tt_metal::TensorSpec>;
 using MoeGroupTensorReturn =
     std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>;
 

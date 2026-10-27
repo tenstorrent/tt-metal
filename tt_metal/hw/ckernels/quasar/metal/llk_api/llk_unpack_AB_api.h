@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_binary_broadcast_operands.h"
 #include "llk_unpack_binary_operands.h"
 #include "llk_unpack_common_api.h"
@@ -17,6 +18,13 @@
  * @details Sets up MOP for unpacking binary operands
  * operandA will be used for UNPACKER0 -> SRCA
  * operandB will be used for UNPACKER1 -> SRCB
+ *
+ * Each operand gets a BFD id allocated from the unpack partition (operandA on Unp0 / UNPACR0,
+ * operandB on Unp1 / UNPACR1) and its table entry is programmed here; the DFB ids are used only
+ * to fetch buffer info, never as BFD ids. One init burns 2 unpack-partition ids, so the partition
+ * wraps sooner under mixed workloads — the standard wrap contract (re-init before re-execute)
+ * applies.
+ *
  * @tparam BType: Broadcast type for SrcB; one of {NONE, ROW, COL, SCALAR}.
  * @param operandA: The input operand dataflow buffer for source A
  * @param operandB: The input operand dataflow buffer for source B
@@ -29,10 +37,22 @@ inline void llk_unpack_AB_init(
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
+    // Keep the Metal binary pipeline full-tile until its tiny-tile paths have integration coverage
+    // (tt-metal #47597). The broadcast LLK still indexes L1 in whole tiles.
+    LLK_ASSERT(
+        get_operand_tensor_shape(operandA_id).total_num_faces() == ckernel::MAX_NUM_FACES,
+        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
+    LLK_ASSERT(
+        get_operand_tensor_shape(operandB_id).total_num_faces() == ckernel::MAX_NUM_FACES,
+        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
+
+    const std::uint8_t bfd_a = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandA_id);
+    const std::uint8_t bfd_b = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
+
     if constexpr (BType == BroadcastType::NONE) {
-        _llk_unpack_binary_operands_init_(operandA_id, operandB_id, 1);
+        _llk_unpack_binary_operands_init_(bfd_a, bfd_b, get_operand_tensor_shape(operandA_id), 1);
     } else {
-        _llk_unpack_binary_broadcast_operands_init_<BType>(operandA_id, operandB_id, 1);
+        _llk_unpack_binary_broadcast_operands_init_<BType>(bfd_a, bfd_b, 1);
     }
 }
 
@@ -59,6 +79,17 @@ inline void llk_unpack_AB(
     const std::uint32_t tile_index_b,
     [[maybe_unused]] const std::uint32_t bcast_row_idx = 0) {
     // TODO (tt-metal #42916): Once runtime asserts are added for Quasar, assert that bcast_row_idx is unused
+    LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
+    LLK_TDMA_GUARD_NOTE_TDMA(operandB);
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp0,
+        operandA,
+        "unpack_AB: operandA DFB differs from the one llk_unpack_AB_init programmed");
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp1,
+        operandB,
+        "unpack_AB: operandB DFB differs from the one llk_unpack_AB_init programmed");
+
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
@@ -66,13 +97,13 @@ inline void llk_unpack_AB(
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
 
     const std::uint32_t l1_tile_idx_a =
-        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx + tile_index_a;
+        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx + tile_index_a;
     const std::uint32_t l1_tile_idx_b =
-        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;
+        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b;
 
     WAYPOINT("UABW");
     if constexpr (BType == BroadcastType::NONE) {
-        _llk_unpack_binary_operands_(l1_tile_idx_a, l1_tile_idx_b);
+        _llk_unpack_binary_operands_(l1_tile_idx_a, l1_tile_idx_b, get_operand_tensor_shape(operandA_id));
     } else {
         _llk_unpack_binary_broadcast_operands_(l1_tile_idx_a, l1_tile_idx_b);
     }

@@ -1048,13 +1048,8 @@ class MultichipDecoder(OptimizedDecoder):
 
         # dispatch/combine "links" = sender cores (max 4); local-only dispatch sends nothing over fabric
         dc_links = int(os.environ.get("TT_LAGUNA_DISPATCH_LINKS", "3"))
-        # local-only dispatch (no fabric) on row-major input splits tokens across this many cores (ttnn dispatch
-        # LOCAL_TOKEN_SPLIT); the tile-input path keeps dc_links senders
+        # row-major dispatch input (ttnn dispatch's row-major path); TT_LAGUNA_DISPATCH_RM=0 sends tiles
         self._dispatch_rm = os.environ.get("TT_LAGUNA_DISPATCH_RM", "1") == "1"
-        d_cores = int(os.environ.get("TT_LAGUNA_DISPATCH_CORES", "64")) if self._dispatch_rm else dc_links
-        # short buckets: fewer cores (each core first adds up every earlier core's route histogram, so the last of
-        # 64 cores starts ~1 us x 63 late; at 128 tokens each core has only 2 tokens to move): 128-token prefill 60.6 -> 59.2 ms. 0 = always d_cores
-        d_tpc = int(os.environ.get("TT_LAGUNA_DISPATCH_TOKENS_PER_CORE", "16")) if self._dispatch_rm else 0
         bucket_modules = {}
         for seq_len in sorted(TOKEN_DISPATCH_BUCKETS):
             # Worst case: every one of T*K routes is local, plus at most 31
@@ -1072,7 +1067,7 @@ class MultichipDecoder(OptimizedDecoder):
                     seq_len_per_chip=seq_len,
                     emb_dim=self.cfg.hidden,
                     cluster_axis=0,
-                    num_links=min(d_cores, max(1, seq_len // d_tpc)) if d_tpc > 0 else d_cores,
+                    num_links=dc_links,
                     topology=ttnn.Topology.Linear,
                 ),
                 "combine": TtCombineModule(
@@ -1209,18 +1204,21 @@ class MultichipDecoder(OptimizedDecoder):
         cfg = self.cfg
 
         weights, indices = self._token_dispatch_router(ln_flat, seq_len)
-        offsets, counts, region_offsets, histogram = state["routing_setup"](
+        routing = state["routing_setup"](
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.global_experts,
-            seq_len_per_chip=seq_len,
             num_experts_per_tok=cfg.top_k,
         )
-        ttnn.deallocate(histogram)
+        offsets = routing.global_dispatch_offsets
+        counts = routing.total_counts_per_expert
+        region_offsets = routing.expert_region_offsets
+        ttnn.deallocate(routing.expert_histograms)
+        if routing.all_global_dispatch_offsets is not offsets:
+            ttnn.deallocate(routing.all_global_dispatch_offsets)
 
         dispatch_input = ttnn.reshape(ln_flat, (1, seq_len, cfg.hidden))
         if self._dispatch_rm:
-            # row-major input selects ttnn dispatch's row-major path, which (local-only) splits tokens over many
-            # cores; the tile path's expert-split senders are capped at 4
+            # row-major input selects ttnn dispatch's row-major path
             dispatch_input = ttnn.to_layout(dispatch_input, ttnn.ROW_MAJOR_LAYOUT)
         dispatched, metadata = bucket["dispatch"](
             dispatch_input,

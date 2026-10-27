@@ -239,9 +239,9 @@ void multicast_tensor_tensix(
     TensorLayout tile_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig(BufferType::DRAM));
 
     // Input tensor: MxN elements
-    TensorSpec input_spec(Shape({M, N}), tile_layout);
+    tt::tt_metal::TensorSpec input_spec(Shape({M, N}), tile_layout);
     // Output tensor: num_receivers copies of the input tensor stacked vertically.
-    TensorSpec output_spec(Shape({num_receivers * M, N}), tile_layout);
+    tt::tt_metal::TensorSpec output_spec(Shape({num_receivers * M, N}), tile_layout);
 
     // Create device tensors from input data.
     // This creates the tensors and queues transfer of data to device in one step.

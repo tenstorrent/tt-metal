@@ -199,14 +199,18 @@ BUCKETS: tuple[Bucket, ...] = (
             "test_ccl_broadcast[blackhole-True-device_params0-1-30-15-"
             "DataType.BFLOAT16-Layout.TILE-4-2-1-0-output_shape0-input_shard_shape0-"
             "TensorMemoryLayout.WIDTH_SHARDED]",
-            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::" "test_dram_zero_fill[blackhole-True-1-65536-device_params0]",
-            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::" "test_dram_zero_fill[blackhole-True-1-131072-device_params0]",
-            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::" "test_dram_zero_fill[blackhole-True-32-32768-device_params0]",
-            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::" "test_dram_zero_fill[blackhole-True-32-65536-device_params0]",
-            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::" "test_dram_zero_fill[blackhole-True-32-131072-device_params0]",
-            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::" "test_dram_zero_fill[blackhole-True-64-32768-device_params0]",
-            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::" "test_dram_zero_fill[blackhole-True-64-65536-device_params0]",
-            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::" "test_dram_zero_fill[blackhole-True-64-131072-device_params0]",
+            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::"
+            "test_dram_zero_fill[blackhole-True-128-1-131072-device_params0]",
+            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::"
+            "test_dram_zero_fill[blackhole-True-128-32-131072-device_params0]",
+            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::"
+            "test_dram_zero_fill[blackhole-True-128-64-131072-device_params0]",
+            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::"
+            "test_dram_zero_fill[blackhole-True-256-1-131072-device_params0]",
+            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::"
+            "test_dram_zero_fill[blackhole-True-256-32-131072-device_params0]",
+            f"{UNIT_TEST_DIR}/test_dram_zero_fill.py::"
+            "test_dram_zero_fill[blackhole-True-256-64-131072-device_params0]",
         ),
     ),
     Bucket(

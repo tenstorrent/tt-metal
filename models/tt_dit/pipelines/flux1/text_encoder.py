@@ -113,6 +113,7 @@ class TextEncoder:
                     subfolder="t5_text_encoder",
                     parallel_config=parallel_config,
                     mesh_shape=tuple(device.shape),
+                    mesh_device=device,
                 )
                 self._t5_tracer = Tracer(self._t5_text_encoder.forward, device=device, prep_run=False)
         else:

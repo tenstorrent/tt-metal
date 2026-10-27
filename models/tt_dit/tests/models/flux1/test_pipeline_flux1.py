@@ -11,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
+from ....models.transformers.transformer_flux1 import Flux1Checkpoint
 from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
 from ....pipelines.events import profiler_event_callback
 from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline, Flux1PipelineConfig
@@ -22,7 +23,14 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline, Flux1PipelineConfi
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": 32768,
+            "trace_region_size": 50000000,
+            "require_exact_physical_num_devices": True,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -31,6 +39,7 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline, Flux1PipelineConfi
         ("schnell", 1024, 1024, 4),
         ("dev", 1024, 1024, 28),
     ],
+    ids=["flux_schnell", "flux_dev"],
 )
 @pytest.mark.parametrize(
     ("mesh_device", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
@@ -89,13 +98,8 @@ def test_flux1_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Setup CI environment
-    if is_ci_env:
-        if use_cache:
-            monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
-        else:
-            pytest.skip("Skipping. No use cache is implicitly tested with the configured non persistent cache path.")
-        if traced:
-            pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
+    if is_ci_env and traced:
+        pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
 
     parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=sp, tp=tp)
     encoder_parallel_config = EncoderParallelConfig.from_tuple(encoder_tp)
@@ -106,6 +110,7 @@ def test_flux1_pipeline(
     logger.info(f"Encoder parallel config: {encoder_parallel_config}")
     logger.info(f"VAE parallel config: {vae_parallel_config}")
     logger.info(f"T5 enabled: {enable_t5_text_encoder}")
+    logger.info(f"HF_HUB_OFFLINE: {os.environ.get('HF_HUB_OFFLINE', '<unset>')}")
 
     pipeline = Flux1Pipeline(
         device=mesh_device,
@@ -186,3 +191,37 @@ def test_flux1_pipeline(
             if prompt[0] == "q":
                 break
             run(prompt=prompt, number=i, seed=i)
+
+
+def _log_hf_checkpoint_location(checkpoint_name) -> None:
+    """Log where HuggingFace will look for / resolve the checkpoint files."""
+    import huggingface_hub.constants as hf_const
+    from huggingface_hub import try_to_load_from_cache
+
+    logger.info(f"Resolved checkpoint_name (passed to from_pretrained): {checkpoint_name}")
+    logger.info(f"HF_HOME      = {hf_const.HF_HOME}")
+    logger.info(f"HF_HUB_CACHE = {hf_const.HF_HUB_CACHE}")
+
+    # If checkpoint_name is a local path, files load from there directly.
+    if os.path.isdir(checkpoint_name):
+        logger.info(f"checkpoint_name is a local directory; loading from: {checkpoint_name}")
+        return
+
+    # Otherwise it's an HF repo id resolved out of the hub cache. Show the cached file paths.
+    for rel in ("transformer/config.json", "model_index.json"):
+        cached = try_to_load_from_cache(checkpoint_name, rel)
+        logger.info(f"  {rel} -> {cached}")
+
+
+def test_flux1_dev_checkpoint_load(model_location_generator) -> None:
+    """Loads Flux1Checkpoint and verifies key metadata/state are available."""
+    checkpoint_name = model_location_generator("black-forest-labs/FLUX.1-dev")
+    _log_hf_checkpoint_location(checkpoint_name)
+    Flux1Checkpoint(checkpoint_name)
+
+
+def test_flux1_schnell_checkpoint_load(model_location_generator) -> None:
+    """Loads Flux1Checkpoint and verifies key metadata/state are available."""
+    checkpoint_name = model_location_generator("black-forest-labs/FLUX.1-schnell")
+    _log_hf_checkpoint_location(checkpoint_name)
+    Flux1Checkpoint(checkpoint_name)

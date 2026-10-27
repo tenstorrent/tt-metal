@@ -91,6 +91,9 @@ public:
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        // Upper bound: tmu-crt0.o, the 2 ncrisc entry objs and substitutes.o. noc.o only applies to
+        // processor_id 0, so it can never coexist with the ncrisc ones.
+        objs.reserve(4);
         if (params.is_fw and params.core_type != HalProgrammableCoreType::ACTIVE_ETH) {
             objs.push_back("runtime/hw/lib/wormhole/tmu-crt0.o");
         }
@@ -117,6 +120,8 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
+        // Upper bound: 8 common includes plus at most 3 from the core type switch.
+        includes.reserve(11);
 
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/wormhole_b0/metal/common");
@@ -245,12 +250,15 @@ void Hal::initialize_wh(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
 
     HalCoreInfoType tensix_mem_map = wormhole::create_tensix_mem_map();
+    tensix_mem_map.num_physical_riscs_ = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
     this->core_info_.push_back(tensix_mem_map);
 
     HalCoreInfoType active_eth_mem_map = wormhole::create_active_eth_mem_map(is_base_routing_fw_enabled);
+    active_eth_mem_map.num_physical_riscs_ = static_cast<uint32_t>(EthProcessorTypes::COUNT);
     this->core_info_.push_back(active_eth_mem_map);
 
     HalCoreInfoType idle_eth_mem_map = wormhole::create_idle_eth_mem_map();
+    idle_eth_mem_map.num_physical_riscs_ = static_cast<uint32_t>(EthProcessorTypes::COUNT);
     this->core_info_.push_back(idle_eth_mem_map);
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
@@ -348,6 +356,7 @@ void Hal::initialize_wh(
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
             case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER: return false;
             default: TT_THROW("Invalid Wormhole dispatch feature {}", static_cast<int>(feature));
         }
     };
@@ -367,14 +376,23 @@ void Hal::initialize_wh(
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX;
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ =
         STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
+    this->noc_stream_remote_dest_words_free_width_ = REMOTE_DEST_WORDS_FREE_WIDTH;
+    this->noc_stream_remote_src_reg_index_ = STREAM_REMOTE_SRC_REG_INDEX;
     this->operand_start_stream_ = OPERAND_START_STREAM;
     this->has_stream_registers_ = true;
+    this->risc_soft_reset_addr_ = RISCV_DEBUG_REG_SOFT_RESET_0;
+    this->wall_clock_low_addr_ = RISCV_DEBUG_REG_WALL_CLOCK_L;
+    this->wall_clock_high_addr_ = RISCV_DEBUG_REG_WALL_CLOCK_H;
+    this->active_eth_physical_eriscs_ = {0};
+    this->supports_fds_ = false;
     this->noc_topology_ = NoCTopologyType::TORUS;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = true;
     this->virtualized_core_types_ = {dev_msgs::AddressableCoreType::TENSIX, dev_msgs::AddressableCoreType::ETH};
+    // Wormhole addresses its PCIE/DRAM non-worker cores physically.
+    this->virtualizes_non_worker_cores_ = false;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = false;
     this->supports_implicit_dfb_sync_ = false;

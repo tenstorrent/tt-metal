@@ -26,18 +26,20 @@ void bind_moe_compute(nb::module_& mod) {
     nb::enum_<ttnn::experimental::prim::detail::MoEActivationFunction>(mod, "MoEActivationFunction")
         .value("SILU", ttnn::experimental::prim::detail::MoEActivationFunction::SILU)
         .value("SWIGLU", ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU)
-        .value("GELU", ttnn::experimental::prim::detail::MoEActivationFunction::GELU);
+        .value("GELU", ttnn::experimental::prim::detail::MoEActivationFunction::GELU)
+        .value("CLAMPED_SILU", ttnn::experimental::prim::detail::MoEActivationFunction::CLAMPED_SILU);
     ttnn::bind_function<"moe_compute", "ttnn.experimental.">(
         mod,
         R"doc(
         Experimental fused MoE compute supporting arbitrary ``(hidden_size, intermediate_size)`` pairs.
 
         This operation performs the expert matmuls (gate/up projection via W0/W1, down
-        projection via W2) and activation (SILU, SwiGLU, or GELU) in a fused compute kernel.
-        Tile distribution across the matmul ring (12 cores on Wormhole; 8 cores on
-        Blackhole — auto-detected from the architecture) is derived at compile time from
-        ``hidden_size`` and ``intermediate_size`` using Euclidean-rhythm (Bresenham) shard
-        formulas — no model-specific configuration tables are needed.
+        projection via W2) and activation (SILU, SwiGLU, GELU, or clamped SiLU) in a fused compute kernel.
+        Tile distribution across the matmul ring (12 cores on Wormhole; 7 or 8 cores on
+        Blackhole depending on whether one DRAM bank is fused off — auto-detected from the
+        live DRAM-bank count) is derived at compile time from ``hidden_size`` and
+        ``intermediate_size`` using Euclidean-rhythm (Bresenham) shard formulas — no
+        model-specific configuration tables are needed.
 
         Note: This is the **compute** portion of the MoE pipeline. The A2A dispatch
         (producing the sparse buffer consumed by this op) and the A2A combine (reducing
@@ -46,14 +48,19 @@ void bind_moe_compute(nb::module_& mod) {
 
         **Hardware / device configuration**
 
-        - **Unharvested Wormhole chips.** The multi-device (6U/Galaxy) flow assumes the
-          full Wormhole compute grid: the WH worker layout hardcodes the drain tilize core
-          at logical ``(6, 9)`` and the combine cores at columns 5–6, so the ``y=9`` compute
-          row must be present. Harvested WH SKUs that drop that row are not supported on
-          this path (the single-card test path derives the drain core dynamically instead).
-        - **``DispatchCoreAxis.COL``.** The mesh device must be opened with
-          ``dispatch_core_axis=ttnn.DispatchCoreAxis.COL`` so dispatch cores occupy a column
-          edge and do not overlap the op's tilize/matmul/combine worker cores.
+        Tilize / matmul / combine worker cores are selected dynamically from the device's
+        ``compute_with_storage_grid_size()`` (which already excludes harvested rows/columns)
+        in logical coordinates, so placement is **harvesting-agnostic** and works on both
+        Wormhole and Blackhole. The matmul ring prefers the DRAM-bank-adjacent workers, but
+        relocates to a compact, column-0-anchored placement when that layout would overlap the
+        mux cores or its bounding box spans the whole compute grid (e.g. WH ROW dispatch, where
+        the DRAM-adjacent workers leave no disjoint room). Tilize and combine are then placed in
+        the remaining grid with mutually disjoint multicast bounding boxes.
+
+        The dispatch-core axis is **not** constrained by this op: both
+        ``DispatchCoreAxis.COL`` and ``DispatchCoreAxis.ROW`` are supported (the test matrix
+        exercises both). The axis only changes which grid edge the dispatch cores occupy,
+        which is already reflected in ``compute_with_storage_grid_size()``.
 
         See https://github.com/tenstorrent/tt-metal/issues/41132 for details.
 
@@ -107,17 +114,38 @@ void bind_moe_compute(nb::module_& mod) {
 
         - ``activation_type`` (optional, default ``None`` ≡ ``SILU``): The expert FFN
           activation function — one of ``ttnn.experimental.MoEActivationFunction``
-          ``{SILU, SWIGLU, GELU}`` — applied between the W0/W1 and W2 projections.
+          ``{SILU, SWIGLU, GELU, CLAMPED_SILU}`` — applied between the W0/W1 and W2 projections.
+
+        - ``activation_limit`` (optional): required for ``CLAMPED_SILU`` and rejected for
+          every other activation; a finite positive ``L`` giving
+          ``silu(min(gate, L)) * clamp(up, -L, L)`` (no additive up bias). Part of the program cache key.
+
+        - ``math_fidelity`` (default ``LoFi``) and ``fp32_dest_acc_en`` (default ``False``): compute
+          settings of the expert matmuls and the activation. ``math_approx_mode`` stays enabled and
+          ``dst_full_sync_en`` disabled. Both are part of the program cache key.
 
         - ``compute_only`` (default ``False``): When ``True``, run only the expert
           matmuls and skip the A2A combine. The op then returns **5** tensors (the
           matmul output is the final output, slot 4) instead of 6, and all combine-path
           arguments below must be left unset (notably ``cluster_axis`` must be ``None``).
 
-        The matmul ring size is **auto-detected** from the architecture — 8 on Blackhole,
-        12 on Wormhole (one per DRAM bank) — and is not exposed on this API. The
-        ``prepare_*`` / ``get_weight_mem_configs`` helpers that pack the weights must be
-        called with the matching ring size (see ``effective_matmul_ring_size``).
+        The matmul ring size is **auto-detected** from the live DRAM-bank count — 12 on
+        Wormhole (no DRAM-bank harvesting), 7/8 on Blackhole (up to one bank may be fused
+        off) — and is not exposed on this API. The ``prepare_*`` / ``get_weight_mem_configs``
+        helpers that pack the weights must be called with the matching ring size (see
+        ``effective_matmul_ring_size``).
+
+        **Core placement**
+
+        Tilize, matmul, and combine worker cores are selected dynamically on the device
+        worker grid (avoiding DRAM-bank matmul workers). Use
+        ``get_moe_combine_cores(mesh_device, output_height_shard_dim,
+        auto_output_width_shard_dim(hidden_size), hidden_size)``
+        to query combine cores for memory-config setup before running the op.
+
+        Shard expert indices/scores to the drain tilize core returned by
+        ``get_moe_tilize_drain_core(mesh_device, output_height_shard_dim,
+        auto_output_width_shard_dim(hidden_size), hidden_size)``.
 
         **Bias support (optional)**
 
@@ -135,29 +163,72 @@ void bind_moe_compute(nb::module_& mod) {
         ``has_bias`` must match the actual layout of the provided tensors; mismatch
         produces silent wrong results or UB.
 
-        **Combine path (Full mode only)**
+        **Combine paths**
 
-        These arguments configure the cross-device A2A combine that reduces expert
-        outputs. They apply only when ``compute_only=False``; with ``compute_only=True``
-        they must be left at their defaults.
+        When ``compute_only=False``, the op returns **6** tensors, the sixth being the final
+        ``[k, tokens, hidden]`` row-major output. There are three ways it is produced:
 
-        - ``cluster_axis`` (**required when** ``compute_only=False``): The mesh axis along
-          which the combine reduces. Must be ``None`` when ``compute_only=True``.
+        - Single-device fused mode: pass ``cluster_axis=None`` on a 1x1 mesh. The fused
+          selective_reduce_combine stage runs locally with no fabric, mux cores, links, topology,
+          or cross-device semaphore.
+        - Multi-device fused mode: pass ``cluster_axis=0`` or ``cluster_axis=1`` naming a mesh
+          axis of extent > 1. The fused combine reduces along that axis using the fabric.
+        - Local output mode: the named ``cluster_axis`` has extent 1 (for example axis 0 of a 1x4
+          expert-parallel mesh, or either axis of a 1x1 mesh). There is nothing to combine, so no
+          combine kernels run: the op's own writer puts each expert's token rows straight into the
+          final output. No fabric, mux cores, links or cross-device semaphore are used (the mesh
+          may be opened without a fabric config); ``topology``, ``num_links``,
+          ``mux_core_range_set`` and ``optional_cross_device_semaphore`` are accepted and unused.
+          On a multi-device mesh every coordinate must receive the same replicated token set and
+          routing metadata (expert indices, scores and mapping) and returns the partial of its own
+          experts: only the rows its experts own are written, as with the combine, and the other
+          rows of the ``[k, tokens, hidden]`` output keep what the buffer held, so a caller that
+          sums the partials across the other axis passes a zeroed ``optional_output_tensor``.
+          The output is written one token row (2 x H bytes) per page, so its memory config
+          (``output_memory_config``, or the ``optional_output_tensor``'s) must be row-major
+          INTERLEAVED or HEIGHT_SHARDED with whole rows per shard, DRAM or L1; WIDTH_SHARDED,
+          BLOCK_SHARDED and ND sharding are rejected (a row would span several pages). Nothing is
+          staged in the combine cores' L1, so the matmul-output tensor (slot 4) is not written on
+          this path. That form does not support shared experts.
+
+        With ``compute_only=True``, ``cluster_axis``, ``topology``, ``num_links``,
+        ``mux_core_range_set``, ``optional_output_tensor``, and
+        ``optional_cross_device_semaphore`` must be passed as ``None`` / left at their
+        defaults. An empty ``CoreRangeSet`` still counts as a provided ``mux_core_range_set``
+        and is rejected in compute-only mode.
+
+        - ``cluster_axis``: ``None`` for ``compute_only=True`` and for single-device fused mode;
+          otherwise the mesh axis along which multi-device fused mode reduces.
         - ``topology`` (optional, default ``None`` ≡ fabric default): Combine fabric
-          topology; only ``ttnn.Topology.Linear`` and ``ttnn.Topology.Ring`` are
-          supported. If the fabric default is Torus/Mesh, pass ``Linear`` or ``Ring``
-          explicitly (BH Loudbox callers must pass ``Linear``).
+          topology for multi-device fused mode; must be ``None`` for single-device fused
+          mode and ``compute_only=True``. Only ``ttnn.Topology.Linear`` and
+          ``ttnn.Topology.Ring`` are supported. If the fabric default is Torus/Mesh, pass
+          ``Linear`` or ``Ring`` explicitly (BH Loudbox callers must pass ``Linear``).
         - ``num_links`` (optional, default ``None``): Number of fabric links for the
-          combine; auto-detected from the mesh and ``cluster_axis`` when ``None``.
+          multi-device fused combine; auto-detected from the mesh and ``cluster_axis`` when
+          ``None`` (1 in local output mode, where no link is opened). Must be ``None`` for
+          single-device fused mode and ``compute_only=True``.
         - ``mux_core_range_set`` (optional, default ``None`` ≡ empty): Cores assigned to
-          the fabric mux on the combine path.
+          the fabric mux on the multi-device fused combine path; must be ``None`` for
+          single-device fused mode and ``compute_only=True``. Mux cores may be placed anywhere
+          on the worker grid — including inside the matmul/all-worker multicast bounding boxes
+          — because the op places every worker group (matmul, tilize, combine) to avoid the
+          mux cells: the matmul ring prefers the DRAM-bank-adjacent workers but relocates to a
+          compact, column-0-anchored placement if mux would overlap it (or if the DRAM-adjacent
+          ring spans the grid, e.g. WH ROW dispatch), and tilize/combine are placed after mux
+          and route around it. The op raises a clear error only if the grid is too
+          small/blocked to fit all groups disjointly.
         - ``output_memory_config`` (optional, default ``None`` ≡ ``DRAM_MEMORY_CONFIG``):
-          Memory config for the combine output tensor.
+          Memory config for the combine output tensor. In local output mode it must be
+          row-major INTERLEAVED or HEIGHT_SHARDED (whole token rows per shard); left
+          ``None`` with an ``optional_output_tensor``, it takes that tensor's memory config,
+          and when both are given they must agree.
         - ``optional_output_tensor`` (optional): Preallocated tensor to receive the
           combine output instead of allocating a new one. Must be ``None`` when
           ``compute_only=True`` (no combine output is produced).
         - ``optional_cross_device_semaphore`` (optional): Global semaphore used to
-          synchronize the cross-device combine.
+          synchronize the multi-device fused combine. Must be ``None`` for single-device
+          fused mode and ``compute_only=True``.
 
         **Reference input packer **
 
@@ -188,10 +259,10 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("output_height_shard_dim"),
         nb::arg("intermediate_size"),
         nb::arg("has_bias") = false,
-        // cluster_axis is required when compute_only=False; pass None for compute_only=True paths.
+        // cluster_axis is None for compute_only=True and for 1x1 fused mode; set it for multi-device fused mode.
         // (Two breaking changes vs prior versions: (1) intermediate_size is now required positional
         // from PR #43932; (2) cluster_axis became optional, new compute_only knob. The matmul ring
-        // size is auto-detected from the arch (8 BH / 12 WH); bh_ring_size remains only on prim.)
+        // size is auto-detected from the live DRAM-bank count (7/8 BH / 12 WH); bh_ring_size remains only on prim.)
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("topology") = nb::none(),
         nb::arg("num_links") = nb::none(),
@@ -201,34 +272,82 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("optional_cross_device_semaphore") = nb::none(),
         nb::arg("activation_type") = nb::none(),
         nb::arg("compute_only") = false,
-        nb::arg("num_shared_experts_per_device") = nb::none());
+        nb::arg("num_shared_experts_per_device") = nb::none(),
+        nb::arg("activation_limit") = nb::none(),
+        nb::arg("math_fidelity") = tt::tt_metal::MathFidelity::LoFi,
+        nb::arg("fp32_dest_acc_en") = false);
 }
 
 void bind_get_moe_combine_cores(nb::module_& mod) {
-    const auto* doc = R"doc(Return the ordered list of cores assigned to A2A Combine for the MoE module flow )doc";
+    const auto* doc = R"doc(
+        Return the ordered list of cores assigned to selective_reduce_combine for moe_compute.
+
+        Cores are selected dynamically on the worker grid to avoid matmul, tilize, and fabric mux workers.
+        ``hidden_size`` must match the model hidden dimension because tilize core placement
+        depends on ``hidden_tiles = hidden_size // 32``.
+        Pass the same ``mux_core_range_set`` used by ``moe_compute`` when fabric mux cores are reserved.
+    )doc";
     ttnn::bind_function<"get_moe_combine_cores", "ttnn.experimental.">(
         mod,
         doc,
         ttnn::overload_t(
-            nb::overload_cast<ttnn::MeshDevice*, const uint32_t, const uint32_t>(
-                &ttnn::experimental::get_moe_combine_cores),
+            nb::overload_cast<
+                ttnn::MeshDevice*,
+                const uint32_t,
+                const uint32_t,
+                const uint32_t,
+                const ttnn::CoreRangeSet&>(&ttnn::experimental::get_moe_combine_cores),
             nb::arg("mesh_device"),
             nb::arg("combine_token_parallel_cores"),
-            nb::arg("combine_data_parallel_cores")));
+            nb::arg("combine_data_parallel_cores"),
+            nb::arg("hidden_size"),
+            nb::arg("mux_core_range_set") = ttnn::CoreRangeSet()));
 
     const auto* bbox_doc =
         R"doc(Return the logical CoreRange bounding box of tilize + matmul + combine worker cores.
-This matches the `all_worker_cores_bounding_box` used by the tilize kernel's per-expert count mcast.)doc";
+This matches the `all_worker_cores_bounding_box` used by the tilize kernel's per-expert count mcast.
+Pass the same ``mux_core_range_set`` used by ``moe_compute`` when fabric mux cores are reserved.)doc";
     ttnn::bind_function<"get_moe_worker_mcast_bounding_box", "ttnn.experimental.">(
         mod,
         bbox_doc,
         ttnn::overload_t(
-            nb::overload_cast<ttnn::MeshDevice*, const uint32_t, const uint32_t, const uint32_t>(
-                &ttnn::experimental::get_moe_worker_mcast_bounding_box),
+            nb::overload_cast<
+                ttnn::MeshDevice*,
+                const uint32_t,
+                const uint32_t,
+                const uint32_t,
+                const ttnn::CoreRangeSet&>(&ttnn::experimental::get_moe_worker_mcast_bounding_box),
             nb::arg("mesh_device"),
             nb::arg("combine_token_parallel_cores"),
             nb::arg("combine_data_parallel_cores"),
-            nb::arg("hidden_size")));
+            nb::arg("hidden_size"),
+            nb::arg("mux_core_range_set") = ttnn::CoreRangeSet()));
+}
+
+void bind_get_moe_tilize_drain_core(nb::module_& mod) {
+    const auto* doc = R"doc(
+        Return the drain tilize core for moe_compute (``tilize_cores[0]``).
+
+        Expert indices and scores tensors must be HEIGHT_SHARDED to this core in L1.
+        ``hidden_size`` must match the model hidden dimension because tilize core placement
+        depends on ``hidden_tiles = hidden_size // 32``.
+        Pass the same ``mux_core_range_set`` used by ``moe_compute`` when fabric mux cores are reserved.
+    )doc";
+    ttnn::bind_function<"get_moe_tilize_drain_core", "ttnn.experimental.">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            nb::overload_cast<
+                ttnn::MeshDevice*,
+                const uint32_t,
+                const uint32_t,
+                const uint32_t,
+                const ttnn::CoreRangeSet&>(&ttnn::experimental::get_moe_tilize_drain_core),
+            nb::arg("mesh_device"),
+            nb::arg("combine_token_parallel_cores"),
+            nb::arg("combine_data_parallel_cores"),
+            nb::arg("hidden_size"),
+            nb::arg("mux_core_range_set") = ttnn::CoreRangeSet()));
 }
 
 void bind_moe_compute_utils(nb::module_& mod) {
@@ -248,9 +367,9 @@ void bind_moe_compute_utils(nb::module_& mod) {
         (complementary when ``Nt%n_cores + Ht%n_cores == n_cores``) for W2. Ring
         ordering: DRAM bank logical coords sorted by ``(y, x)`` descending.
 
-        The matmul ring size is auto-detected from the architecture — 8 on Blackhole,
-        12 on Wormhole (the DRAM-bank count) — matching ``ttnn.experimental.moe_compute``,
-        so the packed weights always line up with the op.
+        The matmul ring size is the live DRAM-bank count (12 on Wormhole, 7/8 on
+        Blackhole), matching ``ttnn.experimental.moe_compute``, so the packed weights always
+        line up with the op.
 
         Returns an object with ``w0_w1_shard_map``, ``w2_shard_map``, and
         ``dram_core_range_set`` attributes.
@@ -304,8 +423,9 @@ void bind_moe_compute_utils(nb::module_& mod) {
         dim) so real columns stay paired with their real W2 rows. This keeps the
         downstream prep + DRAM layout uniform (full-Nt per-expert stride) while
         letting the kernel walk only the per-core prefixes as a balanced TpNt ring.
-        The shard-map generator auto-detects the ring size from the arch (8 on Blackhole,
-        12 on Wormhole), matching ``prepare_*`` / ``get_weight_mem_configs`` and the op.
+        The shard-map generator auto-detects the ring size from the live DRAM-bank count
+        (12 on Wormhole, 7/8 on Blackhole), matching ``prepare_*`` / ``get_weight_mem_configs``
+        and the op.
 
         Returns ``(output_w0, output_w1, output_w2)``, each the result of
         concatenating routed + shared along dim 1.
@@ -322,10 +442,14 @@ void bind_moe_compute_utils(nb::module_& mod) {
     ttnn::bind_function<"prepare_w0_w1_tensor_for_moe_compute", "ttnn.experimental.">(
         mod,
         R"doc(
-        Pack W0/W1 into the interleaved, padded, per-core layout the MoE kernel
-        reads. See ``ttnn.experimental.moe_compute_utils`` for the layout
-        contract. Output local shape:
-        ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE)`` in TILE_LAYOUT.
+        Pack W0/W1 into the interleaved, compact per-core layout the MoE kernel
+        reads (each ring core stores only its own gate/up columns). See
+        ``ttnn.experimental.moe_compute_utils`` for the layout contract. Output
+        local shape: ``(num_banks, L, E, bank_blocks_per_expert, block_rows,
+        4*TILE_SIZE)`` in TILE_LAYOUT (block_rows = 7*TILE_SIZE for 14-tile
+        transactions, 10*TILE_SIZE for 20-tile ones), or, for 14-tile
+        transactions where every core owns the same even column count,
+        ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE)``.
 
         The per-core shard map is derived internally from ``K`` (hidden_size)
         and ``N`` (intermediate_size) via ``get_weight_core_shard_maps``.
@@ -344,7 +468,9 @@ void bind_moe_compute_utils(nb::module_& mod) {
         R"doc(
         Pack W2 into the ring-rotated per-core layout the MoE kernel reads.
         Output local shape:
-        ``(num_cores, L, E, w2_groups_per_core, N_padded, 4*TILE_SIZE)`` in TILE_LAYOUT.
+        ``(num_cores, L, E, w2_groups_per_core, N_padded, 4*TILE_SIZE)`` in TILE_LAYOUT,
+        or ``(num_cores, L, E, w2_blocks_per_core, block_rows, 4*TILE_SIZE)`` when the
+        last a2a iteration is half width (20-tile transactions only).
 
         The per-core shard maps are derived internally from ``K`` (hidden_size)
         and ``N`` (intermediate_size) via ``get_weight_core_shard_maps``.

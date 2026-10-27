@@ -8,6 +8,47 @@ import ttnn
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
 
 
+def test_clamp_bw_tensor_both_bounds_in_range_gradient(device):
+    """Regression test for inverted ge/le in the tensor both-bounds branch of clamp_bw.
+
+    With controlled inputs we can verify analytically:
+      input  = [-5, -1, 0, 1, 5] (32-element tile padded)
+      min    = [-2, -2, -2, -2, -2]
+      max    = [ 2,  2,  2,  2,  2]
+      grad   = [ 1,  1,  1,  1,  1]
+    Expected: gradient passes through only where min <= input <= max (positions 1,2,3),
+    zeros at positions 0 and 4 (out of range). Bug produced all-zero result instead.
+    """
+    shape = torch.Size([1, 1, 32, 32])
+    # Build a flat pattern repeated to fill the tile
+    base_input = torch.tensor([-5.0, -1.0, 0.0, 1.0, 5.0] * (32 * 32 // 5) + [-5.0] * ((32 * 32) % 5))
+    base_min = torch.full((32 * 32,), -2.0)
+    base_max = torch.full((32 * 32,), 2.0)
+    base_grad = torch.ones(32 * 32)
+
+    input_torch = base_input.reshape(shape).bfloat16()
+    min_torch = base_min.reshape(shape).bfloat16()
+    max_torch = base_max.reshape(shape).bfloat16()
+    grad_torch = base_grad.reshape(shape).bfloat16()
+
+    # Golden: gradient only where min <= input <= max
+    in_range = (input_torch >= min_torch) & (input_torch <= max_torch)
+    expected = grad_torch * in_range.bfloat16()
+
+    # Device tensors
+    input_tt = ttnn.from_torch(input_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    min_tt = ttnn.from_torch(min_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    max_tt = ttnn.from_torch(max_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grad_tt = ttnn.from_torch(grad_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result_tt = ttnn.clamp_bw(grad_tt, input_tt, min_tt, max_tt)
+    result_torch = ttnn.to_torch(result_tt[0])
+
+    assert torch.allclose(
+        result_torch.float(), expected.float(), atol=1e-2
+    ), f"clamp_bw tensor both-bounds: got\n{result_torch}\nexpected\n{expected}"
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -60,3 +101,30 @@ def test_unary_bw_clamp_ttnn(input_shapes, min_val, max_val, device):
         golden_tensor = golden_function(grad_data, in_data, min, max)
         comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
         assert comp_pass
+
+
+# clamp_bw used to zero out-of-range gradients with a mask multiply, and in float32 0 * inf and 0 * nan
+# are NaN. torch selects, so a clamped position gets an exact 0 whatever grad holds.
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["float32", "bfloat16"])
+@pytest.mark.parametrize("grad_value", [float("inf"), float("nan")], ids=["inf", "nan"])
+@pytest.mark.parametrize("bounds", ["scalar", "tensor"])
+@pytest.mark.parametrize(
+    "min_val, max_val, input_value",
+    [(-2.0, 2.0, 5.0), (-2.0, None, -5.0), (None, 2.0, 5.0)],
+    ids=["both_above_max", "min_only_below", "max_only_above"],
+)
+def test_clamp_bw_non_finite_grad_out_of_range(device, dtype, grad_value, bounds, min_val, max_val, input_value):
+    shape = torch.Size([1, 1, 32, 32])
+
+    def to_device(value):
+        return ttnn.from_torch(torch.full(shape, value), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if bounds == "tensor":
+        min_arg = None if min_val is None else to_device(min_val)
+        max_arg = None if max_val is None else to_device(max_val)
+    else:
+        min_arg, max_arg = min_val, max_val
+
+    output = ttnn.to_torch(ttnn.clamp_bw(to_device(grad_value), to_device(input_value), min_arg, max_arg)[0]).float()
+
+    assert torch.equal(output, torch.zeros(shape)), f"expected 0, got {output[0, 0, 0, 0].item()}"

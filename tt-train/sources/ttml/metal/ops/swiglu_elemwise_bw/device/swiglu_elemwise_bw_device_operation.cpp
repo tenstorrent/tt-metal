@@ -4,8 +4,7 @@
 
 #include "swiglu_elemwise_bw_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
+#include "metal/common/tensor_validation.hpp"
 #include "swiglu_elemwise_bw_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -13,33 +12,9 @@ namespace ttml::metal::ops::swiglu_elemwise_bw::device {
 
 void SwigluElemwiseBwDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
-            "SwigluElemwiseBw requires {} on Device. Storage type: {}",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-        TT_FATAL(tensor.buffer() != nullptr, "SwigluElemwiseBw: {} buffer is null", name);
-        TT_FATAL(
-            tensor.layout() == tt::tt_metal::Layout::TILE,
-            "SwigluElemwiseBw requires TILE layout. {} layout: {}",
-            name,
-            enchantum::to_string(tensor.layout()));
-        TT_FATAL(
-            tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "SwigluElemwiseBw requires BFLOAT16. {} dtype: {}",
-            name,
-            enchantum::to_string(tensor.dtype()));
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
-            "SwigluElemwiseBw requires INTERLEAVED. {} layout: {}",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
-
-    check_tensor(tensor_args.linear1, "linear1");
-    check_tensor(tensor_args.gate, "gate");
-    check_tensor(tensor_args.dL_dprod, "dL_dprod");
+    check_device_tensor(tensor_args.linear1, "SwigluElemwiseBw", "linear1");
+    check_device_tensor(tensor_args.gate, "SwigluElemwiseBw", "gate");
+    check_device_tensor(tensor_args.dL_dprod, "SwigluElemwiseBw", "dL_dprod");
 
     const auto& expected_logical_shape = tensor_args.linear1.logical_shape();
     const auto& expected_padded_shape = tensor_args.linear1.padded_shape();
@@ -65,7 +40,14 @@ void SwigluElemwiseBwDeviceOperation::validate_on_program_cache_miss(
         expected_padded_shape);
 
     if (tensor_args.preallocated_dL_dlinear1.has_value()) {
-        check_tensor(tensor_args.preallocated_dL_dlinear1.value(), "preallocated_dL_dlinear1");
+        check_device_tensor(
+            tensor_args.preallocated_dL_dlinear1.value(), "SwigluElemwiseBw", "preallocated_dL_dlinear1");
+        check_same_device(
+            tensor_args.preallocated_dL_dlinear1.value(),
+            tensor_args.linear1,
+            "SwigluElemwiseBw",
+            "preallocated_dL_dlinear1",
+            "linear1");
         const auto& prealloc = tensor_args.preallocated_dL_dlinear1.value();
         TT_FATAL(
             prealloc.logical_shape() == expected_logical_shape,
@@ -79,7 +61,13 @@ void SwigluElemwiseBwDeviceOperation::validate_on_program_cache_miss(
             expected_padded_shape);
     }
     if (tensor_args.preallocated_dL_dgate.has_value()) {
-        check_tensor(tensor_args.preallocated_dL_dgate.value(), "preallocated_dL_dgate");
+        check_device_tensor(tensor_args.preallocated_dL_dgate.value(), "SwigluElemwiseBw", "preallocated_dL_dgate");
+        check_same_device(
+            tensor_args.preallocated_dL_dgate.value(),
+            tensor_args.linear1,
+            "SwigluElemwiseBw",
+            "preallocated_dL_dgate",
+            "linear1");
         const auto& prealloc = tensor_args.preallocated_dL_dgate.value();
         TT_FATAL(
             prealloc.logical_shape() == expected_logical_shape,
@@ -96,11 +84,11 @@ void SwigluElemwiseBwDeviceOperation::validate_on_program_cache_miss(
 
 spec_return_value_t SwigluElemwiseBwDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto make_spec = [&](const std::optional<ttnn::Tensor>& prealloc) -> ttnn::TensorSpec {
+    auto make_spec = [&](const std::optional<ttnn::Tensor>& prealloc) -> tt::tt_metal::TensorSpec {
         if (prealloc.has_value()) {
             return prealloc->tensor_spec();
         }
-        return ttnn::TensorSpec(
+        return tt::tt_metal::TensorSpec(
             tensor_args.linear1.logical_shape(),
             tt::tt_metal::TensorLayout(
                 tensor_args.linear1.dtype(), tt::tt_metal::Layout::TILE, tensor_args.linear1.memory_config()));
@@ -116,9 +104,9 @@ tensor_return_value_t SwigluElemwiseBwDeviceOperation::create_output_tensors(
 
     return {
         tensor_args.preallocated_dL_dlinear1.has_value() ? tensor_args.preallocated_dL_dlinear1.value()
-                                                         : create_device_tensor(specs[0], device),
+                                                         : ttnn::create_device_tensor(specs[0], device),
         tensor_args.preallocated_dL_dgate.has_value() ? tensor_args.preallocated_dL_dgate.value()
-                                                      : create_device_tensor(specs[1], device),
+                                                      : ttnn::create_device_tensor(specs[1], device),
     };
 }
 

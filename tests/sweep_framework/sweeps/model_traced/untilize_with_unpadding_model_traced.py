@@ -82,7 +82,14 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    # output_tensor_end is passed positionally below (as end_shape); excluding it
+    # here avoids passing it twice -> "untilize_with_unpadding(): incompatible
+    # function arguments ... output_tensor_end=[...]".
+    op_kwargs = build_op_kwargs(
+        kwargs,
+        exclude={"output_tensor_end", "output_tensor_start", "end_shape"},
+        output_memory_config=output_memory_config,
+    )
 
     # Traced configs store the end argument as 'output_tensor_end' (named kwarg);
     # sample configs use 'end_shape'. Accept both.

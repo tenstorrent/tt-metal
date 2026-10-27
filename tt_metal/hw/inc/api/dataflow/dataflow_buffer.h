@@ -16,59 +16,98 @@
 #include "internal/circular_buffer_interface.h"
 #endif
 
-#ifndef COMPILE_FOR_TRISC
-#include "api/dataflow/noc.h"
-#include "tools/profiler/noc_debugging_profiler.hpp"
+// PrefetcherPipe-relay checkpoint align, called from the RelayDFBBindingToken constructor on
+// TRISC (unpack/pack). DM aligns in PrefetcherPipe::bind_relay().
+#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
+#include "internal/prefetcher_pipe_init.h"
 #endif
 
+#ifndef COMPILE_FOR_TRISC
+#include "api/dataflow/noc.h"
+#include "internal/profiler/noc_debugging_profiler.hpp"
+
+#ifdef ARCH_QUASAR
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+struct noc_traits_t<DataflowBuffer<Pap, Cap>>;
+#else
+template <>
+struct noc_traits_t<DataflowBuffer>;
+#endif
+#endif
+
+#include "api/dataflow/dfb_binding_token.h"
+#include "api/dataflow/dfb_access.h"
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
 #include "api/lock.h"
+#include "api/core_local_mem.h"
+#include <type_traits>
+
+namespace experimental {
+class PrefetcherPipe;
+}
 
 #if __has_include("chlkc_descriptors.h")
 #include "chlkc_descriptors.h"
 #define DFB_DESCRIPTORS_DEFINED
 #endif
 
-// Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
-// The user will never directly interact with this type.
-//
-// The user's host code declares an accessor_name when binding a DFB endpoint to a kernel.
-// The user then uses that accessor_name to construct a DataflowBuffer in the kernel code.
-//
-// Usage example:
-//   // (Host code declares "my_dfb_name" as the DFB local accessor name for this kernel.)
-//   // In the kernel code:
-//   DataflowBuffer my_dfb(dfb::my_dfb_name);
-//
-// Here my_dfb_name is a constexpr DFBAccessor, auto-included in kernel_bindings_generated.h.
-//
-struct DFBAccessor {
-    explicit constexpr DFBAccessor(uint16_t id) noexcept : id_(id) {}
+// RAII scoped lock returned by DataflowBuffer::scoped_write_lock()/scoped_read_lock(). get_ptr() returns
+// the write pointer for a write-lock and the read pointer for a read-lock, wrapped in a CoreLocalMem object.
+// The CoreLocalMem object is mutable for a write-lock, const for a read-lock.
+template <bool IsWrite, typename ReleaseFunc>
+class DfbScopedLock {
+public:
+    inline __attribute__((always_inline)) DfbScopedLock(uint32_t pointer, ReleaseFunc release) :
+        pointer_(pointer), release_(release) {}
+    inline __attribute__((always_inline)) ~DfbScopedLock() { release_(); }
 
-    // Constexpr behavior for ID extraction:
-    //  - On WH/BH, DFBAccessor is always constexpr. It's backed by a compile-time ID.
-    //  - On Quasar, we reserve the right to switch to a runtime-backed ID.
-    //    (Future-proofing workaround to a future problem with DM assignments.)
+    DfbScopedLock(const DfbScopedLock&) = delete;
+    DfbScopedLock(DfbScopedLock&&) = delete;
+    DfbScopedLock& operator=(const DfbScopedLock&) = delete;
+    DfbScopedLock& operator=(DfbScopedLock&&) = delete;
 
-    // Implicit conversion to uint32_t:
-    // This lets a Metal 2.0 kernel pass a DFBAccessor directly to Gen1 (WH/BH) LLK
-    // compute APIs that expect a raw CB id.
-    // This conversion is constexpr; it's intended for Gen1 use only.
-    constexpr operator uint32_t() const noexcept { return id_; }
-
-    // Explicit ID accessor:
-    // This meant only for Quasar LLK APIs, which accept DFBAccessor directly.
-    // Intentionally NOT constexpr; since body could become an RTA retrieval.
-    // (If constexpr is needed by LLK, we could fix that for compute kernels.)
-    uint16_t resolve_id() const noexcept { return id_; }
+    template <typename T = uint32_t>
+    [[nodiscard]] inline __attribute__((always_inline)) CoreLocalMem<std::conditional_t<IsWrite, T, const T>> get_ptr()
+        const {
+        return CoreLocalMem<std::conditional_t<IsWrite, T, const T>>(pointer_);
+    }
 
 private:
-    uint16_t id_;
-    // uint32_t rta_idx; // future-proofing option
+    uint32_t pointer_;
+    ReleaseFunc release_;
 };
 
+template <bool IsWrite, typename ReleaseFunc>
+[[nodiscard]] inline __attribute__((always_inline)) DfbScopedLock<IsWrite, ReleaseFunc> make_dfb_scoped_lock(
+    uint32_t pointer, ReleaseFunc release) {
+    return DfbScopedLock<IsWrite, ReleaseFunc>(pointer, release);
+}
+
+// Only UNPACK and PACK have a DFB interface. On MATH and on the SFPU thread a DataflowBuffer
+// is just an id and the sync calls do nothing. Drop ISOLATE_SFPU from this list when the SFPU
+// thread gets its own interface and unpacks from DFBs.
+#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU))
+#define DFB_IS_COMPUTE_MATH 1
+#else
+#define DFB_IS_COMPUTE_MATH 0
+#endif
+
+DFB_TEMPLATE_DECL
 class DataflowBuffer {
+#ifdef ARCH_QUASAR
+    // Compile-time facts about the pattern pair. UNKNOWN (built from a raw id) reads them at
+    // runtime instead and only supports rings with no BLOCKED side.
+    static constexpr bool pattern_known = Pap != dfb::AccessPattern::UNKNOWN && Cap != dfb::AccessPattern::UNKNOWN;
+    static constexpr bool producer_blocked = Pap == dfb::AccessPattern::BLOCKED;
+    static constexpr bool consumer_blocked = Cap == dfb::AccessPattern::BLOCKED;
+    // Split: one whole-block op is shared by all of this side's counters.
+    static constexpr bool producer_split = producer_blocked && Cap == dfb::AccessPattern::STRIDED;
+    static constexpr bool consumer_split = Pap == dfb::AccessPattern::STRIDED && consumer_blocked;
+    // With a BLOCKED side every op must be exactly one whole block.
+    static constexpr bool share_strict = producer_blocked || consumer_blocked;
+#endif
+
 public:
 #ifdef ARCH_QUASAR
     using DFBInterface = LocalDFBInterface;
@@ -79,15 +118,124 @@ public:
     // Preferred constructor for Metal 2.0 / ProgramSpec kernels.
     // Pass the named binding constant from kernel_bindings_generated.h:
     //   DataflowBuffer dfb(my_dfb_name);
-    DataflowBuffer(DFBAccessor accessor) : DataflowBuffer(accessor.resolve_id()) {}
+#ifdef ARCH_QUASAR
+    // The token carries the pattern pair: DataflowBuffer dfb(dfb::out) deduces it.
+    DataflowBuffer(DFBBindingToken<Pap, Cap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+    // DataflowBuffer<> (UNKNOWN) accepts any token, e.g. std::optional<DataflowBuffer<>>::emplace(token).
+    template <
+        dfb::AccessPattern TokPap,
+        dfb::AccessPattern TokCap,
+        bool Agnostic = !pattern_known,
+        std::enable_if_t<Agnostic, int> = 0>
+    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+    // A known pair rejects any other pair's token (otherwise it would silently convert to an id).
+    template <
+        dfb::AccessPattern TokPap,
+        dfb::AccessPattern TokCap,
+        bool Known = pattern_known,
+        std::enable_if_t<Known && !(TokPap == Pap && TokCap == Cap), int> = 0>
+    DataflowBuffer(DFBBindingToken<TokPap, TokCap>) = delete;
+#else
+    template <dfb::AccessPattern TokPap, dfb::AccessPattern TokCap>
+    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+#endif
 
-    // Low-level constructor: prefer DFBAccessor overload above for new kernel code.
+    // Relay local DFB (CrossNode / PrefetcherPipe bridge to compute). Same runtime object;
+    // the token type is how the host marks the binding as a relay at compile time.
+    // For PrefetcherPipe relays on TRISC, construction snaps the borrowed local iface to the
+    // durable checkpoint via a launch-msg slot lookup keyed by token.prefetcher_pipe_id()
+    DataflowBuffer(RelayDFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
+        if (token.prefetcher_pipe_id() != RelayDFBBindingToken::NO_PREFETCHER_PIPE) {
+            experimental::align_local_dfb_to_prefetcher_pipe_slot(logical_dfb_id_, token.prefetcher_pipe_id());
+        }
+#endif
+    }
+
+    // Low-level constructor: prefer DFBBindingToken / RelayDFBBindingToken for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
+
+#ifdef ARCH_QUASAR
+    // Drains outstanding credits (posted == acked) and, on DM, waits for writes out of the DFB to land.
+    // Only the original object drains. Copies passed into helpers never drain; the original must outlive them.
+    ~DataflowBuffer();
+#endif
 
     uint16_t get_id() const { return logical_dfb_id_; }
 
+    // Returns the size of each entry in the DFB
     uint32_t get_entry_size() const;
     uint32_t get_stride_size() const;
+    // Returns the total number of entries that can be stored in the DFB
+    uint32_t get_total_num_entries() const;
+    // Total L1 backing for the global ring (num_entries * entry_size), in bytes.
+    uint32_t get_total_size_bytes() const;
+
+    // --- Quasar (tt-2xx) depth / L1 extent queries ---------------------------------
+    //
+    // A logical DFB on Quasar may use multiple hardware tile counters (TCs) on one RISC
+    // (round-robin via tc_idx over tc_slots[0..num_tcs_to_rr-1]). Each TC has its own
+    // base_addr and ring extent (limit on DM; ring_size on TRISC). These getters expose
+    // three measurement scopes; see also DFB L1 layout diagrams (STRIDED vs ALL).
+    //
+    //  (1) get_total_*     — entire DFB: num_entries credits, num_entries * entry_size L1.
+    //
+    //  (2) get_local_*     — active TC only (tc_slots[tc_idx]):
+    //        get_local_num_entries()  HW credit depth (buf_capacity) for this TC.
+    //        get_local_size_bytes()   linear address interval [base, limit) / ring_size
+    //                                 for this TC alone.
+    //
+    //      local_size_bytes is ONE contiguous L1 interval, but the entries *owned* by this
+    //      TC are often NOT adjacent inside it — tile counters can have discontiguous L1:
+    //
+    //      STRIDED (e.g. 4Sx1S: stride_in_entries = num_producers):
+    //        Global ring is interleaved: physical slot (e, p) = e*P + p.
+    //        Each TC walks its column with stride_size (= entry_size * P):
+    //
+    //          L1:  [P0@e0][P1@e0][P2@e0][P3@e0][P0@e1][P1@e1]...
+    //          TC0:  ^              ^              ^         (every P-th entry)
+    //
+    //        TC0's [base0, limit0) spans the full linear ring byte length, but its owned
+    //        tiles sit P-1 foreign slots apart — discontiguous within that interval.
+    //
+    //      ALL (e.g. 4Sx1A: stride_in_entries = 1):
+    //        Each TC owns a contiguous block of capacity entries; bases step by
+    //        capacity * entry_size:
+    //
+    //          L1:  [ TC0: cap entries ][ TC1: cap entries ][ TC2: ... ][ TC3: ... ]
+    //
+    //        Here each TC's owned tiles ARE contiguous within its local interval.
+    //
+    //  (3) get_ring_span_* — bounding box across ALL TC slots on this RISC:
+    //        Contiguous L1 from tc_slots[0].base through the end of the last TC ring
+    //        (limit[last] - base[0] on DM; base[last] + ring_size[last] - base[0] on TRISC).
+    //        get_ring_span_num_entries() = ring_span_bytes / entry_size (address slots in
+    //        that bounding interval, not per-TC owned entry count).
+    //
+    //        ring_span is the minimal contiguous L1 interval covering every TC window.
+    //        In STRIDED layouts TC bases are staggered by entry_size with overlapping
+    //        windows; in ALL layouts TC blocks are disjoint and packed. Neither layout
+    //        guarantees that every byte in ring_span belongs to one TC's owned entries
+    //        (STRIDED: foreign interleaved slots; ALL: only the active TC's block is
+    //        "yours" at a given time during round-robin).
+    //
+    // On tt-1xx (WH/BH) there is no per-TC view; all four getters alias get_total_*.
+    uint32_t get_local_num_entries() const;
+    uint32_t get_local_size_bytes() const;
+    uint32_t get_ring_span_bytes() const;
+    uint32_t get_ring_span_num_entries() const;
+
+    // Tiles per op on this side: the block when this side is BLOCKED, block / stride when only the
+    // other side is, else 1. With a BLOCKED side every reserve/push/wait/pop must pass this count.
+    // MATH returns 1 here, so compute kernels keep the dest handshake per tile, not per share.
+    // On tt-1xx (WH/BH) every op moves one contiguous entry, so all four return 1.
+    uint16_t get_producer_share() const;
+    uint16_t get_consumer_share() const;
+    // Spacing between the entries of one op (1 = contiguous). Only a STRIDED side facing BLOCKED
+    // consumers/producers has a stride > 1. copy_tile / pack_tile apply it to their tile index
+    // themselves (llk_unpack_A / llk_pack); raw L1 reads and DM NoC transfers multiply by it.
+    uint16_t get_producer_stride_tiles() const;
+    uint16_t get_consumer_stride_tiles() const;
 
     // Explicit sync APIs
     void reserve_back(uint16_t num_entries) { reserve_back_impl(num_entries); }
@@ -95,6 +243,23 @@ public:
     void wait_front(uint16_t num_entries) { wait_front_impl(num_entries); }
     void pop_front(uint16_t num_entries) { pop_front_impl(num_entries); }
     // Explicit sync APIs end
+
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+    // Test-only free helpers (defined in internal/tt-2xx/dataflow_buffer_test_helpers.h,
+    // NOT part of the public DFB API). Granted friend access to advance the
+    // implicit-sync shadow state alongside the HW counter. See that header for
+    // semantics + usage rules.
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
+    friend void preload_posted_counter(DataflowBuffer<P, C>&, uint16_t);
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
+    friend void preload_acked_counter(DataflowBuffer<P, C>&, uint16_t);
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
+    friend void preload_posted_cursor(DataflowBuffer<P, C>&, uint16_t);
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
+    friend void preload_acked_cursor(DataflowBuffer<P, C>&, uint16_t);
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
+    friend void preload_counters_lockstep(DataflowBuffer<P, C>&, uint16_t);
+#endif
 
 #ifndef COMPILE_FOR_TRISC
 #ifndef ARCH_QUASAR
@@ -210,26 +375,90 @@ public:
 #endif // DFB_DESCRIPTORS_DEFINED
 
 #ifdef COMPILE_FOR_TRISC
-#ifndef ARCH_QUASAR
     uint32_t get_tile_address(uint32_t tile_index);
-    uint32_t read_tile_value(uint32_t tile_index, uint32_t element_offset);
-#endif
+
+    // Reads one scalar element from a tile at specified tile_index. element_offset is an index into the tile as a T[]
+    // array from its L1 base address (not a byte offset); each step is sizeof(T) bytes
+    // (default T=uint32_t → 4-byte words).
+    // Values are mailbox-broadcast to all TRISC threads as a zero-extended uint32_t; MATH/PACK cast back to T.
+    template <typename T = uint32_t>
+    T read_tile_value(uint32_t tile_index, uint32_t element_offset);
 #endif
 
-    void finish() { finish_impl(); }
+    // Deprecated no-op: on Quasar the drain runs in ~DataflowBuffer(); on WH/BH there is nothing to drain.
+    void finish() {}
 
 #ifndef COMPILE_FOR_TRISC
-    // This should not be used on WH/BH if the read into/write out of the DFB uses transaction ids because the transaction ids are not tracked.
-    // Instead, use noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid})
-    void write_barrier(const Noc &noc) const { write_barrier_impl(noc); }
+    // Deprecated no-op on Quasar: the write barrier runs in ~DataflowBuffer().
+    // On WH/BH this should not be used if the read into/write out of the DFB uses transaction ids because the
+    // transaction ids are not tracked. Instead, use noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid})
+    void write_barrier(const Noc& noc) const { write_barrier_impl(noc); }
 #endif
 
-    uint32_t get_write_ptr() const { return get_write_ptr_impl(); }
-    uint32_t get_read_ptr()  const { return get_read_ptr_impl(); }
+    // Peek current FIFO cursors (byte address / arch units). Use for local entry data access —
+    // prefer holding a scoped_write_lock/scoped_read_lock when poking L1. Prefer noc.h for Class 1
+    // transfers (pass the DFB).
+    // On Quasar DM, this returns the uncached alias temporarily until we figure out a long term
+    // cache strategy.
+    uint32_t get_write_ptr() const { return get_write_ptr_impl() + L1_UNCACHED_OFFSET; }
+    uint32_t get_read_ptr() const { return get_read_ptr_impl() + L1_UNCACHED_OFFSET; }
 
-    [[nodiscard]] auto scoped_lock() {
-        // TODO: Register with the debugger to track the lock
-        return Lock([this]() { release_scoped_lock(); });
+#ifdef COMPILE_FOR_TRISC
+    // Returns the LLKOperand pointing to the front (reading address) of the DFB
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
+    template <typename Operand>
+    [[nodiscard]] Operand front() const {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
+        return Operand{0};
+#else
+        return Operand{(get_read_ptr_impl() >> (4 - cb_addr_shift)) - 1};
+#endif
+    }
+
+    // Returns the LLKOperand pointing to the back (writing address) of the DFB
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
+    template <typename Operand>
+    [[nodiscard]] Operand back() const {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
+        return Operand{0};
+#else
+        return Operand{(get_write_ptr_impl() >> (4 - cb_addr_shift)) - 1};
+#endif
+    }
+#endif
+
+#ifndef ARCH_QUASAR
+    // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
+    // Not for peeks: use get_*_ptr. Not declared on Quasar (redesign Classes 2–5).
+    void evil_set_write_ptr(uint32_t addr);
+    void evil_set_read_ptr(uint32_t addr);
+#endif
+
+    // Lock num_entries entries starting at the write_ptr (scoped_write_lock) or read_ptr (scoped_read_lock).
+    // Both:
+    //   - Flag any NOC write into the locked entries as WRITE_TO_LOCKED_DFB.
+    //   - On Quasar, invalidate the L2 cache range on acquire.
+    // In addition, scoped_write_lock also flushes on release.
+    //
+    // get_ptr() hands out the UNCACHED alias on Quasar DM, matching get_write_ptr()/get_read_ptr(), so
+    // CPU accesses through the lock reach TL1 directly.
+    [[nodiscard]] auto scoped_write_lock(uint16_t num_entries = 1) {
+        const ScopedLockRegion region = lock_acquire_impl<true>(num_entries);
+        return make_dfb_scoped_lock<true>(region.start + L1_UNCACHED_OFFSET, [this, region, num_entries]() {
+            lock_release_impl<true>(region, num_entries);
+        });
+    }
+    [[nodiscard]] auto scoped_read_lock(uint16_t num_entries = 1) {
+        const ScopedLockRegion region = lock_acquire_impl<false>(num_entries);
+        return make_dfb_scoped_lock<false>(region.start + L1_UNCACHED_OFFSET, [this, region, num_entries]() {
+            lock_release_impl<false>(region, num_entries);
+        });
     }
 
 private:
@@ -237,51 +466,129 @@ private:
     void push_back_impl(uint16_t num_entries);
     void wait_front_impl(uint16_t num_entries);
     void pop_front_impl(uint16_t num_entries);
+#ifdef ARCH_QUASAR
     void finish_impl();
+#endif
     uint32_t get_write_ptr_impl() const;
     uint32_t get_read_ptr_impl()  const;
-#ifndef COMPILE_FOR_TRISC
-    void write_barrier_impl(const Noc &noc) const;
+
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    static constexpr uint32_t L1_UNCACHED_OFFSET = MEM_L1_UNCACHED_BASE;
+#else
+    static constexpr uint32_t L1_UNCACHED_OFFSET = 0;
 #endif
+
+    // NOC APIs do not accept uncached addresses, but this is private so not exposed to kernels.
+    uint32_t get_noc_write_addr() const { return get_write_ptr_impl(); }
+    uint32_t get_noc_read_addr() const { return get_read_ptr_impl(); }
+
+#ifndef COMPILE_FOR_TRISC
+    friend struct noc_traits_t<DFB_CLASS>;
+
+    void write_barrier_impl(const Noc& noc) const;
+#ifdef ARCH_QUASAR
+    void write_barrier_impl(uint8_t noc_id) const;
+#endif
+#endif
+
+    struct ScopedLockRegion {
+        uint32_t start;  // first locked address = the write/read pointer at acquire
+        uint32_t base;   // wrap base  (Quasar tc_slot base; WH/BH ring base)
+        uint32_t limit;  // wrap limit (Quasar tc_slot limit; WH/BH fifo_limit)
+    };
+    template <bool is_write>
+    ScopedLockRegion lock_acquire_impl(uint16_t num_entries);
+    template <bool is_write>
+    void lock_release_impl(ScopedLockRegion region, uint16_t num_entries);
 
 #ifdef ARCH_QUASAR
     template <bool is_producer>
-    void handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index);
+    void handle_final_credits(uint32_t tiles_issued, uint8_t txn_id_index);
 
 #ifndef COMPILE_FOR_TRISC
-    friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_* implicit-sync helpers
+    friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_*
+    // PrefetcherPipe::pop_front waits on relay consumer acks by calling wait_relay_consumer_caught_up
+    friend class experimental::PrefetcherPipe;
 
-    uint32_t prepare_implicit_read();
-    void commit_implicit_read();
+    uint32_t prepare_implicit_read(uint32_t num_tiles);
+    void commit_implicit_read(uint32_t num_tiles);
 
-    uint32_t prepare_implicit_write();
-    void commit_implicit_write();
+    uint32_t prepare_implicit_write(uint32_t num_tiles);
+    void commit_implicit_write(uint32_t num_tiles);
+
+    // Relay handoff (pipe-private): spin until consumer acked has caught producer posted
+    // on every RR TC this object owns. After push_back(N) in the relay loop, the
+    // outstanding gap is those N entries.
+    void wait_relay_consumer_caught_up() const;
 #endif // !COMPILE_FOR_TRISC
 #endif // ARCH_QUASAR
 
-    void release_scoped_lock() {
-        // TODO: Unregister with the debugger
+    constexpr uint32_t address_units_to_bytes(uint32_t units) const {
+        return units << cb_addr_shift;
     }
 
-    DFBInterface& local_dfb_interface_;
     uint16_t logical_dfb_id_;
 
+#if defined(ARCH_QUASAR) && !DFB_IS_COMPUTE_MATH
+    uint16_t stride_tiles_cache_ = 1;
+    uint16_t peer_share_cache_ = 1;
+#endif
 #ifdef ARCH_QUASAR
-    // Metadata for implicit sync
+    // The stride the host serialized for this hart, in entries.
+    uint16_t wire_stride_tiles() const;
+    template <bool IsProducer>
+    uint16_t side_share() const;
+    template <bool IsProducer>
+    uint16_t side_stride_tiles() const;
+#if !defined(COMPILE_FOR_TRISC)
+    // ALL consumers: a DM producer posts every op to all of its counters. Compile-time except
+    // for UNKNOWN, which reads the wire flag.
+    bool producer_broadcast() const;
+#endif
+#endif
+
+#if !DFB_IS_COMPUTE_MATH
+    DFBInterface& local_dfb_interface_;
+#endif
+
+#ifdef ARCH_QUASAR
+#ifndef COMPILE_FOR_TRISC
+    // Metadata for implicit sync (DM only)
     uint16_t ptxn_id_loop_cnt_ = 0;
     uint8_t ptxn_id_index_ = 0;
-    uint16_t ptiles_read_ = 0;  // not the same as tile counter: HW has no way to track pending posts
+    uint32_t ptiles_read_ = 0;  // running total of tiles read (32-bit so it never wraps in a launch)
 
     uint16_t ctxn_id_loop_cnt_ = 0;
     uint8_t ctxn_id_index_ = 0;
-    uint16_t ctiles_written_ = 0;  // not the same as tile counter: HW has no way to track pending acks
+    uint32_t ctiles_written_ = 0;  // running total of tiles written (32-bit so it never wraps in a launch)
+
+    // Implicit sync: position inside the current share and its txn id. A STRIDED side moves one
+    // entry per NoC call; a BLOCKED side moves the whole block, so it stays at 0.
+    uint16_t pshare_pos_ = 0;
+    uint32_t pshare_txn_id_ = 0;
+    uint16_t cshare_pos_ = 0;
+    uint32_t cshare_txn_id_ = 0;
+#endif
+
+    // The implicit copy constructor copies this pointer, so every copy points at the original. Traffic is
+    // recorded on the original, and only the original drains.
+    DataflowBuffer* drain_owner_ = this;
+#ifndef COMPILE_FOR_TRISC
+    // DM only
+    bool has_outbound_writes_ = false;
+#endif
 #endif
 };
 
 #ifndef COMPILE_FOR_TRISC
 
+#ifdef ARCH_QUASAR
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+struct noc_traits_t<DataflowBuffer<Pap, Cap>> {
+#else
 template <>
 struct noc_traits_t<DataflowBuffer> {
+#endif
 
     // Alias the struct defined in noc.h so that noc_traits_t<DataflowBuffer>::src/dst_args_type
     // stays consistent with the DFB-specific Noc overload signatures.
@@ -296,28 +603,42 @@ struct noc_traits_t<DataflowBuffer> {
         uint32_t offset_bytes{};
     };
     template <Noc::AddressType address_type>
-    static auto src_addr(const DataflowBuffer& src, const Noc&, const src_args_type& args) {
+    static auto src_addr(const DFB_CLASS& src, const Noc&, const src_args_type& args) {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 source");
-        return src.get_read_ptr() + args.offset_bytes;
+#ifdef ARCH_QUASAR
+        src.drain_owner_->has_outbound_writes_ = true;
+#endif
+        // Use cached addresses for NOC APIs
+        return src.get_noc_read_addr() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
-    static auto dst_addr(const DataflowBuffer& dst, const Noc& noc, const dst_args_type& args) {
+    static auto dst_addr(const DFB_CLASS& dst, const Noc& noc, const dst_args_type& args) {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 destination");
-        return dst.get_write_ptr() + args.offset_bytes;
+        // Use cached addresses for NOC APIs
+        return dst.get_noc_write_addr() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
-    static auto dst_addr_mcast(const DataflowBuffer& dst, const Noc& noc, const dst_args_mcast_type& args) {
+    static auto dst_addr_mcast(const DFB_CLASS& dst, const Noc& noc, const dst_args_mcast_type& args) {
         static_assert(
             address_type == Noc::AddressType::NOC, "DataflowBuffer with mcast range cannot be used as L1 destination");
-        auto local_addr = dst.get_write_ptr() + args.offset_bytes;
+        // Use cached addresses for NOC APIs
+        auto local_addr = dst.get_noc_write_addr() + args.offset_bytes;
         return ::get_noc_multicast_addr(
             args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
     }
 };
+
+#ifdef ARCH_QUASAR
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+inline constexpr bool noc_zero_l1_endpoint_v<DataflowBuffer<Pap, Cap>> = true;
+#else
+template <>
+inline constexpr bool noc_zero_l1_endpoint_v<DataflowBuffer> = true;
+#endif
 
 #endif
 

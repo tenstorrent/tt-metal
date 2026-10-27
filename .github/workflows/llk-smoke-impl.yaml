@@ -16,6 +16,30 @@ on:
         required: false
         type: string
         default: "not perf and not nightly and not quasar"
+      budget-type:
+        required: false
+        type: string
+        default: pr_gate
+        description: >-
+          Which of llk's allowances this run spends. Reporting only: budgets are
+          enforced from the `budget_type` field
+      sku-allowlist:
+        required: false
+        type: string
+        default: "*"
+        description: >-
+          Optional logical SKU allowlist (comma-separated) for change gating.
+          Default "*" means no extra filter. Empty string skips all tests.
+          Any other value is forwarded as --sku-allowlist.
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Commit SHA to test. Empty means github.sha, which is what the PR gate
+          wants (on pull_request that is the merge commit). Pipelines that can
+          target an arbitrary commit — sanity-tests.yaml — pass their own ref so
+          the LLK legs test the same tree as every other leg.
 
 permissions:
   checks: write
@@ -26,36 +50,52 @@ env:
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.hardware-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_smoke_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_pr_gate_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          ref: ${{ inputs.ref || github.sha }}
           sparse-checkout: |
             .github
             tests/pipeline_reorg
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "smoke"
       - name: Build test matrix
         id: build-matrix
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
+          sku-allowlist: ${{ inputs.sku-allowlist }}
+
+      # Quasar shards in the same yaml run on ttsim (sim_quasar_xl) from
+      # llk-ttsim-pr-gate-impl.yaml. This job mounts /dev/tenstorrent.
+      - name: Drop simulator legs
+        id: hardware-matrix
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
         run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+          python3 - << 'PY'
+          import json
+          import os
+
+          rows = json.loads(os.environ["MATRIX"] or "[]")
+          kept = [row for row in rows if not str(row.get("sku", "")).startswith("sim_")]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write("matrix<<EOF\n")
+              handle.write(json.dumps(kept))
+              handle.write("\nEOF\n")
+          print(f"Hardware legs: {len(kept)} (dropped {len(rows) - len(kept)} simulator legs)")
+          PY
 
   llk-smoke-exec:
     needs: load-test-matrix
@@ -74,6 +114,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - name: Install SFPI
         shell: bash
         working-directory: ${{ env.LLK_PATH }}

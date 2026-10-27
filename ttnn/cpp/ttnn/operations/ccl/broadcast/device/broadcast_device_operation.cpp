@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 namespace ttnn::prim {
 void BroadcastDeviceOperation::validate_on_program_cache_miss(
@@ -36,11 +37,11 @@ void BroadcastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.memory_config().memory_layout());
 }
 
-TensorSpec BroadcastDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec BroadcastDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& shape = input_tensor.logical_shape();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.output_mem_config));
@@ -52,23 +53,27 @@ Tensor BroadcastDeviceOperation::create_output_tensors(
     return create_device_tensor(spec, tensor_args.input_tensor.device());
 }
 
-ttsl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
+BroadcastDeviceOperation::topology_return_value_t BroadcastDeviceOperation::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "BroadcastDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = operation_attributes.sub_device_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    return tt::tt_metal::operation::hash_operation<BroadcastDeviceOperation>(
-        operation_attributes.sender_coord,
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        operation_attributes.output_mem_config,
-        operation_attributes.topology,
-        operation_attributes.cluster_axis,
-        subdevice_core_range_set,
-        tensor_args);
+    // Every device along the broadcast line ends up holding the sender's bytes. The op only ever runs on a tensor
+    // that spans the sender's line: every non-sender's link-0 worker waits on the semaphore the sender's line
+    // multicast raises (BroadcastProgramFactory::create_at, `wait_output_semaphore = (link == 0) && !is_sender`), so
+    // a device off that line would never be signalled. The label is therefore the all_broadcast label: Replicate on
+    // the broadcast axis (`cluster_axis`) with the other axes kept, or Replicate on every axis for the whole-mesh
+    // call. The helper computes it -- it expands a collapsed `{N},[p]` label to one placement per mesh axis first and
+    // edits by axis index only when axis i of the label is axis i of the mesh -- and the inputs broadcast runs on pass
+    // that test: a collapsed label covering a line mesh, and the N-D `(1, C)` / `(R, 1)` sub-range labels from_torch
+    // produces for `ShardTensor2dMesh(mesh_shape=(1, C))` on the parent mesh, judged by their shape since a device
+    // tensor's label lists every device of the mesh (test_broadcast_nd_along_one_axis_keeps_the_other). A label whose
+    // axes are not the mesh's is refused: `ShardTensor2dMesh(mesh_shape=(C, 1))` on an RxC mesh with C > R does not
+    // fit, distributes row-major over row 0 and would keep a Shard claiming C distinct pieces where every device
+    // holds the sender's (test_broadcast_misaligned_nd_label_is_refused). A refusal (nullopt, already reported by the
+    // helper; an error under strict mode) keeps the input's label, stated explicitly: `{}` would hand the framework
+    // the union over every tensor argument.
+    const auto& input_tensor = tensor_args.input_tensor;
+    return {
+        ttnn::operations::ccl::common::all_broadcast_output_topology(input_tensor, operation_attributes.cluster_axis)
+            .value_or(input_tensor.tensor_topology())};
 }
 
 Tensor broadcast(

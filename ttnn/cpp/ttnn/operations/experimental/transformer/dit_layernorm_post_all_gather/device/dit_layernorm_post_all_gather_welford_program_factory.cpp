@@ -9,9 +9,12 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
+#include "ttnn/distributed/types.hpp"
 
 #include <optional>
 #include <string>
@@ -47,7 +50,7 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
 
     uint32_t num_tile_rows = NC * Ht;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -235,7 +238,7 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
         "conversion.");
 
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
-    // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode). For those, setting
+    // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode). For those, setting
     // the flag preserves the full 23-mantissa fp32 by bypassing SrcA.
     // c_1 (stats) is consumed only by copy_tile inside combine_welford_partials.
     // Set the flag so the per-row mean/M2 recombine reads full mantissa.

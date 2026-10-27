@@ -19,13 +19,13 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
-    const std::optional<float> scalar,
+    std::optional<float> scalar,
     const std::optional<ttnn::Tensor>& addcmul_input_tensor1,
     const std::optional<ttnn::Tensor>& addcmul_input_tensor2,
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
     const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const ttnn::ccl::Topology topology,
+    ttnn::ccl::Topology topology,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<const DataType> dtype = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
@@ -33,7 +33,7 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     uint32_t num_links = 1,
     std::optional<uint32_t> cluster_axis = std::nullopt,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
-    const bool force_transpose = true,
+    bool force_transpose = true,
     uint32_t num_workers_per_link = 1,
     uint32_t num_buffers_per_channel = 1,
     int32_t chunks = 1,
@@ -41,6 +41,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     std::optional<uint32_t> fsdp_cluster_axis = std::nullopt,
     const std::vector<GlobalSemaphore>& fsdp_multi_device_global_semaphore = {},
     const std::optional<ttnn::Tensor>& persistent_weight_buffer = std::nullopt,
-    std::optional<ttnn::ccl::Topology> fsdp_topology = std::nullopt);
+    std::optional<ttnn::ccl::Topology> fsdp_topology = std::nullopt,
+    bool fuse_swiglu = false,
+    const std::vector<uint32_t>& chunk_sizes = {});
 
 }  // namespace ttnn

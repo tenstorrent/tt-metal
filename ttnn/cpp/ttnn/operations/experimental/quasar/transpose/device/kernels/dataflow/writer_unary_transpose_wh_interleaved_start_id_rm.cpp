@@ -5,32 +5,31 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_id = get_arg_val<uint32_t>(1);
-    uint32_t num_hw_blocks_per_core = get_arg_val<uint32_t>(2);
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t num_hw_blocks_per_core = get_arg(args::num_hw_blocks);
 
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);
-    constexpr uint32_t H = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt = get_compile_time_arg_val(3);
-    constexpr uint32_t W_per_tile = get_compile_time_arg_val(4);
-    constexpr uint32_t W_per_tile_last = get_compile_time_arg_val(5);
-    constexpr uint32_t HtWt = get_compile_time_arg_val(6);
-    constexpr uint32_t H_size_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t l1_read_offset_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t H = get_arg(args::H);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t W_per_tile = get_arg(args::W_per_tile);
+    constexpr uint32_t W_per_tile_last = get_arg(args::W_per_tile_last);
+    constexpr uint32_t HtWt = get_arg(args::HtWt);
+    constexpr uint32_t H_size_bytes = get_arg(args::H_size_bytes);
+    constexpr uint32_t l1_read_offset_bytes = get_arg(args::l1_read_offset_bytes);
 
     // single-tile ublocks
     const uint32_t stick_size_bytes = H_size_bytes;
 
-    constexpr auto dst_args = TensorAccessorArgs<10>();
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    CircularBuffer cb(cb_out0);
+    DataflowBuffer cb(dfb::cb_out0);
 
     uint32_t i_stick = start_id;
 

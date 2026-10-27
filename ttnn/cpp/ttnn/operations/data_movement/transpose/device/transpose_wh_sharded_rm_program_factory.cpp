@@ -250,4 +250,18 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
     return desc;
 }
 
+void TransposeWHShardedRMProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& tensor_args,
+    Tensor& output_tensor,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // All three kernels take compile-time args only, so the buffer addresses are the whole per-dispatch
+    // state. CBs are matched positionally: src0 and output are pushed first, the rest are unbound.
+    ProgramDescriptor cb_addr_only;
+    cb_addr_only.cbs.push_back(CBDescriptor{.buffer = tensor_args.input.buffer()});
+    cb_addr_only.cbs.push_back(CBDescriptor{.buffer = output_tensor.buffer()});
+    apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
+}
+
 }  // namespace ttnn::prim

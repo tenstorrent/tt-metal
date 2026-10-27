@@ -335,7 +335,7 @@ TEST_F(MeshEventsTestSuite, EventQuery) {
         }
     }
     // Create a dummy event from the future that has not been issued yet.
-    auto event = MeshEvent(0xffff, mesh_device_.get(), 0, MeshCoordinateRange(mesh_device_->shape()));
+    auto event = MeshEvent(0xffff, mesh_device_->mesh_command_queue(0), MeshCoordinateRange(mesh_device_->shape()));
     EXPECT_FALSE(EventQuery(event));  // Querying an event that has not been issued should return false.
 }
 

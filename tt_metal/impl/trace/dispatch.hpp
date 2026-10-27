@@ -13,30 +13,33 @@
 #include "core_coord.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/worker_config_buffer.hpp"
+#include "impl/context/context_types.hpp"
 #include "sub_device_types.hpp"
 #include "trace_buffer.hpp"
 
 namespace tt::tt_metal {
-class IDevice;
 class LaunchMessageRingBufferState;
 class SystemMemoryManager;
 class WorkerConfigBufferMgr;
+namespace distributed {
+class MeshDevice;
+}
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::trace_dispatch {
 
 struct TraceDispatchMetadata {
     uint32_t cmd_sequence_sizeB;
-    std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& trace_worker_descriptors;
-    std::vector<SubDeviceId>& sub_device_ids;
+    const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& trace_worker_descriptors;
+    const std::vector<SubDeviceId>& sub_device_ids;
     uint32_t trace_buffer_page_size = 0;
     uint32_t trace_buffer_num_pages = 0;
     uint32_t trace_buffer_address = 0;
 
     TraceDispatchMetadata(
         uint32_t cmd_size,
-        std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& descriptors,
-        std::vector<SubDeviceId>& sub_devices,
+        const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& descriptors,
+        const std::vector<SubDeviceId>& sub_devices,
         uint32_t buf_page_size,
         uint32_t buf_num_pages,
         uint32_t buf_address) :
@@ -67,14 +70,14 @@ void load_host_dispatch_state(
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset);
 
 void issue_trace_commands(
-    IDevice* device,
+    distributed::MeshDevice* mesh_device,
     SystemMemoryManager& sysmem_manager,
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
-    CoreCoord dispatch_core);
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state);
 
-uint32_t compute_trace_cmd_size(uint32_t num_sub_devices);
+uint32_t compute_trace_cmd_size(ContextId context_id, uint32_t num_sub_devices);
 
 void update_worker_state_post_trace_execution(
     const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& trace_worker_descriptors,

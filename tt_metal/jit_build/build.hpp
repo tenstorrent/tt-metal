@@ -11,12 +11,13 @@
 #include <future>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <tt-metalium/hal_types.hpp>
 #include "jit_build/types.hpp"
 #include "jit_build_options.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::llrt {
 class RunTimeOptions;
@@ -30,9 +31,13 @@ class Hal;
 static constexpr uint32_t CACHE_LINE_ALIGNMENT = 64;
 
 template <typename T>
-using vector_cache_aligned = std::vector<T, tt::stl::aligned_allocator<T, CACHE_LINE_ALIGNMENT>>;
+using vector_cache_aligned = std::vector<T, ttsl::aligned_allocator<T, CACHE_LINE_ALIGNMENT>>;
 
 class JitBuildSettings;
+
+// Root of the tt-metal cache: TT_METAL_CACHE as captured by `rtoptions` if set, else
+// ~/.cache/tt-metal-cache/, else /tmp/tt-metal-cache/.
+std::string get_cache_root(const llrt::RunTimeOptions& rtoptions);
 
 struct JitBuiltStateConfig {
     HalProgrammableCoreType core_type{};
@@ -40,6 +45,7 @@ struct JitBuiltStateConfig {
     int processor_id = 0;
     bool is_fw = false;
     uint32_t dispatch_message_addr = 0;
+    bool fds_signalling = false;
     // Set `is_cooperative` when Metal FW/Kernel code is loaded on risc with some base FW running.
     // In this case Metal FW will need to facilitate context switching to base FW (e.g. code running on WH active
     // eriscs)
@@ -61,7 +67,7 @@ public:
         const std::map<std::string, std::string>& device_kernel_defines);
 
     tt::ARCH get_arch() const { return arch_; }
-    uint32_t get_max_cbs() const { return max_cbs_; };
+    uint32_t get_max_dfbs() const { return max_dfbs_; };
     const tt::llrt::RunTimeOptions& get_rtoptions() const { return *rtoptions_; }
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
@@ -81,7 +87,7 @@ private:
     const tt::llrt::RunTimeOptions* rtoptions_{nullptr};
 
     tt::ARCH arch_{tt::ARCH::Invalid};
-    uint32_t max_cbs_{};
+    uint32_t max_dfbs_{};
 
     // Paths
     std::string root_;
@@ -130,6 +136,11 @@ protected:
     std::string extra_link_objs_;
     std::string weakened_firmware_name_;
 
+    // HAL-provided compile flags enabling RVV codegen on this state; empty when the arch or
+    // processor does not support it. Appended to a kernel's recipe cflags only when that
+    // kernel opted in (JitBuildSettings::get_rvv_enabled), so default builds are unchanged.
+    std::string rvv_cflags_;
+
     // Default compiler optimization setting
     // Used when JitBuildSettings is not provided
     std::string default_compile_opt_level_;
@@ -148,7 +159,6 @@ protected:
     static constexpr size_t kMaxBuildBitset = 64;
 
     bool build_state_matches(const std::string& out_dir) const;
-    void write_build_state_hash(const std::string& out_dir) const;
 
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
     std::bitset<kMaxBuildBitset> compile(
@@ -175,6 +185,25 @@ public:
     // kernel-specific settings.  Replaces the PoC pattern of exposing
     // individual getters for every internal field.
     tt::jit_build::TargetRecipe export_target_recipe(const JitBuildSettings* settings) const;
+
+    // Write the effective-recipe hash to a ".build_state" file in out_dir. Callers producing a
+    // reusable cache (preprocess-and-ship) stamp this with the real recipe so a later local build
+    // detects recipe changes not reflected in the kernel-hash path.
+    void write_build_state_hash(const std::string& out_dir) const;
+
+    // True if a warmed preprocess-and-ship ELF for `kernel_name` is present and still valid: the
+    // ".build_state" recipe stamp matches and the source-complete FULL_DEPHASH_SUFFIX sidecar is up
+    // to date, so compile+link (local build) or the remote round-trip can be skipped and the cached
+    // ELF loaded directly. Validates only this build state's single ELF; callers loop over a kernel's
+    // per-processor build states. Ordinary local builds never write the sidecar, so this returns
+    // false for them.
+    bool warmed_elf_reusable(std::string_view kernel_name) const;
+
+    // Write the preprocess-and-ship reuse cache (FULL_DEPHASH_SUFFIX sidecar + ".build_state") for
+    // this build state's ELF, from the .d files the -E step left in the target dir plus the link
+    // inputs. Call only after the remote compile succeeds and the ELF is on disk, so the cache never
+    // points at a missing or stale ELF. Validates on the next run via warmed_elf_reusable.
+    void write_reuse_cache(std::string_view kernel_name) const;
     const std::string& get_weakened_firmware_name() const { return weakened_firmware_name_; }
     bool get_firmware_is_kernel_object() const { return firmware_is_kernel_object_; }
 };
@@ -198,6 +227,10 @@ void sync_build_steps(std::vector<std::shared_future<void>>& events);
 // Returns immediately if hash was already built.
 // If build_fn throws, subsequent callers will retry.
 void jit_build_once(size_t hash, const std::function<void()>& build_fn);
+
+// Like jit_build_once(), but returns false instead of occupying the caller while
+// another thread builds the same hash.
+bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn);
 
 // Clear the JIT build cache so that subsequent jit_build_once() calls re-execute.
 void jit_build_cache_clear();

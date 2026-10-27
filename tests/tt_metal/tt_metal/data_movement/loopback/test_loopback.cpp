@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -16,7 +15,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
-#include <distributed/mesh_device_impl.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -49,9 +48,7 @@ struct LoopbackConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const LoopbackConfig& test_config) {
-    IDevice* device = mesh_device->impl().get_device(0);
-
+bool run_dm(distributed::MeshDevice& mesh_device, const LoopbackConfig& test_config) {
     // Buffer Parameters
     const uint32_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
 
@@ -73,7 +70,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
     uint32_t subordinate_l1_byte_address =
         master_l1_info.base_address + transaction_size_bytes;  // Offset for subordinate data
 
-    CoreCoord worker = device->worker_core_from_logical_core(test_config.master_core_coord);
+    CoreCoord worker = mesh_device.worker_core_from_logical_core(test_config.master_core_coord);
 
     using namespace tt::tt_metal::experimental;
 
@@ -88,6 +85,18 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
         .target_nodes = test_config.master_core_coord,
     };
 
+    DataMovementHardwareConfig sender_hw_config;
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
+        sender_hw_config = DataMovementHardwareConfig{};
+    } else {
+        sender_hw_config = DataMovementHardwareConfig{
+            .config_1xx =
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = test_config.noc_id,
+                },
+        };
+    }
     KernelSpec sender_spec{
         .unique_id = KernelSpecName{"sender"},
         .source = "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender_2_0.cpp",
@@ -99,15 +108,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
             {
                 .runtime_arg_names = {"num_of_transactions", "transaction_num_pages", "dest_x", "dest_y"},
             },
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = test_config.noc_id,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = sender_hw_config,
     };
 
     ProgramSpec spec{
@@ -121,17 +122,19 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
         }},
     };
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program = MakeProgramFromSpec(mesh_device, spec);
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
-    sender_run_params.runtime_arg_values.push_back(
-        {.node = test_config.master_core_coord,
-         .args = {
-             {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
-             {"transaction_num_pages", (uint32_t)test_config.transaction_size_pages},
-             {"dest_x", (uint32_t)worker.x},
-             {"dest_y", (uint32_t)worker.y}}});
+    AddRuntimeArgsForNode(
+        sender_run_params.runtime_arg_values,
+        test_config.master_core_coord,
+        {
+            {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
+            {"transaction_num_pages", (uint32_t)test_config.transaction_size_pages},
+            {"dest_x", (uint32_t)worker.x},
+            {"dest_y", (uint32_t)worker.y},
+        });
     run_params.kernel_run_args.push_back(sender_run_params);
     SetProgramRunArgs(program, run_params);
 
@@ -151,8 +154,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
     vector<uint32_t> packed_golden = packed_input;
 
     // Write Input to Master L1
-    detail::WriteToDeviceL1(device, test_config.master_core_coord, master_l1_byte_address, packed_input);
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    slow_dispatch::WriteToL1(mesh_device, test_config.master_core_coord, master_l1_byte_address, packed_input);
+    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
 
     // Launch program and record outputs
     auto mesh_workload = distributed::MeshWorkload();
@@ -160,14 +163,14 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 
     // Record Output from Subordinate L1 (same core, different address)
     vector<uint32_t> packed_output;
-    detail::ReadFromDeviceL1(
-        device, test_config.master_core_coord, subordinate_l1_byte_address, transaction_size_bytes, packed_output);
+    slow_dispatch::ReadFromL1(
+        mesh_device, test_config.master_core_coord, subordinate_l1_byte_address, transaction_size_bytes, packed_output);
 
     // Results comparison
     bool is_equal = (packed_output == packed_golden);
@@ -183,9 +186,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
 }  // namespace unit_tests::dm::core_loopback
 
 /* ========== Test case for loopback data movement; ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
-    auto mesh_device = get_mesh_device();
-    auto arch_ = mesh_device->impl().get_device(0)->arch();
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementLoopbackPacketSizes) {
+    auto arch_ = this->device().arch();
 
     if (arch_ == ARCH::QUASAR) {
         // Single run to validate the Quasar code path within emulator 3-min timeout
@@ -198,7 +200,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
             .l1_data_format = DataFormat::Float16_b,
             .noc_id = NOC::NOC_0,
         };
-        EXPECT_TRUE(run_dm(mesh_device, test_config));
+        EXPECT_TRUE(run_dm(this->device(), test_config));
         return;
     }
 
@@ -225,19 +227,18 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
             };
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackDirectedIdeal) {
-    auto mesh_device = get_mesh_device();
-    auto arch_ = mesh_device->impl().get_device(0)->arch();
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementLoopbackDirectedIdeal) {
+    auto arch_ = this->device().arch();
 
     uint32_t test_id = 55;
 
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
 
     // Use reduced params for Quasar emulator to fit within 3-min timeout
     uint32_t num_of_transactions = arch_ == ARCH::QUASAR ? 4 : 128;
@@ -257,19 +258,18 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackDirectedIdeal) {
         .noc_id = noc_id};
 
     // Run
-    EXPECT_TRUE(run_dm(mesh_device, test_config));
+    EXPECT_TRUE(run_dm(this->device(), test_config));
 }
 
 /* ========== Metal 2.0 variants ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes_2_0) {
-    auto mesh_device = get_mesh_device();
-    auto arch_ = mesh_device->impl().get_device(0)->arch();
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementLoopbackPacketSizes_2_0) {
+    auto arch_ = this->device().arch();
 
     if (arch_ == ARCH::QUASAR) {
         // Single small config on Quasar emulator to fit within 3-min timeout while still
         // exercising the Metal 2.0 host path (MakeProgramFromSpec + named RTAs + SemaphoreSpec).
         unit_tests::dm::core_loopback::LoopbackConfig test_config = {
-            .test_id = unit_tests::dm::core_loopback::START_ID + 100,
+            .test_id = 44,
             .master_core_coord = {0, 0},
             .num_of_transactions = 4,
             .transaction_size_pages = 4,
@@ -277,7 +277,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes_2_0) {
             .l1_data_format = DataFormat::Float16_b,
             .noc_id = NOC::NOC_0,
         };
-        EXPECT_TRUE(unit_tests::dm::core_loopback::run_dm(mesh_device, test_config));
+        EXPECT_TRUE(unit_tests::dm::core_loopback::run_dm(this->device(), test_config));
         return;
     }
 
@@ -292,7 +292,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes_2_0) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
             unit_tests::dm::core_loopback::LoopbackConfig test_config = {
-                .test_id = unit_tests::dm::core_loopback::START_ID + 100,
+                .test_id = 44,
                 .master_core_coord = master_core_coord,
                 .num_of_transactions = num_of_transactions,
                 .transaction_size_pages = transaction_size_pages,
@@ -300,19 +300,18 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes_2_0) {
                 .l1_data_format = DataFormat::Float16_b,
                 .noc_id = noc_id,
             };
-            EXPECT_TRUE(unit_tests::dm::core_loopback::run_dm(mesh_device, test_config));
+            EXPECT_TRUE(unit_tests::dm::core_loopback::run_dm(this->device(), test_config));
         }
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackDirectedIdeal_2_0) {
-    auto mesh_device = get_mesh_device();
-    auto arch_ = mesh_device->impl().get_device(0)->arch();
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementLoopbackDirectedIdeal_2_0) {
+    auto arch_ = this->device().arch();
 
-    uint32_t test_id = 155;
+    uint32_t test_id = 45;
 
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
 
     uint32_t num_of_transactions = arch_ == ARCH::QUASAR ? 4 : 128;
     uint32_t transaction_size_pages = max_transmittable_pages / (num_of_transactions * 2);
@@ -327,7 +326,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackDirectedIdeal_2_0) {
         .noc_id = NOC::NOC_0,
     };
 
-    EXPECT_TRUE(unit_tests::dm::core_loopback::run_dm(mesh_device, test_config));
+    EXPECT_TRUE(unit_tests::dm::core_loopback::run_dm(this->device(), test_config));
 }
 
 }  // namespace tt::tt_metal

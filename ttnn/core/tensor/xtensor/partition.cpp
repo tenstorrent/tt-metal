@@ -8,6 +8,7 @@
 
 #include <type_traits>
 #include <algorithm>
+#include <cstring>
 
 #include <tt_stl/span.hpp>
 #include "ttnn/operations/functions.hpp"
@@ -21,7 +22,7 @@
 #include <xtensor/core/xtensor_forward.hpp>
 #include <xtensor/views/xview.hpp>
 
-namespace tt::tt_metal::experimental::xtensor {
+namespace ttnn::experimental::xtensor {
 namespace {
 
 ttsl::SmallVector<int> normalize_dims(const ttsl::SmallVector<int>& dims, size_t tensor_dims) {
@@ -172,28 +173,30 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
         std::accumulate(result_shape.begin(), result_shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
     XtensorAdapter<DataType> result(std::vector<DataType>(result_volume), std::move(result_shape));
 
-    // An optimization for concatenating along the outer dimension.
-    if (normalized_dims.size() == 1) {
-        // Check if all dimensions before the concat dimension have size 1.
-        bool can_use_memcpy = true;
-        for (int d = 0; d < normalized_dims[0]; ++d) {
-            if (expected_shape[d] != 1) {
-                can_use_memcpy = false;
-                break;
-            }
-        }
+    // Empty tensors have no valid element pointers; do not form offsets or call memcpy.
+    if (result_volume == 0) {
+        return result;
+    }
 
-        if (can_use_memcpy) {
-            DataType* result_ptr = result.data().data();
-            const size_t chunk_size = std::accumulate(
-                expected_shape.begin(), expected_shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
-            size_t offset = 0;
-            for (const auto& expr : expressions) {
-                std::memcpy(result_ptr + offset, expr.data(), chunk_size * sizeof(DataType));
-                offset += chunk_size;
+    if (normalized_dims.size() == 1 && std::all_of(expressions.begin(), expressions.end(), [](const auto& expr) {
+            return expr.layout() == xt::layout_type::row_major && expr.is_contiguous() && expr.data_offset() == 0;
+        })) {
+        // Each outer coordinate contributes one contiguous block per input, in input order.
+        const auto axis = normalized_dims.front();
+        const size_t outer_count = std::accumulate(
+            expected_shape.begin(), expected_shape.begin() + axis, size_t{1}, std::multiplies<size_t>());
+        const size_t block_elements =
+            std::accumulate(expected_shape.begin() + axis, expected_shape.end(), size_t{1}, std::multiplies<size_t>());
+        DataType* result_ptr = result.data().data();
+        for (size_t outer = 0; outer < outer_count; ++outer) {
+            for (size_t chunk = 0; chunk < expressions.size(); ++chunk) {
+                std::memcpy(
+                    result_ptr + (outer * expressions.size() + chunk) * block_elements,
+                    expressions[chunk].data() + outer * block_elements,
+                    block_elements * sizeof(DataType));
             }
-            return result;
         }
+        return result;
     }
 
     // Get the size of each piece along concatenation dimensions
@@ -232,7 +235,7 @@ XtensorAdapter<typename Expression::value_type> concat(const std::vector<Express
     return concat_ndim<Expression>(v, {v.size()}, {dim});
 }
 
-// Adaptor APIs from xtensor to tt::tt_metal::Tensor.
+// Adaptor APIs from xtensor to ttnn::Tensor.
 namespace adaptor {
 namespace {
 
@@ -244,13 +247,13 @@ Tensor concat_impl(const std::vector<Tensor>& tensors, const tt::tt_metal::Tenso
         xtensors.push_back(to_xtensor<T>(tensor));
     }
     xt::xarray<T> result(concat(xtensors, dim).expr());
-    return from_xtensor<T>(result, TensorSpec(get_shape_from_xarray(result), layout));
+    return from_xtensor<T>(result, tt::tt_metal::TensorSpec(get_shape_from_xarray(result), layout));
 }
 
 }  // namespace
 }  // namespace adaptor
 
-Tensor concat(const std::vector<Tensor>& tensors, int dim) {
+ttnn::Tensor concat(const std::vector<ttnn::Tensor>& tensors, int dim) {
     TT_FATAL(!tensors.empty(), "Cannot concatenate an empty list of tensors");
     const auto& reference_layout = tensors.front().tensor_spec().tensor_layout();
     switch (reference_layout.get_data_type()) {
@@ -259,6 +262,7 @@ Tensor concat(const std::vector<Tensor>& tensors, int dim) {
         case tt::tt_metal::DataType::FLOAT32: return adaptor::concat_impl<float>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::BFLOAT16: return adaptor::concat_impl<bfloat16>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::INT32: return adaptor::concat_impl<int32_t>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::INT8: return adaptor::concat_impl<int8_t>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::UINT8: return adaptor::concat_impl<uint8_t>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::UINT16: return adaptor::concat_impl<uint16_t>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::UINT32: return adaptor::concat_impl<uint32_t>(tensors, reference_layout, dim);
@@ -298,6 +302,7 @@ EXPLICIT_INSTANTIATIONS_FOR_TYPE(bfloat16)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(float)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(double)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(int32_t)
+EXPLICIT_INSTANTIATIONS_FOR_TYPE(int8_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint8_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint16_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint32_t)
@@ -306,4 +311,4 @@ EXPLICIT_INSTANTIATIONS_FOR_TYPE(float8_e4m3)
 
 #undef EXPLICIT_INSTANTIATIONS_FOR_TYPE
 
-}  // namespace tt::tt_metal::experimental::xtensor
+}  // namespace ttnn::experimental::xtensor

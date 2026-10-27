@@ -12,14 +12,13 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "llk_defs.h"
+#include "llk_sfpu/ckernel_sfpu_relu.h"
+#include "llk_sfpu/ckernel_sfpu_sqrt.h"
+#include "llk_sfpu/ckernel_sfpu_typecast_fp16b_uint16.h"
+#include "llk_sfpu/ckernel_sfpu_typecast_fp32_to_uint16.h"
+#include "llk_sfpu/ckernel_sfpu_typecast_int32_fp16b.h"
+#include "llk_sfpu/ckernel_sfpu_typecast_int32_fp32.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_recip.h"
-#include "sfpu/ckernel_sfpu_relu.h"
-#include "sfpu/ckernel_sfpu_sqrt.h"
-#include "sfpu/ckernel_sfpu_tanh.h"
-#include "sfpu/ckernel_sfpu_typecast_fp16b_uint16.h"
-#include "sfpu/ckernel_sfpu_typecast_int32_fp32.h"
 
 namespace ckernel
 {
@@ -40,16 +39,18 @@ inline void _sfpu_configure_addrmod_()
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
     }
-        .set(ADDR_MOD_7, csr_read<CSR::TRISC_ID>());
+        .set(ADDR_MOD_7);
 }
 
 /**
  * @brief Sets up starting index of SFPU, Stalls till all FPU operations are done
+ * @tparam TILE_SHAPE: Destination tile shape used to calculate the write address
  * @param tile_index: Use to index to a tile in Destination register
  */
+template <trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void _llk_math_sfpu_start_(const std::uint32_t tile_index)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_index);
+    _set_dst_write_addr_<TILE_SHAPE>(tile_index);
     TTI_STALLWAIT(p_stall::STALL_SFPU, 0, 0, p_stall::MATH);
 }
 

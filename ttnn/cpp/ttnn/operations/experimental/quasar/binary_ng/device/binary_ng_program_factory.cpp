@@ -8,11 +8,12 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/experimental/quasar/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <algorithm>
 using namespace tt::tt_metal;
+using ttnn::Tensor;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -24,7 +25,9 @@ uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     const auto& shape = x.logical_shape();
     uint32_t nD_dim = 1;
     if (out_rank >= 6 && shape.rank() >= 6) {
-        for (int i = -6; i >= -out_rank; --i) {
+        // A lower-rank operand has no dims beyond its own rank; they broadcast as 1.
+        const int rank = std::min<int>(out_rank, shape.rank());
+        for (int i = -6; i >= -rank; --i) {
             auto dim = shape[i];
             nD_dim *= dim;
         }
@@ -82,7 +85,9 @@ TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor
 }
 
 std::optional<AllShardSpecs> get_shard_specs(
-    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c) {
     bool a_sharded = a.memory_config().is_sharded();
     bool b_sharded = b.has_value() && b->memory_config().is_sharded();
     bool c_sharded = c.memory_config().is_sharded();
@@ -315,19 +320,24 @@ void overwrite_compute_kernel_name_and_defines(
 // Returns true on the (arch, broadcast, dtype) tuple that hangs the LLK
 // `unary_bcast` path on Blackhole: COL bcast + BFLOAT16 input + fp32_dest_acc_en.
 bool hits_bh_col_bcast_bf16_to_fp32_hang(
-    SubtileBroadcastType subtile_broadcast_type, DataType a_dtype, DataType b_dtype, bool fp32_dest_acc_en) {
+    tt::ARCH arch,
+    SubtileBroadcastType subtile_broadcast_type,
+    DataType a_dtype,
+    DataType b_dtype,
+    bool fp32_dest_acc_en) {
     const bool is_col_bcast =
         subtile_broadcast_type == SubtileBroadcastType::COL_A || subtile_broadcast_type == SubtileBroadcastType::COL_B;
     const bool has_bf16_input = a_dtype == DataType::BFLOAT16 || b_dtype == DataType::BFLOAT16;
-    return tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && is_col_bcast && fp32_dest_acc_en && has_bf16_input;
+    return arch == tt::ARCH::BLACKHOLE && is_col_bcast && fp32_dest_acc_en && has_bf16_input;
 }
 
 bool is_llk_bcast(
+    const tt::ARCH arch,
     const SubtileBroadcastType subtile_broadcast_type,
     const DataType a_dtype,
     const DataType b_dtype,
     const bool fp32_dest_acc_en) {
-    if (hits_bh_col_bcast_bf16_to_fp32_hang(subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en)) {
+    if (hits_bh_col_bcast_bf16_to_fp32_hang(arch, subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en)) {
         return false;
     }
 
@@ -346,7 +356,6 @@ bool is_llk_bcast(
         }
         if (all_match(DataType::FLOAT32) || all_match(DataType::INT32) || all_match(DataType::UINT32) ||
             all_match(DataType::UINT16)) {
-            tt::ARCH arch = tt::tt_metal::hal::get_arch();
             if (arch == tt::ARCH::WORMHOLE_B0) {
                 return true;
             }
@@ -361,7 +370,9 @@ bool is_llk_bcast(
 namespace ttnn::operations::experimental::quasar::binary_ng {
 
 std::optional<AllShardVolumes> get_shard_volumes(
-    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c) {
     const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c);
 
     if (not shard_specs.has_value()) {
@@ -398,10 +409,13 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const auto input_dtype = operation_attributes.input_dtype;
     if (is_quant_op) {
         TT_FATAL(is_sfpu_op, "Quantization op is SFPU-only");
+        TT_FATAL(
+            a.dtype() != DataType::INT8 && c.dtype() != DataType::INT8,
+            "Int8 quantization is not supported on the Quasar binary_ng path yet; use the default binary_ng op.");
     }
 
     const auto shard_volumes = get_shard_volumes(
-        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<TensorSpec>{}, c.tensor_spec());
+        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
     const auto has_sharding = shard_volumes.has_value();
     const auto a_sharded = has_sharding and shard_volumes->a_shard_volume.has_value();
     const auto b_sharded = has_sharding and shard_volumes->b_shard_volume.has_value();
@@ -423,6 +437,17 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
 
+    // fp32 dest accumulation must be enabled whenever any input or output is fp32, otherwise
+    // loading fp32 tiles into a DST configured for bf16 produces tile-aligned corruption
+    // for broadcast multiply (issue 43196). Computed here because it also bounds the number of
+    // tiles a compute batch may hold in DST (below), not only the compute kernel config.
+    const bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
+                                  c_data_format == tt::DataFormat::Float32 ||
+                                  a_data_format == tt::DataFormat::Float32 ||
+                                  b_data_format == tt::DataFormat::Float32 ||
+                                  (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
+                                  (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32);
+
     uint32_t a_single_tile_size = tt::tile_size(a_data_format);
     uint32_t b_single_tile_size = tt::tile_size(b_data_format);
     uint32_t c_single_tile_size = tt::tile_size(c_data_format);
@@ -438,8 +463,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // TODO: when handling mixed types, we must identify the appropriate dtype and pass it here to define the respective
     // LLK APIs
-    const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
-                                      : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
+    const auto& op_params = operation_attributes.op_params;
+    const auto op_config = is_sfpu_op
+                               ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype, op_params)
+                               : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype, op_params);
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
@@ -452,9 +479,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     {
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations = operation_attributes.post_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations = operation_attributes.post_activations;
 
         if (op_config.process_lhs.has_value()) {
             lhs_activations.push_back(*op_config.process_lhs);
@@ -542,8 +569,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     if (enable_multi_tile && !is_where_op) {
         if (!is_sfpu_op) {
-            // FPU kernels: 16-bit types can handle 8 tiles,
-            num_tiles_per_cycle = 8;  // Default for 16-bit types (BF16, BF8, BF4)
+            // FPU kernels: half-sync DST holds 8 tiles of 16-bit data, but only 4 when fp32 dest
+            // accumulation is on (any fp32 operand/output), since each element then takes 32 bits.
+            num_tiles_per_cycle = fp32_dest_acc_en ? 4 : 8;
         } else {
             // SFPU kernel should handle 4, but for unknown reason, only 2 works
             // no document and example to show why 4 does not work, need further investigation
@@ -711,15 +739,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     writer_desc.common_runtime_args = writer_common_runtime_args;
 
     // COMPUTE KERNEL
-    // fp32 dest accumulation must be enabled whenever any input or output is fp32, otherwise
-    // loading fp32 tiles into a DST configured for bf16 produces tile-aligned corruption
-    // for broadcast multiply (issue 43196).
-    bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
-                            c_data_format == tt::DataFormat::Float32 || a_data_format == tt::DataFormat::Float32 ||
-                            b_data_format == tt::DataFormat::Float32 ||
-                            (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
-                            (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32);
-
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t src0interim_cb_index = tt::CBIndex::c_3;
@@ -760,9 +779,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
+    const tt::ARCH arch = a.device()->arch();
     bool use_llk_bcast =
         !inputs_row_major && CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(
-                                 operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en);
+                                 arch, operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en);
 
     // The B2D broadcast path for BFP formats introduces rounding that EXP/EXP2
     // amplifies beyond acceptable tolerance.
@@ -808,7 +828,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // instead of MOVB2D.  Fall back to the software-broadcast path for the affected
     // broadcast types on Blackhole when FP32 dest accumulation is active.
     if (use_llk_bcast && fp32_dest_acc_en) {
-        tt::ARCH arch = tt::tt_metal::hal::get_arch();
         if (arch == tt::ARCH::BLACKHOLE) {
             auto sbt = operation_attributes.subtile_broadcast_type;
             bool uses_movb2d =
@@ -836,7 +855,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::Int32>";
             compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else if (b_dtype == DataType::UINT32) {
-            compute_kernel_defines["FILL_LLK"] = "fill_tile_uint<DataFormat::UInt32>";
+            compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::UInt32>";
             compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else {
             compute_kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
@@ -894,7 +913,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         const auto [cD, cN, cC, cHt, cWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(c);
 
         const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
-            a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<TensorSpec>{}, c.tensor_spec());
+            a.tensor_spec(),
+            b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
+            c.tensor_spec());
         const bool rt_has_sharding = shard_specs.has_value();
         auto grid = rt_has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
 
@@ -1138,10 +1159,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
                     }
                 }
-                std::vector<uint32_t> writer_runtime_args;
+                std::vector<std::variant<uint32_t, Buffer*>> writer_runtime_args;
                 if (row_major_inputs) {
                     writer_runtime_args = {
-                        c.buffer()->address(),
+                        c.buffer(),
                         common_row_width_elements,
                         c_num_tiles_core,
                         cD,
@@ -1157,20 +1178,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         writer_stride_size_bytes};
                 } else {
                     writer_runtime_args = {
-                        c.buffer()->address(),
-                        c_start_id,
-                        c_num_tiles_core,
-                        c_current_shard_width,
-                        cD,
-                        cN,
-                        cC,
-                        cHt,
-                        cWt,
-                        cND,
-                        0u};
+                        c.buffer(), c_start_id, c_num_tiles_core, c_current_shard_width, cD, cN, cC, cHt, cWt, cND, 0u};
                 }
-                writer_desc.runtime_args.emplace_back(
-                    core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
+                writer_desc.emplace_runtime_args(core, writer_runtime_args);
 
                 auto [freq, counter] = CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(
                     operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
@@ -1205,10 +1215,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 const auto scalar = *operation_attributes.scalar;
                 const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), rt_is_quant_op);
                 packed_scalar_for_reader = packed_scalar;
-                std::vector<uint32_t> writer_runtime_args;
+                std::vector<std::variant<uint32_t, Buffer*>> writer_runtime_args;
                 if (row_major_inputs) {
                     writer_runtime_args = {
-                        c.buffer()->address(),
+                        c.buffer(),
                         common_row_width_elements,
                         c_num_tiles_core,
                         cD,
@@ -1225,7 +1235,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 } else {
                     writer_runtime_args = {
                         packed_scalar,
-                        c.buffer()->address(),
+                        c.buffer(),
                         c_start_id,
                         c_num_tiles_core,
                         c_current_shard_width,
@@ -1237,17 +1247,17 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         cND,
                         0u};
                 }
-                writer_desc.runtime_args.emplace_back(
-                    core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
+                writer_desc.emplace_runtime_args(core, writer_runtime_args);
 
                 std::array compute_runtime_args = {compute_tiles, 0u, 0u, compute_scalar_value};
                 compute_desc.runtime_args.emplace_back(
                     core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
             }
-            std::vector<uint32_t> reader_runtime_args;
+            std::vector<std::variant<uint32_t, Buffer*>> reader_runtime_args;
 
             if (row_major_inputs) {
-                const uint32_t b_addr = b.has_value() ? b->buffer()->address() : 0u;
+                const std::variant<uint32_t, Buffer*> b_addr =
+                    b.has_value() ? std::variant<uint32_t, Buffer*>{b->buffer()} : std::variant<uint32_t, Buffer*>{0u};
                 const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->buffer()->aligned_page_size())
                                                            : static_cast<uint32_t>(a.buffer()->aligned_page_size());
                 const uint32_t bD_arg = b.has_value() ? bD : 1u;
@@ -1255,7 +1265,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 const uint32_t bC_arg = b.has_value() ? bC : 1u;
                 const uint32_t bHt_r_arg = b.has_value() ? bHt_r : 1u;
                 reader_runtime_args = {
-                    a.buffer()->address(),
+                    a.buffer(),
                     c_num_tiles_core,
                     aD,
                     aN,
@@ -1283,7 +1293,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     packed_scalar_for_reader};
             } else {
                 reader_runtime_args = {
-                    a.buffer()->address(),
+                    a.buffer(),
                     c_start_id,
                     a_num_tiles,
                     c_num_tiles_core,
@@ -1298,7 +1308,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     cHt,
                     cWt,
                     cND,
-                    b.has_value() ? b->buffer()->address() : 0u,
+                    b.has_value() ? std::variant<uint32_t, Buffer*>{b->buffer()} : std::variant<uint32_t, Buffer*>{0u},
                     bHt * bWt * bC * bN * bD * (bND > 1),
                     bHt * bWt * bC * bN * (bD > 1),
                     bHt * bWt * bC * (bN > 1),
@@ -1307,8 +1317,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 };
             }
 
-            reader_desc.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
+            reader_desc.emplace_runtime_args(core, reader_runtime_args);
 
             start_tile_id += c_num_tiles_core;
             if (row_major_inputs) {

@@ -62,16 +62,27 @@ void MSDAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     // the program factory.
     TT_FATAL(vs[0] > 0, "N must be > 0");
     TT_FATAL(vs[1] > 0 && vs[2] > 0, "h_in and w_in must be > 0");
+    // The reader maps grid coords to pixel coords in Q16.16: it saturates the
+    // coordinate at +-3 (align_corners) or +-2, halves (g + 1), then scales by
+    // the feature-map size. The largest half-coordinate is 2 in Q16.16, so the
+    // product leaves int32 once the size passes this bound.
+    constexpr uint32_t max_feature_map_size = 16384;
+    TT_FATAL(
+        static_cast<uint32_t>(vs[1]) <= max_feature_map_size && static_cast<uint32_t>(vs[2]) <= max_feature_map_size,
+        "h_in and w_in must each be <= {}, got {}x{}",
+        max_feature_map_size,
+        static_cast<uint32_t>(vs[1]),
+        static_cast<uint32_t>(vs[2]));
     TT_FATAL(as[1] > 0, "Q must be > 0");
     TT_FATAL(as[2] > 0, "P must be > 0");
 
-    // TODO: generalize the kernel to support arbitrary D (multiple of 16). The
-    // reader/writer currently assume D=32: a single tile row is split into
-    // exactly two 32-byte halves placed in TL+TR (or BL+BR) faces, and
-    // HALF_STICK_NBYTES is hardcoded to 32 in the kernels. Supporting D=64
-    // or D=16 means deriving the per-row layout from element_size + D and
-    // looping over multiple (half-)faces per row.
-    TT_FATAL(vs[-1] == 32, "value's last dim (D) must be 32, got {}", static_cast<uint32_t>(vs[-1]));
+    // The reader scatters each D-wide value stick across ceil(D/32) tiles
+    // laid side by side (16 values per face half), and the writer gathers
+    // them back per query row, so any positive multiple of 16 works.
+    TT_FATAL(
+        vs[-1] > 0 && vs[-1] % 16 == 0,
+        "value's last dim (D) must be a positive multiple of 16, got {}",
+        static_cast<uint32_t>(vs[-1]));
 
     const uint32_t qp = static_cast<uint32_t>(gs[1]);
     const uint32_t q = static_cast<uint32_t>(as[1]);
@@ -97,7 +108,7 @@ MSDAOperation::spec_return_value_t MSDAOperation::compute_output_specs(
     const uint32_t Q = as[1];
 
     Shape out_shape({N, Q, D});
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         out_shape,
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), attrs.output_memory_config));

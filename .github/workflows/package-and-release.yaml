@@ -23,7 +23,12 @@ on:
         default: ""
         type: string
       tests-yaml-gist-url:
-        description: "URL to GitHub gist/raw containing release_tests.yaml (optional). Must be from gist.githubusercontent.com or raw.githubusercontent.com. For trusted sources only - manual dispatch required."
+        description: "URL to GitHub gist/raw containing models_e2e_tests.yaml (optional). Must be from gist.githubusercontent.com or raw.githubusercontent.com. For trusted sources only - manual dispatch required."
+        required: false
+        default: ""
+        type: string
+      ops-test-categories:
+        description: "Categories from ops_pnr_tests.yaml to run (comma-separated, e.g. matmul,fused,reduction,moreh)."
         required: false
         default: ""
         type: string
@@ -53,6 +58,12 @@ env:
   #     SHA3
   DEFAULT_IGNORE_COMMITS: >-
     72e9419a1be562889e1f008cf3e2db495f9e0aa9
+  # Ops unit-test categories every release runs; the ops-test-categories dispatch UI input
+  # overrides this when set, and falls back here when left empty. Keep this value itself
+  # non-empty: the filter matches category names exactly, so an empty list would match
+  # nothing and skip the job. A new category also needs a timeout in ops_pnr_tests.yaml.
+  DEFAULT_OPS_TEST_CATEGORIES: >-
+    matmul,fused,reduction,moreh
 
 # Some explanation:
 # is-release-candidate is always true, unless the workflow is manually dispatched on a tag
@@ -67,6 +78,7 @@ jobs:
       is-release-candidate: ${{ steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate }}
       tag-type: ${{ steps.get-is-release-candidate-and-tag-type.outputs.tag-type }}
       default-ignore-commits: ${{ steps.set-defaults.outputs.ignore-commits }}
+      default-ops-test-categories: ${{ steps.set-defaults.outputs.ops-test-categories }}
     steps:
       - name: Set default values
         id: set-defaults
@@ -74,6 +86,7 @@ jobs:
         # (i.e., in `uses:` with `with:`), so we must expose env values via job outputs.
         run: |
           echo "ignore-commits=${{ env.DEFAULT_IGNORE_COMMITS }}" >> "$GITHUB_OUTPUT"
+          echo "ops-test-categories=${{ env.DEFAULT_OPS_TEST_CATEGORIES }}" >> "$GITHUB_OUTPUT"
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -161,11 +174,67 @@ jobs:
       tag-version: ${{ needs.create-tag.outputs.version }}
       is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
+      ops-test-categories: ${{ inputs.ops-test-categories || needs.release-precheck.outputs.default-ops-test-categories }}
+
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+  build-artifact-profiler:
+    # create-tag already depends on release-precheck, so that edge is transitive.
+    needs: [create-tag, check-harbor]
+    if: ${{ !cancelled() && needs.create-tag.result == 'success' }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      platform: "Ubuntu 22.04"
+      tracy: true
+      publish-package: false
+      # Needed to ensure the profiler build produces a wheel for blaze to consume.
+      build-wheel: true
+      fetch-depth: 0
+      skip-tt-train: false
+      enable-lto: false
+      # Mirror the plain release build so the two differ ONLY in tracy.
+      wheel-ref: ${{ inputs.dry-run && github.sha || format('refs/tags/{0}', needs.create-tag.outputs.version) }}
+      use-system-sfpi: false
+
+  # ===========================================================================
+  # Team: blaze -- test list owned by tenstorrent/tt-blaze (its ci.yaml)
+  # ===========================================================================
+  # Runs tt-blaze's full merge gate against this release build
+
+  blaze-merge-gate:
+    needs: [build-artifact-profiler]
+    if: ${{ !cancelled() && needs.build-artifact-profiler.result == 'success' }}
+    permissions:
+      contents: read
+    # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
+    secrets:
+      TT_BLAZE_PAT: ${{ secrets.TT_BLAZE_PAT }}
+    uses: ./.github/workflows/blaze-merge-gate.yaml
+    with:
+      # Artifacts belong to the TOP-LEVEL run, which is this workflow.
+      metal-run-id: ${{ github.run_id }}
+      # tt-blaze checks its tt-metal submodule out here so its JIT-compiled kernels
+      # match the libraries it links against.
+      metal-ref: ${{ github.sha }}
+      # Commit-scoped, not tracy-scoped: the same image the plain build resolves.
+      dev-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      # Run tt-blaze's full merge gate from its main branch.
+      blaze-ref: main
 
   publish-to-pypi:
-    needs: [build-test-publish, create-tag]
+    needs: [build-test-publish, create-tag, blaze-merge-gate]
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
+    if: >-
+      ${{ !cancelled()
+          && needs.build-test-publish.result == 'success'
+          && needs.create-tag.result == 'success'
+          && (needs.blaze-merge-gate.result == 'success' || needs.blaze-merge-gate.result == 'skipped')
+          && (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run) }}
     environment:
       name: pypi
       url: https://pypi.org/project/ttnn/
@@ -192,9 +261,43 @@ jobs:
           find artifacts -type f -name '*.tar.gz' -exec cp {} dist/ \;
           ls -l dist
 
+      # Asserts PROVENANCE, not wheel contents: the two wheels are indistinguishable
+      # by inspection -- same filename, same file list, libtracy.so in both; only the
+      # binaries differ. So all that can be checked is that the removal step above did
+      # its job. Passes when no profiler build exists, so it never blocks a release.
+      - name: Verify no profiler build is about to be published
+        run: |
+          set -euo pipefail
+
+          # The removal step must have left nothing profiler-shaped behind.
+          LEFTOVER=$(find artifacts -maxdepth 1 -type d -name '*profiler*' -printf '%f\n' || true)
+          if [ -n "$LEFTOVER" ]; then
+            echo "::error::Refusing to publish: profiler artifact director(ies) survived the removal step, so dist/ may contain a tracy build. PyPI must only ever receive the non-profiler wheel."
+            echo "$LEFTOVER" | sed 's/^/  /'
+            exit 1
+          fi
+
+          # An over-matching filter would empty dist/, and the publish action would
+          # then no-op silently -- indistinguishable from a successful release.
+          KEPT=$(find artifacts -maxdepth 1 -type d -name 'ttnn-dist-*' -printf '%f\n' | sort || true)
+          if [ -z "$KEPT" ]; then
+            echo "::error::No non-profiler ttnn-dist-* artifact remains under artifacts/; nothing legitimate left to publish."
+            exit 1
+          fi
+
+          COUNT=$(find dist -type f \( -name '*.whl' -o -name '*.tar.gz' \) | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::dist/ contains no wheel or sdist to publish."
+            exit 1
+          fi
+
+          echo "Publishing from these artifacts:"
+          echo "$KEPT" | sed 's/^/  /'
+          echo "dist/ verified clean: ${COUNT} artifact(s), no profiler provenance."
+
       - name: Publish to PyPI (Trusted Publishing)
         if: ${{ !inputs.dry-run }}
-        uses: pypa/gh-action-pypi-publish@ed0c539abdc6b55ad89f3ea7b8e96860a5ddef80 # v1.13.0
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
 
 
 
@@ -239,17 +342,36 @@ jobs:
       - name: Create changelog
         if: ${{ !inputs.dry-run }}
         id: create-changelog
-        uses: mikepenz/release-changelog-builder-action@v4
+        uses: mikepenz/release-changelog-builder-action@32e3c96f29a6532607f638797455e9e98cfc703d # v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           configuration: infra/release-changelog-config.json
           fromTag: ${{ steps.get-previous-tag.outputs.previous-tag }}
           toTag: ${{ needs.create-tag.outputs.version }}
+          # Resolve each commit in the range to its PR via the commits API instead
+          # of matching PR merge_commit_sha within a merge-date window. Our release
+          # branch re-creates commits (new SHAs) and lands PRs later than they
+          # merged to main, so the default matching only associated a handful of
+          # PRs (e.g. v0.74.0 listed 8 of ~600). One API call per commit.
+          fetchViaCommits: true
           failOnError: true
           outputFile: CHANGELOG.txt
       - name: Create empty changelog for dry run
         if: ${{ inputs.dry-run }}
         run: echo "Changelog generation skipped for dry run" > CHANGELOG.txt
+      - name: Set up Python for title rework
+        if: ${{ !inputs.dry-run }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Rework unclear PR titles
+        if: ${{ !inputs.dry-run }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUG_CHECKER_API_KEY: ${{ secrets.BUG_CHECKER_API_KEY }}
+        run: |
+          pip install --quiet anthropic==0.91.0
+          python3 .github/actions/scripts/release_notes_rewrite_titles.py CHANGELOG.txt
       - name: Group changelog by layer
         if: ${{ !inputs.dry-run }}
         env:
@@ -270,7 +392,7 @@ jobs:
     if: ${{ !inputs.dry-run }}
     needs: create-changelog
     permissions: read-all
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -300,7 +422,7 @@ jobs:
 
   check-existing-release:
     needs: [create-tag, create-release-notes, build-test-publish]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: ${{ !cancelled() }}
     concurrency: create_upload_draft_release
     outputs:
@@ -367,7 +489,6 @@ jobs:
               "CHANGELOG.txt"
               "README.md"
               "INSTALLING.md"
-              "MODEL_UPDATES.md"
               "tt-metalium.tar.gz"
             )
 
@@ -450,7 +571,6 @@ jobs:
             "CHANGELOG.txt"
             "README.md"
             "INSTALLING.md"
-            "models/docs/MODEL_UPDATES.md"
             "tt-metalium.tar.gz"
           )
           for file in "${required_files[@]}"; do
@@ -486,7 +606,6 @@ jobs:
             CHANGELOG.txt
             README.md
             INSTALLING.md
-            models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
             debian-packages/*.deb
           fail_on_unmatched_files: true
@@ -494,7 +613,7 @@ jobs:
   convert-draft-to-prerelease:
     needs: [create-and-upload-draft-release, create-tag]
     concurrency: create_upload_draft_release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: ${{ !cancelled() && needs.create-and-upload-draft-release.result == 'success' && !inputs.dry-run && github.run_attempt == '1' }}
     steps:
       - name: Checkout
@@ -635,7 +754,8 @@ jobs:
             {
               "release-type": "rc",
               "dry-run": "${{ inputs.dry-run || 'false' }}",
-              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}"
+              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}",
+              "ops-test-categories": "${{ inputs.ops-test-categories || '' }}"
             }
       - name: Log no action needed
         if: ${{ steps.check-new-commits.outputs.has-new-commits == 'false' }}
@@ -643,10 +763,15 @@ jobs:
           echo "No new commits found since latest release. No RC release needed."
 
   trigger-prod-after-rc-success:
-    needs: [build-test-publish, release-precheck, create-tag]
-    runs-on: ubuntu-latest
-    # Only trigger if we are on an RC and the RC build-test-publish succeeded
-    if: ${{ needs.release-precheck.outputs.tag-type == 'rc' && success() }}
+    needs: [build-test-publish, release-precheck, create-tag, blaze-merge-gate]
+    runs-on: ubuntu-slim
+    if: >-
+      ${{ !cancelled()
+          && needs.release-precheck.outputs.tag-type == 'rc'
+          && needs.release-precheck.result == 'success'
+          && needs.build-test-publish.result == 'success'
+          && needs.create-tag.result == 'success'
+          && (needs.blaze-merge-gate.result == 'success' || needs.blaze-merge-gate.result == 'skipped') }}
     steps:
       - name: Wait for RC workflow completion
         run: |
@@ -663,5 +788,6 @@ jobs:
             {
               "release-type": "prod",
               "dry-run": "${{ inputs.dry-run || 'false' }}",
-              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}"
+              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}",
+              "ops-test-categories": "${{ inputs.ops-test-categories || '' }}"
             }

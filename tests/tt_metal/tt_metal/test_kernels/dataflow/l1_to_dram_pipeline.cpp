@@ -26,7 +26,7 @@ void kernel_main() {
 #endif
 
     for (uint32_t i = 0; i < num_elements; i++) {
-        sem.down(1);
+        sem.wait_min(i + 1);
 
         const uint32_t offset = i * static_cast<uint32_t>(sizeof(uint32_t));
         DPRINT(

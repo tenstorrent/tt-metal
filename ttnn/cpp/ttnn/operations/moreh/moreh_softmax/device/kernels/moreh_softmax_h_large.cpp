@@ -5,71 +5,200 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/minmax.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"  // Exp, Log, Recip
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"  // Mask, Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
-void kernel_main() {
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_mask = tt::CBIndex::c_1;
-    constexpr auto cb_max_scaler = tt::CBIndex::c_2;
-    constexpr auto cb_sum_scaler = tt::CBIndex::c_3;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
-    constexpr auto cb_exps = tt::CBIndex::c_24;
-    constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
-    CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
-    constexpr auto cb_add = tt::CBIndex::c_26;
-    constexpr auto cb_max = tt::CBIndex::c_27;
-    CircularBuffer cb_max_obj(cb_max);
-    constexpr auto cb_tmp = tt::CBIndex::c_28;
+namespace ckl = compute_kernel_lib;
 
-    binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
+// MIN is SFPU-only: a Fast fp32 MIN does not exist, so an fp32 reduce input needs
+// ReduceFp32Mode::Accurate; bf16 ignores fp32_mode entirely. Deduce it from the compile-time
+// formats of the buffers THIS reduce can read (unpack_src_format[] is a constexpr descriptor
+// array, so it is usable as a template argument):
+//   * dfb::in0 -- the leading tiles (the large kernels' phase 1 reduces them straight out of it);
+//   * dfb::tmp -- the masked last tile; the factories declare TMP with intermed_data_format,
+//                 which is Float32 whenever fp32_dest_acc_en is enabled, even for a bf16 tensor.
+// Deriving the mode from dfb::in0 alone picks Fast for bf16 + fp32 accumulation and trips the
+// MIN static_assert in reduce_helpers_compute.inl.
+constexpr DataFormat kSoftminInFormat = static_cast<DataFormat>(unpack_src_format[dfb::in0]);
+constexpr DataFormat kSoftminScratchFormat = static_cast<DataFormat>(unpack_src_format[dfb::tmp]);
+constexpr ReduceFp32Mode kFp32Mode =
+    (kSoftminInFormat == DataFormat::Float32 || kSoftminScratchFormat == DataFormat::Float32) ? ReduceFp32Mode::Accurate
+                                                                                              : ReduceFp32Mode::Fast;
+// The MIN reduce has an SFPU fold only for Int32, Float16_b and Accurate Float32 on WH/BH
+// (is_sfpu_reduce_path in reduce_helpers_common.hpp; the FPU has no min pool), and the
+// reduce helpers static_assert on any other MIN. Every buffer the min-shift path reduces out of
+// has to qualify. A Bfp8_b tensor without fp32 accumulation does not (dfb::in0, and the TMP/staging
+// buffers declared with intermed_data_format, are all Bfp8_b there), so SOFTMIN keeps the
+// max-shifted path it used before for that configuration. Bfp8_b cannot carry an inf through its
+// shared exponent anyway, so the +-inf rows the min shift exists for do not reach this kernel in it.
+constexpr bool kSoftminMinShiftSupported =
+    is_sfpu_reduce_path<PoolType::MIN, ReduceDim::REDUCE_COL, kSoftminInFormat, kFp32Mode>() &&
+    is_sfpu_reduce_path<PoolType::MIN, ReduceDim::REDUCE_COL, kSoftminScratchFormat, kFp32Mode>();
 
-    constexpr uint32_t onetile = 1;
-    constexpr int dst0 = 0;
-
-    uint32_t N = get_compile_time_arg_val(0);
-    uint32_t Ht = get_compile_time_arg_val(1);
-
-    for (uint32_t n = 0; n < N; ++n) {
+// Finds the per-column shift into dfb::max: max(x) for SOFTMAX (and for SOFTMIN when the
+// buffers above have no MIN fold), min(x) for SOFTMIN otherwise. kShiftPool is spelled through
+// UseMinShift so the branch that is not taken is never instantiated: kernel_main is not a
+// template, so a plain if constexpr there would still instantiate the MIN reduce and trip its
+// static_assert.
+template <
+    bool UseMinShift,
+    typename DFBIn0,
+    typename DFBMask,
+    typename DFBTmp,
+    typename DFBExps,
+    typename DFBAdd,
+    typename DFBMax>
+ALWI void find_shift(
+    std::uint32_t Ht,
+    DFBIn0& dfb_in0_obj,
+    DFBMask& dfb_mask_obj,
+    DFBTmp& dfb_tmp_obj,
+    DFBExps& dfb_exps_obj,
+    DFBAdd& dfb_add_obj,
+    DFBMax& dfb_max_obj) {
+    constexpr PoolType kShiftPool = UseMinShift ? PoolType::MIN : PoolType::MAX;
+    if constexpr (!UseMinShift) {
         // find max
         if (Ht == 1) {
-            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
+            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
 
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
+            ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
+                ckl::ReduceInputBlockShape::single());
         } else {
             // Phase 1: Reduce Ht-1 tiles
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_in0, cb_max_scaler, cb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
+            ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::in0, dfb::max_scaler, dfb::max>(
+                ckl::ReduceInputBlockShape::col(Ht - 1));
 
-            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
+            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
 
             // Phase 2: Reduce final masked tile with accumulation
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::single(),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
+            ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
+                ckl::ReduceInputBlockShape::single(),
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::Accumulate::at(dfb::max, 1));  // iteration=1, reload from dfb::max
         }
+    } else {
+        // find min
+        if (Ht == 1) {
+            mask_posinf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
 
-        for (uint32_t h = 0; h < Ht; h += onetile) {
+            ckl::reduce<
+                kShiftPool,
+                ReduceDim::REDUCE_COL,
+                dfb::tmp,
+                dfb::max_scaler,
+                dfb::max,
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                kFp32Mode>(ckl::ReduceInputBlockShape::single());
+        } else {
+            // Phase 1: reduce the leading tiles straight out of dfb::in0 -- a streaming reduce that needs
+            // no staging buffer -- and park the partial min in dfb::add, which is otherwise free until the
+            // exp-sum accumulation below.
+            ckl::reduce<
+                kShiftPool,
+                ReduceDim::REDUCE_COL,
+                dfb::in0,
+                dfb::max_scaler,
+                dfb::add,
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                kFp32Mode>(ckl::ReduceInputBlockShape::col(Ht - 1));
+
+            // Phase 2: mask the last tile's padding lanes to +inf into dfb::tmp and reduce that single
+            // tile into dfb::exps. A 0-masked pad (what the MAX path wants) wins the MIN on every
+            // all-positive row, so the mask polarity has to flip with the pool type.
+            mask_posinf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
+            ckl::reduce<
+                kShiftPool,
+                ReduceDim::REDUCE_COL,
+                dfb::tmp,
+                dfb::max_scaler,
+                dfb::exps,
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                kFp32Mode>(ckl::ReduceInputBlockShape::single());
+
+            // Combine the two partial minima into dfb::max, where the rest of the kernel reads the row
+            // statistic. Both operands are reduced tiles, and the reduce lane is the same lane in both,
+            // so the element-wise MIN is exact there. Neither operand is the destination, so the combine
+            // never has to free a slot in a DFB it is still reading.
+            ckl::binary_sfpu<
+                ckl::BinaryMin<>,
+                ckl::input(dfb::add, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, moreh_data_format_reconfig),
+                ckl::input(dfb::exps, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, moreh_data_format_reconfig),
+                ckl::output(
+                    dfb::max, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, moreh_data_format_reconfig)>(
+                ckl::IterationShape::one_tile(), dfb_add_obj, dfb_exps_obj, dfb_max_obj);
+        }
+    }
+}
+
+void kernel_main() {
+    DataflowBuffer dfb_recipsumexps_obj(dfb::recip_sum_exps);
+    DataflowBuffer dfb_max_obj(dfb::max);
+    DataflowBuffer dfb_in0_obj(dfb::in0);
+    DataflowBuffer dfb_mask_obj(dfb::mask);
+    DataflowBuffer dfb_tmp_obj(dfb::tmp);
+    DataflowBuffer dfb_exps_obj(dfb::exps);
+    DataflowBuffer dfb_add_obj(dfb::add);
+    DataflowBuffer dfb_out0_obj(dfb::out0);
+
+    compute_kernel_hw_startup(dfb::in0, dfb::max_scaler, dfb::out0);
+
+    constexpr uint32_t onetile = 1;
+
+    // Plain uint32_t (not constexpr) to match legacy get_compile_time_arg_val typing and avoid
+    // force-unrolling the per-Ht loops (see moreh_softmax_w_large.cpp for the LTO/addrmod rationale).
+    uint32_t N = get_arg(args::N);
+    uint32_t Ht = get_arg(args::Ht);
+
+    for (std::uint32_t n = 0; n < N; ++n) {
+        // SOFTMIN shift: use min(x) instead of max(x). A max-based shift is +inf for a row
+        // holding +inf, and exp(max(x) - x) then saturates the whole row (inf / inf = NaN, and the
+        // +inf lane itself is inf - inf = NaN) -- see #56371. Shifted by min(x) instead, a row that
+        // holds +inf still has a finite minimum, so the +inf lanes exponentiate to 0 and the finite
+        // lanes keep their relative weights -- that is torch's distribution. (A row whose minimum is
+        // itself -inf is the documented divergent case: the whole mass lands on that lane.)
+        // The padding lanes of the last tile are masked to +inf: a 0-masked pad (what the MAX path
+        // wants) would win the MIN on an all-positive row.
+#ifdef SOFTMAX
+        find_shift</*UseMinShift=*/false>(
+            Ht, dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, dfb_exps_obj, dfb_add_obj, dfb_max_obj);
+#else
+        find_shift<kSoftminMinShiftSupported>(
+            Ht, dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, dfb_exps_obj, dfb_add_obj, dfb_max_obj);
+#endif
+
+        for (std::uint32_t h = 0; h < Ht; h += onetile) {
             // compute exp(x - max(x))
+            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(
+                dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
             if (h == Ht - 1) {
 #ifdef SOFTMAX
-                sub_tiles_bcast_rows_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
-                exp_tile_and_mask_tile_to_cb(
-                    cb_tmp,
-                    cb_mask,
-                    cb_exps,
+                exp_tile_and_mask_tile_to_dfb<dfb::tmp, dfb::mask, dfb::exps>(
+                    dfb_tmp_obj,
+                    dfb_mask_obj,
+                    dfb_exps_obj,
                     /*itile=*/0,
                     /*mtile=*/0,
                     /*pop=*/1,
                     /*popm=*/0);
 #else
-                rexp_tile_and_mask_tile_to_cb(
-                    cb_in0,
-                    cb_mask,
-                    cb_exps,
+                rexp_tile_and_mask_tile_to_dfb<dfb::tmp, dfb::mask, dfb::exps>(
+                    dfb_tmp_obj,
+                    dfb_mask_obj,
+                    dfb_exps_obj,
                     /*itile=*/0,
                     /*mtile=*/0,
                     /*pop=*/1,
@@ -77,51 +206,47 @@ void kernel_main() {
 #endif
             } else {
 #ifdef SOFTMAX
-                sub_tiles_bcast_rows_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
-                exp_tile_to_cb(cb_tmp, cb_exps);
+                exp_tile_to_dfb<dfb::tmp, dfb::exps>(dfb_tmp_obj, dfb_exps_obj);
 #else
-                sub_tiles_bcast_rows_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
-                rexp_tile_to_cb(cb_tmp, cb_exps);
+                rexp_tile_to_dfb<dfb::tmp, dfb::exps>(dfb_tmp_obj, dfb_exps_obj);
 #endif
             }
 
             if (h == 0) {
-                copy_tile_to_cb(cb_exps, cb_add);
+                copy_tile_to_dfb<dfb::exps, dfb::add>(dfb_exps_obj, dfb_add_obj);
             } else {
-                add_tiles_to_cb(cb_add, cb_exps, cb_add);
+                add_tiles_to_dfb<dfb::add, dfb::exps, dfb::add>(dfb_add_obj, dfb_exps_obj, dfb_add_obj);
             }
         }
 
 #ifdef LOG
         // compute log(sum) - pop tile after reduce
-        compute_kernel_lib::reduce<
+        ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_COL,
-            cb_add,
-            cb_sum_scaler,
-            cb_recipsumexps,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-            compute_kernel_lib::ReduceInputBlockShape::single(),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
+            dfb::add,
+            dfb::sum_scaler,
+            dfb::recip_sum_exps,
+            ckl::ReduceInputPolicy::BulkWaitBulkPop>(
+            ckl::ReduceInputBlockShape::single(),
+            ckl::ReduceInputMemoryLayout::contiguous(),
+            ckl::NoAccumulation{},
             [](uint32_t dst_idx) {
                 log_tile_init();
                 log_tile(dst_idx);
             });
 #else
         // compute 1/sum(exp(x)) - pop tile after reduce
-        compute_kernel_lib::reduce<
+        ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_COL,
-            cb_add,
-            cb_sum_scaler,
-            cb_recipsumexps,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-            compute_kernel_lib::ReduceInputBlockShape::single(),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
+            dfb::add,
+            dfb::sum_scaler,
+            dfb::recip_sum_exps,
+            ckl::ReduceInputPolicy::BulkWaitBulkPop>(
+            ckl::ReduceInputBlockShape::single(),
+            ckl::ReduceInputMemoryLayout::contiguous(),
+            ckl::NoAccumulation{},
             [](uint32_t dst_idx) {
                 recip_tile_init();
                 recip_tile(dst_idx);
@@ -129,37 +254,42 @@ void kernel_main() {
 #endif
 
         // step 3, compute final result
-        for (uint32_t h = 0; h < Ht; h += onetile) {
+        for (std::uint32_t h = 0; h < Ht; h += onetile) {
 #ifdef LOG
 #ifdef SOFTMAX
             // x - max - log(sum)
-            sub_tiles_bcast_rows_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(
+                dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            sub_tiles_bcast_rows_to_cb(cb_tmp, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::tmp, dfb::recip_sum_exps, dfb::out0>(
+                dfb_tmp_obj, dfb_recipsumexps_obj, dfb_out0_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 #else
-            // -x + max - log(sum)
             // logsoftmin not implemented
 #endif
 #else
 #ifdef SOFTMAX
             // exp(x - max) / sum
-            sub_tiles_bcast_rows_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(
+                dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            exp_tile_to_cb(cb_tmp, cb_exps);
+            exp_tile_to_dfb<dfb::tmp, dfb::exps>(dfb_tmp_obj, dfb_exps_obj);
 
-            mul_tiles_bcast_rows_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_rows_to_dfb<dfb::exps, dfb::recip_sum_exps, dfb::out0>(
+                dfb_exps_obj, dfb_recipsumexps_obj, dfb_out0_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 #else
             // rexp(x - max) / sum
-            sub_tiles_bcast_rows_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(
+                dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            rexp_tile_to_cb(cb_tmp, cb_exps);
+            rexp_tile_to_dfb<dfb::tmp, dfb::exps>(dfb_tmp_obj, dfb_exps_obj);
 
-            mul_tiles_bcast_rows_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_rows_to_dfb<dfb::exps, dfb::recip_sum_exps, dfb::out0>(
+                dfb_exps_obj, dfb_recipsumexps_obj, dfb_out0_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 #endif
 #endif
         }
 
-        cb_recipsumexps_obj.pop_front(onetile);
-        cb_max_obj.pop_front(onetile);
+        dfb_recipsumexps_obj.pop_front(onetile);
+        dfb_max_obj.pop_front(onetile);
     }
 }

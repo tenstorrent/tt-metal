@@ -46,11 +46,6 @@ constexpr bool is_fp32_output_format() {
 
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 constexpr bool can_use_fast_tilize() {
-    // Float32 OUTPUT is unsupported: fast-tilize's pack path uses Read_32b=0
-    // (bf16-stride stepping through DEST), which truncates fp32 DEST to bf16.
-    // That truncation is acceptable for bf16/bfp output but destroys precision
-    // for fp32 output, producing garbage results in downstream fp32 consumers
-    // (see attn_matmul_fp32 regression).
     return block_width_tiles < 256 && dfb_has_32x32_tiles<output_dfb>() && !get_dst_full_sync_enabled() &&
            has_supported_fast_tilize_format<input_dfb>() && !is_fp32_output_format<output_dfb>();
 }
@@ -67,11 +62,14 @@ template <
     tilize_config::WaitMode wait_mode,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     tilize_config::Fp32Mode fp32_mode,
-    tilize_config::RemapMode remap_mode>
-ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
+    tilize_config::RemapMode remap_mode,
+    typename InDFB,
+    typename OutDFB>
+ALWI void tilize(InDFB& in_dfb, OutDFB& out_dfb, uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
     // Compile-time validation
     static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
-    static_assert(input_dfb != output_dfb, "Tilize cannot be done in-place: input_dfb and output_dfb must be different");
+    static_assert(
+        input_dfb != output_dfb, "Tilize cannot be done in-place: input_dfb and output_dfb must be different");
     static_assert(input_dfb < 32, "Invalid input_dfb: must be less than 32");
     static_assert(output_dfb < 32, "Invalid output_dfb: must be less than 32");
 
@@ -83,7 +81,8 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
     // (fast tilize truncates fp32 → tf32). Has no effect on non-fp32 formats.
     constexpr bool lossless_fp32_override =
         (fp32_mode == tilize_config::Fp32Mode::Lossless) && is_fp32_input_format<input_dfb>();
-    constexpr bool use_fast = can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_fp32_override;
+    constexpr bool use_fast =
+        can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_fp32_override;
 
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =
@@ -109,10 +108,10 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         // Reconfigure srcA for unpack
         reconfig_data_format_srca(input_dfb);
 
-#ifndef ARCH_BLACKHOLE
+#ifdef ARCH_WORMHOLE
         if constexpr (use_fast) {
             // WH fast-tilize uses both SrcA and SrcB; reconfigure SrcB to match input.
-            // BH fast-tilize only uses SrcA — SrcB must not be touched so matmul
+            // BH/Quasar fast-tilize only uses SrcA — SrcB must not be touched so matmul
             // weights stay configured correctly.
             reconfig_data_format_srcb(input_dfb);
         }
@@ -142,7 +141,14 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         }
     }
 
-    // Validate DFB capacity
+    // The caller's buffers, bound by reference; tilize() never constructs a DataflowBuffer of its own
+    // (on Quasar one drains when it goes out of scope).
+    ASSERT(in_dfb.get_id() == input_dfb);
+    ASSERT(out_dfb.get_id() == output_dfb);
+
+    // Validate DFB capacity — race-free here because the caller's DataflowBuffer constructors already
+    // ran dfb_ensure_ready(), which blocks until the producer has programmed the tile counters
+    // (buf_capacity, read by get_dfb_num_pages()).
     if (asymmetric_dfb_pages) {
         uint32_t max_in = (*total_input_pages < 32) ? *total_input_pages : 32;
         UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= max_in));
@@ -150,10 +156,6 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= block_width_tiles));
     }
     PACK(ASSERT(get_dfb_num_pages(output_dfb) >= block_width_tiles));
-
-    // Construct DataflowBuffer objects for sync operations
-    DataflowBuffer in_dfb(input_dfb);
-    DataflowBuffer out_dfb(output_dfb);
 
     // Upfront wait (when requested)
     if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {

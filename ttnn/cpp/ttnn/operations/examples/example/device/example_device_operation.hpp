@@ -45,17 +45,17 @@ struct ExampleDeviceOperation {
     };
 
     // Define the return types for the spec(s) of the operation.
-    // Can be a single ttnn::TensorSpec, std::optional<ttnn::TensorSpec>, std::vector<ttnn::TensorSpec>,
-    // std::tuple<ttnn::TensorSpec, ...> etc.
-    using spec_return_value_t = ttnn::TensorSpec;
+    // Can be a single tt::tt_metal::TensorSpec, std::optional<tt::tt_metal::TensorSpec>,
+    // std::vector<tt::tt_metal::TensorSpec>, std::tuple<tt::tt_metal::TensorSpec, ...> etc.
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
 
     // Define the return types for the tensor(s) of the operation.
     // Can be a single Tensor, std::optional<Tensor>, std::vector<Tensor>, std::tuple<Tensor, ...> etc.
     using tensor_return_value_t = Tensor;
 
     // Note: spec_return_value_t and tensor_return_value_t should follow the same pattern.
-    // i.e. if spec_return_value_t is a std::vector<std::optional<ttnn::TensorSpec>> then tensor_return_value_t should
-    // be std::vector<std::optional<Tensor>>
+    // i.e. if spec_return_value_t is a std::vector<std::optional<tt::tt_metal::TensorSpec>> then tensor_return_value_t
+    // should be std::vector<std::optional<Tensor>>
 
     // -------------------------------------------------------------------------
     // Descriptor-based program factories

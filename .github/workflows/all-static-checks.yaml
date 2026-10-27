@@ -40,6 +40,10 @@ jobs:
         env:
           PRE_COMMIT_FROM_REF: ${{ github.event_name == 'pull_request' && format('refs/remotes/origin/{0}', github.event.pull_request.base.ref) || 'HEAD^' }}
           PRE_COMMIT_TO_REF: HEAD
+          # compile-agentic-workflows shells out to `gh release download`. Without a
+          # token, `gh` runs unauthenticated and hits GitHub's 60/hour anonymous rate
+          # limit almost immediately on the shared hosted-runner IP pool.
+          GH_TOKEN: ${{ github.token }}
         with:
           extra_args: |
             --from-ref ${{ env.PRE_COMMIT_FROM_REF }} \
@@ -64,12 +68,6 @@ jobs:
           echo "::error::Pre-commit hooks failed. Suggested fixes posted as PR review comments above."
           echo "To fix locally: pre-commit run --from-ref origin/main --to-ref HEAD"
           exit 1
-  check-black:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Do Nothing
-        run: echo "Black is covered by pre-commit. This is a placeholder to be removed after updating branch restrictions."
-
   check-spdx-licenses:
     runs-on: ubuntu-latest
     steps:

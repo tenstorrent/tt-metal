@@ -8,6 +8,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "reduce_scatter_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -77,11 +78,11 @@ ReduceScatterDeviceOperation::spec_return_value_t ReduceScatterDeviceOperation::
     output_shape[operation_attributes.dim] /= target_ring_size;
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             inter_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), adjusted_intermediate_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.memory_config)),
@@ -97,28 +98,24 @@ ReduceScatterDeviceOperation::tensor_return_value_t ReduceScatterDeviceOperation
     return {intermediate_tensor, output_tensor};
 }
 
-ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
+ReduceScatterDeviceOperation::topology_return_value_t ReduceScatterDeviceOperation::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "ReduceScatterDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = operation_attributes.subdevice_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    return tt::tt_metal::operation::hash_operation<ReduceScatterDeviceOperation>(
-        operation_attributes.dim,
-        operation_attributes.num_links,
-        operation_attributes.cluster_axis,
-        operation_attributes.memory_config,
-        operation_attributes.optional_intermediate_mem_config,
-        operation_attributes.topology,
-        operation_attributes.chunks_per_sync,
-        operation_attributes.num_workers_per_link,
-        operation_attributes.num_buffers_per_channel,
-        operation_attributes.compute_kernel_config,
-        operation_attributes.use_l1_small_for_semaphores,
-        subdevice_core_range_set,
-        tensor_args);
+    // One label per Tensor of create_output_tensors, in its order: {intermediate, output}. The intermediate is
+    // device-local scratch and keeps the input's label (the reduce_scatter_minimal_async convention); the output
+    // takes the helper's label, Shard{dim} on `cluster_axis` (the rules are documented on
+    // reduce_scatter_output_topology in ccl_topology_utils.hpp). `dim` is already normalised by the host wrapper
+    // and needs no guard here: compute_output_specs has indexed output_shape[dim] before this hook runs, and the
+    // one invalid value that gets through it (a negative int32 wrapped into the uint32) is rejected by validation
+    // right after, so no label computed for it is ever observed. A refusal (nullopt, already logged by the helper)
+    // keeps the input's label on both tensors, stated explicitly: {} would hand the framework the union over every
+    // tensor argument, the caller's optional_output_tensor included.
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_topology = input_tensor.tensor_topology();
+    auto output_topology =
+        ttnn::operations::ccl::common::reduce_scatter_output_topology(
+            input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.dim))
+            .value_or(input_topology);
+    return {input_topology, std::move(output_topology)};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<ReduceScatterDeviceOperation::tensor_return_value_t>

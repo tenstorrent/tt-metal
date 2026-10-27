@@ -2,18 +2,70 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <set>
+#include <string>
+
 #include <tt_stl/reflection.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_metal/fabric/fabric_vc2_connection.hpp"
+#include "tt_metal/fabric/mcast_reverse_tree.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
+
+namespace {
+
+// Returns the canonical root outputs, which may fan out even without express routing.
+// Per-axis topology is available for every valid 2D mesh.
+std::vector<RoutingDirection> mcast_outgoing_directions(
+    const FabricNodeId& src_node_id, const std::unordered_map<RoutingDirection, uint32_t>& hops) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto* y_rings = control_plane.axis_topology(src_node_id.mesh_id, 0);
+    const auto* x_rings = control_plane.axis_topology(src_node_id.mesh_id, 1);
+    TT_FATAL(y_rings != nullptr && x_rings != nullptr, "Missing 2D axis topology for multicast source {}", src_node_id);
+
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto coord = mesh_graph.chip_to_coordinate(src_node_id.mesh_id, src_node_id.chip_id);
+    const auto hop_count = [&](RoutingDirection direction) {
+        const auto it = hops.find(direction);
+        return it == hops.end() ? 0 : static_cast<int>(it->second);
+    };
+
+    std::string failure;
+    const auto directions = mcast_root_output_directions(
+        mesh_graph,
+        src_node_id.mesh_id,
+        *y_rings,
+        *x_rings,
+        static_cast<int>(coord[0]),
+        static_cast<int>(coord[1]),
+        hop_count(RoutingDirection::N),
+        hop_count(RoutingDirection::S),
+        hop_count(RoutingDirection::E),
+        hop_count(RoutingDirection::W),
+        &failure);
+
+    TT_FATAL(failure.empty(), "2D multicast from {} could not be encoded: {}", src_node_id, failure);
+    TT_FATAL(!directions.empty(), "2D multicast from {} reaches nothing outside its own chip", src_node_id);
+    TT_FATAL(
+        directions.size() <= MAX_MCAST_INJECTIONS,
+        "2D multicast from {} has a canonical root action with {} outputs, more than the {} the "
+        "sender kernel can inject into. A root cannot have more outputs than the mesh has ports, so this "
+        "means the encoder produced an action the codec forbids.",
+        src_node_id,
+        directions.size(),
+        MAX_MCAST_INJECTIONS);
+    return directions;
+}
+
+}  // namespace
 
 // ====================================
 // FabricConnectionManager Implementation
 // ====================================
 
 void FabricConnectionManager::register_client(
-    const CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key, const FabricNodeId& next_hop_dst) {
+    const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key, const FabricNodeId& next_hop_dst) {
     auto [it, inserted] = connections_.try_emplace(key);
     auto& conn = it->second;
 
@@ -106,7 +158,7 @@ void FabricConnectionManager::process(
 
             const uint8_t num_buffers_full_size_channel = BUFFERS_PER_CHANNEL;
             const uint8_t num_buffers_header_only_channel = BUFFERS_PER_CHANNEL;
-            const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+            const size_t buffer_size_bytes_full_size_channel = device_info_provider->get_channel_buffer_size_bytes();
             const size_t mux_base_l1_address = device_info_provider->get_l1_unreserved_base();
 
             // Create the mux config
@@ -145,8 +197,8 @@ std::unordered_map<RoutingDirection, std::set<uint32_t>> FabricConnectionManager
 }
 
 std::vector<ConnectionKey> FabricConnectionManager::get_connection_keys_for_core(
-    const CoreCoord& core, TestWorkerType worker_type) const {
-    const auto* map = [&]() -> const std::unordered_map<CoreCoord, std::set<ConnectionKey>>* {
+    const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const {
+    const auto* map = [&]() -> const std::unordered_map<tt::tt_metal::CoreCoord, std::set<ConnectionKey>>* {
         switch (worker_type) {
             case TestWorkerType::SENDER: return &sender_core_to_keys_;
             case TestWorkerType::RECEIVER: return &receiver_core_to_keys_;
@@ -165,13 +217,13 @@ std::vector<ConnectionKey> FabricConnectionManager::get_connection_keys_for_core
     return {};
 }
 
-size_t FabricConnectionManager::get_connection_count_for_core(const CoreCoord& core, TestWorkerType worker_type) const {
+size_t FabricConnectionManager::get_connection_count_for_core(const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const {
     auto keys = get_connection_keys_for_core(core, worker_type);
     return keys.size();
 }
 
 uint32_t FabricConnectionManager::get_connection_array_index_for_key(
-    const CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key) const {
+    const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key) const {
     auto keys = get_connection_keys_for_core(core, worker_type);
 
     for (size_t i = 0; i < keys.size(); i++) {
@@ -183,12 +235,12 @@ uint32_t FabricConnectionManager::get_connection_array_index_for_key(
     return UINT32_MAX;  // Not found
 }
 
-bool FabricConnectionManager::is_mux_client(const CoreCoord& core) const {
+bool FabricConnectionManager::is_mux_client(const tt::tt_metal::CoreCoord& core) const {
     return all_mux_client_cores_.contains(core);
 }
 
 std::vector<uint32_t> FabricConnectionManager::generate_mux_termination_local_args_for_core(
-    const CoreCoord& core, const std::shared_ptr<IDeviceInfoProvider>& device_info_provider) const {
+    const tt::tt_metal::CoreCoord& core, const std::shared_ptr<IDeviceInfoProvider>& device_info_provider) const {
     // Not a mux client? Return empty vector
     if (!is_mux_client(core)) {
         return {};
@@ -222,7 +274,7 @@ std::vector<uint32_t> FabricConnectionManager::generate_mux_termination_local_ar
 }
 
 std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core(
-    const CoreCoord& core,
+    const tt::tt_metal::CoreCoord& core,
     TestWorkerType worker_type,
     const std::shared_ptr<IDeviceInfoProvider>& device_info_provider,
     const FabricNodeId& fabric_node_id,
@@ -260,7 +312,7 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
                 "Mux core not found for connection dir={} link={}",
                 static_cast<int>(key.direction),
                 key.link_idx);
-            const CoreCoord& mux_core = mux_core_it->second;
+            const tt::tt_metal::CoreCoord& mux_core = mux_core_it->second;
 
             // Get the stored mux config using the mux core as key
             auto mux_config_it = mux_configs_.find(mux_core);
@@ -293,12 +345,17 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
             rt_args.insert(rt_args.end(), mux_rt_args.begin(), mux_rt_args.end());
         } else {
             // The first-hop neighbor is invariant per ConnectionKey and was recorded on
-            // the Connection at registration time (multi-Z disambiguation is encoded in the
-            // eth_chan / link_idx, so this dst is uniquely determined per key).
+            // the Connection at registration time.
             const auto& neighbor_node_id = conn.next_hop_dst;
             if (key.use_vc2()) {
                 append_fabric_vc2_connection_rt_args(
-                    fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+                    tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context(),
+                    fabric_node_id,
+                    neighbor_node_id,
+                    key.link_idx,
+                    program_handle,
+                    core,
+                    rt_args);
             } else {
                 append_fabric_connection_rt_args(
                     fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
@@ -346,7 +403,7 @@ void FabricConnectionManager::assign_and_validate_channels(Connection& conn, con
 // ====================================
 
 TestWorker::TestWorker(
-    CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+    tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     logical_core_(logical_core), test_device_ptr_(test_device_ptr) {
     if (kernel_src.has_value()) {
         this->kernel_src_ = std::string(kernel_src.value());
@@ -363,6 +420,7 @@ void TestWorker::create_kernel(
     const std::vector<uint32_t>& rt_args,
     const std::vector<uint32_t>& local_args,
     uint32_t local_args_address,
+    uint32_t local_args_capacity_bytes,
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
     tt::tt_metal::NOC noc_id) const {
     auto kernel_handle = tt::tt_metal::CreateKernel(
@@ -381,6 +439,16 @@ void TestWorker::create_kernel(
 
     // Set local args to memory buffer
     if (!local_args.empty()) {
+        const size_t local_args_bytes = local_args.size() * sizeof(uint32_t);
+        TT_FATAL(
+            local_args_bytes <= local_args_capacity_bytes,
+            "Local args for core {} need {} bytes but the local args region holds {}. This core owns too "
+            "many traffic configs for the region; raise CommonMemoryMap::LOCAL_ARGS_BUFFER_SIZE or lower "
+            "allocation_policies.sender.max_configs_per_core so the configs spread over more cores.",
+            this->logical_core_.str(),
+            local_args_bytes,
+            local_args_capacity_bytes);
+
         this->test_device_ptr_->set_local_runtime_args_for_core(
             device_coord, this->logical_core_, local_args_address, local_args);
     }
@@ -399,7 +467,7 @@ void TestWorker::create_kernel(
 // ====================================
 
 TestSender::TestSender(
-    CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+    tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {
     // TODO: init mem map?
 }
@@ -411,33 +479,37 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
     // Special handling: For torus 2D unicast, we have bugs where we try to follow the input hop count
     // but the routing tables cause packets to fail to reach the destination properly in some cases,
     // due to torus links. In this case, we use node IDs instead of hops.
-    RoutingDirection outgoing_direction;
-    bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_fabric::Topology::Torus) &&
-                               (config.parameters.is_2D_routing_enabled) &&
-                               (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
+    const bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_fabric::Topology::Torus) &&
+                                     (config.parameters.is_2D_routing_enabled) &&
+                                     (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
 
-    if (config.hops.has_value() && !is_torus_2d_unicast) {
-        // Use hops to determine direction (for static routing with explicit hops)
-        // However, NeighborExchange topology does not support multi-hop.
-        outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
+    const bool has_z_hop = config.hops.has_value() && config.hops->contains(RoutingDirection::Z) &&
+                           config.hops->at(RoutingDirection::Z) > 0;
+
+    std::vector<RoutingDirection> outgoing_directions;
+    if (config.hops.has_value() && config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST &&
+        config.parameters.is_2D_routing_enabled) {
+        outgoing_directions = mcast_outgoing_directions(this->test_device_ptr_->get_node_id(), config.hops.value());
+    } else if (config.hops.has_value() && (!is_torus_2d_unicast || has_z_hop)) {
+        outgoing_directions.push_back(this->test_device_ptr_->get_forwarding_direction(config.hops.value()));
     } else {
-        // Derive direction from src->dst node IDs
-        outgoing_direction =
-            this->test_device_ptr_->get_forwarding_direction(this->test_device_ptr_->get_node_id(), dst_node_id);
+        outgoing_directions.push_back(
+            this->test_device_ptr_->get_forwarding_direction(this->test_device_ptr_->get_node_id(), dst_node_id));
     }
 
-    // Use common helper to register fabric connection. The final dst_node_id is intentionally
-    // not part of the dedup key — multiple traffic configs with different dsts that share the
-    // same physical eth chan + VC will collapse to a single ConnectionKey.
-    auto fabric_connection_key = this->test_device_ptr_->register_fabric_connection(
-        this->logical_core_,
-        TestWorkerType::SENDER,
-        this->test_device_ptr_->connection_manager_,
-        outgoing_direction,
-        config.link_id,
-        config.vc_id);
+    std::vector<ConnectionKey> fabric_connection_keys;
+    fabric_connection_keys.reserve(outgoing_directions.size());
+    for (const auto direction : outgoing_directions) {
+        fabric_connection_keys.push_back(this->test_device_ptr_->register_fabric_connection(
+            this->logical_core_,
+            TestWorkerType::SENDER,
+            this->test_device_ptr_->connection_manager_,
+            direction,
+            config.link_id,
+            config.vc_id));
+    }
 
-    this->configs_.emplace_back(std::move(config), fabric_connection_key);
+    this->configs_.emplace_back(std::move(config), std::move(fabric_connection_keys));
 }
 
 bool TestSender::validate_results(std::vector<uint32_t>& data) const {
@@ -471,7 +543,7 @@ bool TestSender::validate_results(std::vector<uint32_t>& data) const {
 // ====================================
 
 TestReceiver::TestReceiver(
-    CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+    tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {
     // TODO: init mem map?
 }
@@ -495,7 +567,8 @@ void TestReceiver::add_config(TestTrafficReceiverConfig config) {
             TestWorkerType::RECEIVER,
             this->test_device_ptr_->connection_manager_,
             outgoing_direction,
-            config.link_id);
+            config.link_id,
+            /*vc_id=*/0);
     }
 
     this->configs_.emplace_back(std::move(config), credit_connection_key);
@@ -531,7 +604,7 @@ bool TestReceiver::validate_results(std::vector<uint32_t>& data) const {
 // TestSync Implementation
 // ====================================
 
-TestSync::TestSync(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+TestSync::TestSync(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {
     // TODO: init mem map?
 }
@@ -539,21 +612,31 @@ TestSync::TestSync(CoreCoord logical_core, TestDevice* test_device_ptr, std::opt
 void TestSync::add_config(TestTrafficSyncConfig sync_config) {
     const auto& sender_config = sync_config.sender_config;
 
-    // Determine outgoing direction for sync message
-    RoutingDirection outgoing_direction;
     // Multicast sync configs should always have hops specified (multicast pattern)
     TT_FATAL(sender_config.hops.has_value(), "Sync config on core {} should have hops specified", this->logical_core_);
-    outgoing_direction = this->test_device_ptr_->get_forwarding_direction(sender_config.hops.value());
+
+    std::vector<RoutingDirection> outgoing_directions;
+    if (sender_config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST &&
+        sender_config.parameters.is_2D_routing_enabled) {
+        outgoing_directions =
+            mcast_outgoing_directions(this->test_device_ptr_->get_node_id(), sender_config.hops.value());
+    } else {
+        outgoing_directions.push_back(this->test_device_ptr_->get_forwarding_direction(sender_config.hops.value()));
+    }
 
     // Use common helper to register sync fabric connection
-    auto fabric_connection_key = this->test_device_ptr_->register_fabric_connection(
-        this->logical_core_,
-        TestWorkerType::SYNC,
-        this->test_device_ptr_->get_sync_connection_manager(),
-        outgoing_direction,
-        sender_config.link_id);
+    std::vector<ConnectionKey> fabric_connection_keys;
+    fabric_connection_keys.reserve(outgoing_directions.size());
+    for (const auto direction : outgoing_directions) {
+        fabric_connection_keys.push_back(this->test_device_ptr_->register_fabric_connection(
+            this->logical_core_,
+            TestWorkerType::SYNC,
+            this->test_device_ptr_->get_sync_connection_manager(),
+            direction,
+            sender_config.link_id));
+    }
 
-    this->configs_.emplace_back(std::move(sync_config), fabric_connection_key);
+    this->configs_.emplace_back(std::move(sync_config), std::move(fabric_connection_keys));
 }
 
 bool TestSync::validate_results(std::vector<uint32_t>& /*data*/) const {
@@ -565,7 +648,7 @@ bool TestSync::validate_results(std::vector<uint32_t>& /*data*/) const {
 // TestMux Implementation
 // ====================================
 
-TestMux::TestMux(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+TestMux::TestMux(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {}
 
 void TestMux::set_config(FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
@@ -598,8 +681,8 @@ tt::tt_metal::Program& TestDevice::get_program_handle() { return this->program_h
 
 const FabricNodeId& TestDevice::get_node_id() const { return this->fabric_node_id_; }
 
-void TestDevice::add_worker(TestWorkerType worker_type, CoreCoord logical_core) {
-    auto core_already_occupied = [this](TestWorkerType worker_type, CoreCoord logical_core) {
+void TestDevice::add_worker(TestWorkerType worker_type, tt::tt_metal::CoreCoord logical_core) {
+    auto core_already_occupied = [this](TestWorkerType worker_type, tt::tt_metal::CoreCoord logical_core) {
         switch (worker_type) {
             case TestWorkerType::SENDER: return senders_.contains(logical_core);
             case TestWorkerType::RECEIVER: return receivers_.contains(logical_core);
@@ -634,24 +717,12 @@ void TestDevice::add_worker(TestWorkerType worker_type, CoreCoord logical_core) 
 }
 
 ConnectionKey TestDevice::register_fabric_connection(
-    CoreCoord logical_core,
+    tt::tt_metal::CoreCoord logical_core,
     TestWorkerType worker_type,
     FabricConnectionManager& connection_mgr,
     RoutingDirection outgoing_direction,
     uint32_t link_idx,
     uint8_t vc_id) {
-    // Resolve link_idx -> physical eth chan and the first-hop neighbor on the other end.
-    // The ConnectionKey dedups on (direction, link_idx, vc_id, eth_chan): all four are
-    // mutually consistent, but eth_chan is what we conceptually identify the connection by.
-    // The caller's final dst is intentionally not part of the key — many traffic configs
-    // with different final dsts can legitimately share one physical connection (e.g. Z-link
-    // sub-torus all-to-all). The first-hop neighbor is recorded on the Connection so that
-    // downstream calls into the fabric API have a valid (dst, link_idx) pair.
-    //
-    // Validation is by direction only (no per-destination filter): for Z, multiple chans
-    // in one direction can land on different peer chips, and the same link_idx may
-    // legitimately serve many final dsts. Per-destination forwarding correctness is
-    // enforced by the fabric API at append-connection time.
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto candidate_eth_chans =
         cp.get_active_fabric_eth_channels_in_direction(fabric_node_id_, outgoing_direction);
@@ -660,18 +731,16 @@ ConnectionKey TestDevice::register_fabric_connection(
         "No active fabric eth channels in direction {} from node {}",
         static_cast<int>(outgoing_direction),
         this->fabric_node_id_);
+
     TT_FATAL(
         link_idx < candidate_eth_chans.size(),
-        "On node {}, link_idx={} out of range for direction {} ({} eth chans available)",
+        "On node {}, link_idx={} out of range for direction {} with {} active eth channel(s)",
         this->fabric_node_id_,
         link_idx,
         static_cast<int>(outgoing_direction),
         candidate_eth_chans.size());
     const chan_id_t eth_chan = candidate_eth_chans[link_idx];
 
-    // Resolve the peer per eth_chan: this handles multi-Z (chans in one direction may land on
-    // different neighbor meshes / chips) and NESW uniformly (where it returns the single
-    // per-direction neighbor).
     const FabricNodeId next_hop_dst = cp.get_connected_mesh_chip_chan_ids(fabric_node_id_, eth_chan).first;
 
     ConnectionKey connection_key{outgoing_direction, link_idx, vc_id, eth_chan};
@@ -698,7 +767,7 @@ ConnectionKey TestDevice::register_fabric_connection(
     return connection_key;
 }
 
-void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config) {
+void TestDevice::add_sender_traffic_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSenderConfig config) {
     if (!this->senders_.contains(logical_core)) {
         this->add_worker(TestWorkerType::SENDER, logical_core);
     }
@@ -706,7 +775,7 @@ void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSe
     this->senders_.at(logical_core).add_config(std::move(config));
 }
 
-void TestDevice::add_sender_sync_config(CoreCoord logical_core, TestTrafficSyncConfig sync_config) {
+void TestDevice::add_sender_sync_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSyncConfig sync_config) {
     if (!this->sync_workers_.contains(logical_core)) {
         this->add_worker(TestWorkerType::SYNC, logical_core);
     }
@@ -714,7 +783,7 @@ void TestDevice::add_sender_sync_config(CoreCoord logical_core, TestTrafficSyncC
     this->sync_workers_.at(logical_core).add_config(std::move(sync_config));
 }
 
-void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config) {
+void TestDevice::add_receiver_traffic_config(tt::tt_metal::CoreCoord logical_core, const TestTrafficReceiverConfig& config) {
     if (!this->receivers_.contains(logical_core)) {
         this->add_worker(TestWorkerType::RECEIVER, logical_core);
     }
@@ -723,7 +792,7 @@ void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, const TestT
 }
 
 void TestDevice::add_mux_worker_config(
-    CoreCoord logical_core, FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
+    tt::tt_metal::CoreCoord logical_core, FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
     if (!this->muxes_.contains(logical_core)) {
         this->add_worker(TestWorkerType::MUX, logical_core);
     }
@@ -777,6 +846,7 @@ void TestDevice::create_mux_kernels() {
             mux_rt_args,
             {},  // no local args
             {},  // no local args address
+            {},  // no local args capacity
             {}   // no addresses and size to clear
         );
 
@@ -808,7 +878,7 @@ void TestDevice::create_sync_kernel() {
     uint32_t num_muxes_to_terminate = sync_connection_manager.get_num_muxes_to_terminate();
 
     // If the test is using the NeighborExchange topology, synchronization must use unicast packets
-    const auto topology = tt::tt_fabric::get_fabric_topology();
+    const auto topology = this->device_info_provider_->get_fabric_topology();
     bool use_unicast_sync_packets = (topology == tt::tt_fabric::Topology::NeighborExchange);
 
     // Compile-time args
@@ -819,7 +889,8 @@ void TestDevice::create_sync_kernel() {
         sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
         has_mux_connections ? 1u : 0u,                       /* HAS_MUX_CONNECTIONS */
         num_muxes_to_terminate,                              /* NUM_MUXES_TO_TERMINATE */
-        use_unicast_sync_packets                             /* USE_UNICAST_SYNC_PACKETS */
+        use_unicast_sync_packets,                            /* USE_UNICAST_SYNC_PACKETS */
+        static_cast<uint32_t>(sync_worker.configs_.size())   /* NUM_SYNC_CONFIGS */
     };
 
     // Runtime args: memory map args, then sync fabric connection args
@@ -839,14 +910,21 @@ void TestDevice::create_sync_kernel() {
     const auto& sync_val = sync_worker.configs_.front().first.sync_val;
     local_args.push_back(sync_val);
 
-    // Add sync config to fabric connection mapping (same pattern as sender traffic configs)
-    // This mapping tells each LineSyncConfig which fabric connection index to use
-    for (const auto& [sync_config, connection_key] : sync_worker.configs_) {
-        uint32_t array_idx =
-            sync_connection_manager.get_connection_array_index_for_key(sync_core, TestWorkerType::SYNC, connection_key);
+    for (const auto& [sync_config, connection_keys] : sync_worker.configs_) {
         TT_FATAL(
-            array_idx != UINT32_MAX, "Failed to find connection array index for sync config on core {}", sync_core);
-        local_args.push_back(array_idx);
+            !connection_keys.empty() && connection_keys.size() <= MAX_MCAST_INJECTIONS,
+            "Sync config on core {} claims {} connections, outside the 1..{} the sync kernel sizes for",
+            sync_core,
+            connection_keys.size(),
+            MAX_MCAST_INJECTIONS);
+        local_args.push_back(static_cast<uint32_t>(connection_keys.size()));
+        for (const auto& connection_key : connection_keys) {
+            uint32_t array_idx = sync_connection_manager.get_connection_array_index_for_key(
+                sync_core, TestWorkerType::SYNC, connection_key);
+            TT_FATAL(
+                array_idx != UINT32_MAX, "Failed to find connection array index for sync config on core {}", sync_core);
+            local_args.push_back(array_idx);
+        }
     }
 
     // Add sync routing args for each sync config
@@ -903,6 +981,7 @@ void TestDevice::create_sync_kernel() {
         rt_args,
         local_args,
         sender_memory_map_->get_local_args_address(),
+        sender_memory_map_->get_local_args_size(),
         addresses_and_size_to_clear);
     log_debug(tt::LogTest, "created sync kernel on core: {}", sync_core);
 }
@@ -918,6 +997,17 @@ void TestDevice::create_sender_kernels() {
     for (const auto& [core, sender] : this->senders_) {
         // Get connection count and generate all connection args via FabricConnectionManager
         size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::SENDER);
+
+        // Fail on the host with core context instead of a kernel static_assert.
+        const size_t max_connections_per_core = device_info_provider_->get_max_connections_per_device();
+        TT_FATAL(
+            num_connections <= max_connections_per_core,
+            "Sender core {} on {} needs {} fabric connections but the kernel holds at most {}. Spread the "
+            "traffic configs over more cores.",
+            core.str(),
+            fabric_node_id_,
+            num_connections,
+            max_connections_per_core);
 
         // Check if this core has mux connections
         bool has_mux_connections = connection_manager_.is_mux_client(core);
@@ -983,17 +1073,20 @@ void TestDevice::create_sender_kernels() {
             }
         }
 
-        // Add traffic config connection mapping AFTER sync args
-        // Query the array index for each traffic config's connection key
-        for (const auto& [config, connection_key] : sender.configs_) {
-            uint32_t array_idx =
-                connection_manager_.get_connection_array_index_for_key(core, TestWorkerType::SENDER, connection_key);
-            TT_FATAL(
-                array_idx < num_connections,
-                "Connection array idx should be < num_connections. Got idx {}, num_connections {}",
-                array_idx,
-                num_connections);
-            local_args.push_back(array_idx);
+        // Add traffic config connection mapping after sync args.
+        for (const auto& [config, connection_keys] : sender.configs_) {
+            TT_FATAL(!connection_keys.empty(), "Traffic config on core {} has no fabric connection", core.str());
+            local_args.push_back(static_cast<uint32_t>(connection_keys.size()));
+            for (const auto& connection_key : connection_keys) {
+                uint32_t array_idx = connection_manager_.get_connection_array_index_for_key(
+                    core, TestWorkerType::SENDER, connection_key);
+                TT_FATAL(
+                    array_idx < num_connections,
+                    "Connection array idx should be < num_connections. Got idx {}, num_connections {}",
+                    array_idx,
+                    num_connections);
+                local_args.push_back(array_idx);
+            }
         }
 
         // Add sender traffic config args (including credit management info)
@@ -1042,6 +1135,7 @@ void TestDevice::create_sender_kernels() {
             rt_args,
             local_args,
             sender_memory_map_->get_local_args_address(),
+            sender_memory_map_->get_local_args_size(),
             addresses_and_size_to_clear,
             noc_id);
 
@@ -1154,6 +1248,7 @@ void TestDevice::create_receiver_kernels() {
             rt_args,
             local_args,
             receiver_memory_map_->get_local_args_address(),
+            receiver_memory_map_->get_local_args_size(),
             addresses_and_size_to_clear);
 
         log_debug(tt::LogTest, "Created receiver kernel on core {}", core);
@@ -1217,7 +1312,7 @@ TestDevice::ValidationReadOps TestDevice::initiate_results_readback() const {
     ValidationReadOps ops;
 
     // Get sender cores
-    std::vector<CoreCoord> sender_cores;
+    std::vector<tt::tt_metal::CoreCoord> sender_cores;
     sender_cores.reserve(this->senders_.size());
     for (const auto& [core, _] : this->senders_) {
         sender_cores.push_back(core);
@@ -1236,7 +1331,7 @@ TestDevice::ValidationReadOps TestDevice::initiate_results_readback() const {
     }
 
     // Get receiver cores
-    std::vector<CoreCoord> receiver_cores;
+    std::vector<tt::tt_metal::CoreCoord> receiver_cores;
     receiver_cores.reserve(this->receivers_.size());
     for (const auto& [core, _] : this->receivers_) {
         receiver_cores.push_back(core);
@@ -1280,7 +1375,7 @@ void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) c
 }
 
 void TestDevice::validate_sender_results() const {
-    std::vector<CoreCoord> sender_cores;
+    std::vector<tt::tt_metal::CoreCoord> sender_cores;
     sender_cores.reserve(this->senders_.size());
     for (const auto& [core, _] : this->senders_) {
         sender_cores.push_back(core);
@@ -1305,7 +1400,7 @@ void TestDevice::validate_sender_results() const {
 }
 
 void TestDevice::validate_receiver_results() const {
-    std::vector<CoreCoord> receiver_cores;
+    std::vector<tt::tt_metal::CoreCoord> receiver_cores;
     receiver_cores.reserve(this->receivers_.size());
     for (const auto& [core, _] : this->receivers_) {
         receiver_cores.push_back(core);
@@ -1331,7 +1426,7 @@ void TestDevice::validate_receiver_results() const {
 
 void TestDevice::set_local_runtime_args_for_core(
     const MeshCoordinate& device_coord,
-    CoreCoord logical_core,
+    tt::tt_metal::CoreCoord logical_core,
     uint32_t local_args_address,
     const std::vector<uint32_t>& args) const {
     device_info_provider_->write_data_to_core(device_coord, logical_core, local_args_address, args);
@@ -1351,12 +1446,12 @@ size_t TestDevice::get_latency_receive_buffer_address(uint32_t payload_size) con
 }
 
 void TestDevice::create_latency_sender_kernel(
-    CoreCoord core,
+    tt::tt_metal::CoreCoord core,
     FabricNodeId dest_node,
     uint32_t payload_size,
     uint32_t num_samples,
     NocSendType noc_send_type,
-    CoreCoord responder_virtual_core) {
+    tt::tt_metal::CoreCoord responder_virtual_core) {
     log_debug(tt::LogTest, "Creating latency sender kernel on node: {}", fabric_node_id_);
 
     // Use static memory map address for semaphore (same as bandwidth tests)
@@ -1439,7 +1534,7 @@ void TestDevice::create_latency_sender_kernel(
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear = {
         {semaphore_address, sender_memory_map_->get_local_sync_region_size()}};
 
-    senders_.at(core).create_kernel(coord_, ct_args, rt_args, {}, {}, addresses_and_size_to_clear);
+    senders_.at(core).create_kernel(coord_, ct_args, rt_args, {}, {}, {}, addresses_and_size_to_clear);
 
     log_debug(
         tt::LogTest,
@@ -1449,14 +1544,14 @@ void TestDevice::create_latency_sender_kernel(
 }
 
 void TestDevice::create_latency_responder_kernel(
-    CoreCoord core,
+    tt::tt_metal::CoreCoord core,
     FabricNodeId sender_node,
     uint32_t payload_size,
     uint32_t num_samples,
     NocSendType noc_send_type,
     uint32_t sender_send_buffer_address,
     uint32_t sender_receive_buffer_address,
-    CoreCoord sender_virtual_core) {
+    tt::tt_metal::CoreCoord sender_virtual_core) {
     log_debug(tt::LogTest, "Creating latency responder kernel on node: {}", fabric_node_id_);
 
     // Use static memory map address for semaphore (same as bandwidth tests)
@@ -1542,7 +1637,7 @@ void TestDevice::create_latency_responder_kernel(
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear = {
         {semaphore_address, sender_memory_map_->get_local_sync_region_size()}};
 
-    receivers_.at(core).create_kernel(coord_, ct_args, rt_args, {}, {}, addresses_and_size_to_clear);
+    receivers_.at(core).create_kernel(coord_, ct_args, rt_args, {}, {}, {}, addresses_and_size_to_clear);
 
     log_debug(
         tt::LogTest,
@@ -1552,14 +1647,14 @@ void TestDevice::create_latency_responder_kernel(
 }
 
 // Set kernel source for specific workers (used by latency tests to override default kernels)
-void TestDevice::set_sender_kernel_src(CoreCoord core, const std::string& kernel_src) {
+void TestDevice::set_sender_kernel_src(tt::tt_metal::CoreCoord core, const std::string& kernel_src) {
     auto it = senders_.find(core);
     if (it != senders_.end()) {
         it->second.set_kernel_src(kernel_src);
     }
 }
 
-void TestDevice::set_receiver_kernel_src(CoreCoord core, const std::string& kernel_src) {
+void TestDevice::set_receiver_kernel_src(tt::tt_metal::CoreCoord core, const std::string& kernel_src) {
     auto it = receivers_.find(core);
     if (it != receivers_.end()) {
         it->second.set_kernel_src(kernel_src);

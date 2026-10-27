@@ -4,13 +4,12 @@
 
 #pragma once
 
-#include <map>
+#include <vector>
 #include <tt_stl/indestructible.hpp>
-#include <tt-metalium/device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal {
-class IDevice;
+class Device;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
@@ -65,12 +64,12 @@ public:
     FabricSwitchManager& operator=(FabricSwitchManager&&) = delete;
 
 private:
-    friend class tt::stl::Indestructible<FabricSwitchManager>;
+    friend class ttsl::Indestructible<FabricSwitchManager>;
     FabricSwitchManager() = default;
     ~FabricSwitchManager() = default;
 
-    // Cache the device map returned by CreateDevices to use directly in CloseDevices
-    std::map<tt::ChipId, tt::tt_metal::IDevice*> switch_devices_;
+    // Devices opened for switch chips; closed explicitly in teardown() for fabric handshake.
+    std::vector<tt::tt_metal::Device*> switch_devices_;
 };
 
 }  // namespace tt::tt_fabric

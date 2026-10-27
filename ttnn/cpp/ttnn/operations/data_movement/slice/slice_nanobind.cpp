@@ -25,14 +25,14 @@ namespace {
 
 ttnn::Tensor slice_small_vector_wrapper(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int>& slice_start,
-    const ttnn::SmallVector<int>& slice_end,
-    const std::optional<ttnn::SmallVector<int>>& step,
+    const ttsl::SmallVector<int>& slice_start,
+    const ttsl::SmallVector<int>& slice_end,
+    const std::optional<ttsl::SmallVector<int>>& step,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,
     const std::optional<CoreRangeSet>&& sub_core_grids) {
-    const auto step_value = step.value_or(ttnn::SmallVector<int>(slice_end.size(), 1));
+    const auto step_value = step.value_or(ttsl::SmallVector<int>(slice_end.size(), 1));
     return ttnn::slice(
         input_tensor,
         slice_start,
@@ -65,6 +65,9 @@ void bind_slice(nb::module_& mod) {
         Note:
             Strided slicing (``slice_step != 1``) is not supported for ``bfloat8_b`` tensors.
 
+            TILE layout tensors must use the standard 32x32 tile, and a pre-allocated ``output_tensor`` must
+            carry the same tile as the input.
+
         Returns:
             ttnn.Tensor: the output tensor.
     )doc";
@@ -80,7 +83,7 @@ void bind_slice(nb::module_& mod) {
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
-                const std::optional<ttnn::SmallVector<uint32_t>>&,
+                const std::optional<ttsl::SmallVector<uint32_t>>&,
                 const std::optional<MemoryConfig>&,
                 const std::optional<Tensor>&,
                 const std::optional<float>&,
@@ -118,7 +121,7 @@ void bind_slice(nb::module_& mod) {
             nb::arg("output_tensor") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()),
-        // Overload 3: SmallVector<int> version (int32_t template parameter)
+        // Overload 3: ttsl::SmallVector<int> version (int32_t template parameter)
         ttnn::overload_t(
             &slice_small_vector_wrapper,
             nb::arg("input_tensor"),
@@ -138,7 +141,13 @@ void bind_slice_descriptor(nb::module_& mod) {
         .def_rw("slice_end", &ttnn::prim::SliceParams::slice_end)
         .def_rw("step", &ttnn::prim::SliceParams::step)
         .def_rw("output_mem_config", &ttnn::prim::SliceParams::output_mem_config)
-        .def_rw("sub_core_grids", &ttnn::prim::SliceParams::sub_core_grids);
+        .def_rw("sub_core_grids", &ttnn::prim::SliceParams::sub_core_grids)
+        .def_rw(
+            "output_mem_config_inherited",
+            &ttnn::prim::SliceParams::output_mem_config_inherited,
+            "True if output_mem_config was implicitly inherited from the input tensor (no memory_config or "
+            "output_tensor given by the caller) rather than explicitly requested. When set, the device operation "
+            "may adjust an inherited sharded spec to fit the sliced output shape.");
 
     nb::class_<ttnn::prim::SliceInputs>(mod, "SliceInputs")
         .def(
@@ -162,18 +171,10 @@ void bind_slice_descriptor(nb::module_& mod) {
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 
-    nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::SliceParams& operation_attributes,
-               const ttnn::prim::SliceInputs& tensor_args,
-               Tensor& tensor_return_value) {
-                return ttnn::prim::SliceTileProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
+    // Bound without create_descriptor: the Metal 2.0 factory produces a ProgramSpec, and the
+    // fusion branches that used to drive create_descriptor consume a ProgramDescriptor. The class
+    // stays exposed so those call sites resolve and report the missing method themselves.
+    nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory");
 }
 
 }  // namespace ttnn::operations::data_movement::detail

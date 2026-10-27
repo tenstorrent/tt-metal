@@ -20,6 +20,7 @@
 #include "ttnn/tensor/storage.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/math.hpp>
 #include <algorithm>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -157,6 +158,8 @@ static Tensor create_scalar_config_tensor(
         default: break;
     }
 
+    scalars_per_core.reserve(num_iterations);
+
     {
         uint32_t nhw_linear = 0;
         uint32_t output_stick_n = 0;
@@ -192,6 +195,8 @@ static Tensor create_scalar_config_tensor(
         max_scalars_cnt,
         num_iterations,
         in_memory_layout);
+
+    config_vector.reserve(scalars_per_core.size() * (config_tensor_in_dram ? 1 : num_shards_c) * entries_per_core);
 
     switch (in_memory_layout) {
         case TensorMemoryLayout::HEIGHT_SHARDED:
@@ -241,6 +246,7 @@ std::vector<uint32_t> generate_core_starting_indices(
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: repeat_factor = num_cores_x; break;
         default: TT_FATAL(false, "Unsupported shard scheme");
     };
+    starting_indices.reserve(shard_boundaries.size() * repeat_factor);
     for (const auto& item : shard_boundaries) {
         const auto& [output_shard_start, _] = item.output_range;
         if (output_shard_start >= op_trace_metadata.size()) {
@@ -304,10 +310,14 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     const bool is_width_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     // distributing out_hw across the grid
-    const auto all_cores = input.shard_spec().value().grid;
+    const auto& shard_spec = input.shard_spec().value();
+    const auto all_cores = shard_spec.grid;
     const uint32_t ncores = all_cores.num_cores();
-    const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
-    const uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
+    // Same origin-anchored walk as the runtime-arg placement below (#60513).
+    ttnn::operations::sliding_window::validate_sliding_window_shard_grid(
+        all_cores, is_block_sharded, shard_spec.orientation);
+    const uint32_t rectangular_x =
+        ttnn::operations::sliding_window::sliding_window_shard_row_width(all_cores, is_block_sharded);
     const uint32_t max_out_nhw_per_core = outputs[0].shard_spec()->shape[0];
     const uint32_t max_in_nhw_per_core = input.shard_spec()->shape[0];
     TT_FATAL(

@@ -2,24 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 op-local writer for transpose's tiled WH factory. The device-side NoC + TensorAccessor
+// logic is unchanged from the legacy eltwise/unary writer; only the resource bindings move to the
+// Metal 2.0 namespaces (dfb::/tensor::/args::).
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
+    const uint32_t num_pages = get_arg(args::num_pages);
+    const uint32_t start_id = get_arg(args::start_id);
 
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
-
-    // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
+    constexpr uint32_t page_size = get_arg(args::page_size);
 
     Noc noc;
-    CircularBuffer cb(cb_id_out);
+    DataflowBuffer cb(dfb::cb_out0);
 
 #ifdef OUT_SHARDED
     cb.wait_front(num_pages);
@@ -28,7 +29,7 @@ void kernel_main() {
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_pages;
@@ -38,7 +39,7 @@ void kernel_main() {
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
         cb.wait_front(onepage);
-        noc.async_write(cb, s, page_bytes, {}, {.page_id = i});
+        noc.async_write(cb, s, page_size, {.offset_bytes = 0}, {.page_id = i});
         noc.async_writes_flushed();
         cb.pop_front(onepage);
     }

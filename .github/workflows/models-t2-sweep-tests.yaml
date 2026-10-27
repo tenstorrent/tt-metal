@@ -1,16 +1,16 @@
 name: "(Tier 2) Models Sweep Tests"
 
 on:
+  schedule:
+    # Weekly, Saturdays at 06:00 UTC. (GitHub Actions cron is always UTC; scheduled runs fire on the default branch only.)
+    - cron: "0 6 * * 6"
   workflow_dispatch:
     inputs:
       model:
-        description: "Select model to test"
+        description: "all, or comma-separated model filters"
         required: true
         default: all
-        type: choice
-        options:
-          - all
-          - llama3.1-8b
+        type: string
       sku:
         description: "Select SKU to test"
         required: false
@@ -52,6 +52,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access to populate tensor caches)"
 
 permissions:
   packages: write
@@ -61,7 +66,7 @@ jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
     steps:
@@ -79,6 +84,7 @@ jobs:
           fi
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -87,11 +93,12 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-sweep-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/models-sweep-tests-impl.yaml
     with:
@@ -101,3 +108,5 @@ jobs:
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       tier: "2"
+      # `!= false` so unset inputs on scheduled runs default to read-only (true)
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}

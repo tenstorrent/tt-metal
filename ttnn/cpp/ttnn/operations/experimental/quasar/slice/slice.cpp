@@ -11,6 +11,7 @@
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 
 #include <tt-metalium/constants.hpp>
 
@@ -173,7 +174,7 @@ ttnn::Tensor slice(
         const auto resolved_mc = resolve_mc(source);
         const auto target = can_land_in_preallocated(source) ? optional_output_tensor : std::nullopt;
         auto tensor = ttnn::to_memory_config(source, resolved_mc, std::nullopt, target);
-        tensor = ttnn::to_layout(tensor, input_layout);
+        tensor = ttnn::operations::experimental::quasar::to_layout(tensor, input_layout);
         return tensor;
     });
 
@@ -206,9 +207,9 @@ ttnn::Tensor slice(
     }
 
     // Create modified vectors with wrapped indices and adjust them to match the tensor's rank
-    ttnn::SmallVector<uint32_t> modified_begins(input_rank, 0);
-    ttnn::SmallVector<uint32_t> modified_ends(input_rank, 0);
-    ttnn::SmallVector<uint32_t> modified_step(input_rank, 1);
+    ttsl::SmallVector<uint32_t> modified_begins(input_rank, 0);
+    ttsl::SmallVector<uint32_t> modified_ends(input_rank, 0);
+    ttsl::SmallVector<uint32_t> modified_step(input_rank, 1);
 
     // Wrap indices and adjust begins, ends, and step
     for (size_t i = 0; i < begins.size(); ++i) {
@@ -223,7 +224,7 @@ ttnn::Tensor slice(
         }
     }
 
-    auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttnn::SmallVector<uint32_t>& modified_ends) {
+    auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttsl::SmallVector<uint32_t>& modified_ends) {
         return (modified_ends[i] - modified_begins[i] + modified_step[i] - 1) / modified_step[i];
     };
 
@@ -253,7 +254,7 @@ ttnn::Tensor slice(
             const auto& shard_spec_val = output_memory_config.shard_spec().value();
 
             // Compute output dimensions, tile-aligned if using TILE path
-            ttnn::SmallVector<uint32_t> output_dims(input_rank);
+            ttsl::SmallVector<uint32_t> output_dims(input_rank);
             for (size_t i = 0; i < input_rank; i++) {
                 output_dims[i] = output_dim_i(i, modified_ends);
             }
@@ -319,16 +320,17 @@ ttnn::Tensor slice(
         if (!no_step) {
             TT_FATAL(input.dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
         }
-        input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config);
+        input =
+            ttnn::operations::experimental::quasar::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config);
     }
 
-    ttnn::SmallVector<uint32_t> padded_ends = modified_ends;
+    ttsl::SmallVector<uint32_t> padded_ends = modified_ends;
     if (input.layout() == Layout::TILE) {
         padded_ends[input_rank - 2] = std::max(tt::round_up(padded_ends[input_rank - 2], tile_shape[0]), tile_shape[0]);
         padded_ends[input_rank - 1] = std::max(tt::round_up(padded_ends[input_rank - 1], tile_shape[1]), tile_shape[1]);
     }
 
-    ttnn::SmallVector<uint32_t> actual_shape_vec, final_padded_shape_vec;
+    ttsl::SmallVector<uint32_t> actual_shape_vec, final_padded_shape_vec;
     actual_shape_vec.reserve(input_rank);
     final_padded_shape_vec.reserve(input_rank);
     bool empty = false;
@@ -412,7 +414,7 @@ ttnn::Tensor slice(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& output_tensor_start,
     const ttnn::Tensor& output_tensor_end,
-    const std::optional<ttnn::SmallVector<T>>& step,
+    const std::optional<ttsl::SmallVector<T>>& step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,
@@ -468,8 +470,8 @@ ttnn::Tensor slice(
 
         // Create dummy shapes for SliceDeviceOperation (will be ignored when use_tensor_args=true)
         uint32_t input_rank = input_tensor.logical_shape().rank();
-        ttnn::SmallVector<uint32_t> dummy_shape(input_rank, 0);
-        ttnn::SmallVector<uint32_t> dummy_step_shape(input_rank, 1);
+        ttsl::SmallVector<uint32_t> dummy_shape(input_rank, 0);
+        ttsl::SmallVector<uint32_t> dummy_step_shape(input_rank, 1);
         ttnn::Shape dummy_start(dummy_shape);
         ttnn::Shape dummy_end(dummy_shape);
         ttnn::Shape dummy_step(dummy_step_shape);
@@ -501,7 +503,7 @@ ttnn::Tensor slice(
     ttsl::Span<const T> output_tensor_end_span(output_tensor_end_vector.data(), output_tensor_end_vector.size());
 
     // generate the step value if it is not provided
-    ttnn::SmallVector<T> step_value = step.value_or(ttnn::SmallVector<T>(output_tensor_start_span.size(), 1));
+    ttsl::SmallVector<T> step_value = step.value_or(ttsl::SmallVector<T>(output_tensor_start_span.size(), 1));
 
     return slice<T>(
         input_tensor,
@@ -551,7 +553,7 @@ template ttnn::Tensor slice<uint32_t>(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& output_tensor_start,
     const ttnn::Tensor& output_tensor_end,
-    const std::optional<ttnn::SmallVector<uint32_t>>& step,
+    const std::optional<ttsl::SmallVector<uint32_t>>& step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,

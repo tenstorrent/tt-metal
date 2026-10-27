@@ -21,7 +21,6 @@ class Attention:
         self.norm_num_blocks = 1
         self.norm_grid_core = ttnn.CoreGrid(y=4, x=8) if in_channels == 128 else ttnn.CoreGrid(y=8, x=8)
         (
-            self.norm_input_mask,
             self.norm_weights,
             self.norm_bias,
         ) = prepare_group_norm(
@@ -110,7 +109,6 @@ class Attention:
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=GROUPNORM_GROUPS,
-            input_mask=self.norm_input_mask,
             weight=self.norm_weights,
             bias=self.norm_bias,
             epsilon=GROUPNORM_EPSILON,

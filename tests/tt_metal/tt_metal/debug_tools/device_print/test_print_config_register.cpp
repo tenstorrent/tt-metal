@@ -22,7 +22,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -93,7 +93,7 @@ const std::vector<std::string> field_names_alu_config_all = {
     "ALU_ACC_CTRL_Fp32_enabled",
     "ALU_ACC_CTRL_SFPU_Fp32_enabled",
     "ALU_ACC_CTRL_INT8_math_enabled"};
-const std::vector<uint32_t> field_values_alu_config_all = {1, 0, 1, 15, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1};
+const std::vector<uint32_t> field_values_alu_config_all = {0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1};
 
 // PACK_EDGE_OFFSET
 const std::vector<std::string> field_names_pack_edge_offset_all = {
@@ -154,7 +154,7 @@ const std::vector<std::string> field_names_unpack_tile_descriptor_wormhole_or_bl
     "digest_type",
     "digest_size"};
 const std::vector<uint32_t> field_values_unpack_tile_descriptor_wormhole_or_blackhole = {
-    5, 1, 0, 10, 7, 2, 4, 8, 16, 32, 0, 0, 0};
+    5, 1, 0, 10, 7, 2, 4, 8, 0, 0, 0, 0, 0};
 
 // UNPACK CONFIG
 const std::vector<std::string> field_names_unpack_config_wormhole_or_blackhole = {
@@ -181,7 +181,7 @@ const std::vector<std::string> field_names_unpack_config_wormhole_or_blackhole =
     "fifo_size",
     "reserved_5"};
 const std::vector<uint32_t> field_values_unpack_config_wormhole_or_blackhole = {0, 1, 2, 0, 1, 1, 0, 3,  0, 0,  16,
-                                                                                5, 6, 0, 0, 2, 3, 0, 28, 0, 29, 0};
+                                                                                5, 6, 0, 0, 2, 3, 0, 0,  0, 0,  0};
 
 const std::vector<std::string> field_names_pack_config_blackhole = {
     "row_ptr_section_size",
@@ -277,13 +277,25 @@ static std::string int_to_hex(int value) {
     return ss.str();
 }
 
-// Prepares the compute kernel with the specified program and test configuration
-static KernelHandle prepare_writer(distributed::MeshWorkload& workload, const ConfigRegPrintTestConfig& config) {
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto& program_ = workload.get_programs().at(device_range);
-    return tt_metal::CreateKernel(
-        program_, config.write_kernel, config.core, tt_metal::ComputeConfig{.compile_args = {config.register_name}});
+// Builds the compute-kernel program for the specified test configuration.
+static Program make_writer_program(distributed::MeshDevice& mesh_device, const ConfigRegPrintTestConfig& config) {
+    experimental::ComputeHardwareConfig hw_config;
+    hw_config = experimental::ComputeHardwareConfig{};
+
+    const experimental::KernelSpecName kKernel{"config_reg_writer"};
+    experimental::ProgramSpec spec{
+        .name = "dprint_config_reg",
+        .kernels = {experimental::KernelSpec{
+            .unique_id = kKernel,
+            .source = std::filesystem::path{config.write_kernel},
+            .num_threads = 1,
+            .compile_time_args = {{"register_name", config.register_name}},
+            .hw_config = hw_config,
+        }},
+        .work_units = {experimental::WorkUnitSpec{
+            .name = "main", .kernels = {kKernel}, .target_nodes = experimental::NodeCoord{config.core}}},
+    };
+    return experimental::MakeProgramFromSpec(mesh_device, spec);
 }
 
 static std::string generate_golden_output(
@@ -329,15 +341,15 @@ static void print_config_reg(
     DevicePrintFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const ConfigRegPrintTestConfig& config) {
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Tensix config registers are Gen1-only (no ckernel_debug.h for Quasar)";
+    }
+
     // Create program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
-    workload.add_program(device_range, std::move(program));
-
-    // Prepare write kernel
-    [[maybe_unused]] auto write_kernel = prepare_writer(workload, config);
+    workload.add_program(device_range, make_writer_program(*mesh_device, config));
 
     // Generate golden output
     std::string golden_output =
@@ -357,7 +369,7 @@ TEST_F(DevicePrintFixture, ConfigRegAluTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = 1,
         .field_names = field_names_alu_config,
         .field_values = field_values_alu_config,
@@ -382,7 +394,7 @@ TEST_F(DevicePrintFixture, ConfigRegTileDescriptorTestPrint) {
 
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = 2,
         .field_names = field_names_unpack_tile_descriptor,
         .field_values = field_values_unpack_tile_descriptor,
@@ -406,7 +418,7 @@ TEST_F(DevicePrintFixture, ConfigRegUnpackTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = 2,
         .field_names = field_names_unpack_config,
         .field_values = field_values_unpack_config,
@@ -442,7 +454,7 @@ TEST_F(DevicePrintFixture, ConfigRegPackTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = num_of_registers,
         .field_names = field_names_pack_config,
         .field_values = field_values_pack_config,
@@ -463,7 +475,7 @@ TEST_F(DevicePrintFixture, ConfigRegReluTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = 1,
         .field_names = field_names_relu_config,
         .field_values = field_values_relu_config,
@@ -484,7 +496,7 @@ TEST_F(DevicePrintFixture, ConfigRegDestRdCtrlTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = 1,
         .field_names = field_names_dest_rd_ctrl,
         .field_values = field_values_dest_rd_ctrl,
@@ -507,7 +519,7 @@ TEST_F(DevicePrintFixture, ConfigRegPackEdgeOffsetTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = num_of_registers,
         .field_names = field_names_pack_edge_offset,
         .field_values = field_values_pack_edge_offset,
@@ -530,7 +542,7 @@ TEST_F(DevicePrintFixture, ConfigRegPackCountersTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = num_of_registers,
         .field_names = field_names_pack_counters,
         .field_values = field_values_pack_counters,

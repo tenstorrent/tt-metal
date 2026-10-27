@@ -544,7 +544,10 @@ private:
     void expand_all_devices_uniform_pattern(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
     void expand_one_or_all_to_all_multicast(
-        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type);
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        HighLevelTrafficPattern pattern_type,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
 
     void expand_unidirectional_linear_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
@@ -579,6 +582,8 @@ private:
     // into separate senders (one per routing direction) so each worker feeds exactly
     // one fabric connection. This prevents the worker from becoming the bottleneck.
     void split_senders_by_direction_for_benchmark(ParsedTestConfig& test);
+
+    void resolve_hop_sentinels(ParsedTestConfig& test);
 
     bool expand_link_duplicates(ParsedTestConfig& test);
 

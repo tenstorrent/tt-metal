@@ -11,7 +11,7 @@ void NLPConcatHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args;
 
-    TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to TM need to be on device!");
+    TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
@@ -49,6 +49,12 @@ void NLPConcatHeadsDeviceOperation::validate_on_program_cache_miss(
             args.output_mem_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
             "Output memory config layout must not be HEIGHT_SHARDED but got {}",
             args.output_mem_config.memory_layout());
+        // The sharded kernel writes directly into the output shard; an interleaved output has no
+        // shard to write to (legacy silently produced garbage through an unconfigured CB here).
+        TT_FATAL(
+            args.output_mem_config.is_sharded(),
+            "Sharded input requires a sharded output memory config but got {}",
+            args.output_mem_config.memory_layout());
     } else {
         TT_FATAL(
             args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -76,13 +82,13 @@ NLPConcatHeadsDeviceOperation::spec_return_value_t NLPConcatHeadsDeviceOperation
         shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
         auto mem_config = tt::tt_metal::MemoryConfig(
             args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), shard_spec);
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), mem_config));
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));

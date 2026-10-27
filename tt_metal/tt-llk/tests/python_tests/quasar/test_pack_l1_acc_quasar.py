@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     PackGolden,
@@ -14,7 +15,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
+    PerfRunType,
     ReluConfig,
     format_dict,
 )
@@ -23,13 +24,16 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
+    runtime,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -54,11 +58,8 @@ PACK_L1_ACC_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ]
-)
+) + quasar_mx_smoke(DataFormat.MxInt8, DataFormat.Float16_b)
 
 
 def generate_qsr_pack_l1_acc_combinations(
@@ -124,26 +125,35 @@ def generate_qsr_pack_l1_acc_combinations(
     return combinations
 
 
+def pack_l1_acc_dest_sync_modes(*, is_perf=False):
+    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
+
+
+ALL_PACK_L1_ACC_COMBINATIONS = generate_qsr_pack_l1_acc_combinations(
+    PACK_L1_ACC_FORMATS
+)
+
+
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=generate_qsr_pack_l1_acc_combinations(PACK_L1_ACC_FORMATS),
-    # don't generate the No variant for them. formats_dest_acc[0] is the InputOutputFormat (input/output pair).
-    implied_math_format=lambda formats_dest_acc: (
-        [ImpliedMathFormat.Yes]
-        if formats_dest_acc[0].input_format.is_mx_format()
-        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-    ),
-    dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=INPUT_DIMENSIONS,
+    formats_dest_acc=ALL_PACK_L1_ACC_COMBINATIONS,
+    dest_sync_mode=lambda: pack_l1_acc_dest_sync_modes(is_perf=False),
+    input_dimensions=runtime(INPUT_DIMENSIONS),
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
 )
 def test_pack_l1_acc_quasar(
     formats_dest_acc,
-    implied_math_format,
     dest_sync_mode,
     input_dimensions,
+    run_types,
+    loop_factor,
     boot_mode=BootMode.DEFAULT,
+    *,
+    is_perf=False,
+    perf_report=None,
 ):
-    (formats, dest_acc) = formats_dest_acc
+    formats, dest_acc = formats_dest_acc
 
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
@@ -171,49 +181,50 @@ def test_pack_l1_acc_quasar(
         tile_dimensions=TILE_DIMENSIONS,
     )
 
-    # Quantize MX input through the source lattice so the golden sees what HW
-    # sees after unpacking from L1. Without this, raw bfloat16 stimuli flow
-    # into PackGolden while HW reads MxInt4-quantized values; per-block
-    # accumulation then amplifies the per-element drift.
-    src_A_golden = (
-        quantize_mx_tensor_chunked(src_A, formats.input_format)
-        if formats.input_format.is_mx_format()
-        else src_A
-    )
+    if not is_perf:
+        # Quantize MX input through the source lattice so the golden sees what HW
+        # sees after unpacking from L1. Without this, raw bfloat16 stimuli flow
+        # into PackGolden while HW reads MxInt4-quantized values; per-block
+        # accumulation then amplifies the per-element drift.
+        src_A_golden = (
+            quantize_mx_tensor_chunked(src_A, formats.input_format)
+            if formats.input_format.is_mx_format()
+            else src_A
+        )
 
-    generate_golden = get_golden_generator(PackGolden)
-    full_golden = generate_golden(
-        src_A_golden,
-        formats.output_format,
-        num_faces=num_faces,
-        input_dimensions=input_dimensions,
-        face_r_dim=face_r_dim,
-    )
+        generate_golden = get_golden_generator(PackGolden)
+        full_golden = generate_golden(
+            src_A_golden,
+            formats.output_format,
+            num_faces=num_faces,
+            input_dimensions=input_dimensions,
+            face_r_dim=face_r_dim,
+        )
 
-    # This test accumulates the results of each block on top of each other
-    # Slice the full golden into per-block partials and accumulate
-    elements_per_block = output_tiles_in_block * num_faces * face_r_dim * FACE_C_DIM
-    partials = [
-        full_golden[block * elements_per_block : (block + 1) * elements_per_block]
-        for block in range(output_num_blocks)
-    ]
-    golden_tensor = generate_golden.accumulate_l1(
-        partials, data_format=formats.output_format
-    )
+        # This test accumulates the results of each block on top of each other
+        # Slice the full golden into per-block partials and accumulate
+        elements_per_block = output_tiles_in_block * num_faces * face_r_dim * FACE_C_DIM
+        partials = [
+            full_golden[block * elements_per_block : (block + 1) * elements_per_block]
+            for block in range(output_num_blocks)
+        ]
+        golden_tensor = generate_golden.accumulate_l1(
+            partials, data_format=formats.output_format
+        )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
-    configuration = TestConfig(
-        "sources/quasar/pack_l1_acc_quasar_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            IMPLIED_MATH_FORMAT(implied_math_format),
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/pack_l1_acc_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             DEST_SYNC(dest_sync_mode),
         ],
-        runtimes=[
+        "runtimes": [
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
             NUM_FACES(num_faces),
             NUM_TILES_IN_BLOCK(
@@ -228,8 +239,9 @@ def test_pack_l1_acc_quasar(
             ),
             TEST_FACE_DIMS(face_r_dim=face_r_dim, face_c_dim=FACE_C_DIM),
             RELU_CONFIG(ReluConfig.NoRelu.value),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -243,13 +255,19 @@ def test_pack_l1_acc_quasar(
             tile_dimensions=TILE_DIMENSIONS,
             use_dense_tile_dimensions=True,
         ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+        "dest_acc": dest_acc,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
         boot_mode=boot_mode,
-        # MX inputs need format inference disabled so the C++ side's
-        # IMPLIED_MATH_FORMAT setting drives the math format.
-        disable_format_inference=formats.input_format.is_mx_format(),
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 

@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 #include <optional>
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "fd_kernel.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
@@ -76,6 +76,7 @@ public:
         const ContextDescriptor& descriptor,
         dispatch_core_manager& dispatch_core_manager,
         const GetControlPlaneFn& get_control_plane,
+        const GetDispatchQueryManagerFn& get_dispatch_query_manager,
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores) :
         FDKernel(
             node_id,
@@ -86,8 +87,7 @@ public:
             descriptor,
             dispatch_core_manager,
             get_control_plane,
-            {},
-            {},
+            get_dispatch_query_manager,
             get_reads_dispatch_cores),
         d2h_{d2h},
         tunnel_id_{tunnel_index} {

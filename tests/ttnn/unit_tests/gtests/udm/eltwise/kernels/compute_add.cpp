@@ -41,8 +41,8 @@ void kernel_main() {
     constexpr uint32_t dst_reg = 0;
 
     // Initialize binary operation for add
-    binary_op_init_common(cb_in0, cb_in1, cb_out);
-    add_tiles_init(cb_in0, cb_in1);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out);
+    add_init(cb_in0, cb_in1);
 
     // Process all tiles
     for (uint32_t i = 0; i < n_tiles; i++) {

@@ -12,7 +12,7 @@ from conftest import is_6u
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 
@@ -33,7 +33,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_llama_all_gather_matmul import (
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
 NUM_ITERATIONS = 75
@@ -421,6 +421,17 @@ def get_core_range_set(output_core_grid):
     return output_core_range_set
 
 
+def fit_core_grid_to_device(mesh_device, shard_grid):
+    """Use the preferred grid when the device has it, else let the device place the cores."""
+    if shard_grid is None:
+        return None
+    last_core = shard_grid.bounding_box().end
+    device_grid = mesh_device.compute_with_storage_grid_size()
+    if last_core.x < device_grid.x and last_core.y < device_grid.y:
+        return shard_grid
+    return ttnn.num_cores_to_corerangeset(shard_grid.num_cores(), device_grid, row_wise=True)
+
+
 CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
     {
         ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
@@ -545,6 +556,8 @@ def test_all_gather_6u_llama(
 ):
     if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
+    input_shard_grid = fit_core_grid_to_device(mesh_device, input_shard_grid)
+    output_shard_grid = fit_core_grid_to_device(mesh_device, output_shard_grid)
     if input_shard_grid is not None and input_shard_shape is not None:
         input_shard_spec = ttnn.ShardSpec(
             input_shard_grid,
@@ -708,6 +721,8 @@ def test_all_gather_tg_llama(
 ):
     if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
+    input_shard_grid = fit_core_grid_to_device(mesh_device, input_shard_grid)
+    output_shard_grid = fit_core_grid_to_device(mesh_device, output_shard_grid)
     if input_shard_grid is not None and input_shard_shape is not None:
         input_shard_spec = ttnn.ShardSpec(
             input_shard_grid,

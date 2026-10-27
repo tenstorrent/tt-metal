@@ -101,7 +101,7 @@ auto eltwise_sfpu_kernel_id = CreateKernel(
     program,
     "tt_metal/programming_examples/eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",
     core,
-    ComputeConfig{ .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false });
+    ComputeConfig{ .math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .math_approx_mode = false });
 
 SetRuntimeArgs(program, eltwise_sfpu_kernel_id, core, { n_tiles });
 SetRuntimeArgs(program, unary_reader_kernel_id, core, { src0_dram_buffer->address(), n_tiles });

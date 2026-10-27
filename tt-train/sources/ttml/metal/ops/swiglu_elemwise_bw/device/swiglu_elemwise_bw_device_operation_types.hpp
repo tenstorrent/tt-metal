@@ -23,7 +23,7 @@ struct SwigluElemwiseBwResult {
     ttnn::Tensor dL_dgate;
 };
 
-using SwigluElemwiseBwOutputSpecs = std::vector<ttnn::TensorSpec>;
+using SwigluElemwiseBwOutputSpecs = std::vector<tt::tt_metal::TensorSpec>;
 
 // Backward-compat aliases for in-flight branches.
 using operation_attributes_t = SwigluElemwiseBwParams;

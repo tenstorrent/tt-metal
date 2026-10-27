@@ -347,8 +347,11 @@ def compute_score_single_device_tt_only(
     """
     queries = [p[0] for p in sentence_pairs]
     passages = [p[1] for p in sentence_pairs]
-    enc_q = model_args.encode_prompts(queries)
-    enc_p = model_args.encode_prompts(passages)
+    # attention_mask_4d=False: the mask is used as the 2D [B, S] keep-mask by
+    # _norm_weights_ttnn / _colbert_embedding_ttnn and passed through to_ttnn_ids
+    # to the TT model (which accepts the 2D HF-convention mask).
+    enc_q = model_args.encode_prompts(queries, attention_mask_4d=False)
+    enc_p = model_args.encode_prompts(passages, attention_mask_4d=False)
 
     def run_tt(ids: torch.Tensor, attn: torch.Tensor, tok_type: torch.Tensor) -> Any:
         return ttnn_model(

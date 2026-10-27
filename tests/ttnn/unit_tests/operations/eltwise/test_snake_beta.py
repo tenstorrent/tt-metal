@@ -50,7 +50,7 @@ def test_snake_beta_broadcast(device, x_shape, ab_shape, seed, torch_dtype, ttnn
         # ULP is a poor metric near y≈0 at fp32 precision; use combined rtol/atol instead.
         assert torch.allclose(expected, result, rtol=1e-5, atol=1e-5)
     else:
-        assert_with_ulp(expected, result, ulp_threshold=2)
+        assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=2)
 
 
 # Per-preset bf16 distribution params from issue #43337:
@@ -130,7 +130,7 @@ def test_snake_beta_real_workload(device, preset, torch_dtype):
     if torch_dtype == torch.float32:
         assert torch.allclose(expected, result, rtol=1e-5, atol=1e-5)
     else:
-        assert_with_ulp(expected, result, ulp_threshold=2)
+        assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=2)
 
 
 def test_snake_beta_pi_boundary(device):
@@ -150,7 +150,7 @@ def test_snake_beta_pi_boundary(device):
     a_tt = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device)
     b_tt = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device)
     result = ttnn.to_torch(ttnn.snake_beta(x_tt, a_tt, b_tt))
-    assert_with_ulp(expected, result, ulp_threshold=1)
+    assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -178,7 +178,7 @@ def test_snake_beta_output_tensor(device, x_shape, ab_shape):
     # Returned tensor must alias the caller-supplied buffer (proves the op wrote into it
     # instead of allocating a fresh one).
     out_pre_torch = ttnn.to_torch(out_pre)
-    assert_with_ulp(expected, out_pre_torch, ulp_threshold=2)
+    assert_with_ulp(expected_result=expected, actual_result=out_pre_torch, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -202,63 +202,63 @@ def test_snake_beta_rank_preservation(device, x_shape, ab_shape):
     result = ttnn.snake_beta(x_tt, a_tt, b_tt)
 
     assert tuple(result.shape) == x_shape, f"expected output shape {x_shape}, got {tuple(result.shape)}"
-    assert_with_ulp(expected, ttnn.to_torch(result), ulp_threshold=2)
+    assert_with_ulp(expected_result=expected, actual_result=ttnn.to_torch(result), ulp_threshold=2)
 
 
 # --- Validation failure tests ---
 
 
-def test_snake_beta_shape_mismatch_alpha_beta(device):
+def test_snake_beta_shape_mismatch_alpha_beta(device, expect_error):
     x = ttnn.from_torch(torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     a = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     b = ttnn.from_torch(torch.ones(64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match=r"alpha.shape == beta.shape|Broadcasting rule violation"):
+    with expect_error(RuntimeError, r"alpha.shape == beta.shape|Broadcasting rule violation"):
         ttnn.snake_beta(x, a, b)
 
 
-def test_snake_beta_dtype_mismatch(device):
+def test_snake_beta_dtype_mismatch(device, expect_error):
     x = ttnn.from_torch(torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     a = ttnn.from_torch(torch.ones(32, dtype=torch.float32), layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32, device=device)
     b = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match=r"dtype"):
+    with expect_error(RuntimeError, r"dtype"):
         ttnn.snake_beta(x, a, b)
 
 
-def test_snake_beta_w_mismatch(device):
+def test_snake_beta_w_mismatch(device, expect_error):
     x = ttnn.from_torch(torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     a = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     b = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match=r"input.W == alpha.W|Broadcasting rule violation"):
+    with expect_error(RuntimeError, r"input.W == alpha.W|Broadcasting rule violation"):
         ttnn.snake_beta(x, a, b)
 
 
-def test_snake_beta_unsupported_broadcast(device):
+def test_snake_beta_unsupported_broadcast(device, expect_error):
     """alpha with a non-1 non-W dim (H=64) is rejected in v1."""
     x = ttnn.from_torch(torch.zeros(1, 1, 64, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     a = ttnn.from_torch(torch.ones(1, 1, 64, 1, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     b = ttnn.from_torch(torch.ones(1, 1, 64, 1, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match=r"non-1 size only on the last dim|input.W == alpha.W|broadcast"):
+    with expect_error(RuntimeError, r"non-1 size only on the last dim|input.W == alpha.W|broadcast"):
         ttnn.snake_beta(x, a, b)
 
 
-def test_snake_beta_row_major_layout(device):
+def test_snake_beta_row_major_layout(device, expect_error):
     x = ttnn.from_torch(torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     a = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     b = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match=r"[Tt]ile [Ll]ayout|tile layout"):
+    with expect_error(RuntimeError, r"[Tt]ile [Ll]ayout|tile layout"):
         ttnn.snake_beta(x, a, b)
 
 
-def test_snake_beta_unsupported_input_rank(device):
+def test_snake_beta_unsupported_input_rank(device, expect_error):
     """Rank-1 input is rejected; the kernel reader requires padded_shape rank >= 2."""
     x = ttnn.from_torch(torch.zeros(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     a = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     b = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match=r"input rank >= 2"):
+    with expect_error(RuntimeError, r"input rank >= 2"):
         ttnn.snake_beta(x, a, b)
 
 
-def test_snake_beta_unsupported_dtype_int32(device):
+def test_snake_beta_unsupported_dtype_int32(device, expect_error):
     """INT32 is rejected; only BFLOAT16 / FLOAT32 are supported."""
     x = ttnn.from_torch(
         torch.zeros(1, 1, 32, 32, dtype=torch.int32),
@@ -278,5 +278,5 @@ def test_snake_beta_unsupported_dtype_int32(device):
         dtype=ttnn.int32,
         device=device,
     )
-    with pytest.raises(RuntimeError, match=r"BFLOAT16 or FLOAT32"):
+    with expect_error(RuntimeError, r"BFLOAT16 or FLOAT32"):
         ttnn.snake_beta(x, a, b)

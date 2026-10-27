@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "hostdevcommon/config.hpp"
+#include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
@@ -15,8 +16,13 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
+
+#include <array>
+#include <cmath>
+#include <utility>
 
 namespace ttnn::experimental::prim {
 namespace detail {
@@ -37,6 +43,14 @@ void MoEComputeDeviceOperation::validate_on_program_cache_hit(
 
 void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    TT_FATAL(
+        (args.activation_type == detail::MoEActivationFunction::CLAMPED_SILU) == args.activation_limit.has_value(),
+        "activation_limit is required for CLAMPED_SILU and must be omitted for other activations");
+    TT_FATAL(
+        !args.activation_limit.has_value() || (std::isfinite(*args.activation_limit) && *args.activation_limit > 0.0f),
+        "activation_limit must be finite and positive, got {}",
+        args.activation_limit.value_or(0.0f));
+
     // Tilize
     TT_FATAL(
         tensor_args.tilize_input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
@@ -76,34 +90,41 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         "matmul_w2_tensor must be rank 6 ([num_cores, L, E, groups_per_core, N, 4*TILE_SIZE]); got rank {}",
         rank_of(tensor_args.matmul_w2_tensor));
 
-    // When has_bias=True, dm0 derives per-expert byte strides using ceil((K+1)/W0W1_TXN)*W0W1_TXN and
-    // ceil((N+1)/W2_TXN)*W2_TXN. The physical tensors must be padded to those tile counts; if not,
-    // dm0 silently reads from wrong expert boundaries after the first expert.
+    // When has_bias=True, dm0 derives per-expert byte strides from K+1 and N+1 padded to whole DRAM
+    // blocks. The physical tensors must be padded to those tile counts; if not, dm0 silently reads from
+    // wrong expert boundaries after the first expert. (The program factory also checks both tensors'
+    // total page counts against the layout.) Block height = 2 * tiles_per_txn / 4 rows for the per-shape
+    // transaction size.
     if (args.has_bias) {
         constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
-        constexpr uint32_t w0w1_txn = moe_ring::W0_W1_BLOCK_TILES_H * tile_h;  // bytes per transaction row
-        constexpr uint32_t w2_txn = moe_ring::W2_TILES_PER_A2A_ITER_H * tile_h;
+        const uint32_t tiles_per_txn = moe_ring::tiles_per_txn_for_shape(
+            tensor_args.tilize_input_tensor.logical_shape()[-1] / tile_h,
+            args.intermediate_size / tile_h,
+            true,
+            args.bh_ring_size);
+        const uint32_t w0w1_rows_per_block = moe_ring::block_tiles_h(tiles_per_txn) * tile_h;
+        const uint32_t w2_rows_per_block = moe_ring::block_tiles_h(tiles_per_txn) * tile_h;
 
         const auto& w0_w1_shape = tensor_args.matmul_w0_w1_tensor.tensor_spec().logical_shape();
         const uint32_t w0_w1_k = w0_w1_shape[-2];
         TT_FATAL(
-            w0_w1_k % w0w1_txn == 0,
+            w0_w1_k % w0w1_rows_per_block == 0,
             "matmul_w0_w1_tensor K-dimension ({}) must be a multiple of {} elements ({} tiles * {} rows/tile) "
             "when has_bias=True. Use moe_compute_utils.prepare_w0_w1_tensor_with_bias() to prepare the tensor.",
             w0_w1_k,
-            w0w1_txn,
-            moe_ring::W0_W1_TILES_PER_TXN,
+            w0w1_rows_per_block,
+            moe_ring::block_tiles_h(tiles_per_txn),
             tile_h);
 
         const auto& w2_shape = tensor_args.matmul_w2_tensor.tensor_spec().logical_shape();
         const uint32_t w2_n = w2_shape[-2];
         TT_FATAL(
-            w2_n % w2_txn == 0,
+            w2_n % w2_rows_per_block == 0,
             "matmul_w2_tensor N-dimension ({}) must be a multiple of {} elements ({} tiles * {} rows/tile) "
             "when has_bias=True. Use moe_compute_utils.prepare_w2_tensor_with_bias() to prepare the tensor.",
             w2_n,
-            w2_txn,
-            moe_ring::W2_TILES_PER_TXN,
+            w2_rows_per_block,
+            moe_ring::block_tiles_h(tiles_per_txn),
             tile_h);
     }
 
@@ -118,8 +139,21 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         max_tokens >= total_tokens, "Too many tokens in input, got: {} but expected max: {}", total_tokens, max_tokens);
 
-    // ComputeOnly mode: combine_params must be nullopt and the optional output tensor (which
-    // would normally be the combine output) must not be provided.
+    // Mode-specific validation of combine_params and optional_output_tensor.
+    // - ComputeOnly: no combine_params, no optional_output_tensor (5 outputs).
+    // - SingleDevice: combine_params must be set with local_combine=true; only on a 1x1 mesh;
+    //   optional_output_tensor is allowed as the combine output sink (6 outputs, no CCL).
+    // - SingleCluster: combine_params describes the final [k, T, H] output (6 outputs, no combine
+    //   kernels: dm1 writes the output). The cluster_axis has extent 1; on a multi-device mesh
+    //   that leaves one partial per coordinate for the caller to reduce, so the token set and its
+    //   routing metadata must be replicated (every coordinate sees the same tokens, indices,
+    //   scores and mapping). Only the rows of the experts a coordinate holds are written, as the
+    //   combine writes only the rows it receives. The output is written one token row (2 x H
+    //   bytes) at a time through a TensorAccessor page, the same addressing as the combine writer,
+    //   so it takes the combine's output memory config check. The optional_output_tensor, when
+    //   given, is the buffer dm1 addresses (create_output_tensors returns it as slot 5).
+    // - FullCcl: combine_params must be set with local_combine=false (6 outputs, CCL path).
+    auto* mesh_device = tensor_args.tilize_input_tensor.device();
     if (args.path == MoEComputePath::ComputeOnly) {
         TT_FATAL(!args.combine_params.has_value(), "path=ComputeOnly requires combine_params to be std::nullopt");
         TT_FATAL(
@@ -127,8 +161,106 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
             "path=ComputeOnly requires optional_output_tensor to be std::nullopt (no combine output is produced)");
     } else {
         TT_FATAL(args.combine_params.has_value(), "path=Full requires combine_params to be set");
-        TT_FATAL(args.combine_params->num_links > 0, "num_links must be greater than 0");
-        TT_FATAL(args.combine_params->axis < 2, "cluster_axis must be 0 or 1");
+        const auto& mesh_shape = mesh_device->shape();
+        TT_FATAL(
+            args.combine_params->axis < mesh_shape.dims(),
+            "cluster_axis {} is out of range for a mesh with {} axes",
+            args.combine_params->axis,
+            mesh_shape.dims());
+        if (args.path == MoEComputePath::SingleDevice) {
+            TT_FATAL(
+                mesh_device->num_devices() == 1,
+                "path=SingleDevice is only supported on a 1x1 mesh, got num_devices={}",
+                mesh_device->num_devices());
+            TT_FATAL(
+                args.combine_params->local_combine,
+                "path=SingleDevice requires combine_params->local_combine to be true");
+        } else if (args.path == MoEComputePath::SingleCluster) {
+            // The CCL knobs are accepted and unused on this path; num_links keeps its range check.
+            TT_FATAL(args.combine_params->num_links > 0, "num_links must be greater than 0");
+            TT_FATAL(
+                mesh_shape[args.combine_params->axis] == 1,
+                "path=SingleCluster requires cluster_axis {} to have extent 1, got {}",
+                args.combine_params->axis,
+                mesh_shape[args.combine_params->axis]);
+            // The local output is one partial per mesh coordinate that the caller sums, so a shared
+            // expert would be counted once per coordinate; dm1's expert loop also only covers the
+            // routed experts' e_t pages. The public wrapper rejects this at the op boundary; this
+            // repeats it for direct ttnn::prim callers.
+            TT_FATAL(
+                args.num_shared_experts_per_device.value_or(0) == 0,
+                "moe_compute over a mesh axis of extent 1 writes a local output and does not support shared experts; "
+                "got num_shared_experts_per_device={}",
+                args.num_shared_experts_per_device.value_or(0));
+            if (mesh_device->num_devices() > 1) {
+                // Every coordinate runs the tilize stage over the whole token set: the input rows,
+                // the expert indices and scores that route them and the expert mapping are all
+                // read as the full set, and dm1 addresses page k * T + t of the output by the
+                // global token id. A sharded copy of any of the four would give the coordinates
+                // different token numberings or partial routing tables, so all four must be
+                // fully replicated. A 1x1 mesh has nothing to check.
+                const std::array<std::pair<const char*, const ttnn::Tensor*>, 4> replicated_inputs{{
+                    {"input", &tensor_args.tilize_input_tensor},
+                    {"expert indices", &tensor_args.tilize_expert_indices_tensor},
+                    {"expert scores", &tensor_args.tilize_expert_scores_tensor},
+                    {"expert mapping", &tensor_args.tilize_expert_mapping_tensor},
+                }};
+                for (const auto& [what, tensor] : replicated_inputs) {
+                    for (const auto& placement : tensor->tensor_topology().placements()) {
+                        TT_FATAL(
+                            std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement),
+                            "moe_compute over a mesh axis of extent 1 on a multi-device mesh requires a fully "
+                            "replicated {} topology (every coordinate reads the whole token set and its routing); "
+                            "the caller reduces the per-device partials",
+                            what);
+                    }
+                }
+            }
+            const auto& output_memory_config = args.combine_params->output_memory_config;
+            const uint32_t num_output_rows =
+                args.combine_params->select_experts_k * args.combine_params->batch_size * args.combine_params->seq_size;
+            const uint32_t output_hidden_size = tilize_input_shape[-1];
+            detail::validate_combine_output_memory_config(
+                output_memory_config, num_output_rows, output_hidden_size, "output memory config");
+            if (tensor_args.optional_output_tensor.has_value()) {
+                const auto& out = *tensor_args.optional_output_tensor;
+                const ttnn::Shape expected_shape(
+                    {args.combine_params->select_experts_k,
+                     args.combine_params->batch_size * args.combine_params->seq_size,
+                     output_hidden_size});
+                TT_FATAL(
+                    out.logical_shape() == expected_shape && out.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                        out.dtype() == tensor_args.tilize_input_tensor.dtype(),
+                    "optional_output_tensor must be a {} row-major {} tensor for the local output path; got shape {} "
+                    "layout {} dtype {}",
+                    expected_shape,
+                    tensor_args.tilize_input_tensor.dtype(),
+                    out.logical_shape(),
+                    out.layout(),
+                    out.dtype());
+                // combine_params.output_memory_config is slot 5's spec and part of the program hash;
+                // the tensor is the buffer dm1 writes. ttnn::prim::moe_compute takes the tensor's
+                // config when the caller leaves output_memory_config unset, so a difference here is
+                // an explicit disagreement, never a silent default.
+                TT_FATAL(
+                    out.memory_config() == output_memory_config,
+                    "optional_output_tensor memory config {} differs from output_memory_config {} on the local output "
+                    "path; pass one or the other (an unset output_memory_config takes the tensor's)",
+                    out.memory_config(),
+                    output_memory_config);
+                // The tensor's own (TensorSpec-populated) config is what dm1's accessor is built from.
+                detail::validate_combine_output_memory_config(
+                    out.memory_config(), num_output_rows, output_hidden_size, "optional_output_tensor memory config");
+            }
+        } else {
+            TT_FATAL(
+                !args.combine_params->local_combine, "path=FullCcl requires combine_params->local_combine to be false");
+            TT_FATAL(args.combine_params->num_links > 0, "num_links must be greater than 0");
+            TT_FATAL(args.combine_params->axis < 2, "cluster_axis must be 0 or 1");
+            TT_FATAL(
+                mesh_shape[args.combine_params->axis] > 1,
+                "path=FullCcl requires a cluster_axis of extent > 1; an axis of extent 1 takes the SingleCluster path");
+        }
     }
 
     // Validate hidden_size
@@ -149,21 +281,10 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     // Both Full and ComputeOnly paths use the same matmul ring kernels, so this applies in both modes.
     //
     // matmul_num_cores must match the actual matmul ring size produced by program_factory:
-    //   - WH: ring = num DRAM banks = 12 (1:1, no padding). args.bh_ring_size is forced to 12
-    //     in invoke() for WH, so reading either source returns the same value.
-    //   - BH: ring = bh_ring_size (8 / 12 / 16). program_factory.cpp pads the 8 DRAM-adjacent
-    //     cores up to bh_ring_size via `kBhMatmulExtras` (see program_factory.cpp). Using the
-    //     raw DRAM bank count here (=8 on BH always) would under-report and reject shapes
-    //     whose width_shard_dim divides bh_ring_size but not 8 — e.g. GPT-OSS at hidden=2880
-    //     forces output_width_shard_dim=3, valid at N=12 (12%3=0) but the early validate using
-    //     raw 8 would fail (8%3≠0). args.bh_ring_size is already resolved by invoke() before
-    //     this validate runs.
-    auto* mesh_device = tensor_args.tilize_input_tensor.device();
-    const uint32_t matmul_num_cores =
-        (mesh_device->arch() == tt::ARCH::BLACKHOLE)
-            ? args.bh_ring_size
-            : mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default)
-                  .size();
+    //   - WH: ring is always 12 (no DRAM-bank harvesting).
+    //   - BH: ring = live DRAM-bank count (7 or 8). args.bh_ring_size is resolved by invoke()
+    //     to this value before validate runs.
+    const uint32_t matmul_num_cores = args.bh_ring_size;
     const uint32_t intermediate_tiles = intermediate_size / 32;
     TT_FATAL(
         intermediate_tiles >= matmul_num_cores,
@@ -172,20 +293,24 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         intermediate_tiles,
         matmul_num_cores);
 
+    const uint32_t hidden_tiles = hidden_size / 32;
     TT_FATAL(
-        matmul_num_cores % combine_data_parallel_cores == 0,
-        "matmul_num_cores ({}) must be divisible by num_data_parallel_cores ({}) "
-        "so RING_CORES_PER_COMBINE_COL is integral",
-        matmul_num_cores,
+        hidden_tiles % combine_data_parallel_cores == 0,
+        "hidden_tiles ({}) must be divisible by num_data_parallel_cores ({}) "
+        "so output width shards are tile-aligned",
+        hidden_tiles,
         combine_data_parallel_cores);
 
     // dm1 auto-splits each ring A2A transfer into enough noc_async_write_one_packet calls
-    // to fit within NOC_MAX_BURST_SIZE (arch-dependent). Validate tiles_per_step is even
-    // (required by the round-up formula used in MoeRingConfig::in2_tiles_per_step).
+    // to fit within NOC_MAX_BURST_SIZE (arch-dependent). Validate tiles_per_step (the a2a
+    // exchange width, MoeRingConfig::in2_tiles_per_step) holds every core's columns.
     const uint32_t tiles_per_step_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
-    const uint32_t tiles_per_step = (tiles_per_step_raw + 1) & ~1u;
+    const uint32_t tiles_per_step = moe_ring::a2a_exchange_tiles(intermediate_tiles, matmul_num_cores);
     TT_FATAL(
-        tiles_per_step >= 2 && tiles_per_step % 2 == 0, "tiles_per_step ({}) must be even and >= 2", tiles_per_step);
+        tiles_per_step >= tiles_per_step_raw && tiles_per_step >= 2,
+        "a2a exchange width ({}) must hold the largest per-core column count ({}) and be >= 2",
+        tiles_per_step,
+        tiles_per_step_raw);
 
     const uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
     TT_FATAL(
@@ -194,9 +319,16 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         args.num_shared_experts_per_device,
         experts_per_device);
 
-    TT_FATAL(
-        args.bh_ring_size == 8 || args.bh_ring_size == 12 || args.bh_ring_size == 16,
-        "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
+    // Validate that dynamic core placement succeeds for this hidden size and combine grid.
+    // mux_core_range_set comes from combine_params when in Full mode; ComputeOnly uses an empty set.
+    const CoreRangeSet validate_mux_cores =
+        args.combine_params.has_value() ? args.combine_params->mux_core_range_set : CoreRangeSet{};
+    ttnn::operations::ccl::common::select_moe_compute_cores(
+        mesh_device,
+        combine_token_parallel_cores,
+        combine_data_parallel_cores,
+        hidden_size,
+        validate_mux_cores,
         args.bh_ring_size);
 }
 
@@ -236,7 +368,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
             shard_cores, {1, per_expert_total_tokens_row_elements}, tt::tt_metal::ShardOrientation::ROW_MAJOR),
     };
 
-    auto tilize_per_expert_total_tokens_spec = TensorSpec(
+    auto tilize_per_expert_total_tokens_spec = tt::tt_metal::TensorSpec(
         tilize_per_expert_total_tokens_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
@@ -251,7 +383,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     uint32_t activation_row_bytes = tt::align(activation_row_elements * sizeof(uint32_t), l1_alignment);
     uint32_t activation_total_bytes = total_tokens * activation_row_bytes;
     auto tilize_expert_activation_shape = ttnn::Shape({1, activation_total_bytes / sizeof(uint32_t)});
-    auto tilize_expert_activation_spec = TensorSpec(
+    auto tilize_expert_activation_spec = tt::tt_metal::TensorSpec(
         tilize_expert_activation_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
@@ -265,7 +397,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     uint32_t e_t_row_bytes = (total_tokens + 1) * tt::align(sizeof(uint32_t), l1_alignment);
     uint32_t e_t_row_elements = e_t_row_bytes / sizeof(uint32_t);
     auto tilize_e_t_shape = ttnn::Shape({experts_per_device, e_t_row_elements});
-    auto tilize_e_t_spec = TensorSpec(
+    auto tilize_e_t_spec = tt::tt_metal::TensorSpec(
         Shape(tilize_e_t_shape),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
@@ -291,7 +423,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
 
     auto tilize_output_shape =
         ttnn::Shape({shard_cores.num_cores(), detail::DOUBLE_BUFFER_SIZE, detail::TOKEN_SIZE, hidden_size});
-    auto tilize_output_spec = TensorSpec(
+    auto tilize_output_spec = tt::tt_metal::TensorSpec(
         Shape(tilize_output_shape),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
@@ -310,7 +442,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     const auto& tilize_output_layout = tilize_output_spec.tensor_layout();
     const tt::tt_metal::TensorLayout matmul_output_layout(
         tilize_output_layout.get_data_type(), ROW_MAJOR_LAYOUT, tilize_output_layout.get_memory_config());
-    const auto matmul_output_spec = TensorSpec(tilize_output_shape, matmul_output_layout);
+    const auto matmul_output_spec = tt::tt_metal::TensorSpec(tilize_output_shape, matmul_output_layout);
 
     //-------------------------------------------------------------------------
     // a2a combine output
@@ -329,6 +461,8 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
 
     TT_FATAL(args.combine_params.has_value(), "combine_params required when path is not ComputeOnly");
 
+    // Output 5 has the combine's [k, T / axis extent, H] spec on every path: SingleCluster's axis has
+    // extent 1, so dm1 writes the whole replicated token set into the same shape.
     ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
         .dense_input_tensor = tilize_input_tensor,
         .dense_activations_tensor = tilize_input_tensor,
@@ -348,15 +482,30 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
         output_spec};
 }
 
+MoEComputeDeviceOperation::topology_return_value_t MoEComputeDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto* mesh_device = tensor_args.tilize_input_tensor.device();
+    const bool local_output_on_mesh = args.path == MoEComputePath::SingleCluster && mesh_device->num_devices() > 1;
+    if (!local_output_on_mesh) {
+        // Keep the default topology inference for ComputeOnly, SingleDevice, FullCcl and a 1x1 SingleCluster.
+        return {};
+    }
+
+    // An axis of extent 1 on a multi-device mesh leaves one full-width partial at every
+    // coordinate. No tensor dimension is sharded, so the outputs keep the (replicated) input
+    // topology instead of inheriting an expert-sharded placement from the weight inputs.
+    return topology_return_value_t(6, tensor_args.tilize_input_tensor.tensor_topology());
+}
+
 MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const std::vector<ttnn::TensorSpec>& output_specs = compute_output_specs(args, tensor_args);
+    const std::vector<tt::tt_metal::TensorSpec>& output_specs = compute_output_specs(args, tensor_args);
 
     const auto tilize_output_tensor = create_device_tensor(output_specs[3], tensor_args.tilize_input_tensor.device());
 
     // re-percieve tilize output tensor as RM for output
     const auto matmul_output_tensor =
-        tt::tt_metal::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
+        ttnn::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
     TT_FATAL(
         matmul_output_tensor.tensor_spec() == output_specs[4],
         "Reinterpreted tensor spec does not match expected output_specs[4]");
@@ -408,7 +557,10 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
     const bool compute_only,
     const std::optional<uint32_t>& bh_ring_size,
-    const std::optional<uint32_t>& num_shared_experts_per_device) {
+    const std::optional<uint32_t>& num_shared_experts_per_device,
+    const std::optional<float>& activation_limit,
+    const tt::tt_metal::MathFidelity math_fidelity,
+    const bool fp32_dest_acc_en) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
@@ -421,38 +573,126 @@ std::vector<ttnn::Tensor> moe_compute(
 
     auto* mesh_device = tilize_input_tensor.device();
 
-    // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
-    // Validate before num_data_parallel_cores derivation so ring-aware width dim can use ring_n.
-    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(12u) : 12u;
-    // NOTE: there has been some experimentation with different ring sizes on Blackhole but there are known correctness
-    // issues for some model configurations for values other than 8, which is why this is not exposed in the public API
+    // Ring size is 12 on Wormhole (no DRAM-bank harvesting). On Blackhole it is the live
+    // DRAM-bank count (7 or 8). Resolved by the public API before invocation, but keep a
+    // fallback to the live bank count for direct prim callers.
+    const uint32_t ring_n = bh_ring_size.value_or(
+        mesh_device->arch() == tt::ARCH::BLACKHOLE
+            ? mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default).size()
+            : 12u);
+    // NOTE: the public API auto-detects the ring from the device and does not expose it as a knob.
 
-    // Auto-compute num_data_parallel_cores: largest divisor d of hidden_tiles with d <= 4
-    // AND ring_n % d == 0. dm1 maps ring cores to combine columns via
-    // RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim, so both must divide evenly.
-    // E.g. GPT-OSS (Ht=90) picks d=3 at N=12 but falls back to d=2 at N=8 or N=16.
+    // Auto-compute num_data_parallel_cores: largest divisor d of hidden_tiles with d <= 4.
+    // The ring size does not constrain d: each ring core signals every combine column its w2
+    // width slice overlaps, and each combine core releases exactly the ring cores feeding it.
+    // Keeping d large matters for the fabric combine, which sends each token segment as one
+    // packet (e.g. DeepSeek at d=1 would need a 14 KB segment).
     const uint32_t hidden_tiles = hidden_size / 32;
     uint32_t num_data_parallel_cores = 1;
     for (uint32_t d = 4; d >= 1; --d) {
-        if (hidden_tiles % d == 0 && ring_n % d == 0) {
+        if (hidden_tiles % d == 0) {
             num_data_parallel_cores = d;
             break;
         }
     }
 
-    const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
+    // Determine the MoE compute path from compute_only and cluster_axis.
+    // - ComputeOnly: compute_only=true, cluster_axis must be None, no CCL options.
+    // - SingleDevice: compute_only=false, cluster_axis=None, only valid on a 1x1 mesh. No CCL
+    //   options; combine runs as a local reduction with no fabric.
+    // - SingleCluster: compute_only=false, cluster_axis names an axis of extent 1. Nothing to
+    //   combine: dm1 writes the final output, the fabric is not consulted and the CCL options
+    //   are accepted and unused.
+    // - FullCcl: compute_only=false, cluster_axis names an axis of extent > 1. CCL options apply.
+    const uint32_t num_devices = mesh_device->num_devices();
+    const auto& mesh_shape = mesh_device->shape();
+    if (cluster_axis.has_value()) {
+        TT_FATAL(
+            *cluster_axis < mesh_shape.dims(),
+            "cluster_axis {} is out of range for a mesh with {} axes",
+            *cluster_axis,
+            mesh_shape.dims());
+    }
+    // TODO(#59730): run the 1x1 cluster_axis=None call through the SingleCluster path once it supports shared experts.
+    const bool single_device = !compute_only && !cluster_axis.has_value();
+    const bool single_cluster = !compute_only && cluster_axis.has_value() && mesh_shape[*cluster_axis] == 1;
+    if (single_device) {
+        TT_FATAL(
+            num_devices == 1,
+            "moe_compute(compute_only=false, cluster_axis=None) is only supported on a 1x1 mesh, "
+            "got num_devices={}. Pass cluster_axis for multi-device fused compute+combine.",
+            num_devices);
+    }
 
-    TT_FATAL(
-        !(compute_only && cluster_axis.has_value()),
-        "moe_compute: compute_only=True is incompatible with cluster_axis (got cluster_axis={}). "
-        "compute_only skips the combine path, so cluster_axis has no meaning.",
-        cluster_axis.value_or(0));
+    if (compute_only) {
+        TT_FATAL(!cluster_axis.has_value(), "moe_compute(compute_only=true) requires cluster_axis to be std::nullopt");
+        TT_FATAL(!topology.has_value(), "moe_compute(compute_only=true) requires topology to be std::nullopt");
+        TT_FATAL(!num_links.has_value(), "moe_compute(compute_only=true) requires num_links to be std::nullopt");
+        TT_FATAL(
+            !mux_core_range_set.has_value(),
+            "moe_compute(compute_only=true) requires mux_core_range_set to be std::nullopt");
+        TT_FATAL(
+            !optional_cross_device_semaphore.has_value(),
+            "moe_compute(compute_only=true) requires optional_cross_device_semaphore to be std::nullopt");
+        TT_FATAL(
+            !optional_output_tensor.has_value(),
+            "moe_compute(compute_only=true) requires optional_output_tensor to be std::nullopt");
+    } else if (single_device) {
+        TT_FATAL(!topology.has_value(), "moe_compute(cluster_axis=None) requires topology to be std::nullopt");
+        TT_FATAL(!num_links.has_value(), "moe_compute(cluster_axis=None) requires num_links to be std::nullopt");
+        TT_FATAL(
+            !mux_core_range_set.has_value(),
+            "moe_compute(cluster_axis=None) requires mux_core_range_set to be std::nullopt");
+        TT_FATAL(
+            !optional_cross_device_semaphore.has_value(),
+            "moe_compute(cluster_axis=None) requires optional_cross_device_semaphore to be std::nullopt");
+    } else {
+        TT_FATAL(cluster_axis.has_value(), "moe_compute(compute_only=false) requires cluster_axis to be provided");
+    }
+
+    const auto& combine_cores = get_moe_combine_cores(
+        mesh_device,
+        num_token_parallel_cores,
+        num_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set.value_or(CoreRangeSet{}),
+        ring_n);
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
-    if (!compute_only) {
+    if (single_device) {
+        // Local combine: no fabric, no mux, no cross-device semaphore. axis=0 names an axis of
+        // extent 1 on the 1x1 mesh, which the combine program factory builds as the local
+        // combine (and mesh_shape[1-axis]=1 for shared_expert_tp_factor).
+        combine_params = ttnn::experimental::prim::SelectiveReduceCombineParams{
+            .hidden_size = hidden_size,
+            .batch_size = 1,
+            .seq_size = total_tokens,
+            .select_experts_k = select_experts_k,
+            .num_links = 1,
+            .axis = 0,
+            .topology = tt::tt_fabric::Topology::Linear,
+            .num_token_parallel_cores = num_token_parallel_cores,
+            .num_data_parallel_cores = num_data_parallel_cores,
+            .worker_cores = combine_cores,
+            .mux_core_range_set = CoreRangeSet{},
+            .output_memory_config = output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
+            .optional_cross_device_semaphore = std::nullopt,
+            .local_combine = true};
+    } else if (!compute_only) {
+        // An axis of extent 1 has nothing to combine (SingleCluster: dm1 writes the final output), so
+        // skip link discovery and the fabric topology lookup, both of which need an initialized
+        // fabric context that a mesh opened without a fabric config lacks. Explicit CCL options are
+        // accepted and unused there; num_links is still checked > 0 below.
+        const bool axis_has_neighbours = !single_cluster;
+        // The local output leaves one partial per mesh coordinate that the caller sums, so a
+        // shared expert would be counted once per coordinate.
+        TT_FATAL(
+            axis_has_neighbours || num_shared_experts_per_device.value_or(0) == 0,
+            "moe_compute over a mesh axis of extent 1 writes a local output and does not support shared experts; "
+            "run them separately and add their partial before the cross-device reduction");
         // see #27196 for potential limitations
-        const uint32_t resolved_num_links =
-            num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, *cluster_axis));
+        const uint32_t resolved_num_links = num_links.value_or(
+            axis_has_neighbours ? ttnn::operations::ccl::common::get_num_links(*mesh_device, *cluster_axis) : 1);
         // Resolve `topology` via the shared CCL helper. This (a) substitutes the fabric
         // default when `topology` is nullopt, (b) maps Torus → Mesh when the tensor doesn't
         // span a wrap edge so the TT_FATAL below can reject it, and (c) downgrades Ring → Linear
@@ -463,7 +703,10 @@ std::vector<ttnn::Tensor> moe_compute(
         // guard in fabric_multicast_bidirectional_atomic_inc_1d (moe_utils.hpp) then routes the
         // multicast through the line-aware code path. (Fixing get_usable_topology() to consult
         // physical mesh wrap capability is a separate follow-up that affects all CCL ops.)
-        const auto resolved_topology = ttnn::ccl::get_usable_topology(tilize_input_tensor, topology, cluster_axis);
+        // An axis of extent 1 is a trivial topology: Linear unless the caller named one.
+        const auto resolved_topology = axis_has_neighbours
+                                           ? ttnn::ccl::get_usable_topology(tilize_input_tensor, topology, cluster_axis)
+                                           : topology.value_or(tt::tt_fabric::Topology::Linear);
         // Mirror the kernel-side static_assert in fabric_multicast_bidirectional_atomic_inc_1d
         // (moe_utils.hpp). `get_usable_topology` can return Mesh when the fabric default is Torus
         // and the tensor doesn't span a wrap edge; the combine kernel only handles Ring/Linear and
@@ -475,6 +718,14 @@ std::vector<ttnn::Tensor> moe_compute(
             "If the fabric default is Torus/Mesh, pass topology=ttnn.Topology.Linear or "
             "ttnn.Topology.Ring explicitly to ttnn.experimental.moe_compute.",
             resolved_topology);
+        // SingleCluster: slot 5 is the caller's optional_output_tensor when one is given, so an unset
+        // output_memory_config takes that tensor's config instead of a DRAM default that would
+        // describe a buffer it does not match; when both are given the device op requires them to
+        // agree. FullCcl keeps the DRAM default (the combine's own validation applies there).
+        const ttnn::MemoryConfig resolved_output_memory_config =
+            output_memory_config.has_value()                         ? *output_memory_config
+            : (single_cluster && optional_output_tensor.has_value()) ? optional_output_tensor->memory_config()
+                                                                     : ttnn::DRAM_MEMORY_CONFIG;
         combine_params = ttnn::experimental::prim::SelectiveReduceCombineParams{
             .hidden_size = hidden_size,
             .batch_size = 1,
@@ -487,7 +738,7 @@ std::vector<ttnn::Tensor> moe_compute(
             .num_data_parallel_cores = num_data_parallel_cores,
             .worker_cores = combine_cores,
             .mux_core_range_set = mux_core_range_set.value_or(CoreRangeSet{}),
-            .output_memory_config = output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
+            .output_memory_config = resolved_output_memory_config,
             .optional_cross_device_semaphore = optional_cross_device_semaphore};
     }
 
@@ -500,11 +751,16 @@ std::vector<ttnn::Tensor> moe_compute(
             .has_bias = has_bias,
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,
-            .path = compute_only ? experimental::prim::MoEComputePath::ComputeOnly
-                                 : experimental::prim::MoEComputePath::Full,
+            .path = compute_only     ? experimental::prim::MoEComputePath::ComputeOnly
+                    : single_device  ? experimental::prim::MoEComputePath::SingleDevice
+                    : single_cluster ? experimental::prim::MoEComputePath::SingleCluster
+                                     : experimental::prim::MoEComputePath::FullCcl,
             .bh_ring_size = ring_n,
             .combine_params = combine_params,
-            .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU)},
+            .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU),
+            .activation_limit = activation_limit,
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,

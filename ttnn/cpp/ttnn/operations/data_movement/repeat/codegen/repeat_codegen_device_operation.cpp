@@ -1,0 +1,150 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_device_operation.hpp"
+
+#include <optional>
+
+#include <tt_stl/assert.hpp>
+
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_supported.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+
+namespace ttnn::prim {
+
+RepeatCodegenDeviceOperation::program_factory_t RepeatCodegenDeviceOperation::select_program_factory(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
+    return RepeatCodegenProgramFactory{};
+}
+
+namespace {
+
+namespace repeat_codegen = ttnn::operations::data_movement::repeat_codegen;
+
+const MemoryConfig& output_mem_config_of(
+    const RepeatCodegenParams& operation_attributes, const RepeatCodegenInputs& tensor_args) {
+    return tensor_args.optional_output_tensor.has_value() ? tensor_args.optional_output_tensor->memory_config()
+                                                          : operation_attributes.output_mem_config;
+}
+
+// Also run on a cache hit: the key sees only the output's spec, not its buffer or device.
+void validate_output(const RepeatCodegenParams& operation_attributes, const RepeatCodegenInputs& tensor_args) {
+    const Tensor& input = tensor_args.input;
+    auto expected_shape = input.logical_shape();
+    expected_shape[operation_attributes.rep_dim] *= operation_attributes.num_repeats;
+    TT_FATAL(
+        repeat_codegen::shard_spec_is_page_identical(
+            output_mem_config_of(operation_attributes, tensor_args), expected_shape, input.layout()),
+        "RepeatCodegen output placement must be interleaved or a page-identical shard spec");
+
+    if (!tensor_args.optional_output_tensor.has_value()) {
+        return;
+    }
+    const auto& out = tensor_args.optional_output_tensor.value();
+    TT_FATAL(out.storage_type() == ttnn::StorageType::DEVICE, "Repeat codegen optional output must be on device");
+    TT_FATAL(out.buffer() != nullptr, "Repeat codegen optional output must be allocated in a buffer on device");
+    TT_FATAL(out.logical_shape() == expected_shape, "Repeat codegen optional output shape mismatch");
+    TT_FATAL(
+        repeat_codegen::output_matches_input_page(input, out),
+        "Repeat codegen optional output must match the input's dtype, layout and tile");
+    TT_FATAL(out.device() == input.device(), "Repeat codegen optional output must be on the same device");
+    TT_FATAL(out.buffer() != input.buffer(), "Repeat codegen optional output must not alias the input buffer");
+}
+
+}  // namespace
+
+void RepeatCodegenDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const Tensor& input = tensor_args.input;
+    TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to repeat need to be on device!");
+    TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(
+        input.logical_shape().rank() == 4,
+        "RepeatCodegen expects a 4D input, got rank {}",
+        input.logical_shape().rank());
+    TT_FATAL(
+        operation_attributes.rep_dim < 4,
+        "RepeatCodegen rep_dim must be in [0, 3], got {}",
+        operation_attributes.rep_dim);
+    TT_FATAL(
+        operation_attributes.num_repeats >= 1,
+        "RepeatCodegen num_repeats must be at least 1, got {}",
+        operation_attributes.num_repeats);
+    TT_FATAL(
+        repeat_codegen::supported_by_codegen(
+            input,
+            operation_attributes.rep_dim,
+            operation_attributes.num_repeats,
+            output_mem_config_of(operation_attributes, tensor_args)),
+        "Input is not supported by RepeatCodegen");
+    validate_output(operation_attributes, tensor_args);
+}
+
+void RepeatCodegenDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    TT_FATAL(tensor_args.input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    validate_output(operation_attributes, tensor_args);
+}
+
+// Row-major CBs are sized to the free L1, so the key carries the CB plan the factory will build.
+ttsl::hash::hash_t RepeatCodegenDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    uint32_t cb_batch = 0;
+    uint32_t cb_depth = 0;
+    if (tensor_args.input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
+        const auto cb_plan =
+            rm_cb_plan_for_call(tensor_args.input, compute_output_specs(operation_attributes, tensor_args));
+        if (cb_plan.has_value()) {
+            cb_batch = cb_plan->batch;
+            cb_depth = cb_plan->depth;
+        }
+    }
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<RepeatCodegenDeviceOperation>, operation_attributes, tensor_args, cb_batch, cb_depth);
+}
+
+RepeatCodegenDeviceOperation::spec_return_value_t RepeatCodegenDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.optional_output_tensor.has_value()) {
+        return tensor_args.optional_output_tensor->tensor_spec();
+    }
+    const auto& input = tensor_args.input;
+    auto output_shape = input.logical_shape();
+    output_shape[operation_attributes.rep_dim] *= operation_attributes.num_repeats;
+    return tt::tt_metal::TensorSpec(
+        output_shape,
+        tt::tt_metal::TensorLayout(
+            input.dtype(),
+            tt::tt_metal::PageConfig(input.layout(), input.tensor_spec().tile()),
+            operation_attributes.output_mem_config));
+}
+
+RepeatCodegenDeviceOperation::tensor_return_value_t RepeatCodegenDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.optional_output_tensor.has_value()) {
+        return tensor_args.optional_output_tensor.value();
+    }
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> RepeatCodegenDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& /*operation_attributes*/,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    const auto& input_tensor = tensor_args.input;
+    int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
+    return {{input_tensor}, output_tensor, ideal_dev_clock_cycles};
+}
+
+RepeatCodegenDeviceOperation::tensor_return_value_t repeat_codegen(
+    const Tensor& input, const RepeatCodegenParams& params, std::optional<Tensor> optional_output_tensor) {
+    using OperationType = RepeatCodegenDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        params,
+        OperationType::tensor_args_t{.input = input, .optional_output_tensor = std::move(optional_output_tensor)});
+}
+
+}  // namespace ttnn::prim
