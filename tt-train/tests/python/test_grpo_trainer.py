@@ -15,8 +15,8 @@ Speed strategy:
     ``_download_hf_repo`` and ``load_from_safetensors`` in
     ``ttml.trainers.grpo_trainer.grpo_ttml_model`` to no-ops; the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
-  * Exactly one optimizer step (``num_iterations=1``,
-    ``prompts_to_train=2 * gradient_accumulation_steps``). On this single device
+  * Two optimizer steps (``num_iterations=1``,
+    ``prompts_to_train=4 * gradient_accumulation_steps``). On this single device
     ``per_device_train_batch_size=4`` and ``num_generations=2`` give a
     per-micro-batch prompt count of ``4 * 1 / 2 = 2``, so the generation batch
     has ``gradient_accumulation_steps`` micro-batches of 2 prompts.
@@ -165,6 +165,7 @@ class _RecordingCallback(TrainerCallback):
         self.before_step = 0
         self.step_end = 0
         self.train_end = 0
+        self.first_step_metrics: dict | None = None
         self.last_step_metrics: dict | None = None
         self.final_step_time_s: float | None = None
 
@@ -177,6 +178,8 @@ class _RecordingCallback(TrainerCallback):
     def on_step_end(self, trainer, step, **kwargs):
         self.step_end += 1
         self.last_step_metrics = {"step": step, **kwargs}
+        if self.first_step_metrics is None:
+            self.first_step_metrics = self.last_step_metrics
 
     def on_train_end(self, trainer):
         self.train_end += 1
@@ -215,7 +218,7 @@ def test_grpo_trainer_one_step_smoke(
     gradient_accumulation_steps,
     expected_first_lr_scale,
 ):
-    """One full GRPO optimizer step on a tiny random-init Llama.
+    """Two GRPO optimizer steps on a tiny random-init Llama.
 
     Asserts the loop reaches every callback hook, produces finite metrics,
     and actually mutates model weights via ``optimizer.step``.
@@ -231,7 +234,7 @@ def test_grpo_trainer_one_step_smoke(
         output_dir=str(tmp_path),
         checkpointing=False,
         checkpoint_interval=999,
-        prompts_to_train=2 * gradient_accumulation_steps,
+        prompts_to_train=4 * gradient_accumulation_steps,
         temperature=1.0,
         max_completion_length=4,
         num_generations=2,
@@ -251,9 +254,9 @@ def test_grpo_trainer_one_step_smoke(
                     tokenize=False,
                     add_generation_prompt=True,
                 )
-                for p in user_prompts
+                for p in user_prompts * 2
             ],
-            "answer": ["2", "blue", "apple", "4"],
+            "answer": ["2", "blue", "apple", "4"] * 2,
         }
     )
 
@@ -300,11 +303,11 @@ def test_grpo_trainer_one_step_smoke(
     trainer.train()
 
     assert trainer.model.get_run_mode() == RunMode.TRAIN, "the sampler must leave the shared model in train mode"
-    assert sampler.weight_version == 1, "trainer should publish the new weight version after the optimizer step"
+    assert sampler.weight_version == 1, "trainer should publish a new weight version after the first batch"
 
     assert recorder.train_begin == 1, "on_train_begin should fire exactly once"
-    assert recorder.before_step == 1, "on_before_optimizer_step should fire once for the single step"
-    assert recorder.step_end == 1, "on_step_end should fire once for the single step"
+    assert recorder.before_step == 2, "on_before_optimizer_step should fire once per step"
+    assert recorder.step_end == 2, "on_step_end should fire once per step"
     assert recorder.train_end == 1, "on_train_end should fire exactly once"
 
     assert reward_calls, "reward_func was never invoked"
@@ -320,7 +323,7 @@ def test_grpo_trainer_one_step_smoke(
 
     metrics = recorder.last_step_metrics
     assert metrics is not None
-    assert metrics["lr"] == pytest.approx(
+    assert recorder.first_step_metrics["lr"] == pytest.approx(
         optimizer_dict["lr"] * expected_first_lr_scale
     ), "first-step LR does not match the scheduler contract"
     for key in (
@@ -628,13 +631,15 @@ _BEHAVIOR_LOGPROB = -0.5
 _BASE_LR = 1.0
 
 
-def _run_train_loop_on_host(monkeypatch):
-    """Run ``GRPOTrainer.train()`` on host fakes: one scored batch of 2 prompts x 2 generations,
+def _run_train_loop_on_host(monkeypatch, num_batches=1):
+    """Run ``GRPOTrainer.train()`` on host fakes: ``num_batches`` scored batches of 2 prompts x 2 generations,
     ``num_iterations=2``, a checkpoint every step. The fake scheduler halves the LR each step."""
     from ttml.trainers import GRPOMonitor
     from ttml.trainers.grpo_trainer.rollout_batch_source import ScoredRolloutBatch
 
-    run = SimpleNamespace(clock=0.0, batches_drawn=0, events=[], pi_old=[], saved_lrs=[], metrics_by_step={})
+    run = SimpleNamespace(
+        clock=0.0, batches_drawn=0, events=[], pi_old=[], saved_lrs=[], metrics_by_step={}, update_weights_steps=[]
+    )
     monkeypatch.setattr(grpo_trainer_module, "time", SimpleNamespace(perf_counter=lambda: run.clock))
 
     max_len = _HOST_GRPO_CONFIG["max_completion_length"]
@@ -648,11 +653,12 @@ def _run_train_loop_on_host(monkeypatch):
     class _Source(RolloutBatchSource):
         def __iter__(self):
             run.batches_drawn += 1
-            run.clock += _GENERATE_TIME_S
-            yield ScoredRolloutBatch(rollout, np.array(_REWARDS, dtype=np.float32), {}, _GENERATE_TIME_S, 0.0)
+            for _ in range(num_batches):
+                run.clock += _GENERATE_TIME_S
+                yield ScoredRolloutBatch(rollout, np.array(_REWARDS, dtype=np.float32), {}, _GENERATE_TIME_S, 0.0)
 
         def update_weights(self, model, step):
-            pass
+            run.update_weights_steps.append(step)
 
     class _Optimizer:
         lr = _BASE_LR
@@ -697,6 +703,7 @@ def _run_train_loop_on_host(monkeypatch):
         self._lr_scheduler = SimpleNamespace(step=lambda: setattr(optimizer, "lr", optimizer.lr / 2))
         self._monitor_cb = monitor
         self._completions_per_microbatch = 4
+        self._num_generation_batches = num_batches
         self.rollout_batch_source = _Source()
 
     monkeypatch.setattr(grpo_trainer_module, "init_distributed_training", lambda config: None)
@@ -726,6 +733,10 @@ def test_train_loop_reuses_pi_old_across_mini_epochs(monkeypatch):
     mini_epoch_1_pi_old, mini_epoch_2_pi_old = run.pi_old
     # With num_iterations > 1, pi_old must not be recomputed between mini-epochs.
     np.testing.assert_array_equal(mini_epoch_1_pi_old, mini_epoch_2_pi_old)
+
+
+def test_train_loop_updates_weights_once_per_batch_except_the_last(monkeypatch):
+    assert _run_train_loop_on_host(monkeypatch, num_batches=2).update_weights_steps == [2]
 
 
 def test_train_loop_checkpoints_between_step_end_and_monitor(monkeypatch):
@@ -1099,7 +1110,8 @@ def test_sync_remote_source_pushes_every_weight_sync_every_steps(monkeypatch):
     versions = []
     for step, scored in enumerate(source, start=1):
         versions.append(scored.rollout.weight_version)
-        source.update_weights(None, step)
+        if step < 4:
+            source.update_weights(None, step)
 
     assert versions == [0, 0, 2, 2]
     assert client.pushed == [0, 2]

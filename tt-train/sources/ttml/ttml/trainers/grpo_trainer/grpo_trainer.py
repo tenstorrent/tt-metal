@@ -1089,6 +1089,7 @@ class GRPOTrainer:
         self._monitor_cb: Optional[GRPOMonitor] = None
         self._batch_layout: Optional[BatchLayout] = None
         self._completions_per_microbatch: int = 0
+        self._num_generation_batches: int = 0
         self.rollout_batch_source: Optional[RolloutBatchSource] = None
         self._rollout_client: Any = None
         self._rollout_mesh: Any = None
@@ -1336,7 +1337,8 @@ class GRPOTrainer:
             tokenizer=tokenizer,
             reward_funcs=self.reward_funcs,
         )
-        total_optimizer_steps = (total_prompts // generation_batch_prompts) * grpo_cfg.num_iterations
+        self._num_generation_batches = total_prompts // generation_batch_prompts
+        total_optimizer_steps = self._num_generation_batches * grpo_cfg.num_iterations
         self._lr_scheduler = _build_lr_scheduler(optimizer, grpo_cfg, total_optimizer_steps)
 
     # -- phase helpers -------------------------------------------------------
@@ -1601,7 +1603,7 @@ class GRPOTrainer:
                 cb.on_train_begin(self)
             if self.config.backend.weight_push_before_training:
                 self.rollout_batch_source.update_weights(self.model, 0)
-            for scored in self._iter_scored_batches():
+            for batch_idx, scored in enumerate(self._iter_scored_batches()):
                 advantages_np = self._compute_advantages(scored.rewards)
                 batch_metrics = dict(self.metrics)
                 for mini_epoch in range(self.config.num_iterations):
@@ -1618,7 +1620,8 @@ class GRPOTrainer:
                     self._apply_gradients()
                     self.global_step += 1
                     self._publish_step_metrics()
-                self.rollout_batch_source.update_weights(self.model, self.global_step)
+                if batch_idx < self._num_generation_batches - 1:
+                    self.rollout_batch_source.update_weights(self.model, self.global_step)
         finally:
             self.rollout_batch_source.close()
         for cb in self.callbacks:
