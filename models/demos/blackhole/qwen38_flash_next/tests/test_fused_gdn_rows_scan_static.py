@@ -29,8 +29,9 @@ GDN_SOURCE = Path(gdn_module.__file__).read_text(encoding="utf-8")
 
 
 def _constants(source: str) -> dict[str, int]:
+    """The kernel's CB index constants (``cb_snewc = 30``) under the host's names (``CB_SNEWC``)."""
     text = (KERNELS / source).read_text()
-    return {name: int(value) for name, value in re.findall(r"\b(CB_[A-Z0-9]+)\s*=\s*(\d+)", text)}
+    return {name.upper(): int(value) for name, value in re.findall(r"\b(cb_[a-z0-9]+)\s*=\s*(\d+)", text)}
 
 
 # ------------------------------------------------------------------------------------------- the CB table
@@ -74,18 +75,23 @@ def test_cb_indices_agree_between_kernels_and_python():
     }
     # the state carry is read back by copy_tile (CB_SNEWC) and multiplied by matmul (CB_SNEW): two packs, two modes
     text = (KERNELS / "compute.cpp").read_text()
-    assert "pack_tile(j, CB_SNEW);" in text and "pack_tile(j, CB_SNEWC);" in text
-    assert "matmul_tiles(CB_QROW, CB_SNEW" in text and "copy_tile(src, t, 0)" in text
+    assert "pack_tile(j, cb_snew);" in text and "pack_tile(j, cb_snewc);" in text
+    assert "matmul_tiles(cb_qrow, cb_snew" in text and "copy_tile(src, t, 0)" in text
     # the gates: one whole-tile SFPU pass per gate (no per-row scalar chain), the results to the reader as fp32 tiles,
     # which fans each row's element out into the full tiles the recurrence multiplies (exact 32-bit copies)
     assert "gates_all();" in text and "gate_scalars" not in text and "unary_bcast" not in text
     assert (
-        "copy_tile(CB_AB, 1, 0);" in text and "copy_tile(CB_AB, 0, 0);" in text and "cb_push_back(CB_GALL, 2);" in text
+        "copy_tile(cb_ab, 1, 0);" in text
+        and "copy_tile(cb_ab, 0, 0);" in text
+        and "CircularBuffer(cb_gall).push_back(2);" in text
     )
-    assert "cb_wait_front(CB_BETA, row + 1);" in text and "cb_wait_front(CB_DECAY, row + 1);" in text
+    assert (
+        "CircularBuffer(cb_beta).wait_front(row + 1);" in text
+        and "CircularBuffer(cb_decay).wait_front(row + 1);" in text
+    )
     reader_text = (KERNELS / "reader.cpp").read_text()
-    assert "cb_wait_front(CB_GALL, 2);" in reader_text and "fill_tile_words(" in reader_text
-    assert "4 * fused_rows::face_element(r, head)" in reader_text and "cb_push_back(CB_AB, 2);" in reader_text
+    assert "CircularBuffer(cb_gall).wait_front(2);" in reader_text and "fill_tile_words(" in reader_text
+    assert "fused_rows::face_element(r, head)" in reader_text and "CircularBuffer(cb_ab).push_back(2);" in reader_text
     assert reader["CB_GALL"] == compute["CB_GALL"] == 13 and reader["CB_BETA"] == 18 and reader["CB_DECAY"] == 19
 
 
@@ -106,7 +112,7 @@ def test_kernel_argument_layouts():
     writer = (KERNELS / "writer.cpp").read_text()
     assert writer.count("TensorAccessorArgs<") == 2 and "TensorAccessorArgs<2>" in writer  # prefix, out
     assert writer.count("get_arg_val<uint32_t>(arg++)") == 2 + 1 + 2 + 2  # addresses, items, (head, vb), peers' (x, y)
-    assert "noc_semaphore_wait_min(sem, PEERS)" in writer and "get_semaphore(0)" in writer
+    assert "exchange.wait_min(peers)" in writer and "exchange_semaphore_id = 0" in writer
     pick = (KERNELS / "pick.cpp").read_text()
     assert pick.count("TensorAccessorArgs<") == 3 and "TensorAccessorArgs<1>" in pick  # accepted, prefix, recurrent
     assert pick.count("get_arg_val<uint32_t>(arg++)") == 4 + 2
@@ -114,7 +120,7 @@ def test_kernel_argument_layouts():
     assert "get_arg_val<uint32_t>(0)" in compute
     assert "get_compile_time_arg_val(0)" in compute and "get_compile_time_arg_val(1)" in compute
     # the pick converts the fp32 accept count to a slot index on the RISC and clamps it to the rows
-    assert "reinterpret_cast<volatile tt_l1_ptr float*>" in pick and "accepted >= ROWS" in pick
+    assert "CoreLocalMem<volatile float>" in pick and "accepted >= rows" in pick
     # the row helpers are the shared header's
     for source in ("reader.cpp", "writer.cpp"):
         assert '#include "../../kernels/row_mask.h"' in (KERNELS / source).read_text()
@@ -363,7 +369,7 @@ def test_lanes_form_shares_the_compute_kernel_and_leaves_the_single_form_untouch
 
     for source in ("reader.cpp", "writer.cpp", "pick.cpp", "compute.cpp"):
         text = (KERNELS / source).read_text()
-        assert "LANES" not in text and "lane *" not in text and "row0" not in text, source
+        assert "lanes" not in text and "lane *" not in text and "row0" not in text, source
     assert "lanes" not in inspect.getsource(module.run) and "lanes" not in inspect.getsource(module.run_pick)
     for source in ("reader_lanes.cpp", "writer_lanes.cpp", "pick_lanes.cpp"):
         assert (KERNELS / source).is_file(), source
@@ -387,31 +393,33 @@ def test_lanes_form_shares_the_compute_kernel_and_leaves_the_single_form_untouch
 
 def test_lanes_kernel_argument_layouts_and_the_finiteness_rule():
     reader = (KERNELS / "reader_lanes.cpp").read_text()
-    assert reader.count("TensorAccessorArgs<") == 9 and "TensorAccessorArgs<3>" in reader  # after ROWS, VBT, LANES
+    assert reader.count("TensorAccessorArgs<") == 9 and "TensorAccessorArgs<3>" in reader  # after rows, vbt, lanes
     assert reader.count("get_arg_val<uint32_t>(arg++)") == 10 + 2  # 9 addresses, items, then (head, lane)
-    assert "get_compile_time_arg_val(2)" in reader and "static_assert(VBT == HT" in reader
-    assert "LANES * ROWS <= 32" in reader
+    assert "get_compile_time_arg_val(2)" in reader and "static_assert(block_tiles == head_tiles" in reader
+    assert "lanes * rows <= 32" in reader
     # lane u's state pages, lane u's history tile row, the masks and gates of tile rows row0 + r
-    assert "(lane * HEADS + head) * HT * HT + kt * HT + c" in reader and "history_page0 + ids[t]" in reader
-    assert "one_hot_row_bf16(l1 + r * BF16_TILE, row0 + r)" in reader
-    assert "4 * fused_rows::face_element(row0 + r, head)" in reader
+    assert "(lane * value_heads + head) * head_tiles * head_tiles + kt * head_tiles + c" in reader
+    assert "history_page0 + conv_pages[t + 1]" in reader
+    assert "one_hot_row_bf16(mask_l1 + r * bf16_tile_bytes, row0 + r)" in reader
+    assert "fused_rows::face_element(row0 + r, head)" in reader
     # the per-lane patch after the assembly's barrier, RISC word copies, no-op for lane 0
-    assert "patch_lane_rows(s_l1 + (3 * t) * BF16_TILE, row0)" in reader and "if (lane > 0)" in reader
-    assert reader.index("noc_async_read_barrier();  // group t + 1") < reader.index("patch_lane_rows(s_l1")
-    assert "j < s && j < ROWS" in reader and "copy_row_bf16_between(dst_tile, row0 + j, s0_tile, i + j)" in reader
+    assert "patch_lane_rows(conv_l1.slots + (3 * t) * bf16_tile_bytes, row0)" in reader and "if (lane > 0)" in reader
+    assert reader.index("noc.async_read_barrier();  // group t + 1") < reader.index("patch_lane_rows(conv_l1")
+    assert "j < shift && j < rows" in reader
+    assert "copy_row_bf16_between(dst_tile, row0 + j, slot0_tile, i + j)" in reader
     assert "FINITENESS RULE" in reader and "NaN * 0 = NaN" in reader
     writer = (KERNELS / "writer_lanes.cpp").read_text()
     assert writer.count("TensorAccessorArgs<") == 2 and "TensorAccessorArgs<3>" in writer  # prefix, out
     assert writer.count("get_arg_val<uint32_t>(arg++)") == 3 + 2  # addresses, items, (head, lane)
-    assert "((row0 + r) * HEADS + head) * STATE_TILES + kt * HT + c" in writer  # prefix slot row0 + r
-    assert "fused_rows::copy_row_bf16(orows + j * BF16_TILE, src + j * BF16_TILE, row0 + r)" in writer
-    assert "out.get_noc_addr(page, off)" in writer and "if (lane + 1 == LANES)" in writer  # row pieces; pad rows
-    assert "noc_semaphore" not in writer and "PEERS" not in writer
+    assert "((row0 + row) * value_heads + head) * head_state_tiles + kt * head_tiles + c" in writer  # slot row0 + r
+    assert "fused_rows::copy_row_bf16(o_rows + j * bf16_tile_bytes, o_tiles + j * bf16_tile_bytes, row0 + r)" in writer
+    assert "{.page_id = page, .offset_bytes = offset}" in writer and "if (lane + 1 == lanes)" in writer  # row pieces
+    assert "Semaphore" not in writer and "peers" not in writer
     pick = (KERNELS / "pick_lanes.cpp").read_text()
     assert pick.count("TensorAccessorArgs<") == 3 and "TensorAccessorArgs<2>" in pick  # counts, prefix, recurrent
     assert pick.count("get_arg_val<uint32_t>(arg++)") == 4 + 3  # addresses, items, (lane, head, col)
-    assert "if (c == 0) {" in pick and "continue;" in pick  # c_u = 0 keeps the lane's state
-    assert "const uint32_t slot = lane * ROWS + c - 1;" in pick and "c > ROWS ? ROWS : c" in pick
+    assert "if (count == 0) {" in pick and "continue;" in pick  # c_u = 0 keeps the lane's state
+    assert "const uint32_t slot = lane * rows + count - 1;" in pick and "count > rows ? rows : count" in pick
     for source in ("reader_lanes.cpp", "writer_lanes.cpp"):
         assert '#include "../../kernels/row_mask.h"' in (KERNELS / source).read_text()
 

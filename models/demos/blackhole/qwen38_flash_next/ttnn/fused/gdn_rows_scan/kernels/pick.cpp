@@ -4,16 +4,20 @@
 // The verify rows' commit under the fold: copies prefix slot `accepted` (the state after accepted + 1 rows) into the
 // recurrent state; data movement only. The accept count is the fp32 [1, 1, 1, 1] device scalar, read on device so a
 // traced replay follows the rewritten value. Per item (head, column tile): the four state tiles (kt, col).
-// Compile-time args: 0 ROWS; then TensorAccessorArgs of accepted, prefix, recurrent.  Runtime args: 0 accepted,
+// Compile-time args: 0 rows; then TensorAccessorArgs of accepted, prefix, recurrent.  Runtime args: 0 accepted,
 // 1 prefix, 2 recurrent addresses, 3 items, then (head, col) pairs.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 namespace {
-constexpr uint32_t CB_ACCEPT = 0, CB_TILES = 1;
-constexpr uint32_t ROWS = get_compile_time_arg_val(0);
-constexpr uint32_t HEADS = 12, HT = 4, STATE_TILES = HT * HT, FP32_TILE = 4096;
+constexpr uint32_t cb_accept = 0, cb_tiles = 1;
+constexpr uint32_t rows = get_compile_time_arg_val(0);
+constexpr uint32_t value_heads = 12, head_tiles = 4, head_state_tiles = head_tiles * head_tiles;
+constexpr uint32_t fp32_tile_bytes = 4096;
 }  // namespace
 
 void kernel_main() {
@@ -28,32 +32,43 @@ void kernel_main() {
     const auto accept = TensorAccessor(accept_args, accept_addr);
     const auto prefix = TensorAccessor(prefix_args, prefix_addr);
     const auto state = TensorAccessor(state_args, state_addr);
+    const Noc noc;
 
     uint32_t accepted = 0;
     {
-        cb_reserve_back(CB_ACCEPT, 1);
-        const uint32_t l1 = get_write_ptr(CB_ACCEPT);
-        noc_async_read_page(0, accept, l1);
-        noc_async_read_barrier();
-        const float value = *reinterpret_cast<volatile tt_l1_ptr float*>(l1);
+        CircularBuffer(cb_accept).reserve_back(1);
+        const CoreLocalMem<volatile float> accept_l1(CircularBuffer(cb_accept).get_write_ptr());
+        noc.async_read(accept, accept_l1, accept.get_aligned_page_size(), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        const float value = *accept_l1;
         accepted = value <= 0.0f ? 0u : static_cast<uint32_t>(value);
-        if (accepted >= ROWS) {
-            accepted = ROWS - 1;
+        if (accepted >= rows) {
+            accepted = rows - 1;
         }
     }
-    cb_reserve_back(CB_TILES, HT);
-    const uint32_t tiles = get_write_ptr(CB_TILES);
+    // cb_tiles is scratch: reserved once and never pushed, each item's tiles are read into it and written out of it
+    CircularBuffer(cb_tiles).reserve_back(head_tiles);
+    const CoreLocalMem<uint32_t> tiles(CircularBuffer(cb_tiles).get_write_ptr());
     for (uint32_t item = 0; item < items; ++item) {
         const uint32_t head = get_arg_val<uint32_t>(arg++);
         const uint32_t col = get_arg_val<uint32_t>(arg++);
-        for (uint32_t kt = 0; kt < HT; ++kt) {
-            noc_async_read_page(
-                (accepted * HEADS + head) * STATE_TILES + kt * HT + col, prefix, tiles + kt * FP32_TILE);
+        for (uint32_t kt = 0; kt < head_tiles; ++kt) {
+            noc.async_read(
+                prefix,
+                tiles,
+                prefix.get_aligned_page_size(),
+                {.page_id = (accepted * value_heads + head) * head_state_tiles + kt * head_tiles + col},
+                {.offset_bytes = kt * fp32_tile_bytes});
         }
-        noc_async_read_barrier();
-        for (uint32_t kt = 0; kt < HT; ++kt) {
-            noc_async_write_page(head * STATE_TILES + kt * HT + col, state, tiles + kt * FP32_TILE);
+        noc.async_read_barrier();
+        for (uint32_t kt = 0; kt < head_tiles; ++kt) {
+            noc.async_write(
+                tiles,
+                state,
+                state.get_aligned_page_size(),
+                {.offset_bytes = kt * fp32_tile_bytes},
+                {.page_id = head * head_state_tiles + kt * head_tiles + col});
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
     }
 }

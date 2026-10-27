@@ -5,18 +5,22 @@
 // prefix slot lane * R + c_u - 1 into lane u's recurrent state; c_u = 0 writes nothing, so that lane's state is kept.
 // Data movement only; the counts are read on device so a traced replay follows the rewritten values.
 // Per item (lane, head, column tile): the four state tiles (kt, col).
-// Compile-time args: 0 ROWS (R), 1 LANES (B); then TensorAccessorArgs of counts, prefix, recurrent.
+// Compile-time args: 0 rows (R), 1 lanes (B); then TensorAccessorArgs of counts, prefix, recurrent.
 // Runtime args: 0 counts, 1 prefix, 2 recurrent addresses, 3 items, then (lane, head, col) triples.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 namespace {
-constexpr uint32_t CB_COUNTS = 0, CB_TILES = 1;
-constexpr uint32_t ROWS = get_compile_time_arg_val(0);
-constexpr uint32_t LANES = get_compile_time_arg_val(1);
-constexpr uint32_t HEADS = 12, HT = 4, STATE_TILES = HT * HT, FP32_TILE = 4096;
-static_assert(ROWS >= 1 && LANES >= 1 && LANES * ROWS <= 32, "B lanes x R rows in one tile");
+constexpr uint32_t cb_counts = 0, cb_tiles = 1;
+constexpr uint32_t rows = get_compile_time_arg_val(0);
+constexpr uint32_t lanes = get_compile_time_arg_val(1);
+constexpr uint32_t value_heads = 12, head_tiles = 4, head_state_tiles = head_tiles * head_tiles;
+constexpr uint32_t fp32_tile_bytes = 4096;
+static_assert(rows >= 1 && lanes >= 1 && lanes * rows <= 32, "B lanes x R rows in one tile");
 }  // namespace
 
 void kernel_main() {
@@ -31,39 +35,56 @@ void kernel_main() {
     const auto counts = TensorAccessor(counts_args, counts_addr);
     const auto prefix = TensorAccessor(prefix_args, prefix_addr);
     const auto state = TensorAccessor(state_args, state_addr);
+    const Noc noc;
 
-    uint32_t committed[LANES];
+    uint32_t committed[lanes];
     {
-        cb_reserve_back(CB_COUNTS, LANES);
-        const uint32_t l1 = get_write_ptr(CB_COUNTS);
-        for (uint32_t lane = 0; lane < LANES; ++lane) {
-            noc_async_read_page(lane, counts, l1 + lane * FP32_TILE);
+        CircularBuffer(cb_counts).reserve_back(lanes);
+        const CoreLocalMem<volatile float> counts_l1(CircularBuffer(cb_counts).get_write_ptr());
+        for (uint32_t lane = 0; lane < lanes; ++lane) {
+            noc.async_read(
+                counts,
+                counts_l1,
+                counts.get_aligned_page_size(),
+                {.page_id = lane},
+                {.offset_bytes = lane * fp32_tile_bytes});
         }
-        noc_async_read_barrier();
-        for (uint32_t lane = 0; lane < LANES; ++lane) {
-            const float value = *reinterpret_cast<volatile tt_l1_ptr float*>(l1 + lane * FP32_TILE);
-            uint32_t c = value <= 0.0f ? 0u : static_cast<uint32_t>(value);
-            committed[lane] = c > ROWS ? ROWS : c;
+        noc.async_read_barrier();
+        for (uint32_t lane = 0; lane < lanes; ++lane) {
+            const float value = counts_l1[lane * fp32_tile_bytes / sizeof(float)];
+            const uint32_t count = value <= 0.0f ? 0u : static_cast<uint32_t>(value);
+            committed[lane] = count > rows ? rows : count;
         }
     }
-    cb_reserve_back(CB_TILES, HT);
-    const uint32_t tiles = get_write_ptr(CB_TILES);
+    // cb_tiles is scratch: reserved once and never pushed, each item's tiles are read into it and written out of it
+    CircularBuffer(cb_tiles).reserve_back(head_tiles);
+    const CoreLocalMem<uint32_t> tiles(CircularBuffer(cb_tiles).get_write_ptr());
     for (uint32_t item = 0; item < items; ++item) {
         const uint32_t lane = get_arg_val<uint32_t>(arg++);
         const uint32_t head = get_arg_val<uint32_t>(arg++);
         const uint32_t col = get_arg_val<uint32_t>(arg++);
-        const uint32_t c = committed[lane];
-        if (c == 0) {
+        const uint32_t count = committed[lane];
+        if (count == 0) {
             continue;  // the lane keeps its state
         }
-        const uint32_t slot = lane * ROWS + c - 1;
-        for (uint32_t kt = 0; kt < HT; ++kt) {
-            noc_async_read_page((slot * HEADS + head) * STATE_TILES + kt * HT + col, prefix, tiles + kt * FP32_TILE);
+        const uint32_t slot = lane * rows + count - 1;
+        for (uint32_t kt = 0; kt < head_tiles; ++kt) {
+            noc.async_read(
+                prefix,
+                tiles,
+                prefix.get_aligned_page_size(),
+                {.page_id = (slot * value_heads + head) * head_state_tiles + kt * head_tiles + col},
+                {.offset_bytes = kt * fp32_tile_bytes});
         }
-        noc_async_read_barrier();
-        for (uint32_t kt = 0; kt < HT; ++kt) {
-            noc_async_write_page((lane * HEADS + head) * STATE_TILES + kt * HT + col, state, tiles + kt * FP32_TILE);
+        noc.async_read_barrier();
+        for (uint32_t kt = 0; kt < head_tiles; ++kt) {
+            noc.async_write(
+                tiles,
+                state,
+                state.get_aligned_page_size(),
+                {.offset_bytes = kt * fp32_tile_bytes},
+                {.page_id = (lane * value_heads + head) * head_state_tiles + kt * head_tiles + col});
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
     }
 }
