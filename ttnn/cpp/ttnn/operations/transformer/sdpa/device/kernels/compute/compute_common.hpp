@@ -952,9 +952,10 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
     // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
     // That holds for exp_tile_first_column only. The regular exp_tile (the commented-out call in the
-    // loop) reads vConstFloatPrgm0..2 as programmed by exp_tile_init, and that init overwrites the
-    // reciprocal constant set here. Restoring that call needs exp_tile_init and sfpu_reciprocal_init
-    // re-run inside the loop, each directly before its tile call.
+    // loop) takes its constants from the programmable registers exp_tile_init sets (vConstFloatPrgm0..1
+    // on a bf16 DEST, 0..2 on a Blackhole fp32 DEST; see the note on exp_tile), and exp_tile_init
+    // overwrites the reciprocal constant set here. Restoring that call needs exp_tile_init and
+    // sfpu_reciprocal_init re-run inside the loop, each directly before its tile call.
     MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
 
     for (uint32_t i = 0; i < num_tiles; i++) {

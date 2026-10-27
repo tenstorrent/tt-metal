@@ -584,7 +584,9 @@ inline void _sfpu_exp_fp32_load_imm32_() {
  * @note LREG12..14 are the SFPU's shared programmable constants (sfpi::vConstFloatPrgm0..2). Other SFPU ops'
  * inits (reciprocal, tanh, sqrt, typecast, reduce, ...) reprogram them, so any such init between exp_init and
  * this call makes the body read their values as 1/ln2 and -ln2: re-run exp_init after it. This is the same
- * contract as the bf16 body (_sfpu_exp_21f_bf16_tti_), which takes LREG12..13 from exp_init the same way.
+ * contract as the bf16 body (_sfpu_exp_21f_bf16_tti_), which takes LREG12..13 from exp_init the same way, and
+ * new to the fp32 DEST path: the sfpi form this replaces (still the Wormhole fp32 path) loads every constant
+ * as an immediate, so an exp_init, other init, exp sequence that was correct with it is not correct here.
  */
 template <bool SCALE_EN, int ITERATIONS>
 inline void _sfpu_exp_fp32_accurate_tti_(const std::uint32_t exp_base_scale_factor) {
