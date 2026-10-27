@@ -109,7 +109,7 @@ def mm_linear(x, weight, precision: Toto2Precision, config, *, bias=None):
 
 
 # R2-2 screening switch: residual add in the minimal_matmul epilogue (needs folded betas, R2-1).
-_EPILOGUE_RESIDUAL = os.environ.get("TOTO2_EPILOGUE_RESIDUAL", "1") == "1"
+_EPILOGUE_RESIDUAL = os.environ.get("TOTO2_EPILOGUE_RESIDUAL", "0") == "1"
 
 
 def mm_linear_residual(x, weight, precision: Toto2Precision, configs, residual, beta: float, ones, *, bias=None):
@@ -238,7 +238,9 @@ class TtTimeAttention:
             merged = ttnn.experimental.nlp_concat_heads(ctx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(ctx)
         merged = ttnn.reshape(merged, (1, 1, r * sp, merged.shape[-1]))
-        y = mm_linear_residual(merged, self._w_o, p, (self._o_config, self._o_config_ep), x, self.beta, self._ones, bias=self._b_o)
+        y = mm_linear_residual(
+            merged, self._w_o, p, (self._o_config, self._o_config_ep), x, self.beta, self._ones, bias=self._b_o
+        )
         ttnn.deallocate(merged)
         ttnn.deallocate(x)
         return y

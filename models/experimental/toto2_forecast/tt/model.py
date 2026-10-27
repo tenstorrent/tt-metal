@@ -83,7 +83,7 @@ class TtToto2:
         self, device, weights: Toto2Weights, precision: Toto2Precision | None = None, fold_betas: bool | None = None
     ):
         if fold_betas is None:  # R2-1 screening switch
-            fold_betas = os.environ.get("TOTO2_FOLD_BETAS", "1") == "1"
+            fold_betas = os.environ.get("TOTO2_FOLD_BETAS", "0") == "1"
         if fold_betas:
             weights = weights.fold_residual_betas()
         self.device = device
@@ -143,7 +143,9 @@ class TtToto2:
         tokens[:, :s] = host.tokens
         # Tilizing on device is far cheaper than on the host for large batches.
         token_dtype = ttnn.float32 if self.precision.fp32_tokens else ttnn.bfloat16
-        tokens_rm = upload(self.device, tokens.reshape(1, 1, r * sp, -1), dtype=token_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tokens_rm = upload(
+            self.device, tokens.reshape(1, 1, r * sp, -1), dtype=token_dtype, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
         tokens_dev = ttnn.to_layout(tokens_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tokens_rm)
         owned = [tokens_dev]
