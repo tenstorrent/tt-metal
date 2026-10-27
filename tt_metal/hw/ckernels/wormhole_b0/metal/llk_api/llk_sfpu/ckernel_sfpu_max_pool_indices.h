@@ -358,7 +358,9 @@ inline void init_max_pool_with_indices() {
     // Set bit [2] of the SFPU_CONTROL_REG to enable Destination Index Tracking Mode:
     // LREGs 4-7 will be treated as indices corresponding to the values in LREGs 0-3,
     // and LREGs 4-7 will mirror the movement of the values in LREGs 0-3;
-    _sfpu_load_config32_(0xF, 0x0, 0x4);
+    // One SFPCONFIG with imm16-is-value (mod1 = 1) writes LaneConfig[15:0] directly, replacing the
+    // 3-instruction LReg0 round-trip of _sfpu_load_config32_(0xF, 0x0, 0x4).
+    TTI_SFPCONFIG(0x4, 0xF, 1);
 
     if constexpr (layout == ckernel::DataLayout::ROW_MAJOR) {
         // Program replay buffer for row major layout
