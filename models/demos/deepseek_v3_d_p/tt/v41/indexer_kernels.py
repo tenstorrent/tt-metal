@@ -360,12 +360,15 @@ def split_geometry(width: int, rows: int | None = None) -> tuple[int, int, int, 
     return rows, nchunks, per_row, per_row * chunk_cols
 
 
-def range_scores(q, w, k, pin, user: int, width: int, rows: int | None = None, dyn: bool = False):
+def range_scores(
+    q, w, k, pin, user: int, width: int, rows: int | None = None, dyn: bool = False, row: int | None = None
+):
     """One user's query of the decode tile against the visible prefix of its own index keys, in the pool's tiled
     form (the single-query scorer of the densely scored sources).
 
     ``q`` [1, 1, R, 32 * 128] bf16 row-major and ``w`` [1, 1, R, 32] bf16 row-major (``TtV41Indexer.decode_query``;
-    row ``user`` is read), ``k`` [U, 1, width, 128] bf16 TILE_LAYOUT DRAM-interleaved (the pool's ``index_k[src]``:
+    row ``row`` is read, default ``user``: a verify row of speculative decode is a tile row of its user's keys
+    other than the user's own, with its own pin entry), ``k`` [U, 1, width, 128] bf16 TILE_LAYOUT DRAM-interleaved (the pool's ``index_k[src]``:
     user ``u``'s key tile row ``g`` is the tile pages ``(u * width / 32 + g) * 4 + d``), ``pin`` [1, 1, 1, P] uint32
     row-major with ``P > user`` (the step's ``newest`` page: entry ``user`` the user's newest visible row, the
     sentinel for none). -> bf16 row-major [1, 1, rows, row width] in the split layout of ``split_geometry(width,
@@ -382,9 +385,10 @@ def range_scores(q, w, k, pin, user: int, width: int, rows: int | None = None, d
     assert k.layout == ttnn.TILE_LAYOUT and k.dtype == ttnn.bfloat16, "range_scores index-K must be tiled bf16"
     assert memory.buffer_type == ttnn.BufferType.DRAM and not memory.is_sharded(), "index-K must be DRAM-interleaved"
     assert width % 32 == 0 and (k.shape[2], k.shape[3]) == (width, 128), (width, tuple(k.shape))
-    assert 0 <= user < k.shape[0] and q.shape[2] > user and w.shape[2] > user, (user, tuple(k.shape))
+    row = user if row is None else row
+    assert 0 <= user < k.shape[0] and q.shape[2] > row and w.shape[2] > row, (user, row, tuple(k.shape))
     assert q.shape[3] == 32 * 128 and w.shape[3] == 32, (tuple(q.shape), tuple(w.shape))
-    assert pin.shape[2] == 1 and pin.shape[3] > user, (tuple(pin.shape), user)
+    assert pin.shape[2] == 1 and pin.shape[3] > row, (tuple(pin.shape), row)
     pin_rows = pin.shape[3]
     pin_slot = _round_up(pin_rows * 4, 64)
     tile_rows = width // 32
@@ -405,8 +409,9 @@ def range_scores(q, w, k, pin, user: int, width: int, rows: int | None = None, d
             pin.buffer_address(),
             user,
             i,
+            row,
         ]
-        writer_args[cx][cy] = [out.buffer_address(), pin.buffer_address(), user, i]
+        writer_args[cx][cy] = [out.buffer_address(), pin.buffer_address(), user, i, row]
         compute_args[cx][cy] = [i]
     kernels = [
         ttnn.KernelDescriptor(

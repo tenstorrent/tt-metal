@@ -14,7 +14,7 @@
 //
 // compile_time_args = [cb_out, cb_scratch, CHUNK, TR, NCORES, PIN_ROWS, PER_ROW, DYN, TensorAccessorArgs(out)...,
 //                      TensorAccessorArgs(pin)...]
-// runtime args      = [out_addr, pin_addr, user, core_index]
+// runtime args      = [out_addr, pin_addr, user, core_index, row]
 
 #include <cstdint>
 
@@ -26,6 +26,8 @@ void kernel_main() {
     const uint32_t pin_addr = get_arg_val<uint32_t>(1);
     const uint32_t user = get_arg_val<uint32_t>(2);
     const uint32_t core = get_arg_val<uint32_t>(3);
+    const uint32_t row = get_arg_val<uint32_t>(4);  // the pin entry (the user's own row, or a verify row)
+    (void)user;
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(1);
@@ -60,7 +62,7 @@ void kernel_main() {
     noc_async_read(pin.get_noc_addr(0, 0), base_l1, PIN_BYTES);
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* pins = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_l1);
-    const uint32_t newest = DYN ? pins[2] : pins[user];
+    const uint32_t newest = DYN ? pins[2] : pins[row];
     const uint32_t visible = newest == SENTINEL ? 0 : newest + 1;
     uint32_t vt = (visible + 31) / 32;
     if (vt > TR) {

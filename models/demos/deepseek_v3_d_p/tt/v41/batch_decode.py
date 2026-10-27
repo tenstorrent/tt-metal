@@ -337,6 +337,8 @@ class DeviceSampler:
 
 
 class TtV41BatchDecoder(TtV41Decoder):
+    POOL_RING_SLOTS = RING  # the pool's ring slots per layer (a subclass with verify rows takes more)
+
     def __init__(
         self,
         model: TtV41Transformer,
@@ -362,6 +364,7 @@ class TtV41BatchDecoder(TtV41Decoder):
             model.layers,
             users_per_rank,
             model.kv_format,
+            ring_slots=self.POOL_RING_SLOTS,
         )
         self.slots: dict[int, _User] = {}
         # the MoE's per-rank [real rows, right padding]: the slots' rows of every rank

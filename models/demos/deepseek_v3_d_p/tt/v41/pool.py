@@ -117,25 +117,41 @@ class SlotLayout:
 
     layers: tuple  # consumer layers in order (ring index = position in this tuple)
     cap: int  # compressed rows (0 for the ratio-0 tensor)
+    ring_slots: int = RING  # ring slots per consumer layer (RING; the verify rows of speculative decode take more)
 
     @property
     def comp_base(self) -> int:
-        return RING * len(self.layers)
+        return self.ring_slots * len(self.layers)
 
     @property
     def rows(self) -> int:
         return self.comp_base + self.cap
 
     def ring_base(self, layer: int) -> int:
-        return RING * self.layers.index(layer)
+        return self.ring_slots * self.layers.index(layer)
 
 
 class V41DecodePool:
-    def __init__(self, mesh_device, config, max_seq_len: int, layers: list[int], users_per_rank: int, kv_format):
+    def __init__(
+        self,
+        mesh_device,
+        config,
+        max_seq_len: int,
+        layers: list[int],
+        users_per_rank: int,
+        kv_format,
+        ring_slots: int = RING,
+    ):
         """The pool of ``users_per_rank`` slots per mesh row for the layer schedule ``layers`` (all of a model's
-        layers in serving) up to ``max_seq_len`` positions per user, compressed rows in ``kv_format``."""
+        layers in serving) up to ``max_seq_len`` positions per user, compressed rows in ``kv_format``.
+        ``ring_slots`` (>= RING): the window ring's slots per layer; with ``position_rings`` set, a position's slot is
+        ``position % ring_slots`` (the join places the carry there) instead of the global step's (speculative
+        decode's verify rows, ``tt/v41/spec_verify.py``: rows of one slot at consecutive positions in one step)."""
         assert 0 < users_per_rank <= ROWS, users_per_rank
         assert config.SLIDING_WINDOW <= RING and WINDOW_SLOT == RING
+        assert ring_slots >= RING, ring_slots
+        self.ring_slots = ring_slots
+        self.position_rings = False
         self.mesh_device, self.config = mesh_device, config
         self.layout = V41MeshLayout.of(mesh_device)
         self.sp, self.tp = self.layout.sp, self.layout.tp
@@ -148,10 +164,10 @@ class V41DecodePool:
         for src in sources:
             ratio = config.compress_ratio(src)
             consumers = tuple(l for l in self.layers if config.compress_ratio(l) and config.kv_source(l) == src)
-            self.slots[src] = SlotLayout(consumers, max_seq_len // ratio)
+            self.slots[src] = SlotLayout(consumers, max_seq_len // ratio, ring_slots)
         swa = tuple(l for l in self.layers if config.compress_ratio(l) == 0)
         if swa:
-            self.slots[-1] = SlotLayout(swa, 0)
+            self.slots[-1] = SlotLayout(swa, 0, ring_slots)
         self.kv = {}
         # the index keys, [users, 1, cap + 32, idim] bf16 tiled (slot u = cache_batch_idx u of the dense scorer), kept
         # tiled by every write; and, for the candidate source, the same rows as block pages [1, 1, users * (cap + 32)
@@ -291,8 +307,11 @@ class V41DecodePool:
             return self.per_rank(host, ttnn.uint32, device=False)
 
         carried = any(c is not None for c in state.compressor_carry.values())  # an odd prompt's trailing token
+        # the carry's row k is position start - RING + k: at ring slot (step + k) % RING, or, with position rings,
+        # at the position's own slot
+        first = state.start - RING if self.position_rings else self.step
         inputs = {
-            "ring": index(RING, (torch.arange(RING) + self.step) % RING),
+            "ring": index(RING, (torch.arange(RING) + first) % self.ring_slots),
             "row": index(1, torch.tensor([u])) if carried else index(1, torch.zeros(0)),
         }
         for ratio in sorted({self.config.compress_ratio(src) for src in self.slots if src >= 0}):

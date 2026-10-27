@@ -18,7 +18,7 @@
 //
 // compile_time_args = [cb_qrm, cb_wrm, cb_k, cb_meta, CHUNK, TR, NCORES, PIN_ROWS, DYN, TensorAccessorArgs(q)...,
 //                      TensorAccessorArgs(w)..., TensorAccessorArgs(k)..., TensorAccessorArgs(pin)...]
-// runtime args = [q_addr, w_addr, k_addr, pin_addr, user, core_index]
+// runtime args = [q_addr, w_addr, k_addr, pin_addr, user, core_index, row]
 
 #include <cstdint>
 
@@ -30,8 +30,9 @@ void kernel_main() {
     const uint32_t w_addr = get_arg_val<uint32_t>(1);
     const uint32_t k_addr = get_arg_val<uint32_t>(2);
     const uint32_t pin_addr = get_arg_val<uint32_t>(3);
-    const uint32_t user_arg = get_arg_val<uint32_t>(4);
+    const uint32_t user_arg = get_arg_val<uint32_t>(4);  // the key user
     const uint32_t core = get_arg_val<uint32_t>(5);
+    const uint32_t row_arg = get_arg_val<uint32_t>(6);  // the query row and pin entry (the user's own row, or a verify row)
 
     constexpr uint32_t cb_qrm = get_compile_time_arg_val(0);
     constexpr uint32_t cb_wrm = get_compile_time_arg_val(1);
@@ -72,8 +73,9 @@ void kernel_main() {
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_l1);
     volatile tt_l1_ptr uint32_t* pins = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pin_l1);
-    const uint32_t user = DYN ? (pins[0] < 32 ? pins[0] : 0) : user_arg;
-    const uint32_t newest = DYN ? pins[2] : pins[user];
+    const uint32_t user = DYN ? (pins[0] < 32 ? pins[0] : 0) : user_arg;  // the key user
+    const uint32_t row = DYN ? user : row_arg;                               // the query row and pin entry
+    const uint32_t newest = DYN ? pins[2] : pins[row];
     const uint32_t visible = newest == SENTINEL ? 0 : newest + 1;
     uint32_t vt = (visible + 31) / 32;
     if (vt > TR) {
@@ -90,9 +92,9 @@ void kernel_main() {
         }
     }
     qrm.reserve_back(DIM_TILES);
-    noc_async_read(q.get_noc_addr(user, 0), qrm.get_write_ptr(), Q_BYTES);
+    noc_async_read(q.get_noc_addr(row, 0), qrm.get_write_ptr(), Q_BYTES);
     wrm.reserve_back(1);
-    noc_async_read(w.get_noc_addr(user, 0), wrm.get_write_ptr(), W_BYTES);
+    noc_async_read(w.get_noc_addr(row, 0), wrm.get_write_ptr(), W_BYTES);
     noc_async_read_barrier();
     qrm.push_back(DIM_TILES);
     wrm.push_back(1);
