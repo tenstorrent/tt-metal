@@ -2045,12 +2045,23 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
-    // Two chunkings on the same tensors are two cached programs; the first one again is a hit, and a hit
-    // on a second live input set must read the new buffers.
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // Two chunkings on the same tensors are two cached programs; the first one again is a hit, also on a
+    // second set of inputs at other addresses. The first chunking splits, so the hit reuses the cached
+    // program's scratch tensor, its semaphores (reset by every merger) and its slots.
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     device->enable_program_cache();
-    const std::array<std::size_t, 4> shape{1U, 2U, 256U, 64U};
+    const SDPATestConfig shape_config{
+        .batch_size = 1U,
+        .sequence_length = 1024U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = metal::AttentionMaskType::Causal,
+        .return_intermediates = false};
+    const std::array<std::size_t, 4> shape{1U, 2U, 1024U, 64U};
     auto make = [&](uint32_t seed) {
         return core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed), device);
     };
@@ -2058,8 +2069,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
         ttnn::Tensor query, key, value;
     };
     const Inputs first{make(1U), make(2U), make(3U)};
-    const Inputs second{make(4U), make(5U), make(6U)};  // both sets stay alive: different addresses
-    auto run = [&](const Inputs& in, const metal::SDPAForwardProgramConfig& cfg) {
+    const Inputs second{make(4U), make(5U), make(6U)};  // live at the same time: different addresses
+    auto run = [&](const metal::SDPAForwardProgramConfig& cfg, const Inputs& in) {
         return core::to_xtensor(metal::sdpa_fw(
                                     in.query,
                                     in.key,
@@ -2072,33 +2083,38 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
                                     cfg)[0]
                                     .value());
     };
-    const metal::SDPAForwardProgramConfig a{.q_chunk_size = 128U, .k_chunk_size = 256U};
-    const metal::SDPAForwardProgramConfig b{.q_chunk_size = 32U, .k_chunk_size = 64U};
+    const metal::SDPAForwardProgramConfig a{.q_chunk_size = 64U, .k_chunk_size = 128U};
+    const metal::SDPAForwardProgramConfig a_unsplit{.q_chunk_size = 64U, .k_chunk_size = 128U, .max_pieces = 1U};
+    const metal::SDPAForwardProgramConfig b{.q_chunk_size = 128U, .k_chunk_size = 256U};
+    {
+        SDPATestConfig split_config = shape_config;
+        split_config.program_config = a;
+        ASSERT_GT(host_schedule(split_config).num_slots, 0U) << "the twice-run config must split";
+    }
     const auto entries0 = device->num_program_cache_entries();
-    const xt::xarray<float> out_a = run(first, a);
+    const xt::xarray<float> out_a = run(a, first);
     const auto entries_a = device->num_program_cache_entries();
     ASSERT_GT(entries_a, entries0) << "first config did not populate the cache";
-    const xt::xarray<float> out_b = run(first, b);
+    const xt::xarray<float> out_b = run(b, first);
     EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "second config must miss: different program";
-    const xt::xarray<float> out_a_again = run(first, a);
+    const xt::xarray<float> out_a_second = run(a, second);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "first config on new inputs must hit";
+    const xt::xarray<float> out_a_again = run(a, first);
     EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "first config again must hit";
     EXPECT_TRUE(xt::all(xt::equal(out_a, out_a_again))) << "cache hit must reproduce the first run";
     EXPECT_LT(xt::mean(xt::abs(out_a - out_b))(), kCrossChunkingMeanAbsTol) << "both chunkings compute the same op";
-
-    // Same shapes at other addresses: a hit that computes the new inputs (both chunkings agree on them).
-    const xt::xarray<float> out_a2 = run(second, a);
-    const xt::xarray<float> out_b2 = run(second, b);
-    EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "other addresses must hit";
-    EXPECT_FALSE(xt::allclose(out_a2, out_a, 1e-3F, 1e-3F)) << "hit reproduced the first inputs: stale addresses";
-    EXPECT_LT(xt::mean(xt::abs(out_a2 - out_b2))(), kCrossChunkingMeanAbsTol)
-        << "the hits on the second inputs must agree with each other";
+    // The hit on the second inputs must have read them (not the first inputs) and merged them right.
+    const xt::xarray<float> out_a_second_unsplit = run(a_unsplit, second);
+    EXPECT_FALSE(xt::all(xt::equal(out_a_second, out_a))) << "the hit must read the new inputs";
+    expect_split_matches_unsplit(out_a_second, out_a_second_unsplit, "ProgramCacheMissAndHit_second_inputs");
 
     // The mask address is a reader runtime arg of its own: a hit with a second live mask tensor (same shape,
     // other values and address) must read the new mask, not the first one.
-    const std::array<std::size_t, 4> mask_shape{1U, 1U, 256U, 256U};
-    xt::xarray<float> lower = xt::tril(xt::ones<float>({256UL, 256UL}));
+    constexpr std::size_t kSeq = 1024U;
+    const std::array<std::size_t, 4> mask_shape{1U, 1U, kSeq, kSeq};
+    xt::xarray<float> lower = xt::tril(xt::ones<float>({kSeq, kSeq}));
     lower.reshape(mask_shape);
-    xt::xarray<float> upper = xt::triu(xt::ones<float>({256UL, 256UL}));
+    xt::xarray<float> upper = xt::triu(xt::ones<float>({kSeq, kSeq}));
     upper.reshape(mask_shape);
     const ttnn::Tensor causal_mask = core::from_xtensor(lower, device);
     const ttnn::Tensor anticausal_mask = core::from_xtensor(upper, device);  // both stay alive
