@@ -1040,6 +1040,10 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
         target.config_page_addr_per_sender.push_back(
             static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe)));
         target.config_page_alloc_per_sender.emplace_back(experimental::sender_state_drisc_l1_allocation(pipe));
+        // One factory call's pipes share a space, so they share its receiver zone range.
+        if (pipe.impl().space().has_dram_receivers()) {
+            target.receiver_alloc = pipe.impl().space().receiver_zone_allocation();
+        }
     }
     TT_FATAL(
         distinct_receivers.size() == total_receivers,
@@ -1968,18 +1972,24 @@ void TensorPrefetcherManager::record_drain_targets(
     const RequestTarget& target, const std::vector<uint32_t>& target_sender_indices) {
     for (size_t m = 0; m < target_sender_indices.size(); ++m) {
         record_drain_target(
-            target_sender_indices[m], target.config_page_addr_per_sender[m], target.config_page_alloc_per_sender[m]);
+            target_sender_indices[m],
+            target.config_page_addr_per_sender[m],
+            target.config_page_alloc_per_sender[m],
+            target.receiver_alloc);
     }
 }
 
 void TensorPrefetcherManager::record_drain_target(
-    uint32_t sender, uint32_t config_page_addr, const std::weak_ptr<DriscL1Allocation>& allocation) {
+    uint32_t sender,
+    uint32_t config_page_addr,
+    const std::weak_ptr<DriscL1Allocation>& allocation,
+    const std::weak_ptr<DriscL1Allocation>& receivers) {
     auto& targets = drain_targets_per_sender_[sender];
     std::erase_if(targets, [](const DrainTarget& t) { return t.allocation.expired(); });
     const auto it = std::find_if(
         targets.begin(), targets.end(), [&](const DrainTarget& t) { return t.config_page_addr == config_page_addr; });
     if (it == targets.end()) {
-        targets.push_back(DrainTarget{config_page_addr, allocation});
+        targets.push_back(DrainTarget{config_page_addr, allocation, receivers});
     }
 }
 
@@ -1993,6 +2003,9 @@ std::vector<TensorPrefetcherManager::Request> TensorPrefetcherManager::build_dra
             if (auto alive = t.allocation.lock()) {
                 pages_per_sender[s].push_back(t.config_page_addr);
                 drain_holds_.push_back(std::move(alive));
+                if (std::shared_ptr<DriscL1Allocation> receivers = t.receivers.lock()) {
+                    drain_holds_.push_back(std::move(receivers));
+                }
             }
         }
         max_pages = std::max(max_pages, pages_per_sender[s].size());
@@ -2687,24 +2700,20 @@ void TensorPrefetcherManager::stop() {
         } catch (const std::exception& error) {
             wait_failure = std::current_exception();
             log_error(tt::LogMetal, "Tensor prefetcher: waiting for the senders to exit failed: {}", error.what());
-            log_cce_sender_statuses();
-            drain_holds_after_failed_stop_.insert(
-                drain_holds_after_failed_stop_.end(),
-                std::make_move_iterator(drain_holds_.begin()),
-                std::make_move_iterator(drain_holds_.end()));
         }
     }
-    // A sender the worker gave up on may still be running, so its DRAIN ranges stay held as above.
+    // A sender that did not exit, or that the worker gave up on, may still be running, so its DRAIN ranges and the
+    // DRAM receiver zones it writes stay held.
     const bool worker_gave_up_on_sender = worker_gave_up_on_sender_.load();
-    if (worker_gave_up_on_sender && !wait_failure) {
+    const bool senders_may_still_run = wait_failure || worker_gave_up_on_sender;
+    std::vector<std::string> failed_senders;
+    if (senders_may_still_run) {
         log_cce_sender_statuses();
         drain_holds_after_failed_stop_.insert(
             drain_holds_after_failed_stop_.end(),
             std::make_move_iterator(drain_holds_.begin()),
             std::make_move_iterator(drain_holds_.end()));
-    }
-    std::vector<std::string> failed_senders;
-    if (!worker_gave_up_on_sender && !wait_failure) {
+    } else {
         failed_senders = failed_cce_senders();
     }
     const uint32_t dropped_request_pages = dropped_request_pages_.load();
