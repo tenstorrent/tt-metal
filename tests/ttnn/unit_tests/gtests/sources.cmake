@@ -6,7 +6,6 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     sdpa/test_ring_joint_ksplit.cpp
     sdpa/test_ring_mla_packing_plan.cpp
     sdpa/test_sliding_window_work_plan.cpp
-    test_quasar_matmul_unified_subblock.cpp
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
     test_async_runtime.cpp
@@ -51,6 +50,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_tanh_fw_ulp.cpp
     test_work_split_tilize.cpp
     test_unary_program_hash.cpp
+    test_unary_dram_read_plan.cpp
 )
 
 set(UNIT_TESTS_TTNN_KERNEL_LIB_SOURCES
@@ -72,7 +72,6 @@ set(UNIT_TESTS_TTNN_CCL_SOURCES
     ccl/test_erisc_data_mover_with_workers.cpp
     ccl/test_fabric_erisc_data_mover_loopback_with_workers.cpp
     ccl/test_fabric_mux_connection_args.cpp
-    ccl/test_mesh_partition_topology_rules.cpp
     ccl/test_sharded_address_generators.cpp
     ccl/test_sharded_address_generators_new.cpp
 )

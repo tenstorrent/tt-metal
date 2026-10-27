@@ -43,6 +43,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "test_host_kernel_common.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -180,7 +181,7 @@ void RunSetUnicastRouteTest(
     std::vector<tt::tt_metal::CoreCoord> logical_cores(NUM_DEVICES);
     for (size_t dev_idx = 0; dev_idx < NUM_DEVICES; dev_idx++) {
         if (core_type == HalProgrammableCoreType::IDLE_ETH) {
-            auto idle_eth_cores = devices[dev_idx]->get_devices()[0]->get_inactive_ethernet_cores();
+            auto idle_eth_cores = devices[dev_idx]->impl().get_devices()[0]->get_inactive_ethernet_cores();
             if (idle_eth_cores.empty()) {
                 GTEST_SKIP() << "No IDLE_ETH cores available on device " << dev_idx;
             }

@@ -851,7 +851,7 @@ TEST_F(UnitMeshFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
 }
 
 // ring-pressure scenarios (tight rings, heavy wraparound)
-TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest1xDFB_RingPressure_1Sx1S_2_0) {
+TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest1xDFB_RingPressure_1Sx1S) {
     M2SingleDFBParams params{
         .producer_type = M2PorCType::DM,
         .consumer_type = M2PorCType::DM,
@@ -864,7 +864,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest1xDFB_RingPressure_1Sx1S_2_0) {
     run_single_dfb_program_2_0(this->device(), params);
 }
 
-TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest1xDFB_RingPressure_3Sx3S_2_0) {
+TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest1xDFB_RingPressure_3Sx3S) {
     // M2 caps user DM cores per WU at 6 (legacy 4Sx4S=8 doesn't fit on Gen2).
     M2SingleDFBParams params{
         .producer_type = M2PorCType::DM,
@@ -878,7 +878,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest1xDFB_RingPressure_3Sx3S_2_0) {
     run_single_dfb_program_2_0(this->device(), params);
 }
 
-TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest1xDFB_RingPressure_2Sx4S_2_0) {
+TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest1xDFB_RingPressure_2Sx4S) {
     M2SingleDFBParams params{
         .producer_type = M2PorCType::TENSIX,
         .consumer_type = M2PorCType::DM,
@@ -893,7 +893,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest1xDFB_RingPressure_2Sx4S_2_0
 
 // 4 DM producers + 4 Tensix consumers ALL, num_entries=4 → capacity=1: maximum
 // ring pressure on the remapper fan-out path (1 DM post → 4 UNPACK TC acks).
-TEST_P(DFBImplicitSyncParamFixture_2_0, DMTensixTest1xDFB_RingPressure_4Sx4A_2_0) {
+TEST_P(DFBImplicitSyncParamFixture_2_0, DMTensixTest1xDFB_RingPressure_4Sx4A) {
     M2SingleDFBParams params{
         .producer_type = M2PorCType::DM,
         .consumer_type = M2PorCType::TENSIX,
@@ -1203,5 +1203,92 @@ A1_THREADED_TEST(1, 1, 2)  // op-level FAIL 50.0%  (W > C)
 A1_THREADED_TEST(1, 1, 4)  // op-level FAIL 74.9%  (W > C)
 
 #undef A1_THREADED_TEST
+
+// =====================================================================================
+// BLOCKED A1 DRAM-pipeline data-verify tests
+// =====================================================================================
+// DM -> Tensix -> DM through DRAM; the DM producer fills the input ring in blocks and the output must equal the input.
+// 1 producer, each consumer pattern.
+TEST_F(UnitMeshFixture, A1Blocked_DMTensixDM_BLOCKED_1B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::BLOCKED, 1, 4, 16);
+}
+TEST_F(UnitMeshFixture, A1Blocked_DMTensixDM_STRIDED_1B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::STRIDED, 1, 4, 16);
+}
+TEST_F(UnitMeshFixture, A1Blocked_DMTensixDM_ALL_1B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::ALL, 1, 4, 16);
+}
+// 2 or 4 DM producers into 1 Tensix consumer.
+TEST_F(UnitMeshFixture, A1Blocked_DMTensixDM_BLOCKED_2B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::BLOCKED, 2, 4, 16);
+}
+TEST_F(UnitMeshFixture, A1Blocked_DMTensixDM_BLOCKED_4B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::BLOCKED, 4, 4, 16);
+}
+TEST_F(UnitMeshFixture, A1Blocked_DMTensixDM_ALL_2B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::ALL, 2, 4, 16);
+}
+TEST_F(UnitMeshFixture, A1Blocked_DMTensixDM_ALL_4B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::ALL, 4, 4, 16);
+}
+// Same, with implicit sync on the DM cores (the Tensix consumer is always explicit).
+TEST_F(UnitMeshFixture, A1Blocked_DMTensixDM_BLOCKED_1B_blk4_impl) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::BLOCKED, 1, 4, 16, /*implicit=*/true);
+}
+TEST_F(UnitMeshFixture, A1Blocked_DMTensixDM_STRIDED_1B_blk4_impl) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::STRIDED, 1, 4, 16, /*implicit=*/true);
+}
+TEST_F(UnitMeshFixture, A1Blocked_DMTensixDM_ALL_1B_blk4_impl) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::ALL, 1, 4, 16, /*implicit=*/true);
+}
+// 2 implicit-sync DM producers into 1 explicit Tensix consumer.
+TEST_F(UnitMeshFixture, A1Blocked_DMTensixDM_BLOCKED_2B_blk4_impl) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::BLOCKED, 2, 4, 16, /*implicit=*/true);
+}
+TEST_F(UnitMeshFixture, A1Blocked_DMTensixDM_ALL_2B_blk4_impl) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::ALL, 2, 4, 16, /*implicit=*/true);
+}
+
+// 1 DM producer -> 2 or 4 Tensix consumers -> DM, for each producer/consumer pattern; the output must equal the input.
+// RUN WITH TT_METAL_WATCHER=1: these tests skip without the watcher.
+TEST_F(UnitMeshFixture, A1Fanout_DMTensixDM_STRIDED_1Bx2_blk4) {
+    run_a1_fanout_blocked_pipeline(this->device(), 2, 4, 16, /*implicit=*/false, m2::DFBAccessPattern::STRIDED);
+}
+TEST_F(UnitMeshFixture, A1Fanout_DMTensixDM_STRIDED_1Bx4_blk4) {
+    run_a1_fanout_blocked_pipeline(this->device(), 4, 4, 16, /*implicit=*/false, m2::DFBAccessPattern::STRIDED);
+}
+TEST_F(UnitMeshFixture, A1Fanout_DMTensixDM_SB_1Sx2B_blk4) {
+    run_a1_fanout_blocked_pipeline(
+        this->device(), 2, 4, 16, /*implicit=*/false, m2::DFBAccessPattern::BLOCKED, m2::DFBAccessPattern::STRIDED);
+}
+TEST_F(UnitMeshFixture, A1Fanout_DMTensixDM_SB_1Sx1B_blk4) {
+    run_a1_fanout_blocked_pipeline(
+        this->device(), 1, 4, 16, /*implicit=*/false, m2::DFBAccessPattern::BLOCKED, m2::DFBAccessPattern::STRIDED);
+}
+TEST_F(UnitMeshFixture, A1Fanout_DMTensixDM_BLOCKED_1Bx2_blk4) {
+    run_a1_fanout_blocked_pipeline(this->device(), 2, 4, 16);
+}
+TEST_F(UnitMeshFixture, A1Fanout_DMTensixDM_BLOCKED_1Bx4_blk4) {
+    run_a1_fanout_blocked_pipeline(this->device(), 4, 4, 16);
+}
+// Same, with an implicit-sync producer. Also skips without the watcher.
+TEST_F(UnitMeshFixture, A1Fanout_DMTensixDM_BLOCKED_1Bx2_blk4_impl) {
+    run_a1_fanout_blocked_pipeline(this->device(), 2, 4, 16, /*implicit=*/true);
+}
+
+// DM -> Tensix BLOCKED producers -> DM ALL consumers, with the Tensix side packing real data.
+// Every consumer must see every block in order; the expected output is computed by the helper.
+TEST_F(UnitMeshFixture, TensixBlockedOut_DMTensixDM_1Bx2A_blk4) {
+    run_tensix_blocked_out_pipeline(this->device(), /*P=*/1, /*C=*/2, /*block_size=*/4, /*num_entries=*/16);
+}
+TEST_F(UnitMeshFixture, TensixBlockedOut_DMTensixDM_1Bx4A_blk4) {
+    run_tensix_blocked_out_pipeline(this->device(), /*P=*/1, /*C=*/4, /*block_size=*/4, /*num_entries=*/16);
+}
+TEST_F(UnitMeshFixture, TensixBlockedOut_DMTensixDM_2Bx2A_blk4) {
+    run_tensix_blocked_out_pipeline(this->device(), /*P=*/2, /*C=*/2, /*block_size=*/4, /*num_entries=*/16);
+}
+TEST_F(UnitMeshFixture, TensixBlockedOut_DMTensixDM_2Bx1A_blk4) {
+    run_tensix_blocked_out_pipeline(this->device(), /*P=*/2, /*C=*/1, /*block_size=*/4, /*num_entries=*/16);
+}
 
 }  // namespace tt::tt_metal

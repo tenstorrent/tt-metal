@@ -159,11 +159,11 @@ inline void llk_matmul_pack(
     }
 }
 
-// Matmul output blocks take llk_pack_block where the tt-llk sweep reads it faster: DestSync full, and half sync at LoFi
-// with one K tile; a static math throttle of 4 or more at half sync keeps the per-tile pack (math bounds the block).
+// Matmul output blocks take llk_pack_block where the tt-llk sweep reads it faster: DestSync full (the pack is not hidden behind
+// the math there, also at LoFi with several K tiles), and half sync at LoFi with one K tile; a static math throttle of 4 or more at half sync keeps the per-tile pack (math bounds the block).
 template <MathFidelity math_fidelity, std::uint32_t kt_per_section, std::uint32_t output, int throttle_level = 0>
 constexpr bool llk_matmul_block_pack() {
-    if constexpr (math_fidelity == MathFidelity::LoFi && kt_per_section > 1) {
+    if constexpr (math_fidelity == MathFidelity::LoFi && kt_per_section > 1 && DST_SYNC_MODE != DstSync::SyncFull) {
         return false;
     } else if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
         return true;
@@ -173,7 +173,9 @@ constexpr bool llk_matmul_block_pack() {
         constexpr bool small_tile = pack_tile_num_faces[output] != 4 || pack_tile_face_r_dim[output] != FACE_R_DIM ||
                                     pack_partial_face[output] != 0;
         constexpr bool float32_out = static_cast<DataFormat>(pack_dst_format[output]) == DataFormat::Float32;
-        return math_fidelity == MathFidelity::LoFi && !(small_tile && float32_out);
+        // HiFi2 with one K tile: the per-tile pack is on the critical path for small tiles and Float32 outputs
+        constexpr bool hifi2_one_k = math_fidelity == MathFidelity::HiFi2 && kt_per_section == 1 && (small_tile || float32_out);
+        return (math_fidelity == MathFidelity::LoFi || hifi2_one_k) && !(small_tile && float32_out);
     }
 }
 
@@ -235,4 +237,38 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
             _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(tile_index, pack_tile_addr);
         }
     }
+}
+
+// Whether llk_pack_block takes the closed form, whose destination words llk_pack_block_prepare can issue early.
+inline bool llk_pack_block_is_closed_form(std::uint32_t output, std::uint32_t ntiles) {
+    const std::uint8_t output_id = get_output_id(output);
+    return ntiles > 1 && !llk_pack_block_is_contiguous(output_id) && llk_pack_block_is_closable(output_id);
+}
+
+// Full sync only: issues the closed block pack's destination words before the math wait of the block.
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_block_prepare(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
+    if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
+        if (llk_pack_block_is_closed_form(output, ntiles)) {
+            const std::uint8_t output_id = get_output_id(output);
+            _llk_pack_block_closed_pre_(
+                start_tile_index,
+                get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1);
+        }
+    }
+}
+
+// llk_pack_block after llk_pack_block_prepare of the same block, with no pack in between.
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_block_prepared(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
+    if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
+        if (llk_pack_block_is_closed_form(output, ntiles)) {
+            const std::uint8_t output_id = get_output_id(output);
+            const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
+            get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
+            _llk_pack_block_closed_run_(ntiles, page_size << 4, get_output_num_faces(output_id));
+            return;
+        }
+    }
+    llk_pack_block<is_fp32_dest_acc_en>(start_tile_index, output, ntiles);
 }

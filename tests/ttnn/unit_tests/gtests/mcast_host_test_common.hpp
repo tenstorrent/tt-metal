@@ -52,7 +52,7 @@ struct GroupInput {
 };
 
 inline McastImpl make_mcast(
-    tt::tt_metal::IDevice* device, const std::vector<GroupInput>& inputs, const McastConfig& cfg = {}) {
+    tt::tt_metal::distributed::MeshDevice* device, const std::vector<GroupInput>& inputs, const McastConfig& cfg = {}) {
     McastImpl mcast(*device, cfg);
     for (const auto& input : inputs) {
         mcast.add_group(input.receivers, input.senders, input.ack);

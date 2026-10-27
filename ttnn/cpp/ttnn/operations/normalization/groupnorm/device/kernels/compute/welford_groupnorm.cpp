@@ -429,11 +429,7 @@ void kernel_main() {
 
         tile_regs_commit();
         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-        PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(mean_dst, dfb_ex_partial_id, 2)));
-#else
         pack_block(mean_dst, dfb_ex_partial_id, 2);
-#endif
         tile_regs_release();
         dfb_ex_partial.push_back(2);
         // End Statistics Aggregation
@@ -532,9 +528,11 @@ void kernel_main() {
                             constexpr uint32_t inv_std_dst = 2;
                             tile_regs_acquire();
 #ifdef TILIZE_IN
+                            reconfig_data_format_srca(dfb_normalize_in_fp32_id);
                             copy_init(dfb_normalize_in_fp32_id);
                             copy_tile(dfb_normalize_in_fp32_id, nt, data_dst);
 #else
+                            reconfig_data_format_srca(dfb_normalize_in_fp32_id);
                             copy_init(dfb_normalize_in_fp32_id);
                             copy_tile(dfb_normalize_in_fp32_id, 0, data_dst);
 #endif

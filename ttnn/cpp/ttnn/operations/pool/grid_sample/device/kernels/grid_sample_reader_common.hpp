@@ -139,7 +139,7 @@ struct GridCoordinateReader {
 // - read_bytes: bytes to copy per corner (chunk width)
 // - write_stride: distance between consecutive corners in the destination CB page
 // - src_byte_offset: byte offset within the source stick (= c_i * input_chunk_nbytes)
-template <typename TensorAccessorT>
+template <typename TensorAccessorT, typename DFB>
 ALWI void read_four_corner_inputs(
     Noc noc,
     const TensorAccessorT& input_tensor_accessor,
@@ -153,7 +153,7 @@ ALWI void read_four_corner_inputs(
     int32_t w0,
     int32_t w1,
     uint32_t input_height,
-    DataflowBuffer input_dfb) {
+    DFB input_dfb) {
     // Boundary checks (recompute for performance)
     const bool h0_valid = is_coordinate_valid(h0, input_height);
     const bool h1_valid = is_coordinate_valid(h1, input_height);
@@ -207,7 +207,7 @@ ALWI void read_four_corner_inputs(
     }
 }
 
-template <typename TensorAccessorT>
+template <typename TensorAccessorT, typename DFB>
 ALWI void read_four_corner_inputs_with_fill(
     Noc noc,
     const TensorAccessorT& input_tensor_accessor,
@@ -219,7 +219,7 @@ ALWI void read_four_corner_inputs_with_fill(
     int32_t w0,
     int32_t w1,
     uint32_t input_height,
-    DataflowBuffer input_dfb,
+    DFB input_dfb,
     uint32_t fill_stick_addr) {
     const bool h0_valid = is_coordinate_valid(h0, input_height);
     const bool h1_valid = is_coordinate_valid(h1, input_height);
@@ -302,11 +302,13 @@ template <
     uint32_t input_cb_index,
     uint32_t scalar_cb_index,
     typename TensorAccessor,
-    typename GridPtrType>
+    typename GridPtrType,
+    typename InputDFB,
+    typename ScalarDFB>
 ALWI void process_grid_point(
     Noc noc,
-    DataflowBuffer input_dfb,
-    DataflowBuffer scalar_dfb,
+    InputDFB input_dfb,
+    ScalarDFB scalar_dfb,
     GridPtrType grid_ptr,
     uint32_t grid_idx,
     const TensorAccessor& input_tensor_accessor,

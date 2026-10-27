@@ -102,6 +102,20 @@ inline void rmsnorm_bcast_scalar_reuse_dest_as_src()
     TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_1, p_movd2b::MOV_1_ROW, 0);
 }
 
+/**
+ * @brief Output[tile] = SrcA[tile] (+, -, *) scalar for num_tiles tiles, the scalar being element [0] of the DEST
+ * tile at src_index, moved into SrcB by MOVD2B and broadcast by the FPU op.
+ *
+ * @tparam eltwise_binary_type: FPU op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam num_tiles: Tiles the MOP walks per call (matches the unpack init).
+ * @tparam clear_dest: ZEROACC every tile of the DEST section between the MOVD2B and the MOP. ELWMUL accumulates
+ *         into DEST, so set it unless the output tiles are already zero (and no other tile in the section is live).
+ * @param src_index: DEST tile holding the scalar.
+ * @param dst_index: DEST tile the first output lands in.
+ * @note No op that leaves the Src zero-substitution flag at keep (copy_init / datacopy) may run between
+ *       @ref _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_ and this call: the MOP would keep denormal
+ *       Src operands it should flush. Checked on entry under LLK asserts.
+ */
 template <
     EltwiseBinaryType eltwise_binary_type,
     std::uint32_t num_tiles,
@@ -113,6 +127,13 @@ inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_(std::uint32_t src_index, 
 {
     constexpr bool high_fidelity          = is_high_fidelity(math_fidelity);
     constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
+
+    // The init re-established the operand-driven flag; an op issued between it and this call must not have
+    // left keep behind, or the MOP keeps the denormal Src operands it should flush (fires only under LLK asserts).
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "rmsnorm_bcast_scalar_dest_reuse: Src zero-substitution flag does not hold the operand-driven value; an op between the init "
+        "and this call left it at keep");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(src_index);
     rmsnorm_bcast_scalar_reuse_dest_as_src();
@@ -213,6 +234,17 @@ inline void rmsnorm_bcast_scalar_dest_reuse_configure_addrmod(const std::uint32_
     }
 }
 
+/**
+ * @brief Initialize the FPU for @ref _llk_math_rmsnorm_bcast_scalar_dest_reuse_: addr-mods and the num_tiles MOP.
+ *
+ * @tparam eltwise_binary_type: FPU op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam num_tiles: Tiles the MOP walks per call.
+ * @param num_faces: Faces per tile (1, 2 or 4).
+ * @param acc_to_dest: Dest-accumulate field of the ELWADD/ELWSUB MOP instructions.
+ * @note Establishes the operand-driven default Src zero-substitution state, which the execute asserts under
+ *       LLK asserts; an op that leaves it at keep (copy_init / datacopy) must be followed by this init again.
+ *       Pairs with @ref _llk_unpack_A_rmsnorm_init_ on the unpack thread.
+ */
 template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_tiles, MathFidelity math_fidelity>
 inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_(const std::uint32_t num_faces, const std::uint32_t acc_to_dest)
 {
@@ -230,4 +262,9 @@ inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_(const std::uint32_t 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // ELWADD/ELWMUL/ELWSUB read the Src zero-substitution flag and the addr-mod/MOP setup above does not touch
+    // it, so re-establish the operand-driven DEFAULT here -- otherwise a preceding copy_init/datacopy op that
+    // left PRESERVE leaks into the MOP (denormal Src results differ). Mirrors _llk_math_eltwise_binary_init_.
+    math::_configure_default_zero_flag_state_();
 }

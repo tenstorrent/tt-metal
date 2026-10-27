@@ -86,7 +86,6 @@ Tensor strided_all_gather_async(
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        ttnn::ccl::get_active_physical_devices(input_tensor),
         dim,
         num_links,
         num_devices,

@@ -1737,6 +1737,29 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpPreparationUnderNoDispatchCaptureLeav
     EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before);
 }
 
+TEST_F(TTNNFixtureWithDevice, TestGenericOpRejectsOverlappingMeshCoordinateRanges) {
+    const std::vector<Tensor> io_tensors = make_io_tensors(this->device_);
+    const ProgramDescriptor program = make_single_core_program(kEmptyKernelSource);
+    const std::size_t cache_entries_before = this->device_->num_program_cache_entries();
+
+    auto expect_overlap_rejected = [&](ttnn::MeshCoordinateRange left, ttnn::MeshCoordinateRange right) {
+        tt::tt_metal::experimental::MeshProgramDescriptor mesh_program;
+        mesh_program.mesh_programs.emplace_back(std::move(left), program);
+        mesh_program.mesh_programs.emplace_back(std::move(right), program);
+        EXPECT_THAT(
+            [&] { ttnn::experimental::prepare_generic_op(io_tensors, mesh_program); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("overlaps")));
+    };
+
+    expect_overlap_rejected(
+        ttnn::MeshCoordinateRange(ttnn::MeshCoordinate(0, 0), ttnn::MeshCoordinate(0, 1)),
+        ttnn::MeshCoordinateRange(ttnn::MeshCoordinate(0, 1), ttnn::MeshCoordinate(0, 2)));
+    expect_overlap_rejected(
+        ttnn::MeshCoordinateRange(ttnn::MeshCoordinate(0, 0), ttnn::MeshCoordinate(0, 1)),
+        ttnn::MeshCoordinateRange(ttnn::MeshCoordinate(0, 0), ttnn::MeshCoordinate(0, 1)));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before);
+}
+
 // Kernels compile after the workload is created, so a compilation failure exercises the order in which a new workload
 // is used and then cached.
 TEST_F(TTNNFixtureWithDevice, TestGenericOpCompilationFailureLeavesProgramCacheUnchanged) {

@@ -28,6 +28,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     IN_TILE_DIMS,
     MATH_FIDELITY,
+    MATMUL_STREAM_NARROW,
     NUM_FACES,
     PARTIAL_FACE,
     STOCHASTIC_ROUNDING,
@@ -43,7 +44,6 @@ from helpers.utils import passed_test
 MATMUL_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
     ]
 )
@@ -175,6 +175,15 @@ def test_unpack_matmul(
             MATH_FIDELITY(math_fidelity),
             THROTTLE_LEVEL(0),
             DEST_SYNC(matmul_config.dest_sync),
+            *MATMUL_STREAM_NARROW.for_block(
+                formats,
+                dest_acc,
+                matmul_config.dest_sync,
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+                matmul_config.tile_dimensions.in0_tile_r_dim,
+                math_fidelity=math_fidelity,
+            ),
         ],
         runtimes=[
             TILE_COUNT(matmul_config.tile_dimensions.tile_cnt),

@@ -10,7 +10,8 @@ ResNet50's residual add is `add_(out, ds_out, activations=[RELU])` (see the resi
 models/.../resnet50/quasar/tt/ttnn_functional_resnet50.py): ADD, no broadcast, HEIGHT/BLOCK sharded
 L1, in-place, fused RELU. The op routes this config through the DFB factory automatically (no env
 flag) — that path is arch-portable, so the same test runs on real Wormhole (CB-backed DFB) and on
-the Quasar simulator (overlay-backed DFB).
+the Quasar simulator (overlay-backed DFB). On Quasar the native factory takes this config first,
+unless TTNN_QSR_NATIVE=0.
 
 The shapes use bf16 and core grids that fit both Wormhole (8x8) and the Quasar simulator (8x4). The
 WH model config uses bf8, but Quasar's DFB data-format validation accepts bf16/MX formats rather

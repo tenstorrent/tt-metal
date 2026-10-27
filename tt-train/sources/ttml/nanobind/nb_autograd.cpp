@@ -22,7 +22,6 @@
 #include "autograd/callback.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/tensor.hpp"
-#include "core/tt_tensor_utils.hpp"
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_util.hpp"
 #include "ops/binary_ops.hpp"
@@ -114,13 +113,7 @@ void py_module(nb::module_& m) {
         py_tensor.def(
             "assign",
             [](const TensorPtr& self, const TensorPtr& other) {
-                // Keep self's storage dtype: loading weights into a parameter never changes its precision.
-                const auto& current = self->get_value(PreferredPrecision::NATIVE);
-                const auto precision =
-                    ttml::core::is_tensor_initialized(current) && current.dtype() == ttnn::DataType::FLOAT32
-                        ? PreferredPrecision::FULL
-                        : PreferredPrecision::HALF;
-                self->set_value(other->get_value(precision));
+                self->assign(other->get_value(PreferredPrecision::NATIVE));
             },
             nb::arg("other"));
         py_tensor.def_static(
@@ -157,16 +150,23 @@ void py_module(nb::module_& m) {
             [](const Tensor& tensor,
                std::optional<tt::tt_metal::DataType> new_type,
                ttnn::distributed::MeshToTensor* composer,
-               PreferredPrecision precision) {
-                return ttml::nanobind::util::make_numpy_tensor(tensor.get_value(precision), new_type, composer);
+               std::optional<PreferredPrecision> precision) {
+                // By default, read the tensor as stored and convert a bf16 tensor to a float32 array on the host:
+                // the same array a FULL read gives, without creating an fp32 copy on the device.
+                const auto& value = tensor.get_value(precision.value_or(PreferredPrecision::NATIVE));
+                if (!precision && !new_type && value.dtype() == ttnn::DataType::BFLOAT16) {
+                    new_type = ttnn::DataType::FLOAT32;
+                }
+                return ttml::nanobind::util::make_numpy_tensor(value, new_type, composer);
             },
             nb::arg("new_type") = std::nullopt,
             nb::arg("composer") = nullptr,
-            nb::arg("precision") = PreferredPrecision::FULL,
-            "Construct a numpy tensor from a Tensor. precision=NATIVE reads the value as stored (no upcast).");
+            nb::arg("precision") = std::nullopt,
+            "Construct a numpy tensor from a Tensor. By default a bf16 tensor gives a float32 array, converted on the "
+            "host; precision= reads that view (HALF, FULL or NATIVE) without the conversion.");
         py_tensor.def(
             "to_string",
-            [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::FULL).write_to_string(); },
+            [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::NATIVE).write_to_string(); },
             "Return string representation of the Tensor");
         py_tensor.def(
             "shape",
@@ -181,8 +181,8 @@ void py_module(nb::module_& m) {
             "Get Tensor shape as list");
         py_tensor.def(
             "dtype",
-            [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::FULL).dtype(); },
-            "Get Tensor data type");
+            [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::NATIVE).dtype(); },
+            "Get the dtype the Tensor is stored in");
         py_tensor.def(
             "__add__",
             [](const TensorPtr& self, const AutocastTensor& other) { return ttml::ops::operator+(self, other); },

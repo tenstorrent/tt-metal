@@ -189,7 +189,6 @@ ring_attention_all_gather_async_build_operation_args(
 
     return {
         RingAttentionAllGatherAsyncParams{
-            {},
             gather_dim,
             num_links,
             ring_size,

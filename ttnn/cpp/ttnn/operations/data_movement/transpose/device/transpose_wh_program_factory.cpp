@@ -173,9 +173,6 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
 
     // ---- compute ----
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (row_major && (input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::INT32)) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
 
     // Legacy built a ComputeConfigDescriptor directly (no TTNN ComputeKernelConfig feeding it),
     // setting only fp32_dest_acc_en and unpack_to_dest_mode; every other field kept its Metal

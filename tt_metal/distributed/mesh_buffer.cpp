@@ -17,6 +17,7 @@
 #include "device.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "mesh_device_impl.hpp"
+#include "mesh_device_view_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/debug/inspector/inspector.hpp"
 #include <tt-metalium/distributed_context.hpp>
@@ -206,7 +207,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             }},
         mesh_buffer_config);
 
-    if (mesh_device->get_view().get_devices().empty()) {
+    if (mesh_device->get_device_ids().empty()) {
         auto mesh_buffer =
             std::shared_ptr<MeshBuffer>(new MeshBuffer(mesh_buffer_config, device_local_config, 0, 0, mesh_device));
         mesh_buffer->initialize_device_buffers();
@@ -248,7 +249,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         if (is_hybrid) {
             std::vector<AllocatorImpl*> device_allocators;
             device_allocators.reserve(mesh_device->get_view().num_devices());
-            for (auto* device : mesh_device->get_view().get_devices()) {
+            for (auto* device : mesh_device->get_view().impl().get_devices()) {
                 device_allocators.push_back(device->allocator_impl().get());
             }
             hybrid_scope.emplace(mesh_allocator, device_allocators);

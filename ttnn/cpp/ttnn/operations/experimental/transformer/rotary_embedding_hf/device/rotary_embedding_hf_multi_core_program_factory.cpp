@@ -55,8 +55,8 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     bool row_major;
     uint32_t num_cores, num_rows_per_core_group_1, num_rows_per_core_group_2;
@@ -78,9 +78,6 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         num_rows_per_core_group_2 = 0;
         num_input_tiles = in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
         num_output_tiles = out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
-        auto bbox = all_cores.bounding_box();
-        num_cores_x = bbox.end_coord.x + 1;
-        num_cores_y = bbox.end_coord.y + 1;
     } else {
         row_major = true;
         std::tie(
@@ -284,7 +281,8 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
     }
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+    const auto cores = shard_spec.has_value() ? corerange_to_cores(all_cores, num_cores, row_major)
+                                              : grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
     reader_desc.runtime_args.reserve(num_cores);
     writer_desc.runtime_args.reserve(num_cores);
@@ -358,8 +356,8 @@ ProgramDescriptor create_multi_tile_descriptor(
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     bool row_major;
     uint32_t num_cores, num_rows_per_core_group_1, num_rows_per_core_group_2;
@@ -382,9 +380,6 @@ ProgramDescriptor create_multi_tile_descriptor(
         num_rows_per_core_group_2 = 0;
         num_input_tiles = in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
         num_output_tiles = out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
-        auto bbox = all_cores.bounding_box();
-        num_cores_x = bbox.end_coord.x + 1;
-        num_cores_y = bbox.end_coord.y + 1;
     } else {
         row_major = true;
         std::tie(
@@ -595,7 +590,8 @@ ProgramDescriptor create_multi_tile_descriptor(
     }
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+    const auto cores = shard_spec.has_value() ? corerange_to_cores(all_cores, num_cores, row_major)
+                                              : grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
     reader_desc.runtime_args.reserve(num_cores);
     writer_desc.runtime_args.reserve(num_cores);

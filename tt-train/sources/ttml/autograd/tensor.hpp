@@ -30,6 +30,8 @@ public:
     ~Tensor() = default;
 
     void set_value(const ttnn::Tensor &value);
+    // Sets the value in the dtype this tensor is stored in, for loading values into it; see AutocastTensor::assign().
+    void assign(const ttnn::Tensor &value);
     void set_grad(const ttnn::Tensor &grad);
     void set_node(const std::optional<NodeId> &node);
     void clean_node();

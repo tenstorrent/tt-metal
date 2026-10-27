@@ -75,7 +75,7 @@ ttnn::Tensor fused_msda(
 // sampling_offsets are raw, in feature-map pixel units. scale_l is
 // [1/W_l, 1/H_l] when align_corners is false and [1/(W_l-1), 1/(H_l-1)] when
 // it is true, matching the pixel spacing of the normalized -> pixel mapping; a
-// singleton axis has scale 0. The op applies scale_l on the SFPU.
+// singleton axis has scale 0. The op accounts for scale_l internally.
 // reference_points must be (B, Q, R, 2) normalized (x, y) in [0, 1], bfloat16
 // or float32. float32 keeps a point in [0, 1] from moving in steps of 2^-8.
 // The 4-D box form is rejected rather than reinterpreted.
@@ -83,6 +83,14 @@ ttnn::Tensor fused_msda(
 // Each level's H_l and W_l must be <= 256: the bilinear corner crosses from the
 // SFPU geometry to the reader as bf16, which represents every integer up to 256
 // exactly and only some beyond it.
+//
+// num_valid_queries, when given, holds one count per batch (each in [0, Q], at
+// least one nonzero): only queries [0, num_valid_queries[b]) of batch b are
+// computed. The output rows past it are left unwritten and hold undefined data,
+// possibly NaN or Inf, so a caller must drop them with a select such as
+// ttnn.where, not by multiplying with a 0/1 mask. Changing the counts between
+// calls reuses the cached program; because they are runtime args, a captured
+// trace replays the counts it was captured with.
 ttnn::Tensor fused_msda_from_offsets(
     const ttnn::Tensor& value,
     const ttnn::Tensor& reference_points,
@@ -91,6 +99,20 @@ ttnn::Tensor fused_msda_from_offsets(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     MSDAReferenceMode reference_mode = MSDAReferenceMode::Level,
     bool align_corners = false,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& num_valid_queries = std::nullopt);
+
+// Whether fused_msda_from_offsets can stage value (ROW_MAJOR, interleaved L1)
+// and its bf16 output in L1 alongside its circular buffers. value may still be
+// TILE or in DRAM. Reads the allocator's current state, so call it right before
+// the op and do not cache the answer.
+bool can_use_fused_msda_from_offsets_l1_value(
+    const ttnn::Tensor& value,
+    const ttnn::Tensor& reference_points,
+    const ttnn::Tensor& sampling_offsets,
+    const ttnn::Tensor& attention_weights,
+    const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
+    MSDAReferenceMode reference_mode = MSDAReferenceMode::Level,
+    bool align_corners = false);
 
 }  // namespace ttnn::experimental

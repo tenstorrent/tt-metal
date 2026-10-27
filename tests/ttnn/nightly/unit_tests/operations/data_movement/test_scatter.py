@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_quasar
+from tt_py_test_utils_common.utility_functions import is_quasar
 from tests.ttnn.utils_for_testing import assert_allclose
 
 
@@ -1050,18 +1050,18 @@ def test_scatter_zero_volume_rejects_invalid_operands(
         ttnn.scatter(make(input_dtype), -1, make(index_dtype), make(source_dtype))
 
 
-# ttnn::scatter checks dtypes on the caller's tensors, before to_layout(ROW_MAJOR) turns BFLOAT8_B into
-# BFLOAT16. So a BFLOAT8_B operand mixed with a BFLOAT16 one is rejected up front, even though the two
-# would match after untilize. BFLOAT8_B on both sides is still accepted.
+# ttnn::scatter untilizes TILE operands before scattering, which turns BFLOAT8_B into BFLOAT16. So a
+# BFLOAT8_B operand works with a BFLOAT16 one (models such as GPT-OSS's top-k router and BGE-M3 rely on
+# this), as does BFLOAT8_B on both sides. The output is BFLOAT16 in every case.
 @pytest.mark.parametrize(
-    "input_dtype, source_dtype, expected_message",
+    "input_dtype, source_dtype",
     [
-        (ttnn.bfloat16, ttnn.bfloat8_b, "input_dtype differs from src_dtype"),
-        (ttnn.bfloat8_b, ttnn.bfloat16, "input_dtype differs from src_dtype"),
-        (ttnn.bfloat8_b, ttnn.bfloat8_b, None),
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.bfloat8_b, ttnn.bfloat16),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b),
     ],
 )
-def test_scatter_block_float_operands(input_dtype, source_dtype, expected_message, device, expect_error):
+def test_scatter_block_float_operands(input_dtype, source_dtype, device):
     torch.manual_seed(0)
     shape, dim = [32, 64], -1
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
@@ -1073,11 +1073,6 @@ def test_scatter_block_float_operands(input_dtype, source_dtype, expected_messag
     # test untilize rather than scatter.
     ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_src = ttnn.from_torch(torch_src, dtype=source_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-
-    if expected_message is not None:
-        with expect_error(RuntimeError, expected_message):
-            ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
-        return
 
     if is_quasar():
         pytest.skip("untilize of a BFLOAT8_B tensor is not supported on Quasar (Bfp8_b DFB format)")

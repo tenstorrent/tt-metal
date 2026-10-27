@@ -61,8 +61,8 @@ void tilize_in(
         reconfig_mode>(in_num_subblocks);
 }  // tilize_in()
 
-template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
-inline void tilize_single_block(DataflowBuffer in_dfb) {
+template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, typename DFBIn>
+inline void tilize_single_block(DFBIn in_dfb) {
     in_dfb.wait_front(in_block_w);
     fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
     in_dfb.pop_front(in_block_w);
@@ -74,8 +74,8 @@ inline uint32_t update_in_cb(uint32_t in_cb_addr) {
     return in_cb_addr + window_reuse_offset;
 }
 
-template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, uint32_t tilized_cb_row_offset>
-inline void tilize_single_block_with_out_cb_update(DataflowBuffer in_dfb, uint32_t& out_cb_addr) {
+template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, uint32_t tilized_cb_row_offset, typename DFBIn>
+inline void tilize_single_block_with_out_cb_update(DFBIn in_dfb, uint32_t& out_cb_addr) {
     PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr));
     PACK((out_cb_addr += tilized_cb_row_offset));
     tilize_single_block<in_cb_id, in_block_w, out_cb_id>(in_dfb);
@@ -92,11 +92,14 @@ template <
     uint32_t window_reuse_offset,
     uint32_t tilized_cb_row_offset,
     uint32_t tilized_cb_second_reader_offset,
-    uint32_t image_width_in_tiles>
+    uint32_t image_width_in_tiles,
+    typename DFBIn1,
+    typename DFBIn2,
+    typename DFBOut>
 inline void tilize_in_reuse_split_reader(
-    DataflowBuffer in1_dfb,
-    DataflowBuffer in2_dfb,
-    DataflowBuffer out_dfb,
+    DFBIn1 in1_dfb,
+    DFBIn2 in2_dfb,
+    DFBOut out_dfb,
     uint32_t act_cb_start_address,
     uint32_t act_cb_second_reader_start_address) {
     // with activation reuse, the activation buffers are sized to fit one output image width only,
@@ -167,10 +170,10 @@ inline void tilize_in_reuse_split_reader(
     fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
 }
 
-template <uint32_t out_subblock_w, uint32_t out_block_w>
+template <uint32_t out_subblock_w, uint32_t out_block_w, typename DFBInterm, typename DFBOut>
 inline void reblock_and_untilize(
-    DataflowBuffer interm_dfb,
-    DataflowBuffer out_dfb,
+    DFBInterm interm_dfb,
+    DFBOut out_dfb,
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h) {
@@ -199,14 +202,6 @@ inline void reblock_and_untilize(
     }
     interm_dfb.pop_front(num_tiles_in_row_of_subblocks);
 }
-
-#ifdef ARCH_BLACKHOLE
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void pack_block_per_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
-    LLK_SAN_FUNCTION();
-    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
-}
-#endif
 
 void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
@@ -255,19 +250,6 @@ void kernel_main() {
     constexpr uint32_t out_block_w = in1_block_w;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
-#ifdef ARCH_BLACKHOLE
-    // Block pack only where it helps; relu keeps the per-tile pack.
-    constexpr bool block_pack_subblocks =
-        !pack_relu && ((!height_sharded && packer_l1_acc && out_subblock_h == 2 && out_subblock_w == 4) ||
-                       (!height_sharded && !packer_l1_acc && out_subblock_h == 2 && out_subblock_w == 2 &&
-                        in0_block_w == 6 && in0_num_blocks_w == 30) ||
-                       (height_sharded && !packer_l1_acc && in0_block_w >= 12 &&
-                        ((out_subblock_h == 1 && out_subblock_w == 4 && in0_num_blocks_h > 1 &&
-                          in0_num_subblocks * in1_num_subblocks > 1) ||
-                         (out_subblock_h == 4 && out_subblock_w == 1))) ||
-                       (height_sharded && !packer_l1_acc && in0_block_w == 3 && in0_num_blocks_w == 3 &&
-                        in0_num_blocks_h == 1 && out_subblock_h == 1 && (out_subblock_w == 4 || out_subblock_w == 5)));
-#endif
 
     uint32_t bias_block_offset = 0;
     constexpr uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
@@ -497,8 +479,7 @@ void kernel_main() {
                         }
 #endif
                         tile_regs_commit();
-                        DataflowBuffer curr_out_dfb =
-                            curr_matmul_out_cb == matmul_partials_cb ? dfb_matmul_partials : dfb_mm_out;
+                        auto curr_out_dfb = curr_matmul_out_cb == matmul_partials_cb ? dfb_matmul_partials : dfb_mm_out;
                         curr_out_dfb.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
 
@@ -507,15 +488,7 @@ void kernel_main() {
                         }
 
                         uint32_t start_dst_index = 0;
-#ifdef ARCH_BLACKHOLE
-                        if constexpr (block_pack_subblocks) {
-                            pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
-                        } else {
-                            pack_block_per_tile(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
-                        }
-#else
                         pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
-#endif
 
                         tile_regs_release();
                         curr_out_dfb.push_back(out_subblock_num_tiles);
@@ -582,19 +555,9 @@ void kernel_main() {
 
                         dfb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-                        if constexpr (block_pack_subblocks) {
-                            pack_block_mop(0, untilize_mode_out_cb_id, out_subblock_num_tiles);
-                        } else {
-                            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                                pack_tile(i, untilize_mode_out_cb_id);
-                            }
-                        }
-#else
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_cb_id);
                         }
-#endif
                         tile_regs_release();
                         dfb_untilize_mode_out.push_back(out_subblock_num_tiles);
 

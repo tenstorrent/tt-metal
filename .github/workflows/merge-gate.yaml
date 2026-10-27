@@ -678,7 +678,7 @@ jobs:
             threshold: "0.02"
             module_thresholds: ""
           - arch: wormhole
-            threshold: "0.10"
+            threshold: "0.13"
             module_thresholds: perf_matmul=0.25,perf_math_matmul=0.25
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:

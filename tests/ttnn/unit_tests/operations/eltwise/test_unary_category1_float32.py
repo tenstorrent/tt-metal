@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import (
     assert_equal,
     assert_with_ulp,
@@ -149,14 +149,12 @@ def test_spl_value_check_ops(device, ttnn_op):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Logical NOT (-0.0) returns False while golden returns True
+# Logical NOT
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_logical_not_ops(device):
     input_tensor = generate_float32_bits(include_spl_values=True)
-    # Replace -0.0 with 0.0
-    input_tensor = torch.where(input_tensor == -0.0, torch.zeros_like(input_tensor), input_tensor)
     ttnn_op = ttnn.logical_not
     tt_in = to_float32_tt_tensor(input_tensor, device)
 

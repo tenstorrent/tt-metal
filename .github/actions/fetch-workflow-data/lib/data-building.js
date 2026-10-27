@@ -107,7 +107,7 @@ async function updateLastSuccessTimestamps(grouped, branch, octokit, context, ca
         }
 
         // Find first successful run on this page
-        const successRun = data.workflow_runs.find(r => r.conclusion === 'success');
+        const successRun = data.workflow_runs.find(r => r.conclusion === 'success' && fetching.isBaseRepoRun(r));
         if (successRun) {
           lastSuccessTimestamps.set(name, {
             timestamp: successRun.created_at,

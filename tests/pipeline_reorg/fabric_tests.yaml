@@ -157,7 +157,6 @@
   cmd: |
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DUDMModeFixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric2DUDMModeFixture.*"
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*ChannelTrimming*"
   skus:
     bh_loudbox:
       timeout: 15
@@ -168,6 +167,23 @@
   team: scaleout
   budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
+
+# Every channel trimming gtest (fixtures and scenario suites are all named ChannelTrimming*), with both ERISCs and
+# with a single ERISC. Trimming mode decides which channels each ERISC services.
+- name: BH fabric channel trimming tests
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*ChannelTrimming*"
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*ChannelTrimming*"
+  skus:
+    bh_loudbox:
+      timeout: 10
+    bh_p300:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  team: scaleout
+  budget_type: unit
+  owner_id: U0BRTUH9VE0 # Amogh Rajagopal
 
 - name: BH ttnn UDM unit tests
   cmd: ./build/test/ttnn/unit_tests_ttnn_udm

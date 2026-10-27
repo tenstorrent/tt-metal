@@ -112,7 +112,14 @@ void bind_fabric_mux(nb::module_& experimental_module) {
             )doc")
         .def(
             "kernel_runtime_args",
-            &tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>,
+            nb::overload_cast<
+                const tt::tt_fabric::FabricNodeId&,
+                const tt::tt_fabric::FabricNodeId&,
+                uint32_t,
+                tt::tt_metal::ProgramDescriptor&,
+                const tt::tt_metal::CoreCoord&>(
+                &tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>,
+                nb::const_),
             nb::kw_only(),
             nb::arg("source_node_id"),
             nb::arg("destination_node_id"),

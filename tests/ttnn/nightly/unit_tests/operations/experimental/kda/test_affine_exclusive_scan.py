@@ -11,7 +11,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -53,12 +53,13 @@ _UNIT_CASE = _ProductionCase(
     expected_duration_ns=8250,
 )
 
-# Kimi-K3 production layouts. References are pooled medians from two independent
-# three-sample Blackhole runs after scoping synchronization to each independent head.
+# Kimi-K3 production layouts. References are medians of the CI bh_p150b_civ2_viommu runner (four main nightlies,
+# plus one PR run for sp1-tp8 and sp2-tp4); the earlier development-machine references sat at the top of the
+# runner's spread, so sp2-tp4 fell below its band on an ordinary run (72,849 ns).
 _PRODUCTION_CASES = (
-    _ProductionCase("sp1-tp8", 12, 8, 128, 128, 100847),
-    _ProductionCase("sp2-tp4", 24, 4, 128, 128, 76819),
-    _ProductionCase("sp4-tp2", 48, 2, 128, 128, 66771),
+    _ProductionCase("sp1-tp8", 12, 8, 128, 128, 99597),
+    _ProductionCase("sp2-tp4", 24, 4, 128, 128, 74808),
+    _ProductionCase("sp4-tp2", 48, 2, 128, 128, 65831),
 )
 
 

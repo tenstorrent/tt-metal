@@ -123,9 +123,9 @@ void kernel_main() {
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
-    compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in_id);
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
+    compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in_id);
     constexpr std::uint32_t dfb_in_rm_id = dfb_repack_id;
     compute_kernel_lib::tilize<
         per_core_N,
@@ -135,14 +135,16 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
-    constexpr std::uint32_t dfb_in_rm_id = dfb_in0_id;
+    constexpr std::uint32_t dfb_in_rm_id = welford_fp32_alias ? dfb_in0_welford_id : dfb_in0_id;
+    compute_kernel_hw_startup(dfb_in_rm_id, dfb_in_rm_id, dfb_in_id);
     compute_kernel_lib::tilize<
         per_core_N,
         dfb_in_rm_id,
         dfb_in_id,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
+        compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(per_core_M);
 #endif  // READER_REPACK
     dfb_in.wait_front(per_core_MN);
     if constexpr (welford_fp32_alias) {
@@ -432,9 +434,11 @@ void kernel_main() {
                         constexpr std::uint32_t inv_std_dst = 2;
                         tile_regs_acquire();
 #ifdef TILIZE_IN
+                        reconfig_data_format_srca(dfb_in_welford_id);
                         copy_init(dfb_in_welford_id);
                         copy_tile(dfb_in_welford_id, tile_id, data_dst);
 #else
+                        reconfig_data_format_srca(dfb_in0_welford_id);
                         copy_init(dfb_in0_welford_id);
                         copy_tile(dfb_in0_welford_id, tile_id, data_dst);
 #endif

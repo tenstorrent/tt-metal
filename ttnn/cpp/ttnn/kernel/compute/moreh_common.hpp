@@ -37,7 +37,7 @@ inline constexpr auto moreh_data_format_reconfig = ckl::DataFormatReconfig::Enab
 inline constexpr auto moreh_data_format_reconfig = ckl::DataFormatReconfig::Disabled;
 #endif
 
-template <uint32_t Dfb>
+template <const auto& Dfb>
 inline constexpr auto moreh_input = ckl::input(
     Dfb,
     ckl::WaitPolicy::None,
@@ -46,60 +46,75 @@ inline constexpr auto moreh_input = ckl::input(
     moreh_data_format_reconfig,
     ckl::TileAddressing::Offset);
 
-template <uint32_t Dfb>
+template <const auto& Dfb>
 inline constexpr auto moreh_output =
     ckl::output(Dfb, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, moreh_data_format_reconfig);
 
-ALWI void pack_tile_with_dt(uint32_t ifrom_dst, DataflowBuffer icb) {
+// The DataflowBuffer type the chain elements built from Dfb's spec take. A token puts the same access
+// patterns on its input and output specs, so this one alias serves both; a uint32_t id gives UNKNOWN
+// patterns. On WH/BH it is plain DataflowBuffer.
+template <const auto& Dfb>
+using moreh_dfb_t =
+    DataflowBufferFor<moreh_input<Dfb>.producer_access_pattern, moreh_input<Dfb>.consumer_access_pattern>;
+
+template <typename IDFB>
+ALWI void pack_tile_with_dt(uint32_t ifrom_dst, IDFB icb) {
 #if defined FP32_DEST_ACC_EN
     pack_reconfig_data_format(icb.get_id());
 #endif
     pack_tile(ifrom_dst, icb.get_id());
 }
 
-ALWI void copy_tile_init_with_dt(DataflowBuffer icb, uint32_t transpose = 0) {
+template <typename IDFB>
+ALWI void copy_tile_init_with_dt(IDFB icb, uint32_t transpose = 0) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format_srca(icb.get_id());
 #endif
     copy_init(icb.get_id(), transpose);
 }
 
-ALWI void add_tiles_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+template <typename DFB0, typename DFB1>
+ALWI void add_tiles_init_with_dt(DFB0 icb0, DFB1 icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
     add_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void add_bcast_rows_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+template <typename DFB0, typename DFB1>
+ALWI void add_bcast_rows_init_with_dt(DFB0 icb0, DFB1 icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
     add_bcast_rows_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void add_bcast_cols_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+template <typename DFB0, typename DFB1>
+ALWI void add_bcast_cols_init_with_dt(DFB0 icb0, DFB1 icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
     add_bcast_cols_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void add_bcast_scalar_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+template <typename DFB0, typename DFB1>
+ALWI void add_bcast_scalar_init_with_dt(DFB0 icb0, DFB1 icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
     add_bcast_scalar_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void sub_tiles_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+template <typename DFB0, typename DFB1>
+ALWI void sub_tiles_init_with_dt(DFB0 icb0, DFB1 icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
     sub_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void sub_bcast_rows_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+template <typename DFB0, typename DFB1>
+ALWI void sub_bcast_rows_init_with_dt(DFB0 icb0, DFB1 icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -108,42 +123,48 @@ ALWI void sub_bcast_rows_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) 
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0.get_id(), icb1.get_id())));
 }
 
-ALWI void sub_bcast_cols_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+template <typename DFB0, typename DFB1>
+ALWI void sub_bcast_cols_init_with_dt(DFB0 icb0, DFB1 icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
     sub_bcast_cols_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void sub_bcast_scalar_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+template <typename DFB0, typename DFB1>
+ALWI void sub_bcast_scalar_init_with_dt(DFB0 icb0, DFB1 icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
     sub_bcast_scalar_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void mul_tiles_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+template <typename DFB0, typename DFB1>
+ALWI void mul_tiles_init_with_dt(DFB0 icb0, DFB1 icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
     mul_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void mul_bcast_rows_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+template <typename DFB0, typename DFB1>
+ALWI void mul_bcast_rows_init_with_dt(DFB0 icb0, DFB1 icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
     mul_bcast_rows_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void mul_bcast_cols_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+template <typename DFB0, typename DFB1>
+ALWI void mul_bcast_cols_init_with_dt(DFB0 icb0, DFB1 icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
     mul_bcast_cols_init(icb0.get_id(), icb1.get_id());
 }
 
-ALWI void mul_bcast_scalar_init_with_dt(DataflowBuffer icb0, DataflowBuffer icb1) {
+template <typename DFB0, typename DFB1>
+ALWI void mul_bcast_scalar_init_with_dt(DFB0 icb0, DFB1 icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -161,11 +182,11 @@ public:
     }
 };
 
-template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
+template <const auto& Dfb0, const auto& Dfb1, const auto& DfbOut>
 ALWI void mul_tiles_to_dfb(
-    DataflowBuffer& dfb0,
-    DataflowBuffer& dfb1,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<Dfb0>& dfb0,
+    moreh_dfb_t<Dfb1>& dfb1,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile0 = 0,
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
@@ -186,11 +207,11 @@ ALWI void mul_tiles_to_dfb(
     }
 }
 
-template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
+template <const auto& Dfb0, const auto& Dfb1, const auto& DfbOut>
 ALWI void mul_tiles_and_negative_to_dfb(
-    DataflowBuffer& dfb0,
-    DataflowBuffer& dfb1,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<Dfb0>& dfb0,
+    moreh_dfb_t<Dfb1>& dfb1,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile0 = 0,
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
@@ -212,12 +233,12 @@ ALWI void mul_tiles_and_negative_to_dfb(
     }
 }
 
-template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbMask, uint32_t DfbOut>
+template <const auto& Dfb0, const auto& Dfb1, const auto& DfbMask, const auto& DfbOut>
 ALWI void mul_tiles_and_mask_tile_to_dfb(
-    DataflowBuffer& dfb0,
-    DataflowBuffer& dfb1,
-    DataflowBuffer& dfb_mask,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<Dfb0>& dfb0,
+    moreh_dfb_t<Dfb1>& dfb1,
+    moreh_dfb_t<DfbMask>& dfb_mask,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile0 = 0,
     uint32_t itile1 = 0,
     uint32_t mtile = 0,
@@ -246,11 +267,11 @@ ALWI void mul_tiles_and_mask_tile_to_dfb(
     }
 }
 
-template <ckl::BroadcastDim Bcast, uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
+template <ckl::BroadcastDim Bcast, const auto& Dfb0, const auto& Dfb1, const auto& DfbOut>
 ALWI void mul_tiles_bcast_to_dfb(
-    DataflowBuffer& dfb0,
-    DataflowBuffer& dfb1,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<Dfb0>& dfb0,
+    moreh_dfb_t<Dfb1>& dfb1,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile0 = 0,
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
@@ -272,11 +293,11 @@ ALWI void mul_tiles_bcast_to_dfb(
     }
 }
 
-template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
+template <const auto& Dfb0, const auto& Dfb1, const auto& DfbOut>
 ALWI void mul_tiles_bcast_rows_to_dfb(
-    DataflowBuffer& dfb0,
-    DataflowBuffer& dfb1,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<Dfb0>& dfb0,
+    moreh_dfb_t<Dfb1>& dfb1,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile0 = 0,
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
@@ -284,11 +305,11 @@ ALWI void mul_tiles_bcast_rows_to_dfb(
     mul_tiles_bcast_to_dfb<ckl::BroadcastDim::Row, Dfb0, Dfb1, DfbOut>(dfb0, dfb1, dfb_out, itile0, itile1, pop0, pop1);
 }
 
-template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
+template <const auto& Dfb0, const auto& Dfb1, const auto& DfbOut>
 ALWI void mul_tiles_bcast_cols_to_dfb(
-    DataflowBuffer& dfb0,
-    DataflowBuffer& dfb1,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<Dfb0>& dfb0,
+    moreh_dfb_t<Dfb1>& dfb1,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile0 = 0,
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
@@ -296,8 +317,9 @@ ALWI void mul_tiles_bcast_cols_to_dfb(
     mul_tiles_bcast_to_dfb<ckl::BroadcastDim::Col, Dfb0, Dfb1, DfbOut>(dfb0, dfb1, dfb_out, itile0, itile1, pop0, pop1);
 }
 
-template <uint32_t DfbIn, uint32_t DfbOut>
-ALWI void copy_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+template <const auto& DfbIn, const auto& DfbOut>
+ALWI void copy_tile_to_dfb(
+    moreh_dfb_t<DfbIn>& dfb_in, moreh_dfb_t<DfbOut>& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
     dfb_in.wait_front(itile + 1);
 
     ckl::eltwise_chain(
@@ -310,8 +332,10 @@ ALWI void copy_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint
     }
 }
 
-template <uint32_t DfbIn, uint32_t DfbOut>
-ALWI void sign_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
+template <const auto& DfbIn, const auto& DfbOut>
+ALWI void sign_tile_to_dfb(
+    moreh_dfb_t<DfbIn>& dfb_in, moreh_dfb_t<DfbOut>& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
     dfb_in.wait_front(itile + 1);
 
     ckl::eltwise_chain(
@@ -324,12 +348,13 @@ ALWI void sign_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint
         dfb_in.pop_front(pop);
     }
 }
+#endif  // !ARCH_QUASAR
 
-template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
+template <const auto& Dfb0, const auto& Dfb1, const auto& DfbOut>
 ALWI void add_tiles_to_dfb(
-    DataflowBuffer& dfb0,
-    DataflowBuffer& dfb1,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<Dfb0>& dfb0,
+    moreh_dfb_t<Dfb1>& dfb1,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile0 = 0,
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
@@ -350,11 +375,11 @@ ALWI void add_tiles_to_dfb(
     }
 }
 
-template <uint32_t DfbIn, uint32_t DfbMask, uint32_t DfbOut>
+template <const auto& DfbIn, const auto& DfbMask, const auto& DfbOut>
 ALWI void mask_tile_to_dfb(
-    DataflowBuffer& dfb_in,
-    DataflowBuffer& dfb_mask,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<DfbIn>& dfb_in,
+    moreh_dfb_t<DfbMask>& dfb_mask,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile = 0,
     uint32_t mtile = 0,
     uint32_t pop = 1,
@@ -377,11 +402,42 @@ ALWI void mask_tile_to_dfb(
     }
 }
 
-template <ckl::BroadcastDim Bcast, uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
+// Same contract as mask_tile_to_dfb, but the masked lanes are written as +inf instead of 0. A MIN
+// pool must treat padding as +inf, otherwise a zeroed pad wins whenever every real lane of the row
+// is positive (see the softmin shift in moreh_softmax_{h,w}(_large).cpp). Mirrors the MINUS_INF
+// handling of the moreh_norm ord_other kernels; ckl::MaskPosInf is backed by mask_posinf_tile.
+template <const auto& DfbIn, const auto& DfbMask, const auto& DfbOut>
+ALWI void mask_posinf_tile_to_dfb(
+    moreh_dfb_t<DfbIn>& dfb_in,
+    moreh_dfb_t<DfbMask>& dfb_mask,
+    moreh_dfb_t<DfbOut>& dfb_out,
+    uint32_t itile = 0,
+    uint32_t mtile = 0,
+    uint32_t pop = 1,
+    uint32_t popm = 1) {
+    dfb_in.wait_front(itile + 1);
+    dfb_mask.wait_front(mtile + 1);
+
+    ckl::eltwise_chain(
+        ckl::IterationShape::one_tile(),
+        ckl::CopyTile<moreh_input<DfbIn>>{dfb_in, itile},
+        ckl::CopyTile<moreh_input<DfbMask>, ckl::Dst::D1>{dfb_mask, mtile},
+        ckl::MaskPosInf<>{},
+        ckl::PackTile<moreh_output<DfbOut>>{dfb_out});
+
+    if (pop) {
+        dfb_in.pop_front(pop);
+    }
+    if (popm) {
+        dfb_mask.pop_front(popm);
+    }
+}
+
+template <ckl::BroadcastDim Bcast, const auto& Dfb0, const auto& Dfb1, const auto& DfbOut>
 ALWI void sub_tiles_bcast_to_dfb(
-    DataflowBuffer& dfb0,
-    DataflowBuffer& dfb1,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<Dfb0>& dfb0,
+    moreh_dfb_t<Dfb1>& dfb1,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile0 = 0,
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
@@ -403,11 +459,11 @@ ALWI void sub_tiles_bcast_to_dfb(
     }
 }
 
-template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
+template <const auto& Dfb0, const auto& Dfb1, const auto& DfbOut>
 ALWI void sub_tiles_bcast_cols_to_dfb(
-    DataflowBuffer& dfb0,
-    DataflowBuffer& dfb1,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<Dfb0>& dfb0,
+    moreh_dfb_t<Dfb1>& dfb1,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile0 = 0,
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
@@ -415,11 +471,11 @@ ALWI void sub_tiles_bcast_cols_to_dfb(
     sub_tiles_bcast_to_dfb<ckl::BroadcastDim::Col, Dfb0, Dfb1, DfbOut>(dfb0, dfb1, dfb_out, itile0, itile1, pop0, pop1);
 }
 
-template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
+template <const auto& Dfb0, const auto& Dfb1, const auto& DfbOut>
 ALWI void sub_tiles_bcast_rows_to_dfb(
-    DataflowBuffer& dfb0,
-    DataflowBuffer& dfb1,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<Dfb0>& dfb0,
+    moreh_dfb_t<Dfb1>& dfb1,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile0 = 0,
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
@@ -427,11 +483,11 @@ ALWI void sub_tiles_bcast_rows_to_dfb(
     sub_tiles_bcast_to_dfb<ckl::BroadcastDim::Row, Dfb0, Dfb1, DfbOut>(dfb0, dfb1, dfb_out, itile0, itile1, pop0, pop1);
 }
 
-template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
+template <const auto& Dfb0, const auto& Dfb1, const auto& DfbOut>
 ALWI void sub_tiles_to_dfb(
-    DataflowBuffer& dfb0,
-    DataflowBuffer& dfb1,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<Dfb0>& dfb0,
+    moreh_dfb_t<Dfb1>& dfb1,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile0 = 0,
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
@@ -440,8 +496,9 @@ ALWI void sub_tiles_to_dfb(
         dfb0, dfb1, dfb_out, itile0, itile1, pop0, pop1);
 }
 
-template <bool Negative, uint32_t DfbIn, uint32_t DfbOut>
-ALWI void exp_tile_to_dfb_impl(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+template <bool Negative, const auto& DfbIn, const auto& DfbOut>
+ALWI void exp_tile_to_dfb_impl(
+    moreh_dfb_t<DfbIn>& dfb_in, moreh_dfb_t<DfbOut>& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
     dfb_in.wait_front(itile + 1);
 
     if constexpr (Negative) {
@@ -464,21 +521,23 @@ ALWI void exp_tile_to_dfb_impl(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, 
     }
 }
 
-template <uint32_t DfbIn, uint32_t DfbOut>
-ALWI void exp_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+template <const auto& DfbIn, const auto& DfbOut>
+ALWI void exp_tile_to_dfb(
+    moreh_dfb_t<DfbIn>& dfb_in, moreh_dfb_t<DfbOut>& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
     exp_tile_to_dfb_impl<false, DfbIn, DfbOut>(dfb_in, dfb_out, itile, pop);
 }
 
-template <uint32_t DfbIn, uint32_t DfbOut>
-ALWI void rexp_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+template <const auto& DfbIn, const auto& DfbOut>
+ALWI void rexp_tile_to_dfb(
+    moreh_dfb_t<DfbIn>& dfb_in, moreh_dfb_t<DfbOut>& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
     exp_tile_to_dfb_impl<true, DfbIn, DfbOut>(dfb_in, dfb_out, itile, pop);
 }
 
-template <bool Negative, uint32_t DfbIn, uint32_t DfbMask, uint32_t DfbOut>
+template <bool Negative, const auto& DfbIn, const auto& DfbMask, const auto& DfbOut>
 ALWI void exp_tile_and_mask_tile_to_dfb_impl(
-    DataflowBuffer& dfb_in,
-    DataflowBuffer& dfb_mask,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<DfbIn>& dfb_in,
+    moreh_dfb_t<DfbMask>& dfb_mask,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile = 0,
     uint32_t mtile = 0,
     uint32_t pop = 1,
@@ -513,11 +572,11 @@ ALWI void exp_tile_and_mask_tile_to_dfb_impl(
     }
 }
 
-template <uint32_t DfbIn, uint32_t DfbMask, uint32_t DfbOut>
+template <const auto& DfbIn, const auto& DfbMask, const auto& DfbOut>
 ALWI void exp_tile_and_mask_tile_to_dfb(
-    DataflowBuffer& dfb_in,
-    DataflowBuffer& dfb_mask,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<DfbIn>& dfb_in,
+    moreh_dfb_t<DfbMask>& dfb_mask,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile = 0,
     uint32_t mtile = 0,
     uint32_t pop = 1,
@@ -526,11 +585,11 @@ ALWI void exp_tile_and_mask_tile_to_dfb(
         dfb_in, dfb_mask, dfb_out, itile, mtile, pop, popm);
 }
 
-template <uint32_t DfbIn, uint32_t DfbMask, uint32_t DfbOut>
+template <const auto& DfbIn, const auto& DfbMask, const auto& DfbOut>
 ALWI void rexp_tile_and_mask_tile_to_dfb(
-    DataflowBuffer& dfb_in,
-    DataflowBuffer& dfb_mask,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<DfbIn>& dfb_in,
+    moreh_dfb_t<DfbMask>& dfb_mask,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t itile = 0,
     uint32_t mtile = 0,
     uint32_t pop = 1,
@@ -539,8 +598,9 @@ ALWI void rexp_tile_and_mask_tile_to_dfb(
         dfb_in, dfb_mask, dfb_out, itile, mtile, pop, popm);
 }
 
-template <uint32_t DfbIn, uint32_t DfbOut>
-ALWI void recip_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+template <const auto& DfbIn, const auto& DfbOut>
+ALWI void recip_tile_to_dfb(
+    moreh_dfb_t<DfbIn>& dfb_in, moreh_dfb_t<DfbOut>& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
     dfb_in.wait_front(itile + 1);
 
     ckl::eltwise_chain(
@@ -554,8 +614,10 @@ ALWI void recip_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uin
     }
 }
 
-template <uint32_t DfbIn, uint32_t DfbOut>
-ALWI void log_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
+template <const auto& DfbIn, const auto& DfbOut>
+ALWI void log_tile_to_dfb(
+    moreh_dfb_t<DfbIn>& dfb_in, moreh_dfb_t<DfbOut>& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
     dfb_in.wait_front(itile + 1);
 
     ckl::eltwise_chain(
@@ -568,23 +630,25 @@ ALWI void log_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint3
         dfb_in.pop_front(pop);
     }
 }
+#endif  // !ARCH_QUASAR
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <
     bool AbsX,
     bool RecipFinal,
-    uint32_t DfbX,
-    uint32_t DfbXpow,
-    uint32_t DfbLogX,
-    uint32_t DfbDecimal,
-    uint32_t DfbExpLogXMulDecimal,
-    uint32_t DfbOut>
+    const auto& DfbX,
+    const auto& DfbXpow,
+    const auto& DfbLogX,
+    const auto& DfbDecimal,
+    const auto& DfbExpLogXMulDecimal,
+    const auto& DfbOut>
 ALWI void power_tile_to_dfb_impl(
-    DataflowBuffer& dfb_x,
-    DataflowBuffer& dfb_xpow,
-    DataflowBuffer& dfb_logx,
-    DataflowBuffer& dfb_decimal,
-    DataflowBuffer& dfb_exp_logx_mul_decimal,
-    DataflowBuffer& dfb_out,
+    moreh_dfb_t<DfbX>& dfb_x,
+    moreh_dfb_t<DfbXpow>& dfb_xpow,
+    moreh_dfb_t<DfbLogX>& dfb_logx,
+    moreh_dfb_t<DfbDecimal>& dfb_decimal,
+    moreh_dfb_t<DfbExpLogXMulDecimal>& dfb_exp_logx_mul_decimal,
+    moreh_dfb_t<DfbOut>& dfb_out,
     uint32_t p,
     bool p_is_negative) {
     // x^p
@@ -629,75 +693,77 @@ ALWI void power_tile_to_dfb_impl(
         ckl::Optional<RecipFinal, ckl::Recip<>>{},
         ckl::PackTile<moreh_output<DfbOut>>{dfb_out});
 }
+#endif  // !ARCH_QUASAR
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <
-    uint32_t DfbX,
-    uint32_t DfbXpow,
-    uint32_t DfbLogX,
-    uint32_t DfbDecimal,
-    uint32_t DfbExpLogXMulDecimal,
-    uint32_t DfbCorrectXpow>
+    const auto& DfbX,
+    const auto& DfbXpow,
+    const auto& DfbLogX,
+    const auto& DfbDecimal,
+    const auto& DfbExpLogXMulDecimal,
+    const auto& DfbCorrectXpow>
 ALWI void power_tile_to_dfb(
-    DataflowBuffer& dfb_x,
-    DataflowBuffer& dfb_xpow,
-    DataflowBuffer& dfb_logx,
-    DataflowBuffer& dfb_decimal,
-    DataflowBuffer& dfb_exp_logx_mul_decimal,
-    DataflowBuffer& dfb_correct_xpow,
+    moreh_dfb_t<DfbX>& dfb_x,
+    moreh_dfb_t<DfbXpow>& dfb_xpow,
+    moreh_dfb_t<DfbLogX>& dfb_logx,
+    moreh_dfb_t<DfbDecimal>& dfb_decimal,
+    moreh_dfb_t<DfbExpLogXMulDecimal>& dfb_exp_logx_mul_decimal,
+    moreh_dfb_t<DfbCorrectXpow>& dfb_correct_xpow,
     uint32_t p,
     bool p_is_negative) {
     power_tile_to_dfb_impl<false, false, DfbX, DfbXpow, DfbLogX, DfbDecimal, DfbExpLogXMulDecimal, DfbCorrectXpow>(
         dfb_x, dfb_xpow, dfb_logx, dfb_decimal, dfb_exp_logx_mul_decimal, dfb_correct_xpow, p, p_is_negative);
 }
+#endif  // !ARCH_QUASAR
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <
-    uint32_t DfbX,
-    uint32_t DfbXpow,
-    uint32_t DfbLogX,
-    uint32_t DfbDecimal,
-    uint32_t DfbExpLogXMulDecimal,
-    uint32_t DfbCorrectXpow>
+    const auto& DfbX,
+    const auto& DfbXpow,
+    const auto& DfbLogX,
+    const auto& DfbDecimal,
+    const auto& DfbExpLogXMulDecimal,
+    const auto& DfbCorrectXpow>
 ALWI void power_tile_with_abs_x_to_dfb(
-    DataflowBuffer& dfb_x,
-    DataflowBuffer& dfb_xpow,
-    DataflowBuffer& dfb_logx,
-    DataflowBuffer& dfb_decimal,
-    DataflowBuffer& dfb_exp_logx_mul_decimal,
-    DataflowBuffer& dfb_correct_xpow,
+    moreh_dfb_t<DfbX>& dfb_x,
+    moreh_dfb_t<DfbXpow>& dfb_xpow,
+    moreh_dfb_t<DfbLogX>& dfb_logx,
+    moreh_dfb_t<DfbDecimal>& dfb_decimal,
+    moreh_dfb_t<DfbExpLogXMulDecimal>& dfb_exp_logx_mul_decimal,
+    moreh_dfb_t<DfbCorrectXpow>& dfb_correct_xpow,
     uint32_t p,
     bool p_is_negative) {
     power_tile_to_dfb_impl<true, false, DfbX, DfbXpow, DfbLogX, DfbDecimal, DfbExpLogXMulDecimal, DfbCorrectXpow>(
         dfb_x, dfb_xpow, dfb_logx, dfb_decimal, dfb_exp_logx_mul_decimal, dfb_correct_xpow, p, p_is_negative);
 }
+#endif  // !ARCH_QUASAR
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <
-    uint32_t DfbX,
-    uint32_t DfbXpow,
-    uint32_t DfbLogX,
-    uint32_t DfbDecimal,
-    uint32_t DfbExpLogXMulDecimal,
-    uint32_t DfbRecipXpow>
+    const auto& DfbX,
+    const auto& DfbXpow,
+    const auto& DfbLogX,
+    const auto& DfbDecimal,
+    const auto& DfbExpLogXMulDecimal,
+    const auto& DfbRecipXpow>
 ALWI void power_and_recip_tile_to_dfb(
-    DataflowBuffer& dfb_x,
-    DataflowBuffer& dfb_xpow,
-    DataflowBuffer& dfb_logx,
-    DataflowBuffer& dfb_decimal,
-    DataflowBuffer& dfb_exp_logx_mul_decimal,
-    DataflowBuffer& dfb_recip_xpow,
+    moreh_dfb_t<DfbX>& dfb_x,
+    moreh_dfb_t<DfbXpow>& dfb_xpow,
+    moreh_dfb_t<DfbLogX>& dfb_logx,
+    moreh_dfb_t<DfbDecimal>& dfb_decimal,
+    moreh_dfb_t<DfbExpLogXMulDecimal>& dfb_exp_logx_mul_decimal,
+    moreh_dfb_t<DfbRecipXpow>& dfb_recip_xpow,
     uint32_t p,
     bool p_is_negative) {
     power_tile_to_dfb_impl<false, true, DfbX, DfbXpow, DfbLogX, DfbDecimal, DfbExpLogXMulDecimal, DfbRecipXpow>(
         dfb_x, dfb_xpow, dfb_logx, dfb_decimal, dfb_exp_logx_mul_decimal, dfb_recip_xpow, p, p_is_negative);
 }
+#endif  // !ARCH_QUASAR
 
+template <typename DFB0, typename DFB1, typename ODFB>
 ALWI void mul_tiles_to_cb(
-    DataflowBuffer icb0,
-    DataflowBuffer icb1,
-    DataflowBuffer ocb,
-    uint32_t itile0 = 0,
-    uint32_t itile1 = 0,
-    uint32_t pop0 = 1,
-    uint32_t pop1 = 1) {
+    DFB0 icb0, DFB1 icb1, ODFB ocb, uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
 
@@ -724,7 +790,8 @@ ALWI void mul_tiles_to_cb(
     ocb.push_back(onetile);
 }
 
-ALWI void copy_tile_to_cb(DataflowBuffer icb, DataflowBuffer ocb, uint32_t itile = 0, uint32_t pop = 1) {
+template <typename IDFB, typename ODFB>
+ALWI void copy_tile_to_cb(IDFB icb, ODFB ocb, uint32_t itile = 0, uint32_t pop = 1) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
 
@@ -746,14 +813,9 @@ ALWI void copy_tile_to_cb(DataflowBuffer icb, DataflowBuffer ocb, uint32_t itile
     ocb.push_back(onetile);
 }
 
+template <typename DFB0, typename DFB1, typename ODFB>
 ALWI void add_tiles_to_cb(
-    DataflowBuffer icb0,
-    DataflowBuffer icb1,
-    DataflowBuffer ocb,
-    uint32_t itile0 = 0,
-    uint32_t itile1 = 0,
-    uint32_t pop0 = 1,
-    uint32_t pop1 = 1) {
+    DFB0 icb0, DFB1 icb1, ODFB ocb, uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
 
@@ -780,14 +842,9 @@ ALWI void add_tiles_to_cb(
     ocb.push_back(onetile);
 }
 
+template <typename DFB0, typename DFB1, typename ODFB>
 ALWI void sub_tiles_to_cb(
-    DataflowBuffer icb0,
-    DataflowBuffer icb1,
-    DataflowBuffer ocb,
-    uint32_t itile0 = 0,
-    uint32_t itile1 = 0,
-    uint32_t pop0 = 1,
-    uint32_t pop1 = 1) {
+    DFB0 icb0, DFB1 icb1, ODFB ocb, uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
 
@@ -815,13 +872,20 @@ ALWI void sub_tiles_to_cb(
 }
 
 // TODO(seunghwan100): If p is 2 and decimal is 0, we can use sqrt_tile.
+template <
+    typename DFBX,
+    typename DFBXPow,
+    typename DFBLogX,
+    typename DFBDecimal,
+    typename DFBExpLxmd,
+    typename DFBCorrectXPow>
 ALWI void power_tile_to_cb(
-    DataflowBuffer cb_x,
-    DataflowBuffer cb_xpow,
-    DataflowBuffer cb_logx,
-    DataflowBuffer cb_decimal,
-    DataflowBuffer cb_exp_lxmd,
-    DataflowBuffer cb_correct_xpow,
+    DFBX cb_x,
+    DFBXPow cb_xpow,
+    DFBLogX cb_logx,
+    DFBDecimal cb_decimal,
+    DFBExpLxmd cb_exp_lxmd,
+    DFBCorrectXPow cb_correct_xpow,
     uint32_t p,
     bool p_is_negative) {
     constexpr uint32_t onetile = 1;
@@ -907,7 +971,8 @@ ALWI void power_tile_to_cb(
     cb_correct_xpow.push_back(onetile);
 }
 
-ALWI void copy_tile_to_dst(DataflowBuffer icb, uint32_t itile = 0, uint32_t dst = 0, bool cb_wait_and_pop = true) {
+template <typename IDFB>
+ALWI void copy_tile_to_dst(IDFB icb, uint32_t itile = 0, uint32_t dst = 0, bool cb_wait_and_pop = true) {
     constexpr uint32_t onetile = 1;
     if (cb_wait_and_pop) {
         icb.wait_front(onetile);
@@ -920,7 +985,8 @@ ALWI void copy_tile_to_dst(DataflowBuffer icb, uint32_t itile = 0, uint32_t dst 
     }
 }
 
-ALWI void pack_tile_from_dst(DataflowBuffer ocb, uint32_t dst = 0) {
+template <typename ODFB>
+ALWI void pack_tile_from_dst(ODFB ocb, uint32_t dst = 0) {
     constexpr uint32_t onetile = 1;
     ocb.reserve_back(onetile);
     pack_reconfig_data_format(ocb.get_id());

@@ -7,7 +7,7 @@ import os
 import torch
 import pytest
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 
 @pytest.mark.parametrize(

@@ -39,26 +39,12 @@ class KernelData:
 
 
 @dataclass
-class MeshCoordinate:
-    coordinates: list[int]
-
-
-@dataclass
 class MeshDeviceData:
     meshId: int
     devices: list[int]
     shape: list[int]
     parentMeshId: int | None = None
     initialized: bool = False
-
-    def get_device_id(self, coordinate: MeshCoordinate) -> int:
-        assert len(coordinate.coordinates) == len(
-            self.shape
-        ), f"Coordinate {coordinate.coordinates} does not match mesh shape {self.shape}"
-        linear_index = 0
-        for dim in range(len(coordinate.coordinates)):
-            linear_index = linear_index + coordinate.coordinates[dim] * (1 if dim == 0 else self.shape[dim - 1])
-        return self.devices[linear_index]
 
 
 BinaryStatus: TypeAlias = Literal["notSent", "inFlight", "committed"]
@@ -71,41 +57,12 @@ class DeviceBinaryStatus:
 
 
 @dataclass
-class MeshWorkloadProgramData:
-    programId: int
-    coordinates: list[MeshCoordinate]
-
-
-@dataclass
-class MeshDeviceBinaryStatus:
-    meshId: int
-    status: BinaryStatus
-
-
-@dataclass
 class MeshWorkloadRuntimeEntry:
     workloadId: int
     runtimeId: int
     operationName: str = ""
     operationParameters: str = ""
     traceId: int = 0xFFFFFFFF
-
-
-@dataclass
-class MeshWorkloadData:
-    meshWorkloadId: int
-    programs: list[MeshWorkloadProgramData]
-    binary_status_per_mesh_device: dict[int, BinaryStatus]
-
-    @cached_property
-    def binaryStatusPerMeshDevice(self) -> list[MeshDeviceBinaryStatus]:
-        return [
-            MeshDeviceBinaryStatus(meshId=mesh_id, status=status)
-            for mesh_id, status in self.binary_status_per_mesh_device.items()
-        ]
-
-    def get_device_binary_status(self, mesh_id: int) -> BinaryStatus:
-        return self.binary_status_per_mesh_device.get(mesh_id, "notSent")
 
 
 @dataclass
@@ -329,94 +286,11 @@ def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, Mes
     return mesh_devices
 
 
-def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, MeshWorkloadData]:
-    yaml_path = os.path.join(log_directory, "mesh_workloads_log.yaml")
-    data = read_yaml(yaml_path)
-    startup: StartupData | None = None
-    if verbose:
-        print("Mesh workloads log:")
-        startup = get_startup_data(log_directory)
-
-    mesh_workloads: dict[int, MeshWorkloadData] = {}
-    for entry in data:
-        if "mesh_workload_created" in entry:
-            info = entry["mesh_workload_created"]
-            mesh_workload_id = int(info.get("mesh_workload_id"))
-            mesh_workloads[mesh_workload_id] = MeshWorkloadData(
-                meshWorkloadId=mesh_workload_id,
-                programs=[],
-                binary_status_per_mesh_device={},
-            )
-            if startup is not None:
-                startup.print_log(int(info.get("timestamp_ns")), f"Mesh workload {mesh_workload_id} created")
-        elif "mesh_workload_destroyed" in entry:
-            info = entry["mesh_workload_destroyed"]
-            mesh_workload_id = int(info.get("mesh_workload_id"))
-            if mesh_workload_id in mesh_workloads:
-                del mesh_workloads[mesh_workload_id]
-            if startup is not None:
-                startup.print_log(int(info.get("timestamp_ns")), f"Mesh workload {mesh_workload_id} destroyed")
-        elif "mesh_workload_add_program" in entry:
-            info = entry["mesh_workload_add_program"]
-            mesh_workload_id = int(info.get("mesh_workload_id"))
-            program_id = int(info.get("program_id"))
-            coordinates = [
-                MeshCoordinate(coordinates=[int(c) for c in coord]) for coord in info.get("coordinates", [[]])
-            ]
-            if mesh_workload_id in mesh_workloads:
-                mesh_workloads[mesh_workload_id].programs.append(
-                    MeshWorkloadProgramData(programId=program_id, coordinates=coordinates)
-                )
-            if startup is not None:
-                startup.print_log(
-                    int(info.get("timestamp_ns")),
-                    f"Program {program_id} added to mesh workload {mesh_workload_id} with coordinates {coordinates}",
-                )
-        elif "mesh_workload_set_program_binary_status" in entry:
-            info = entry["mesh_workload_set_program_binary_status"]
-            mesh_workload_id = int(info.get("mesh_workload_id"))
-            mesh_id = int(info.get("mesh_id"))
-            if mesh_workload_id in mesh_workloads:
-                mesh_workloads[mesh_workload_id].binary_status_per_mesh_device[mesh_id] = info.get("status")
-            if startup is not None:
-                startup.print_log(
-                    int(info.get("timestamp_ns")),
-                    f"Mesh workload {mesh_workload_id} binary status changed to {info.get('status')}",
-                )
-    if verbose:
-        print()
-    return mesh_workloads
-
-
-def update_programs_with_mesh_workloads(
-    programs: dict[int, ProgramData],
-    mesh_workloads: list[MeshWorkloadData],
-    mesh_devices: list[MeshDeviceData],
-):
-    mesh_devices_map = {device.meshId: device for device in mesh_devices}
-    for mesh_workload in mesh_workloads:
-        for mesh_id, binary_status in mesh_workload.binary_status_per_mesh_device.items():
-            # Values originate from untyped yaml, so the "NotSet" sentinel is possible at runtime
-            # even though it is outside the declared BinaryStatus literal.
-            if str(binary_status) != "NotSet":
-                for program_data in mesh_workload.programs:
-                    program_id = program_data.programId
-                    if program_id not in programs:
-                        continue  # Skip if the program is not found
-                    program = programs[program_id]
-                    for coordinate in program_data.coordinates:
-                        device_id = mesh_devices_map[mesh_id].get_device_id(coordinate)
-                        program.binary_status_per_device[device_id] = binary_status
-
-
-def get_devices_in_use(programs: list[ProgramData]) -> set[int]:
-    used_devices = set()
-    for program in programs:
-        # Only include devices with status "Committed"
-        committed_devices = {
-            device_id for device_id, status in program.binary_status_per_device.items() if status == "Committed"
-        }
-        used_devices.update(committed_devices)
+def get_devices_in_use(mesh_devices: list[MeshDeviceData]) -> set[int]:
+    # Mesh devices that were not destroyed own their devices, mirroring the live RPC (device manager's active devices).
+    used_devices: set[int] = set()
+    for mesh_device in mesh_devices:
+        used_devices.update(mesh_device.devices)
     return used_devices
 
 
@@ -442,13 +316,6 @@ class InspectorLogsData:
 
     def getMeshDevices(self):
         return self.mesh_devices
-
-    @cached_property
-    def mesh_workloads(self):
-        GetMeshWorkloadResults = namedtuple("GetMeshWorkloadResults", ["meshWorkloads", "runtimeIds"])
-        return GetMeshWorkloadResults(
-            meshWorkloads=list(get_mesh_workloads(self.log_directory).values()), runtimeIds=self._get_runtime_entries()
-        )
 
     def _get_runtime_entries(self) -> list[MeshWorkloadRuntimeEntry]:
         """Parse runtime entries from logs"""
@@ -487,9 +354,6 @@ class InspectorLogsData:
                     entry_map[(wid, rid)] = re
         return runtime_entries
 
-    def getMeshWorkloads(self):
-        return self.mesh_workloads
-
     def getMeshWorkloadRuntimeEntries(self):
         GetMeshWorkloadRuntimeEntriesResults = namedtuple("GetMeshWorkloadRuntimeEntriesResults", ["runtimeEntries"])
         return GetMeshWorkloadRuntimeEntriesResults(runtimeEntries=self._get_runtime_entries())
@@ -502,7 +366,6 @@ class InspectorLogsData:
     def programs(self):
         GetProgramsResults = namedtuple("GetProgramsResults", ["programs"])
         programs = get_programs(self.log_directory)
-        update_programs_with_mesh_workloads(programs, self.mesh_workloads.meshWorkloads, self.mesh_devices.meshDevices)
         for program in programs.values():
             program.kernels = [self.kernels[kid] for kid in program.watcherKernelIds if kid in self.kernels]
         return GetProgramsResults(programs=list(programs.values()))
@@ -513,7 +376,7 @@ class InspectorLogsData:
     @cached_property
     def devices_in_use(self):
         GetDevicesInUseResults = namedtuple("GetDevicesInUseResults", ["metalDeviceIds"])
-        return GetDevicesInUseResults(metalDeviceIds=list(get_devices_in_use(self.getPrograms().programs)))
+        return GetDevicesInUseResults(metalDeviceIds=list(get_devices_in_use(self.mesh_devices.meshDevices)))
 
     def getDevicesInUse(self):
         return self.devices_in_use
@@ -559,25 +422,7 @@ def main():
         print(f"    Shape: {mesh_device.shape}")
     print()
 
-    mesh_workloads = get_mesh_workloads(log_directory, verbose=True)
-    print(f"Mesh Workloads: {len(mesh_workloads)} found {mesh_workloads.keys()}")
-    for mesh_workload in mesh_workloads.values():
-        print(f"  Mesh Workload ID {mesh_workload.meshWorkloadId}")
-        print(f"    Programs:")
-        for workload_program in mesh_workload.programs:
-            print(f"      {workload_program.programId}: {workload_program.coordinates}")
-        print(f"    Binary status per mesh device: {mesh_workload.binary_status_per_mesh_device}")
-    print()
-
-    update_programs_with_mesh_workloads(programs, list(mesh_workloads.values()), list(mesh_devices.values()))
-    print("Programs after updating with mesh workloads:")
-    for program in programs.values():
-        print(f"  Program ID {program.id}, compiled: {program.compiled}")
-        print(f"    Binary status per device: {program.binary_status_per_device}")
-        print(f"    Watcher Kernel IDs: {program.watcherKernelIds}")
-    print()
-
-    devices_in_use = get_devices_in_use(list(programs.values()))
+    devices_in_use = get_devices_in_use(list(mesh_devices.values()))
     print(f"Devices in use: {devices_in_use}")
     print()
 

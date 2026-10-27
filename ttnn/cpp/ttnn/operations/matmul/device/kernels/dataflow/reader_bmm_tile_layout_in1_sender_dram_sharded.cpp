@@ -21,6 +21,7 @@
 // uncached-alias addresses (what the DFB getters hand out on Quasar DM); a LocalTensorAccessor base is the
 // plain (cached) L1 address, so normalise both operands first.
 #include "ttnn/operations/kernel_helper_functions/local_l1_copy.hpp"
+#include "internal/local_mem/address_access.h"
 FORCE_INLINE uint32_t l1_uncached(uint32_t addr) {
     return addr >= MEM_L1_UNCACHED_BASE ? addr : MEM_L1_UNCACHED_BASE + (addr - MEM_L1_BASE);
 }
@@ -34,9 +35,10 @@ void kernel_main() {
         return;
     }
 
-    const uint32_t in1_tensor_addr = TensorAccessor(tensor::in1).get_bank_base_address();
+    // in1 / bias are DRAM-sharded: read by bank (this reader's dram_bank_id) at offsets into each tensor.
+    const auto in1_accessor = TensorAccessor(tensor::in1);
 #ifdef FUSE_BIAS
-    const uint32_t in3_tensor_addr = TensorAccessor(tensor::bias).get_bank_base_address();
+    const auto bias_accessor = TensorAccessor(tensor::bias);
 #endif
     const uint32_t dram_bank_id = get_arg(args::dram_bank_id);
     const uint32_t vc = get_arg(args::vc);
@@ -91,9 +93,9 @@ void kernel_main() {
     uint32_t l1_write_addr_in1;
     uint32_t l1_read_addr_in1 = 0;
 
-    const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+    const BankView dram_bank(in1_accessor);
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = vc});
+        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .offset_bytes = 0}, NocOptVals{.vc = vc});
 
 #ifdef ARCH_GRAYSKULL
     for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -106,7 +108,7 @@ void kernel_main() {
                 dram_bank,
                 CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 in1_page_size,
-                {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
+                {.bank_id = dram_bank_id, .offset_bytes = l1_read_addr_in1},
                 {},
                 NocOptVals{.vc = vc});
             l1_read_addr_in1 += in1_page_size;
@@ -138,7 +140,7 @@ void kernel_main() {
             const uint32_t source_tile =
                 (block * k_rows_per_block + row) * bank_row_stride_tiles + shard_column_offset_tiles;
             const uint32_t read_size = tiles_per_k_row * in1_tile_size_bytes;
-            const uint32_t read_address = in1_tensor_addr + source_tile * in1_tile_size_bytes;
+            const uint32_t read_offset = source_tile * in1_tile_size_bytes;
             // A split reader's row may exceed one NoC burst (e.g. the LM
             // head). Use its real compile-time bound so the read helper
             // packetizes it and accounts for every response under this TRID.
@@ -146,7 +148,7 @@ void kernel_main() {
                 dram_bank,
                 CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 read_size,
-                {.bank_id = dram_bank_id, .addr = read_address},
+                {.bank_id = dram_bank_id, .offset_bytes = read_offset},
                 {},
                 NocOptVals{.vc = vc, .trid = curr_block_trid});
             l1_write_addr_in1 += read_size;
@@ -157,7 +159,7 @@ void kernel_main() {
                 dram_bank,
                 CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 in1_page_size,
-                {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
+                {.bank_id = dram_bank_id, .offset_bytes = l1_read_addr_in1},
                 {},
                 NocOptVals{.vc = vc, .trid = curr_block_trid});
             l1_read_addr_in1 += in1_page_size;
@@ -199,15 +201,16 @@ void kernel_main() {
     constexpr uint32_t in3_tile_size_bytes = (in3_num_pages * in3_page_size) / reader_width_tiles;
     l1_read_addr_in3 = dram_reader_index * reader_width_tiles * in3_tile_size_bytes;
 #endif
+    const BankView bias_bank(bias_accessor);
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-        dram_bank, in3_page_size, {.bank_id = dram_bank_id, .addr = in3_tensor_addr}, NocOptVals{.vc = vc});
+        bias_bank, in3_page_size, {.bank_id = dram_bank_id, .offset_bytes = 0}, NocOptVals{.vc = vc});
 
     for (uint32_t h = 0; h < in3_num_pages; ++h) {
         noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-            dram_bank,
+            bias_bank,
             CoreLocalMem<uint32_t>(l1_write_addr_in3),
             in3_page_size,
-            {.bank_id = dram_bank_id, .addr = in3_tensor_addr + l1_read_addr_in3},
+            {.bank_id = dram_bank_id, .offset_bytes = l1_read_addr_in3},
             {},
             NocOptVals{.vc = vc});
         l1_read_addr_in3 += in3_page_size;
@@ -227,7 +230,10 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_shard_to_write_back; ++i) {
         uint32_t l1_read_addr_out = dfb_out.get_read_ptr() + l1_read_addr_out_offset;
-        uint32_t l1_write_addr_out_reshard = out_shard.get_bank_base_address();
+        // Raw address needed: the shard sits at the same L1 address on every core, so this core's base is the
+        // remote write address on the storage core (and a local_l1_copy operand on Quasar).
+        uint32_t l1_write_addr_out_reshard =
+            static_cast<uint32_t>(local_mem::detail::AddressAccess::address(out_shard.local_mem()));
 
         if (i == 0) {
             l1_write_addr_out_reshard += reshard_tensor_start_offset;
@@ -274,9 +280,17 @@ void kernel_main() {
 
     dfb_out.pop_front(out_block_num_tiles);
 
+#ifdef ARCH_QUASAR
+    // Quasar's command buffer has no NOC_CTRL (it's split into NOC_CTRL_LO/HI, and under NOC API v2/v3 reads use the
+    // RoCC buffer), so restore the firmware-default VC (1) through the NOC API. Unlike the path below, this also
+    // rewrites the read address/length state; the NOC API has no VC-only restore yet.
+    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = 1});
+#else
     // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default (VC=1, set in noc_init); a full set_async_read_state
     // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
     const uint32_t noc_rd_cmd_field =
         NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+#endif
 }

@@ -50,12 +50,18 @@ void prepare_uint16_fp32_dest_value_tiles_for_pack(uint32_t dst_tile_a, uint32_t
  * @tparam tie_order The GLOBAL sort order, never the per-pair local direction, which
  * this helper deliberately alternates to build the bitonic sequence.
  */
-template <bool stable_sort = false, ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset>
+template <
+    bool stable_sort = false,
+    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset,
+    typename InputDFB,
+    typename IndexDFB,
+    typename InputTransposedDFB,
+    typename IndexTransposedDFB>
 FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
-    DataflowBuffer& input_dfb,
-    DataflowBuffer& index_dfb,
-    DataflowBuffer& input_transposed_dfb,
-    DataflowBuffer& index_transposed_dfb,
+    InputDFB& input_dfb,
+    IndexDFB& index_dfb,
+    InputTransposedDFB& input_transposed_dfb,
+    IndexTransposedDFB& index_transposed_dfb,
     const uint32_t Wt,
     const bool switch_dir,
     const bool ascending,
@@ -136,9 +142,9 @@ FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
  * @param dest_dfb Destination circular buffer where packed tiles will be stored.
  * @param Wt Number of tiles to process (width in tiles).
  */
-FORCE_INLINE
-void transpose_and_pack(
-    DataflowBuffer& transposed_dfb, DataflowBuffer& dest_dfb, uint32_t Wt, bool prepare_uint16_value_for_pack = false) {
+template <typename SrcDFB, typename DstDFB>
+FORCE_INLINE void transpose_and_pack(
+    SrcDFB& transposed_dfb, DstDFB& dest_dfb, uint32_t Wt, bool prepare_uint16_value_for_pack = false) {
     constexpr uint32_t one_tile = 1;
 
     // Transpose from sorting by column to right structure
@@ -214,8 +220,8 @@ constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
  *
  * @param packer_unpacker_sync_dfb The circular buffer used for synchronization.
  */
-FORCE_INLINE
-void sync_packer_unpacker(DataflowBuffer& packer_unpacker_sync_dfb) {
+template <typename DFB>
+FORCE_INLINE void sync_packer_unpacker(DFB& packer_unpacker_sync_dfb) {
     constexpr uint32_t ONE_TILE = 1;
 
     // This double sequence forces both the packer and the unpacker to wait for the other.
@@ -263,12 +269,12 @@ void sync_packer_unpacker(DataflowBuffer& packer_unpacker_sync_dfb) {
  * @param dst_dfb Destination circular buffer to which tile will be copied.
  * @param dst_tile_id Index of the tile in the destination circular buffer.
  */
-FORCE_INLINE
-void copy_tile_between_cbs(
+template <typename SrcDFB, typename DstDFB>
+FORCE_INLINE void copy_tile_between_cbs(
     uint32_t& last_used_cb_index,
-    DataflowBuffer& src_dfb,
+    SrcDFB& src_dfb,
     uint32_t src_tile_id,
-    DataflowBuffer& dst_dfb,
+    DstDFB& dst_dfb,
     uint32_t dst_tile_id = 0,
     bool prepare_uint16_value_for_pack = false) {
     // Constants

@@ -31,10 +31,4 @@ ContextId extract_context_id(const IDevice* device);
 
 ContextId extract_context_id(const distributed::MeshDevice* mesh_device);
 
-// Extract context ID from MeshDevice or Device, using whichever one is not nullptr
-// This is used specifically by the profiler as some functions accept both a MeshDevice xor a IDevice pointer
-// TOOD: Remove this and make profiler aware of which MetalEnv the device is on
-// https://github.com/tenstorrent/tt-metal/issues/39741
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device, const IDevice* device);
-
 }  // namespace tt::tt_metal

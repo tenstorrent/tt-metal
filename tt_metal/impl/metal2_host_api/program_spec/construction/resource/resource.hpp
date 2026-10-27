@@ -97,6 +97,13 @@ using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
 // DFB name -> device slot map. The slot is what a kernel sees (the dfb::<name> accessor value) and
 // what indexes the per-core config table, so it is what device-facing lowering must use.
 using DFBNameToSlotMap = std::unordered_map<DFBSpecName, uint32_t>;
+// Both sides' access patterns for one DFB, in the device's dfb::AccessPattern numbering
+// (STRIDED 0, ALL 1, BLOCKED 2). Baked into each binding's DFBBindingToken at compile time.
+struct DFBSidePatterns {
+    uint8_t pap = 0;
+    uint8_t cap = 0;
+};
+using DFBNameToPatternsMap = std::unordered_map<DFBSpecName, DFBSidePatterns>;
 
 // Per-DFB handles produced by RegisterDataflowBuffers (relay_pipe_id is filled by RecordRelayPipeIds).
 struct DataflowBufferHandles {
@@ -104,6 +111,7 @@ struct DataflowBufferHandles {
     DFBNameToSlotMap slot;
     std::unordered_map<DFBSpecName, bool> is_relay;
     std::unordered_map<DFBSpecName, uint8_t> relay_pipe_id;
+    DFBNameToPatternsMap patterns;
 };
 
 // Register DFBs with the Program
@@ -122,7 +130,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
     const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
     const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name,
-    const DFBNameToIdMap& dfb_name_to_id);
+    const DFBNameToIdMap& dfb_name_to_id,
+    const DFBNameToPatternsMap& dfb_name_to_patterns);
 
 // ----------------------------------------------------------------------------
 // PrefetcherPipes (prefetcher_pipe.cpp)

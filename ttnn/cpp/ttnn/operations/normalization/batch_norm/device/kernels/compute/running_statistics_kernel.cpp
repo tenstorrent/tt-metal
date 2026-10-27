@@ -13,14 +13,24 @@
 namespace ckl = compute_kernel_lib;
 
 // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
-template <uint32_t dfb_batch_id, uint32_t dfb_old_id, uint32_t dfb_updated_id, bool AlsoOut0>
+template <
+    const auto& dfb_batch_token,
+    const auto& dfb_old_token,
+    const auto& dfb_updated_token,
+    bool AlsoOut0,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2,
+    typename DFB3,
+    typename DFB4,
+    typename DFB5>
 ALWI void update_running_stat(
-    DataflowBuffer& dfb_batch_obj,
-    DataflowBuffer& dfb_old_obj,
-    DataflowBuffer& dfb_updated_obj,
-    DataflowBuffer& dfb_one_obj,
-    DataflowBuffer& dfb_momentum_obj,
-    DataflowBuffer& dfb_out_obj) {
+    DFB0& dfb_batch_obj,
+    DFB1& dfb_old_obj,
+    DFB2& dfb_updated_obj,
+    DFB3& dfb_one_obj,
+    DFB4& dfb_momentum_obj,
+    DFB5& dfb_out_obj) {
     using D = ckl::Dst;
     using ckl::BinaryFpuOp;
 
@@ -32,14 +42,15 @@ ALWI void update_running_stat(
             ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{
             dfb_one_obj, dfb_momentum_obj},  // D0 = 1 - momentum
         // D0 = (1 - momentum) * old_stat
-        ckl::DestReuseBinary<BinaryFpuOp::Mul, ckl::input(dfb_old_id), ckl::DestReuseType::DEST_TO_SRCA>{dfb_old_obj},
+        ckl::DestReuseBinary<BinaryFpuOp::Mul, ckl::input(dfb_old_token), ckl::DestReuseType::DEST_TO_SRCA>{
+            dfb_old_obj},
         ckl::BinaryFpu<
             BinaryFpuOp::Mul,
             ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::input(dfb_batch_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            ckl::input(dfb_batch_token, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             D::D1>{dfb_momentum_obj, dfb_batch_obj},  // D1 = momentum * batch_stat
         ckl::AddBinary<D::D0, D::D1, D::D0>{},        // D0 = D0 + D1
-        ckl::PackTile<ckl::output(dfb_updated_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{
+        ckl::PackTile<ckl::output(dfb_updated_token, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{
             dfb_updated_obj},
         ckl::Optional<AlsoOut0, ckl::PackTile<ckl::output(dfb::out, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{
             dfb_out_obj});

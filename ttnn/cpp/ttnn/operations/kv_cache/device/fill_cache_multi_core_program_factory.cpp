@@ -43,8 +43,8 @@ std::vector<std::pair<CoreCoord, std::uint32_t>> compute_fill_cache_start_ids(
     tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    std::uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    std::uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const std::uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const std::uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     bool row_major;
     std::uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
@@ -61,9 +61,6 @@ std::vector<std::pair<CoreCoord, std::uint32_t>> compute_fill_cache_start_ids(
         core_group_2 = CoreRangeSet();
         num_blocks_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
         num_blocks_per_core_group_2 = 0;
-        auto bbox = all_cores.bounding_box();
-        num_cores_x = bbox.end_coord.x + 1;
-        num_cores_y = bbox.end_coord.y + 1;
     } else {
         row_major = true;
         std::tie(
@@ -77,7 +74,8 @@ std::vector<std::pair<CoreCoord, std::uint32_t>> compute_fill_cache_start_ids(
     }
 
     std::uint32_t g1_numcores = core_group_1.num_cores();
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+    const auto cores = shard_spec.has_value() ? corerange_to_cores(all_cores, num_cores, row_major)
+                                              : grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
     std::vector<std::pair<CoreCoord, std::uint32_t>> start_ids;
     start_ids.reserve(num_cores);
@@ -126,8 +124,8 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
     tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    std::uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    std::uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const std::uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const std::uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     bool row_major;
     std::uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
@@ -146,9 +144,6 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
         num_blocks_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
         num_blocks_per_core_group_2 = 0;
         num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
-        auto bbox = all_cores.bounding_box();
-        num_cores_x = bbox.end_coord.x + 1;
-        num_cores_y = bbox.end_coord.y + 1;
     } else {
         row_major = true;
         std::tie(
@@ -219,7 +214,8 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
 
     // ---- Per-core runtime args ----
     std::uint32_t g1_numcores = core_group_1.num_cores();
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+    const auto cores = shard_spec.has_value() ? corerange_to_cores(all_cores, num_cores, row_major)
+                                              : grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
     const auto start_ids = compute_fill_cache_start_ids(operation_attributes, tensor_args);
 
     KernelRunArgs reader_run_args{.kernel = READER};

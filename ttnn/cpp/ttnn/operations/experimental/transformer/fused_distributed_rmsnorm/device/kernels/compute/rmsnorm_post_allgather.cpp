@@ -87,8 +87,8 @@ void kernel_main() {
      */
     constexpr uint32_t mul_rms_result_cb = (fuse_rope || has_weight) ? intermediate_cb : output_cb;
     constexpr uint32_t mul_weight_result_cb = fuse_rope ? intermediate_cb : output_cb;
-    DataflowBuffer& cb_mul_rms_result = (fuse_rope || has_weight) ? cb_intermediate_dfb : cb_output;
-    DataflowBuffer& cb_mul_weight_result = fuse_rope ? cb_intermediate_dfb : cb_output;
+    auto& cb_mul_rms_result = (fuse_rope || has_weight) ? cb_intermediate_dfb : cb_output;
+    auto& cb_mul_weight_result = fuse_rope ? cb_intermediate_dfb : cb_output;
 
     for (uint32_t tile_row = 0; tile_row < num_tile_rows_to_process; tile_row++) {
         // ROPE tracking variables

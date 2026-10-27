@@ -532,6 +532,9 @@ When the completer opens a named mesh with an `"fsdp"` axis (size > 1), the
    gradients were already reduce-scattered by the FSDP backward hook); any
    replicated parameter is all-reduced across the axis.
 
+Parameters too small to shard into whole tiles can be kept replicated with
+`device_config.fsdp_replicate_params`; see [Keeping parameters replicated](./FSDP.md#keeping-parameters-replicated).
+
 Checkpointing is unsupported under FSDP (the checkpoint would store per-rank
 shards rather than full tensors) — set `checkpointing: false`.
 

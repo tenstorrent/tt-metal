@@ -123,7 +123,6 @@ STANDARD_SWEEP_OPS = sorted(
 BROAD_FORMATS = input_output_formats(
     [
         DataFormat.Float32,
-        DataFormat.Float16,
         DataFormat.Float16_b,
         DataFormat.Bfp8_b,
     ]
@@ -141,13 +140,12 @@ BROAD_DIMENSIONS = [[128, 256]]
 STANDARD_DIMENSIONS = [[64, 64]]
 
 # Bfp4_b is only exercised as an input format, so the input is pinned to Bfp4_b here
-# rather than building the full matrix and skipping the 12 non-Bfp4_b-input combos.
+# rather than building the full matrix and skipping the 6 non-Bfp4_b-input combos.
 FORMATS_BFP4_B = [
     InputOutputFormat(DataFormat.Bfp4_b, output_format)
     for output_format in [
         DataFormat.Float16_b,
         DataFormat.Bfp8_b,
-        DataFormat.Float16,
         DataFormat.Bfp4_b,
     ]
 ]
@@ -265,19 +263,6 @@ def _assert_dest_acc_ids_match_kernels():
 _assert_dest_acc_ids_match_kernels()
 
 
-def _skip_bh_unsupported_float_combo(formats, dest_acc):
-    """Blackhole with dest_acc=No supports neither Float16 input nor Float32->Float16."""
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and (
-            formats.input_format == DataFormat.Float16
-            or formats == InputOutputFormat(DataFormat.Float32, DataFormat.Float16)
-        )
-    ):
-        pytest.skip(reason="This combination is not supported on BH architecture")
-
-
 def _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials):
     """*specials*, minus the cells where the golden would assert an unspecified NaN sign.
 
@@ -336,12 +321,9 @@ def test_eltwise_unary_sfpu(
     """
     broad = mathop in BROAD_SWEEP_OPS
 
-    # Each profile has its own Blackhole dest_acc=No guard, measured against its own
-    # format set: the broad profile runs everything except a Float16 input or
-    # Float32->Float16, while the standard profile allows only Float32->Float32.
-    if broad:
-        _skip_bh_unsupported_float_combo(formats, dest_acc)
-    else:
+    # The broad profile's formats all run on Blackhole at dest_acc=No; the standard
+    # profile allows only Float32->Float32 there.
+    if not broad:
         _skip_bh_unless_fp32(formats, dest_acc)
 
     eltwise_unary_sfpu(

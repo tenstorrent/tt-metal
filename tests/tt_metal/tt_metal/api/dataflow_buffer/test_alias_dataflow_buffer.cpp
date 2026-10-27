@@ -38,6 +38,7 @@
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -484,7 +485,7 @@ TEST_F(UnitMeshFixture, AliasDFBAddressEquality1Sx1S) {
 
     program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const uint32_t id_a = program.impl().get_dfb_handle("dfb_a");
     const uint32_t id_b = program.impl().get_dfb_handle("dfb_b");
@@ -717,7 +718,7 @@ TEST_F(UnitMeshFixture, AliasDFBAllocSecondarySkipped) {
 
     program.impl().set_dfb_alias(id_a, id_b);
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const uint32_t addr_a = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
     const uint32_t addr_b = program.impl().get_dataflow_buffer(id_b)->uniform_alloc_addr();
@@ -748,7 +749,7 @@ TEST_F(UnitMeshFixture, AliasDFBAlloc3Way) {
     program.impl().set_dfb_alias(id_a, id_b);
     program.impl().set_dfb_alias(id_a, id_c);
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const uint32_t addr_a = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
     const uint32_t addr_b = program.impl().get_dataflow_buffer(id_b)->uniform_alloc_addr();
@@ -779,7 +780,7 @@ TEST_F(UnitMeshFixture, AliasDFBAgreedGroupResize) {
     program.impl().set_dfb_alias(id_a, id_b);
 
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const uint32_t addr_a0 = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
     EXPECT_EQ(addr_a0, program.impl().get_dataflow_buffer(id_b)->uniform_alloc_addr())
@@ -793,7 +794,7 @@ TEST_F(UnitMeshFixture, AliasDFBAgreedGroupResize) {
         {.dfb_id = id_b, .entry_size = 1024u, .num_entries = 8u},  // 8192
     };
     EXPECT_NO_THROW(program.impl().apply_dfb_size_overrides(overrides));
-    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     auto dfb_a = program.impl().get_dataflow_buffer(id_a);
     auto dfb_b = program.impl().get_dataflow_buffer(id_b);
@@ -818,7 +819,7 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryAddressEquality) {
 
     program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     auto rtas = [&]() {
         return MakeRuntimeArgsForSingleNode(
@@ -972,7 +973,7 @@ TEST_F(UnitMeshFixture, BorrowedMemoryDFBBufRw) {
     distributed::MeshWorkload wl = LaunchProgram(this->device(), std::move(program));
 
     const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(this->device().shape())].impl();
-    IDevice* dev = this->device().get_devices()[0];
+    auto* dev = this->device().impl().get_devices()[0];
     auto names = [](const auto& accesses) {
         std::set<std::string_view> s;
         for (const auto& a : accesses) {
@@ -1061,7 +1062,7 @@ TEST_F(UnitMeshFixture, BorrowedMemorySelfLoopDFBBufRw) {
     const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(this->device().shape())].impl();
     auto kernel = program_impl.get_kernel_by_spec_name("loop");
     ASSERT_NE(kernel, nullptr);
-    const ResolvedBufRw rw = kernel->resolve_buf_rw(*this->device().get_devices()[0], program_impl);
+    const ResolvedBufRw rw = kernel->resolve_buf_rw(*this->device().impl().get_devices()[0], program_impl);
     const uint32_t ring_address = static_cast<uint32_t>(ring.address());
     EXPECT_FALSE(rw.opaque);
     ASSERT_EQ(rw.writes.size(), 1u) << "producing into the borrowed DFB writes ring_tensor";
