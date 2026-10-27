@@ -171,19 +171,21 @@ inline void calculate_remainder() {
         sfpi::vFloat v = sfpi::abs(val);
 
         sfpi::vFloat quotient;
-        vInt exp = sfpi::exexp(v * recip_val);
+        // v * recip_val is read in four places across v_if regions; the compiler does not CSE
+        // across predication, so compute it once (same SFPMUL on the same operands: bit-identical).
+        sfpi::vFloat prod = v * recip_val;
+        vInt exp = sfpi::exexp(prod);
         v_if(exp < 0) { quotient = 0.0f; }
         // Since fp32 has 23 mantissa bits, the LSB represents the fractional part when exp < 23.
         // We effectively round off the fractional bits to zero by right shifting using (exp - 23) and then left
         // shifting it back using (0 - (exp - 23)).
         v_elseif(exp < 23) {
-            quotient = sfpi::as<sfpi::vFloat>(
-                shft((shft(sfpi::as<sfpi::vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
+            quotient = sfpi::as<sfpi::vFloat>(shft((shft(sfpi::as<sfpi::vUInt>(prod), (exp - 23))), (0 - (exp - 23))));
         }
-        v_else { quotient = v * recip_val; }
+        v_else { quotient = prod; }
         v_endif
 
-        v_if(quotient > v * recip_val) {
+        v_if(quotient > prod) {
             quotient = quotient - 1;
         }
         v_endif;
