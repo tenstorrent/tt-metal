@@ -786,7 +786,6 @@ def construct_live_decode_diagnostic(
     mesh_device,
     collective_topology,
     marker: Marker | None = None,
-    stage_missing_bf4: bool = True,
     bf4_stage_limit: int | None = None,
     require_complete: bool = True,
     decode_dram_workers_per_bank: int | None = None,
@@ -794,9 +793,9 @@ def construct_live_decode_diagnostic(
     """Construct and attach the real live builder, then stop before target build.
 
     With a corpus the read-only adapter replaces the builder's cache.  Without one the production cache is used:
-    missing layers are converted from the checkpoint (``stage_missing_bf4``; at most ``bf4_stage_limit`` of them
-    this run, for hosts that bound a job's wall time) and the construction refuses while any is still missing
-    (``require_complete``; a prepare-only run returns the builder as is).
+    missing layers are converted from the checkpoint (at most ``bf4_stage_limit`` of them this run, for hosts that
+    bound a job's wall time) and the construction refuses while any is still missing (``require_complete``; a
+    prepare-only run returns the builder as is).
     """
 
     if type(prepared) is not Qwen38PreparedLiveDecodeDiagnostic:
@@ -850,7 +849,7 @@ def construct_live_decode_diagnostic(
                 prepared.checkpoint, prepared.placement, namespace=cached_slot[0], layer_index=cached_slot[1]
             )
             _mark(marker, f"after-bf4-cache-admission-expert-{admission['expert']}-{admission['seconds']}s")
-        if missing and stage_missing_bf4:
+        if missing:
             for namespace, layer_index in missing[: len(missing) if bf4_stage_limit is None else bf4_stage_limit]:
                 _mark(marker, f"before-bf4-stage-{namespace}-{layer_index:02d}")
                 builder.stage_bf4_layer(namespace=namespace, layer_index=layer_index)

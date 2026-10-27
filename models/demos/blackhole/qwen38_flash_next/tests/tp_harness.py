@@ -41,7 +41,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.model import Qwen38TTNNRoPE
 
 HIDDEN_SIZE = 2560
 RESIDUAL_BRANCHES = 4
-# The demo's mesh parameters (demo/text_demo.py DEVICE_PARAMS: the vLLM launch's tt config).
+# open_partition_b_mesh's parameters (tools/qwen38_chat_session.py) with the second command queue of the MTP form.
 DEVICE_PARAMS = {
     "l1_small_size": 24576,
     "num_command_queues": 2,
@@ -80,7 +80,6 @@ class Qwen38TPHarness:
         self.rope = Qwen38TTNNRoPE(mesh_device, self.contract, self.config)
         cache_root = os.environ.get("QWEN38_CACHE_ROOT")
         self.caches = None if not cache_root else Path(cache_root) / "caches"
-        # The adapter's default label: the demo and these tests share one component namespace.
         self.cache_label = os.environ.get("QWEN38_CACHE_LABEL") or f"c{RESIDENT_DEFAULT_QSA_CACHE_CAPACITY}-vllm"
         self.component_cache_root = tmp_path if self.caches is None else self.caches / self.cache_label / "components"
 
@@ -172,7 +171,7 @@ class Qwen38TPHarness:
         if builder.bf4_cache.verify_layer("backbone", layer_index) is None:
             pytest.skip(
                 f"BF4 expert layer {layer_index} is not in the cache under {self.caches / 'bf4-experts'}; "
-                "the chat server or the demo converts it on its first start"
+                "the chat server converts it on its first start"
             )
         return builder, builder.build_backbone_layer(layer_index)
 

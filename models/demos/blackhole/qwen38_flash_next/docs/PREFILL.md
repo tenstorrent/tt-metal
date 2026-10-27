@@ -14,8 +14,7 @@ raw-key ring, the PLE history and the device position.
 | slab | `--prefill-slab ROWS` | slabs of ROWS rows (a multiple of 512 up to 2048) ahead of the 128-row chunks |
 
 `--long-chunks` is accepted for compatibility: the 128-row chunks are the default. `--prefill-slab` implies it and
-combines with `--mtp`. The vLLM adapter takes the same forms from `QWEN38_PREFILL_SLAB` and `QWEN38_LONG_CHUNKS`
-([SERVER.md](SERVER.md)).
+combines with `--mtp`.
 
 ## The slab
 

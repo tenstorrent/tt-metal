@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``resolve_hardware_profile``: a named public profile resolves on any host; a private table's lane keeps its host."""
+"""``resolve_hardware_profile``: a named public profile resolves on any host; a private table's lane keeps its host.
+``with_device_nodes``: UMD's indices on a host that presents exactly the four nodes, else the node numbers."""
 
 from __future__ import annotations
 
@@ -83,3 +84,12 @@ def test_no_name_takes_the_default_lane_or_the_lane_the_visible_devices_select(e
         _resolve(None, host="host-one", visible="1,2")
     with expect_error(HardwareProfileError, match=r"no hardware profile for host 'some-box'"):
         _resolve(None, host="some-box")
+
+
+def test_device_nodes_take_umd_indices_only_on_a_host_that_presents_exactly_those_nodes(tmp_path) -> None:
+    moved = hardware_profiles.P150_LINE.with_device_nodes((4, 5, 6, 7), present=(4, 5, 6, 7))
+    assert (moved.device_nodes, moved.visible_devices) == ((4, 5, 6, 7), "0,1,2,3"), moved
+    host = hardware_profiles.P150_LINE.with_device_nodes((4, 5, 6, 7), present=range(8))
+    assert (host.device_nodes, host.visible_devices) == ((4, 5, 6, 7), "4,5,6,7"), host
+    absent = hardware_profiles.present_device_nodes(tmp_path / "absent")
+    assert absent == (), absent

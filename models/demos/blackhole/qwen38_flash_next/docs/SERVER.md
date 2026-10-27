@@ -1,8 +1,7 @@
 # The chat server
 
 `tools/run_qwen38_chat_server.sh` starts `tools/qwen38_chat_server.py` on one 1x4 mesh; `--help` lists its flags.
-This page covers what the flags do not: start-up, the request rules, `/health`, follow-up turns, lanes, MTP, the
-uvicorn container form and the vLLM adapter.
+This page covers what the flags do not: start-up, the request rules, `/health`, follow-up turns, lanes and MTP.
 
 ## Start-up
 
@@ -105,44 +104,3 @@ refused. `--mtp-gdn-anchor layer0` re-anchors layer 0's GDN state from the 1-row
 chain's DRAM growth against the admission's estimate (`/health.mtp.admission`). `QWEN38_MTP_SAMPLED`,
 `QWEN38_MTP_PLE_EARLY`, `QWEN38_MTP_DRAFTS_PER_REQUEST` and `QWEN38_MTP_MOE_ROWS` are not read; setting one refuses
 the start.
-
-## The uvicorn container form
-
-```bash
-python -m uvicorn --lifespan on models.demos.blackhole.qwen38_flash_next.tools.qwen38_asgi:app
-```
-
-`tools/qwen38_asgi.py` starts the chat server as a child process (device teardown must run in the process and thread
-that opened the devices) and finishes its startup only when the server writes `READY`. Requests are forwarded byte
-for byte over loopback; before `READY` and after the stop they get HTTP 503. Shutdown sends the server SIGTERM and
-waits for it; a server that exits on its own ends the uvicorn process with its status.
-
-| variable | default |
-|---|---|
-| `QWEN38_HARDWARE_PROFILE` | `p150-line` |
-| `QWEN38_ALLOCATED_CONTEXT` | `32768` |
-| `QWEN38_SERVER_ARGS` | `--mtp 4 --sampling --stall-seconds 300 --require-json-96` |
-| `QWEN38_CACHE_ROOT` | `/tensor-cache` |
-| `QWEN38_CHECKPOINT` | unset: the pinned revision of `HF_MODEL` in the local Hugging Face cache |
-| `QWEN38_INNER_PORT` | `18000` |
-| `QWEN38_STOP_SECONDS` | `300` |
-
-## The vLLM adapter
-
-`tools/qwen38_vllm.py` (`Qwen38ForCausalLM`) is the model class vllm-tt-plugin drives: the same traced chain with
-one resident slot. `prefill_forward` resets the state and prefills the prompt; `decode_forward` runs one traced step
-for the token vLLM sampled. `--max-model-len` picks the smallest resident context that holds it. The README has the
-launch command. Settings come from the environment and are checked before the device opens:
-
-| variable | default | meaning |
-|---|---|---|
-| `MODEL_WEIGHTS_DIR` | unset | the checkpoint directory; unset, the pinned revision of `QWEN38_HF_REPO` (or `--model`) must be in the Hugging Face cache |
-| `QWEN38_CACHE_ROOT` | required | `caches/<label>/{components,model-io}` and `caches/bf4-experts` |
-| `QWEN38_CACHE_LABEL` | `c<context>-vllm` | the component and model I/O cache label |
-| `QWEN38_BF4_CORPUS`, `QWEN38_BF4_CORPUS_VERIFICATION` | unset | a CPU-staged BF4 corpus; otherwise `caches/bf4-experts` must exist unless `QWEN38_VLLM_ALLOW_BF4_CONVERSION=1` |
-| `QWEN38_PREFILL_SLAB` | unset | slab rows, a multiple of 512 up to 2048; `0` / `off` or unset: no slab |
-| `QWEN38_LONG_CHUNKS` | unset | unset or `1`: 128-row chunks ahead of the 32-row ones; `0`: 32-row chunks only (refused with a slab) |
-| `QWEN38_TT_METAL_SHA` | unset | the cache identity's tt-metal sha; unset, the checkout head or the extension digest |
-
-Not supported under vLLM: batch above 1, MTP, the on-device sampler, prefix reuse, scheduler chunked prefill and
-asynchronous decode. vLLM's block table and KV cache are accepted and ignored.

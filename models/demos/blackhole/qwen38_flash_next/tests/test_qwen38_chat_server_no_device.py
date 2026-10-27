@@ -2,16 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The chat server's start-up and request checks without a device: the shipped greedy acceptance records and their
-loader's refusals, the MTP switches the server does not read, and the refused ``mtp_drafts`` request field."""
+loader's refusals, the MTP switches the server does not read, the refused ``mtp_drafts`` request field, and the
+runtime identity of a tree without git history."""
 
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_server as server
+from models.demos.blackhole.qwen38_flash_next.tools import runtime_admission
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import Qwen38ChatRequestRejected
 
 ACCEPTANCE_RECORDS = Path(server.__file__).parent / "acceptance" / "greedy-prompts.jsonl"
@@ -91,3 +94,39 @@ def test_a_request_naming_mtp_drafts_is_refused_with_its_param(where, drafts) ->
     assert f"one drafting chain): drop it, got {drafts}" in str(info.value), str(info.value)
     parsed = server.parse_chat_request({"messages": messages, "mtp_drafts": None}, seed=1)  # JSON null: absent
     assert "mtp_drafts" not in parsed, sorted(parsed)
+
+
+def test_a_tree_without_git_history_is_admitted_only_with_its_head_declared(
+    expect_error, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.delenv(runtime_admission.DECLARED_HEAD_VARIABLE, raising=False)
+    with expect_error(runtime_admission.RuntimeAdmissionError, match="without git history"):
+        runtime_admission.git_identity(tmp_path)
+    monkeypatch.setenv(runtime_admission.DECLARED_HEAD_VARIABLE, "abc")
+    with expect_error(runtime_admission.RuntimeAdmissionError, match="must be lowercase 40-hex"):
+        runtime_admission.git_identity(tmp_path)
+    head = "78ae83c92c420ae1cd4aa52b5a4b8217961531cb"
+    monkeypatch.setenv(runtime_admission.DECLARED_HEAD_VARIABLE, head)
+    identity = runtime_admission.git_identity(tmp_path)
+    assert identity == {
+        "repo": str(tmp_path),
+        "head": head,
+        "tree": None,
+        "dirty": False,
+        "source": "declared",
+    }, identity
+
+
+def test_a_checkout_with_history_refuses_a_declared_head_that_differs(expect_error, monkeypatch) -> None:
+    root = runtime_admission.REPO_ROOT
+    if subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True).returncode:
+        pytest.skip("not a git checkout")
+    monkeypatch.delenv(runtime_admission.DECLARED_HEAD_VARIABLE, raising=False)
+    identity = runtime_admission.git_identity(root)
+    assert "source" not in identity and len(identity["head"]) == 40, identity
+    monkeypatch.setenv(runtime_admission.DECLARED_HEAD_VARIABLE, identity["head"])
+    declared = runtime_admission.git_identity(root)
+    assert declared["head"] == identity["head"], (declared, identity)
+    monkeypatch.setenv(runtime_admission.DECLARED_HEAD_VARIABLE, "0" * 40)
+    with expect_error(runtime_admission.RuntimeAdmissionError, match="differs from the checkout head"):
+        runtime_admission.git_identity(root)

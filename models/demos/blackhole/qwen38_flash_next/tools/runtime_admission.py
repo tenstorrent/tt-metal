@@ -30,7 +30,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.resident_decode import Resid
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_MAX_QSA_CACHE_CAPACITY
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
-# The head of a tree without git history (a container image); the vLLM adapter reads the same variable first.
+# The head of a tree without git history (a container image).
 DECLARED_HEAD_VARIABLE = "QWEN38_TT_METAL_SHA"
 SCHEMA = "qwen38-runtime-identity/v1"
 # Expected values a launcher may pass; the admitted identity must match each one given.

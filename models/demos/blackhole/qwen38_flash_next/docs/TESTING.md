@@ -7,9 +7,9 @@ Run from the repository root:
     QWEN38_CHECKPOINT=/data/Qwen3.8-Flash-Next python_env/bin/python -m pytest models/demos/blackhole/qwen38_flash_next/tests
 
 `tests/` holds the no-device tests (protocol, chat format, sampling, prefill driver, MTP session and MTP rows /
-verify / draft, batched and MTP lanes, lane scheduler, vision inputs, vLLM / ASGI adapters, launcher), the
-component tests against the `tt/` torch reference, and the device tests (`*_device.py`, `*_tp.py`). The
-checkpoint-reading tests skip unless `QWEN38_CHECKPOINT` (or `MODEL_WEIGHTS_DIR`) names the checkpoint.
+verify / draft, batched and MTP lanes, lane scheduler, vision inputs, launcher), the component tests against the
+`tt/` torch reference, and the device tests (`*_device.py`, `*_tp.py`). The checkpoint-reading tests skip unless
+`QWEN38_CHECKPOINT` (or `MODEL_WEIGHTS_DIR`) names the checkpoint.
 
 ## The acceptance gate
 
