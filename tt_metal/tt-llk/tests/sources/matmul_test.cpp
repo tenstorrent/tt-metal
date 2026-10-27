@@ -257,13 +257,26 @@ constexpr bool matmul_half_end_fold_k = matmul_tile_mop && matmul_half_end_fold<
 #else
 constexpr bool matmul_half_end_fold_k = false;
 #endif
+// Wormhole and Quasar take main's template arguments: the tile MOP, reuse direction and fold parameters are Blackhole's
+#ifdef ARCH_BLACKHOLE
+#define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en, fused_post_flip, next_op_sets_base
+#else
+#define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en
+#endif
+#ifdef ARCH_BLACKHOLE
+#define MATMUL_MATH_DEFAULT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
+#define MATMUL_MATH_DEFAULT_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, false, matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k
+#else
+#define MATMUL_MATH_DEFAULT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL
+#define MATMUL_MATH_DEFAULT_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL
+#endif
 #line 176
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_MOP)
 #define MATMUL_MATH_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true
 #define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true
 #else
-#define MATMUL_MATH_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
-#define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, false, matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k
+#define MATMUL_MATH_TEMPLATE_ARGS MATMUL_MATH_DEFAULT_ARGS
+#define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_MATH_DEFAULT_INIT_ARGS
 #endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -333,19 +346,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
                 #ifdef MATMUL_UNFUSED_POST
-                constexpr bool fused_post_flip = false;
+                [[maybe_unused]] constexpr bool fused_post_flip = false;
                 #else
-                constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b);
+                [[maybe_unused]] constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b);
                 #endif
                 #else
-                constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3);
+                [[maybe_unused]] constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3);
                 #endif
                 #if defined(MATMUL_KEEP_FLIP_WRITE)
-                    constexpr bool next_op_sets_base = false;
+                    [[maybe_unused]] constexpr bool next_op_sets_base = false;
 #else
-                    constexpr bool next_op_sets_base = !is_fp32_dest_acc_en;
+                    [[maybe_unused]] constexpr bool next_op_sets_base = !is_fp32_dest_acc_en;
 #endif
-                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en, fused_post_flip, next_op_sets_base>();
+                    _llk_math_dest_section_done_<MATMUL_DEST_DONE_ARGS>();
             }
         }
         PROFILER_SYNC();

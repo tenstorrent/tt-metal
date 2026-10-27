@@ -99,6 +99,8 @@ DB_SCHEMA = [
     Column("face_c_dim", "int64", True, "configuration"),
     Column("face_r_dim", "int64", True, "configuration"),
     Column("fast_mode", "string", True, "configuration"),
+    Column("form_hoist", "int64", True, "configuration"),
+    Column("form_kind", "int64", True, "configuration"),
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
     Column("fused_sort", "string", True, "configuration"),

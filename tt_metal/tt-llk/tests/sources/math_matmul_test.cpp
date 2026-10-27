@@ -187,6 +187,20 @@ constexpr bool matmul_row_end_fold_k = true;
 #else
 constexpr bool matmul_row_end_fold_k = false;
 #endif
+// Wormhole and Quasar take main's template arguments: the row MOP, in1 order, reuse direction and fold parameters are Blackhole's
+#ifdef ARCH_BLACKHOLE
+#define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en, fused_post_flip, next_op_sets_base
+#else
+#define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en
+#endif
+#ifdef ARCH_BLACKHOLE
+#define MATMUL_MATH_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
+#define MATMUL_MATH_INIT_ARGS \
+    MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_in1_order, !(dest_sync == DstSync::SyncHalf && is_fp32_dest_acc_en), dest_sync == DstSync::SyncFull || matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k
+#else
+#define MATMUL_MATH_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL
+#define MATMUL_MATH_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL
+#endif
 #line 146
 
 #ifdef LLK_TRISC_MATH
@@ -249,7 +263,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-        _llk_math_matmul_init_<MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_in1_order, !(dest_sync == DstSync::SyncHalf && is_fp32_dest_acc_en), dest_sync == DstSync::SyncFull || matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k>(
+        _llk_math_matmul_init_<MATMUL_MATH_INIT_ARGS>(
             in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
         PROFILER_SYNC();
     }
@@ -270,7 +284,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_math_matmul_<MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k>(DST_INDEX, CT_DIM, RT_DIM);
+                        _llk_math_matmul_<MATMUL_MATH_ARGS>(DST_INDEX, CT_DIM, RT_DIM);
                     }
                 }
             }
@@ -287,21 +301,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         "Matmul block exceeds destination capacity");
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_math_matmul_<MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k>(DST_INDEX, CT_DIM, RT_DIM);
+                        _llk_math_matmul_<MATMUL_MATH_ARGS>(DST_INDEX, CT_DIM, RT_DIM);
                     }
                     #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_UNFUSED_POST)
-                    constexpr bool fused_post_flip = false;
+                    [[maybe_unused]] constexpr bool fused_post_flip = false;
                     #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
-                    constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b;
+                    [[maybe_unused]] constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b;
                     #else
-                    constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3;
+                    [[maybe_unused]] constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3;
                     #endif
                     #if defined(MATMUL_KEEP_FLIP_WRITE)
-                    constexpr bool next_op_sets_base = false;
+                    [[maybe_unused]] constexpr bool next_op_sets_base = false;
 #else
-                    constexpr bool next_op_sets_base = !is_fp32_dest_acc_en;
+                    [[maybe_unused]] constexpr bool next_op_sets_base = !is_fp32_dest_acc_en;
 #endif
-                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en, fused_post_flip, next_op_sets_base>();
+                    _llk_math_dest_section_done_<MATMUL_DEST_DONE_ARGS>();
                 }
             }
         }

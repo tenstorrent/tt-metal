@@ -609,22 +609,22 @@ class MATMUL_PROD_KEYS(TemplateParameter):
         return "#define MATMUL_PROD_KEYS"
 
 
-@dataclass(init=False, repr=False, eq=False)
+@dataclass
 class MATMUL_FORCE_FORM(TemplateParameter):
     """The math MOP kind (0 tile MOP, 1 rows MOP of the default form, 2 row MOP: also pass MATMUL_ROW_MOP) and the hoisted unpack
     of a cell, whatever the forms table says. Measures every form of a cell so any key can be judged without another run.
 
-    No report column (the fields stay out of the dataclass); the repr holds them, as the variant hash reads it."""
+    Both fields are report columns: the forms of a cell share every other sweep parameter, so without them the rows of the forms
+    would collide on one key."""
 
-    def __init__(self, kind: int = 0, hoist: bool = False):
-        self.kind = kind
-        self.hoist = hoist
+    form_kind: int = 0
+    form_hoist: int = 0
 
-    def __repr__(self) -> str:
-        return f"MATMUL_FORCE_FORM({self.kind}, {self.hoist})"
+    def __post_init__(self):
+        self.form_hoist = int(self.form_hoist)
 
     def convert_to_cpp(self) -> str:
-        return f"#define MATMUL_FORCE_FORM {2 * self.kind + int(self.hoist)}"
+        return f"#define MATMUL_FORCE_FORM {2 * self.form_kind + self.form_hoist}"
 
 
 @dataclass
