@@ -50,8 +50,11 @@
 #                    (default: nproc).
 #   --no-precompile  Force-off: plain pytest, kernels compile on demand (inline & serial).
 #                    AUTO (neither flag given): decided from argv alone, no pre-pass. A whole
-#                    directory or whole test file -> ON. NARROW (a ::nodeid or a -k filter) -> a
-#                    handful of programs, the collect pass cannot pay for itself -> OFF. Sim: OFF.
+#                    directory or whole test file -> ON. Up to $PRECOMPILE_NARROW_MAX_IDS (default 3)
+#                    ::nodeids and nothing else -> OFF: a handful of programs, the collect pass
+#                    cannot pay for itself. More ::nodeids (on the command line or in @argfiles)
+#                    -> ON. A -k filter -> OFF (its size is unknown from argv; pass --precompile for
+#                    a broad slice). Sim: OFF.
 #   --jit-server[=host:port] / --no-jit-server
 #                    Route the precompile COMPILE STEP to a remote JIT server (default endpoint:
 #                    $TT_METAL_JIT_SERVER_ENDPOINT). Used only when the collected program count is
@@ -326,24 +329,46 @@ fi
 TT_TIMING_TEST_PATH="$TEST_PATH"
 
 # --- Precompile AUTO decision (argv only, no pre-pass) ---
-# A ::nodeid or a -k filter selects a handful of programs. For those the collect pass costs more
-# than the parallel compile saves (the compile is ~2s for one program, cold), so leave them plain.
-# Explicit --precompile / --no-precompile always win.
+# Precompile has a fixed cost: the collect pass runs every selected body to find the distinct
+# programs before anything compiles. It pays off once there are more than ~3 programs to compile in
+# parallel (~1.1 s per program one at a time vs ~0.14 s each in parallel, measured on a 5,444-cell
+# golden suite). So a few ::nodeids stay plain, but a list of many (e.g. a 300-id golden chunk, ~200
+# programs: ~227 s plain vs ~31 s precompiled) must not. A whole directory / file passed alongside
+# ids keeps it on. A -k filter can select one test or thousands and argv cannot tell, so it stays
+# plain; callers running a broad -k slice pass --precompile. Explicit flags always win.
+PRECOMPILE_NARROW_MAX_IDS="${PRECOMPILE_NARROW_MAX_IDS:-3}"
 PRECOMPILE_NARROW=false
-if [[ "$TEST_PATH" == *"::"* ]]; then
+_n_ids=0
+_n_whole=0
+_has_k=false
+_skip_next=false
+for _arg in "${PYTEST_ARGS[@]}"; do
+    if [[ "$_skip_next" == true ]]; then _skip_next=false; continue; fi
+    case "$_arg" in
+        -k|--keyword) _has_k=true; _skip_next=true ;;
+        -k=*|--keyword=*) _has_k=true ;;
+        -m|-n|-p|-c|-o|-W|--deselect|--ignore|--rootdir|--junitxml|--maxfail|--timeout|--log-level) _skip_next=true ;;
+        -*) ;;
+        @*)  # pytest @argfile: one argument per line
+            if [[ -r "${_arg#@}" ]]; then
+                _n_ids=$((_n_ids + $(grep -c '::' "${_arg#@}" || true)))
+                _n_whole=$((_n_whole + $(grep -v '::' "${_arg#@}" | grep -c '[^[:space:]]' || true)))
+            fi ;;
+        *::*) _n_ids=$((_n_ids + 1)) ;;
+        *) _n_whole=$((_n_whole + 1)) ;;
+    esac
+done
+if [[ "$_has_k" == true ]] || (( _n_whole == 0 && _n_ids <= PRECOMPILE_NARROW_MAX_IDS )); then
     PRECOMPILE_NARROW=true
-else
-    for _arg in "${PYTEST_ARGS[@]}"; do
-        if [[ "$_arg" == "-k" || "$_arg" == -k=* || "$_arg" == "--keyword" ]]; then
-            PRECOMPILE_NARROW=true
-            break
-        fi
-    done
 fi
 if [[ "$PRECOMPILE" == auto ]]; then
     if [[ "$PRECOMPILE_NARROW" == true ]]; then
         PRECOMPILE=false
         TT_TIMING_PRECOMPILE_REASON="narrow"
+        if [[ "$_has_k" == true && "$SIM_MODE" != true ]]; then
+            echo "SAFE_PYTEST: precompile off for a -k selection (its size is unknown from the command line);" \
+                 "pass --precompile when the slice covers more than a few tests" >&2
+        fi
     else
         PRECOMPILE=true
     fi
