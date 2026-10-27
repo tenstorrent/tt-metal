@@ -287,8 +287,11 @@ class QuasarModelArgs(_QuasarArgsMixin, ModelArgs):
     def __init__(self, *args, **kwargs):
         self._quasar_init(ModelArgs.__init__, *args, **kwargs)
         self._quasar_fix_grid_attrs()
-        # ttnn.scatter is not ported to Quasar; the vision-token merge copies rows on the host instead.
-        self.device_scatter = False
+        # The vision-token merge scatters on device on Quasar (int32 transpose fixed by #62744), except on craq-sim with
+        # fewer cores than its 32: there scatter's final tilize keeps whole 80-tile rows on one core, which craq-sim's
+        # MOP loop limit of 64 rejects (craq-sim#537; QUASAR_GAPS Q1). Elsewhere it copies rows on the host.
+        craq_sim = os.path.isfile(os.environ.get("TT_METAL_SIMULATOR", ""))
+        self.device_scatter = is_quasar() and not (craq_sim and self.max_grid_size.num_cores < 32)
         # Quasar DRAM (2 x 1 GiB) cannot hold the bf16 embedding table next to the bf16 LM head; keep the table on the
         # host and upload only the looked-up rows (QUASAR_GAPS Q8). Prefill already embeds on the host.
         self.host_embedding = True
