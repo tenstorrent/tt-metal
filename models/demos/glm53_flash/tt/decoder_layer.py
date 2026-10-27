@@ -58,7 +58,7 @@ def _dump(dump_dir: str, name: str, t) -> None:
 
 
 from models.demos.glm53_flash.tt.mlp import TtClampedSwiGLU
-from models.demos.glm53_flash.tt.moe import TtMoE
+from models.demos.glm53_flash.tt.moe import TtMoE, pad_mask_enabled, pad_row_mask_host
 
 
 def _strip(sd: dict[str, torch.Tensor], prefix: str) -> dict[str, torch.Tensor]:
@@ -144,6 +144,7 @@ class TtDecoderLayer(LightweightModule):
                 mesh=self.mesh,
                 weight_cache_path=weight_cache_path,
             )
+            self.mlp.experts.call_site = f"layer {layer_idx} MoE"  # the eager dispatch guard's label
         else:
             self.mlp = TtClampedSwiGLU(
                 device,
@@ -228,9 +229,12 @@ class TtDecoderLayer(LightweightModule):
         actual_end: ttnn.Tensor | None = None,
         slot=None,
         ring_sel: ttnn.Tensor | None = None,
+        row_mask: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, LayerState]:
         """``_prefill_forward_impl`` inside ``mesh.prefill_scope()`` (the composite TP all-reduce for every prefill
-        shape, see ``GLMMesh.prefill_scope``)."""
+        shape, see ``GLMMesh.prefill_scope``). ``row_mask``: the MoE router's pad-row mask of this row's slab
+        (``tt/moe.py`` ``pad_row_mask_host``; the traced prefill's per-length input); built here for an eager chunk
+        with rows past ``seq_len`` when not given."""
         with self.mesh.prefill_scope():
             return self._prefill_forward_impl(
                 streams,
@@ -242,6 +246,7 @@ class TtDecoderLayer(LightweightModule):
                 actual_end=actual_end,
                 slot=slot,
                 ring_sel=ring_sel,
+                row_mask=row_mask,
             )
 
     def _prefill_forward_impl(
@@ -256,6 +261,7 @@ class TtDecoderLayer(LightweightModule):
         actual_end: ttnn.Tensor | None = None,
         slot=None,
         ring_sel: ttnn.Tensor | None = None,
+        row_mask: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, LayerState]:
         """streams [1,1,T_pad,4*hidden] fp32 for one user: row i is the token at absolute position
         ``start + i`` (``start % 32 == 0``), T_pad % 32 == 0 and rows past ``seq_len`` are padding.
@@ -304,8 +310,18 @@ class TtDecoderLayer(LightweightModule):
             return ttnn.multiply(y, 1.0 / rows, output_tensor=y)
 
         streams = self._hc_call(self.attn_hc, streams, attention, self.input_norm_w)
-        ffn = (lambda t: self.mlp(t, prefill=True)) if self.is_moe else self.mlp  # the router's composite path on slabs
+        mask, own = row_mask, False
+        if self.is_moe:
+            if mask is None and seq_len < T and pad_mask_enabled():
+                # an eager chunk with rows past seq_len (the ragged last chunk): the attention leaves them
+                # unspecified and the MoE router must not see them (GLM53_ROUTER_PAD_MASK; 2026-10-27 block hang)
+                mask, own = self.mesh.upload(pad_row_mask_host(T, seq_len), ttnn.bfloat16, rows=2), True
+            ffn = lambda t, m=mask: self.mlp(t, prefill=True, row_mask=m)  # the router's composite path on slabs
+        else:
+            ffn = self.mlp
         streams = self._hc_call(self.ffn_hc, streams, ffn, self.post_norm_w)
+        if own:
+            ttnn.deallocate(mask)
         return streams, new_state
 
     # ------------------------------------------------------------------- decode

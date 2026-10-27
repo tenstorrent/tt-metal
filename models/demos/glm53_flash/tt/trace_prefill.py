@@ -46,6 +46,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.tt.mesh import GLMMesh
+from models.demos.glm53_flash.tt.moe import pad_row_mask_host
 
 TILE = 32
 DENSE_ROWS = 2048  # TtDSA.sparse_row_start: rows at positions < 2048 attend densely (the traced range, Phase A)
@@ -216,6 +217,7 @@ class PrefillTraceInputs:
     ids: ttnn.Tensor  # [1,1,1,T] uint32 RM, row-sharded (each row embeds its own slab)
     end: ttnn.Tensor  # [1,1,1,1] uint32 RM replicated: the prompt length S (ttKDA actual_end)
     ring_sel: ttnn.Tensor  # [1,1,32,T] bf16 TILE replicated: ring-row selector (rows j < 4)
+    row_mask: ttnn.Tensor  # [1,1,T,32] bf16 TILE row-sharded: column 0 = 1.0 on rows < S (the MoE pad-row mask)
     tile_start: ttnn.Tensor  # [4] int32 replicated: [0, 0, tile0, 0], the last token's 32-row tile of the local rows
     tile_end: ttnn.Tensor  # [4] int32 replicated: [1, 1, tile0 + 32, hidden]
     out_logits: ttnn.Tensor | None  # [1,1,32,V] bf16 TILE: the tile's logits, copied inside the trace
@@ -239,6 +241,7 @@ class PrefillTraceInputs:
             ids=_upload(mesh, torch.zeros(1, 1, 1, T, dtype=torch.int32), ttnn.uint32, rm, rows_dim=3),
             end=_upload(mesh, torch.tensor([[[[T]]]], dtype=torch.int32), ttnn.uint32, rm),
             ring_sel=_upload(mesh, torch.zeros(1, 1, TILE, T), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            row_mask=_upload(mesh, pad_row_mask_host(T, T), ttnn.bfloat16, ttnn.TILE_LAYOUT, rows_dim=2),
             tile_start=_upload(mesh, torch.tensor([0, 0, T_loc - TILE, 0], dtype=torch.int32), i32, rm),
             tile_end=_upload(mesh, torch.tensor([1, 1, T_loc, hidden], dtype=torch.int32), i32, rm),
             out_logits=_upload(mesh, torch.zeros(1, 1, TILE, vocab), ttnn.bfloat16, ttnn.TILE_LAYOUT)
@@ -280,6 +283,7 @@ class PrefillTraceInputs:
         _refresh(mesh, ids_host, self.ids, rows_dim=3)
         _refresh(mesh, torch.tensor([[[[S]]]], dtype=torch.int32), self.end)
         _refresh(mesh, self.ring_selector(S, self.T), self.ring_sel)
+        _refresh(mesh, pad_row_mask_host(self.T, S), self.row_mask, rows_dim=2)  # rows >= S leave the router
         tile0 = ((S - 1) % self.T_loc) // TILE * TILE  # the same local offset on every row (the owner row is read)
         _refresh(mesh, torch.tensor([0, 0, tile0, 0], dtype=torch.int32), self.tile_start)
         _refresh(mesh, torch.tensor([1, 1, tile0 + TILE, self.hidden], dtype=torch.int32), self.tile_end)
