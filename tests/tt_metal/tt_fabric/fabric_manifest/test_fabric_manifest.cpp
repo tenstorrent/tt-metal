@@ -42,6 +42,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_catalog.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {
@@ -1237,9 +1238,6 @@ void check_archs(const json& manifest) {
             "heartbeat",
             "fabric_telemetry",
             "routing_table",
-            "go_msg",
-            "launch",
-            "launch_msg_rd_ptr",
             "eth_fw_mailbox",
             "base_fw_port_status",
             "base_fw_train_status",
@@ -1256,7 +1254,6 @@ void check_archs(const json& manifest) {
     };
     expect_hal_area("fabric_telemetry", HalL1MemAddrType::FABRIC_TELEMETRY);
     expect_hal_area("routing_table", HalL1MemAddrType::ROUTING_TABLE);
-    expect_hal_area("launch_msg_rd_ptr", HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
     if (hal.get_dev_addr(core, HalL1MemAddrType::ETH_FW_MAILBOX) != 0) {
         expect_hal_area("eth_fw_mailbox", HalL1MemAddrType::ETH_FW_MAILBOX);
     } else {
@@ -1285,19 +1282,6 @@ void check_archs(const json& manifest) {
     expect_base_fw_word("base_fw_retrain_count", FWMailboxMsg::RETRAIN_COUNT);
     expect_base_fw_word("base_fw_rx_link_up", FWMailboxMsg::RX_LINK_UP);
     expect_base_fw_word("base_fw_postcode", FWMailboxMsg::POSTCODE);
-
-    // Only the first of the HAL's go messages: the one active ERISC firmware uses.
-    const auto& go_msg = areas.at("go_msg");
-    EXPECT_EQ(go_msg.at("address").get<uint64_t>(), hal.get_dev_addr(core, HalL1MemAddrType::GO_MSG));
-    EXPECT_EQ(go_msg.at("size"), hal.get_dev_msgs_factory(core).size_of<tt::tt_metal::dev_msgs::go_msg_t>());
-    EXPECT_FALSE(go_msg.contains("num_elements"));
-
-    // The whole launch ring, which starts at the HAL's single LAUNCH entry.
-    const auto& launch = areas.at("launch");
-    EXPECT_EQ(launch.at("address").get<uint64_t>(), hal.get_dev_addr(core, HalL1MemAddrType::LAUNCH));
-    EXPECT_EQ(launch.at("size_per_element"), hal.get_dev_size(core, HalL1MemAddrType::LAUNCH));
-    EXPECT_EQ(launch.at("num_elements"), tt::tt_metal::dev_msgs::launch_msg_buffer_num_entries);
-    EXPECT_EQ(launch.at("schema"), "struct:launch_msg_t");
 
     const auto& heartbeat = areas.at("heartbeat");
     EXPECT_EQ(
@@ -1514,10 +1498,50 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(schema_name({element::Uint{}, 8, 2}), "u32");
     EXPECT_EQ(schema_name({element::Enum{"RouterState"}, 4, 0}), "enum:RouterState");
     EXPECT_EQ(schema_name({element::Struct{"WorkerXY"}, 4, 0}), "struct:WorkerXY");
-    EXPECT_EQ(schema_name({element::Packed{"direction_table", 2}, 16, 64}), "packed:direction_table");
+    EXPECT_EQ(
+        schema_name({element::TaggedUnion{"NocCommandFields", "noc_send_type"}, 40, 0}), "union:NocCommandFields");
     EXPECT_EQ(schema_name({element::Bytes{}, 1, 0}), "bytes");
     EXPECT_EQ(schema_name({element::Pad{}, 1, 0}), "pad");
     EXPECT_EQ(schema_name(layout::type_of<uint32_t>()), "u32");
+}
+
+// EDMStatus is listed by hand, since enchantum cannot reach its values. Each listed name should carry its enumerator's
+// value, so decode names a router's status word correctly.
+TEST(ManifestTypes, EdmStatusEnumerators) {
+    const manifest::EnumType type = manifest::enum_type<EDMStatus>();
+    EXPECT_EQ(type.name, "EDMStatus");
+    const auto value_of = [&](std::string_view name) {
+        const auto it = std::ranges::find(type.enumerators, name, &manifest::Enumerator::name);
+        EXPECT_NE(it, type.enumerators.end()) << name;
+        return it == type.enumerators.end() ? 0u : it->value;
+    };
+    EXPECT_EQ(value_of("STARTED"), static_cast<uint32_t>(EDMStatus::STARTED));
+    EXPECT_EQ(value_of("READY_FOR_TRAFFIC"), static_cast<uint32_t>(EDMStatus::READY_FOR_TRAFFIC));
+    EXPECT_EQ(value_of("INITIALIZATION_COMPLETE"), static_cast<uint32_t>(EDMStatus::INITIALIZATION_COMPLETE));
+}
+
+// Every struct and enum a described struct's members name should itself be described, so the manifest's schemas
+// resolve from the layouts alone, before any run writes a manifest.
+TEST(ManifestTypes, EveryTypeALayoutNamesIsDescribed) {
+    const auto structs = manifest::described_struct_types();
+    const auto enums = manifest::described_enum_types();
+    std::set<std::string_view> struct_names;
+    std::set<std::string_view> enum_names;
+    for (const auto& type : structs) {
+        EXPECT_TRUE(struct_names.insert(type.name).second) << "two structs are named " << type.name;
+    }
+    for (const auto& type : enums) {
+        EXPECT_TRUE(enum_names.insert(type.name).second) << "two enums are named " << type.name;
+    }
+    for (const auto& type : structs) {
+        for (const auto& member : type.members) {
+            if (const auto* s = std::get_if<layout::element::Struct>(&member.type.element)) {
+                EXPECT_TRUE(struct_names.contains(s->type_name)) << type.name << "." << member.name;
+            } else if (const auto* e = std::get_if<layout::element::Enum>(&member.type.element)) {
+                EXPECT_TRUE(enum_names.contains(e->type_name)) << type.name << "." << member.name;
+            }
+        }
+    }
 }
 
 TEST(ManifestArgs, SameFamily) {

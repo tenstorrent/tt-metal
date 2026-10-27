@@ -45,7 +45,7 @@ run_mock() {
 }
 
 echo "== Device-free tests"
-"$BIN" --gtest_filter='ManifestNames.*:ManifestArgs.*:ManifestDocs.*:StructLayout.*'
+"$BIN" --gtest_filter='ManifestNames.*:ManifestTypes.*:ManifestArgs.*:ManifestDocs.*:StructLayout.*'
 
 run_mock t3k_1d "$T3K" 'Fabric1DManifestFixture.*'
 run_mock t3k_2d "$T3K" 'Fabric2DManifestFixture.*'

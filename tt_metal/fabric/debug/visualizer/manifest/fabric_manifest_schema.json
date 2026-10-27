@@ -46,7 +46,7 @@
     "z_port_role": { "enum": ["none", "intermesh_boundary", "express_chord"] },
     "schema": {
       "type": "string",
-      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*|enum:[A-Za-z_][A-Za-z0-9_]*|packed:[a-z0-9_]+)$"
+      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*|enum:[A-Za-z_][A-Za-z0-9_]*)$"
     },
     "stream_register": {
       "description": "A register's byte offset in a stream's block, and how many of the word's low bits hold its value.",
@@ -122,19 +122,17 @@
     },
 
     "type_keys": {
-      "description": "A type's size and schema. An array also has num_elements and size_per_element, and a packed table num_elements and bits_per_entry.",
+      "description": "A type's size and schema. An array also has num_elements and size_per_element.",
       "type": "object",
       "properties": {
         "size": { "$ref": "#/$defs/count" },
         "num_elements": { "$ref": "#/$defs/count" },
         "size_per_element": { "$ref": "#/$defs/count" },
-        "bits_per_entry": { "$ref": "#/$defs/count" },
         "schema": { "$ref": "#/$defs/schema" }
       },
       "required": ["size", "schema"],
       "dependentRequired": {
-        "size_per_element": ["num_elements"],
-        "bits_per_entry": ["num_elements"]
+        "size_per_element": ["num_elements"]
       }
     },
     "region_keys": {
@@ -184,9 +182,6 @@
             },
             "fabric_telemetry": { "$ref": "#/$defs/region" },
             "routing_table": { "$ref": "#/$defs/region" },
-            "go_msg": { "$ref": "#/$defs/region" },
-            "launch": { "$ref": "#/$defs/region" },
-            "launch_msg_rd_ptr": { "$ref": "#/$defs/region" },
             "eth_fw_mailbox": { "$ref": "#/$defs/optional_region" },
             "base_fw_port_status": { "$ref": "#/$defs/optional_region" },
             "base_fw_train_status": { "$ref": "#/$defs/optional_region" },
@@ -195,7 +190,7 @@
             "base_fw_postcode": { "$ref": "#/$defs/optional_region" }
           },
           "required": [
-            "heartbeat", "fabric_telemetry", "routing_table", "go_msg", "launch", "launch_msg_rd_ptr",
+            "heartbeat", "fabric_telemetry", "routing_table",
             "eth_fw_mailbox", "base_fw_port_status", "base_fw_train_status", "base_fw_retrain_count",
             "base_fw_rx_link_up", "base_fw_postcode"
           ],
