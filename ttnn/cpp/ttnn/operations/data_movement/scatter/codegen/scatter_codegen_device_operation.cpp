@@ -75,9 +75,9 @@ ScatterCodegenDeviceOperation::program_factory_t ScatterCodegenDeviceOperation::
 // factory's create_descriptor() will.
 ttsl::hash::hash_t ScatterCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // With the program cache on this runs ahead of validate_on_program_cache_miss(), and
-    // select_program_factory() reads the operands' buffers, so a missing one must fail here rather
-    // than dereference null.
+    // The framework's validate_input_tensors has already rejected a host or deallocated operand by
+    // the time the key is computed; this restates the precondition select_program_factory() reads
+    // the buffers under, since it runs ahead of validate_on_program_cache_miss().
     TT_FATAL(
         tensor_args.input_tensor.buffer() != nullptr && tensor_args.index_tensor.buffer() != nullptr &&
             tensor_args.src_tensor.buffer() != nullptr,
@@ -201,9 +201,9 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             out.buffer() != nullptr, "scatter_codegen: preallocated output tensor has no device buffer allocated.");
         TT_FATAL(
-            out.buffer() != src_tensor.buffer(),
-            "scatter_codegen: preallocated output tensor must not alias src (the readers scan the whole source "
-            "row while the writers update it).");
+            out.buffer() != src_tensor.buffer() && out.buffer() != index_tensor.buffer(),
+            "scatter_codegen: preallocated output tensor must not alias src or index (the readers scan the whole "
+            "source and index rows while the writers update the output).");
     }
 }
 
@@ -228,9 +228,9 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_hit(
             out.buffer() != nullptr && out.device() == input_tensor.device(),
             "scatter_codegen: preallocated output tensor must be allocated on the input's device.");
         TT_FATAL(
-            out.buffer() != src_tensor.buffer(),
-            "scatter_codegen: preallocated output tensor must not alias src (the readers scan the whole source "
-            "row while the writers update it).");
+            out.buffer() != src_tensor.buffer() && out.buffer() != index_tensor.buffer(),
+            "scatter_codegen: preallocated output tensor must not alias src or index (the readers scan the whole "
+            "source and index rows while the writers update the output).");
     }
 }
 
@@ -288,7 +288,7 @@ ScatterCodegenParams build_scatter_codegen_params(
             geometry.output_logical_w,
             geometry.idx_valid_h_last,
             geometry.idx_valid_w_last,
-            geometry.Ht_per_batch_src,
+            geometry.Ht_per_batch_index,
             /*num_sticks=*/0,
             /*input_stick_elems=*/0,
             /*index_stick_elems=*/0,
@@ -305,7 +305,7 @@ ScatterCodegenParams build_scatter_codegen_params(
         /*output_logical_w=*/0,
         /*idx_valid_h_last=*/0,
         /*idx_valid_w_last=*/0,
-        /*Ht_per_batch_src=*/0,
+        /*Ht_per_batch_index=*/0,
         geometry.num_sticks,
         geometry.input_stick_elems,
         geometry.index_stick_elems,

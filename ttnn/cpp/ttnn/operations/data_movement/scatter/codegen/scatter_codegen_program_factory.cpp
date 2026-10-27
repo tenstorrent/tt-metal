@@ -24,6 +24,8 @@ using namespace tt::tt_metal;
 
 namespace {
 
+// Deliberately not gather's map (input on c_0, output on c_2): the kernels are written against this
+// one, and a watcher dump of a scatter program reads with these ids.
 constexpr uint32_t kCbOutput = tt::CBIndex::c_0;
 constexpr uint32_t kCbIndex = tt::CBIndex::c_1;
 constexpr uint32_t kCbSrc = tt::CBIndex::c_2;
@@ -161,8 +163,17 @@ CBDescriptor make_tile_cb(uint32_t cb_id, const Tensor& tensor, uint32_t depth, 
     };
 }
 
+// CB sizes reach the device in 16 B words, so a page that is not a multiple of 16 B would leave the
+// kernel's view of the buffer short of what the host wrote into it.
+constexpr uint32_t kCbWordBytes = 16;
+
 CBDescriptor make_rm_cb(
-    uint32_t cb_id, tt::tt_metal::DataType dtype, uint32_t page_size, uint32_t depth, const CoreRangeSet& core_range) {
+    uint32_t cb_id,
+    tt::tt_metal::DataType dtype,
+    uint32_t raw_page_size,
+    uint32_t depth,
+    const CoreRangeSet& core_range) {
+    const uint32_t page_size = tt::align(raw_page_size, kCbWordBytes);
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
     return CBDescriptor{
         .total_size = depth * page_size,
@@ -224,7 +235,7 @@ ScatterTileGeometry compute_scatter_tile_geometry(
     const uint32_t idx_w_mod = logical_index[-1] % tile_w;
     const uint32_t idx_valid_w_last = idx_w_mod != 0 ? idx_w_mod : tile_w;
 
-    const uint32_t Ht_per_batch_src = padded_src[-2] / tile_h;
+    const uint32_t Ht_per_batch_index = padded_src[-2] / tile_h;
 
     return ScatterTileGeometry{
         Ht,
@@ -233,7 +244,7 @@ ScatterTileGeometry compute_scatter_tile_geometry(
         input_tensor.logical_shape()[-1],
         idx_valid_h_last,
         idx_valid_w_last,
-        Ht_per_batch_src};
+        Ht_per_batch_index};
 }
 
 ScatterRmGeometry compute_scatter_rm_geometry(const Tensor& input_tensor, const Tensor& index_tensor) {
@@ -269,7 +280,11 @@ uint64_t scatter_static_l1(const Tensor& input_tensor) {
     auto* device = input_tensor.device();
     const uint64_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const uint64_t ceiling = static_cast<uint64_t>(device->l1_size_per_core());
-    return ceiling > base ? ceiling - base : 0;
+    // The bank excludes the L1_SMALL region a device may be opened with, which sits at the top of the
+    // span and which the occupancy query below never reports; CBs planned past the bank would overlap
+    // it silently.
+    const uint64_t bank = device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+    return std::min(ceiling > base ? ceiling - base : 0, bank);
 }
 
 uint64_t scatter_usable_l1(const Tensor& input_tensor) {
@@ -300,12 +315,12 @@ uint64_t scatter_rm_fixed_bytes(uint64_t input_page_bytes, uint64_t output_page_
 }
 
 bool scatter_rm_min_plan_fits_l1(
-    uint64_t static_l1, uint64_t input_page_bytes, uint32_t index_elem_size, uint32_t src_elem_size, bool bf16_reduce) {
+    uint64_t l1_budget, uint64_t input_page_bytes, uint32_t index_elem_size, uint32_t src_elem_size, bool bf16_reduce) {
     // The gate runs before the output exists; supported_execution_controls() pins the output's buffer
     // type to the input's, so the output page is the input's own.
     const uint64_t fixed_bytes = scatter_rm_fixed_bytes(input_page_bytes, input_page_bytes, bf16_reduce);
     const uint64_t min_chunk_bytes = static_cast<uint64_t>(kRmMinChunkElems) * (index_elem_size + src_elem_size);
-    return fixed_bytes + min_chunk_bytes <= static_l1;
+    return fixed_bytes + min_chunk_bytes <= l1_budget;
 }
 
 uint32_t scatter_rm_chunk_elems(
@@ -323,13 +338,13 @@ uint32_t scatter_rm_chunk_elems(
         // Chunking is now actually in play (chunk < index_stick_elems): preserve the 32-byte NOC
         // alignment every chunk-boundary offset needs.
         chunk = (chunk / kRmChunkAlign) * kRmChunkAlign;
-        // supported_by_codegen() only ever validated the STATIC L1 ceiling (scatter_static_l1) at
-        // routing time; the LIVE frontier read here (scatter_usable_l1) can be tighter by the time this
-        // factory runs (e.g. this call's own L1-placed output already seated). Rounding an
-        // under-budget affordance down to zero would hand the reader kernels a chunk_elems that never
-        // advances their `base += chunk_elems` loop, hanging the device instead of failing. Clamp to
-        // the smallest NOC-alignment-safe chunk and let Program::validate_circular_buffer_region raise
-        // a real allocation error if even that does not fit.
+        // The forced entry and direct prim callers are gated on the static bank only, and even a routed
+        // call's own L1 output seats between routing and this factory, so the frontier read here can
+        // be tighter than what was planned against. Rounding an under-budget affordance down to zero
+        // would hand the reader kernels a chunk_elems that never advances their `base += chunk_elems`
+        // loop, hanging the device instead of failing. Clamp to the smallest NOC-alignment-safe chunk
+        // and let Program::validate_circular_buffer_region raise a real allocation error if even that
+        // does not fit.
         chunk = std::max(chunk, kRmMinChunkElems);
     }
     return chunk;
@@ -360,7 +375,7 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryInterleaved::create_
         split.num_cores,
         attributes.idx_valid_h_last,
         attributes.idx_valid_w_last,
-        attributes.Ht_per_batch_src,
+        attributes.Ht_per_batch_index,
         attributes.output_logical_w,
     };
     TensorAccessorArgs(*index_t.buffer()).append_to(reader_ct);
@@ -440,7 +455,7 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryStreaming::create_de
         split.num_cores,
         attributes.idx_valid_h_last,
         attributes.idx_valid_w_last,
-        attributes.Ht_per_batch_src,
+        attributes.Ht_per_batch_index,
         attributes.output_logical_w,
     };
     TensorAccessorArgs(*index_t.buffer()).append_to(reader_ct);
