@@ -204,10 +204,9 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
 
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATA, 0x3c02);
 
-    // Number of instructions in one iteration of the loop body. Used by the
-    // load_replay_buf record and TTI_REPLAY/replay below; MUST match exactly the
-    // count of TTI_ instructions emitted by the recorded lambda, or the replay
-    // buffer will misalign.
+    // Number of instructions in one iteration of the loop body: the recorded
+    // lambda plus the inline tail below. MUST match exactly the count of TTI_
+    // instructions they emit, or the replay buffer will misalign.
     //
     //   Base body:                                                15
     //     SFPLOAD, SFPMAD, SFPLOADI(255), SFPSWAP,
@@ -218,10 +217,21 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     //   + is_fp32_dest_acc_en ? 0 : 1       (SFP_STOCH_RND fp32→bf16)
     constexpr int BODY_LEN = 15 + (SCALE_EN ? 1 : 0) + (is_fp32_dest_acc_en ? 0 : 1);
 
-    // Record the loop body into replay buffer slot 0 the first time
-    // through. Subsequent iterations replay the recorded sequence, which
+    // Blackhole splits each thread's 32-entry replay buffer at ckernel::math::replay_buf_offset: the slots below
+    // it are the SFPU's, the rest hold the FPU ops' recorded sequences (matmul records its MVMUL sequence there
+    // once per matmul_init and replays it on every matmul_tiles). The scaled bf16 body is one word too long for
+    // the SFPU's slots, so its last word, the SFPSTORE, is issued inline after the record and after every replay
+    // instead of being recorded. Every other instantiation records the whole body, as before.
+    constexpr int TAIL_LEN = BODY_LEN > static_cast<int>(ckernel::math::replay_buf_offset) ? 1 : 0;
+    constexpr int HEAD_LEN = BODY_LEN - TAIL_LEN;
+    static_assert(
+        HEAD_LEN <= static_cast<int>(ckernel::math::replay_buf_offset),
+        "the recorded head must stay inside the SFPU's replay slots");
+
+    // Record the head of the loop body into replay buffer slot 0 the first
+    // time through. Subsequent iterations replay the recorded sequence, which
     // shrinks the unrolled kernel binary from ~ITERATIONS*BODY_LEN
-    // instructions down to BODY_LEN + (ITERATIONS - 1) replays.
+    // instructions down to BODY_LEN + (ITERATIONS - 1) * (1 + TAIL_LEN).
     //
     // Per-element runtime is unchanged: the recorded instructions execute
     // exactly as if they had been issued inline, and dst_reg is advanced
@@ -232,12 +242,17 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // same SFPU slots; the two never run under one init, since the DEST
     // accumulation mode picks one of them. Callers that mix this function
     // with other replay-buffer clients should not rely on slots
-    // [0, BODY_LEN) surviving the call.
+    // [0, HEAD_LEN) surviving the call.
     //
     // The record goes through load_replay_buf, which brackets it with
     // disable_gathering()/enable_gathering() when ENABLE_GATHERING is defined
     // and compiles to the bare record otherwise.
-    load_replay_buf<Exec>(0 /*start*/, BODY_LEN, [exp_base_scale_factor] {
+    //
+    // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
+    // (ADDR_MOD_6 increments dest by 2 on store.)
+    auto store = [] { TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0); };
+
+    load_replay_buf<Exec>(0 /*start*/, HEAD_LEN, [exp_base_scale_factor, store] {
         // val = sfpi::dst_reg[0]
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
 
@@ -308,17 +323,23 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
                 sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         }
 
-        // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
-        // (ADDR_MOD_6 increments dest by 2 on store.)
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+        if constexpr (TAIL_LEN == 0) {
+            store();
+        }
     });
+    if constexpr (TAIL_LEN == 1) {
+        store();
+    }
 
 #pragma GCC unroll 8
     for (std::uint32_t i = 1; i < ITERATIONS; i++) {
-        // Replay the recorded body for the remaining ITERATIONS - 1 elements.
+        // Replay the recorded head for the remaining ITERATIONS - 1 elements.
         // Each replay is one REPLAY-equivalent issue; the body executes as
         // if it had been issued inline, dst_reg advancing via ADDR_MOD_6.
-        TTI_REPLAY(0, BODY_LEN, 0, 0);
+        TTI_REPLAY(0, HEAD_LEN, 0, 0);
+        if constexpr (TAIL_LEN == 1) {
+            store();
+        }
     }
 }
 
