@@ -1205,3 +1205,12 @@ a/b/c/d; the server log shows the one-copy build ("the stacked stream copy is no
 ppb 1), boot 616 s (676 with the stacked upload); first tokens exact, determinism 4/4, 4 x 65 514-token needles 4/4 (TTFT 28.1 / 54.6 /
 81.1 / 107.6 s); bench 128 x 128 x 32: TPOT 103.2 ms = 9.7 tok/s per user, 37.3 tok/s output (174.8 before), queue TTFT median 48.2 s
 (82.5). The served step is now the harness replay (~76 ms) + ~26 ms host; the host share is the next serving lever.
+
+13:17 `long1m_B4_8x4_default` (wt_frozen20 defaults + bound; 4 prompts per row x 8 rows at ISL 1 047 612, gen 160): prefill 484.8 s
+(2161 tok/s; per user 485/474/474/472), decode step 78.8 ms = 12.7 tok/s per user, 406 aggregate at 32 slots (was 152.1 / 6.6 / 210).
+Needles 30/32: rows 2 and 3 of user 3 produced "The user asked what is the secret passphrase for the vault. Answer with the passphrase
+only." -- the same alternative as row 1 of the batch-1 run, always after the shared first token 785. Reading: a near-tie at the second
+token under the stream (= stacked) numerics that the row-level ulp noise flips on ~3 of 40 replica slots; the 2026-10-21 runs (32/32,
+8/8) decoded on the regions-fallback numerics (chain pcc 0.9497 vs 0.8615) where the tie sat elsewhere. Not a corruption signature
+(coherent text, no cross-talk, exact first tokens served); the natural-text logits gates (`logits_8x4_all`) remain the arbiter.
+README 32-slot 1 M row refreshed.
