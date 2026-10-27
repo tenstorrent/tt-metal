@@ -410,32 +410,65 @@ inline void calculate_unary_power(const uint32_t exponent) {
 }
 
 /**
+ * @brief Raises two adjacent rows to the power (exp_minus_one + 1) by binary exponentiation
+ *
+ * Each row runs the same multiply sequence as a single-row walk; pairing them shares the walk's
+ * branches and lets each row's multiply cover the other's MUL latency, so no NOPs are needed.
+ * The last squaring is skipped since its result is never used.
+ *
+ * @param exp_minus_one Exponent minus one (the first factor is the base itself)
+ */
+sfpi_inline void _sfpu_unary_power_iterative_two_rows_(const uint32_t exp_minus_one) {
+    sfpi::vFloat in0 = sfpi::dst_reg[0];
+    sfpi::vFloat in1 = sfpi::dst_reg[1];
+    sfpi::vFloat result0 = in0;
+    sfpi::vFloat result1 = in1;
+    for (uint32_t exp = exp_minus_one; exp > 0;) {
+        if (exp & 1) {
+            result0 *= in0;
+            result1 *= in1;
+        }
+        exp >>= 1;
+        if (exp == 0) {
+            break;
+        }
+        in0 *= in0;
+        in1 *= in1;
+    }
+    sfpi::dst_reg[0] = result0;
+    sfpi::dst_reg[1] = result1;
+    sfpi::dst_reg += 2;
+}
+
+/**
  * @brief Compute power operation using iterative approach
  *
  * @param exponent Non-negative integer exponent value
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_power_iterative(const uint32_t exponent) {
+    static_assert(ITERATIONS % 2 == 0, "rows are processed in pairs");
     // iterative approach for positive integer exponents
+    if (exponent == 0) {
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        if (exponent == 0) {
+        for (int d = 0; d < ITERATIONS; d++) {
             sfpi::dst_reg[0] = 1.0f;
-        } else {
-            sfpi::vFloat result = in;
-            uint32_t exp = exponent - 1;
-
-            while (exp > 0) {
-                if (exp & 1) {
-                    result *= in;
-                }
-                in *= in;
-                exp >>= 1;
-            }
-            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
         }
-        sfpi::dst_reg++;
+        return;
+    }
+    if (__builtin_constant_p(exponent)) {
+        // The walk folds to straight-line multiplies; unrolling lets the compiler replay-roll the rows.
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d += 2) {
+            _sfpu_unary_power_iterative_two_rows_(exponent - 1);
+        }
+    } else {
+        // Runtime exponent: keep the row loop rolled so the bit walk is emitted once, not per row.
+#pragma GCC unroll 1
+        for (int d = 0; d < ITERATIONS; d += 2) {
+            _sfpu_unary_power_iterative_two_rows_(exponent - 1);
+        }
     }
 }
 
