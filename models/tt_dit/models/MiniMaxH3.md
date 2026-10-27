@@ -356,9 +356,10 @@ say plainly:
 
 ### Opening the mesh
 
-Every H3 mesh, on every architecture, opens with `worker_l1_size=minimax_h3_worker_l1_size()` (from
-`pipelines/minimax_h3/pipeline_minimax_h3.py`), next to the fabric settings `resolve_mesh_preset` gives.
-It trades 2 KB of allocatable L1 per core for a 71 KB kernel-config ring instead of the 69 KB default:
+Every H3 mesh opens with `worker_l1_size=minimax_h3_worker_l1_size(mesh_shape)` (from
+`pipelines/minimax_h3/pipeline_minimax_h3.py`), next to the fabric settings `resolve_mesh_preset` gives: each
+preset carries a `kernel_config_ring_bytes`, and the helper turns it into this architecture's `worker_l1_size`.
+Every preset asks for 71 KB, trading 2 KB of allocatable L1 per core against the 69 KB default ring:
 the vision tower's ring attention otherwise overflows the ring on Wormhole. `MiniMaxH3Pipeline` raises on
 a mesh opened with a smaller ring, and the test fixtures (`tests/models/minimax_h3/conftest.py`) open with
 the same value, so the Memory Test checks the deployed layout.

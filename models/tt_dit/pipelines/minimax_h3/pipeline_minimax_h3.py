@@ -290,6 +290,21 @@ class _BucketState:
     warm: bool = False
 
 
+# Tensix kernel-config ring: the L1 window between the firmware and the allocatable region, where
+# dispatch stages each program's kernel binaries, runtime args, semaphores and CB configs. A program
+# larger than the ring aborts at compile ("Program size (...) too large for kernel config buffer").
+# Both architectures default to 69 KB (70656 B). On Wormhole the Qwen3-VL vision tower's ring_joint_sdpa
+# overflowed it twice -- 70816 B on 2026-10-16, 70864 B after tt-metal#56754 (+292 B in the pack thread)
+# -- and SFPI 7.91.0 then cut it to 68816 B at its tightest shape: kernel text moves by kilobytes with
+# LLK and toolchain changes, in either direction. Blackhole sits ~6 KB lower. The ring grows by exactly
+# the bytes `worker_l1_size` gives up, so each preset carries `kernel_config_ring_bytes` and the mesh
+# opens with `minimax_h3_worker_l1_size(mesh_shape)`: 2 KB of each core's ~1.4 MB of allocatable L1, for
+# ~3.9 KB of headroom on that program at SFPI 7.91.0. A ring size rather than an absolute
+# `worker_l1_size`, because the latter means a different ring per architecture and moves whenever the
+# firmware region does. Servers and the test fixtures (tests/models/minimax_h3/conftest.py) both open
+# with it, so the Memory Test checks the deployed layout, and the pipeline refuses a smaller ring.
+_KERNEL_CONFIG_RING_BYTES = 71 * 1024
+
 # Per-mesh-shape defaults, following `pipelines/wan/pipeline_wan.py`'s `_PRESETS_BH`. An unlisted
 # shape raises rather than defaulting, so it cannot silently ring-collective over a line fabric.
 #
@@ -308,6 +323,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
         "use_persistent_ccl_buffers": False,
         "trace_audio": True,
+        "kernel_config_ring_bytes": _KERNEL_CONFIG_RING_BYTES,
     },
     # Quad Blackhole Galaxy, 4 MPI hosts x 32 chips. Same axes, links and topology; SP goes 8 -> 32,
     # which moves the SP alignment to 32 * TILE_SIZE = 1024 and re-keys every packed length.
@@ -329,6 +345,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "audio_t_shard": True,
         "audio_t_factor": 32,
         "trace_audio": True,
+        "kernel_config_ring_bytes": _KERNEL_CONFIG_RING_BYTES,
     },
 }
 
@@ -362,6 +379,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "bucket_denoise": True,
         "use_persistent_ccl_buffers": False,
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
+        "kernel_config_ring_bytes": _KERNEL_CONFIG_RING_BYTES,
     },
 }
 
@@ -413,28 +431,15 @@ def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -
     return preset
 
 
-# Tensix kernel-config ring: the L1 window between the firmware and the allocatable region, where
-# dispatch stages each program's kernel binaries, runtime args, semaphores and CB configs. A program
-# larger than the ring aborts at compile ("Program size (...) too large for kernel config buffer").
-# Both architectures default to 69 KB (70656 B). On Wormhole the Qwen3-VL vision tower's ring_joint_sdpa
-# overflowed it twice -- 70816 B on 2026-10-16, 70864 B after tt-metal#56754 (+292 B in the pack thread)
-# -- and SFPI 7.91.0 then cut it to 68816 B at its tightest shape: kernel text moves by kilobytes with
-# LLK and toolchain changes, in either direction. Blackhole sits ~6 KB lower. The ring grows by exactly
-# the bytes `worker_l1_size` gives up, so every MiniMax-H3 mesh opens with `minimax_h3_worker_l1_size()`:
-# 2 KB of each core's ~1.4 MB of allocatable L1, for ~3.9 KB of headroom on that program at SFPI 7.91.0.
-# Wormhole Llama3-70B Galaxy serving runs with a ring 47.5 KB larger. Servers and the test fixtures
-# (tests/models/minimax_h3/conftest.py) both open with this value, so the Memory Test checks the
-# layout that is deployed, and the pipeline refuses a mesh opened with a smaller ring.
-MINIMAX_H3_KERNEL_CONFIG_RING_BYTES = 71 * 1024
+def minimax_h3_worker_l1_size(mesh_shape: tuple[int, ...]) -> int | None:
+    """`worker_l1_size` to open a MiniMax-H3 mesh of this shape with, or None for an unlisted shape.
 
-
-def minimax_h3_worker_l1_size() -> int:
-    """`worker_l1_size` to open every MiniMax-H3 mesh with, on either architecture.
-
-    The allocatable L1 left above a `MINIMAX_H3_KERNEL_CONFIG_RING_BYTES` ring. Pass it with the
-    preset's fabric settings to `ttnn.open_mesh_device(..., worker_l1_size=...)`.
+    The allocatable L1 left above the preset's `kernel_config_ring_bytes` ring on this architecture. Pass it
+    with the preset's fabric settings to `ttnn.open_mesh_device(..., worker_l1_size=...)`; None leaves the
+    stock 69 KB ring.
     """
-    return ttnn.device.get_max_worker_l1_unreserved_size() - MINIMAX_H3_KERNEL_CONFIG_RING_BYTES
+    ring = resolve_mesh_preset(mesh_shape, required=False).get("kernel_config_ring_bytes")
+    return None if ring is None else ttnn.device.get_max_worker_l1_unreserved_size() - ring
 
 
 def kernel_config_ring_bytes(mesh_device: ttnn.MeshDevice) -> int:
@@ -446,13 +451,15 @@ def kernel_config_ring_bytes(mesh_device: ttnn.MeshDevice) -> int:
 
 
 def check_kernel_config_ring(mesh_device: ttnn.MeshDevice) -> None:
-    """Raise unless `mesh_device` was opened with at least MiniMax-H3's kernel-config ring."""
+    """Raise unless `mesh_device` was opened with at least its preset's kernel-config ring (no-op if unlisted)."""
+    shape = tuple(mesh_device.shape)
+    needed = resolve_mesh_preset(shape, required=False).get("kernel_config_ring_bytes")
     ring = kernel_config_ring_bytes(mesh_device)
-    if ring < MINIMAX_H3_KERNEL_CONFIG_RING_BYTES:
+    if needed is not None and ring < needed:
         msg = (
-            f"this mesh has a {ring} B kernel-config ring; MiniMax-H3 needs "
-            f"{MINIMAX_H3_KERNEL_CONFIG_RING_BYTES} B, or its largest programs fail to compile. Open the mesh "
-            f"with worker_l1_size=minimax_h3_worker_l1_size() ({minimax_h3_worker_l1_size()} B on this device)."
+            f"this {shape} mesh has a {ring} B kernel-config ring; its MiniMax-H3 preset needs {needed} B, or the "
+            f"largest programs fail to compile. Open the mesh with worker_l1_size=minimax_h3_worker_l1_size("
+            f"{shape}) ({minimax_h3_worker_l1_size(shape)} B on this device)."
         )
         raise ValueError(msg)
 

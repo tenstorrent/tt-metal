@@ -14,14 +14,20 @@ from ....pipelines.minimax_h3.pipeline_minimax_h3 import minimax_h3_worker_l1_si
 
 @pytest.fixture(scope="function")
 def device_params(request):
-    """The root `device_params`, plus the `worker_l1_size` every MiniMax-H3 deployment opens with.
+    """The root `device_params`, plus the `worker_l1_size` a MiniMax-H3 deployment of this mesh shape opens with.
 
-    Filled in here rather than in each parametrize list so no H3 test opens a mesh with a layout that is
-    not deployed (see `MINIMAX_H3_KERNEL_CONFIG_RING_BYTES`), and at fixture time because the value comes
-    from the HAL, which collection must not touch. A test that sets its own `worker_l1_size` keeps it.
+    Read from the mesh preset's `kernel_config_ring_bytes` (`minimax_h3_worker_l1_size`), so no H3 test opens
+    a mesh with a layout that is not deployed; filled in at fixture time because the value comes from the HAL,
+    which collection must not touch. Shapes without a preset keep the stock ring, and a test that sets its own
+    `worker_l1_size` keeps it.
     """
     params = dict(getattr(request, "param", {}))
-    params.setdefault("worker_l1_size", minimax_h3_worker_l1_size())
+    callspec = getattr(request.node, "callspec", None)
+    shape = callspec.params.get("mesh_device") if callspec is not None else None
+    if isinstance(shape, (tuple, list)) and "worker_l1_size" not in params:
+        worker_l1_size = minimax_h3_worker_l1_size(tuple(shape))
+        if worker_l1_size is not None:
+            params["worker_l1_size"] = worker_l1_size
     return params
 
 

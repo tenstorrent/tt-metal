@@ -5,14 +5,14 @@
 """MiniMax-H3 kernel-config canary: the vision tower's ring attention must fit the deployed ring, with margin.
 
 The Qwen3-VL vision tower's `ring_joint_sdpa` is the largest program MiniMax-H3 compiles and has overflowed
-the Tensix kernel-config ring twice on Wormhole (see `MINIMAX_H3_KERNEL_CONFIG_RING_BYTES`), each time from an
+the Tensix kernel-config ring twice on Wormhole (see `_KERNEL_CONFIG_RING_BYTES`), each time from an
 LLK change outside tt_dit. CI's "Minimax H3 Memory Test" runs this first: it compiles just that program, for
 every shard-size variant the pipeline reaches, in about a minute and without weights, so a regression fails
 there before the 2.5 h warmup (test_mock_oom_minimax_h3.py), which covers every other program.
 
-The mesh opens with the deployed ring minus `GUARD_BYTES`, so this fails while deployments still have that much
-left: a red run here is a warning, and the fix is to shrink the program or raise the ring in
-`pipeline_minimax_h3.py`. The TT_FATAL lists the size per RISC.
+The mesh opens with its preset's `kernel_config_ring_bytes` minus `GUARD_BYTES`, so this fails while deployments
+still have that much left: a red run here is a warning, and the fix is to shrink the program or raise the ring in
+the preset (`pipeline_minimax_h3.py`). The TT_FATAL lists the size per RISC.
 
 `test_l1_small_fence_keeps_circular_buffers_out_of_l1_small` checks that this directory's `l1_small_fence` fixture
 is in place, so an H3 program whose static CBs would overwrite L1_SMALL (tt-metal#62798) fails its test.
@@ -35,11 +35,7 @@ import ttnn
 from models.tt_dit.encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionAttention, resolve_vision_parallel
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3 import (
-    MINIMAX_H3_KERNEL_CONFIG_RING_BYTES,
-    MINIMAX_H3_VISION_PATCH_LADDER,
-    resolve_mesh_preset,
-)
+from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3 import MINIMAX_H3_VISION_PATCH_LADDER, resolve_mesh_preset
 from models.tt_dit.tests.encoders.qwen3vl.common import HIDDEN_SIZE, NUM_HEADS
 from models.tt_dit.tests.models.minimax_h3.common import MESH_4X8_RING, MESH_4X8_RING_WH
 from models.tt_dit.utils.tensor import bf16_tensor
@@ -59,9 +55,10 @@ PATCHES = [256, 768, 1280, 1792, 2304, 2816, 3072, 3840]
 
 
 @pytest.fixture
-def device_params(device_params):
-    """Open with the deployed ring less the guard band (the `worker_l1_size` that ring leaves)."""
-    ring = MINIMAX_H3_KERNEL_CONFIG_RING_BYTES - GUARD_BYTES
+def device_params(request, device_params):
+    """Open with the preset's ring less the guard band (the `worker_l1_size` that ring leaves)."""
+    shape = tuple(request.node.callspec.params["mesh_device"])
+    ring = resolve_mesh_preset(shape)["kernel_config_ring_bytes"] - GUARD_BYTES
     device_params["worker_l1_size"] = ttnn.device.get_max_worker_l1_unreserved_size() - ring
     return device_params
 
