@@ -156,12 +156,6 @@ void kernel_main() {
             if (role == mrs::role::ADD_BWD || role == mrs::role::ADD_BOTH) {
                 ready &= landed(cb_arrivals_bwd) ? 1u : 0u;
             }
-#ifdef FF_FORCE_LATE  // test-only: every arrival entry takes the late branch (determinism / bit-equality check)
-            ready = 0;
-#endif
-#ifdef FF_FORCE_FUSED  // test-only: every arrival entry takes the fused branch (blocks on the arrival below)
-            ready = 1;
-#endif
             mailbox_write(ckernel::ThreadId::MathThreadId, ready);
             mailbox_write(ckernel::ThreadId::PackThreadId, ready);
         }));
