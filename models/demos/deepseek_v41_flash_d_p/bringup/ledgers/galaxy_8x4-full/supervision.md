@@ -244,3 +244,13 @@ Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release on
   L.smoke) awaiting the owner's word. Owner (08:41): pause after L.smoke; then a profile chart of one 5k chunk at
   0, 50k, 100k, 200k, 500k (500k: check KV memory on 8x4 first); then the owner will rebase onto latest tt-metal
   (a month-old tt-d-gen is of little use before that), so K.1 waits.
+- 09:0x F195 (0384fc770c1): device smoke budget = the CPU smoke's (24 / intake.smoke.max_new); selftest; suite 601
+  passed, only the old xing40 failure. L.smoke classified framework, `gate --unit L.smoke`: device 'We need answer one
+  word. Capital of France = Paris' (token 11) PASS; `--continue` committed 9fe2e3a915f. Run stays PAUSED before K.1
+  (owner: pause after L.smoke; rebase onto latest tt-metal next; month-old tt-d-gen not useful before that).
+- Owner order: profile one 5120 chunk of the whole model at context 0, 50k, 100k, 200k, 500k (positions 0, 51200,
+  102400, 204800, 512000), device + host time, section breakdown each. Overseer measurement outside the ledger:
+  /scratch/dnijemcevic/posprof (plugin: synthetic rung, zero KV prefix, random tokens, as testing/positions.py;
+  run_profile unchanged: warm, plain wall, one RT-profiler run). 500k fits: deploy.seq 1044480. One process per
+  position. Framework gap: run_profile only profiles a golden rung's last chunk; a position profile with sections is
+  what X.3's test_positions should record (wall only today) -> F-entry at the next boundary.
