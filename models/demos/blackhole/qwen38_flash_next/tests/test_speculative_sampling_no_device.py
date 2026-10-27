@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step as step
+from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling as step
 from models.demos.blackhole.qwen38_flash_next.tools.mtp_v2_verify_reference import accept_select
 from models.demos.blackhole.qwen38_flash_next.ttnn import mtp_v2, sampling
 from models.demos.blackhole.qwen38_flash_next.ttnn import speculative_sampling as spec

@@ -16,7 +16,7 @@ import pytest
 
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_server as server
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_session as session
-from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step as step
+from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling as step
 from models.demos.blackhole.qwen38_flash_next.ttnn.sampling import Qwen38SamplingParameters
 
 

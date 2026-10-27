@@ -18,7 +18,7 @@ import torch
 from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_TRACKING
 
 import ttnn
-from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic import DIAGNOSTIC_INPUT_TOKEN_ID
+from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import DIAGNOSTIC_INPUT_TOKEN_ID
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TP_SIZE, replicate_tensor_2d_mesh_mapper
 from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import LOCAL_VOCAB_SIZE, TOKEN_ROW_SHAPE
 

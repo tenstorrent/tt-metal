@@ -20,7 +20,7 @@ from typing import Any
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.tools.evidence_records import Marker
 from models.demos.blackhole.qwen38_flash_next.tools.hardware_profiles import ResidentHardwareProfile
-from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic import (
+from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import (
     DEFAULT_CPU_ORACLE,
     Qwen38RetainedCPUTokenOracle,
     load_retained_cpu_token_oracle,

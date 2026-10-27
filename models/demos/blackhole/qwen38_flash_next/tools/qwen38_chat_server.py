@@ -45,7 +45,7 @@ from models.demos.blackhole.qwen38_flash_next.chat import (
 from models.demos.blackhole.qwen38_flash_next.tools import hardware_profiles
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_protocol as protocol
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_reference_corpus as reference_corpus
-from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step as sampling_step
+from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling as sampling_step
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_vision_inputs as vision_inputs
 from models.demos.blackhole.qwen38_flash_next.tools import resident_decode, runtime_admission
 from models.demos.blackhole.qwen38_flash_next.tools.checkpoint_budget import vision_resident_layout
@@ -55,7 +55,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.evidence_records import (
     utc_now,
     write_result,
 )
-from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic import (
+from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import (
     construct_live_decode_diagnostic,
     missing_bf4_layers,
 )

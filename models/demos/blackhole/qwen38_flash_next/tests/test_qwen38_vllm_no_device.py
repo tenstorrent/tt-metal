@@ -24,10 +24,10 @@ import ttnn
 from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, VOCAB_SIZE
 from models.demos.blackhole.qwen38_flash_next.checkpoint import PINNED_CHECKPOINT_REVISION
 from models.demos.blackhole.qwen38_flash_next.tests import test_qwen38_prefill_driver_no_device as driver_tests
-from models.demos.blackhole.qwen38_flash_next.tests import test_qwen38_sampling_step_no_device as sampling_tests
+from models.demos.blackhole.qwen38_flash_next.tests import test_qwen38_sampling_no_device as sampling_tests
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_prefill_driver as driver_module
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_vllm as vllm_module
-from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic import MODE
+from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import MODE
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import (
     CHUNK_PREFILL_MIN_ROWS,
     RESIDUE_CLASSES,

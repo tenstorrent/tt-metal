@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_session as session
-from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step as step
+from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling as step
 
 TOKEN_ROW = "fp32 TILE DRAM [1,1,1,32]"
 

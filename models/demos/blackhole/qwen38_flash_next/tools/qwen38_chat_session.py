@@ -34,11 +34,11 @@ from models.demos.blackhole.qwen38_flash_next.chat import (
 from models.demos.blackhole.qwen38_flash_next.config import LAYER_PATTERN
 from models.demos.blackhole.qwen38_flash_next.tools import hardware_profiles, physical_route
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_protocol as protocol
-from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step as sampling_step
+from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling as sampling_step
 from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
 from models.demos.blackhole.qwen38_flash_next.tools.evidence_records import Marker, utc_now
 from models.demos.blackhole.qwen38_flash_next.tools.hardware_profiles import ResidentHardwareProfile
-from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic import (
+from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import (
     Qwen38LiveDecodeConstruction,
     construct_live_decode_diagnostic,
 )

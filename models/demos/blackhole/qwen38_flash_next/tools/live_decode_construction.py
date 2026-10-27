@@ -23,18 +23,18 @@ from types import MappingProxyType
 from typing import Any
 
 import ttnn
+from models.demos.blackhole.qwen38_flash_next.bf4_corpus import (
+    EXPECTED_SLOTS,
+    DiagnosticBF4Artifact,
+    DiagnosticBF4Corpus,
+    bind_diagnostic_bf4_corpus,
+)
 from models.demos.blackhole.qwen38_flash_next.checkpoint import (
     CHECKPOINT_FILE_MANIFEST_SHA256,
     INDEX_SHA256,
     Qwen38Checkpoint,
 )
 from models.demos.blackhole.qwen38_flash_next.config import CONFIG_SHA256, Qwen38Placement
-from models.demos.blackhole.qwen38_flash_next.diagnostic_bf4 import (
-    EXPECTED_SLOTS,
-    DiagnosticBF4Artifact,
-    DiagnosticBF4Corpus,
-    bind_diagnostic_bf4_corpus,
-)
 from models.demos.blackhole.qwen38_flash_next.ttnn.bf4 import (
     BF4Artifact,
     BF4LayerRecord,
@@ -57,12 +57,12 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.decode import (
     Qwen38OrdinaryStopReason,
     Qwen38OrdinaryToken,
 )
-from models.demos.blackhole.qwen38_flash_next.ttnn.diagnostic_decode import Qwen38NonqualifyingDecodedToken
 from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import (
     PINNED_CHECKPOINT_REVISION,
     PINNED_TENSOR_MANIFEST_SHA256,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.model import LayerObserver
+from models.demos.blackhole.qwen38_flash_next.ttnn.one_token_decode import Qwen38NonqualifyingDecodedToken
 
 MODE = "diagnostic_non_promoting"
 EXPECTED_MESH_SHAPE = (1, 4)

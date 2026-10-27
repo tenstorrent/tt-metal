@@ -15,7 +15,7 @@ from types import MappingProxyType
 
 import pytest
 
-from models.demos.blackhole.qwen38_flash_next import diagnostic_bf4
+from models.demos.blackhole.qwen38_flash_next import bf4_corpus
 
 PHYSICAL_IDS = (1, 0, 2, 3)
 PRODUCER = {
@@ -41,18 +41,18 @@ def _fixture(tmp_path: Path):
     verification_result = tmp_path / "verification.json"
     specs = MappingProxyType(
         {
-            "w0_w1": diagnostic_bf4._ArtifactSpec(
+            "w0_w1": bf4_corpus._ArtifactSpec(
                 "w0_w1_dtype_BFLOAT4_B_layout_TILE.tensorbin", 11, (8, 1, 128, 2), (8, 1, 512, 2)
             ),
-            "w2": diagnostic_bf4._ArtifactSpec(
+            "w2": bf4_corpus._ArtifactSpec(
                 "w2_dtype_BFLOAT4_B_layout_TILE.tensorbin", 13, (8, 1, 128, 3), (8, 1, 512, 3)
             ),
         }
     )
-    contract = diagnostic_bf4._BindingContract(
+    contract = bf4_corpus._BindingContract(
         artifact_root=artifact_root,
         verification_result=verification_result,
-        slots=diagnostic_bf4.EXPECTED_SLOTS,
+        slots=bf4_corpus.EXPECTED_SLOTS,
         artifact_specs=specs,
         checkpoint=MappingProxyType(PRODUCER["checkpoint"]),
         runtime=MappingProxyType(PRODUCER["runtime"]),
@@ -86,7 +86,7 @@ def _fixture(tmp_path: Path):
         _write_json(
             evidence_path,
             {
-                "mode": diagnostic_bf4.STAGING_MODE,
+                "mode": bf4_corpus.STAGING_MODE,
                 "production_qualification": False,
                 "device_opened": False,
                 "device_locks_acquired": False,
@@ -124,7 +124,7 @@ def _write_summaries(
         _write_json(
             path,
             {
-                "mode": diagnostic_bf4.STAGING_MODE,
+                "mode": bf4_corpus.STAGING_MODE,
                 "status": "pass",
                 "production_qualification": False,
                 "device_opened": False,
@@ -135,7 +135,7 @@ def _write_summaries(
         )
     if create:
         verification = {
-            "mode": diagnostic_bf4.VERIFICATION_MODE,
+            "mode": bf4_corpus.VERIFICATION_MODE,
             "status": "pass",
             "production_qualification": False,
             "device_opened": False,
@@ -158,7 +158,7 @@ def _write_summaries(
 
 def test_binds_exact_49_slot_corpus_and_adopts_the_producer_order(tmp_path):
     contract, _, _ = _fixture(tmp_path)
-    corpus = diagnostic_bf4._bind(contract.artifact_root, contract.verification_result, contract=contract)
+    corpus = bf4_corpus._bind(contract.artifact_root, contract.verification_result, contract=contract)
     assert len(corpus.records) == 49
     assert corpus.get("backbone", 47).w0_w1.local_shape == (8, 1, 128, 2)
     assert corpus.get("mtp", 0).physical_ids == PHYSICAL_IDS
@@ -171,26 +171,26 @@ def test_binds_exact_49_slot_corpus_and_adopts_the_producer_order(tmp_path):
 
 def test_public_binder_reads_the_producer_identity_from_the_record_and_pins_a_given_one(expect_error, tmp_path):
     contract, _, _ = _fixture(tmp_path)
-    assert diagnostic_bf4.producer_identity(contract.verification_result) == PRODUCER
-    built = diagnostic_bf4.binding_contract(contract.artifact_root, contract.verification_result, producer=PRODUCER)
+    assert bf4_corpus.producer_identity(contract.verification_result) == PRODUCER
+    built = bf4_corpus.binding_contract(contract.artifact_root, contract.verification_result, producer=PRODUCER)
     assert built.source_head == PRODUCER["source_head"] and built.physical_ids is None
-    assert built.total_bytes == diagnostic_bf4.EXPECTED_TOTAL_BYTES  # the public contract is the real corpus's
+    assert built.total_bytes == bf4_corpus.EXPECTED_TOTAL_BYTES  # the public contract is the real corpus's
     other = {**PRODUCER, "source_head": "b" * 40}
-    with expect_error(diagnostic_bf4.DiagnosticBF4BindingError, match="producer identity differs"):
-        diagnostic_bf4.binding_contract(contract.artifact_root, contract.verification_result, producer=other)
+    with expect_error(bf4_corpus.DiagnosticBF4BindingError, match="producer identity differs"):
+        bf4_corpus.binding_contract(contract.artifact_root, contract.verification_result, producer=other)
     # the synthetic corpus is not the real one: its record matches its disk, so the public binder refuses it at the
     # first artifact whose size is not the compact pin
-    with expect_error(diagnostic_bf4.DiagnosticBF4BindingError, match="not the compact layout"):
-        diagnostic_bf4.bind_diagnostic_bf4_corpus(contract.artifact_root, contract.verification_result)
-    with expect_error(diagnostic_bf4.DiagnosticBF4BindingError, match="absolute"):
-        diagnostic_bf4.bind_diagnostic_bf4_corpus("relative/corpus", contract.verification_result)
+    with expect_error(bf4_corpus.DiagnosticBF4BindingError, match="not the compact layout"):
+        bf4_corpus.bind_diagnostic_bf4_corpus(contract.artifact_root, contract.verification_result)
+    with expect_error(bf4_corpus.DiagnosticBF4BindingError, match="absolute"):
+        bf4_corpus.bind_diagnostic_bf4_corpus("relative/corpus", contract.verification_result)
 
 
 def test_rejects_missing_artifact(expect_error, tmp_path):
     contract, _, _ = _fixture(tmp_path)
     (contract.artifact_root / "backbone/layer-12/w2_dtype_BFLOAT4_B_layout_TILE.tensorbin").unlink()
-    with expect_error(diagnostic_bf4.DiagnosticBF4BindingError, match="unavailable"):
-        diagnostic_bf4._bind(contract.artifact_root, contract.verification_result, contract=contract)
+    with expect_error(bf4_corpus.DiagnosticBF4BindingError, match="unavailable"):
+        bf4_corpus._bind(contract.artifact_root, contract.verification_result, contract=contract)
 
 
 def test_rejects_artifact_hash_mismatch(expect_error, tmp_path):
@@ -201,8 +201,8 @@ def test_rejects_artifact_hash_mismatch(expect_error, tmp_path):
     results[4]["artifacts"]["w0_w1"]["sha256"] = "f" * 64
     _write_json(evidence_path, evidence)
     _write_summaries(results, summary_paths, contract.verification_result)
-    with expect_error(diagnostic_bf4.DiagnosticBF4BindingError, match="SHA-256 differs"):
-        diagnostic_bf4._bind(contract.artifact_root, contract.verification_result, contract=contract)
+    with expect_error(bf4_corpus.DiagnosticBF4BindingError, match="SHA-256 differs"):
+        bf4_corpus._bind(contract.artifact_root, contract.verification_result, contract=contract)
 
 
 def test_rejects_artifact_shape_mismatch(expect_error, tmp_path):
@@ -213,28 +213,28 @@ def test_rejects_artifact_shape_mismatch(expect_error, tmp_path):
     results[9]["artifacts"]["w2"]["local_shape"] = [8, 1, 127, 3]
     _write_json(evidence_path, evidence)
     _write_summaries(results, summary_paths, contract.verification_result)
-    with expect_error(diagnostic_bf4.DiagnosticBF4BindingError, match="local_shape differs"):
-        diagnostic_bf4._bind(contract.artifact_root, contract.verification_result, contract=contract)
+    with expect_error(bf4_corpus.DiagnosticBF4BindingError, match="local_shape differs"):
+        bf4_corpus._bind(contract.artifact_root, contract.verification_result, contract=contract)
 
 
 def test_rejects_slot_mismatch_and_a_second_physical_order(expect_error, tmp_path):
     contract, results, summary_paths = _fixture(tmp_path)
     results[-1]["slot"] = ["mtp", 1]
     _write_summaries(results, summary_paths, contract.verification_result)
-    with expect_error(diagnostic_bf4.DiagnosticBF4BindingError, match="slot coverage differs"):
-        diagnostic_bf4._bind(contract.artifact_root, contract.verification_result, contract=contract)
+    with expect_error(bf4_corpus.DiagnosticBF4BindingError, match="slot coverage differs"):
+        bf4_corpus._bind(contract.artifact_root, contract.verification_result, contract=contract)
     contract, results, summary_paths = _fixture(tmp_path / "second")
     evidence_path = Path(results[3]["evidence"])
     evidence = json.loads(evidence_path.read_text())
     evidence["ownership"]["physical_ids"] = [0, 2, 1, 3]
     _write_json(evidence_path, evidence)
-    with expect_error(diagnostic_bf4.DiagnosticBF4BindingError, match="physical_ids"):
-        diagnostic_bf4._bind(contract.artifact_root, contract.verification_result, contract=contract)
+    with expect_error(bf4_corpus.DiagnosticBF4BindingError, match="physical_ids"):
+        bf4_corpus._bind(contract.artifact_root, contract.verification_result, contract=contract)
 
 
 def test_summary_reports_disk_bytes_and_the_contract_total_apart(tmp_path):
     contract, _, _ = _fixture(tmp_path)
-    corpus = diagnostic_bf4._bind(contract.artifact_root, contract.verification_result, contract=contract)
+    corpus = bf4_corpus._bind(contract.artifact_root, contract.verification_result, contract=contract)
     assert corpus.summary()["bytes"] == 49 * 24 == corpus.disk_bytes
     assert corpus.summary()["contract_bytes"] == contract.total_bytes == 49 * 24
 
@@ -251,10 +251,10 @@ def test_record_is_compared_to_the_disk_and_a_pre_compact_corpus_is_named(expect
         total_bytes=49 * 20,
     )
     with pytest.raises(  # allow-pytest.raises: inspect the captured exception object
-        diagnostic_bf4.DiagnosticBF4BindingError, match="not the compact layout"
+        bf4_corpus.DiagnosticBF4BindingError, match="not the compact layout"
     ) as caught:  # allow-pytest.raises: inspect the captured exception object
-        diagnostic_bf4._bind(compact.artifact_root, compact.verification_result, contract=compact)
+        bf4_corpus._bind(compact.artifact_root, compact.verification_result, contract=compact)
     assert "w0_w1 is 11 bytes on disk against the contract's 9" in str(caught.value)
     _write_summaries(results, summary_paths, contract.verification_result, contract.artifact_root, 49 * 20, create=True)
-    with expect_error(diagnostic_bf4.DiagnosticBF4BindingError, match="verification corpus differs"):
-        diagnostic_bf4._bind(contract.artifact_root, contract.verification_result, contract=contract)
+    with expect_error(bf4_corpus.DiagnosticBF4BindingError, match="verification corpus differs"):
+        bf4_corpus._bind(contract.artifact_root, contract.verification_result, contract=contract)

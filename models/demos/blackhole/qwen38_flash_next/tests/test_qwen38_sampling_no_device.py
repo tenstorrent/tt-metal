@@ -10,7 +10,7 @@ import inspect
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step as step
+from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling as step
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import THINK_END_ID
 from models.demos.blackhole.qwen38_flash_next.ttnn import device_sampler as ds
 from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import LOCAL_VOCAB_SIZE, TP_SIZE, VOCAB_SIZE

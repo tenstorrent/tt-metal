@@ -16,7 +16,7 @@ import torch
 
 from models.demos.blackhole.qwen38_flash_next.chat import EOS_TOKEN_IDS
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_session as session_module
-from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step as step
+from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling as step
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import THINK_END_ID
 from models.demos.blackhole.qwen38_flash_next.ttnn import mtp_v2
 from models.demos.blackhole.qwen38_flash_next.ttnn import speculative_sampling as spec

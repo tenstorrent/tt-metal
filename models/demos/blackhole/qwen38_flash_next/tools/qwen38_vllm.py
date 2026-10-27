@@ -37,7 +37,7 @@ from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_TRACKING
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, VOCAB_SIZE
 from models.demos.blackhole.qwen38_flash_next.checkpoint import PINNED_CHECKPOINT_REVISION
-from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic import (
+from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import (
     MODE,
     construct_live_decode_diagnostic,
     prepare_live_decode_diagnostic,

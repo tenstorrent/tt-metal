@@ -23,7 +23,7 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
 from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
-from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic import (
+from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import (
     Qwen38DiagnosticBF4Cache,
     prepare_live_decode_diagnostic,
 )
