@@ -236,9 +236,10 @@ class GRPOConfig:
     # num_generations. Kept only so older configs that still set it construct
     # without error; the trainer ignores any value provided here.
     batch_size: Optional[int] = None
-    # remote_sync: push the policy weights to the rollout rank every N optimizer steps.
+    # ttt_remote_sync: push the policy weights to the rollout rank at a generation-batch boundary
+    # once N optimizer steps have passed since the last push.
     weight_sync_every: int = 1
-    # remote_sync: rollout rank settings, from the top-level remote_rollout_config yaml section.
+    # ttt_remote_sync: rollout rank settings, from the top-level remote_rollout_config yaml section.
     remote_rollout: Optional[RemoteRolloutConfig] = None
 
     def __post_init__(self) -> None:
@@ -1060,13 +1061,13 @@ class GRPOTrainer:
         :func:`~ttml.trainers.grpo_trainer.grpo_ttml_model.setup_ttml_model`.
         It also builds the optimizer, LR scheduler and the
         :class:`RolloutBatchSource` over the tokenized prompts
-        (``self.rollout_batch_source``), so ``train()`` only runs the loop. In
-        ``in_process`` mode the source generates with ``self.rollout_sampler``,
+        (``self.rollout_batch_source``), so ``train()`` only runs the loop. With
+        ``rollout_backend="ttml_in_process_sync"`` the source generates with ``self.rollout_sampler``,
         built from ``config.rollout_backend`` with the trainer's model and
         tokenizer. The trainer runs its own forward pass with gradients on the
         model and never changes its run mode.
 
-        In ``remote_sync`` mode the same script runs on both tt-run ranks. Rank
+        With ``rollout_backend="ttt_remote_sync"`` the same script runs on both tt-run ranks. Rank
         1 only opens the rollout mesh and builds its :class:`RolloutSampler`
         and RPC server; it never calls ``dataset_func``, and ``train()``
         serves rollouts there.

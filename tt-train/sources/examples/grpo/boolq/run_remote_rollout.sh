@@ -4,7 +4,7 @@
 #
 # Launches the BoolQ GRPO training example on two tt-run ranks with remote
 # rollouts (2 TTML chips + 2 TTT chips on one host). Both ranks run the same
-# script; the remote_sync config makes rank 1 serve rollouts.
+# script; the ttt_remote_sync config makes rank 1 serve rollouts.
 
 set -euo pipefail
 

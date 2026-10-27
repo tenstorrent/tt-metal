@@ -111,8 +111,7 @@ device_config:
 
 Device setup (`enable_fabric`, `open_device`,
 `initialize_parallelism_context`) is performed by `setup_ttml_model`,
-which the `GRPOTrainer` constructor calls. FSDP-specific behavior — including the
-requirement that `checkpointing: false` — is documented in the
+which the `GRPOTrainer` constructor calls. FSDP-specific behavior is documented in the
 [FSDP subsection](../../../docs/GRPO_TRAINER.md#fsdp) of the trainer
 doc.
 
@@ -143,7 +142,8 @@ Both ranks construct the same `GRPOTrainer`, which picks each rank's role:
 - **Rank 0** builds the ttml policy, calls `dataset_func`, and for each batch
   sends the prompts to rank 1, receives the completions, tt-transformers'
   per-token log-probs and rank 1's weight version, and computes the rewards.
-  Every `weight_sync_every` optimizer steps it pushes the policy weights.
+  At a generation-batch boundary once `weight_sync_every` optimizer steps have
+  passed since the last push, it pushes the policy weights.
 - **Rank 1** opens the rollout mesh, builds a `TTTRolloutSampler` and an
   `MPIRolloutServer`, never loads the dataset, and serves requests until
   rank 0 is done.
@@ -157,7 +157,7 @@ until rank 0 pushes its weights as version 0, before the first batch.
 | ----- | ----------- |
 | `training_config.model_source` | HuggingFace Hub id. Rank 0 loads its weights from it and rank 1 reads its config and tokenizer; a local path is rejected in `ttt_remote_sync`. |
 | `grpo_config.rollout_backend` | `"ttt_remote_sync"`. |
-| `grpo_config.weight_sync_every` | Push the policy weights to rank 1 every *N* optimizer steps (default 1). |
+| `grpo_config.weight_sync_every` | Push the policy weights to rank 1 at a generation-batch boundary once *N* optimizer steps have passed since the last push (default 1). |
 | `remote_rollout_config.mesh_shape` | Rank 1's parent mesh `[rows, cols]`, split into `rows * cols` `[1, 1]` submeshes that generate data-parallel. |
 | `remote_rollout_config.max_batch_size` | Per-submesh decode capacity. One tt-transformers call serves `max_batch_size * num_submeshes` completions; larger batches are split into several calls. |
 | `remote_rollout_config.max_seq_len` | Max prompt + completion length. A prompt longer than `max_seq_len - max_completion_length` raises `ValueError`; prompts are never truncated. |
