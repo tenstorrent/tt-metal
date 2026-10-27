@@ -170,6 +170,10 @@ inline void calculate_tangent() {
     const float P0 = -0x1.92p+0f;   // representable as bf16
     const float P1 = -0x1.fbp-12f;  // representable as fp16
 
+    // Hoisted out of the loop: tan leaves an LReg free, so the bias is loaded once per
+    // call instead of once per row.
+    const sfpi::vFloat rounding_bias = sfpi::sFloat16b(0x1.8p23f);
+
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vInt i;
@@ -179,7 +183,6 @@ inline void calculate_tangent() {
         // j = round(v / (PI/2))
         // j = v * (2/PI) + 1.5*2**23 shifts the mantissa bits to give round-to-nearest.
         // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
-        sfpi::vFloat rounding_bias = sfpi::sFloat16b(0x1.8p23f);
         sfpi::vFloat j =
             __builtin_rvtt_sfpmad(v.get(), inv_pio2.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
@@ -189,8 +192,6 @@ inline void calculate_tangent() {
         // Shift mantissa bits back; j is now round(v / (PI/2)) in fp32.
         j += -rounding_bias;
 
-        i <<= 31;
-
         // Four-stage Cody-Waite reduction; a = v - j * (PI/2).
         // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
         sfpi::vFloat a = v + j * P0;
@@ -198,6 +199,10 @@ inline void calculate_tangent() {
         a = a + j * P1;
         a = a + j * sfpi::vConstFloatPrgm0;
         a = a + j * sfpi::vConstFloatPrgm1;
+
+        // Issued here so the shift fills a NOP slot in the Cody-Waite MAD chain's shadow
+        // instead of sitting after the SFPADDI, where nothing needs a filler.
+        i <<= 31;
 
         a = sfpu_tan<is_fp32_dest_acc_en>(a, i);
 
