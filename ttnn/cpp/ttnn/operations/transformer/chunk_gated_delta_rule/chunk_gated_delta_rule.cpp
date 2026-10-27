@@ -136,7 +136,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& eye,
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
-    const std::optional<ttnn::Tensor>& masks) {
+    const std::optional<ttnn::Tensor>& masks,
+    std::optional<uint32_t> num_key_heads) {
     TT_FATAL(!use_qk_l2norm, "chunk_gated_delta_rule: use_qk_l2norm not yet supported; pre-normalize q/k on host");
     ttnn::prim::validate_gdn_chunk_size(chunk_size);
 
@@ -147,16 +148,43 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const uint32_t T = qs[1];
     // Flat q/k/v: rank-3 inputs are FLAT token-major tensors — the model adapter (fused_chunk.py) skips
     // the head-split relayout. Head counts can't be read off a flat width, so: HV comes from beta [B,T,HV];
-    // for the flat q/k path we assume per-head K==V (true for GDN: linear_key_head_dim==value_head_dim),
-    // so K=V and H = q_flat_width / K. The prep reader tile-addresses q/k/v out of the flat grids.
+    // for the flat q/k path K==V is assumed (true for GDN: linear_key_head_dim==value_head_dim) unless the
+    // caller passes num_key_heads, in which case H = num_key_heads and K = q_flat_width / H (K != V works).
+    // Without num_key_heads, K=V and H = q_flat_width / K. The prep reader tile-addresses q/k/v out of the
+    // flat grids.
     const bool flat_v = (vs.rank() == 3);
     const bool flat_qk = (qs.rank() == 3);
     const uint32_t HV = flat_v ? beta_in.logical_shape()[2] : vs[2];
     const uint32_t V = flat_v ? (vs[2] / HV) : vs[3];
-    const uint32_t K = flat_qk ? V : qs[3];
-    const uint32_t H = flat_qk ? (qs[2] / K) : qs[2];
+    uint32_t K = 0;
+    uint32_t H = 0;
     if (flat_qk) {
-        TT_FATAL(qs[2] == H * K, "flat q width {} != H*K ({}*{}); flat q/k path assumes K==V", qs[2], H, K);
+        if (num_key_heads.has_value()) {
+            H = *num_key_heads;
+            TT_FATAL(
+                H > 0 && qs[2] % H == 0,
+                "flat q width ({}) must be divisible by num_key_heads ({}) (and num_key_heads > 0)",
+                qs[2],
+                H);
+            K = qs[2] / H;
+        } else {
+            K = V;
+            H = qs[2] / K;
+        }
+        TT_FATAL(
+            qs[2] == H * K,
+            "flat q width {} != H*K ({}*{}); without num_key_heads the flat q/k path assumes K==V",
+            qs[2],
+            H,
+            K);
+    } else {
+        K = qs[3];
+        H = qs[2];
+        TT_FATAL(
+            !num_key_heads.has_value() || *num_key_heads == qs[2],
+            "num_key_heads ({}) must equal q's head count ({}) for rank-4 q/k",
+            num_key_heads.value_or(0),
+            qs[2]);
     }
     TT_FATAL(HV % H == 0, "HV ({}) must be divisible by H ({})", HV, H);
     const uint32_t G = HV / H;
@@ -279,19 +307,20 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     // Fused and mono are the two program factories of one device op (chunk_gdn_device_operation.hpp);
     // phased is the two prims of chunk_gdn_phased.hpp. The program config names the path, as a matmul
     // program config names its factory; without one the op chooses by the fused path's calibrated
-    // geometry cost model: fused iff a geometry (NP producers per head, or one producer pool) fits this
-    // grid AND its predicted time beats the phased reference (fused_pays). On QB2's 11x10 grid that is
-    // every BH <= 48 (BH=64 needs 128 cores -> phased); the fused path is bit-exact vs phased and
-    // measured 1.2-2.0x faster at BH = 4..48. Every config field is hashed inside the device op's
-    // attributes (the factory choice included), so each path has its own program-cache entries.
+    // geometry cost model: fused iff its plan — one program, or the BH heads in waves of a few dozen
+    // heads each, one program per wave into shared outputs — is predicted faster than the phased
+    // reference (fused_pays), or whenever BH exceeds the compute grid (the phased scan takes one core per
+    // head, so there only the plan's waves can run); each program's geometry (NP producers per head, or one
+    // producer pool) is the model's pick for its head count, which the prim re-derives from a free config. The
+    // fused path is bit-exact vs phased. Every config field is hashed inside the device op's attributes (the
+    // factory choice included), so each path has its own program-cache entries.
+    const auto grid = dev->compute_with_storage_grid_size();
+    const uint32_t Vt = V / tt::constants::TILE_WIDTH;
     const ChunkGdnProgramConfig cfg = program_config.has_value() ? *program_config : [&]() -> ChunkGdnProgramConfig {
-        const auto grid = dev->compute_with_storage_grid_size();
-        const auto choice = ttnn::prim::choose_fused_geometry(grid.x, grid.y, BH, NC, V / tt::constants::TILE_WIDTH);
-        if (choice.nv >= 1 && choice.fused_pays) {
-            // Geometry left free: the prim re-derives this same pick among the candidates of its kind.
-            ChunkGdnFusedProgramConfig fused{};
-            fused.producer_pool = choice.placement == 2;
-            return fused;
+        const auto plan = ttnn::prim::plan_fused_waves(grid.x, grid.y, BH, NC, Vt);
+        const bool phased_fits = BH <= grid.x * grid.y;
+        if (!plan.waves.empty() && (plan.fused_pays || !phased_fits)) {
+            return ChunkGdnFusedProgramConfig{};  // geometry left free: the prim re-derives the plan's picks
         }
         return ChunkGdnPhasedProgramConfig{};
     }();
@@ -352,36 +381,86 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
         // Fused or mono: one device op whose program factory the config alternative selects. Same
         // preprocessed inputs the phased branch feeds prep (incl. s0, which the host ALWAYS provides —
         // zeros built above when the caller passed none), same outputs scan produces; the
-        // postprocessing below is shared.
+        // postprocessing below is shared. Fused: the heads run in waves, one program each, as the config
+        // pins (wave_heads) or the cost model plans; a single wave is the plain launch, more waves write
+        // into one preallocated output pair at their head rows.
         const ttnn::prim::ChunkGdnDeviceProgramConfig dev_cfg =
             std::holds_alternative<ChunkGdnFusedProgramConfig>(cfg)
                 ? ttnn::prim::ChunkGdnDeviceProgramConfig{std::get<ChunkGdnFusedProgramConfig>(cfg)}
                 : ttnn::prim::ChunkGdnDeviceProgramConfig{ChunkGdnMonoProgramConfig{}};
-        auto results = ttnn::prim::chunk_gdn(
-            q_c,
-            k_c,
-            v_c,
-            g_c,
-            beta_c,
-            eye_c,
-            tril_c,
-            ones_c,
-            masks_c,
-            s0,
-            C,
-            output_final_state,
-            out_mem,
-            kernel_cfg,
-            dev_cfg,
-            wy_inverse,
-            flat_v,
-            HV,
-            qk_norm,
-            scale,
-            flat_qk,
-            H);
-        o_c = results[0];
-        final_state = results[1];
+        std::vector<uint32_t> waves{BH};
+        if (const auto* fused_cfg = std::get_if<ChunkGdnFusedProgramConfig>(&cfg)) {
+            if (fused_cfg->wave_heads.has_value()) {
+                TT_FATAL(*fused_cfg->wave_heads >= 1, "chunk_gated_delta_rule: wave_heads must be >= 1");
+                waves = ttnn::prim::fused_even_waves(BH, (BH + *fused_cfg->wave_heads - 1) / *fused_cfg->wave_heads);
+            } else {
+                // Priced with the config's pins, so each wave gets the geometry the prim re-derives for it.
+                const auto& pool_pin = fused_cfg->producer_pool;
+                const auto plan = ttnn::prim::plan_fused_waves(
+                    grid.x,
+                    grid.y,
+                    BH,
+                    NC,
+                    Vt,
+                    0,
+                    fused_cfg->num_receivers.value_or(0),
+                    fused_cfg->num_producers.value_or(0),
+                    fused_cfg->handoff_depth.value_or(0),
+                    !pool_pin.has_value() ? ttnn::prim::FusedCandidates::Both
+                    : *pool_pin           ? ttnn::prim::FusedCandidates::Pool
+                                          : ttnn::prim::FusedCandidates::PerHead,
+                    fused_cfg->pool_extra_share.value_or(-1.0f));
+                if (!plan.waves.empty()) {  // else: the single launch below reports why nothing fits
+                    waves = plan.waves;
+                }
+            }
+        }
+        auto launch = [&](uint32_t num_heads,
+                          uint32_t head_offset,
+                          const std::optional<ttnn::Tensor>& o_out,
+                          const std::optional<ttnn::Tensor>& final_state_out) {
+            return ttnn::prim::chunk_gdn(
+                q_c,
+                k_c,
+                v_c,
+                g_c,
+                beta_c,
+                eye_c,
+                tril_c,
+                ones_c,
+                masks_c,
+                s0,
+                C,
+                output_final_state,
+                out_mem,
+                kernel_cfg,
+                dev_cfg,
+                wy_inverse,
+                flat_v,
+                HV,
+                qk_norm,
+                scale,
+                flat_qk,
+                H,
+                num_heads,
+                head_offset,
+                o_out,
+                final_state_out);
+        };
+        if (waves.size() == 1) {
+            auto results = launch(0, 0, std::nullopt, std::nullopt);
+            o_c = results[0];
+            final_state = results[1];
+        } else {
+            const TensorLayout out_layout(DataType::FLOAT32, PageConfig(Layout::TILE), out_mem);
+            o_c = create_device_tensor(TensorSpec(ttnn::Shape({BH, NC, C, V}), out_layout), dev);
+            final_state = create_device_tensor(TensorSpec(ttnn::Shape({BH, K, V}), out_layout), dev);
+            uint32_t head_offset = 0;
+            for (const uint32_t num_heads : waves) {
+                launch(num_heads, head_offset, o_c, final_state);
+                head_offset += num_heads;
+            }
+        }
     }
 
     std::optional<ttnn::Tensor> final_opt;

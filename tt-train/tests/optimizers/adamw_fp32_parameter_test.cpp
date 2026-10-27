@@ -190,17 +190,9 @@ static void run_steps_and_compare(const AdamWFp32ParameterCase& pc, uint32_t ste
 
     ttml::optimizers::AdamW opt(params, cfg);
 
-    // Inject optimizer state
-    serialization::StateDict state;
+    // Inject optimizer state on top of the optimizer's own state dict, which carries its param groups.
+    auto state = opt.get_state_dict();
     state["steps"] = initial_steps;
-    state["lr"] = pc.lr;
-    state["initial_lr"] = pc.lr;
-    state["beta1"] = pc.beta1;
-    state["beta2"] = pc.beta2;
-    state["epsilon"] = pc.epsilon;
-    state["weight_decay"] = pc.weight_decay;
-    state["amsgrad"] = pc.amsgrad;
-    state["stochastic_rounding"] = false;
     state["exp_avg"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(m0), false)}};
     state["exp_avg_sq"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(v0), false)}};
     if (pc.amsgrad) {

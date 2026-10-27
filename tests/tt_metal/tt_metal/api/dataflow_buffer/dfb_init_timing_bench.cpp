@@ -1139,6 +1139,7 @@ void run_benchmark_case_six(DfbInitTimingBenchContext& ctx) {
 
     // Host preflight: catch stale builds where blobs still carry entry_size=1024.
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(device);
     program.impl().allocate_dataflow_buffers(device);
     const CoreCoord bench_core(0, 0);
     const auto dfbs = program.impl().dataflow_buffers_on_core(bench_core);
@@ -1234,6 +1235,7 @@ void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
         NUM_ENTRIES);
 
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(device);
     program.impl().allocate_dataflow_buffers(device);
     const CoreCoord bench_core(0, 0);
     const auto dfbs = program.impl().dataflow_buffers_on_core(bench_core);

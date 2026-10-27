@@ -7,22 +7,24 @@
 Routing is read from the inspector's kernels.yaml, which names the kernel SOURCES actually bound. That
 is the only observable that separates the two factories at this stage -- they are a mechanical copy of
 each other, so cycles, values and the active-core set are identical by construction. The native tests
-compare bits with the bf16 oracle; the fallback test uses the shared _run helper (golden + PCC floor +
+compare bits with the bf16 oracles; the fallback test uses the shared _run helper (golden + PCC floor +
 constant-output guard).
 
-Configuration-gated on TTNN_QSR_NATIVE rather than parametrized: the program cache resolves the factory
-from a cached index, so flipping the knob in-process would silently re-run the previous program. One
-process per state -- see the run commands in debug/run_targeted_matrix.sh.
+The native factory is the default on Quasar, and TTNN_QSR_NATIVE=0 turns it off. The tests read that state
+from the environment rather than parametrize it: the program cache resolves the factory from a cached index, so
+flipping the knob in-process would silently re-run the previous program. So the native tests run by default, and
+test_fallback_factory_is_engaged runs in a process with TTNN_QSR_NATIVE=0. Off Quasar the native tests skip.
 
 Every TTNN_QSR_* tuning knob left unset takes the rule's value (resolve_native_config in
 binary_ng_utils.cpp): 4 compute threads; where the operands move over the NoC, a reader thread per compute
 thread and the writer threads that the 6 DM cores leave, and one of each where they are borrowed. With every
-operand in L1: batches of 8 tiles in the DM kernels, and in the compute where each compute thread owns one
-tile counter of each ring, in rings of 16 entries per thread. Beside a DRAM operand: batches of 1, in rings of
-2 entries per thread. The tests in this process use DRAM tensors. Above ring stride 1 only one tile of
-each compute batch comes out right, so each test predicts its output from its configuration: the tests in this
-process from the invocation's knobs, the arms from their own. A test that predicts wrong output is a strict
-expected failure, and it passes only on exactly the predicted wrong tiles.
+operand in L1: batches of 8 tiles in the DM kernels, in rings of 16 entries per thread; in the compute, where each
+compute thread owns one tile counter of each ring, 4 tiles on the SFPU kernel (2 in fp32) and 8 on the FPU kernel at
+1,1,1 only. Beside a DRAM operand: batches of 1, in rings of 2 entries per thread. The tests in this process use DRAM
+tensors. Above ring stride 1 only one tile of each FPU-kernel compute batch comes out right, which is why the rule
+does not batch the FPU kernel there. A set batch still runs, so each test predicts its output from its
+configuration: the tests in this process from the invocation's knobs, the arms from their own. A test that predicts
+wrong output is a strict expected failure, and it passes only on exactly the predicted wrong tiles.
 """
 
 import json
@@ -38,7 +40,12 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import _run
+from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
+    _add_goldens,
+    _matches_none,
+    _run,
+)
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 # Resolve the inspector output the way the runtime does: <logs_dir>/generated/inspector, where
 # logs_dir is TT_METAL_LOGS_PATH if set, else the root dir (TT_METAL_HOME, else cwd). See
@@ -58,16 +65,18 @@ _INTERLEAVED_SHAPE = (32 * 32, 40 * 32)
 
 
 def _native_enabled():
-    # "0" and unset both mean OFF -- matching native_tuning()'s env_bool in binary_ng_utils.cpp. A
-    # `"TTNN_QSR_NATIVE" in os.environ` test here would silently disagree with the C++ side for =0.
-    return os.environ.get("TTNN_QSR_NATIVE", "") not in ("", "0")
+    # On Quasar unless TTNN_QSR_NATIVE=0, matching native_tuning() in binary_ng_utils.cpp, which refuses any value but
+    # 0 and 1. Off Quasar the gate refuses every op, so the native tests skip there.
+    return is_quasar() and os.environ.get("TTNN_QSR_NATIVE", "") != "0"
 
 
 # The rule's value of every knob left unset. Mirrors resolve_native_config in binary_ng_utils.cpp: a test whose
 # prediction disagrees with the device is how a change on either side shows up.
 _RULE_COMPUTE_THREADS = 4
+# The FPU kernel's rule batch is 8 at R = C = W = 1 only: above ring stride 1 its batches come out wrong.
 _RULE_TILES_PER_CYCLE = 8
-# The SFPU kernel's rule batch is 4: it holds a tile in two DST slots, so 4 tiles fill the DST in bf16.
+# The SFPU kernel's rule batch is 4: it holds a tile in two DST slots, so 4 tiles fill a 16-bit DST section. In fp32
+# the rule runs it at 2; no prediction reads that batch, as SFPU batches are exact, and the log test checks it.
 _RULE_SFPU_TILES_PER_CYCLE = 4
 _USER_DM_CORES = 6
 
@@ -100,7 +109,8 @@ def _resolve(knobs, path, sfpu=False):
     c = knob("TTNN_QSR_COMPUTE_THREADS", _RULE_COMPUTE_THREADS)
     r = knob("TTNN_QSR_READER_THREADS", c) if inputs_move else 1
     w = knob("TTNN_QSR_WRITER_THREADS", min(c, max(1, _USER_DM_CORES - r))) if output_moves else 1
-    rule_batch = 1 if dram else (_RULE_SFPU_TILES_PER_CYCLE if sfpu else _RULE_TILES_PER_CYCLE)
+    fpu_batch = _RULE_TILES_PER_CYCLE if r == c == w == 1 else 1
+    rule_batch = 1 if dram else (_RULE_SFPU_TILES_PER_CYCLE if sfpu else fpu_batch)
     batch = knob("TTNN_QSR_TILES_PER_CYCLE", rule_batch if r <= c and w <= c else 1)
     return r, c, w, batch
 
@@ -146,9 +156,9 @@ def _noc_split(tiles, clusters=_CLUSTERS):
     return [per_cluster + 1] * extra + [per_cluster] * (clusters - extra)
 
 
-def _wrong_tiles(got, golden):
-    """The 32x32 tiles of a 2D output in which any element differs from the oracle, compared as int16."""
-    differ = got.contiguous().view(torch.int16) != golden.contiguous().view(torch.int16)
+def _wrong_tiles(got, goldens):
+    """The 32x32 tiles of a 2D output in which any element matches none of the oracles."""
+    differ = _matches_none(got, goldens)
     height, width = differ.shape[-2:]
     return int(differ.reshape(-1, height // 32, 32, width // 32, 32).any(dim=4).any(dim=2).sum())
 
@@ -170,7 +180,7 @@ _PARENT_KNOBS = {k: v for k, v in os.environ.items() if k.startswith("TTNN_QSR_"
 
 
 class _WrongOutput(Exception):
-    """An op ran to completion on the expected factory, and its output differs from the bf16 oracle."""
+    """An op ran to completion on the expected factory, and its output differs from the bf16 oracles."""
 
 
 # Above output ring stride 1 compute batching runs, but only one tile of each batch comes out right.
@@ -184,13 +194,13 @@ def _expectation_marks(expected_wrong):
     return [_BATCHED_XFAIL] if expected_wrong > 0 else []
 
 
-def _matches_prediction(got, golden, expected_wrong, what):
-    """Assert that exactly the predicted number of output tiles differ from the oracle; 0 means exact.
+def _matches_prediction(got, goldens, expected_wrong, what):
+    """Assert that exactly the predicted number of output tiles differ from the oracles; 0 means exact.
 
     Returns True when the output is wrong as predicted.
     """
-    wrong = _wrong_tiles(got, golden)
-    total = golden.numel() // (32 * 32)
+    wrong = _wrong_tiles(got, goldens)
+    total = got.numel() // (32 * 32)
     assert wrong == expected_wrong, f"{what}: {wrong} of {total} tiles differ, the prediction is {expected_wrong}"
     return wrong > 0
 
@@ -240,23 +250,17 @@ def _add_returning_operands(device, h_tiles=32, w_tiles=40, seed=0):
 _BENCHMARK_WRONG = _batched_wrong_tiles(_noc_split(32 * 40), _PARENT_KNOBS, _NOC_DRAM)
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.xfail(_BENCHMARK_WRONG > 0, raises=_WrongOutput, strict=True, reason=_BATCHED_REASON)
 def test_native_output_matches_the_prediction(device):
-    """bf16 add on this slice is EXACT, so compare bits rather than PCC.
-
-    fp32_dest_acc_en is false for bf16 and HiFi4 is fidelity-inert for FPU add, so the device result
-    equals torch's bf16 add bit-for-bit. The int16 view is required, not cosmetic: torch.equal on
-    floats reports False for NaN vs itself. randn produces no NaN/Inf, so that path stays unexercised.
-    The rule batches nothing beside a DRAM operand, so the output is exact unless the invocation sets a batch.
-    """
+    """bf16 add on this slice is exact: the output equals one of _FPU_ADD_ROUNDINGS bit for bit, except the
+    tiles that a set batch leaves wrong."""
     out, ta, tb = _add_returning_operands(device)
-    golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
-    if _matches_prediction(ttnn.to_torch(out), golden, _BENCHMARK_WRONG, "32x40 tiles"):
+    if _matches_prediction(ttnn.to_torch(out), _add_goldens(ta, tb), _BENCHMARK_WRONG, "32x40 tiles"):
         raise _WrongOutput("32x40 tiles: wrong as predicted")
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 def test_native_factory_is_engaged(device):
     """The benchmark add binds the three kernels_qsr sources and no kernels_dfb source.
 
@@ -270,8 +274,9 @@ def test_native_factory_is_engaged(device):
     assert dfb == [], f"native run still bound kernels_dfb sources: {dfb}"
 
 
-@pytest.mark.skipif(_native_enabled(), reason="negative control needs TTNN_QSR_NATIVE off")
+@pytest.mark.skipif(_native_enabled(), reason="negative control runs with TTNN_QSR_NATIVE=0")
 def test_fallback_factory_is_engaged(device):
+    assert is_quasar() == (device.arch() == ttnn.device.Arch.QUASAR), "ttnn.get_arch_name() disagrees with the device"
     _run_benchmark_add(device)
     sources = bound_kernel_sources()
     assert [s for s in sources if "kernels_qsr/" in s] == [], "fallback run bound native kernels"
@@ -340,6 +345,8 @@ _NATIVE_ARMS = [(1, 1, 1), (4, 4, 2), (1, 4, 4), (4, 4, 1), (2, 4, 2)]
 _ARM_SRC = """
 import json, os, pathlib, sys
 import torch, ttnn
+from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
+    _add_goldens, _matches_none)
 
 TILE_COUNTS = json.loads(os.environ["ARM_TILE_COUNTS"])
 
@@ -354,9 +361,7 @@ try:
         tb = ttnn.from_torch(torch.randn((32, tiles * 32), dtype=torch.float32), **cfg)
         out = ttnn.experimental.quasar.add(ta, tb, memory_config=ttnn.DRAM_MEMORY_CONFIG,
                                            dtype=ttnn.bfloat16)
-        golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
-        got = ttnn.to_torch(out)
-        differ = got.contiguous().view(torch.int16) != golden.contiguous().view(torch.int16)
+        differ = _matches_none(ttnn.to_torch(out), _add_goldens(ta, tb))
         if differ.any():
             h, w = differ.shape[-2:]
             wrong = int(differ.reshape(-1, h // 32, 32, w // 32, 32).any(dim=4).any(dim=2).sum())
@@ -413,38 +418,37 @@ def _check_arm(p, what, expect_wrong=None):
             f"{what}: the wrong tiles are not the predicted ones (label: count), "
             f"measured {measured}, predicted {expect_wrong}\n{p.stdout}"
         )
-        raise _WrongOutput(f"{what}: output differs from the bf16 oracle as predicted\n{p.stdout}")
+        raise _WrongOutput(f"{what}: output differs from the bf16 oracles as predicted\n{p.stdout}")
     assert p.returncode == 0, f"{what} failed:\n{p.stdout}\n{p.stderr[-2000:]}"
 
 
 def _add_one_row(device, tiles, seed):
-    """One (1 x tiles) add. Returns (output, bf16 oracle).
+    """One (1 x tiles) add. Returns (output, bf16 oracles).
 
     A 1-tile-tall shape is a legitimate one-dimensional sweep here because the native reader walks
     page = start_tile_id + k -- a pure linear index -- so behaviour depends on the tile COUNT alone and
     not on how it factors into height x width.
 
-    The golden is rounded to bf16, not left in fp32: the device packs bf16, and the sum of two bf16
+    The goldens are rounded to bf16, not left in fp32: the device packs bf16, and the sum of two bf16
     values needs 9 mantissa bits where bf16 has 8, so an fp32 comparison reports ~54% mismatch on
     random data purely from rounding.
     """
     out, ta, tb = _add_returning_operands(device, h_tiles=1, w_tiles=tiles, seed=seed)
-    golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
-    return ttnn.to_torch(out), golden
+    return ttnn.to_torch(out), _add_goldens(ta, tb)
 
 
 def _parent_prediction(tiles):
     return _batched_wrong_tiles(_noc_split(tiles), _PARENT_KNOBS, _NOC_DRAM)
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize(
     "tiles", [pytest.param(t, marks=_expectation_marks(_parent_prediction(t))) for t in _RAGGED_TILE_COUNTS], ids=str
 )
 def test_native_uneven_tile_counts_match_the_prediction(device, tiles):
     before = set(bound_kernel_sources())
-    got, golden = _add_one_row(device, tiles, seed=tiles)
-    wrong_as_predicted = _matches_prediction(got, golden, _parent_prediction(tiles), f"{tiles} tiles")
+    got, goldens = _add_one_row(device, tiles, seed=tiles)
+    wrong_as_predicted = _matches_prediction(got, goldens, _parent_prediction(tiles), f"{tiles} tiles")
 
     # Without this the test is a false green: the shape could have been rejected by some OTHER gate
     # condition, silently run the single-threaded fallback, and pass. Assert on THIS op's new bindings,
@@ -466,7 +470,7 @@ _CACHE_SEQUENCE = (128, 33, 128, 32, 128)
 _CACHE_WRONG = max(_parent_prediction(t) for t in _CACHE_SEQUENCE)
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.xfail(_CACHE_WRONG > 0, raises=_WrongOutput, strict=True, reason=_BATCHED_REASON)
 def test_native_even_and_uneven_share_a_process(device):
     """Even and ragged shapes must not poison each other through the program cache.
@@ -494,7 +498,7 @@ _DM_BATCH_8 = {"TTNN_QSR_DM_BATCH": "8"}
 _BATCHING = {"per-tile": _PER_TILE, "batched": {**_DM_BATCH_8, **_COMPUTE_BATCH_1}}
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("batching", list(_BATCHING))
 @pytest.mark.parametrize("rcw", _NATIVE_ARMS, ids=lambda t: "R{}C{}W{}".format(*t))
 def test_native_uneven_tile_counts_multithread(rcw, batching):
@@ -531,7 +535,7 @@ _DM_BATCH_TILE_COUNTS = [32, 96, 288, 1312, 2080]
 _DM_BATCH_ARMS = [(4, 4, 2), (1, 4, 1)]
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("rcw", _DM_BATCH_ARMS, ids=lambda t: "R{}C{}W{}".format(*t))
 def test_native_dm_batch_above_one_counter_is_bit_exact(rcw):
     """A DM batch of 8 on a role that owns more than one tile counter must stay bit-exact.
@@ -550,7 +554,7 @@ def test_native_dm_batch_above_one_counter_is_bit_exact(rcw):
 
 # --- Compute batching --------------------------------------------------------------------------------
 #
-# The rule's compute batch of 8 runs eight tiles per tile_regs_acquire. The output is right only at output ring
+# An FPU-kernel compute batch of 8 runs eight tiles per tile_regs_acquire. The output is right only at output ring
 # stride 1 -- C = W = 1; above it only one tile of each batch is right. The factory runs any stride; the tests
 # above stride 1 expect the wrong output. Per-cluster tile counts on the 32-cluster grid: 1 runs a single
 # short batch and no full one; 9 runs one full batch of 8 then a tail of 1; 64 runs eight full batches,
@@ -559,7 +563,7 @@ def test_native_dm_batch_above_one_counter_is_bit_exact(rcw):
 _TILES_PER_CYCLE_TILE_COUNTS = [32, 288, 2048, 2080]
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("dm_batch", [1, 8], ids=["compute-batch-only", "both-batches"])
 def test_native_tiles_per_cycle_is_bit_exact(dm_batch):
     """A compute batch of 8 at 1,1,1 must stay bit-exact, alone and together with a DM batch of 8.
@@ -575,29 +579,31 @@ def test_native_tiles_per_cycle_is_bit_exact(dm_batch):
     _check_arm(p, f"tiles_per_cycle=8 dm_batch={dm_batch}")
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @_BATCHED_XFAIL
 def test_native_tiles_per_cycle_above_stride_one():
-    """With every knob unset and every operand in L1, the NoC path runs the rule's 4,4,2 and both batches of
-    8, and its output is wrong until compute batching above ring stride 1 is fixed.
+    """With the compute batch set to 8 and every other knob unset, the NoC path runs the rule's 4,4,2 and both
+    batches of 8 in L1, and its output is wrong until compute batching above ring stride 1 is fixed. The rule itself
+    runs the FPU kernel at 1 there, which the rule cases of the L1 tests check.
 
     L1-interleaved tensors of 288 and 2080 tiles hold 9 and 65 tiles per bank, which 4 does not divide, so they
     take the NoC path. The ring stride is 4 on every DFB. 288 tiles give each compute thread two or three
     tiles, one short batch; 2080 give it sixteen or seventeen, two full batches of 8 and a tail. A refusal, a
     hang, a fallback or wrong output without the predicted count fails this test instead of passing
-    as an expected failure, and so does an exact output: the rule then does not batch.
+    as an expected failure, and so does an exact output: the batch then does not run.
     """
+    knobs = {"TTNN_QSR_TILES_PER_CYCLE": "8"}
     cases = [_anchored((f"l1_{t}", "l1", None, None, (32, t * 32)), None, "") for t in (288, 2080)]
-    p = _run_shard_arm([case[0] for case in cases], expect="qsr", timeout=900, knobs={})
-    _check_arm(p, "the rule on the L1 NoC path", expect_wrong=_expect_wrong(cases, {}))
+    p = _run_shard_arm([case[0] for case in cases], expect="qsr", timeout=900, knobs=knobs)
+    _check_arm(p, "a compute batch of 8 on the L1 NoC path", expect_wrong=_expect_wrong(cases, knobs))
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 def test_native_rule_does_not_batch_beside_dram():
     """With every knob unset and an operand in DRAM, the rule batches nothing, so the output is exact.
 
     The rule keeps the legacy reader's one tile per barrier beside DRAM, and at compute batch 1 the batching
-    defect cannot occur. The shapes are the ones the L1 test above loses tiles on at the rule's batch of 8.
+    defect cannot occur. The shapes are the ones the L1 test above loses tiles on at a compute batch of 8.
     """
     p = _run_arm([288, 2080], knobs={}, timeout=900)
     _check_arm(p, "the rule beside DRAM")
@@ -636,10 +642,10 @@ _GUARD_ARMS = [
     ),
     (
         # The rule batches only when every operand is in L1: an L1-interleaved tensor of 5 tiles per bank
-        # takes the NoC path at the rule's 4 compute threads.
+        # takes the NoC path at the rule's 4 compute threads, where the rule's DM batch is 8 and its FPU batch 1.
         "rule-batch-depth",
         {"TTNN_QSR_ENTRIES_PER_THREAD": "8"},
-        "tiles_per_cycle=8 (rule) needs entries_per_thread >= 16 for double buffering, "
+        "dm_batch=8 (rule) needs entries_per_thread >= 16 for double buffering, "
         "got entries_per_thread=8 (TTNN_QSR_ENTRIES_PER_THREAD)",
         [("l1_160", "l1", None, None, (5 * 32, 32 * 32))],
     ),
@@ -662,16 +668,24 @@ _GUARD_ARMS = [
         "R + W must be <= 6 (Quasar has 6 user DM cores), got R=6 (TTNN_QSR_READER_THREADS) + W=1 (rule)",
     ),
     (
-        # The SFPU kernel runs at most 4 tiles per compute batch, so a set batch of 8 is refused for multiply.
+        # A batch must fit one DST section: the SFPU kernel runs at most 4 tiles in a 16-bit DST, so a set batch of 8
+        # is refused for multiply.
         "sfpu-batch",
         {"TTNN_QSR_TILES_PER_CYCLE": "8"},
-        "tiles_per_cycle=8 (TTNN_QSR_TILES_PER_CYCLE) exceeds 4, the most the SFPU kernel runs",
+        "tiles_per_cycle=8 (TTNN_QSR_TILES_PER_CYCLE) exceeds 4, the most the SFPU kernel runs in a 16-bit DST",
         [("dram_128/multiply", "dram", None, None, (4 * 32, 32 * 32), {"op": "multiply"})],
+    ),
+    (
+        # In a 32-bit DST the SFPU kernel runs at most 2 tiles, so a set batch of 4 is refused for fp32 add.
+        "sfpu-batch-fp32",
+        {"TTNN_QSR_TILES_PER_CYCLE": "4"},
+        "tiles_per_cycle=4 (TTNN_QSR_TILES_PER_CYCLE) exceeds 2, the most the SFPU kernel runs in a 32-bit DST",
+        [("dram_128/fp32", "dram", None, None, (4 * 32, 32 * 32), {"dtype": "float32"})],
     ),
 ]
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("arm", _GUARD_ARMS, ids=[a[0] for a in _GUARD_ARMS])
 def test_native_knob_guards_refuse(arm):
     """A knob setting the factory cannot run must fail with its own message, not run and hang.
@@ -799,8 +813,10 @@ def _shard_cores(entry):
 
 
 def _runs_sfpu(entry):
-    """True when the op of a _SHARD_ARM_SRC entry runs the SFPU kernel: multiply out of its fast mode, or divide."""
-    return (entry[5] if len(entry) > 5 else {}).get("op") in ("multiply", "divide")
+    """True when the op of a _SHARD_ARM_SRC entry runs the SFPU kernel: multiply out of its fast mode, divide, or any
+    op on fp32 operands."""
+    opts = entry[5] if len(entry) > 5 else {}
+    return opts.get("op") in ("multiply", "divide") or opts.get("dtype") == "float32"
 
 
 def _expect_wrong(cases, knobs):
@@ -829,7 +845,8 @@ def _config_params(configs, cases):
 # of options: "out" gives the output its own placement (otherwise it takes the inputs'), "b" does the same for b,
 # "output_tensor" supplies a preallocated output with its own placement, "in_place" adds b into a with add_, "grid" (x0,
 # y0, x1, y1) runs the op on that sub-core grid, "op" runs "subtract", "multiply", "divide" or "multiply_fast" (multiply
-# in fast and approximate mode) instead of add, and "act" chains SQUARE on a ("lhs"), on b ("rhs"), on both ("both") or
+# in fast and approximate mode) instead of add, "dtype": "float32" runs it on fp32 operands and output (with "op" add,
+# subtract, multiply or divide, and "act" None, "lhs", "rhs" or "relu"), and "act" chains SQUARE on a ("lhs"), on b ("rhs"), on both ("both") or
 # on the result ("post"), a lone RELU on the result ("relu"), RELU on a ("relu_lhs"), or SQUARE on a and RELU on the
 # result ("relu_chain"). "out" may also be None, so that the op derives the output's memory config, or
 # "height_specless", an L1 height-sharded config without a shard spec, which the op completes; then "resolved_out" names
@@ -841,6 +858,8 @@ def _config_params(configs, cases):
 _SHARD_ARM_SRC = """
 import collections, csv, json, os, pathlib, sys
 import torch, ttnn
+from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
+    _FPU_ADD_ROUNDINGS, _ULP, _matches_none)
 
 SHARDS = json.loads(os.environ["ARM_SHARDS"])
 EXPECT = os.environ["ARM_EXPECT"]
@@ -864,25 +883,20 @@ def round_to_bf16(x):
 
 def truncate_to_bf16(x):
     # Quasar's SFPU multiply drops the low 16 bits of the fp32 result today, where the Wormhole and Blackhole LLKs
-    # round to nearest even, and a zero product comes out as +0.0: adding 0.0 turns -0.0 into +0.0 and keeps every
-    # other value.
-    return ((x.contiguous().view(torch.int32) & -65536).view(torch.float32) + 0.0).to(torch.bfloat16)
+    # round to nearest even.
+    return (x.contiguous().view(torch.int32) & -65536).view(torch.float32).to(torch.bfloat16)
 
 
-def round_to_bf16_zero_positive(x):
-    # Quasar's SFPU divide rounds to nearest even, and a zero quotient comes out as +0.0, as a zero product does.
-    return (x.to(torch.bfloat16).float() + 0.0).to(torch.bfloat16)
-
-
-# op -> (the op, its extra arguments, the exact result, the kernel's rounding of it to bf16). The FPU kernel
-# rounds to nearest even. The SFPU kernel runs multiply out of fast mode, which truncates, and divide, which
-# rounds to nearest even.
-OPS = {"add": (ttnn.experimental.quasar.add, {}, torch.add, round_to_bf16),
-       "subtract": (ttnn.experimental.quasar.subtract, {}, torch.subtract, round_to_bf16),
-       "multiply": (ttnn.experimental.quasar.multiply, {}, torch.multiply, truncate_to_bf16),
-       "multiply_fast": (ttnn.experimental.quasar.multiply, {"fast_and_approximate_mode": True}, torch.multiply,
-                         round_to_bf16),
-       "divide": (ttnn.experimental.quasar.divide, {}, torch.divide, round_to_bf16_zero_positive)}
+# op -> (the op, its extra arguments, the kernel's bf16 results from the operands; an element is right when it
+# matches one). The FPU kernel adds and subtracts as _FPU_ADD_ROUNDINGS says, and multiplies with rounding to nearest
+# even. The SFPU kernel runs multiply out of fast mode, which truncates, and divide, which rounds to nearest even.
+OPS = {"add": (ttnn.experimental.quasar.add, {}, _FPU_ADD_ROUNDINGS),
+       "subtract": (ttnn.experimental.quasar.subtract, {},
+                    tuple(lambda a, b, rounding=rounding: rounding(a, -b) for rounding in _FPU_ADD_ROUNDINGS)),
+       "multiply": (ttnn.experimental.quasar.multiply, {}, (lambda a, b: truncate_to_bf16(torch.multiply(a, b)),)),
+       "multiply_fast": (ttnn.experimental.quasar.multiply, {"fast_and_approximate_mode": True},
+                         (lambda a, b: round_to_bf16(torch.multiply(a, b)),)),
+       "divide": (ttnn.experimental.quasar.divide, {}, (lambda a, b: round_to_bf16(torch.divide(a, b)),))}
 
 
 def square(x):
@@ -890,29 +904,33 @@ def square(x):
     return truncate_to_bf16(x * x).float()
 
 
-def relu(x):
-    # RELU on the SFPU gives +0.0 for a negative input.
-    return torch.where(x > 0, x, torch.zeros_like(x))
-
-
-# act -> (the op's activation arguments, the output from the operands, the exact op and its rounding). SQUARE
+# act ->(the op's activation arguments, the output from the operands and one of the op's roundings). SQUARE
 # chains on a, on b, on both or on the result; a lone RELU on the result runs in the packer, on the rounded result.
 # RELU on a, and RELU on the result beside a chain, run on the SFPU.
 SQUARE, RELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE), ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
-ACTS = {None: ({}, lambda a, b, exact, rounding: rounding(exact(a, b))),
-        "lhs": ({"input_tensor_a_activations": [SQUARE]},
-                lambda a, b, exact, rounding: rounding(exact(square(a), b))),
-        "rhs": ({"input_tensor_b_activations": [SQUARE]},
-                lambda a, b, exact, rounding: rounding(exact(a, square(b)))),
+ACTS = {None: ({}, lambda a, b, op: op(a, b)),
+        "lhs": ({"input_tensor_a_activations": [SQUARE]}, lambda a, b, op: op(square(a), b)),
+        "rhs": ({"input_tensor_b_activations": [SQUARE]}, lambda a, b, op: op(a, square(b))),
         "both": ({"input_tensor_a_activations": [SQUARE], "input_tensor_b_activations": [SQUARE]},
-                 lambda a, b, exact, rounding: rounding(exact(square(a), square(b)))),
-        "post": ({"activations": [SQUARE]},
-                 lambda a, b, exact, rounding: square(rounding(exact(a, b)).float()).to(torch.bfloat16)),
-        "relu": ({"activations": [RELU]}, lambda a, b, exact, rounding: torch.relu(rounding(exact(a, b)))),
-        "relu_lhs": ({"input_tensor_a_activations": [RELU]},
-                     lambda a, b, exact, rounding: rounding(exact(relu(a), b))),
+                 lambda a, b, op: op(square(a), square(b))),
+        "post": ({"activations": [SQUARE]}, lambda a, b, op: square(op(a, b).float()).to(torch.bfloat16)),
+        "relu": ({"activations": [RELU]}, lambda a, b, op: torch.relu(op(a, b))),
+        "relu_lhs": ({"input_tensor_a_activations": [RELU]}, lambda a, b, op: op(torch.relu(a), b)),
         "relu_chain": ({"input_tensor_a_activations": [SQUARE], "activations": [RELU]},
-                       lambda a, b, exact, rounding: relu(rounding(exact(square(a), b)).float()).to(torch.bfloat16))}
+                       lambda a, b, op: torch.relu(op(square(a), b)))}
+
+
+# On fp32 operands every op runs on the SFPU kernel and keeps the fp32 result: within _ULP of torch's, the bound the
+# suites check too.
+OPS_FP32 = {"add": (ttnn.experimental.quasar.add, {}, (torch.add,)),
+            "subtract": (ttnn.experimental.quasar.subtract, {}, (torch.subtract,)),
+            "multiply": (ttnn.experimental.quasar.multiply, {}, (torch.multiply,)),
+            "divide": (ttnn.experimental.quasar.divide, {}, (torch.divide,))}
+ACTS_FP32 = {None: ACTS[None],
+             "lhs": ({"input_tensor_a_activations": [SQUARE]}, lambda a, b, op: op(a * a, b)),
+             "rhs": ({"input_tensor_b_activations": [SQUARE]}, lambda a, b, op: op(a, b * b)),
+             "relu": ({"activations": [RELU]}, lambda a, b, op: torch.relu(op(a, b)))}
+DTYPES = {"bfloat16": ttnn.bfloat16, "float32": ttnn.float32}
 profile_csv = root / "generated" / "profiler" / ".logs" / "profile_log_device.csv"
 if (EXPECT_NEOS or EXPECT_DMS) and profile_csv.exists():
     profile_csv.unlink()
@@ -955,12 +973,15 @@ try:
         else:
             out_mem = memory_config(*opts["out"]) if "out" in opts else mem
         b_mem = memory_config(*opts["b"]) if "b" in opts else mem
-        cfg = dict(dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        fp32 = opts.get("dtype") == "float32"
+        dtype = DTYPES[opts.get("dtype", "bfloat16")]
+        cfg = dict(dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
         ta = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=mem, **cfg)
         tb = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=b_mem, **cfg)
-        op_fn, op_extra, exact, rounding = OPS[opts.get("op", "add")]
-        act_kwargs, model = ACTS[opts.get("act")]
-        golden = model(ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float(), exact, rounding)
+        op_fn, op_extra, results = (OPS_FP32 if fp32 else OPS)[opts.get("op", "add")]
+        act_kwargs, model = (ACTS_FP32 if fp32 else ACTS)[opts.get("act")]
+        a, b = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
+        goldens = [model(a, b, op) for op in results]
         cached = device.num_program_cache_entries()
         op_kwargs = {}
         if "grid" in opts:
@@ -976,7 +997,7 @@ try:
                     torch.zeros(shape), memory_config=memory_config(*opts["output_tensor"]), **cfg)
             if out_mem is not None:
                 op_kwargs["memory_config"] = out_mem
-            out = op_fn(ta, tb, dtype=ttnn.bfloat16, **op_extra, **act_kwargs, **op_kwargs)
+            out = op_fn(ta, tb, dtype=dtype, **op_extra, **act_kwargs, **op_kwargs)
         if "resolved_out" in opts and out.memory_config() != memory_config(*opts["resolved_out"]):
             failures.append("{}: the output took {}".format(name, out.memory_config()))
         spec = json.dumps(entry[1:])
@@ -986,7 +1007,10 @@ try:
         if spec in specs[i + 1:]:
             keep.extend([ta, tb, out])
         got = ttnn.to_torch(out)
-        differ = got.contiguous().view(torch.int16) != golden.contiguous().view(torch.int16)
+        # Integer ULP distance per element, as production measures it: the sign of a zero does not count. A bf16
+        # golden is one of the kernel's exact roundings; fp32 allows the op's measured bound.
+        bound = _ULP[ttnn.float32][opts.get("op", "add")] if fp32 else 0
+        differ = _matches_none(got, goldens, bound)
         if differ.any():
             # Pad a partial last tile row or column with matches, so that the mask holds whole tiles.
             differ = torch.nn.functional.pad(differ, (0, -differ.shape[-1] % 32, 0, -differ.shape[-2] % 32))
@@ -1068,11 +1092,11 @@ def _run_shard_arm(shards, expect, timeout, knobs=None):
 
 
 # Every borrowed shard above is even: each core computes one whole shard, and 4 divides it. So the rule's own
-# configuration runs them too, and its compute batch of 8 at ring stride 4 leaves the predicted tiles wrong.
+# configuration runs them too, at the FPU kernel's compute batch of 1, which is exact.
 _BORROWED_SHARD_CASES = [(entry, _BORROWED, [_shard_tiles(entry)] * _shard_cores(entry)) for entry in _BORROWED_SHARDS]
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", _config_params({**_BORROWED_CONFIGS, "rule": {}}, _BORROWED_SHARD_CASES))
 def test_native_borrowed_shards_match_the_prediction(name, knobs):
     """Height, block and width shards must run native and give the predicted output in every configuration.
@@ -1084,7 +1108,7 @@ def test_native_borrowed_shards_match_the_prediction(name, knobs):
     _check_arm(p, f"borrowed shards, {name}", expect_wrong=_expect_wrong(_BORROWED_SHARD_CASES, knobs))
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", list(_BORROWED_CONFIGS.items()), ids=list(_BORROWED_CONFIGS))
 def test_native_borrowed_uneven_shards_are_bit_exact(name, knobs):
     """Shards whose last clusters hold fewer real tiles must run native and bit-exact in every configuration.
@@ -1096,7 +1120,7 @@ def test_native_borrowed_uneven_shards_are_bit_exact(name, knobs):
     _check_arm(p, f"uneven shards, {name}")
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", list(_BORROWED_CONFIGS_C2.items()), ids=list(_BORROWED_CONFIGS_C2))
 def test_native_borrowed_indivisible_shards_stay_native(name, knobs):
     """A shard whose tile count does not divide by the compute count must stay native and bit-exact.
@@ -1109,7 +1133,7 @@ def test_native_borrowed_indivisible_shards_stay_native(name, knobs):
     _check_arm(p, f"indivisible shards, {name}")
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("shard", _FOUR_NEO_SHARDS, ids=[s[0] for s in _FOUR_NEO_SHARDS])
 def test_native_borrowed_indivisible_shards_use_every_compute_thread(shard):
     """With no thread knob set, a borrowed shard must run on all four Neos, however few tiles it has.
@@ -1128,7 +1152,7 @@ def test_native_borrowed_indivisible_shards_use_every_compute_thread(shard):
     _check_arm(p, f"{shard[0]} on four Neos")
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 def test_native_borrowed_mismatched_output_borrows_only_the_inputs():
     """An output on the inputs' grid with another shard spec must not be borrowed, and must be right.
 
@@ -1152,7 +1176,7 @@ def test_native_borrowed_mismatched_output_borrows_only_the_inputs():
     _check_arm(p, "an output shard spec unlike the inputs'")
 
 
-# 64 tiles per core: at the rule's 1,4,1 each compute thread takes 16, two full batches of 8 at ring stride 4.
+# 64 tiles per core: at 1,4,1 and a set batch of 8, each compute thread takes 16, two full batches at ring stride 4.
 _BATCHED_BORROWED_SHARDS = [
     ("block64", "block", [8 * 32, 8 * 32], (0, 0, 1, 1), (2 * 8 * 32, 2 * 8 * 32)),
 ]
@@ -1161,17 +1185,21 @@ _BATCHED_BORROWED_CASES = [
 ]
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @_BATCHED_XFAIL
 def test_native_borrowed_tiles_per_cycle_above_stride_one():
-    """With every knob unset a borrowed shard runs the rule's 1,4,1 at a compute batch of 8, and its output
-    is wrong until compute batching above ring stride 1 is fixed.
+    """With the compute batch set to 8 and every other knob unset, a borrowed shard runs the rule's 1,4,1 at a
+    compute batch of 8, and its output is wrong until compute batching above ring stride 1 is fixed. The rule itself
+    runs the FPU kernel at 1 there.
 
-    This is the test that becomes a plain pass when that fix lands. An exact output fails it too: the rule
-    then does not batch.
+    This is the test that becomes a plain pass when that fix lands. An exact output fails it too: the batch
+    then does not run.
     """
-    p = _run_shard_arm(_BATCHED_BORROWED_SHARDS, expect="qsr", timeout=900, knobs={})
-    _check_arm(p, "the rule on a borrowed shard", expect_wrong=_expect_wrong(_BATCHED_BORROWED_CASES, {}))
+    knobs = {"TTNN_QSR_TILES_PER_CYCLE": "8"}
+    p = _run_shard_arm(_BATCHED_BORROWED_SHARDS, expect="qsr", timeout=900, knobs=knobs)
+    _check_arm(
+        p, "a compute batch of 8 on a borrowed shard", expect_wrong=_expect_wrong(_BATCHED_BORROWED_CASES, knobs)
+    )
 
 
 # L1-interleaved operands. Bank k of an L1-interleaved tensor holds its pages k, k+32, k+64, ... back to
@@ -1235,7 +1263,7 @@ _L1_INTERLEAVED_RULE_CASES = [
 ]
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", list(_BORROWED_CONFIGS_C2.items()), ids=list(_BORROWED_CONFIGS_C2))
 def test_native_l1_interleaved_is_bit_exact(name, knobs):
     """L1-interleaved operands must run native and bit-exact in every configuration, borrowed or not.
@@ -1249,20 +1277,19 @@ def test_native_l1_interleaved_is_bit_exact(name, knobs):
     _check_arm(p, f"L1-interleaved, {name}")
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", _config_params({"rule": {}}, _L1_INTERLEAVED_RULE_CASES))
 def test_native_l1_interleaved_matches_the_rule_prediction(name, knobs):
     """With every knob unset, L1-interleaved operands must give the rule's predicted output.
 
-    A borrowed slice of 4 tiles gives each compute thread a batch of one, which packs right; 8 tiles give
-    it a batch of two, which loses one tile at ring stride 4. The NoC cases split their tiles over the
-    worker clusters as usual.
+    The rule runs the FPU kernel at a compute batch of 1 at ring stride 4, so every case is exact. The NoC cases
+    split their tiles over the worker clusters as usual.
     """
     p = _run_shard_arm([case[0] for case in _L1_INTERLEAVED_RULE_CASES], expect="qsr", timeout=900, knobs=knobs)
     _check_arm(p, f"L1-interleaved, {name}", expect_wrong=_expect_wrong(_L1_INTERLEAVED_RULE_CASES, knobs))
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("threads", ["rule", "R4C4W2"])
 @pytest.mark.parametrize("case, cores", _L1_INTERLEAVED_DM_BORROWED, ids=[c[0][0] for c in _L1_INTERLEAVED_DM_BORROWED])
 def test_native_l1_interleaved_borrows_in_place(case, cores, threads):
@@ -1289,7 +1316,7 @@ def test_native_l1_interleaved_borrows_in_place(case, cores, threads):
     _check_arm(p, f"{case[0]} borrowed at 1,4,1, threads {threads}")
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("case, cores", _L1_INTERLEAVED_DM_NOC, ids=[c[0][0] for c in _L1_INTERLEAVED_DM_NOC])
 def test_native_l1_interleaved_keeps_the_noc_path(case, cores):
     """An indivisible tile count per cluster or a partial grid must keep the NoC path, and run the rule's 4,4,2
@@ -1320,7 +1347,7 @@ _L1_INTERLEAVED_PARTIAL_ROUTES = [
 ]
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize(
     "case, dms, cores", _L1_INTERLEAVED_PARTIAL_ROUTES, ids=[r[0][0] for r in _L1_INTERLEAVED_PARTIAL_ROUTES]
 )
@@ -1412,7 +1439,7 @@ _DRAM_SHARDED_CONFIGS = {
 _DRAM_SHARDED_CASES = [(entry, _NOC_DRAM, _noc_split(_tensor_tiles(entry))) for entry in _DRAM_SHARDED]
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", _config_params(_DRAM_SHARDED_CONFIGS, _DRAM_SHARDED_CASES))
 def test_native_dram_sharded_matches_the_prediction(name, knobs):
     """DRAM-sharded operands must run native and give the predicted output, alone or beside interleaved
@@ -1433,7 +1460,7 @@ _DRAM_SHARDED_PLACEMENT = [
 ]
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("case", _DRAM_SHARDED_PLACEMENT, ids=[c[0] for c in _DRAM_SHARDED_PLACEMENT])
 def test_native_dram_sharded_spreads_over_the_worker_grid(case):
     """A DRAM-sharded op must run the rule's threads on every worker cluster, not on its shard grid.
@@ -1738,7 +1765,7 @@ _MIXED_CONFIGS = {
 }
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", _config_params(_MIXED_CONFIGS, _MIXED_CASES))
 def test_native_mixed_layouts_match_the_prediction(name, knobs):
     """Every mix of placements must run native and give the predicted output.
@@ -1755,8 +1782,8 @@ def test_native_mixed_layouts_match_the_prediction(name, knobs):
 # run the SFPU kernel. Each op runs one mix of each kind: the output's shard walked by the reader, the inputs' shard
 # walked by the writer, the bank walk in the reader and in the writer, pad slots in the reader and in the writer, all
 # three borrowed as slices with partial tiles, all three borrowed as shards with 4 tiles per compute thread, and the
-# NoC path beside DRAM. Under the rule, the shards hold 4 tiles per compute thread, so their wrong-tile counts tell
-# the SFPU batch of 4 from a batch of 2.
+# NoC path beside DRAM. Under the rule, the shards hold 4 tiles per compute thread, so the FPU kernel's batches give
+# the predicted wrong tiles, and the SFPU kernel's batches are exact.
 _OTHER_OPS = ("subtract", "multiply", "multiply_fast", "divide")
 _OP_MIXES = (
     "I.I.W32",
@@ -1785,14 +1812,11 @@ _OP_CASES = [
 ]
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", _config_params(_MIXED_CONFIGS, _OP_CASES))
 def test_native_other_ops_match_the_prediction(name, knobs):
-    """subtract, multiply and divide must run native in every kind of mix and give the predicted output.
-
-    The oracle is the exact result as the kernel rounds it: to nearest even on the FPU kernel and for divide, by
-    truncation for the SFPU multiply. A wrong op define or a wrong DST slot fails the comparison, which is exact.
-    """
+    """subtract, multiply and divide must run native in every kind of mix and give the predicted output, exactly as
+    each kernel rounds (OPS in _SHARD_ARM_SRC), so a wrong op define or DST slot fails."""
     p = _run_shard_arm([case[0] for case in _OP_CASES], expect="qsr", timeout=1800, knobs=knobs)
     _check_arm(p, f"subtract, multiply and divide, {name}", expect_wrong=_expect_wrong(_OP_CASES, knobs))
 
@@ -1807,7 +1831,7 @@ _OP_TAIL_SHARDS = [
 ]
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", list(_BORROWED_CONFIGS_C2.items()), ids=list(_BORROWED_CONFIGS_C2))
 def test_native_other_ops_on_the_tail_rings_are_bit_exact(name, knobs):
     """subtract, multiply and divide must stay native and exact where a shard's last tiles go through the tail
@@ -1822,8 +1846,8 @@ def test_native_other_ops_on_the_tail_rings_are_bit_exact(name, knobs):
 # borrowed; the inputs borrowed beside an output that moves; the output borrowed beside inputs that move. SQUARE on both
 # inputs runs two self-loop rings on each Neo. block_6's shards hold 6 tiles, which 4 does not divide. The tail rings
 # carry no activation, so at the rule's compute count block_6 takes the NoC path.
-# SQUARE and RELU have exact models. GELU and TANH do not, and on craq-sim they change the SFPU results of the later
-# programs in the same process, on both factories.
+# SQUARE and RELU have exact models; GELU and TANH do not. GELU also shifts the SFPU results of the later programs on
+# the same device, on both factories.
 _ACTIVATIONS = ("lhs", "rhs", "post", "relu", "relu_lhs", "relu_chain")
 _ACT_MIXES = ("I.I.I_partial", "B.B.B_partial", "B32.B32.I", "I.I.W32")
 _BLOCK_6 = next(entry for entry in _SMALL_SHARDS if entry[0] == "block_6")
@@ -1857,11 +1881,11 @@ _ACT_CASES = (
 )
 
 # The activations change only the compute side: one compute thread at the rule's batch, four at batch 1, and the
-# rule, whose batch above ring stride 1 leaves the predicted tiles wrong.
+# rule, which batches the SFPU kernel at 4 and the FPU kernel at 1, both exact.
 _ACT_CONFIGS = {name: _MIXED_CONFIGS[name] for name in ("R1C1W1", "rule-n1", "rule")}
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", _config_params(_ACT_CONFIGS, _ACT_CASES))
 def test_native_activations_match_the_prediction(name, knobs):
     """Activations on a, on b and on the result must run native and give the predicted output.
@@ -1872,6 +1896,70 @@ def test_native_activations_match_the_prediction(name, knobs):
     """
     p = _run_shard_arm([case[0] for case in _ACT_CASES], expect="qsr", timeout=1800, knobs=knobs)
     _check_arm(p, f"activations, {name}", expect_wrong=_expect_wrong(_ACT_CASES, knobs))
+
+
+# fp32: add, subtract, multiply and divide all run the SFPU kernel, in a 32-bit DST, where the rule's compute batch is 2.
+# They run the op mixes, the shards whose last tiles go through the tail rings, and three activations: SQUARE on a and
+# SQUARE on b, which run the Float32 activation rings of a and of b, and a lone RELU on the result, in the packer.
+_FP32_OPS = ("add", "subtract", "multiply", "divide")
+
+
+def _with_fp32(entry):
+    """A _SHARD_ARM_SRC entry on fp32 operands and output, named after it."""
+    opts = entry[5] if len(entry) > 5 else {}
+    return (f"{entry[0]}/fp32", *entry[1:5], {**opts, "dtype": "float32"})
+
+
+_FP32_CASES = [
+    (_with_fp32(_with_op(entry, op)), path, split)
+    for op in _FP32_OPS
+    for entry, path, split in _MIXED_CASES
+    if entry[0] in _OP_MIXES
+]
+_FP32_TAIL_SHARDS = [
+    _with_fp32(_with_op(entry, op))
+    for op in _FP32_OPS
+    for entry in _SMALL_SHARDS
+    if entry[0] in ("block_6", "height1", "height_5")
+]
+_FP32_ACT_CASES = [
+    (_with_act(_with_fp32(_with_op(entry, op)), act), path, split)
+    for op in ("add", "multiply")
+    for act in ("lhs", "rhs", "relu")
+    for entry, path, split in _MIXED_CASES
+    if entry[0] in _ACT_MIXES
+]
+_FP32_CONFIGS = {name: _MIXED_CONFIGS[name] for name in ("R1C1W1", "rule-n1", "rule")}
+# The configurations that have tail rings: at C = 1 every shard divides, and R4C4W2-n1 builds rule-n1's program.
+_FP32_TAIL_CONFIGS = {name: _BORROWED_CONFIGS_C2[name] for name in ("rule-n1", "R1C2W1-n1")}
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", _config_params(_FP32_CONFIGS, _FP32_CASES))
+def test_native_fp32_ops_match_the_prediction(name, knobs):
+    """fp32 add, subtract, multiply and divide must run native in every kind of mix and give the predicted output.
+
+    The oracle is torch's fp32 result, within _ULP. A batch larger than a
+    32-bit DST section holds overwrites the section the packer reads.
+    """
+    p = _run_shard_arm([case[0] for case in _FP32_CASES], expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"fp32 ops, {name}", expect_wrong=_expect_wrong(_FP32_CASES, knobs))
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_FP32_TAIL_CONFIGS.items()), ids=list(_FP32_TAIL_CONFIGS))
+def test_native_fp32_on_the_tail_rings_match_the_oracle(name, knobs):
+    """fp32 ops must stay native and match the fp32 oracle where a shard's last tiles go through the tail rings."""
+    p = _run_shard_arm(_FP32_TAIL_SHARDS, expect="qsr", timeout=900, knobs=knobs)
+    _check_arm(p, f"fp32 ops on the tail rings, {name}")
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", _config_params(_ACT_CONFIGS, _FP32_ACT_CASES))
+def test_native_fp32_activations_match_the_prediction(name, knobs):
+    """Activations on fp32 operands must run native and give the predicted output."""
+    p = _run_shard_arm([case[0] for case in _FP32_ACT_CASES], expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"fp32 activations, {name}", expect_wrong=_expect_wrong(_FP32_ACT_CASES, knobs))
 
 
 # One case per child, as above, and one case of each kind of anchor and walk. The thread counts tell the
@@ -1932,7 +2020,7 @@ _MIXED_ROUTED = (
 _MIXED_ROUTES = [(case[0], *_route(case, _COMPUTE_BATCH_1)) for case in _MIXED_CASES if case[0][0] in _MIXED_ROUTED]
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("case, dms, cores", _MIXED_ROUTES, ids=[r[0][0] for r in _MIXED_ROUTES])
 def test_native_mixed_layouts_route_by_the_anchor(case, dms, cores):
     """Each mix must run where its anchor puts it, with the threads of what it moves.
@@ -1962,7 +2050,7 @@ def test_native_mixed_layouts_route_by_the_anchor(case, dms, cores):
 _DRAM_128 = ("dram_128", "dram", None, None, (4 * 32, 32 * 32))
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 def test_native_rule_follows_a_set_compute_count():
     """With only the compute count set, the rule must give the reader and writer counts that match it.
 
@@ -1989,7 +2077,8 @@ def test_native_rule_follows_a_set_compute_count():
 # Each case: the knobs, the values each program shape's part of the settings line must name with their
 # sources, and whether the output must be exact. The line gives five shapes: every operand over the NoC and in
 # L1, the same beside a DRAM operand (where the rule batches nothing), the output borrowed beside an input that
-# moves, the inputs borrowed beside an output that moves, all of them borrowed. C = 1 alone gives 1,1,1 by the
+# moves, the inputs borrowed beside an output that moves, all of them borrowed. With no knob set, the rule runs the
+# FPU kernel at batch 1 above ring stride 1, and the SFPU kernel at 4 and 2. C = 1 alone gives 1,1,1 by the
 # rule. R = 2 beside C = 1 makes each compute thread own two tile counters of the input rings, so the rule's
 # compute batch drops to 1 where the inputs move. That case checks the line only: its output is exact only on
 # craq-sim builds without the defect that corrupts a run whose DM side outnumbers its Tensix side. A hang still
@@ -2016,7 +2105,29 @@ _LOG_CASES = {
             _OUTPUT_SHAPE: ["R=4 (rule) W=1 tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
             _INPUTS_SHAPE: ["R=1 W=1 (TTNN_QSR_WRITER_THREADS) tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
-            _SFPU_SHAPE: ["tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
+            _SFPU_SHAPE: [
+                "tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE) in a 16-bit DST",
+                "tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE) in a 32-bit DST",
+            ],
+        },
+        True,
+    ),
+    "rule": (
+        {},
+        {
+            _NOC_SHAPE: [
+                "R=4 (rule)",
+                "C=4 (rule)",
+                "W=2 (rule)",
+                "entries_per_thread=16 (rule)",
+                "dm_batch=8 (rule)",
+                "tiles_per_cycle=1 (rule)",
+            ],
+            _DRAM_SHAPE: ["entries_per_thread=2 (rule) dm_batch=1 (rule) tiles_per_cycle=1 (rule)"],
+            _OUTPUT_SHAPE: ["R=4 (rule) W=1 tiles_per_cycle=1 (rule)"],
+            _INPUTS_SHAPE: ["R=1 W=4 (rule) tiles_per_cycle=1 (rule)"],
+            _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=1 (rule)"],
+            _SFPU_SHAPE: ["tiles_per_cycle=4 (rule) in a 16-bit DST", "tiles_per_cycle=2 (rule) in a 32-bit DST"],
         },
         True,
     ),
@@ -2028,7 +2139,7 @@ _LOG_CASES = {
             _OUTPUT_SHAPE: ["R=1 (rule) W=1 tiles_per_cycle=8 (rule)"],
             _INPUTS_SHAPE: ["R=1 W=1 (rule) tiles_per_cycle=8 (rule)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
-            _SFPU_SHAPE: ["tiles_per_cycle=4 (rule)"],
+            _SFPU_SHAPE: ["tiles_per_cycle=4 (rule) in a 16-bit DST", "tiles_per_cycle=2 (rule) in a 32-bit DST"],
         },
         True,
     ),
@@ -2045,14 +2156,14 @@ _LOG_CASES = {
             _OUTPUT_SHAPE: ["R=2 (TTNN_QSR_READER_THREADS) W=1 tiles_per_cycle=1 (rule)"],
             _INPUTS_SHAPE: ["R=1 W=1 (rule) tiles_per_cycle=8 (rule)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
-            _SFPU_SHAPE: ["tiles_per_cycle=1 (rule)"],
+            _SFPU_SHAPE: ["tiles_per_cycle=1 (rule) in a 16-bit DST", "tiles_per_cycle=1 (rule) in a 32-bit DST"],
         },
         False,
     ),
 }
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name", list(_LOG_CASES))
 def test_native_tuning_log_names_each_source(name):
     """The line that reports the native settings must name the source of each value, the knob or the rule.
@@ -2076,7 +2187,7 @@ def test_native_tuning_log_names_each_source(name):
     assert not missing, f"the native settings line lacks {missing}:\n{line}"
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 def test_native_illegal_thread_knobs_fall_back():
     """Set thread counts that break a ring's STRIDED ratio must send the op to the fallback factory.
 
@@ -2087,7 +2198,7 @@ def test_native_illegal_thread_knobs_fall_back():
     _check_arm(p, "R=3 beside C=4")
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 def test_native_prediction_tables_cover_their_cases():
     """Each prediction must describe its whole case, and every case must have one. No device.
 
@@ -2119,6 +2230,8 @@ def test_native_prediction_tables_cover_their_cases():
     padded_acts = set(_ACT_MIXES) & _MIXED_PAD_SLOTS
     assert not padded_acts, f"these activation mixes have pad slots: {padded_acts}"
     cases += _ACT_CASES
+    # The fp32 tables reuse the op and activation placements; the ones with pad slots stay out of the split check.
+    cases += [case for case in _FP32_CASES if case[0][0].split("/")[0] not in _MIXED_PAD_SLOTS] + _FP32_ACT_CASES
     # In place, a wrong-tile prediction is not verified above a batch of 1: a batch may read other threads'
     # slots, which in place hold their results, not their inputs.
     in_place = [case for case in _MIXED_CASES if len(case[0]) > 5 and case[0][5].get("in_place")]

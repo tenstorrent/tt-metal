@@ -29,51 +29,51 @@ void kernel_main() {
     uint32_t step = get_arg_val<uint32_t>(0);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
-    constexpr auto cb_param_in = tt::CBIndex::c_0;
+    static constexpr auto cb_param_in = tt::CBIndex::c_0;
     DataflowBuffer dfb_param_in_obj(cb_param_in);
-    constexpr auto cb_grad_in = tt::CBIndex::c_1;
+    static constexpr auto cb_grad_in = tt::CBIndex::c_1;
     DataflowBuffer dfb_grad_in_obj(cb_grad_in);
-    constexpr auto cb_exp_avg_in = tt::CBIndex::c_2;
+    static constexpr auto cb_exp_avg_in = tt::CBIndex::c_2;
     DataflowBuffer dfb_exp_avg_in_obj(cb_exp_avg_in);
-    constexpr auto cb_exp_avg_sq_in = tt::CBIndex::c_3;
+    static constexpr auto cb_exp_avg_sq_in = tt::CBIndex::c_3;
     DataflowBuffer dfb_exp_avg_sq_in_obj(cb_exp_avg_sq_in);
 #ifdef AMSGRAD
     constexpr auto cb_max_exp_avg_sq_in = tt::CBIndex::c_4;
     DataflowBuffer dfb_max_exp_avg_sq_in_obj(cb_max_exp_avg_sq_in);
 #endif
     // lr, beta1, beta2, eps, weight_decay
-    constexpr auto cb_scalar_args = tt::CBIndex::c_5;
+    static constexpr auto cb_scalar_args = tt::CBIndex::c_5;
     DataflowBuffer dfb_scalar_args_obj(cb_scalar_args);
-    constexpr auto cb_one = tt::CBIndex::c_6;
+    static constexpr auto cb_one = tt::CBIndex::c_6;
     DataflowBuffer dfb_one_obj(cb_one);
-    constexpr auto cb_param_out = tt::CBIndex::c_16;
+    static constexpr auto cb_param_out = tt::CBIndex::c_16;
     DataflowBuffer dfb_param_out_obj(cb_param_out);
-    constexpr auto cb_exp_avg_out = tt::CBIndex::c_17;
+    static constexpr auto cb_exp_avg_out = tt::CBIndex::c_17;
     DataflowBuffer dfb_exp_avg_out_obj(cb_exp_avg_out);
-    constexpr auto cb_exp_avg_sq_out = tt::CBIndex::c_18;
+    static constexpr auto cb_exp_avg_sq_out = tt::CBIndex::c_18;
     DataflowBuffer dfb_exp_avg_sq_out_obj(cb_exp_avg_sq_out);
 #ifdef AMSGRAD
-    constexpr auto cb_max_exp_avg_sq_out = tt::CBIndex::c_19;
+    static constexpr auto cb_max_exp_avg_sq_out = tt::CBIndex::c_19;
     DataflowBuffer dfb_max_exp_avg_sq_out_obj(cb_max_exp_avg_sq_out);
 #endif
 
-    constexpr auto tmp_cb_param = tt::CBIndex::c_24;
+    static constexpr auto tmp_cb_param = tt::CBIndex::c_24;
     DataflowBuffer tmp_dfb_param_obj(tmp_cb_param);
-    constexpr auto tmp_cb_exp_avg = tt::CBIndex::c_25;
+    static constexpr auto tmp_cb_exp_avg = tt::CBIndex::c_25;
     DataflowBuffer tmp_dfb_exp_avg_obj(tmp_cb_exp_avg);
-    constexpr auto tmp_cb_exp_avg_sq = tt::CBIndex::c_26;
+    static constexpr auto tmp_cb_exp_avg_sq = tt::CBIndex::c_26;
     DataflowBuffer tmp_dfb_exp_avg_sq_obj(tmp_cb_exp_avg_sq);
 #ifdef AMSGRAD
-    constexpr auto tmp_cb_max_exp_avg_sq = tt::CBIndex::c_27;
+    static constexpr auto tmp_cb_max_exp_avg_sq = tt::CBIndex::c_27;
     DataflowBuffer tmp_dfb_max_exp_avg_sq_obj(tmp_cb_max_exp_avg_sq);
 #endif
     constexpr auto cb_beta1_exponent = tt::CBIndex::c_28;
     DataflowBuffer dfb_beta1_exponent_obj(cb_beta1_exponent);
     constexpr auto cb_beta2_exponent = tt::CBIndex::c_29;
     DataflowBuffer dfb_beta2_exponent_obj(cb_beta2_exponent);
-    constexpr auto cb_tmp1 = tt::CBIndex::c_30;
+    static constexpr auto cb_tmp1 = tt::CBIndex::c_30;
     DataflowBuffer dfb_tmp1_obj(cb_tmp1);
-    constexpr auto cb_tmp2 = tt::CBIndex::c_31;
+    static constexpr auto cb_tmp2 = tt::CBIndex::c_31;
     DataflowBuffer dfb_tmp2_obj(cb_tmp2);
 
     constexpr uint32_t first_tile = 0;

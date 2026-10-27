@@ -27,19 +27,19 @@ void kernel_main() {
     DataflowBuffer dfb_x_obj(cb_x);
     constexpr uint32_t cb_one = 1;
     DataflowBuffer dfb_one_obj(cb_one);
-    constexpr uint32_t cb_decimal = 2;
+    static constexpr uint32_t cb_decimal = 2;
     DataflowBuffer dfb_decimal_obj(cb_decimal);
     constexpr uint32_t cb_mask_h_w = 3;
     DataflowBuffer dfb_mask_h_w_obj(cb_mask_h_w);
 
     constexpr uint32_t cb_y = 16;
 
-    constexpr uint32_t cb_xabs = 24;          // |x|
-    constexpr uint32_t cb_xpow = 25;          // |x|^p
+    static constexpr uint32_t cb_xabs = 24;   // |x|
+    static constexpr uint32_t cb_xpow = 25;   // |x|^p
     constexpr uint32_t cb_xpowadd = 26;       // Add[|x|^p * exp(log(|x|) * decimal)]
-    constexpr uint32_t cb_logx = 27;          // log(|x|)
-    constexpr uint32_t cb_exp_lxmd = 28;      // exp(log(|x|) * decimal)
-    constexpr uint32_t cb_correct_xpow = 29;  // |x|^p * exp(log(|x|) * decimal)
+    static constexpr uint32_t cb_logx = 27;   // log(|x|)
+    static constexpr uint32_t cb_exp_lxmd = 28;      // exp(log(|x|) * decimal)
+    static constexpr uint32_t cb_correct_xpow = 29;  // |x|^p * exp(log(|x|) * decimal)
     DataflowBuffer dfb_xabs_obj(cb_xabs);
     DataflowBuffer dfb_xpow_obj(cb_xpow);
     DataflowBuffer dfb_xpowadd_obj(cb_xpowadd);

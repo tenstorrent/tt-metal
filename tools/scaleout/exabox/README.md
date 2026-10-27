@@ -340,7 +340,7 @@ cd /data/local-syseng-manual/tt-metal-recover
 ./tools/scaleout/exabox/recover.sh --hosts <hosts> --mpi-if ens5f0np0
 ```
 
-Nothing records a direct run, so it never reaches the dashboard — the script prints a notice saying so. (On another site the NIC name differs, so drop `--mpi-if` to auto-detect, or pin the right interface.)
+Nothing records a direct run, so it never reaches the dashboard — the script prints a notice saying so. (On another site the NIC name differs, so drop `--mpi-if` to let Open MPI pick, or pin the right interface.)
 
 Look for `All Detected Links are healthy` in the output. No banner means it isn't done.
 
@@ -348,7 +348,7 @@ Look for `All Detected Links are healthy` in the output. No banner means it isn'
 
 DO:
 - **Use `recover-hosts` on Exabox** — it runs the vetted pre-built path, keeps the logs, and records the run.
-- **Pin the MPI interface** with `--mpi-if ens5f0np0` if you are running `recover.sh` directly (other sites: check `ip link`, or omit `--mpi-if` to auto-detect). `recover-hosts` already does this.
+- **Pin the MPI interface** with `--mpi-if ens5f0np0` if you are running `recover.sh` directly (other sites: check `ip link`, or omit `--mpi-if` to let Open MPI pick). `recover-hosts` already does this.
 - **If a run fails, power-cycle the affected hosts via `#bmc-bots` and re-run** before escalating — this clears most transient stalls and hangs.
 - **Confirm `All Detected Links are healthy`** before calling it done.
 

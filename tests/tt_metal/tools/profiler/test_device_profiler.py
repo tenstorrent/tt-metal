@@ -295,6 +295,27 @@ def test_custom_cycle_count():
     _assert_kernel_cycle_counts(devicesData, REF_CYCLE_COUNT_MIN, REF_CYCLE_COUNT_MAX)
 
 
+# At this support count the host profiler buffer (bank size x DRAM banks) exceeds 4 GiB on every Blackhole part.
+def test_large_program_support_count():
+    WRAPPING_PROGRAM_SUPPORT_COUNT = 150000
+    REF_CYCLE_COUNT = 52 * 2000
+    testName = f"build/{PROG_EXMP_DIR}/test_custom_cycle_count"
+    setupStr = "-s test_custom_cycle_count"
+
+    run_device_profiler_test(testName=testName, noPostProcess=True)
+    defaultData = get_device_data(setupStr)
+    if defaultData["data"]["deviceInfo"]["arch"] != "blackhole":
+        pytest.skip("Only Blackhole can reach the 32-bit wrap")
+
+    run_device_profiler_test(testName=testName, noPostProcess=True, setOpSupportCount=WRAPPING_PROGRAM_SUPPORT_COUNT)
+    largeData = get_device_data(setupStr)
+
+    _assert_kernel_cycle_counts(largeData, REF_CYCLE_COUNT // 5, REF_CYCLE_COUNT * 10)
+    defaultCores = set(defaultData["data"]["devices"]["0"]["cores"].keys())
+    largeCores = set(largeData["data"]["devices"]["0"]["cores"].keys())
+    assert largeCores == defaultCores, f"Cores missing at a large support count: {sorted(defaultCores - largeCores)}"
+
+
 @pytest.mark.skip_post_commit
 def test_full_buffer():
     OP_COUNT = 23
@@ -958,6 +979,7 @@ def test_dispatch_cores():
 
 @skip_for_blackhole()
 @pytest.mark.skip_post_commit
+@pytest.mark.timeout(600)
 def test_dispatch_cores_extended_worker():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [9325],

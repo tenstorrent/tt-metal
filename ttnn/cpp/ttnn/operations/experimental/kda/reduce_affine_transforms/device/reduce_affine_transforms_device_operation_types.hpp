@@ -22,8 +22,8 @@ struct ReduceAffineTransformsParams {
 };
 
 struct ReduceAffineTransformsInputs {
-    Tensor a;
-    Tensor b;
+    // Packed [S, B*H*G, K, K+V] summaries; only slot 0 (head transforms) is read.
+    Tensor summaries;
     Tensor actual_start;
     std::optional<Tensor> actual_end;
 };

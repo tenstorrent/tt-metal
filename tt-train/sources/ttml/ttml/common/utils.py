@@ -202,10 +202,21 @@ def create_optimizer(model, yaml_config: dict):
         optimizer_cfg = tc.get("optimizer")
         if optimizer_cfg is None:
             raise ValueError("training_config must contain an 'optimizer' section")
+        # Under pipeline parallelism each stage's model holds only its own params (tok_emb only on the first stage,
+        # fc only on the last), so a param group can match nothing on some stages.
+        if _is_pipeline_parallel(yaml_config):
+            optimizer_cfg = {**optimizer_cfg, "allow_empty_param_groups": True}
         params = model.parameters()
         ttml.optimizers.apply_precision_config(tc, params)
         return ttml.optimizers.create_optimizer(optimizer_cfg, params)
     return ttml.optimizers.create_optimizer(optimizer_cfg, model.parameters())
+
+
+def _is_pipeline_parallel(yaml_config: dict) -> bool:
+    """Whether the full config enables pipeline parallelism."""
+    from .config import resolve_multihost_config
+
+    return resolve_multihost_config(yaml_config).pipeline_parallel_config is not None
 
 
 def get_loss_over_devices(loss):
