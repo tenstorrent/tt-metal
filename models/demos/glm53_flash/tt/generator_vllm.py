@@ -164,6 +164,30 @@ def mesh_cache_root() -> Path | None:
 # ------------------------------------------------------------------------------------------- outputs
 
 
+MEM_LOG_ENV = "GLM53_VLLM_MEM_LOG"  # "1": log the DRAM allocator's state after every eager prefill device chunk
+
+
+def _dram_line(device) -> str:
+    """One line of the DRAM allocator's state: per bank allocated / free / largest free block (the served 1 M-profile
+    prefill ran out of DRAM at ~160 K positions on 2026-10-27 with 507 MB free but fragmented: what is resident after
+    the warm-up and what each chunk adds is read from these lines)."""
+    ttnn = sys.modules.get("ttnn")  # never imported here: the host tests run this adapter without ttnn or a device
+    if device is None or ttnn is None:
+        return "DRAM: no device"
+    mv = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM)
+    alloc = mv.total_bytes_allocated_per_bank
+    free = getattr(mv, "total_bytes_free_per_bank", mv.total_bytes_per_bank - alloc)
+    largest = getattr(mv, "largest_contiguous_bytes_free_per_bank", -(2**20))
+    return (
+        f"DRAM per bank: allocated {alloc / 2**20:.0f} MiB, free {free / 2**20:.0f} MiB, "
+        f"largest free block {largest / 2**20:.0f} MiB (x{mv.num_banks} banks)"
+    )
+
+
+def _mesh_device_of(model):
+    return getattr(getattr(model, "mesh", None), "device", None) or getattr(model, "mesh_device", None)
+
+
 def _install_step_profiler() -> None:
     """``GLM53_VLLM_STEP_PROFILE=N`` (debug, default off): wrap the plugin runner's ``execute_model`` so the engine
     log shows, every 32 engine steps, the mean wall of a whole step next to the adapter's own decode wall (the
@@ -489,6 +513,7 @@ class GLM53FlashForCausalLM:
                         f"GLM53 vLLM: eager prefill warm-up ({n} tokens in {len(plan.chunks)} device chunk(s)) in "
                         f"{time.perf_counter() - t0:.1f} s"
                     )
+                logger.info(f"GLM53 vLLM: after the prefill warm-up: {_dram_line(_mesh_device_of(self.model))}")
                 n = lengths[0]
                 dummy = torch.arange(n, dtype=torch.long) % 1000 + 1000
                 if self.geometry.rows_independent:  # the wave path compiles its own programs: one wave on every row
@@ -715,11 +740,16 @@ class GLM53FlashForCausalLM:
             logits = self._traced_last_logits(res) if want_logits else None
             return first, logits
         out = None
+        mem_log = os.environ.get(MEM_LOG_ENV, "0") == "1"
         for s0, e in plan.chunks:
             if out is not None:
                 self._free(out[0])
                 self._free(out[1])
             out = self.model.prefill(ids[s0 - plan.start : e - plan.start], user=user, start=s0)
+            if mem_log:
+                logger.info(
+                    f"GLM53 vLLM mem: user {user} chunk [{s0}, {e}) done: {_dram_line(_mesh_device_of(self.model))}"
+                )
         streams, logits_last, owner_row = out
         first = int(self.model.first_token(logits_last, owner_row))
         logits = self._eager_last_logits(logits_last, owner_row) if want_logits else None

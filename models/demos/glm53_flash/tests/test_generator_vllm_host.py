@@ -91,7 +91,7 @@ def test_memory_plan_gate_matches_the_envelope():
     ServingGeometry(rows=8, cols=4, users_per_row=4, max_seq_len=1048576).check_memory_plan(plan)
     with expect_error(ValueError, "do not fit"):
         ServingGeometry(rows=8, cols=4, users_per_row=8, max_seq_len=1048576).check_memory_plan(plan)
-    ServingGeometry(rows=8, cols=4, users_per_row=32, max_seq_len=131072).check_memory_plan(plan)
+    ServingGeometry(rows=8, cols=4, users_per_row=28, max_seq_len=131072).check_memory_plan(plan)  # 28 since 2026-10-27
     assert max_tokens_all_users(32, 131072) == 32 * 131072
 
 
