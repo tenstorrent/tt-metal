@@ -20,6 +20,9 @@ namespace ttnn::experimental {
 // Width-1 on ``cluster_axis`` runs local PRE+POST with no fabric.
 // ``fused_activation`` optionally applies a unary activation (e.g. SiLU) to the output tile
 // while it is still in DEST, removing the separate activation op's DRAM round-trip.
+// ``num_valid_rows`` (0 = every row): the number of valid spatial rows summed over the devices
+// of ``cluster_axis``. The caller zero-fills the remaining (padding) rows; the statistics then
+// divide by the valid count instead of the padded one (mean = S/N, var = Q/N - mean^2).
 ttnn::Tensor dit_fused_distributed_groupnorm(
     const ttnn::Tensor& input_tensor,
     int num_groups,
@@ -35,7 +38,8 @@ ttnn::Tensor dit_fused_distributed_groupnorm(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
-    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation = std::nullopt);
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation = std::nullopt,
+    uint32_t num_valid_rows = 0);
 
 // Persistent DRAM scratch for the stats all-gather. Returns nullopt when
 // cluster width is 1 (no AG). Always sized for a single fabric link.

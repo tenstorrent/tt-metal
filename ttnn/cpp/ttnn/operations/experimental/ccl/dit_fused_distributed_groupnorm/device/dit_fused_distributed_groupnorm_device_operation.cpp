@@ -124,6 +124,20 @@ void DitFusedDistributedGroupnormDeviceOperation::validate_on_program_cache_miss
 
     TT_FATAL(args.ring_size >= 1, "ring_size must be >= 1");
     TT_FATAL(args.cluster_axis < 2, "cluster_axis must be 0 or 1");
+    if (args.num_valid_rows > 0) {
+        TT_FATAL(
+            args.ring_size > 1,
+            "num_valid_rows ({}) is only supported with a cluster width > 1 (the cross-device stats merge applies "
+            "it); got ring_size {}",
+            args.num_valid_rows,
+            args.ring_size);
+        TT_FATAL(
+            args.num_valid_rows <= shape[2] * args.ring_size,
+            "num_valid_rows ({}) must not exceed the rows over the cluster (H*W {} x ring_size {})",
+            args.num_valid_rows,
+            shape[2],
+            args.ring_size);
+    }
     if (args.ring_size > 1) {
         TT_FATAL(
             !args.multi_device_global_semaphore.empty(),
@@ -206,6 +220,8 @@ ttsl::hash::hash_t DitFusedDistributedGroupnormDeviceOperation::compute_program_
         // without it a fused and a non-fused call with identical shapes collide in the program
         // cache and the second call silently reuses the first call's compiled program.
         args.fused_activation,
+        // The valid-row count selects a compile-time define and scale in the master reader.
+        args.num_valid_rows,
         args.output_mem_config,
         args.cluster_axis,
         args.ring_size,
@@ -234,7 +250,8 @@ Tensor dit_fused_distributed_groupnorm(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<Tensor>& persistent_output_buffer,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation) {
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
+    uint32_t num_valid_rows) {
     using OperationType = ttnn::experimental::prim::DitFusedDistributedGroupnormDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -253,6 +270,7 @@ Tensor dit_fused_distributed_groupnorm(
         .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
         .compute_kernel_config = kernel_config_val,
         .fused_activation = fused_activation,
+        .num_valid_rows = num_valid_rows,
         .cluster_axis = cluster_axis,
         .ring_size = static_cast<uint32_t>(num_devices),
         .topology = topology_,

@@ -970,8 +970,14 @@ class DistributedGroupNorm(Module):
         ]
         return torch.cat(torch_sharded_lst, dim=0)
 
-    def forward(self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(
+        self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None, num_valid_rows: int | None = None
+    ) -> ttnn.Tensor:
+        """``num_valid_rows`` (fused path, cluster width > 1): the valid spatial rows (``H * W``) summed over the
+        ``cluster_axis`` devices of a bottom-padded input whose padding rows the caller zeroed; the statistics then
+        divide by the valid count. ``None``: every row is valid."""
         if self.inner is not None:
+            assert num_valid_rows is None, "num_valid_rows needs the fused path (cluster_axis set)"
             out = self.inner.forward(x, num_out_blocks=num_out_blocks, compute_kernel_config=compute_kernel_config)
             return _apply_activation_fn(out, self.activation_fn)
 
@@ -1003,6 +1009,10 @@ class DistributedGroupNorm(Module):
 
         # Mirror GroupNorm.forward kwargs; cluster_axis / mesh / semaphore / topology
         # are the only distributed additions.
+        valid_kwargs = {}
+        if num_valid_rows is not None and num_valid_rows < height * width * self.cluster_size:
+            assert self.cluster_size > 1, "num_valid_rows needs a cluster width > 1"
+            valid_kwargs["num_valid_rows"] = int(num_valid_rows)
         out = ttnn.experimental.dit_fused_distributed_groupnorm(
             x4,
             num_groups=self.num_padded_groups,
@@ -1017,6 +1027,7 @@ class DistributedGroupNorm(Module):
             persistent_output_buffer=persistent,
             compute_kernel_config=compute_kernel_config,
             activation=self.fused_activation,
+            **valid_kwargs,
         )
         out = out.reshape([batch_size, height, width, channels])
         # No-op when the activation was consumed into the op above.

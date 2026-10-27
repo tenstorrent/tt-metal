@@ -52,6 +52,12 @@ void kernel_main() {
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
+#ifdef NP_MASK_SENT_ROWS
+    // logical_h masking of the rows this device SENDS: rows at global H index >= logical_h are padding and go out as
+    // zeros (the local copy zeroes them in this device's own output; see the program factory).
+    const uint32_t logical_h = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t device_h_offset = get_arg_val<uint32_t>(arg_idx++);
+#endif
 
     uint32_t read_size = stick_size;
     const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address);
@@ -93,6 +99,18 @@ void kernel_main() {
         if (!is_last_chip) {
             // Read the "end" of each slice into the CB to write to the neighbor
             for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
+#ifdef NP_MASK_SENT_ROWS
+                const uint32_t src_row = direction ? (padding - pad_id) : (input_halo_dim_size - pad_id);
+                if (device_h_offset + src_row >= logical_h) {
+                    for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                        cb_output.reserve_back(1);
+                        zeroPad<stick_size>(noc_obj, cb_output);
+                        noc_obj.async_read_barrier();
+                        cb_output.push_back(1);
+                    }
+                    continue;
+                }
+#endif
                 uint32_t src_stick_id = 0;
                 if (direction) {
                     src_stick_id = (padding - pad_id) * num_sticks_per_halo_dim + stick_start_id;

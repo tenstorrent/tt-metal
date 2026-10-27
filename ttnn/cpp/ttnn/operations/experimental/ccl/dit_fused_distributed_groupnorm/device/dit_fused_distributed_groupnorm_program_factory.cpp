@@ -517,6 +517,18 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         sender_reader_named_ct.emplace("stats_local_cb_id", stats_local_cb_id);
         sender_reader_named_ct.emplace("stats_gathered_cb_id", stats_gathered_cb_id);
     }
+    // Bottom-padded input (num_valid_rows < rows over the cluster): the caller zero-filled the padding rows, so the
+    // merged (mean, var) are exact over the PADDED count; the master rescales them to the valid count in the
+    // cross-device merge (r = padded / valid: mean' = r * mean, var' = r * var + r * (1 - r) * mean^2). Only the
+    // master reader changes; without num_valid_rows the define is absent and the kernel text is unchanged.
+    std::map<std::string, std::string> sender_reader_defines = reader_defines;
+    const uint32_t cluster_rows = H * args.ring_size;
+    if (use_mux && args.num_valid_rows > 0 && args.num_valid_rows < cluster_rows) {
+        sender_reader_defines["GN_VALID_COUNT_SCALE"] = "1";
+        sender_reader_named_ct.emplace(
+            "valid_count_scale",
+            std::bit_cast<uint32_t>(static_cast<float>(cluster_rows) / static_cast<float>(args.num_valid_rows)));
+    }
     std::vector<uint32_t> sender_reader_ct;
     TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_ct);
     TensorAccessorArgs(use_mux ? stats_dram_buffer : input_tensor.buffer()).append_to(sender_reader_ct);
@@ -525,7 +537,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         program,
         gn_kernel_base + "dataflow/welford_reader_mcast_sender_unary_gn.cpp",
         mcast_sender_cores,
-        ReaderDataMovementConfig(sender_reader_ct, reader_defines, sender_reader_named_ct));
+        ReaderDataMovementConfig(sender_reader_ct, sender_reader_defines, sender_reader_named_ct));
 
     // Receiver reader (signal + wait; no fabric).
     KernelHandle receiver_reader_kernel_id = 0;

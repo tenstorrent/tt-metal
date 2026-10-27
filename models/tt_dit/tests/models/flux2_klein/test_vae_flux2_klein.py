@@ -61,7 +61,17 @@ axis 0, latent rows H8 over axis 1):
                                    ``GroupNorm._core_grid_for`` returned during the decode are recorded and the expected
                                    (8, 7) levels asserted (ports of FLUX 3's V4b test_decode_padded_size_full and D1
                                    test_decode_896x1120; before the sub-grid both canvases threw in ``groupnorm.cpp``
-                                   ``validate_dram_grid`` on the device, after admission).
+                                   ``validate_dram_grid`` on the device, after admission). Row padding is switched off
+                                   here (``pad_rows = False``) so 896x1120 still exercises the fallback decoder.
+  D4 test_decode_padded_canvas[size]  a tt-media-server API canvas the H8 split does not divide into whole tiles per
+                                   device (h % 8 != 0 or a partial tile at a decoder level) decodes on the H8 decoder
+                                   bottom-padded to ``h_partition_padded_height`` (``logical_h``: masked conv halos,
+                                   group statistics over the image rows, image-row keys / values) and is compared, on
+                                   the same random bf16-valued tokens (seed 4), with the replicated fallback decoder
+                                   (``pad_rows = False``) and with the fp32 CPU decode, each at the D1 gate (pcc >=
+                                   DECODE_PCC, rel_rmse <= DECODE_RMSE), over the whole image and over its bottom
+                                   ``PAD_BAND`` rows (where a masking error would show); PSNR, max |d| and the warm
+                                   eager decode walls of both decoders logged; second eager == first.
   D3 test_decode_prepared_per_shape  ``layers/conv2d.py`` keeps one prepared weight / bias copy per input-shape key
                                    (FLUX 3 Klein's fix for its striped, saturated 2048+ decodes after the 1024 warm-up:
                                    ``ttnn.prepare_conv_weights`` lays the weight out for ONE conv program). The pipeline's
@@ -774,6 +784,7 @@ def test_decode_subgrid_canvas(mesh_device, snapshot: Path, monkeypatch, height:
 
     h, w = packing.latent_shape(height, width)
     mesh = open_vae(mesh_device, snapshot)
+    mesh.helper.pad_rows = False  # 896x1120 would otherwise decode on the H8 decoder, bottom-padded (D4)
     partitioned = mesh.helper.partitioned(height, width)
     assert partitioned == (h % 8 == 0), (height, width, h, partitioned)
     seen: dict[tuple[int, int], tuple[int, int]] = {}
@@ -818,6 +829,83 @@ def test_decode_subgrid_canvas(mesh_device, snapshot: Path, monkeypatch, height:
         assert_quality(reference, image, pcc=DECODE_PCC, relative_rmse=DECODE_RMSE)
     finally:
         mesh.helper.release_trace()
+        ttnn.synchronize_device(mesh.device)
+
+
+# --- D4: API canvases on the H8 decoder with bottom row padding ---------------------------------------------------------------
+
+# (height, width) of the tt-media-server API canvases (PR #5466) the H8 split does not divide into whole tiles per device;
+# they decode bottom-padded (``h_partition_padded_height``): 768 -> 1024, 1376 -> 1408, 896 -> 1024, 1184 -> 1280,
+# 832 -> 1024, 1248 -> 1280, 2752 -> 2816, 2368 -> 2432, 1664 -> 1792, 2496 -> 2560 px.
+PADDED_CANVASES = [
+    (768, 1376),
+    (1376, 768),
+    (896, 1184),
+    (1184, 896),
+    (832, 1248),
+    (1248, 832),
+    (2752, 1536),
+    (2368, 1792),
+    (1664, 2496),
+    (2496, 1664),
+]
+# Bottom image rows checked on their own: the conv halos below the last image row and the padding rows' place in the
+# group statistics act there first.
+PAD_BAND = 64
+
+
+@vae_rows
+@pytest.mark.parametrize("height, width", PADDED_CANVASES, ids=[f"{w}x{h}" for h, w in PADDED_CANVASES])
+def test_decode_padded_canvas(mesh_device, snapshot: Path, height: int, width: int) -> None:
+    """D4: a canvas decoded on the H8 decoder with bottom row padding vs the replicated fallback decoder and vs the fp32
+    CPU decode of the same tokens, at the D1 gate over the whole image and over its bottom ``PAD_BAND`` rows."""
+    h, w = packing.latent_shape(height, width)
+    mesh = open_vae(mesh_device, snapshot)
+    helper = mesh.helper
+    helper.pad_rows = True
+    assert helper.route(height, width) == "H8+pad", helper.route(height, width)
+    padded = helper.padded_height(height, width)
+    torch.manual_seed(4)
+    tokens = torch.randn(h * w, packing.FLUX2_KLEIN_LATENT_CHANNELS).to(torch.bfloat16).float()
+    name = f"decode_padded_canvas[{width}x{height}] {mesh.tag} H8 padded to {padded}"
+    try:
+        reference = cached_reference_decode(snapshot, tokens, h, w, f"random seed 4 {width}x{height}")
+        image, wall_first = device_decode(mesh, tokens, height, width, traced=False)
+        image2, wall_warm = device_decode(mesh, tokens, height, width, traced=False)
+        helper.pad_rows = False
+        fallback, _ = device_decode(mesh, tokens, height, width, traced=False)
+        fallback, wall_fallback = device_decode(mesh, tokens, height, width, traced=False)
+        helper.pad_rows = True
+        lines = []
+        for label, ref in (("CPU fp32", reference), ("fallback", fallback)):
+            for part, a, b in (
+                ("image", ref, image),
+                (f"bottom {PAD_BAND} rows", ref[:, -PAD_BAND:], image[:, -PAD_BAND:]),
+            ):
+                lines.append(
+                    f"vs {label} {part}: pcc {pcc(a, b):.6f} rel_rmse {rel_rmse_of(a, b):.5f} max|d| "
+                    f"{(a - b).abs().max().item():.4f} PSNR {psnr_uint8(to_pil(b), to_pil(a)):.2f} dB"
+                )
+        lines.append(
+            f"fallback vs CPU fp32 image: pcc {pcc(reference, fallback):.6f} rel_rmse "
+            f"{rel_rmse_of(reference, fallback):.5f}"
+        )
+        logger.info(
+            f"RESULT {name}: first {wall_first:.3f}s warm {wall_warm:.3f}s (fallback warm {wall_fallback:.3f}s); "
+            + "; ".join(lines)
+            + f"; second eager == first {torch.equal(image, image2)}; {memory_line(mesh.device)}"
+        )
+        out_dir = renders_dir()
+        if out_dir is not None:
+            to_pil(image).save(out_dir / f"vae_decode_{mesh.tag}_padded_random_{width}x{height}.png")
+        assert image.shape == (3, height, width) and torch.isfinite(image).all()
+        assert torch.equal(image, image2), "second eager decode differs from the first"
+        for ref in (reference, fallback):
+            assert_quality(ref, image, pcc=DECODE_PCC, relative_rmse=DECODE_RMSE)
+            assert_quality(ref[:, -PAD_BAND:], image[:, -PAD_BAND:], pcc=DECODE_PCC, relative_rmse=DECODE_RMSE)
+    finally:
+        helper.pad_rows = True
+        helper.release_trace()
         ttnn.synchronize_device(mesh.device)
 
 

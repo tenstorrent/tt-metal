@@ -514,12 +514,43 @@ void kernel_main() {
         constexpr uint32_t stick_stride_u16 = stick_bytes / 2;  // uint16 elements per device stick
         auto out_ptr = global_base_ptr;
         for (uint32_t m = 0; m < num_groups; ++m) {
+#ifdef GN_VALID_COUNT_SCALE
+            // Bottom-padded input: the padding rows are zero, so the equal-count merge below (the fp32 arithmetic
+            // of combine_welford_stats) gives the exact stats over the PADDED count Np. Rescale them to the valid
+            // count Nv with r = Np / Nv before the bf16 truncation: mean' = S / Nv = r * mean and
+            // var' = Q / Nv - mean'^2 = r * var + r * (1 - r) * mean^2.
+            constexpr uint32_t scale_bits = get_named_compile_time_arg_val("valid_count_scale");
+            const float r = __builtin_bit_cast(float, scale_bits);
+            auto means_in = gathered_u16 + m * 2;
+            auto vars_in = gathered_u16 + m * 2 + 1;
+            const float base_mean = bf16_to_fp32(means_in[0]);
+            float mean_delta_sum = 0.0f;
+            float mean_delta_sq_sum = 0.0f;
+            float var_sum = bf16_to_fp32(vars_in[0]);
+            for (uint32_t d = 1; d < ring_size; ++d) {
+                const float delta = bf16_to_fp32(means_in[d * stick_stride_u16]) - base_mean;
+                mean_delta_sum += delta;
+                mean_delta_sq_sum += delta * delta;
+                var_sum += bf16_to_fp32(vars_in[d * stick_stride_u16]);
+            }
+            constexpr float inv_ring = 1.0f / static_cast<float>(ring_size);
+            const float mean_delta = mean_delta_sum * inv_ring;
+            const float padded_mean = base_mean + mean_delta;
+            const float padded_var = (var_sum + (mean_delta_sq_sum - mean_delta_sum * mean_delta)) * inv_ring;
+            float valid_var = r * padded_var + r * (1.0f - r) * padded_mean * padded_mean;
+            valid_var = valid_var > 0.0f ? valid_var : 0.0f;
+            auto p_out_means = reinterpret_cast<volatile uint16_t*>(out_ptr);
+            auto p_out_vars = reinterpret_cast<volatile uint16_t*>(out_ptr + single_tile_size_bytes);
+            p_out_means[0] = fp32_to_bf16_truncate(r * padded_mean);
+            p_out_vars[0] = fp32_to_bf16_truncate(valid_var);
+#else
             auto merged = combine_welford_stats<ring_size, count_per_device, stick_stride_u16>(
                 gathered_u16 + m * 2, gathered_u16 + m * 2 + 1);
             auto p_out_means = reinterpret_cast<volatile uint16_t*>(out_ptr);
             auto p_out_vars = reinterpret_cast<volatile uint16_t*>(out_ptr + single_tile_size_bytes);
             p_out_means[0] = merged.mean;
             p_out_vars[0] = merged.variance;
+#endif
             out_ptr += 2 * single_tile_size_bytes;
         }
         dfb_stats_gathered.pop_front(ring_size);

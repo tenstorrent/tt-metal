@@ -144,19 +144,27 @@ at the exact width x height, in one process (peak DRAM 9.1 GB per chip; distille
 | 2048x2048, 2752x1536, 2368x1792 | H8 | 0.91-0.95 s | 2.31-2.34 s | 0.30-0.33 s |
 | 1536x2752, 1792x2368, 2496x1664, 1664x2496 | replicated | 2.16-2.27 s | 3.53-3.64 s | 1.53-1.66 s |
 
+That table predates the bottom row padding below: with it every canvas decodes on the H8 decoder, the other ~1 MP
+canvases in 0.10-0.14 s and the 4 MP ones in 0.30-0.33 s (end to end, 0 refs: 768x1376 0.67 s, 1376x768 0.71 s,
+1536x2752 0.91 s; job 158452, 2026-10-27).
+
 The DiT costs the same at every aspect (96-108 ms per step at about 4K image tokens, 105-111 at about 16K); the
-spread is the VAE decoder. The H-partitioned decoder (`Flux2KleinVaeDecode.partitioned`) splits the latent rows 8
+spread was the VAE decoder. The H-partitioned decoder (`Flux2KleinVaeDecode.partitioned`) splits the latent rows 8
 ways over mesh axis 1 and the channels 4 ways over axis 0, and needs every decoder level to hold a whole number of
-32-row tiles per device (`h_partition_tile_aligned`: `dit_fused_distributed_groupnorm` has no row mask). Every
-portrait canvas and 1376x768, 1184x896, 1248x832 and 2496x1664 fail that and take the replicated fallback (the whole
-image on every column of the mesh, channels TP4), which uses its own conv slicing (`klein_replicated_decoder_slices`)
-and frees its CCL buffers after each eager decode.
+32-row tiles per device (`h_partition_tile_aligned`). Every portrait canvas and 1376x768, 1184x896, 1248x832 and
+2496x1664 fail that; they are padded at the bottom with zero token rows to the smallest height that splits
+(`h_partition_padded_height`: 768 -> 1024, 1376 -> 1408, 896 -> 1024, 1184 -> 1280, 832 -> 1024, 1248 -> 1280,
+2752 -> 2816, 2368 -> 2432, 1664 -> 1792, 2496 -> 2560 px) and decoded with `logical_h` (`models/vae/vae.py::VaeRowPad`):
+the convs read zeros at and below the last image row (`neighbor_pad(logical_h=...)`, which also zeroes the halo rows a
+device sends), the group norms zero the padding rows and divide by the image rows' count
+(`dit_fused_distributed_groupnorm(num_valid_rows=...)`), and the mid-block attention takes its keys and values from the
+image rows only; the render is cropped back. Against the fp32 CPU decode of the bench's final tokens the padded decodes
+reach pcc >= 0.99994 and 49.7-52.3 dB (the replicated fallback: 50.1-51.6 dB; the unpadded H8 decoder: 49.6-51.7 dB at
+the H8 canvases), with the bottom 64 rows at the fallback's level. `FLUX2_KLEIN_VAE_PAD_ROWS=0` restores the replicated
+fallback (the whole image on every column of the mesh, channels TP4), which uses its own conv slicing
+(`klein_replicated_decoder_slices`) and frees its CCL buffers after each eager decode.
 
 Open items:
-
-- **Fallback decode speed.** Padding the latent height to a tile-aligned split (as the Wan / QwenImage / LTX VAEs do
-  with `conv_pad_height` and `logical_h`) would put all 14 canvases on the H-partitioned decoder; the FLUX.2 VAE's
-  GroupNorm averages over the whole image, so the distributed group norm must count only the real rows first.
 - **Fidelity gate.** Against the CPU diffusers golden of the same seed, prompt and initial noise (seed 123), image PSNR
   is 24.3 dB at 1024x1024, 22.1 dB at 1376x768 and 768x1376, 19.3 dB at 2752x1536; teacher-forced velocity pcc is
   0.997-0.999 at every canvas and the Euler update is bit-exact, so the free-running gap is the last of the four
