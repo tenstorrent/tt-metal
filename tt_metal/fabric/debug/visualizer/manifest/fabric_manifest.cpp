@@ -113,7 +113,7 @@ json make_credit_transport_json(const FabricBuilderContext& builder_context, Mes
             continue;
         }
         json reasons = json::array();
-        for (const auto reason : plan.reasons(vc)) {
+        for (const auto reason : plan.get_l1_counters_reasons(vc)) {
             reasons.push_back(lower_enum_name(reason));
         }
         json entry;
@@ -126,14 +126,10 @@ json make_credit_transport_json(const FabricBuilderContext& builder_context, Mes
 
 // ============ Contents ============
 
-// A type's size and schema. An array also gets its element count and the size of one element, and a packed table
-// its entry count and the bits in one entry.
+// A type's size and schema. An array also gets its element count and the size of one element.
 void add_type_json(json& out, const layout::Type& type) {
     out["size"] = type.size;
-    if (const auto* packed = std::get_if<layout::element::Packed>(&type.element)) {
-        out["num_elements"] = type.count;
-        out["bits_per_entry"] = packed->bits_per_entry;
-    } else if (type.count > 0) {
+    if (type.count > 0) {
         out["num_elements"] = type.count;
         out["size_per_element"] = manifest::element_size(type);
     }
@@ -235,9 +231,6 @@ json make_archs_json(const manifest::Arch& arch) {
     areas_json["heartbeat"] = heartbeat_json(areas.heartbeat);
     areas_json["fabric_telemetry"] = l1_json(areas.fabric_telemetry);
     areas_json["routing_table"] = l1_json(areas.routing_table);
-    areas_json["go_msg"] = l1_json(areas.go_msg);
-    areas_json["launch"] = l1_json(areas.launch);
-    areas_json["launch_msg_rd_ptr"] = l1_json(areas.launch_msg_rd_ptr);
     areas_json["eth_fw_mailbox"] = optional_l1_json(areas.eth_fw_mailbox);
     areas_json["base_fw_port_status"] = optional_l1_json(areas.base_fw_port_status);
     areas_json["base_fw_train_status"] = optional_l1_json(areas.base_fw_train_status);

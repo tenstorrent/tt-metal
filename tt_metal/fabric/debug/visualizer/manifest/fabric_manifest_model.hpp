@@ -312,10 +312,6 @@ struct ArchAreas {
     Heartbeat heartbeat;
     content::L1 fabric_telemetry;
     content::L1 routing_table;
-    content::L1 go_msg;
-    // The ring of launch messages, indexed by launch_msg_rd_ptr.
-    content::L1 launch;
-    content::L1 launch_msg_rd_ptr;
     // Null when the architecture has no Ethernet firmware mailbox.
     std::optional<content::L1> eth_fw_mailbox;
     // Base firmware's link status words. Each is null when the HAL gives no address for it, as on Wormhole.
