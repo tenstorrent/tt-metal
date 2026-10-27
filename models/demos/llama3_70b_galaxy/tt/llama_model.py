@@ -964,7 +964,9 @@ class TtTransformer(LightweightModule):
                 self.lm_head.tt_ccl = self.tt_ccl
                 if self.use_prefetcher:
                     self.tt_tensors = self.prefetcher_setup.get_input_tensors()
-                    self.prefetcher_setup.create_global_cb()
+                    # Prefill sampling also switches to decode, but does not use the GCB.
+                    # Leave its first allocation to forward(). Once addresses are saved,
+                    # setup_decode() restores the GCB before other decode allocations.
                 else:
                     # No-prefetcher path reuses the cached decode CCL; clear its semaphore drift.
                     self.tt_ccl.reset_global_semaphores()
@@ -1007,9 +1009,9 @@ class TtTransformer(LightweightModule):
         if mode == "decode" and self.use_prefetcher:
             self.prefetcher_setup.create_global_cb()
             if self._global_cb_addresses is None:
-                # Cached decode programs keep the GCB addresses of their first compile, so every
-                # later decode setup recreates the GCB there. A GCB that no program has read yet
-                # can still move; fixing it earlier would reserve an address prefill may need.
+                # This is the first GCB allocation. Fix both addresses immediately, before
+                # any decode program can cache them. Every later decode setup must restore
+                # this pair, even if no trace has been captured yet.
                 global_cb = self.prefetcher_setup.global_circular_buffer
                 self._global_cb_addresses = (global_cb.buffer_address(), global_cb.config_address())
             garbage_tensor = ttnn.dram_prefetcher(
