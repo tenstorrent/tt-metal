@@ -1,13 +1,8 @@
 # Struct layouts
 
-Fabric keeps some state and types in each router's L1, such as routing tables, telemetry, handshake info, channel
-bookkeeping, etc. To actually interpret that information, the decode-tool needs to read the raw bytes and know what
-they mean (which bytes correlate to which field, what type each field is, and which bytes mean nothing at all).
+Fabric keeps some state and types in each router's L1, such as routing tables, telemetry, handshake info, channel bookkeeping, etc. To actually interpret that information, the decode-tool needs to read the raw bytes and know what they mean (which bytes correlate to which field, what type each field is, and which bytes mean nothing at all).
 
-C++ can't tell us that on its own. It has no way to list a struct's fields. So every struct the manifest describes
-gets a hand-written **layout**: a list of its members, built with a few macros, that says where each member sits and
-how to read it. The layouts live in [fabric_struct_layouts.hpp](../fabric_struct_layouts.hpp), and the macros and
-checks they're built from live in [struct_layout.hpp](../struct_layout.hpp).
+C++ can't tell us that on its own. It has no way to list a struct's fields. So every struct the manifest describes gets a hand-written **layout**: a list of its members, built with a few macros, that says where each member sits and how to read it. The struct-specific layouts live in [fabric_struct_layouts.hpp](../fabric_struct_layouts.hpp), and the macros and checks they're built from live in [struct_layout.hpp](../struct_layout.hpp).
 
 A key point is that a hand-written description of a struct is only useful if it stays true. Device structs can change
 often as development occurs, including fields being added, resized, or carved out of padding. To catch drift between
@@ -15,9 +10,70 @@ a struct and its layout, every layout is checked against its struct at compile t
 fails the build. Most of this doc is about how those checks work, and why the macros are shaped the way they are to make
 the checks possible.
 
-## What a layout says
+## Layouts and descriptions
 
-A layout is a `StructLayout<T>` specialization with an array named `members`. Each entry is a `Member`:
+There are two levels. A **layout** is what you write, one per type. From each layout the build makes a
+**description**, one constant per type, which is what everything downstream reads:
+
+| You write | The build makes | It holds |
+| --- | --- | --- |
+| `StructLayout<T>`, with an array named `members` | `struct_description<T>`, a `StructDescription` | The struct's name, its size, and its members |
+| `TaggedUnionLayout<U>`, with its `Tag` enum and an array named `cases` | `tagged_union_description<U>`, a `TaggedUnionDescription` | The union's name, its size, its tag enum's description, and its cases |
+| Nothing, for most enums (`EnumLayout<E>` only when enchantum can't list them; see special cases) | `enum_description<E>`, an `EnumDescription` | The enum's name, and every enumerator's name and value |
+
+A description doesn't copy its layout: a struct's description views the layout's `members` array, and a union's views
+its `cases`. Its name is the type's name, or the name its layout sets for a type enchantum can't name, such as a class
+template instance (`template_name` in `struct_layout_helpers.hpp`). That name is what the manifest's schemas use.
+
+### The hierarchy
+
+A struct's description holds its members. Each member has a type, each type has an element, and an element of an enum,
+a struct or a tagged union points to that type's description:
+
+```
+StructDescription                    struct_description<T>
+├── name, size
+└── members[]: Member
+    ├── name, offset
+    └── type: Type
+        ├── size, count
+        └── element: Element
+            ├── Uint, Int, Bytes, Pad     read as they are; nothing to follow
+            ├── Enum         ──► EnumDescription
+            ├── Struct       ──► StructDescription
+            └── TaggedUnion  ──► TaggedUnionDescription, and the name of the member holding the tag
+
+EnumDescription                      enum_description<E>
+├── name
+└── enumerators[]: Enumerator {name, value}
+
+TaggedUnionDescription               tagged_union_description<U>
+├── name, size
+├── tag ──► EnumDescription
+└── cases[]: TaggedUnionCase
+    ├── member: Member               like a struct's members
+    └── tag_value                    the enumerator that picks it
+```
+
+So from any type, following the arrows reaches everything needed to read its bytes, down to integers. With the example
+types used throughout this doc (defined under the macros below), `Shape`'s description reaches `Kind`, `Geometry` and
+`Point`:
+
+```
+struct_description<Shape>                  "Shape", 12 bytes
+└── members
+    ├── kind      offset 0, Enum ──►        enum_description<Kind>: "Kind", DOT = 0, LINE = 1
+    └── geometry  offset 4, TaggedUnion ──► tagged_union_description<Geometry>: "Geometry", 8 bytes
+                  (tag member "kind")       ├── tag ──► enum_description<Kind>
+                                            └── cases
+                                                ├── DOT:  dot, Struct ──► struct_description<Point>: "Point", 4 bytes
+                                                │                         └── x (Uint, 2 bytes), y (Uint, 2 bytes)
+                                                └── LINE: line, Uint, 8 bytes, 2 of them
+```
+
+### A member
+
+Each entry in a layout's `members` is a `Member`:
 
 | Part | Meaning |
 | --- | --- |
@@ -31,18 +87,15 @@ The element kinds are what decode needs to know to read a value:
 | Element | Read as |
 | --- | --- |
 | `Uint`, `Int` | An unsigned or signed integer, as wide as one element |
-| `Enum` | An enum, pointing to its description (its name and enumerators), so decode can show the enumerator's name |
-| `Struct` | Another described struct, pointing to its description (its name, size and members), read with that struct's own layout |
-| `TaggedUnion` | A union whose live member is picked by another field, pointing to its description (its name, tag enum and cases; see tagged unions below) |
+| `Enum` | An enum. It points to the enum's description, so decode can show the enumerator's name |
+| `Struct` | Another described struct. It points to that struct's description, and is read with its members |
+| `TaggedUnion` | A union whose live member is picked by another field. It points to the union's description, and names the enclosing struct's member holding the tag (see tagged unions below) |
 | `Bytes` | Raw bytes that decode keeps as they are, for code that knows how to read them |
 | `Pad` | Bytes that mean nothing. Decode skips them |
 
-Every described struct, enum and tagged union has one description, `struct_description<T>`, `enum_description<E>` or
-`tagged_union_description<U>`, built from its layout. Since an element points to it, anything holding a `type` can
-follow it to everything needed to read the bytes, and to the types those name in turn.
-
 Nobody writes these entries by hand. The macros below build them from the struct itself, using `offsetof`, `sizeof` and
-the field's declared type, so the offsets and sizes can't drift from the real struct.
+the field's declared type, so the offsets and sizes can't drift from the real struct, and each element's description
+pointer is filled in from the field's type.
 
 ## The macros
 
@@ -82,8 +135,10 @@ struct StructLayout<Point> {
 };
 ```
 
-A field whose type is another struct needs that struct to be described first. If `Point` had no `StructLayout`, any
-layout listing a `Point` field would fail to compile, which is how a missing description gets noticed.
+A field whose type is another struct needs that struct to be described first, since its element points to that struct's
+description. If `Point` had no `StructLayout`, any layout listing a `Point` field would fail to compile, which is how a
+missing layout gets noticed. A field whose type is an enum needs nothing more: its element points to the enum's
+description, which the build makes on its own.
 
 `LAYOUT_MEMBER` is also how you list padding the struct explicitly declares itself, ie.
 
@@ -165,8 +220,10 @@ struct StructLayout<Shape> {
 ```
 
 They're split because they describe different things. The union's layout describes the union type: its members and
-what picks them. It can't know where its tag is, because a union can't contain its own tag. The struct's entry fills
-that in. `LAYOUT_TAGGED_UNION` also checks at compile time that the tag field really holds the union's `Tag` enum.
+what picks them. From it the build makes `Geometry`'s description, which holds its cases and points to `Kind`'s
+description as its tag. It can't know where its tag is, because a union can't contain its own tag. The struct's entry
+fills that in: its element points to `Geometry`'s description and names `kind` as the member holding the tag.
+`LAYOUT_TAGGED_UNION` also checks at compile time that the tag field really holds the union's `Tag` enum.
 
 A real use of this is packet headers: the NOC command fields are a union picked by the header's send type, and every
 packet in a buffer can have a different one.
@@ -366,10 +423,11 @@ A layout lists the union by the members that span it. If that's a single member 
 as one. Otherwise, wrap the members in `filled_by_one_initializer`, as the 2D packet header does for its chip and mesh
 ids and for `mcast_params`. A named union field is always one value.
 
-**An enum enchantum can't reflect needs an `EnumLayout`.** An enum's enumerators come from enchantum, which finds them
-by scanning a range of values. An enum with values far outside that range, such as `EDMStatus`, specializes
-`EnumLayout<E>` with an array named `enumerators` instead. The specialization goes beside the struct layouts, so it's
-visible wherever the enum's description is used.
+**An enum enchantum can't reflect needs an** `EnumLayout`**.** An enum's description gets its enumerators from enchantum,
+which finds them by scanning a range of values. An enum with values far outside that range, such as `EDMStatus`,
+specializes `EnumLayout<E>` with an array named `enumerators`, and its description lists those instead. If enchantum
+finds no enumerators at all and there's no `EnumLayout`, the build fails. The specialization goes beside the struct
+layouts, so it's visible wherever the enum's description is used.
 
 **Bitfields would confuse the initializer count.** Two bitfields sharing a byte count as two values, but a layout can
 only describe the byte as a whole. None of the described aggregates has bitfields. If one ever does, its layout needs
@@ -380,17 +438,24 @@ to state its count explicitly.
 Layouts are one piece of a longer path that ends with readable values:
 
 ```
-StructLayout<T>  ──►  manifest  ──►  capture  ──►  decode
- (compile time)      (types)        (raw bytes)     (values)
+layouts  ──►  descriptions  ──►  manifest  ──►  capture  ──►  decode
+(written)     (compile time)     (types)        (raw bytes)     (values)
 ```
 
-1. **The manifest** writes every struct, enum and tagged union its schemas name into its `types` section, following each
-   element to its description. For a struct, that's its name and size, and for each member its name, offset, size,
-   count and how to read it (an integer width, an enum, another struct, a tagged union with its tag, raw bytes, or
-   padding). This is the layout, turned into data that tools outside the build can read.
-2. **Capture** reads the router's L1 regions as raw bytes and saves them alongside the manifest. It doesn't need to
+1. **The build** turns each layout into its description, as above.
+2. **The manifest** starts from every type its schemas name. It follows each element to its description, and from there
+
+   to the types that description names, and writes each description it reaches into its `types` section, keyed by name.
+     Since a schema like `"struct:Point"` is a description's name, `types` has an entry for every schema the manifest
+     writes. For a struct, the entry is its name and size, and for each member its name, offset, size, count and how to
+     read it (an integer width, an enum, another struct, a tagged union with its tag, raw bytes, or padding). This is the
+     hierarchy above, turned into data that tools outside the build can read.
+3. **Capture** reads the router's L1 regions as raw bytes and saves them alongside the manifest. It doesn't need to
+
    understand any of the structs.
-3. **Decode** reads the manifest's types and uses them to turn the raw bytes into values:
+4. **Decode** reads the manifest's types back into its own lookup by name, and follows each schema to its entry the way
+
+   the manifest followed elements to descriptions, turning the raw bytes into values:
    - integers and enums are read at their offsets, with enums shown by name;
    - nested structs are read with their own type entries;
    - tagged unions are read after the rest of the struct, by checking the tag and reading the member it picks;
@@ -404,5 +469,7 @@ code it was built from, and decode can trust it.
 
 1. Write a `StructLayout<T>` that lists every field in declaration order, using the macro that fits each one.
 2. List declared padding with `LAYOUT_MEMBER`, and compiler padding with `LAYOUT_PAD` or `LAYOUT_TAIL_PAD`.
-3. Describe any struct a field uses first, and any tagged union with its own `TaggedUnionLayout`.
+3. Describe any struct a field uses first, and any tagged union with its own `TaggedUnionLayout`. An enum a field uses
+
+   needs nothing, unless enchantum can't list its enumerators; then give it an `EnumLayout`.
 4. Follow it with `static_assert(check_struct_layout<T>())`, and the build tells you if anything is missing.
