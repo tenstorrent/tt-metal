@@ -155,8 +155,9 @@ Pass limits:
 acks and retires a chunk after `layers_per_chunk` of them (prefill_reader.cpp:56-101, 121). A migrating slot ships
 layer k over [actual_start, actual_end) at ack k (prefill_reader.cpp:68-95). Before ack k, layer k's rows for the
 chunk and the zeroed pad rows must be in DRAM. Support both transports the runner wires:
-- **Host sink**, the default: `set_layer_completion_sink(sink)`, then `sink(global_layer, request_id)` after the
-  layer's writes have finished. Use an event or a synchronize; the KV Manager reads DRAM out of band
+- **Host sink**, the default: `set_layer_completion_sink(sink)`, then
+  `sink.layers_completed(g, g + 1, slot_id, actual_start, actual_end)` (g the global layer) after the layer's writes
+  have finished. Use an event or a synchronize; the KV Manager reads DRAM out of band
   (kv_ack.py:117-128; prefill_runner.py:686-706). The shipped runner manifests leave `PREFILL_LAYER_ACK_D2H` unset
   (engine/tools/manifests/*/runner_*_migrate.yaml).
 - **D2H** (`PREFILL_LAYER_ACK_D2H=1`): `prefill_chunk(..., d2h_service=, metadata_msg=)`. Enqueue

@@ -24,7 +24,7 @@ row's KV (MoE routing is per token).
 
 Per layer: the attention writes only the records holding real tokens (valid_global = actual_end) and zeroes the pad
 rows [actual_end, ceil32(actual_end)) of the last one; then the ack. Host sink (default): an event sync, then
-``sink(global_layer, request_id)``. D2H (``d2h_service`` given, PREFILL_LAYER_ACK_D2H=1):
+``sink.layers_completed(global_layer, global_layer + 1, slot_id, actual_start, actual_end)``. D2H (``d2h_service`` given, PREFILL_LAYER_ACK_D2H=1):
 ``outbound_socket_service_sync(d2h_service, metadata=metadata_msg)`` enqueued on the same CQ, no host sync.
 
 Import-light: all device / model imports happen inside the methods.
@@ -176,7 +176,7 @@ class XingPrefillRuntime:
         for blk in self.model.blocks:
             blk.attn.bind_cache(c.kvpe, slot, c.kv_row(blk.i), len(c.layers))
 
-    def _run(self, ids, kv_cache, slot, start, end, request_id, acks: bool, d2h_service=None, metadata_msg=None):
+    def _run(self, ids, kv_cache, slot, start, end, acks: bool, d2h_service=None, metadata_msg=None):
         ttnn = self._ttnn
         sink = self._sink if acks else None
         d2h = d2h_service if acks else None
@@ -196,7 +196,7 @@ class XingPrefillRuntime:
             elif sink is not None:
                 # The ack promises the layer's KV is in DRAM (the KV Manager reads it out of band): wait for it.
                 ttnn.event_synchronize(ttnn.record_event(mesh, 0))
-                sink(blk.i, request_id)
+                sink.layers_completed(blk.i, blk.i + 1, slot, start, end)
         if acks and self.hidden_sink is not None:
             self.hidden_sink(h, slot, start, end)
         ttnn.deallocate(h)
@@ -210,7 +210,7 @@ class XingPrefillRuntime:
         c, m = self.config.chunk_size, self.config.max_seq_len
         for start, n in ((0, c), (2944 % c if m > c else 0, c - 2000), (m - c, c)):
             ids = self.make_chunk_input([0] * n, start)
-            self._run(ids, kv_cache, 0, start, start + n, 0, acks=False)
+            self._run(ids, kv_cache, 0, start, start + n, acks=False)
             ttnn.deallocate(ids)
         ttnn.synchronize_device(self.mesh_device)
 
@@ -239,7 +239,6 @@ class XingPrefillRuntime:
             int(slot_id),
             int(actual_start),
             int(actual_end),
-            request_id,
             acks=True,
             d2h_service=d2h_service,
             metadata_msg=metadata_msg,

@@ -168,7 +168,7 @@ class Hy4PrefillRuntime:
             if blk.indexer is not None:
                 blk.indexer.bind_cache(c.index, slot, c.index_row(i), len(c.full))
 
-    def _run(self, ids, kv_cache, slot, start, request_id, acks: bool):
+    def _run(self, ids, kv_cache, slot, start, end, acks: bool):
         ttnn = self._ttnn
         sink = self._sink if acks else None
         mesh = self.mesh_device
@@ -183,7 +183,7 @@ class Hy4PrefillRuntime:
             if sink is not None:
                 # The ack promises the layer's KV is in the engine cache: wait until the device has finished it.
                 ttnn.event_synchronize(ttnn.record_event(mesh, 0))
-                sink(i, request_id)
+                sink.layers_completed(i, i + 1, slot, start, end)
         ttnn.deallocate(h)
 
     def compile(self, kv_cache: Hy4KvCaches) -> None:
@@ -193,7 +193,7 @@ class Hy4PrefillRuntime:
         c = self.config.chunk_size
         for start in range(0, self.config.max_seq_len, c):
             ids = self.make_chunk_input([0] * c)
-            self._run(ids, kv_cache, 0, start, 0, acks=False)
+            self._run(ids, kv_cache, 0, start, start + c, acks=False)
             ttnn.deallocate(ids)
         ttnn.synchronize_device(self.mesh_device)
 
@@ -215,7 +215,7 @@ class Hy4PrefillRuntime:
         assert actual_start + c <= self.config.max_seq_len, "chunk overruns the user slot"
         assert 0 <= slot_id < kv_cache.contract.num_users, (slot_id, kv_cache.contract.num_users)
         assert tuple(input_tensor.shape)[-1] * self.config.mesh_shape[0] == c, input_tensor.shape
-        self._run(input_tensor, kv_cache, slot_id, actual_start, request_id, acks=True)
+        self._run(input_tensor, kv_cache, slot_id, actual_start, actual_end, acks=True)
         return None  # last/single rank: the populated cache is the output
 
     # --- migration hooks ---

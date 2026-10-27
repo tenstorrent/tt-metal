@@ -167,18 +167,18 @@ class MiMoPrefillRuntime:
         ttnn.deallocate(m)
         return out
 
-    def _run(self, ids, kv_cache, slot, start, request_id, acks: bool):
+    def _run(self, ids, kv_cache, slot, start, end, acks: bool):
         ttnn = self._ttnn
         sink = self._sink if acks else None
         mesh = self.mesh_device
         first = kv_cache.layers[0]
 
-        def on_layer(i, request_id=request_id):
+        def on_layer(i):
             if sink is None:
                 return
             # The ack promises the layer's KV is in the migratable cache: wait until the device has finished it.
             ttnn.event_synchronize(ttnn.record_event(mesh, 0))
-            sink(i, request_id)  # TtMiMoBlock.i is the global layer index
+            sink.layers_completed(i, i + 1, slot, start, end)  # TtMiMoBlock.i is the global layer index
 
         contract = kv_cache.contract
         clean = self._clamp_ids(ids)
@@ -199,7 +199,7 @@ class MiMoPrefillRuntime:
         c = self.config.chunk_size
         for start in range(0, self.config.max_seq_len, c):
             ids = self.make_chunk_input([0] * c)
-            self._run(ids, kv_cache, 0, start, 0, acks=False)
+            self._run(ids, kv_cache, 0, start, start + c, acks=False)
             ttnn.deallocate(ids)
         ttnn.synchronize_device(self.mesh_device)
 
@@ -220,7 +220,7 @@ class MiMoPrefillRuntime:
         assert actual_start < actual_end <= actual_start + c, (actual_start, actual_end, c)
         assert actual_start + c <= self.config.max_seq_len, "chunk overruns the user slot"
         assert tuple(input_tensor.shape)[-1] * self.config.mesh_shape[0] == c, input_tensor.shape
-        self._run(input_tensor, kv_cache, slot_id, actual_start, request_id, acks=True)
+        self._run(input_tensor, kv_cache, slot_id, actual_start, actual_end, acks=True)
         return None  # last/single rank: the populated cache is the output
 
     # --- migration hooks ---

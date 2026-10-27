@@ -26,6 +26,7 @@ os.environ.update(
 
 import ttnn  # noqa: E402
 from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter  # noqa: E402
+from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionSink  # noqa: E402
 from models.demos.ernie45_d_p.bringup import metrics  # noqa: E402
 from models.demos.ernie45_d_p.tests.conftest import mesh_1x4  # noqa: E402
 from models.demos.ernie45_d_p.tt.common import Golden  # noqa: E402
@@ -36,7 +37,7 @@ def _device_map(mesh):
     for c in range(mesh.shape[1]):
         fid = mesh.get_fabric_node_id(ttnn.MeshCoordinate(0, c))
         out[(int(fid.mesh_id), int(fid.chip_id))] = int(
-            ttnn.cluster.get_chip_unique_id_from_fabric_node_id(int(fid.mesh_id), int(fid.chip_id))
+            ttnn.cluster.get_chip_unique_id_from_fabric_node_id(mesh, int(fid.mesh_id), int(fid.chip_id))
         )
     return out
 
@@ -67,7 +68,12 @@ def test_engine_contract(mesh_device, record):
     kv = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf, params=params)
     rt = adapter.build_runtime(mesh_device=mesh_device, hf_config=hf, params=params)
     acks = []
-    rt.set_layer_completion_sink(lambda layer, rid: acks.append((layer, rid)))
+
+    class Sink(LayerCompletionSink):
+        def layers_completed(self, layer_start, layer_end, slot_id, pos_start, pos_end):
+            acks.extend((layer, (slot_id, pos_start, pos_end)) for layer in range(layer_start, layer_end))
+
+    rt.set_layer_completion_sink(Sink())
     rt.compile(kv)
     acks.clear()
 
@@ -79,7 +85,7 @@ def test_engine_contract(mesh_device, record):
     ttnn.synchronize_device(mesh_device)
 
     failed = []
-    want_acks = [(layer, c) for c in range(SEQ // CHUNK) for layer in range(28)]
+    want_acks = [(layer, (SLOT, c * CHUNK, (c + 1) * CHUNK)) for c in range(SEQ // CHUNK) for layer in range(28)]
     if acks != want_acks:
         failed.append(f"layer acks {acks[:5]}... != global in-order per chunk")
 
