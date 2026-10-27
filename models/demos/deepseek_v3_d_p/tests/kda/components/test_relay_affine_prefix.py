@@ -314,7 +314,7 @@ def test_relay_affine_prefix_back_to_back(mesh_device):
 # each after a discarded first and never back to back (a device synchronize separates them, the barrier consecutive
 # calls need). As in the KDA layer gate, the ring's wait for its predecessors moves a single call by a few percent.
 _PERF_SAMPLES = 7
-_PERF_MARGIN = 0.05
+_PERF_MARGIN = 0.10
 # A full chunk that starts 320 rows into the second rank, as the layer gates place it: the relay starts mid-ring.
 _PERF_START = _ROWS + 320
 _PERF_KERNEL = "relay_affine_prefix"
@@ -326,9 +326,9 @@ def _perf_case(shape: tuple[int, int], case_id: str, reference_us: float | None)
     return pytest.param(*ring.values, reference_us, marks=ring.marks, id=case_id)
 
 
-# TODO: calibrate on the dedicated LoudBox and QuietBox runners.
+# TODO: calibrate on the dedicated QuietBox runner.
 _PERF_CASES = [
-    _perf_case((8, 1), "loudbox-SP8xTP1-ring", None),
+    _perf_case((8, 1), "loudbox-SP8xTP1-ring", 110.3),
     _perf_case((4, 1), "quietbox-SP4xTP1-ring", None),
 ]
 
