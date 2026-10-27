@@ -137,15 +137,13 @@ ttnn::Tensor create_tensor_from_span(
     tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
     auto* device = &ttml::autograd::ctx().get_device();
 
-    // Without a mapper, replicated per mesh axis (see ttml::core::replicate_to_mesh_mapper).
     std::unique_ptr<ttnn::distributed::TensorToMesh> replicate;
     if (mapper == nullptr) {
         replicate = ttml::core::replicate_to_mesh_mapper(*device);
         mapper = replicate.get();
     }
 
-    // Converted data is moved into a host tensor the mapper borrows from where it can (a replicated tensor shares one
-    // buffer across shards); the numpy span is const, so the mapper copies it.
+    // The mapper can borrow the moved converted data (replicas share one buffer); a const numpy span is copied.
     auto distributed = [&] {
         if constexpr (!std::is_same_v<MetalType, NumpyType>) {
             std::vector<MetalType> converted_data(numpy_data_span.begin(), numpy_data_span.end());

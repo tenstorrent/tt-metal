@@ -64,9 +64,7 @@ bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
 
 namespace {
 
-// Averages each parameter's gradient along the axes in `cluster_axes` that the parameter is not sharded on. Along an
-// axis it is sharded on, a parameter holds a different piece of the tensor on each device, so averaging there would
-// add those pieces together; FSDP's backward hook has already reduce-scattered such a gradient.
+// Averages each gradient along the axes in `cluster_axes` that its parameter is not sharded on.
 void synchronize_gradients_along(
     const serialization::NamedParameters& parameters, const ttsl::SmallVector<uint32_t>& cluster_axes) {
     for (auto& [name, tensor] : parameters) {

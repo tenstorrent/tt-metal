@@ -96,9 +96,7 @@ def _sharded_tensor_dims(placements: Optional[List[Any]]) -> set:
 
 
 def _per_axis_placements(placements: Optional[List[Any]], mesh_shape: Sequence[int], what: str) -> List[Any]:
-    """``placements`` with one entry per mesh axis, read the way C++'s ``uncollapse_placements`` reads them: no
-    topology is Replicate everywhere, and a collapsed ``{N}, [placement]`` is that placement on every axis of size > 1.
-    """
+    """``placements`` per mesh axis; a collapsed ``{N}, [placement]`` is that placement on every axis of size > 1."""
     if placements is None:
         return [ttnn.PlacementReplicate()] * len(mesh_shape)
     if len(placements) == len(mesh_shape):
@@ -113,7 +111,6 @@ def _per_axis_placements(placements: Optional[List[Any]], mesh_shape: Sequence[i
 
 
 def _already_fsdp_sharded(placements: Optional[List[Any]], axis_index: int, mesh_shape: Sequence[int]) -> bool:
-    """True if the parameter is sharded on the FSDP axis."""
     return _is_shard(_per_axis_placements(placements, mesh_shape, "parameter topology")[axis_index])
 
 

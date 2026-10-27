@@ -157,7 +157,6 @@ void py_module(nb::module_& m) {
                 &ttnn::distributed::replicate_tensor_to_mesh_mapper),
             nb::arg("device"));
 
-        // One Replicate per mesh axis; see ttml::core::replicate_to_mesh_mapper.
         py_distributed.def(
             "replicate_to_mesh_mapper",
             &ttml::core::replicate_to_mesh_mapper,
@@ -225,16 +224,14 @@ void py_module(nb::module_& m) {
             nb::arg("cluster_axis") = nb::none(),
             "Raw all_reduce without autograd tracking. Returns a new ttnn::Tensor.");
 
-        // The per-axis reading synchronize_gradients uses to pick the axes a gradient is reduced along.
         py_distributed.def(
             "is_sharded_on_axis",
             &ttml::core::distributed::is_sharded_on_axis,
             nb::arg("tensor"),
             nb::arg("axis"),
-            "True when `tensor`'s TensorTopology is Shard (not Replicate) on mesh axis `axis` of the mesh `tensor` is "
-            "on. A collapsed 1-D label is expanded first: Replicate is Replicate on every axis, a Shard over the whole "
-            "mesh is Shard on every axis of size > 1. Raises for a host tensor, and for a label that is neither one "
-            "placement per mesh axis nor a collapsed label covering the mesh.");
+            "True when `tensor`'s TensorTopology is Shard on mesh axis `axis` of the mesh `tensor` is on; a collapsed "
+            "1-D label counts as its placement on every axis of size > 1. Raises for a host tensor, or for a label "
+            "that is neither per-axis nor a collapsed label covering the mesh.");
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;

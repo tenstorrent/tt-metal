@@ -35,7 +35,6 @@ def lazy_init():
 
 
 def _replicate_to_mesh_mapper() -> Any | None:
-    """Mapper replicating a non-sharded parameter with one Replicate per mesh axis (``replicate_to_mesh_mapper``)."""
     import ttml
 
     device = ttml.autograd.AutoContext.get_instance().get_device()
