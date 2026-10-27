@@ -33,8 +33,8 @@ from ..data_transfer_blocks.data_transfer_blocks import (
     as_dest_acc,
 )
 from ..data_transfer_blocks.l1_codec import datums_per_tile
-from ..data_transfer_blocks.pack_effects import PackEdgeMask
 from ..data_transfer_blocks.units import Fpu
+from ..data_transfer_blocks.units.pack_effects import PackEdgeMask
 from .chain import Chain, Registers, StageRecord, Step
 
 
