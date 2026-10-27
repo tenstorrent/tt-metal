@@ -86,5 +86,6 @@ void kernel_main() {
             done_semaphore_id,
             true>(line, partials_gathered_args, partials_local_args, partials_first_arg, 0);
     }
-    noc_async_full_barrier();
+    const Noc noc;
+    noc.async_full_barrier();
 }
