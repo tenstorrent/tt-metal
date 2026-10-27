@@ -13,6 +13,7 @@
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_software_credit.hpp"
 #include "fabric_edm_packet_header_validate.hpp"
 #include "api/alignment.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp"
@@ -90,16 +91,19 @@ struct RouterStaticSizedChannelWriterAdapter {
         uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
         uint8_t sync_noc_cmd_buf = write_at_cmd_buf) {
         this->worker_credits_stream_id = worker_credits_stream_id.get();
-        if constexpr (!connection_interface::kernel_stream_registers_available) {
-            this->downstream_read_counter_ptr = from_remote_buffer_free_slots_ptr;
+
+        if constexpr (connection_interface::kernel_stream_registers_available) {
+            this->edm_buffer_local_free_slots_read_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+                get_stream_reg_read_addr(this->worker_credits_stream_id));
+            this->edm_buffer_local_free_slots_update_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+                get_stream_reg_write_addr(this->worker_credits_stream_id));
+        } else {
+            // The downstream router's read count: polled here, and the word named to it at open.
+            this->edm_buffer_local_free_slots_read_ptr = from_remote_buffer_free_slots_ptr;
+            this->edm_buffer_local_free_slots_update_ptr = from_remote_buffer_free_slots_ptr;
             this->packets_written = 0;
         }
-
-        this->edm_buffer_local_free_slots_read_ptr =
-            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_stream_reg_read_addr(this->worker_credits_stream_id));
         this->edm_buffer_remote_free_slots_update_addr = get_stream_reg_write_addr(sender_channel_credits_stream_id);
-        this->edm_buffer_local_free_slots_update_ptr =
-            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_stream_reg_write_addr(this->worker_credits_stream_id));
         this->edm_connection_handshake_l1_addr = connected_to_persistent_fabric
                                                      ? edm_connection_handshake_l1_id
                                                      : get_semaphore<my_core_type>(edm_connection_handshake_l1_id);
@@ -122,7 +126,7 @@ struct RouterStaticSizedChannelWriterAdapter {
         if constexpr (connection_interface::kernel_stream_registers_available) {
             init_ptr_val(this->worker_credits_stream_id, EDM_NUM_BUFFER_SLOTS);
         } else {
-            *this->downstream_read_counter_ptr = 0;
+            *this->edm_buffer_local_free_slots_read_ptr = 0;
         }
         for (size_t i = 0; i < EDM_NUM_BUFFER_SLOTS; ++i) {
             this->edm_buffer_slot_addrs[i] = edm_buffer_base_addr + (i * this->buffer_size_bytes);
@@ -190,7 +194,7 @@ public:
         if constexpr (connection_interface::kernel_stream_registers_available) {
             return get_ptr_val(worker_credits_stream_id) != 0;
         } else {
-            return this->packets_written - *this->downstream_read_counter_ptr < EDM_NUM_BUFFER_SLOTS;
+            return this->packets_written - *this->edm_buffer_local_free_slots_read_ptr < EDM_NUM_BUFFER_SLOTS;
         }
     }
 
@@ -236,9 +240,7 @@ private:
     // Downstream router will increment this when it frees up a slot
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_read_ptr;
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_update_ptr;
-    // Software credits: the downstream router's read count, written by it into this L1 word, and this adapter's
-    // write count.
-    volatile tt_l1_ptr uint32_t* downstream_read_counter_ptr;
+    // Software credits: this adapter's write count.
     uint32_t packets_written;
     size_t edm_buffer_remote_free_slots_update_addr;
     size_t edm_connection_handshake_l1_addr;
@@ -265,9 +267,7 @@ private:
     void open_start() {
         connection::open_start<SEND_CREDIT_ADDR, posted, WORKER_HANDSHAKE_NOC>(
             this->edm_worker_location_info_addr,
-            connection_interface::kernel_stream_registers_available
-                ? reinterpret_cast<size_t>(this->edm_buffer_local_free_slots_update_ptr)
-                : reinterpret_cast<size_t>(this->downstream_read_counter_ptr),
+            reinterpret_cast<size_t>(this->edm_buffer_local_free_slots_update_ptr),
             reinterpret_cast<size_t>(this->worker_teardown_addr),
             this->edm_noc_x,
             this->edm_noc_y);
@@ -283,18 +283,12 @@ private:
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = noc_index) {
         if constexpr (!connection_interface::kernel_stream_registers_available) {
-            // Called after advance_buffer_slot_write_index(); the payload's write must land first.
             this->packets_written++;
-            noc_async_writes_flushed(noc);
-            noc_inline_dw_write<InlineWriteDst::L1>(
-                get_noc_addr(
-                    this->edm_noc_x,
-                    this->edm_noc_y,
-                    this->edm_copy_of_wr_counter_addr +
-                        offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter),
-                    noc),
+            fabric_publish_producer_write_count(
+                this->edm_noc_x,
+                this->edm_noc_y,
+                this->edm_copy_of_wr_counter_addr + offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter),
                 this->packets_written,
-                0xF,
                 noc);
             return;
         }
