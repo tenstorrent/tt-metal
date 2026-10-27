@@ -209,6 +209,8 @@ def test_moe_block(mesh_device, device_params, model, chunk):
         # the exchange's fixed combine order)
         x_gathered=os.environ.get("MOE_X_GATHERED") == "1",
         combine_deterministic=os.environ.get("MOE_COMBINE_DET") == "1",
+        # (test-only, as test_moe_block_traced: MOE_COMBINE_SNAP=-19 -> the combine's terms snapped to multiples of 2^-19)
+        combine_snap=2.0 ** int(os.environ["MOE_COMBINE_SNAP"]) if os.environ.get("MOE_COMBINE_SNAP") else None,
     )
     # (test-only: MOE_SE_FIDELITY - the shared expert's fidelity, e.g. LoFi as DeepSeek-V4.1 runs it)
     dtypes = MoEDtypes(shared_fidelity=getattr(ttnn.MathFidelity, os.environ.get("MOE_SE_FIDELITY", "HiFi2")))

@@ -548,7 +548,9 @@ class RoutingStream:
         for d in ("fwd", "bwd"):
             peer = rg["next"] if d == "fwd" else rg["prev"]
             if peer is not None and rg.get(f"{d}_links"):
-                out[0 if (peer[1] - coord[1]) % self.C == 1 else 1] = d
+                # (a line by the sign: modulo C 2 both neighbours are + 1)
+                fwd = (peer[1] - coord[1]) % self.C == 1 if self.wrap_x else peer[1] > coord[1]
+                out[0 if fwd else 1] = d
         return out
 
     def path(self, s, d):
