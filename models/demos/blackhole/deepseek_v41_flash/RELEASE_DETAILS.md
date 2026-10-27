@@ -10,7 +10,7 @@
 | vllm-tt-plugin | `dd4fbc6230610c4d12a436eaa29d45f7d2bc6c29` (branch `ssinghal/dsv4p1-replay-v3`: `15bcbd6` prefill_final plus `dd4fbc6` prefill_total) |
 | Checkpoint | `deepseek-ai/DeepSeek-V4.1-Flash-1017` |
 | Stack | the Python environment is reused from the previous build (previous release: vLLM 0.31.0, torch 2.11.0+cpu, transformers 5.12.1); not re-read from this image |
-| Previous release | `0.24.0-0655530-4743e01` (section "Previous release" below). Images in between, not released: `a58ff4b5c2b-acf66ceb-6066a1e` (production image of the earlier checkpoint), `81284183e99-*` (1017 checkpoint), `74727b7f7ee-5b6f9268-15bcbd6` (v2, mHC and ids sort), `7ca53f64776-5b6f9268-15bcbd6` (v2.1, adaptive-k probe fix) |
+| Previous release | `0.24.0-0655530-4743e01` (section "Previous release" below). Images in between, not released: `a58ff4b5c2b-acf66ceb-6066a1e` (production image of the earlier checkpoint), `81284183e99-*` (1017 checkpoint) |
 | Build | `scripts/build_local_dsv41_image.sh` with the three commits above; the compiled tt-metal is reused, `models/`, the plugin and the tt-inference-server tree are replaced. Verification started on the image built without the documentation commits. |
 
 <!-- sources: dsv4-logs/image_v3b/TAG, MS, PS, build.sh; ttis sha = git rev-parse in wt/ttis_rebase; intermediate images: dsv4-logs/image_tests/*/results.md headers, memory production image -->
@@ -26,11 +26,11 @@
 | Lean CCLs | **New**, default | `DSV41_CCL_LEAN=0` | 40-layer verify round k = 3 -0.232 ms, k = 5 -0.836 ms |
 | mHC blocks (T-aware, fused front) | **New** (in the 1017 images), default | `DSV41_MHC_TAWARE=0`, `DSV41_MHC_PRE=0` | whole-layer mHC chain at T = 6 (k = 5 verify) 354.4 -> 120.2 us, T = 1 (plain decode) 174.8 -> 79.7 us; 8-layer window k = 5 -2.5 ms |
 | ids sort of the selected index entries | **New** (in the 1017 images), default | `DSV41_IDX_SORT=0` | exactness: plain step and verify block read the same keys in the same order (64k boundary) |
-| Adaptive k probe | **Fixed** (v2.1): the scheduler re-measures the other k every 128 rounds | `DSV41_SPEC_PROBE_EVERY=0` (old behaviour) | GSM8K eval: k = 5 in 95.5 % of the rounds (0.5 % before), acceptance length 4.18 (3.32), client decode at 4 concurrent greedy requests +11.5 % |
+| Adaptive k probe | **Fixed**: the scheduler re-measures the other k every 128 rounds | `DSV41_SPEC_PROBE_EVERY=0` (old behaviour) | GSM8K eval: k = 5 in 96.3 % of the rounds, acceptance length 4.20 |
 | Host-side server prefill | **New**, default | `DSV41_PF_RETURN_LAG=-1` (wait for the last window), `DSV41_PF_OVERLAP=0` | time outside the device in a 4 x 64k prefill 10.7 -> 1.35 s at 2,048 / 512 |
 | 1017 checkpoint, APC and paged prefill on, single chunk trace, per-row chunk starts, budget 16,384 / 4,096 | Defaults of the specs and the catalog | see `RELEASE_NOTES.md` | see `OPTIMIZATIONS.md` sections 1 and 2 |
 
-<!-- sources: replay: dsv4-logs/replay_study/RESULTS_phase3.md and OPTIMIZATIONS.md 8.6; indexer, drafter, qkpost, lean CCL: OPTIMIZATIONS.md 8.1-8.4; mHC: dsv4-logs/levers/mhc/README.md; ids sort: tt/indexer.py canonical_ids; probe: OPTIMIZATIONS.md 8.5 and image_tests/7ca53f64776-5b6f9268-15bcbd6/results.md; host-side prefill: OPTIMIZATIONS.md P17; switch names checked in the code of afb78699c8b (tt/replay_cfg.py, tt/spec_paged.py, tt/mtp.py, tt/attention.py, tt/ccl_lean.py, tt/mhc.py, tt/indexer.py, tt/spec_adapt.py) -->
+<!-- sources: replay: dsv4-logs/replay_study/RESULTS_phase3.md and OPTIMIZATIONS.md 8.6; indexer, drafter, qkpost, lean CCL: OPTIMIZATIONS.md 8.1-8.4; mHC: dsv4-logs/levers/mhc/README.md; ids sort: tt/indexer.py canonical_ids; probe: OPTIMIZATIONS.md 8.5 and image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md "Server facts"; host-side prefill: OPTIMIZATIONS.md P17; switch names checked in the code of afb78699c8b (tt/replay_cfg.py, tt/spec_paged.py, tt/mtp.py, tt/attention.py, tt/ccl_lean.py, tt/mhc.py, tt/indexer.py, tt/spec_adapt.py) -->
 
 ### Switches that restore the previous behaviour
 
@@ -53,29 +53,28 @@ All switches are environment variables of the server (`-e NAME=value` in the `do
 
 ### Measurements of this release
 
-- Merged tree, 4 users, 1M build, 40 layers, 1017 checkpoint, adaptive k with a frozen time table (3:47, 5:58 ms): see the table in `RELEASE_NOTES.md`; all four scenarios reproduce plain greedy decoding for 4 of 4 users, with the same accepted tokens per round and k mix as the v2 image (source `dsv4-logs/levers/merged/MERGED.md`).
+- Merged tree, 4 users, 1M build, 40 layers, 1017 checkpoint, adaptive k with a frozen time table (3:47, 5:58 ms): see the table in `RELEASE_NOTES.md`; all four scenarios reproduce plain greedy decoding for 4 of 4 users (source `dsv4-logs/levers/merged/MERGED.md`).
 - Bounded prefill replay, server level (host .45, catalog default B=4 / 1M build): `dsv4-logs/replay_study/RESULTS_phase3.md`. Exactness gates (all pass): last-token logits bit-identical (4 x 8k and 4 x 32k, 40 layers; 8-layer server path for equal, mixed, piecewise, staggered and short prompts), server cold = APC hit = repeat for 32k / 64k late question / 128k needle, GSM8K 8-shot first 256 questions 253 / 256 for replay on and off with identical completions, needles 64k / 131k / 600k found, API suite 23 / 23, vision tests pass. Limits: R must be 2,414 or more; the zone is per mesh row (one prefill slot per row, `DSV41_PREFILL_UP=1`, the default); a request whose total length the plugin does not pass (plugin older than `dd4fbc6`) is treated as no skip.
 - Not run for replay: the B=16 / 262,144 build, full GSM8K / GPQA / tau3 with replay on the server (the verification of this image runs them, see below), 1M needle, B=8.
 
 ### Testing done on this image
 
-Verification of `afb78699c8b-5b6f9268-dd4fbc6` (results: `dsv4-logs/image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md`; same-host baselines of the v2.1 image: `image_tests/v21_ab_for_v3b/`; switch bisect: `image_tests/bisect_v3b/`). Lanes: A (GSM8K, GPQA), B (needles, determinism, cold TTFT, stall, 1M needle), C (API, overload, APC, multi-turn, vision, tools, bench), G (tau3), R and Y (decode and greedy-completion comparisons). All lanes boot the B=4 / 1,048,576-token catalog default (`lane.sh`); B=16 / 262,144 is not part of them.
+Verification of `afb78699c8b-5b6f9268-dd4fbc6` (results: `dsv4-logs/image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md`; switch bisect: `image_tests/bisect_v3b/`). Lanes: A (GSM8K, GPQA), B (needles, determinism, cold TTFT, stall, 1M needle), C (API, overload, APC, multi-turn, vision, tools, bench), G (tau3), R and Y (decode and greedy-completion comparisons). All lanes boot the B=4 / 1,048,576-token catalog default (`lane.sh`); B=16 / 262,144 is not part of them.
 
 | Test | Result |
 |---|---|
 | Boot, catalog default (four lanes) | 1,773 / 1,217 / 1,526 / 1,787 s; verify runners k = 3 and k = 5 built; DRAM free 417.7 MiB per bank after warm-up, 416.0 MiB at the end of the build (largest free block 210.1 MiB; trace region 76.8 MiB per bank allocated, 66.2 free); 0 server errors |
 | API suites (smoke, sanity, serving_api, overload, multi-turn, tools, api_again), vision (client_img, client_many, client_stress, vis_apc, repeat_image) | all pass |
-| GSM8K 8-shot | 96.21 (v2.1 96.21; gate 94.9); k = 5 in 96.3 % of the eval rounds (k_hist {3: 359, 5: 9369}), acceptance length 4.20, 3.07 accepted drafts per row-round, wall 23:48 |
+| GSM8K 8-shot | 96.21 (gate 94.9); k = 5 in 96.3 % of the eval rounds (k_hist {3: 359, 5: 9369}), acceptance length 4.20, 3.07 accepted drafts per row-round, wall 23:48 |
 | GPQA | 80.30 (gate 76.8) |
 | tau3 airline | 74.0 % (gate 72 %; one 50-task run, binomial sd about 6 points) |
-| Needles 64k / 128k / 600k / 1M | 33 / 55 / 240 / 396 s (v2.1 54 / 104 / 431 / 718 s), all found |
+| Needles 64k / 128k / 600k / 1M | 33 / 55 / 240 / 396 s, all found |
 | Determinism 32k / 64k late question / 128k needle, 200 tokens | cold = APC hit = repeat, 3 of 3 |
-| 4 concurrent cold prompts, batch TTFT 8k / 32k / 64k / 128k (host .45) | 4.95 / 14.47 / 26.89 / 51.97 s (v2.1 6.2 / 21.74 / 43.0 / 86.03 s) |
-| Stall, 3 x 32k prompts arriving while users decode, longest gap | 3.95 s (v2.1 5.35 s; gate 6.2 s) |
-| APC cold / hit, 8k / 16k / 32k / 64k | 4.01 / 2.65, 7.11 / 4.27, 12.96 / 7.18, 25.11 / 13.43 s (v2.1 5.43 / 2.91, 10.76 / 5.66, 21.09 / 10.75, 42.5 / 21.66 s); hit text = cold text. The 8k and 16k rows do not meet the old gate hit <= 0.6 x cold only because the cold request is faster; every hit is faster than on v2.1 |
+| 4 concurrent cold prompts, batch TTFT 8k / 32k / 64k / 128k (host .45) | 4.95 / 14.47 / 26.89 / 51.97 s |
+| Stall, 3 x 32k prompts arriving while users decode, longest gap | 3.95 s (gate 6.2 s) |
+| APC cold / hit, 8k / 16k / 32k / 64k | 4.01 / 2.65, 7.11 / 4.27, 12.96 / 7.18, 25.11 / 13.43 s; hit text = cold text. The 8k and 16k rows do not meet the old gate hit <= 0.6 x cold only because the cold request is faster |
 | Multi-turn, turn 2 against cold, 32k / 64k | 7.16 / 12.94 and 13.44 / 25.07 s |
 | Bench B=4, 4 requests, ISL 1,024 / 8,192 | 1649 ms / 27.2 ms / 94.4 tok/s and 5342 ms / 28.2 ms / 56.2 tok/s |
-| GSM8K-prompt decode (c = 1 / 4, sampled and greedy, host .33, same-host v2.1) | +3.6 / +3.8 / +6.2 / +0.9 % |
 | Long-context decode, 768 forced tokens, high-acceptance prompts (host .33) | 64k 96.19 against 78.99 tok/s per user (+22 %), 128k 91.4 against 76.7 (+19 %); the low-acceptance prompts (forced tokens after EOS) depend on the text the model emits and are not a speed comparison |
 | Replay in the server | active: the per-call prefill statistics carry `replays_a_only` (32 for a 16k-token window group, 8 for 4k) and `replay_per_chunk`. The log line `REPLAY: R=2560 ...` is printed by the demo only and does not appear in the server log |
 
@@ -85,7 +84,9 @@ Not run: B=16 / 262,144, full eval workflows beyond GSM8K / GPQA / tau3. AgentX 
 
 ### Benchmark tables of this image
 
-The ISL x OSL tables (OSL 128 / 1,024 / 4,096, ISL 128 to 1,048,320, concurrency 1 and 4, speculation on and plain decode) are in `GETTING_STARTED_DETAILED.md`, section Performance. They were measured on the v2.1 image `7ca53f64776-5b6f9268-15bcbd6`, not on this image (`bench_1m/PATHS.md`, `bench_1m_nospec/PATHS.md`). Plain-decode server facts: catalog 1M / B=4 entry without `speculative_config`, DRAM free 596.4 MiB per bank (415.1 with speculation), trace region 24.2 MiB per bank allocated (87.6 with speculation), boot 1,177 s (1,913 s), TPOT 34.0 / 34.0 / 33.9 ms for three single streaming requests (`bench_1m_nospec/sanity_tpot.out`); 58 of 58 points OK. One point: 1M prompt (1,048,320 tokens), 128 output tokens, 1 user: TTFT 732.6 s and TPOT 75.6 ms with speculation, 741.2 s and 93.8 ms plain.
+The ISL x OSL tables (OSL 128 / 1,024 / 4,096, ISL 128 to 1,048,320, concurrency 1 and 4, speculation on and plain decode) are in `GETTING_STARTED_DETAILED.md`, section Performance.
+
+<!-- TODO: v3b --workflow benchmarks tables (in progress) -->
 
 ### AgentX at B=4 (InferenceX agentic traces)
 
