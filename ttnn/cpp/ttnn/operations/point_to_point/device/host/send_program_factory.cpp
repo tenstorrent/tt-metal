@@ -31,8 +31,7 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
 
     // figure out packets
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
-        detail::compute_aligned_packet_dims(
-            *mesh_device, input_tensor.dtype(), input_page_size_bytes, input_num_pages, l1_alignment);
+        detail::compute_aligned_packet_dims(input_tensor.dtype(), input_page_size_bytes, input_num_pages, l1_alignment);
 
     // eventually add more cores for multi-link
     const CoreCoord use_cores = {1, 1};
