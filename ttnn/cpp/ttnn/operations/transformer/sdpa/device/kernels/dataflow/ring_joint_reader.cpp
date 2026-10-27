@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/debug/kernel_profiler.hpp"  // LOCAL PROBE
+// #define HALO_PROBE_SKIP_WAIT  // LOCAL PROBE toggle
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -875,6 +876,9 @@ void kernel_main() {
             return;
         }
         halo_synchronized = true;
+#ifdef HALO_PROBE_SKIP_WAIT
+        return;  // LOCAL PROBE: timing only, attention reads the halo before it lands (wrong output)
+#endif
         DeviceZoneScopedN("SDPA_HALO_WAIT");  // LOCAL PROBE
         // Sliding has a compact write plan (local slab + cyclic predecessor tails).
         const uint32_t synchronization_iters =

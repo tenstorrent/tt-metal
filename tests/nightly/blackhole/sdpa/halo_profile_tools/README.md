@@ -27,3 +27,8 @@ Model step A/B (`models/demos/gemma4_d_p/tests/test_batched_prefill.py::test_bat
 Two SP4 x TP4 halves (`models/demos/gemma4_d_p/tests/test_request_parallel_local.py`) need `GEMMA4_ALLOW_SUBMESH=1`,
 `GEMMA4_SLIDING_LANES=0` and a TT_CACHE_PATH holding a `tensor_cache_bf16_mesh4x4` cache (built on first run with
 `GEMMA4_PREFILL_LOAD_FULL_WEIGHTS=1`).
+
+Halo wait removed (timing only, the output is wrong): uncomment `#define HALO_PROBE_SKIP_WAIT` at the top of
+`ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp`. The SDPA reader then
+skips its wait for the halo and attention reads halo buffers before they land. Kernels are JIT-compiled, so no
+rebuild is needed; comment it out again afterwards.
