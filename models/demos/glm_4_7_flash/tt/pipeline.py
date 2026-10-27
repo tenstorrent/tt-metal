@@ -137,6 +137,7 @@ class FastArgmax:
     """Trace-safe 32-core argmax via generic_op, replacing ttnn.argmax for decode.
     One core per batch row, 32-byte aligned writes (no semaphore), cached descriptor + persistent buffers.
     Each core writes its result replicated 8x into a 32-byte page to avoid DRAM cache-line races.
+    SPMD dispatch: a single ProgramDescriptor is auto-replicated across the mesh by generic_op.
     """
 
     def __init__(self, device, batch, is_mesh):
@@ -145,6 +146,7 @@ class FastArgmax:
         self.is_mesh = is_mesh
         self._program = None
         self._out_wide = None
+        self._out_narrow = None
         self._inp = None
 
     def _build(self, rm):
@@ -159,6 +161,13 @@ class FastArgmax:
 
         self._out_wide = ttnn.from_torch(
             torch.zeros(1, 1, batch, 8, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=rep,
+        )
+        self._out_narrow = ttnn.from_torch(
+            torch.zeros(1, 1, batch, 1, dtype=torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
@@ -194,44 +203,33 @@ class FastArgmax:
         if kernel_path is None:
             kernel_path = "argmax32.cpp"
 
-        def _make():
-            rt = ttnn.RuntimeArgs()
-            cid = 0
-            for y in range(grid_y):
-                for x in range(grid_x):
-                    if cid < batch:
-                        rt[x][y] = [src_addr, dst_addr, cid]
-                        cid += 1
-            k = ttnn.KernelDescriptor(
-                kernel_source=kernel_path,
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=cores,
-                compile_time_args=ct,
-                runtime_args=rt,
-                config=ttnn.ReaderConfigDescriptor(),
-            )
-            cb = ttnn.CBDescriptor(
-                total_size=cb_total,
-                core_ranges=cores,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=cb_idx,
-                        data_format=ttnn.uint32,
-                        page_size=cb_total,
-                    )
-                ],
-            )
-            return ttnn.ProgramDescriptor(kernels=[k], cbs=[cb])
-
-        if self.is_mesh:
-            self._program = ttnn.MeshProgramDescriptor()
-            for c in range(self.device.shape[1]):
-                coord = ttnn.MeshCoordinate(0, c)
-                self._program[ttnn.MeshCoordinateRange(coord, coord)] = _make()
-        else:
-            self._program = _make()
-
-        ttnn.experimental.prepare_generic_op([self._inp, self._out_wide], self._program)
+        rt = ttnn.RuntimeArgs()
+        cid = 0
+        for y in range(grid_y):
+            for x in range(grid_x):
+                if cid < batch:
+                    rt[x][y] = [src_addr, dst_addr, cid]
+                    cid += 1
+        k = ttnn.KernelDescriptor(
+            kernel_source=kernel_path,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=cores,
+            compile_time_args=ct,
+            runtime_args=rt,
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+        cb = ttnn.CBDescriptor(
+            total_size=cb_total,
+            core_ranges=cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_idx,
+                    data_format=ttnn.uint32,
+                    page_size=cb_total,
+                )
+            ],
+        )
+        self._program = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[cb])
 
     def __call__(self, rm):
         if self._program is None:
