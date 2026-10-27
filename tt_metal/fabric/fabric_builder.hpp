@@ -74,7 +74,7 @@ public:
      * Collect this chip's manifest facts from its router builders and publish them to the builder context,
      * which outlives this FabricBuilder. Must be called after create_kernels().
      */
-    void build_and_publish_manifest_chip() const;
+    void publish_manifest_chip() const;
 
     /**
      * Check if any routers were created.

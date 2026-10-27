@@ -8,6 +8,7 @@
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_router_pass.hpp"
 #include "tt_metal/fabric/channel_trimming_io.hpp"
 #include "tt_metal/fabric/channel_trimming_report.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -221,8 +222,10 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     }
     master_router_chans_.resize(num_devices_, UNINITIALIZED_MASTER_ROUTER_CHAN);
     num_initialized_routers_.resize(num_devices_, UNINITIALIZED_ROUTERS);
-    manifest_chips_.resize(num_devices_);
+    manifest_chips_ = std::make_unique<manifest::PublishedChips>(num_devices_);
 }
+
+FabricBuilderContext::~FabricBuilderContext() = default;
 
 std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_config(
     FabricTensixConfig fabric_tensix_config, eth_chan_directions direction) const {
@@ -302,27 +305,9 @@ chan_id_t FabricBuilderContext::get_fabric_master_router_chan(ChipId chip_id) co
     return master_router_chans_[chip_id];
 }
 
-void FabricBuilderContext::publish_manifest_chip(ChipId chip_id, manifest::Chip chip) {
-    TT_FATAL(chip_id < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
-    TT_FATAL(!manifest_chips_[chip_id].has_value(), "Fabric manifest: chip {} was already published", chip_id);
-    TT_FATAL(
-        num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS &&
-            chip.routers.size() == num_initialized_routers_[chip_id],
-        "Fabric manifest: chip {} published {} routers, but the builder initialized {}",
-        chip_id,
-        chip.routers.size(),
-        num_initialized_routers_[chip_id]);
-    manifest_chips_[chip_id] = std::move(chip);
-}
+manifest::PublishedChips& FabricBuilderContext::get_manifest_chips() { return *manifest_chips_; }
 
-bool FabricBuilderContext::has_manifest_chip(ChipId chip_id) const {
-    return chip_id < num_devices_ && manifest_chips_[chip_id].has_value();
-}
-
-const manifest::Chip& FabricBuilderContext::get_manifest_chip(ChipId chip_id) const {
-    TT_FATAL(has_manifest_chip(chip_id), "Fabric manifest: chip {} was not published", chip_id);
-    return *manifest_chips_[chip_id];
-}
+const manifest::PublishedChips& FabricBuilderContext::get_manifest_chips() const { return *manifest_chips_; }
 
 std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear() const {
     std::vector<size_t> addresses_to_clear = {

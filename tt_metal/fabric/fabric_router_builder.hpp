@@ -4,7 +4,12 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <tt-metalium/kernel_types.hpp>                                 // DataMovementProcessor
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>               // RoutingDirection
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // FabricNodeId
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
@@ -54,6 +59,16 @@ struct KernelCreationContext {
     chan_id_t master_router_chan;
     size_t num_local_fabric_routers;
     uint32_t router_channels_mask;
+};
+
+/**
+ * What a router's create_kernel passed to CreateKernel: the defines every RISC shares, and each RISC's processor and
+ * named compile-time arguments.
+ */
+struct RouterKernelInputs {
+    std::map<std::string, std::string> defines;
+    std::vector<tt::tt_metal::DataMovementProcessor> processors;
+    std::vector<std::unordered_map<std::string, uint32_t>> named_ct_args;
 };
 
 // ============ Router Builder Abstract Base Class ============

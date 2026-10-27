@@ -10,6 +10,7 @@
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_router_pass.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -296,7 +297,7 @@ void FabricBuilder::create_kernels() {
     }
 }
 
-void FabricBuilder::build_and_publish_manifest_chip() const {
+void FabricBuilder::publish_manifest_chip() const {
     const auto& ctx = kernel_creation_context_;
     manifest::Chip chip{
         .z_port_role = z_role_of(chip_facts_.per_direction_capabilities),
@@ -315,7 +316,8 @@ void FabricBuilder::build_and_publish_manifest_chip() const {
     std::sort(chip.routers.begin(), chip.routers.end(), [](const manifest::Router& a, const manifest::Router& b) {
         return a.identity.eth_chan < b.identity.eth_chan;
     });
-    builder_context_.publish_manifest_chip(device_->id(), std::move(chip));
+    builder_context_.get_manifest_chips().publish(
+        device_->id(), std::move(chip), builder_context_.get_num_fabric_initialized_routers(device_->id()));
 }
 
 }  // namespace tt::tt_fabric

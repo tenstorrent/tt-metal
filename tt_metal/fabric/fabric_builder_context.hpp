@@ -10,7 +10,6 @@
 #include "erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include <vector>
 #include <memory>
 #include <array>
@@ -19,6 +18,10 @@
 #include <unordered_map>
 
 namespace tt::tt_fabric {
+
+namespace manifest {
+class PublishedChips;
+}  // namespace manifest
 
 class FabricContext;
 
@@ -115,7 +118,7 @@ struct IntermeshVCConfig {
 class FabricBuilderContext {
 public:
     explicit FabricBuilderContext(const FabricContext& fabric_context);
-    ~FabricBuilderContext() = default;
+    ~FabricBuilderContext();
 
     // Non-copyable, non-movable (owned by FabricContext)
     FabricBuilderContext(const FabricBuilderContext&) = delete;
@@ -162,9 +165,9 @@ public:
     chan_id_t get_fabric_master_router_chan(ChipId chip_id) const;
 
     // ============ Fabric Manifest ============
-    void publish_manifest_chip(ChipId chip_id, manifest::Chip chip);
-    bool has_manifest_chip(ChipId chip_id) const;
-    const manifest::Chip& get_manifest_chip(ChipId chip_id) const;
+    // Each chip's manifest facts, which its FabricBuilder publishes for the manifest's topology pass.
+    manifest::PublishedChips& get_manifest_chips(); // Non-const access for the builder to publish
+    const manifest::PublishedChips& get_manifest_chips() const; // Const access for the topology pass to get information
 
     // ============ Router Address Info ============
     std::vector<size_t> get_fabric_router_addresses_to_clear() const;
@@ -236,7 +239,7 @@ private:
     static constexpr uint32_t UNINITIALIZED_ROUTERS = std::numeric_limits<uint32_t>::max();
     std::vector<chan_id_t> master_router_chans_;
     std::vector<uint32_t> num_initialized_routers_;
-    std::vector<std::optional<manifest::Chip>> manifest_chips_;
+    std::unique_ptr<manifest::PublishedChips> manifest_chips_;
 
     // Helper to create EDM config with given options
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(

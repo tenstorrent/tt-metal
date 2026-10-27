@@ -42,7 +42,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(
     builder.compile_ancillary_kernels();
     builder.create_kernels();
     if (fabric_context.get_rtoptions().get_generate_fabric_manifest()) {
-        builder.build_and_publish_manifest_chip();
+        builder.publish_manifest_chip();
     }
 
     // Compile the program
