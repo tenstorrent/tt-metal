@@ -1662,9 +1662,10 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
 }
 
-// The 8-bit quantization.h entry points. Production instantiates them only with
-// SIGN_MAGNITUDE_FORMAT = false: requant_init<INT8_INPUT = true> with true records fewer
-// instructions than the replay it opens, so the harness rejects that pairing.
+// The 8-bit quantization.h entry points. Production instantiates all eight only with
+// SIGN_MAGNITUDE_FORMAT = false, and the harness rejects true for all of them to match. For
+// REQUANT_INT8_IN / REQUANT_INT8_IN_UINT8_OUT it would also break: requant_init<INT8_INPUT = true>
+// with SIGN_MAGNITUDE_FORMAT = true records fewer instructions than the replay it opens.
 constexpr bool is_quant_byte_binop(const BinaryOp op)
 {
     return op == BinaryOp::QUANT_UINT8 || op == BinaryOp::QUANT_INT8 || op == BinaryOp::REQUANT_UINT8 || op == BinaryOp::REQUANT_INT8 ||

@@ -271,6 +271,8 @@ _OPS_NOT_USING_SHARED_DRIVER: Dict[MathOperation, str] = {
     MathOperation.SfpuRequantInt8InUint8Out: "as SfpuQuantUint8",
     MathOperation.SfpuRequantInt8InInt8Out: "as SfpuQuantUint8",
     MathOperation.SfpuDequantInt8: "as SfpuQuantUint8; the output tile is Float32",
+    MathOperation.SfpuFloatToInt32Positive: "test_eltwise_binary_sfpu_float_to_int32_positive "
+    "stages raw fp32 words in an Int32 tile and checks the int32 result bit for bit",
 }
 
 
@@ -1696,7 +1698,7 @@ def _assert_quant_byte_lanes(
             for i in idx
         )
 
-    # Blackhole SFP_STOCH_RND FP32_TO_INT8 / FP32_TO_UINT8 rounds half away from zero.
+    # SFP_STOCH_RND FP32_TO_INT8 / FP32_TO_UINT8 rounds half away from zero.
     ties = tie & live
     if ties.any():
         assert np.array_equal(result[ties], expected[ties]), (
@@ -1790,19 +1792,30 @@ def test_eltwise_binary_sfpu_quant_byte_special(mathop):
 # _float_to_int32_positive_, the float -> int32 step of the pow kernels, on raw fp32 words.
 # =============================================================================
 
+_FP32_EXP_BIAS = 127
+_FP32_MANTISSA_BITS = 23
+_FP32_EXP_MASK = 0xFF  # also the inf / NaN exponent code
+_FP32_MANTISSA_MASK = (1 << _FP32_MANTISSA_BITS) - 1
+_FP32_IMPLICIT_ONE = 1 << _FP32_MANTISSA_BITS
 _INT32_MAX = 2**31 - 1
+_INT32_SATURATE_EXP = 31  # the helper saturates from 2**31 up
+# Largest in-range left shift of the mantissa: an exponent of 30 is 2**30 <= x < 2**31.
+_F2I_MAX_LEFT_SHIFT = _INT32_SATURATE_EXP - 1 - _FP32_MANTISSA_BITS
 
 
 def _float_to_int32_positive_golden(words: np.ndarray) -> np.ndarray:
     """0 below 1.0, INT32_MAX from 2**31 (incl. inf / NaN), the truncated value between."""
-    exp = ((words.astype(np.int64) >> 23) & 0xFF) - 127
-    man = (words.astype(np.int64) & 0x7FFFFF) | (1 << 23)
+    wide = words.astype(np.int64)
+    exp = ((wide >> _FP32_MANTISSA_BITS) & _FP32_EXP_MASK) - _FP32_EXP_BIAS
+    man = (wide & _FP32_MANTISSA_MASK) | _FP32_IMPLICIT_ONE
+    shift = exp - _FP32_MANTISSA_BITS
     in_range = np.where(
-        exp >= 23, man << np.clip(exp - 23, 0, 7), man >> np.clip(23 - exp, 0, 23)
+        shift >= 0,
+        man << np.clip(shift, 0, _F2I_MAX_LEFT_SHIFT),
+        man >> np.clip(-shift, 0, _FP32_MANTISSA_BITS),
     )
-    return np.where(exp < 0, 0, np.where(exp >= 31, _INT32_MAX, in_range)).astype(
-        np.int32
-    )
+    saturated = np.where(exp >= _INT32_SATURATE_EXP, _INT32_MAX, in_range)
+    return np.where(exp < 0, 0, saturated).astype(np.int32)
 
 
 @pytest.mark.parametrize("mathop", [MathOperation.SfpuFloatToInt32Positive])
@@ -1810,9 +1823,14 @@ def test_eltwise_binary_sfpu_float_to_int32_positive(mathop):
     """Every biased exponent (sign clear) with eight mantissas, bit-exact."""
     generator = np.random.default_rng(0)
     mantissas = np.concatenate(
-        [[0, 1, 0x400000, 0x7FFFFF], generator.integers(0, 1 << 23, size=4)]
+        [
+            [0, 1, 1 << (_FP32_MANTISSA_BITS - 1), _FP32_MANTISSA_MASK],
+            generator.integers(0, _FP32_IMPLICIT_ONE, size=4),
+        ]
     )
-    words = ((np.arange(256)[:, None] << 23) | mantissas[None, :]).reshape(-1)
+    biased_exps = np.arange(_FP32_EXP_MASK + 1)
+    words = (biased_exps[:, None] << _FP32_MANTISSA_BITS) | mantissas[None, :]
+    words = words.reshape(-1)
     words = words.astype(np.int32)
     expected = _float_to_int32_positive_golden(words)
     result = _run_sfpu_binary_word_pairs(
