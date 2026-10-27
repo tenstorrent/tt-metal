@@ -36,3 +36,6 @@
   Outputs: ~/fasth3/data/t511/out_{e2e,off,on}/ (run.log, ltx_av_fast_1920x1088_1.mp4 = replay gen, *_t3s.png).
 - Next: off vs on: grep noise_seed=20000 (only in out_on), Stage 2 denoise lines, md5 differ; ltx_eval video --vbench-ref; stills.
   If ok: ttp push --detach from ttp/t511-ltxrt-land (ff onto origin/ltx-rt); e2e job 310 is the standard e2e on that commit.
+- Update 00:00 PDT (tt-buddy 2e437e49): report quality only (PCC/PSNR, VBench, stills), no speed/denoise-time quotes.
+  On a tray/chip drop or broker degrade: no retry (chain already stops), `ttp note --to tt-buddy` with job id + PDT time,
+  hand off blocked with waits_on `when:timeout 50 tt-project/harness/bin/fasth3-box-health blx04 >/dev/null 2>&1 || exit 1`.
