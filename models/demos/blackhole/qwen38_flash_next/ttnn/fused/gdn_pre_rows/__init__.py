@@ -10,7 +10,8 @@ page maps and the beta/g column transposes are data movement.
 
 Two core groups on disjoint rectangles: group A (``*_qkv`` kernels, 16-bit DEST) runs the conv, SiLU and q/k norms and
 scales per (column group, tile row) unit; group B (``*_gates`` kernels, fp32 DEST) runs the beta / log-decay gates and
-the z sigmoid. Kernel constants are ``DF_BF16`` / ``DF_FP32`` because the JIT defines ``BF16`` / ``FP32`` macros.
+the z sigmoid. The kernels' data-format constants are ``bf16_format`` / ``fp32_format``, clear of the JIT's ``BF16`` /
+``FP32`` macros.
 
 ``v`` keeps the chain's row-mask multiply because its ``0 * x = +0`` clamp turns a SiLU ``-0.0`` into ``+0.0``; the
 writers zero q and k (the same bits as the chain's whole-tile ``x * 0.0``); ``sig`` takes no mask, as in the chain.
@@ -116,7 +117,7 @@ CBS = (
     ("const", 22, FP32, CONST_TILES, "B"),  # dt_bias and neg_exp_A as full fp32 tiles, pushed once
     ("beta", 23, FP32, 2, "B"),
     ("g", 24, FP32, 2, "B"),
-    ("sig", 25, BF16, 2 * HEAD_TILES, "B"),  # two units deep, as CB_OUT
+    ("sig", 25, BF16, 2 * HEAD_TILES, "B"),  # two units deep, as `out`
     ("col", 26, FP32, 2, "B"),  # the writer's scratch: one head's 32 values down column 0 of a zeroed tile
 )
 CB_INDEX = {name: index for name, index, _dtype, _pages, _group in CBS}

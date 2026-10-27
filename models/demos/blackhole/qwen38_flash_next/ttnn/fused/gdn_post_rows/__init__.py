@@ -76,7 +76,7 @@ HISTORY_HEADS = QKV_TILES // HISTORY_COLUMNS  # 10 of the 12 heads carry the his
 SCALAR_TILES = 2  # the reduce scaler tile and the eps tile, side by side
 RECIP_HEAD_DIM_BITS = 0x3C000000  # bit_cast<uint32_t>(1.0f / 128), numeric.h's row_wise_mean epilogue
 
-# (index, dtype, pages); the indices must match the kernels' CB_* constants
+# (index, dtype, pages); the indices must match the kernels' cb_* constants
 CB_CAST_IN, CB_CAST_OUT = 0, 16
 CAST_CBS = ((CB_CAST_IN, FP32, 2 * HEAD_TILES), (CB_CAST_OUT, BF16, 2 * HEAD_TILES))
 # fp32 CBs the compute consumes with copy_tile: the typecast op unpacks its fp32 input straight to the destination
