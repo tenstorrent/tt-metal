@@ -7,6 +7,8 @@
 // items, then (lane, head) pairs.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 namespace {
@@ -25,38 +27,53 @@ void kernel_main() {
     const uint32_t items = get_arg_val<uint32_t>(arg++);
     const auto state = TensorAccessor(state_args, state_addr);
     const auto out = TensorAccessor(out_args, out_addr);
+    const Noc noc;
 
     for (uint32_t item = 0; item < items; ++item) {
         const uint32_t lane = get_arg_val<uint32_t>(arg++);
         const uint32_t head = get_arg_val<uint32_t>(arg++);
 
-        cb_wait_front(cb_outs, head_state_tiles);
-        {
-            const uint32_t l1 = get_read_ptr(cb_outs);
-            for (uint32_t t = 0; t < head_state_tiles; ++t) {
-                noc_async_write_page(
-                    (lane * value_heads + head) * head_state_tiles + t, state, l1 + t * fp32_tile_bytes);
-            }
+        CircularBuffer(cb_outs).wait_front(head_state_tiles);
+        for (uint32_t t = 0; t < head_state_tiles; ++t) {
+            noc.async_write(
+                CircularBuffer(cb_outs),
+                state,
+                state.get_aligned_page_size(),
+                {.offset_bytes = t * fp32_tile_bytes},
+                {.page_id = (lane * value_heads + head) * head_state_tiles + t});
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_outs, head_state_tiles);
+        noc.async_write_barrier();
+        CircularBuffer(cb_outs).pop_front(head_state_tiles);
 
-        cb_wait_front(cb_outg, head_tiles);
-        {
-            const uint32_t l1 = get_read_ptr(cb_outg);
-            for (uint32_t c = 0; c < head_tiles; ++c) {
-                const uint32_t page = head * head_tiles + c;
-                const uint32_t src = l1 + c * bf16_tile_bytes;
-                if constexpr (rows == 1) {
-                    noc_async_write_page(page, out, src);
-                } else {
-                    const uint32_t row = ((lane >> 4) * 2) * face_bytes + (lane & 15) * half_row_bytes;
-                    noc_async_write(src + row, out.get_noc_addr(page, row), half_row_bytes);
-                    noc_async_write(src + row + face_bytes, out.get_noc_addr(page, row + face_bytes), half_row_bytes);
-                }
+        CircularBuffer(cb_outg).wait_front(head_tiles);
+        for (uint32_t c = 0; c < head_tiles; ++c) {
+            const uint32_t page = head * head_tiles + c;
+            const uint32_t tile_offset = c * bf16_tile_bytes;
+            if constexpr (rows == 1) {
+                noc.async_write(
+                    CircularBuffer(cb_outg),
+                    out,
+                    out.get_aligned_page_size(),
+                    {.offset_bytes = tile_offset},
+                    {.page_id = page});
+            } else {
+                // the lane's tile row: its left 16 columns at row_offset, the right 16 one face further
+                const uint32_t row_offset = ((lane >> 4) * 2) * face_bytes + (lane & 15) * half_row_bytes;
+                noc.async_write(
+                    CircularBuffer(cb_outg),
+                    out,
+                    half_row_bytes,
+                    {.offset_bytes = tile_offset + row_offset},
+                    {.page_id = page, .offset_bytes = row_offset});
+                noc.async_write(
+                    CircularBuffer(cb_outg),
+                    out,
+                    half_row_bytes,
+                    {.offset_bytes = tile_offset + row_offset + face_bytes},
+                    {.page_id = page, .offset_bytes = row_offset + face_bytes});
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_outg, head_tiles);
+        noc.async_write_barrier();
+        CircularBuffer(cb_outg).pop_front(head_tiles);
     }
 }
