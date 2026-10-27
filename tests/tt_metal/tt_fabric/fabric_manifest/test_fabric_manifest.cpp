@@ -24,8 +24,10 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "fabric_fixture.hpp"
@@ -42,7 +44,8 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_catalog.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_collector.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {
@@ -1534,43 +1537,81 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(schema_name(layout::type_of<uint32_t>()), "u32");
 }
 
-// EDMStatus is listed by hand, since enchantum cannot reach its values. Each listed name should carry its enumerator's
-// value, so decode names a router's status word correctly.
+// EDMStatus is listed by hand (its EnumLayout), since enchantum cannot reach its values. Each listed name should carry
+// its enumerator's value, so decode names a router's status word correctly.
 TEST(ManifestTypes, EdmStatusEnumerators) {
-    const manifest::EnumType type = manifest::enum_type<EDMStatus>();
-    EXPECT_EQ(type.name, "EDMStatus");
+    const layout::EnumDescription& description = layout::enum_description<EDMStatus>;
+    EXPECT_EQ(description.name, "EDMStatus");
     const auto value_of = [&](std::string_view name) {
-        const auto it = std::ranges::find(type.enumerators, name, &manifest::Enumerator::name);
-        EXPECT_NE(it, type.enumerators.end()) << name;
-        return it == type.enumerators.end() ? 0u : it->value;
+        const auto it = std::ranges::find(description.enumerators, name, &layout::Enumerator::name);
+        EXPECT_NE(it, description.enumerators.end()) << name;
+        return it == description.enumerators.end() ? 0u : it->value;
     };
     EXPECT_EQ(value_of("STARTED"), static_cast<uint32_t>(EDMStatus::STARTED));
     EXPECT_EQ(value_of("READY_FOR_TRAFFIC"), static_cast<uint32_t>(EDMStatus::READY_FOR_TRAFFIC));
     EXPECT_EQ(value_of("INITIALIZATION_COMPLETE"), static_cast<uint32_t>(EDMStatus::INITIALIZATION_COMPLETE));
 }
 
-// Every struct and enum a described struct's members name should itself be described, so the manifest's schemas
-// resolve from the layouts alone, before any run writes a manifest.
-TEST(ManifestTypes, EveryTypeALayoutNamesIsDescribed) {
-    const auto structs = manifest::described_struct_types();
-    const auto enums = manifest::described_enum_types();
-    std::set<std::string_view> struct_names;
-    std::set<std::string_view> enum_names;
-    for (const auto& type : structs) {
-        EXPECT_TRUE(struct_names.insert(type.name).second) << "two structs are named " << type.name;
+// Collecting a struct should also collect every struct and enum its members name, and theirs in turn, so the types
+// block describes everything a schema leads to.
+TEST(ManifestTypes, CollectorFollowsMembers) {
+    manifest::TypeCollector types;
+    types.add(layout::type_of<FabricTelemetry>());
+    for (const std::string_view name :
+         {"FabricTelemetry",
+          "StaticInfo",
+          "DynamicInfo",
+          "BandwidthTelemetry",
+          "EriscDynamicEntry",
+          "RiscTimestampV2"}) {
+        EXPECT_TRUE(types.get_structs().contains(name)) << name;
     }
-    for (const auto& type : enums) {
-        EXPECT_TRUE(enum_names.insert(type.name).second) << "two enums are named " << type.name;
-    }
-    for (const auto& type : structs) {
-        for (const auto& member : type.members) {
+    EXPECT_TRUE(types.get_enums().contains("RouterState"));
+    EXPECT_TRUE(types.get_tagged_unions().empty());
+
+    for (const auto& [name, description] : types.get_structs()) {
+        for (const auto& member : description->members) {
             if (const auto* s = std::get_if<layout::element::Struct>(&member.type.element)) {
-                EXPECT_TRUE(struct_names.contains(s->description->name)) << type.name << "." << member.name;
+                EXPECT_TRUE(types.get_structs().contains(s->description->name)) << name << "." << member.name;
             } else if (const auto* e = std::get_if<layout::element::Enum>(&member.type.element)) {
-                EXPECT_TRUE(enum_names.contains(e->description->name)) << type.name << "." << member.name;
+                EXPECT_TRUE(types.get_enums().contains(e->description->name)) << name << "." << member.name;
             }
         }
     }
+}
+
+// Collecting a tagged union should collect its tag enum and every type its cases name, since decode reads the tag and
+// then the case it picks.
+TEST(ManifestTypes, CollectorFollowsTaggedUnionCases) {
+    manifest::TypeCollector types;
+    types.add(
+        {layout::element::TaggedUnion{&layout::tagged_union_description<NocCommandFields>, "noc_send_type"},
+         sizeof(NocCommandFields),
+         0});
+    EXPECT_TRUE(types.get_tagged_unions().contains("NocCommandFields"));
+    EXPECT_TRUE(types.get_enums().contains("NocSendType"));
+    EXPECT_TRUE(types.get_structs().contains("NocUnicastCommandHeader"));
+    EXPECT_TRUE(types.get_structs().contains("NocUnicastScatterCommandHeader"));
+}
+
+// A type with nothing to describe, such as an integer, should add nothing.
+TEST(ManifestTypes, CollectorSkipsIntegers) {
+    manifest::TypeCollector types;
+    types.add(layout::type_of<uint32_t>());
+    types.add(layout::type_of<uint8_t[4]>());
+    EXPECT_TRUE(types.get_structs().empty());
+    EXPECT_TRUE(types.get_enums().empty());
+    EXPECT_TRUE(types.get_tagged_unions().empty());
+}
+
+// Two different types with one name would make that name's schema ambiguous, so collecting the second should fail.
+TEST(ManifestTypes, CollectorRejectsTwoTypesWithOneName) {
+    static constexpr layout::StructDescription first{"Twin", 4, {}};
+    static constexpr layout::StructDescription second{"Twin", 4, {}};
+    manifest::TypeCollector types;
+    types.add({layout::element::Struct{&first}, 4, 0});
+    types.add({layout::element::Struct{&first}, 4, 0});
+    EXPECT_ANY_THROW(types.add({layout::element::Struct{&second}, 4, 0}));
 }
 
 TEST(ManifestArgs, SameFamily) {
