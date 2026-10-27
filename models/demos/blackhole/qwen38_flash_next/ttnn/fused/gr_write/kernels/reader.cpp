@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// Per output tile (branch b, column j): the block tile j, the residual tile hidden_tiles * b + j and the injection
-// tile with its column b copied into column 0 (rows 0..31), which the compute column-broadcasts.
+// Per output tile (branch, column): the block tile `column`, the residual tile hidden_tiles * branch + column and the
+// injection tile with its column `branch` copied into column 0 (rows 0..31), which the compute column-broadcasts.
 // Named compile-time args: cb_block, cb_res, cb_coef, hidden_tiles, branches.  Compile-time args: TensorAccessorArgs
 // for block, residual, injection, chained from 0.
 // Runtime args: 0 block addr, 1 residual addr, 2 injection addr, 3 first unit, 4 units; unit u = (column u / branches,
@@ -20,7 +20,7 @@ void kernel_main() {
     const uint32_t block_addr = get_arg_val<uint32_t>(0);
     const uint32_t residual_addr = get_arg_val<uint32_t>(1);
     const uint32_t injection_addr = get_arg_val<uint32_t>(2);
-    const uint32_t first = get_arg_val<uint32_t>(3);
+    const uint32_t first_unit = get_arg_val<uint32_t>(3);
     const uint32_t units = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t cb_block = get_named_compile_time_arg_val("cb_block");
@@ -37,28 +37,30 @@ void kernel_main() {
     const auto injection = TensorAccessor(injection_args, injection_addr);
     const uint32_t tile_bytes = get_tile_size(cb_block);
     Noc noc;
-    DataflowBuffer blk(cb_block);
-    DataflowBuffer res(cb_res);
-    DataflowBuffer coef(cb_coef);
+    DataflowBuffer block_tile(cb_block);
+    DataflowBuffer residual_tile(cb_res);
+    DataflowBuffer injection_tile(cb_coef);
 
-    for (uint32_t u = first; u < first + units; ++u) {
-        const uint32_t b = u % branches;
-        const uint32_t j = u / branches;
-        blk.reserve_back(1);
-        res.reserve_back(1);
-        coef.reserve_back(1);
-        noc.async_read(block, blk, tile_bytes, {.page_id = j}, {.offset_bytes = 0});
-        noc.async_read(residual, res, tile_bytes, {.page_id = hidden_tiles * b + j}, {.offset_bytes = 0});
-        noc.async_read(injection, coef, tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
+    for (uint32_t u = first_unit; u < first_unit + units; ++u) {
+        const uint32_t branch = u % branches;
+        const uint32_t column = u / branches;
+        block_tile.reserve_back(1);
+        residual_tile.reserve_back(1);
+        injection_tile.reserve_back(1);
+        noc.async_read(block, block_tile, tile_bytes, {.page_id = column}, {.offset_bytes = 0});
+        noc.async_read(
+            residual, residual_tile, tile_bytes, {.page_id = hidden_tiles * branch + column}, {.offset_bytes = 0});
+        noc.async_read(injection, injection_tile, tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
         // bf16 tile element (r, c) is 16-bit word (r >> 4) * 512 + (c >> 4) * 256 + (r & 15) * 16 + (c & 15)
-        volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(coef.get_write_ptr());
+        volatile tt_l1_ptr uint16_t* injection_words =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(injection_tile.get_write_ptr());
         for (uint32_t r = 0; r < 32; ++r) {
-            const uint32_t row0 = (r >> 4) * 512 + (r & 15) * 16;
-            tile[row0] = tile[row0 + b];
+            const uint32_t row_start = (r >> 4) * 512 + (r & 15) * 16;
+            injection_words[row_start] = injection_words[row_start + branch];
         }
-        blk.push_back(1);
-        res.push_back(1);
-        coef.push_back(1);
+        block_tile.push_back(1);
+        residual_tile.push_back(1);
+        injection_tile.push_back(1);
     }
 }
