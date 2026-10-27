@@ -20,6 +20,18 @@
 #include "swiglu_sfpu.h"
 #endif
 
+// The ones-tile fill on MATH, compiled on PACK too so that __builtin_rvtt_peer_ran there can name it.
+#if defined(TRISC_PACK) || defined(TRISC_MATH)
+#include "sfpu/ckernel_sfpu_fill.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+
+ALWI void moe_gpt_fill_sfpu(uint32_t idst, float value) {
+    SFPU_UNARY_INIT(fill);
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, value);
+}
+#endif
+
 // Compute-side semaphore wait: spin on L1 value (no NOC API needed)
 #ifdef TILIZE_FUSED
 FORCE_INLINE
@@ -141,11 +153,11 @@ void kernel_main() {
     pack_reconfig_data_format(cb_c2c_ones_tile_id);
     copy_init(cb_c2c_ones_tile_id);
     tile_regs_acquire();
-    fill_tile_init();
     constexpr uint32_t dst0 = 0;
-    fill_tile(dst0, 1.f);
+    MATH((moe_gpt_fill_sfpu(dst0, 1.f)));
     tile_regs_commit();
     tile_regs_wait();
+    PACK((__builtin_rvtt_peer_ran(reinterpret_cast<void*>(&moe_gpt_fill_sfpu))));
     cb_c2c_ones_tile.reserve_back(1);
     pack_tile(dst0, cb_c2c_ones_tile_id);
     tile_regs_release();
