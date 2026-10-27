@@ -1460,7 +1460,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
     }
 }
 
-// Unpack-to-dest tilize: the unpacker tilizes straight into DEST, the route the ttnn tilize factories take for fp32.
+// Unpack-to-dest tilize: the unpacker tilizes straight into DEST, the route the tilize op factories take for fp32.
 // 32-bit inputs into a 32-bit DEST, Float16_b into a 16-bit DEST. Every tile is its own DEST section, so the wider
 // blocks run several SyncHalf sections per block and exercise the bank alternation.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeToDest) {
