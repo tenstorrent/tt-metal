@@ -182,42 +182,78 @@ void check_top_level(
     EXPECT_EQ(
         keys_of(manifest),
         (std::set<std::string>{
-            "manifest_version", "kind", "run", "fabric_context", "vocabulary", "archs", "enums", "meshes"}));
-    EXPECT_EQ(keys_of(manifest.at("vocabulary")), (std::set<std::string>{"categories", "kinds", "z_port_roles"}));
-    EXPECT_EQ(manifest.at("manifest_version"), FABRIC_MANIFEST_VERSION);
-    EXPECT_EQ(manifest.at("kind"), "fabric_manifest");
-    EXPECT_GE(std::filesystem::last_write_time(manifest_path), suite_start);
-
-    const auto& run = manifest.at("run");
+            "manifest_version", "file_kind", "run", "fabric", "arch", "types", "vocabulary", "meshes"}));
+    EXPECT_EQ(keys_of(manifest.at("types")), (std::set<std::string>{"structs", "enums"}));
+    const auto& vocabulary = manifest.at("vocabulary");
     EXPECT_EQ(
-        keys_of(run),
+        keys_of(vocabulary),
         (std::set<std::string>{
             "arch",
             "fabric_config",
             "reliability_mode",
             "tensix_config",
             "udm_mode",
-            "host_rank",
-            "mpi_rank",
-            "world_size",
-            "written_at",
-            "git_sha",
-            "git_dirty"}));
-    EXPECT_EQ(run.at("fabric_config"), lower_enum_name(fabric_config));
-    EXPECT_EQ(run.at("arch"), lower_enum_name(BaseFabricFixture::arch_));
+            "fabric_manager_mode",
+            "fabric_topology",
+            "credit_backing",
+            "l1_credit_counter_reason",
+            "z_port_role",
+            "edge_capability",
+            "credit_counter_indexed_by",
+            "stream_register",
+            "field_category",
+            "field_kind",
+            "channel_status",
+            "erisc_processor"}));
+    // A label's value is one of the names its vocabulary list holds.
+    const auto expect_listed = [&](const char* list, const json& name) {
+        EXPECT_NE(std::ranges::find(vocabulary.at(list), name), vocabulary.at(list).end()) << list << ": " << name;
+    };
+    EXPECT_EQ(manifest.at("manifest_version"), FABRIC_MANIFEST_VERSION);
+    EXPECT_EQ(manifest.at("file_kind"), "fabric_manifest");
+    EXPECT_GE(std::filesystem::last_write_time(manifest_path), suite_start);
+
+    const auto& run = manifest.at("run");
+    EXPECT_EQ(keys_of(run), (std::set<std::string>{"host_rank", "mpi_rank", "world_size", "written_at", "build"}));
     EXPECT_FALSE(run.at("written_at").get<std::string>().empty());
+    const auto& build = run.at("build");
+    EXPECT_EQ(keys_of(build), (std::set<std::string>{"git_sha", "git_dirty"}));
     // A full commit SHA, or empty outside a git checkout.
-    const auto git_sha = run.at("git_sha").get<std::string>();
+    const auto git_sha = build.at("git_sha").get<std::string>();
     EXPECT_TRUE(
         git_sha.empty() || (git_sha.size() == 40 && git_sha.find_first_not_of("0123456789abcdef") == std::string::npos))
         << git_sha;
-    EXPECT_TRUE(run.at("git_dirty").is_boolean());
+    EXPECT_TRUE(build.at("git_dirty").is_boolean());
+
+    EXPECT_EQ(manifest.at("arch").at("name"), lower_enum_name(BaseFabricFixture::arch_));
+    expect_listed("arch", manifest.at("arch").at("name"));
 
     const bool is_2d = fabric_config == FabricConfig::FABRIC_2D;
-    const auto& block = manifest.at("fabric_context");
+    const auto& block = manifest.at("fabric");
+    const auto& config = block.at("config");
+    EXPECT_EQ(
+        keys_of(config),
+        (std::set<std::string>{
+            "fabric_config",
+            "reliability_mode",
+            "num_routing_planes",
+            "tensix_config",
+            "udm_mode",
+            "fabric_manager",
+            "router_config"}));
+    EXPECT_EQ(config.at("fabric_config"), lower_enum_name(fabric_config));
+    for (const char* key : {"fabric_config", "reliability_mode", "tensix_config", "udm_mode"}) {
+        expect_listed(key, config.at(key));
+    }
+    expect_listed("fabric_manager_mode", config.at("fabric_manager"));
+    EXPECT_EQ(config.at("fabric_manager"), lower_enum_name(control_plane().get_fabric_manager_mode()));
+    EXPECT_TRUE(config.at("num_routing_planes").is_null() || config.at("num_routing_planes").get<uint32_t>() >= 1);
+    EXPECT_EQ(keys_of(config.at("router_config")), (std::set<std::string>{"max_packet_payload_size_bytes"}));
+    expect_listed("fabric_topology", block.at("topology"));
     EXPECT_EQ(
         keys_of(block),
         (std::set<std::string>{
+            "config",
             "topology",
             "is_2d_routing",
             "packet_header_size_bytes",
@@ -308,7 +344,7 @@ void check_chips(const json& manifest) {
                 chip.at("asic_id"), fmt::format("0x{:016x}", *control_plane().get_asic_id_from_fabric_node_id(node)));
             // Read from the neighbor graph, not from the builder's per-chip facts the writer uses.
             EXPECT_EQ(chip.at("z_port_role"), lower_enum_name(z_port_role(control_plane(), node)));
-            const auto& roles = manifest.at("vocabulary").at("z_port_roles");
+            const auto& roles = manifest.at("vocabulary").at("z_port_role");
             EXPECT_NE(std::ranges::find(roles, chip.at("z_port_role")), roles.end()) << chip.at("z_port_role");
         }
         EXPECT_EQ(keys_of(chips), expected_keys);
@@ -487,7 +523,7 @@ void check_router_shape(const std::vector<RouterEntry>& routers) {
 // counters. Each reason sits only on the VCs it applies to, and matches the fact it names: multi_txq on VC0 and VC1
 // with two TX queues, express on VC1 with express routing, and no_completion_register on VC2 wherever VC2 exists.
 void check_credit_transport(const json& manifest, const std::vector<RouterEntry>& routers) {
-    const bool multi_txq = manifest.at("fabric_context").at("multi_txq").get<bool>();
+    const bool multi_txq = manifest.at("fabric").at("multi_txq").get<bool>();
     for (const auto& mesh_id : control_plane().get_mesh_graph().get_all_mesh_ids()) {
         if (!is_local_mesh(mesh_id)) {
             continue;
@@ -550,10 +586,10 @@ void check_credit_transport(const json& manifest, const std::vector<RouterEntry>
 // enough for every sender channel it is indexed by, and the host clears all of them or none.
 void check_router_credit_counters(const std::vector<RouterEntry>& routers) {
     const std::array<std::pair<const char*, const char*>, 4> arrays = {{
-        {"to_sender_ack", "own_sender_compact"},
-        {"to_sender_completion", "own_sender_compact"},
-        {"receiver_ack", "peer_sender_compact"},
-        {"receiver_completion", "peer_sender_compact"},
+        {"to_sender_ack", "own_sender_channel"},
+        {"to_sender_completion", "own_sender_channel"},
+        {"receiver_ack", "peer_sender_channel"},
+        {"receiver_completion", "peer_sender_channel"},
     }};
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
@@ -570,20 +606,14 @@ void check_router_credit_counters(const std::vector<RouterEntry>& routers) {
         std::optional<uint32_t> next_address;
         std::optional<uint32_t> first_size;
         std::optional<bool> first_cleared_by_host;
-        for (const auto& [name, index_space] : arrays) {
+        for (const auto& [name, indexed_by] : arrays) {
             SCOPED_TRACE(name);
             const auto& array = counters.at(name);
             EXPECT_EQ(
                 keys_of(array),
                 (std::set<std::string>{
-                    "address",
-                    "size",
-                    "num_elements",
-                    "size_per_element",
-                    "schema",
-                    "cleared_by_host",
-                    "index_space"}));
-            EXPECT_EQ(array.at("index_space"), index_space);
+                    "address", "size", "num_elements", "size_per_element", "schema", "cleared_by_host", "indexed_by"}));
+            EXPECT_EQ(array.at("indexed_by"), indexed_by);
             EXPECT_EQ(array.at("schema"), "u32");
             EXPECT_EQ(array.at("size_per_element"), sizeof(uint32_t));
 
@@ -660,14 +690,12 @@ void collect_regions(
 }
 
 // The arch's L1 areas, which every router's core has.
-const json& arch_areas(const json& manifest) {
-    return manifest.at("archs").at(manifest.at("run").at("arch").get<std::string>()).at("areas");
-}
+const json& arch_areas(const json& manifest) { return manifest.at("arch").at("l1_areas"); }
 
 // No two of a router's L1 regions overlap, counting the arch areas on its core.
 void check_router_regions_disjoint(const json& manifest, const std::vector<RouterEntry>& routers) {
     std::vector<std::tuple<uint32_t, uint32_t, std::string>> areas;
-    collect_regions(arch_areas(manifest), "areas", areas);
+    collect_regions(arch_areas(manifest), "l1_areas", areas);
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
         auto regions = areas;
@@ -816,8 +844,8 @@ void expect_fields(
             SCOPED_TRACE(key);
             expect_field(fields.at(key), field);
             if (!fields.at(key).is_null()) {
-                EXPECT_TRUE(listed("categories", fields.at(key).at("category")));
-                EXPECT_TRUE(listed("kinds", fields.at(key).at("kind")));
+                EXPECT_TRUE(listed("field_category", fields.at(key).at("category")));
+                EXPECT_TRUE(listed("field_kind", fields.at(key).at("kind")));
             }
         }
     }
@@ -830,7 +858,7 @@ void expect_fields(
 // worker channel has a producer cursor (buffer_index_sem): a sibling router keeps none. Credits
 // are on the backing the mesh's credit transport names, and only VC0 with bubble flow control gets first-level acks.
 void check_router_senders(const json& manifest, const std::vector<RouterEntry>& routers) {
-    const auto& fabric_context = manifest.at("fabric_context");
+    const auto& fabric_context = manifest.at("fabric");
     const bool is_2d = fabric_context.at("is_2d_routing").get<bool>();
     const auto channel_buffer_size = fabric_context.at("channel_buffer_size_bytes").get<uint32_t>();
 
@@ -930,7 +958,7 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
 // A router's receiver channels, over its shape. A receiver forwards on its own VC, except that VC0's may cross over
 // to VC1, and VC2's forwards on none.
 void check_router_receivers(const json& manifest, const std::vector<RouterEntry>& routers) {
-    const auto& fabric_context = manifest.at("fabric_context");
+    const auto& fabric_context = manifest.at("fabric");
     const bool is_2d = fabric_context.at("is_2d_routing").get<bool>();
     const auto channel_buffer_size = fabric_context.at("channel_buffer_size_bytes").get<uint32_t>();
 
@@ -986,7 +1014,7 @@ void check_router_receivers(const json& manifest, const std::vector<RouterEntry>
 
 // A router's edges, on VC0 and VC1 only, and only VC0 in 1D.
 void check_router_edges(const json& manifest, const std::vector<RouterEntry>& routers) {
-    const bool is_2d = manifest.at("fabric_context").at("is_2d_routing").get<bool>();
+    const bool is_2d = manifest.at("fabric").at("is_2d_routing").get<bool>();
 
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
@@ -1041,7 +1069,7 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
 // Each router has exactly the table's fields it should, router-wide and on each ERISC, each written as its entry says.
 void check_router_fields(const json& manifest, const std::vector<RouterEntry>& routers) {
     const auto& vocabulary = manifest.at("vocabulary");
-    const bool is_2d = manifest.at("fabric_context").at("is_2d_routing").get<bool>();
+    const bool is_2d = manifest.at("fabric").at("is_2d_routing").get<bool>();
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
         const auto& router = *entry.router;
@@ -1223,14 +1251,13 @@ void check_router_leftover_l1(const std::vector<RouterEntry>& routers) {
 }
 
 // The run's arch is the only one described, and its areas are where the HAL puts them on the active Ethernet core.
-void check_archs(const json& manifest) {
+void check_arch(const json& manifest) {
     using tt::tt_metal::HalL1MemAddrType;
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto core = tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-    EXPECT_EQ(keys_of(manifest.at("archs")), (std::set<std::string>{lower_enum_name(BaseFabricFixture::arch_)}));
     EXPECT_EQ(
-        keys_of(manifest.at("archs").at(lower_enum_name(BaseFabricFixture::arch_))),
-        (std::set<std::string>{"areas", "stream_registers", "core_registers", "types"}));
+        keys_of(manifest.at("arch")),
+        (std::set<std::string>{"name", "l1_areas", "stream_registers", "core_registers"}));
     const auto& areas = arch_areas(manifest);
     EXPECT_EQ(
         keys_of(areas),
@@ -1299,7 +1326,7 @@ void check_archs(const json& manifest) {
 // the HAL's register space.
 void check_arch_stream_registers(const json& manifest) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const auto& streams = manifest.at("archs").at(lower_enum_name(BaseFabricFixture::arch_)).at("stream_registers");
+    const auto& streams = manifest.at("arch").at("stream_registers");
     EXPECT_EQ(keys_of(streams), (std::set<std::string>{"base", "stride", "count", "registers"}));
     const auto base = streams.at("base").get<uint32_t>();
     const auto stride = streams.at("stride").get<uint32_t>();
@@ -1341,7 +1368,7 @@ void check_arch_stream_registers(const json& manifest) {
 void check_arch_core_registers(const json& manifest, const std::vector<RouterEntry>& routers) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto arch = BaseFabricFixture::arch_;
-    const auto& registers = manifest.at("archs").at(lower_enum_name(arch)).at("core_registers");
+    const auto& registers = manifest.at("arch").at("core_registers");
     ASSERT_EQ(registers.size(), 3u);
     const std::array<std::pair<const char*, uint32_t>, 3> expected = {{
         {"soft_reset", hal.get_risc_soft_reset_addr()},
@@ -1400,7 +1427,7 @@ void check_arch_core_registers(const json& manifest, const std::vector<RouterEnt
 
 // Enum values are written by name, with the values the enums define.
 void check_enums(const json& manifest) {
-    const auto& enums = manifest.at("enums");
+    const auto& enums = manifest.at("types").at("enums");
     const auto value_of = [&](const char* type, const char* name) {
         return enums.at(type).at("values").at(name).get<uint32_t>();
     };
@@ -1628,8 +1655,8 @@ TEST_F(Fabric2DManifestFixture, LocalSync) { check_local_sync(manifest_); }
 TEST_F(Fabric1DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }
 
-TEST_F(Fabric1DManifestFixture, Archs) { check_archs(manifest_); }
-TEST_F(Fabric2DManifestFixture, Archs) { check_archs(manifest_); }
+TEST_F(Fabric1DManifestFixture, Arch) { check_arch(manifest_); }
+TEST_F(Fabric2DManifestFixture, Arch) { check_arch(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }
 TEST_F(Fabric2DManifestFixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }

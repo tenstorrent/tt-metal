@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The types the manifest describes, built from the struct layouts (fabric_struct_layouts.hpp) and the enums its schemas
-// name: archs.<arch>.types holds a StructType per described struct, and enums an EnumType per described enum.
+// name. In the manifest,types.structs holds a StructType per described struct, and types.enums an EnumType per
+// described enum.
 
 #pragma once
 
