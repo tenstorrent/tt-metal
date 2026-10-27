@@ -20,6 +20,8 @@ struct AffineExclusiveScanParams {
 
     uint32_t sequence_parallel_axis;
     uint32_t local_rows;
+    // A request starts at absolute position zero: seed the scan with zeros instead of initial_state.
+    bool zero_initial_state_on_start;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };

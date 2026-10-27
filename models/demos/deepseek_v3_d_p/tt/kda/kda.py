@@ -189,6 +189,9 @@ class ttKDA:
         )
         if uses_grouped_scan and config.head_k_dim != config.head_v_dim:
             raise ValueError("grouped KDA affine prefix currently requires K == V")
+        if program_config.zero_initial_state_on_start and not uses_grouped_scan:
+            raise ValueError("zero_initial_state_on_start requires grouped KDA execution")
+        self.zero_initial_state_on_start = program_config.zero_initial_state_on_start
         self.tp_ccl_topology = program_config.tp_ccl_topology
         self.gated_rms_output_dtype = program_config.gated_rms_output_dtype
         if weights is not None and state_dict is not None:
@@ -298,6 +301,7 @@ class ttKDA:
             value_dim=self.config.head_v_dim,
             # The bounded gate's lower-bound scale is applied by chunk preparation.
             gate_scale=config.gate_lower_bound if self._bounded_gate else 1.0,
+            zero_initial_state_on_start=self.zero_initial_state_on_start,
         )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -494,6 +498,10 @@ class ttKDA:
         stay alive. Padded rows may hold any values, including NaN: padded output
         rows are unspecified, and returned carries stop at the valid end.
 
+        With ``zero_initial_state_on_start``, a device ``actual_start`` of 0
+        starts a new request from zero carries and ``state`` is not read, so a
+        reused carry needs no reset, eagerly or under trace replay.
+
         The input state is only read. No tensor reachable from it is used as a
         ``ttnn.copy`` destination or retained on this layer. The returned output
         is sequence-partitioned along SP and, when TP > 1, reduce-scattered on
@@ -517,6 +525,7 @@ class ttKDA:
             actual_end=actual_end,
             sequence_parallel_axis=self.sequence_parallel_axis,
             memory_config=self.qkv_memory_config,
+            zero_initial_state_on_start=self.zero_initial_state_on_start,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
         result = self.recurrence(

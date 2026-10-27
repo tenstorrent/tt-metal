@@ -105,7 +105,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
              {"Vt", Vt},
              {"Vt_full", Vt_full},
              {"BH", BH},
-             {"mcast_shared", static_cast<uint32_t>(mcast_shared)}},
+             {"mcast_shared", static_cast<uint32_t>(mcast_shared)},
+             {"zero_initial_state_on_start", static_cast<uint32_t>(attrs.zero_initial_state_on_start)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"head", "value_block", "peer_x0", "peer_y0", "peer_x1", "peer_y1", "receivers"}},
         // The kernel manages every DFB credit explicitly, including the 4-byte actual_start read.

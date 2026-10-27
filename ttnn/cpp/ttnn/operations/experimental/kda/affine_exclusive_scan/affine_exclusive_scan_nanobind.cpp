@@ -77,6 +77,9 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
                 Compute-kernel configuration. Defaults to exact HiFi2 math with
                 FP32 destination accumulation.
+            zero_initial_state_on_start (bool, optional): When ``actual_start`` is 0,
+                start from a zero state and ignore ``initial_state``. Requires a single
+                sequence-parallel rank. Defaults to False.
 
         Returns:
             ttnn.Tensor: New FLOAT32 TILE-layout group-entry states
@@ -102,7 +105,8 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("actual_end") = nb::none());
+        nb::arg("actual_end") = nb::none(),
+        nb::arg("zero_initial_state_on_start") = false);
 }
 
 }  // namespace ttnn::operations::experimental::kda::affine_exclusive_scan::detail

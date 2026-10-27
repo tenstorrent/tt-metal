@@ -22,16 +22,23 @@ inline uint32_t read_word(Noc& noc, const Accessor& accessor, uint32_t slot) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot)[0];
 }
 
-// This rank's chronology over [actual_start, actual_end), or the full capacity without actual_end.
+// This rank's chronology over [actual_start, actual_end), or the full capacity without actual_end; `start` receives
+// actual_start.
 template <uint32_t has_actual_end, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
-inline kda_chronology::Topology read_chronology(Noc& noc, uint32_t slot) {
-    const uint32_t start = read_word(noc, TensorAccessor(tensor::actual_start), slot);
+inline kda_chronology::Topology read_chronology(Noc& noc, uint32_t slot, uint32_t& start) {
+    start = read_word(noc, TensorAccessor(tensor::actual_start), slot);
     if constexpr (has_actual_end) {
         const uint32_t end = read_word(noc, TensorAccessor(*tensor::get_token_if_present<"actual_end">()), slot);
         return kda_chronology::derive_interval(start, end, sp_rank, sp_size, local_rows);
     } else {
         return kda_chronology::derive(start, sp_rank, sp_size, local_rows);
     }
+}
+
+template <uint32_t has_actual_end, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
+inline kda_chronology::Topology read_chronology(Noc& noc, uint32_t slot) {
+    uint32_t start;
+    return read_chronology<has_actual_end, sp_rank, sp_size, local_rows>(noc, slot, start);
 }
 
 }  // namespace qkv_conv

@@ -256,6 +256,7 @@ def distributed_prefix(
     actual_start: ttnn.Tensor,
     local_rows: int,
     gather_buffer: ttnn.Tensor | None = None,
+    zero_initial_state_on_start: bool = False,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compose one affine transform per chip in chronological order.
 
@@ -297,6 +298,7 @@ def distributed_prefix(
         memory_config=output_memory,
         compute_kernel_config=compute_config,
         sequence_parallel_axis=sequence_parallel_axis,
+        zero_initial_state_on_start=zero_initial_state_on_start,
     )
 
 
@@ -329,6 +331,7 @@ def _ordinary_group_scan(
     groups_per_head: int,
     prefix_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
+    zero_initial_state_on_start: bool = False,
 ) -> RecurrenceResult:
     """Scan groups on a single sequence rank, where no split-tail reset is needed."""
     # Tail inputs are unused on this path; reuse the head summaries and initial state.
@@ -346,6 +349,7 @@ def _ordinary_group_scan(
         tail_entry_states=initial_state,
         local_rows=grouped.v_beta.shape[1] * grouped.v_beta.shape[2] * groups_per_head,
         sequence_parallel_axis=sequence_parallel_axis,
+        zero_initial_state_on_start=zero_initial_state_on_start,
     )
     return _scan_chunks(
         grouped,
@@ -371,6 +375,7 @@ def _scan_local_grouped_chunks(
     groups: int,
     memory: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
+    zero_initial_state_on_start: bool = False,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
@@ -394,6 +399,7 @@ def _scan_local_grouped_chunks(
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
+        zero_initial_state_on_start=zero_initial_state_on_start,
     )
     output = ttnn.reshape(
         scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
@@ -411,6 +417,7 @@ def _partition_prefix(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
+    zero_initial_state_on_start: bool = False,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     a, b = ttnn.experimental.kda.reduce_affine_transforms(
         summary.a,
@@ -430,6 +437,7 @@ def _partition_prefix(
         compute_config=compute_config.affine_prefix,
         actual_start=actual_start,
         local_rows=local_rows,
+        zero_initial_state_on_start=zero_initial_state_on_start,
     )
 
 
@@ -446,6 +454,7 @@ def _scan_sp_grouped_chunks(
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
     gather_buffer: ttnn.Tensor | None = None,
+    zero_initial_state_on_start: bool = False,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
@@ -471,6 +480,7 @@ def _scan_sp_grouped_chunks(
             actual_start=actual_start,
             local_rows=geometry.local_rows,
             gather_buffer=gather_buffer,
+            zero_initial_state_on_start=zero_initial_state_on_start,
         )
     else:
         head_a, head_b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
@@ -491,6 +501,7 @@ def _scan_sp_grouped_chunks(
             actual_end=actual_end,
             sequence_parallel_axis=sequence_parallel_axis,
             compute_config=compute_config,
+            zero_initial_state_on_start=zero_initial_state_on_start,
         )
         # The chronological prefix ends where the split tail begins, supplying its seed.
         group_entry_states = ttnn.experimental.kda.affine_exclusive_scan(
@@ -550,6 +561,7 @@ class KDARecurrence:
         value_dim: int,
         batch: int = 1,
         gate_scale: float = 1.0,
+        zero_initial_state_on_start: bool = False,
     ) -> None:
         # Preparation multiplies the gate by gate_scale before its cumulative sum.
         self._gate_scale = gate_scale
@@ -600,6 +612,10 @@ class KDARecurrence:
             isinstance(device, ttnn.MeshDevice) and tuple(device.shape)[sequence_parallel_axis] > 1
         )
         grouped = self._sequence_parallel or program_config.local_scan_strategy == "grouped"
+        if zero_initial_state_on_start and not grouped:
+            raise ValueError("zero_initial_state_on_start requires grouped KDA execution")
+        # Device actual_start == 0 seeds the prefix with zeros instead of reading initial_state.
+        self._zero_initial_state_on_start = zero_initial_state_on_start
         if grouped:
             if key_dim != value_dim:
                 raise ValueError("grouped KDA affine prefix currently requires K == V")
@@ -772,6 +788,7 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
+            zero_initial_state_on_start=self._zero_initial_state_on_start,
         )
 
     def _run_sp(
@@ -793,4 +810,5 @@ class KDARecurrence:
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
             gather_buffer=self._gather_buffer,
+            zero_initial_state_on_start=self._zero_initial_state_on_start,
         )

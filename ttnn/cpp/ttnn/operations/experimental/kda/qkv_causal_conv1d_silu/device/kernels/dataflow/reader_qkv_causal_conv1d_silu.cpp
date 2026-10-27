@@ -36,6 +36,7 @@ template <
     uint32_t input_wt,
     uint32_t input_ct_offset,
     uint32_t exchange,
+    uint32_t zero_initial_state_on_start,
     uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows>
@@ -71,9 +72,12 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     };
     const auto offset_of = [&](uint32_t address) { return address - scratch_base; };
 
-    const auto topology = read_chronology<false, sp_rank, sp_size, local_rows>(noc, rows);
+    uint32_t actual_start;
+    const auto topology = read_chronology<false, sp_rank, sp_size, local_rows>(noc, rows, actual_start);
     const uint32_t local_split_row = topology.local_split ? topology.head_rows : 0;
     const bool initial_from_predecessor = topology.rank != topology.first_rank;
+    // A new request has no history before its first token.
+    const bool request_start = zero_initial_state_on_start && actual_start == 0;
 
     // Read history_rows rows of this channel block's columns into the rows staging area.
     const auto read_rows = [&](const auto& source, uint32_t first_row, uint32_t ct_start) {
@@ -137,7 +141,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         }
 
         // The three tokens preceding this tile: the chronological carry at a segment start (the logical start reads
-        // the caller's history, any other segment start the predecessor's rows), else the previous tile's last rows.
+        // the caller's history, or zeros at a request start, any other segment start the predecessor's rows), else the
+        // previous tile's last rows.
         // Tile-aligned actual_start makes every segment start tile-aligned.
         const bool segment_start =
             mt == 0 || (local_split_row != 0 && mt * tt::constants::TILE_HEIGHT == local_split_row);
@@ -151,6 +156,9 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             // Without the exchange, predecessor is the bare three-row carry, read at the same pages.
             static_assert(predecessor_page == 0);
             read_rows(predecessor, predecessor_page, ct_start);
+        } else if (segment_start && request_start) {
+            noc.async_write_zeros(scratch, history_rows * block_row_bytes, {.offset_bytes = offset_of(rows)});
+            noc.write_zeros_l1_barrier();
         } else if (segment_start) {
             read_rows(history, 0, ct_start);
         } else if (!from_previous_strip) {

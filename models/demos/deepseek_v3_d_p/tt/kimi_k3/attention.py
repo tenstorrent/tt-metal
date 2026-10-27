@@ -22,7 +22,7 @@ collective rather than adding one.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional, Protocol
 
 import torch
@@ -334,8 +334,12 @@ def build_attention(
             tt_ccl=get_tt_ccl(mesh_device),
             sp_axis=sp_axis,
             tp_axis=tp_axis,
-            program_config=kimi_k3_program_config(
-                active_seq_len_local=seq_len // tuple(mesh_device.shape)[sp_axis], tp_ccl_topology=tp_topology
+            # The carries are request-owned: device actual_start == 0 starts each request from zero state.
+            program_config=replace(
+                kimi_k3_program_config(
+                    active_seq_len_local=seq_len // tuple(mesh_device.shape)[sp_axis], tp_ccl_topology=tp_topology
+                ),
+                zero_initial_state_on_start=True,
             ),
             active_seq_len=seq_len,
         ),

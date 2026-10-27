@@ -50,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     moe_fabric_payload,
     torus_xy_device_params,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     get_fused_ring_host_timing,
@@ -2165,17 +2166,22 @@ def run_chunked_transformer_updated(
     # into 1-element uint32 DRAM tensors the metadata ops read on-device; the token input moves into a
     # persistent buffer refreshed in place. With return_intermediates=False the forward is device-only
     # (no host readback), so it is capturable.
-    # The KDA recurrent/conv carries are the one piece of state a replay MUTATES, so they have to be
-    # zeroed in two places: after capture (which costs chunk 0 two extra forwards) and before each
-    # iteration, which would otherwise start where the previous one finished.
-    def _reset_kda_carries(reason):
+    # The KDA recurrent/conv carries are the one piece of state a replay MUTATES. A run starting at
+    # actual_start 0 needs nothing: the KDA kernels start each request from zero state. A run at
+    # preload_isl > 0 continues from the carry, so zero it -- the pretend prefix's carry -- after
+    # capture (which costs chunk 0 two extra forwards) and before each iteration, which would
+    # otherwise start where the previous one finished.
+    def _zero_preloaded_kda_carries(reason):
         kda_states = getattr(transformer, "kda_states", None)
-        if kda_states is None:
+        if kda_states is None or preload_isl == 0:
             return
         for slot in range(kda_states.num_slots):
-            kda_states.reset(slot)
+            for layer_idx in kda_states.layer_ids:
+                live = kda_states.read(layer_idx, slot)
+                zeros = KdaState(ttnn.zeros_like(live.recurrent), ttnn.zeros_like(live.convolution))
+                kda_states.commit(layer_idx, zeros, slot)
         ttnn.synchronize_device(mesh_device)
-        logger.info(f"[trace] reset {kda_states.num_slots} KDA carry slot(s) {reason}")
+        logger.info(f"[trace] zeroed {kda_states.num_slots} preloaded KDA carry slot(s) {reason}")
 
     trace_controller = None
     trace_input = None
@@ -2255,8 +2261,9 @@ def run_chunked_transformer_updated(
         # RECURRENT carry it is not: every forward advances it, so by the measured loop the carry
         # has absorbed chunk 0 three times instead of once, and the error rides into every later
         # chunk. Dense models never see this; Kimi-K3's KDA carries are the first recurrence here.
-        # Zero them so the replay starts from the same state the untraced path starts from.
-        _reset_kda_carries("after capture")
+        # Request-start replay ignores them; a preloaded prefix's carries are zeroed so the replay
+        # starts from the same state the untraced path starts from.
+        _zero_preloaded_kda_carries("after capture")
 
     if determinism_check and num_iters < 2:
         pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
@@ -2265,11 +2272,11 @@ def run_chunked_transformer_updated(
 
     profiler.start("tt_forward")
     for it in range(num_iters):
-        # Unconditional. The carry is the one piece of state an iteration MUTATES, so iteration N
+        # The carry is the one piece of state an iteration MUTATES, so at preload_isl > 0 iteration N
         # otherwise starts where N-1 finished: a false failure under determinism_check, and worse
         # under check_pcc, where the post-loop KV PCC then scores a cache conditioned on the prefix
         # twice. num_iters=1 is unaffected (the carry is already zero at this point).
-        _reset_kda_carries(f"before iter {it}")
+        _zero_preloaded_kda_carries(f"before iter {it}")
         iter_start = time.time()
         chunk_times: list[float] = []
         for c in range(n_chunks):
@@ -3335,9 +3342,9 @@ def run_chunked_transformer_padded_trace(
             assert_threshold=LAYER_PCC_THRESHOLD if kv_pcc_threshold is None else kv_pcc_threshold,
             # Sparse models are gated at FULL depth (assert_full_depth): their deep-layer KV is the
             # product under test, and GATED_LAYER_DEPTH would leave every layer past 10 unasserted.
-            assert_layer_depth=None
-            if assert_full_depth
-            else (GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
+            assert_layer_depth=(
+                None if assert_full_depth else (GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None)
+            ),
             tp_shard_kv=kv_dedup,
         )
         # REQUIRED on the sparse path, not best-effort: GLM has two device caches and checking only the

@@ -37,6 +37,7 @@ template <
     uint32_t Vt_full,
     uint32_t BH,
     uint32_t mcast_shared,
+    uint32_t zero_initial_state_on_start,
     uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows>
@@ -98,9 +99,15 @@ TT_KERNEL void dataflow(
         noc.async_read(actual_start, chronology, sizeof(uint32_t), {.page_id = 0}, {});
         noc.async_read_barrier();
         auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_write_ptr());
-        topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);
+        const uint32_t start = words[0];
+        topology = kda_chronology::derive(start, sp_rank, sp_size, local_rows);
         kda_chronology::store(words, topology);
         chronology.push_back(1);
+        if (zero_initial_state_on_start && start == 0) {
+            // A new request: every rank chains from a zero seed. The overlapped read has landed, so overwrite it.
+            noc.async_write_zeros(initial, state_tiles * initial.get_entry_size());
+            noc.write_zeros_l1_barrier();
+        }
     }
     // This rank's chronological index: its entry state is the carry after step entry_step - 1.
     const uint32_t entry_step = (topology.rank + sp_size - topology.first_rank) % sp_size;

@@ -365,6 +365,7 @@ def make_kimi_k3_device_case(
     program_config: KDAProgramConfig | None = None,
     weights: KDAWeights | None = None,
     cache_weights: bool = True,
+    zero_initial_state_on_start: bool = False,
 ) -> tuple[ttKDA, ttnn.Tensor]:
     """Construct a production-dimension Kimi-K3 layer and sequence-parallel input."""
     sequence_parallel_axis = 1 - tensor_parallel_axis
@@ -399,6 +400,9 @@ def make_kimi_k3_device_case(
             selected_program_config,
             recurrence=replace(selected_program_config.recurrence, summary_group_chunks=summary_group_chunks),
         )
+    if zero_initial_state_on_start:
+        # The request-owned carries of the K3 model (see kimi_k3/attention.py).
+        selected_program_config = replace(selected_program_config, zero_initial_state_on_start=True)
     layer = ttKDA(
         mesh_device,
         case.config,
@@ -508,7 +512,12 @@ def build_layer(
     *,
     active_seq_len: int,
     summary_group_chunks: int | None = None,
+    zero_initial_state_on_start: bool = False,
+    local_scan_strategy: str | None = None,
 ) -> ttKDA:
+    if local_scan_strategy is None:
+        # Request-owned carries need grouped execution, including on a single SP rank.
+        local_scan_strategy = "grouped" if zero_initial_state_on_start else "direct"
     if summary_group_chunks is None:
         # Explicit small-model configurations preserve the established geometry coverage.
         local_rows = active_seq_len // tuple(mesh_device.shape)[sp_axis]
@@ -521,9 +530,12 @@ def build_layer(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         program_config=KDAProgramConfig(
-            recurrence=KDARecurrenceProgramConfig(summary_group_chunks=summary_group_chunks),
+            recurrence=KDARecurrenceProgramConfig(
+                summary_group_chunks=summary_group_chunks, local_scan_strategy=local_scan_strategy
+            ),
             gated_rms_output_dtype=ttnn.bfloat16,
             output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+            zero_initial_state_on_start=zero_initial_state_on_start,
         ),
         active_seq_len=active_seq_len,
     )
