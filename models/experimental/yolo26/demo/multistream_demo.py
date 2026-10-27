@@ -234,7 +234,7 @@ class Display:
         cv2.putText(view, text, (self.tile_w - w - 6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
         cv2.rectangle(view, (0, 0), (self.tile_w - 1, self.tile_h - 1), (40, 40, 40), 1)
 
-    def panel(self, stats, counts, averages):
+    def panel(self, stats, counts):
         x0 = self.canvas.shape[1] - PANEL_W
         p = self.canvas[:, x0:]
         p[:] = (24, 24, 24)
@@ -250,21 +250,20 @@ class Display:
         put(f"People now: {total}", 186, 0.75, (255, 255, 255), 2)
         top = 214
         row_h = max(18, (p.shape[0] - top - 10) // len(self.streams))
-        put("camera          people now      avg 10 s", top - 6, 0.42, (150, 150, 150))
-        bar_x0, bar_x1 = 90, PANEL_W - 130
+        put("camera                                   people now", top - 6, 0.42, (150, 150, 150))
+        bar_x0, bar_x1 = 90, PANEL_W - 70
         scale = max(4, max(counts))
         text = lambda s, x, y, color=(255, 255, 255): cv2.putText(
             p, s, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA
         )
-        for i, (n, avg) in enumerate(zip(counts, averages)):
+        for i, n in enumerate(counts):
             y = top + 4 + i * row_h
             text(f"CAM {i + 1:02d}", 16, y + 13, (210, 210, 210))
             cv2.rectangle(p, (bar_x0, y + 2), (bar_x1, y + row_h - 4), (45, 45, 45), -1)
             cv2.rectangle(
                 p, (bar_x0, y + 2), (bar_x0 + int((bar_x1 - bar_x0) * n / scale), y + row_h - 4), (60, 170, 60), -1
             )
-            text(f"{n:2d}", PANEL_W - 116, y + 13)
-            text(f"{avg:4.1f}", PANEL_W - 60, y + 13, (170, 170, 170))
+            text(f"{n:2d}", PANEL_W - 56, y + 13)
 
 
 def main():
@@ -348,7 +347,6 @@ def main():
         def __init__(self):
             self.lock = threading.Condition()
             self.latest = [None] * args.streams  # (frame_idx, dets) per stream
-            self.history = [deque(maxlen=args.fps * 10) for _ in range(args.streams)]
             self.updates = [deque() for _ in range(args.streams)]  # result timestamps, last 1 s
             self.done_ticks, self.images = deque(), deque()
             self.latencies = deque(maxlen=200)
@@ -370,7 +368,6 @@ def main():
                     src = letterbox.to_source(people[j][:, :4]) if len(people[j]) else np.zeros((0, 4))
                     dets = np.concatenate((src, people[j][:, 4:]), 1) if len(people[j]) else []
                     results.latest[s] = (frame_idx[j], dets)
-                    results.history[s].append(len(dets))
                     u = results.updates[s]
                     u.append(now)
                     while now - u[0] > 1.0:
@@ -411,7 +408,6 @@ def main():
                 last_tick, captured = results.tick, results.tick_captured
                 latest = list(results.latest)
                 counts = [len(r[1]) if r else 0 for r in latest]
-                averages = [float(np.mean(h)) if h else 0.0 for h in results.history]
                 fps = [(len(u) - 1) / (u[-1] - u[0]) if len(u) > 1 and u[-1] > u[0] else 0.0 for u in results.updates]
                 stats = dict(results.stats)
             for s, r in enumerate(latest):
@@ -424,7 +420,7 @@ def main():
                 shown.popleft()
             stats["latency_ms"] = float(np.median(results.latencies))
             stats["display_fps"] = len(shown) / (min(2.0, now - t_start[0]) or 1e-3)
-            display.panel(stats, counts, averages)
+            display.panel(stats, counts)
             if mjpeg:
                 mjpeg.publish(cv2.imencode(".jpg", display.canvas, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes())
             if writer:
