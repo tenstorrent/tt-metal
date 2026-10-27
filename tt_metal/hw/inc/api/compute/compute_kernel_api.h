@@ -678,20 +678,27 @@ ALWI void heaviside_tile_init() { MATH(SFPU_UNARY_INIT(heaviside)); }
  *
  * Return value: None
  *
+ * | Template Parameter  | Description                                    | Type | Valid Range      | Default        |
+ * |---------------------|------------------------------------------------|------|------------------|----------------|
+ * | approx              | Enable approximate mode.                       | bool | true, false      | false          |
+ * | is_fp32_dest_acc_en | DST holds FP32 values.                         | bool | true, false      | DST_ACCUM_MODE |
+ * | iterations          | Number of iterations over 32-SFPU lanes to run | int  | Positive integer | 8              |
+ *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | vector_mode     | Specifies the vector mode for computation (default: VectorMode::RC)        | VectorMode | Subject to specific hardware/kernel limits          | False    |
  */
 // clang-format on
-template <bool approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void expm1_tile(uint32_t idst) {
+template <bool approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, int iterations = 8>
+ALWI void expm1_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_expm1,
-        (approx, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
+        (approx, is_fp32_dest_acc_en, iterations),
         idst,
-        VectorMode::RC));
+        vector_mode));
 }
 
 /**
