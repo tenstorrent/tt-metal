@@ -35,6 +35,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
+import torch
+
 TILE = 32
 DENSE_PREFILL_ROWS = 2048  # the traced per-length prefill covers prompts up to this many tokens
 DEFAULT_DEVICE_PREFILL_CHUNK = 16384  # tokens per eager prefill chunk on the 8x4 (32 K exceeds the KDA owner cores)
@@ -365,16 +367,18 @@ class LogicalBlockTable:
         if end_position < 0 or end_position > self.g.max_seq_len:
             raise ValueError(f"end position {end_position} outside [0, {self.g.max_seq_len}]")
         need = self.blocks_needed(end_position)
-        ids = [int(v) for v in list(table_row)]
-        if len(ids) < need:
+        # tensor ops on the needed prefix only: iterating a 1 M-context row ([32768] ids) in Python cost ~50 ms per
+        # live user per decode step (the served step's largest host share, 2026-10-27 profile)
+        row = torch.as_tensor(table_row).reshape(-1)
+        if row.numel() < need:
             raise ValueError(
-                f"block table row of {len(ids)} entries cannot hold {end_position} positions ({need} pages)"
+                f"block table row of {row.numel()} entries cannot hold {end_position} positions ({need} pages)"
             )
-        prefix = ids[:need]
-        if any(b < 0 for b in prefix):
-            raise ValueError(f"block table prefix {prefix} has a negative block id")
-        if len(set(prefix)) != len(prefix):
-            raise ValueError(f"block table prefix {prefix} repeats a block id")
+        prefix = row[:need]
+        if need and bool((prefix < 0).any()):
+            raise ValueError(f"block table prefix {prefix.tolist()} has a negative block id")
+        if need and int(torch.unique(prefix).numel()) != need:
+            raise ValueError(f"block table prefix {prefix.tolist()} repeats a block id")
         return need
 
 
