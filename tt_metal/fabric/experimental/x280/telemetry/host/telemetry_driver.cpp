@@ -92,16 +92,26 @@ int run(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh, cons
     }
     std::printf("running %s\n", image.c_str());
 
-    const auto waited = runtime.session(enqueued.session).wait_until_result_ready(3000ms);
+    // Fires up all the harts and waits for them to start running.
+    const auto waited = runtime.session(enqueued.session).wait_until_running(3000ms);
     int rc = 0;
     if (waited.succeeded()) {
-        for (const auto& hart : waited.hartstates) {
-            std::printf("hart %u result 0x%llx\n", hart.hart_id, static_cast<unsigned long long>(hart.state.result));
-        }
+        std::printf("firmware running\n");
     } else {
         std::fprintf(stderr, "wait: %s\n", describe(waited).c_str());
         rc = 1;
     }
+    //    const auto waited = runtime.session(enqueued.session).wait_until_result_ready(3000ms);
+    //    int rc = 0;
+    //    if (waited.succeeded()) {
+    //        for (const auto& hart : waited.hartstates) {
+    //            std::printf("hart %u result 0x%llx\n", hart.hart_id, static_cast<unsigned long
+    //            long>(hart.state.result));
+    //        }
+    //    } else {
+    //        std::fprintf(stderr, "wait: %s\n", describe(waited).c_str());
+    //        rc = 1;
+    //    }
 
     const auto cleaned = runtime.cleanup(enqueued.session, request.cleanup_timeout);
     if (!cleaned.cleaned_up()) {
