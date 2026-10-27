@@ -43,6 +43,6 @@ ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_ou
  *
  * Return value: None
  */
-ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
+ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT_FN(unused, sfpu::logsigmoid_init, (APPROX)))); }
 
 }  // namespace ckernel
