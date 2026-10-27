@@ -13,12 +13,7 @@ import math
 import torch
 
 import ttnn
-from models.demos.gemma4.tt.attention.operations import (
-    PREFILL_SDPA_MAX_SEQ,
-    _paged_fill_cache,
-    apply_rope,
-    chunked_prefill_sdpa,
-)
+from models.demos.gemma4.tt.attention.operations import PREFILL_SDPA_MAX_SEQ, _paged_fill_cache, apply_rope
 from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
 from models.demos.muse_glimmer_30b.tt.common import (
     as_tt,
@@ -33,6 +28,41 @@ from models.demos.muse_glimmer_30b.tt.rms_norm import per_head_rms_norm
 from models.demos.muse_glimmer_30b.tt.weight_packing import pack_o, pack_qkvg
 
 SLIDING_PREFILL_STRIDE = 4096
+GLOBAL_PREFILL_CHUNK = 16384  # query rows per chunked SDPA call past PREFILL_SDPA_MAX_SEQ
+
+
+def chunked_global_prefill_sdpa(q, k_cache, v_cache, page_table, user_id, scale, program_config, compute_kernel_config):
+    """Causal prefill SDPA against the paged KV cache in GLOBAL_PREFILL_CHUNK-row query blocks, for prompts longer than
+    PREFILL_SDPA_MAX_SEQ. K/V rows [0, S) must already be in the cache. q [1, Hq, S, D]."""
+    S, nh, hd = q.shape[2], q.shape[1], q.shape[3]
+    user_pt = page_table
+    if page_table.shape[0] > 1:
+        user_pt = ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[1]])
+    outs = []
+    for s in range(0, S, GLOBAL_PREFILL_CHUNK):
+        e = min(S, s + GLOBAL_PREFILL_CHUNK)
+        qc = ttnn.slice(q, [0, 0, s, 0], [1, nh, e, hd])
+        outs.append(
+            ttnn.transformer.chunked_scaled_dot_product_attention(
+                qc,
+                k_cache,
+                v_cache,
+                user_pt,
+                chunk_start_idx=s,
+                scale=scale,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+            )
+        )
+        qc.deallocate(True)
+    if user_pt is not page_table:
+        user_pt.deallocate(True)
+    if len(outs) == 1:
+        return outs[0]
+    out = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for o in outs:
+        o.deallocate(True)
+    return out
 
 
 def sliding_prefill_sdpa(
@@ -359,9 +389,18 @@ class MuseGlimmerAttention:
                 q, k, v, self.sliding_window, a.sdpa_scale, self._prefill_sdpa_config, self.sdpa_cfg
             )
         elif seq_len > PREFILL_SDPA_MAX_SEQ:
-            # Non-chunked prefill SDPA is wrong past 2^15 query rows: use gemma4's chunked paths instead.
+            # Non-chunked prefill SDPA is wrong past 2^15 query rows: attend from the paged cache in chunks.
             assert page_table is not None, "prefill longer than 32768 tokens needs a paged KV cache"
-            sdpa = chunked_prefill_sdpa(q, k_cache, v_cache, page_table, user_id, a.head_dim, scale=a.sdpa_scale)
+            sdpa = chunked_global_prefill_sdpa(
+                q,
+                k_cache,
+                v_cache,
+                page_table,
+                user_id,
+                a.sdpa_scale,
+                self._prefill_sdpa_config(seq_len),
+                self.sdpa_cfg,
+            )
         else:
             sdpa = ttnn.transformer.scaled_dot_product_attention(
                 q,

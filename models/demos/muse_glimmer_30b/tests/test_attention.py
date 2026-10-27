@@ -103,10 +103,10 @@ def test_attention_prefill(mesh_device, tp, layer_idx, seq_len):
 @pytest.mark.parametrize("layer_idx", [0, 3], ids=["sliding_rope", "full_nope"])
 @pytest.mark.parametrize("seq_len", [4096, 3328])
 def test_attention_prefill_chunked(mesh_device, tp, layer_idx, seq_len, monkeypatch):
-    """Long-prompt paths (gemma4 chunked SDPA) forced at short lengths; 3328 has a short tail chunk,
+    """Long-prompt paths (chunked SDPA) forced at short lengths; 3328 has a short tail chunk,
     user 1 checks the page-table row slice."""
     monkeypatch.setattr(attention_mod, "PREFILL_SDPA_MAX_SEQ", 1024)
-    monkeypatch.setattr(gemma4_ops, "PREFILL_CHUNK_SIZE", 1024)
+    monkeypatch.setattr(attention_mod, "GLOBAL_PREFILL_CHUNK", 1024)
     monkeypatch.setattr(gemma4_ops, "PREFILL_SLIDING_CHUNK_SIZE", 1024)
     _run_prefill(mesh_device, tp, layer_idx, seq_len, user_id=1)
 
