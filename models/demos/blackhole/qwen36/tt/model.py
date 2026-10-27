@@ -5509,6 +5509,9 @@ class Qwen36Model:
         once per width change / before each decode call, eagerly (outside trace capture/replay). A no-op unless the
         batched fused mode is on (QWEN36_GDN_FUSED_DECODE=0, max_batch_size == 1: nothing to do). Returns the number
         of layers that needed an in-place sync."""
+        if self.num_devices == 1:
+            # The single-device GDN (Qwen36GatedDeltaNet) has no width-class conv state to prepare.
+            return 0
         n_sync = 0
         n_layers = 0
         for layer in self.layers:
