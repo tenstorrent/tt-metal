@@ -63,7 +63,7 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp3
 - The carry's reload keeps only tf32 precision; residue grows about 0.65e-4 per width chunk (CHANGELOG.md change 3).
 - `return_residual_sum` needs a TILE input and a residual; not in the Python builder.
 - `program_config.use_welford=True` refused; per-channel dtypes outside fp32 / bf16 / bfp8_b raise ValueError; host-resident input raises.
-- Known gap: the C++ path does not refuse a `memory_config` different from the input's placement under `inplace` (the Python path does); `tests/unit/test_rms_norm_ttnn_matrix.py::test_refuses_memory_config_disagreeing_under_inplace` is skipped (CHANGELOG.md, "Known gap").
+- Under `inplace`, a `memory_config` other than the input's placement is refused (a sharded one without a shard spec is accepted).
 - Unshipped Python knob `PC_MCAST_MODE="split"` used a racing rotating Counter sender; not used by any plan (CHANGELOG.md, mcast port).
 - 12 upstream sharded tests (`test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores`) are skipped on both the source and the fork (tests/source_baseline.json).
 - Single device only; any multi-chip norm needs the caller's own gather (split program: of the `stats_out` partials).

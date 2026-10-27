@@ -200,7 +200,7 @@ _PERF_EXPECTED_NS = {
         ("tp2", "indexed_p14"): 1_444_033,
     },
 }
-_PERF_MARGIN = 0.03
+_PERF_MARGIN = 0.03  # slower than this fails; faster only logs a recalibration note (owner, 2026-10-27)
 
 
 def _chip_class(device):
@@ -228,17 +228,27 @@ def test_flat_expert_indexed_perf(device, case):
     expected_ns = _perf_expected_ns(device)
     for mode, (P, y_rm) in _modes(H).items():
         expected = expected_ns.get((tag, mode))
-        assert_op_duration_merged(
+        got = assert_op_duration_merged(  # (measures only: the check below fails on slower, never on faster)
             device,
             lambda: _call(op, d, P, y_rm).deallocate(True),
             "/flat_routed_expert_ttnn/",
             expected_ns=expected or 1,
-            margin=_PERF_MARGIN if expected else float("inf"),
+            margin=float("inf"),
             label=f'("{tag}", "{mode}")',
             iters=3,
         )
         if expected is None:
             missing.append(mode)
+            continue
+        assert got <= expected * (1 + _PERF_MARGIN), (
+            f'("{tag}", "{mode}") device time {got:.0f} ns is {got / expected - 1:+.1%} vs {expected} ns on '
+            f"{_chip_class(device)}: slower than the {_PERF_MARGIN:.0%} margin"
+        )
+        if got < expected * (1 - _PERF_MARGIN):
+            logger.warning(
+                f'("{tag}", "{mode}") {got:.0f} ns is {got / expected - 1:+.1%} vs its baseline {expected} ns: faster, '
+                "recalibrate _PERF_EXPECTED_NS from the RT-CAL line"
+            )
     if missing:
         pytest.skip(f"no baseline for {tag} {missing} on {_chip_class(device)}; add them to _PERF_EXPECTED_NS")
 

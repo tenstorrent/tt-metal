@@ -296,3 +296,11 @@ shapes, mesh, row-major y).
 - Needed by: deepseek_v41_flash_d_p FIX.2 (overseer, reopened: tests/unit/ must pass on a Galaxy chip)
 - Files: `device/flat_routed_expert_program_factory.cpp`, `device/flat_combine_overlap_device_operation.cpp`,
   `tests/unit/test_flat_expert_indexed_shapes.py`, `README.md`
+
+### Tests: deepseek_v41_flash_d_p unpadded shared-expert case (O.1, 2026-10-27)
+- What: tests/cases.py: a case for the shared-expert call at the chip's real 1152 intermediate columns on 2x2 (sig
+  a274529a9f; the model dropped the zero padding to 1280 in FIX.1), otherwise the existing i1280 case's call. rel
+  0.040 per chip vs float64 (limit 0.099 = 2 x the formats' noise), determinism. No op change; no other case touched.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: deepseek_v41_flash_d_p O.1
+- Files: tests/cases.py

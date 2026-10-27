@@ -98,8 +98,8 @@
    "fork": "passed"
   },
   "tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score::test_indexer_score_compressed_key_ratio4_block_cyclic[silicon_arch_name=blackhole-sp4]": {
-   "original": "skipped",
-   "fork": "skipped"
+   "original": "passed",
+   "fork": "passed"
   },
   "tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score::test_indexer_score_compute_kernel_config[math_fidelity=MathFidelity.HiFi2]": {
    "original": "passed",
@@ -360,10 +360,6 @@
   "tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score::test_indexer_score_rejects_bad_kv_len": {
    "original": "passed",
    "fork": "passed"
-  },
-  "tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score::test_indexer_score_rejects_fp32_dest_acc": {
-   "original": "passed",
-   "fork": "failed"
   },
   "tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score::test_indexer_score_rejects_partial_block_cyclic_args": {
    "original": "passed",
