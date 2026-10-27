@@ -53,7 +53,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 
 
 def run_unary_op(device, op, shape, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -697,13 +697,19 @@ def test_unary_sharded_input_on_interleaved_path_cache_reuse(device, shard_shape
 # worker runs on the whole grid and shares the cache entry of a tensor with 4 pages per worker. On N150 and N300 light
 # ops had run it on 16 cores and moderate and mid ops on 32 (4 and 2 pages per core), at up to twice the kernel time.
 @run_for_wormhole_b0("only Wormhole runs small tensors on at most a page per core")
+# The ULP thresholds are the largest errors measured on N300 for these inputs, over bf16 and fp32.
 @pytest.mark.parametrize(
-    "op, torch_op",
-    [(ttnn.relu, torch.relu), (ttnn.exp, torch.exp), (ttnn.cos, torch.cos), (ttnn.silu, torch.nn.functional.silu)],
+    "op, torch_op, ulp_threshold",
+    [
+        (ttnn.relu, torch.relu, 0),
+        (ttnn.exp, torch.exp, 1),
+        (ttnn.cos, torch.cos, 2),
+        (ttnn.silu, torch.nn.functional.silu, 3),
+    ],
     ids=["relu", "exp", "cos", "silu"],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
-def test_unary_small_tensor_grid_page_per_worker_takes_whole_grid(device, op, torch_op, dtype):
+def test_unary_small_tensor_grid_page_per_worker_takes_whole_grid(device, op, torch_op, ulp_threshold, dtype):
     device.cache_entries_counter.reset()
     grid = device.compute_with_storage_grid_size()
     torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[dtype]
@@ -714,6 +720,6 @@ def test_unary_small_tensor_grid_page_per_worker_takes_whole_grid(device, op, to
         tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         with device.cache_entries_counter.measure():
             tt_out = op(tt_a)
-        assert_with_pcc(torch_op(a), ttnn.to_torch(tt_out), 0.999)
+        assert_with_ulp(expected_result=torch_op(a), actual_result=ttnn.to_torch(tt_out), ulp_threshold=ulp_threshold)
 
     assert device.cache_entries_counter.total == 1
