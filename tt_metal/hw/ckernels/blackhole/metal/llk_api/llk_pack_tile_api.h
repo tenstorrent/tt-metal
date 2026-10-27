@@ -148,7 +148,7 @@ inline void llk_matmul_pack(
         StateVal<Operand<Exu::Pack>::TileWidth>(get_output_tile_c_dim(output_id)),
         StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
         StateDiscard<std::uint32_t>(start_tile_index),
-        StateVal<OperationPack::NumTiles>(ntiles),
+        StateDiscard<std::uint32_t>(ntiles),
         StateDiscard<std::uint32_t>(output_tile_index)));
 
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {

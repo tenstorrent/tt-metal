@@ -5,6 +5,7 @@
 #include "topk_large_indices_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "topk_large_indices.hpp"
@@ -47,6 +48,19 @@ void bind_topk_large_indices(nb::module_& mod) {
             * must be in [k, last dimension]; defaults to the full last dimension;
             * applied at runtime (no recompile), so a loop growing valid_length reuses one program.
 
+        Core selection:
+            * ``subdevice_id`` selects a TENSIX subdevice from the active manager;
+            * ``sub_core_grids`` optionally restricts work to a fully contained CoreRangeSet;
+            * the resolved grid is structural and participates in the program-cache key;
+            * kernels and circular buffers are created only on the resolved grid.
+
+        NoC selection:
+            * ``dram_read_noc`` picks the NoC the reader streams the input rows from DRAM on;
+              the writer (k indices per row, plus the row-split survivor hand-off) takes the other one;
+            * defaults to the arch's preferred DRAM-read NoC (NOC_0 on Blackhole);
+            * use it when another program runs alongside on a different subdevice and loads one NoC
+              heavily, so the two do not contend; it participates in the program-cache key.
+
         Args:
             input_tensor: device tensor with ROW_MAJOR layout and BFLOAT16 dtype.
             k: required number of indices to return.
@@ -54,6 +68,14 @@ void bind_topk_large_indices(nb::module_& mod) {
             valid_length_tensor: optional 1-element UINT32 row-major DRAM tensor read on-device. Use for
                 dynamic valid lengths during trace replay. Mutually exclusive with valid_length.
             valid_length_offset: constant added to valid_length_tensor[0] (default 0).
+            subdevice_id: optional active subdevice containing the top-k workers.
+            sub_core_grids: optional core restriction within ``subdevice_id``.
+            valid_end_tensor: optional 1-element UINT32 row-major DRAM tensor holding the REAL token end;
+                caps the derived search length at ceil32(valid_end). Requires valid_length_tensor. Without
+                it a padded chunk ranks columns that were never written. Pass the SAME bound to
+                ring_indexer_score_dsa's valid_end_tensor -- a looser score with a tighter top-k drops real
+                keys, the reverse ranks a stale tail.
+            dram_read_noc: optional ``ttnn.NOC`` for the reader's DRAM reads (default: arch preferred).
         )doc",
         &ttnn::experimental::topk_large_indices,
         nb::arg("input_tensor"),
@@ -61,7 +83,11 @@ void bind_topk_large_indices(nb::module_& mod) {
         nb::arg("k"),
         nb::arg("valid_length") = std::nullopt,
         nb::arg("valid_length_tensor") = nb::none(),
-        nb::arg("valid_length_offset") = 0);
+        nb::arg("valid_length_offset") = 0,
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("valid_end_tensor") = nb::none(),
+        nb::arg("dram_read_noc") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::detail

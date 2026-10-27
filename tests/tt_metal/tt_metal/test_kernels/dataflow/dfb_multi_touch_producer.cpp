@@ -19,8 +19,8 @@
 #error "TEST_NUM_DFBS must be defined by the host (KernelSpec compiler_options.defines)"
 #endif
 
-template <bool ImplicitSync>
-static inline void touch_one(DFBBindingToken token) {
+template <bool ImplicitSync, dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+static inline void touch_one(DFBBindingToken<Pap, Cap> token) {
     DataflowBuffer dfb(token);
     (void)dfb.get_entry_size();
     if constexpr (ImplicitSync) {
@@ -84,5 +84,29 @@ void kernel_main() {
 #endif
 #if TEST_NUM_DFBS > 15
     touch_one<implicit_sync>(dfb::dfb_15);
+#endif
+#if TEST_NUM_DFBS > 16
+    touch_one<implicit_sync>(dfb::dfb_16);
+#endif
+#if TEST_NUM_DFBS > 17
+    touch_one<implicit_sync>(dfb::dfb_17);
+#endif
+#if TEST_NUM_DFBS > 18
+    touch_one<implicit_sync>(dfb::dfb_18);
+#endif
+#if TEST_NUM_DFBS > 19
+    touch_one<implicit_sync>(dfb::dfb_19);
+#endif
+#if TEST_NUM_DFBS > 20
+    touch_one<implicit_sync>(dfb::dfb_20);
+#endif
+#if TEST_NUM_DFBS > 21
+    touch_one<implicit_sync>(dfb::dfb_21);
+#endif
+#if TEST_NUM_DFBS > 22
+    touch_one<implicit_sync>(dfb::dfb_22);
+#endif
+#if TEST_NUM_DFBS > 23
+    touch_one<implicit_sync>(dfb::dfb_23);
 #endif
 }

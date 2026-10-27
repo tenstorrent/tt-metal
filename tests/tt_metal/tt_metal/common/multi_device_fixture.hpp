@@ -139,7 +139,16 @@ protected:
                 *config_.mesh_shape);
         }
 
-        init_max_cbs();
+        // Fabric requires at least 2 participating chips.
+        const auto requested_mesh_shape = config_.mesh_shape.value_or(system_mesh_shape);
+        if (config_.fabric_config != tt_fabric::FabricConfig::DISABLED && requested_mesh_shape.mesh_size() < 2) {
+            GTEST_SKIP() << fmt::format(
+                "Skipping MeshDevice test suite: fabric config {} requires at least 2 chips, but the mesh shape is {}",
+                config_.fabric_config,
+                requested_mesh_shape);
+        }
+
+        init_max_dfbs();
 
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
@@ -157,7 +166,7 @@ protected:
                 config_.fabric_udm_mode);
         }
         mesh_device_ = MeshDevice::create(
-            MeshDeviceConfig(config_.mesh_shape.value_or(system_mesh_shape), config_.mesh_offset),
+            MeshDeviceConfig(requested_mesh_shape, config_.mesh_offset),
             config_.l1_small_size,
             config_.trace_region_size,
             config_.num_cqs,
@@ -177,10 +186,10 @@ protected:
         }
     }
 
-    void init_max_cbs() { max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers(); }
+    void init_max_dfbs() { max_dfbs_ = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers(); }
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
-    uint32_t max_cbs_{};
+    uint32_t max_dfbs_{};
 
     Config config_;
 };
@@ -209,7 +218,7 @@ protected:
                 *config_.mesh_shape);
         }
 
-        init_max_cbs();
+        init_max_dfbs();
 
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();

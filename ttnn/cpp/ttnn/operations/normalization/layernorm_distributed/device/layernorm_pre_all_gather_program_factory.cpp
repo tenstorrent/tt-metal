@@ -5,6 +5,7 @@
 #include "layernorm_pre_all_gather_device_operation.hpp"
 #include "layernorm_distributed_metal2_helpers.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -57,6 +58,7 @@ const m2::DFBSpecName PRE2D_ZERO{"pre2d_zero"};
 const m2::DFBSpecName PRE2D_OUT_FINAL{"pre2d_out_final"};
 
 const m2::SemaphoreSpecName PRE2D_REDUCER{"pre2d_reducer"};
+const m2::SemaphoreSpecName PRE2D_GATHER_FREE{"pre2d_gather_free"};
 
 const m2::TensorParamName PRE2D_INPUT_T{"pre2d_input_t"};
 const m2::TensorParamName PRE2D_RESIDUAL_T{"pre2d_residual_t"};
@@ -102,7 +104,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     const auto& input_mesh = a.mesh_tensor();
     const auto& output_mesh = output.mesh_tensor();
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
 
     uint32_t num_tile_rows = NC * Ht;
@@ -147,7 +149,27 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
     const uint32_t fused_tiles = Wt;                           // a + b
 
-    const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
+    // The x^2 buffer is sized per ROW, so a wide fp32_dest_acc_en row is what pushes this program
+    // past L1 (#54697). Keep the double buffer wherever it fits -- the packer and the unpacker are
+    // different RISCs, so it buys real overlap (measured ~1-3% on shapes that already fit) -- and
+    // fall back to a single buffer only when the double-buffered program would not fit at all,
+    // which today throws at allocation instead of running.
+    const uint32_t x2_tiles_double_buffered = Wt * double_buffer_constant;
+    const uint32_t out0_tiles_estimate = is_rmsnorm ? 1 : 2;
+    const uint32_t static_bytes_double_buffered =
+        in0_tiles * in_single_tile_size + in1_tiles * scaler_tile_size +
+        (fuse_pre_add ? (res_tiles * inb_single_tile_size + fused_tiles * single_tile_size) : 0) +
+        x2_tiles_double_buffered * single_tile_size + out0_tiles_estimate * out_single_tile_size;
+    // Budget is L1 above the reserved base, matching what validate_dataflow_buffer_region compares
+    // against (it checks an absolute region end, so the reserved base must come off the top here).
+    // Deliberately STATIC: shape, dtypes and device config only. Sizing a buffer from dynamic L1
+    // occupancy (lowest_occupied_compute_l1_address) would make the program depend on state the
+    // program-cache key does not cover, so a program built under one occupancy could be replayed
+    // under another -- unsound with the program cache and with tracing.
+    const uint32_t l1_budget = static_cast<uint32_t>(
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+    const uint32_t intermed0_tiles =
+        (static_bytes_double_buffered <= l1_budget) ? x2_tiles_double_buffered : Wt;  // x^2
     uint32_t out0_tiles = 1;
     if (!is_rmsnorm) {
         out0_tiles = 2;
@@ -238,7 +260,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE1D_INPUT_T, .accessor_name = "src"}},
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "Wt", "tile_offset"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     if (fuse_pre_add) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
@@ -255,10 +277,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE1D_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", writer_block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     m2::KernelSpec compute{
         .unique_id = PRE1D_COMPUTE,
         .source = compute_kernel_file,
@@ -289,7 +311,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         compute.dfb_bindings.push_back(m2::DFBBinding{
             .dfb_spec_name = PRE1D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
-    auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+    auto& compute_gen1 = gen1_compute_config(device->arch(), std::get<m2::ComputeHardwareConfig>(compute.hw_config));
     // With the 32-bit Dest register enabled, every Float32 buffer the compute kernel consumes needs an
     // explicit unpack mode. Here each one feeds an FPU op (mul_tiles for x**2, the row reduce for the
     // sums), and the FPU reads its operands out of SrcA/SrcB, so SrcA/B is the mode for all of them.
@@ -415,7 +437,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     const auto& input_mesh = a.mesh_tensor();
     const auto& output_mesh = output.mesh_tensor();
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     uint32_t block_size = 1;
     uint32_t writer_block_size = 1;
@@ -469,8 +491,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
 
     auto grid_size = device->compute_with_storage_grid_size();
 
+    uint32_t max_cores_x = grid_size.x;
     uint32_t max_cores_y = grid_size.y;
-    uint32_t cores_x = std::min(max_cores_y, num_tile_rows);
+    uint32_t cores_x = std::min(max_cores_x, num_tile_rows);
     while (num_tile_rows % cores_x != 0 && cores_x > 1) {
         cores_x--;
     }
@@ -563,14 +586,37 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                     .accessor_name = "out",
                     .endpoint_type = m2::DFBEndpointType::CONSUMER},
             },
-        .semaphore_bindings = {m2::SemaphoreBinding{.semaphore_spec_name = PRE2D_REDUCER, .accessor_name = "reducer"}},
+        .semaphore_bindings =
+            {m2::SemaphoreBinding{.semaphore_spec_name = PRE2D_REDUCER, .accessor_name = "reducer"},
+             m2::SemaphoreBinding{.semaphore_spec_name = PRE2D_GATHER_FREE, .accessor_name = "gather_free"}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE2D_INPUT_T, .accessor_name = "src"}},
         .compile_time_args = {{"blk", block_size}, {"num_cores_to_wait", cores_y}},
         .runtime_arg_schema =
             {.runtime_arg_names =
-                 {"NCHt", "Wt", "tile_offset", "is_merge_core", "reduce_core_noc_x", "reduce_core_noc_y", "y"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+                 {"NCHt",
+                  "Wt",
+                  "tile_offset",
+                  "row_stride",
+                  "is_merge_core",
+                  "reduce_core_noc_x",
+                  "reduce_core_noc_y",
+                  "y",
+                  "workers_noc_x_start",
+                  "workers_noc_y_start",
+                  "workers_noc_x_end",
+                  "workers_noc_y_end"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
+    // The merge core's reader multicasts to its column with the rectangle given from the lower to the higher
+    // NoC coordinates (see the runtime args below), which is NOC_0 order. config_1xx is the reader's placement on
+    // Wormhole and Blackhole, where a reader on NOC_1 would need start and end swapped. The check skips a
+    // missing config_1xx on purpose: Quasar ignores config_1xx, and its multicast accepts only the lower-to-higher
+    // order, so the coordinates are correct there whatever config_1xx would say.
+    const auto& reader_hw_config = std::get<m2::DataMovementHardwareConfig>(reader.hw_config);
+    TT_FATAL(
+        !reader_hw_config.config_1xx.has_value() || reader_hw_config.config_1xx->noc == NOC::NOC_0,
+        "The 2D pre-all-gather reader multicasts to its column in NOC_0 order; a reader on NOC_1 would need the "
+        "rectangle's start and end swapped.");
     if (fuse_pre_add) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
             .dfb_spec_name = PRE2D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::PRODUCER});
@@ -586,7 +632,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE2D_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", writer_block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Two instances of the one compute source, over disjoint node sets: the merge row additionally
@@ -631,7 +677,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                  {"blk", block_size},
                  {"num_cores_y", cores_y},
                  {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
-            .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+            .hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config),
         };
         bind_self_loop(compute, PRE2D_X2, "x2");
         if (fuse_pre_add) {
@@ -647,7 +693,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                 .accessor_name = "out_final",
                 .endpoint_type = m2::DFBEndpointType::PRODUCER});
         }
-        auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+        auto& compute_gen1 =
+            gen1_compute_config(device->arch(), std::get<m2::ComputeHardwareConfig>(compute.hw_config));
         // Float32 operands use UnpackToDest on the accurate SFPU path and SrcA/SrcB on the FPU path.
         // The reduce scaler and the FPU merge's zero tile are always consumed through SrcA/SrcB.
         if (compute_gen1.enable_32_bit_dest) {
@@ -714,8 +761,21 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
 
             uint32_t num_tile_rows_per_core = tiles_per_core_x;
 
-            uint32_t in_tile_offset = (x * Wt) + (y * tiles_per_core_y);
-            uint32_t out_tile_offset = x * out0_tiles;
+            // Core (x, y) handles tile rows [x * tiles_per_core_x, (x + 1) * tiles_per_core_x) and, within
+            // each of them, tiles [y * tiles_per_core_y, (y + 1) * tiles_per_core_y).
+            uint32_t in_tile_offset = (x * tiles_per_core_x * Wt) + (y * tiles_per_core_y);
+            uint32_t out_tile_offset = x * tiles_per_core_x * out0_tiles;
+
+            // For each tile row, the merge core's reader increments the gather_free semaphore on the other cores of
+            // its column, logical cores (x, 1) to (x, cores_y - 1), with one multicast. This tells them that its gather
+            // buffer can take their next partial sums. These are the NoC coordinates of that rectangle of cores,
+            // from the lower to the higher coordinates; the TT_FATAL after the reader spec explains that order.
+            CoreCoord workers_noc_start = {0, 0};
+            CoreCoord workers_noc_end = {0, 0};
+            if (is_merge_core && cores_y > 1) {
+                workers_noc_start = device->worker_core_from_logical_core({x, 1});
+                workers_noc_end = device->worker_core_from_logical_core({x, cores_y - 1});
+            }
 
             m2::AddRuntimeArgsForNode(
                 reader_run.runtime_arg_values,
@@ -723,10 +783,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                 {{"NCHt", tiles_per_core_x},
                  {"Wt", tiles_per_core_y},
                  {"tile_offset", in_tile_offset},
+                 {"row_stride", Wt},
                  {"is_merge_core", static_cast<uint32_t>(is_merge_core)},
                  {"reduce_core_noc_x", static_cast<uint32_t>(merge_core.x)},
                  {"reduce_core_noc_y", static_cast<uint32_t>(merge_core.y)},
-                 {"y", y}});
+                 {"y", y},
+                 {"workers_noc_x_start", static_cast<uint32_t>(workers_noc_start.x)},
+                 {"workers_noc_y_start", static_cast<uint32_t>(workers_noc_start.y)},
+                 {"workers_noc_x_end", static_cast<uint32_t>(workers_noc_end.x)},
+                 {"workers_noc_y_end", static_cast<uint32_t>(workers_noc_end.y)}});
             if (is_merge_core) {
                 m2::AddRuntimeArgsForNode(
                     writer_run.runtime_arg_values,
@@ -751,7 +816,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         .name = "layernorm_pre_all_gather_2d",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dfbs),
-        .semaphores = {m2::SemaphoreSpec{.unique_id = PRE2D_REDUCER, .target_nodes = all_cores}},
+        .semaphores =
+            {m2::SemaphoreSpec{.unique_id = PRE2D_REDUCER, .target_nodes = all_cores},
+             m2::SemaphoreSpec{.unique_id = PRE2D_GATHER_FREE, .target_nodes = all_cores}},
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
     };

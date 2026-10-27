@@ -16,7 +16,13 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "compute_common.hpp"
+#ifndef ARCH_QUASAR
+// The streaming compute path uses LLK primitives not available on Quasar (matmul_block_no_mop,
+// exp_packthread_tile, *_custom, mm_no_mop_*), so it is neither compiled nor selected there — Quasar
+// forces the non-streaming path (factory: use_streaming_compute=false on Quasar). See the guarded
+// streaming branch in kernel_main() below.
 #include "compute_streaming.hpp"
+#endif
 
 void kernel_main() {
     [[maybe_unused]] constexpr auto B = get_arg(args::B);
@@ -90,7 +96,15 @@ void kernel_main() {
     constexpr auto dfb_max_A = dfb::max_A;
     constexpr auto dfb_max_B = dfb::max_B;
     constexpr auto dfb_sum_A = dfb::sum_A;
+#if defined(USE_STREAMING_COMPUTE) || defined(USE_ATTENTION_SINK)
+    // Streaming and the attention-sink path keep two separate sum DFBs (prev/cur ping-pong halves).
     constexpr auto dfb_sum_B = dfb::sum_B;
+#else
+    // The non-streaming STANDARD path (no sink) merges the running-sum ping-pong into a single 3-deep
+    // DFB bound to sum_A; the factory drops the sum_B binding, so alias it to sum_A. sdpa_inner_loop
+    // ignores this arg on the merged path (merged_sum).
+    constexpr auto dfb_sum_B = dfb::sum_A;
+#endif
     constexpr auto dfb_exp_max_diff = dfb::exp_max_diff;
 #ifdef HAS_MASK
     constexpr auto dfb_mask_in = dfb::mask_in;
@@ -119,11 +133,50 @@ void kernel_main() {
 #endif
 
     uint32_t chunked_q_chunk_offset = 0;
-    DataflowBuffer dfb_chunk_start_idx_obj(dfb_chunk_start_idx);
+    // One owning DataflowBuffer per bound DFB for the whole kernel; placeholders alias q_in's object.
+    DataflowBuffer dfb_q_in_obj(dfb_q_in);
+    DataflowBuffer dfb_k_in_obj(dfb_k_in);
+    DataflowBuffer dfb_v_in_obj(dfb_v_in);
     DataflowBuffer dfb_identity_scale_in_obj(dfb_identity_scale_in);
+    DataflowBuffer dfb_col_identity_obj(dfb_col_identity);
+    DataflowBuffer dfb_out_obj(dfb_out);
+    DataflowBuffer dfb_qk_im_obj(dfb_qk_im);
+    DataflowBuffer dfb_out_im_A_obj(dfb_out_im_A);
+    DataflowBuffer dfb_out_im_B_obj(dfb_out_im_B);
+    DataflowBuffer dfb_max_A_obj(dfb_max_A);
+    DataflowBuffer dfb_max_B_obj(dfb_max_B);
+    DataflowBuffer dfb_sum_A_obj(dfb_sum_A);
+#if defined(USE_STREAMING_COMPUTE) || defined(USE_ATTENTION_SINK)
+    DataflowBuffer dfb_sum_B_obj(dfb_sum_B);
+#else
+    auto& dfb_sum_B_obj = dfb_sum_A_obj;
+#endif
+    DataflowBuffer dfb_exp_max_diff_obj(dfb_exp_max_diff);
+#ifdef HAS_MASK
     DataflowBuffer dfb_mask_in_obj(dfb_mask_in);
+#else
+    auto& dfb_mask_in_obj = dfb_q_in_obj;
+#endif
+#ifdef USE_ATTENTION_SINK
+    DataflowBuffer dfb_attention_sink_obj(dfb_attention_sink);
+#else
+    auto& dfb_attention_sink_obj = dfb_q_in_obj;
+#endif
+#ifdef FLEXIBLE_CHUNKED
+    DataflowBuffer dfb_chunk_start_idx_obj(dfb_chunk_start_idx);
+#else
+    auto& dfb_chunk_start_idx_obj = dfb_q_in_obj;
+#endif
+#ifdef USE_WINDOWED_NARROWING
+    DataflowBuffer dfb_windowed_k_range_obj(dfb_windowed_k_range);
+#else
+    auto& dfb_windowed_k_range_obj = dfb_q_in_obj;
+#endif
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb_q_in, dfb_k_in, dfb_out);
     matmul_init(dfb_q_in, dfb_k_in);
+    // Reset the Quasar pack-operand tracker so the first pack_reconfig_out re-points via pack_init
+    // regardless of the post-startup packer state. No-op on WH/BH.
+    reset_pack_operand_tracking();
 
     if constexpr (is_chunked) {
         if (use_chunk_start_idx_tensor != 0) {
@@ -142,6 +195,8 @@ void kernel_main() {
     }
 
     if constexpr (use_streaming_compute) {
+#ifndef ARCH_QUASAR  // streaming path is not built on Quasar (see guarded include); use_streaming_compute
+                     // is forced false there, so this branch is also discarded at compile time.
         // Streaming SDPA v2: direct dfb_qkt_im writes via dfb_push_back_hold_wr_ptr.
         // No row buffers needed; a dedicated 1-tile DFB is used as recip scratch.
 
@@ -226,6 +281,10 @@ void kernel_main() {
             lw_mask,
             q_num_chunks,
             use_zigzag_balancing);
+        if constexpr ((is_causal || sliding_window_size > 0 || k_partial_col > 0) && !use_provided_mask) {
+            release_writer_constant(dfb_mask_in_obj, lw_mask_tile_count);
+        }
+#endif  // !ARCH_QUASAR
     } else {
         // Standard SDPA path (causal, masked, chunked, etc.)
         constexpr bool use_lightweight_causal_mask = is_causal && !use_provided_mask && (sliding_window_size == 0);
@@ -291,21 +350,33 @@ void kernel_main() {
                 v_chunk_tiles,
                 qk_chunk_tiles,
                 out_chunk_tiles,
-                dfb_q_in,
-                dfb_k_in,
-                dfb_v_in,
-                dfb_mask_in,
-                dfb_col_identity,
-                dfb_out_im_A,
-                dfb_out_im_B,
-                dfb_max_A,
-                dfb_max_B,
-                dfb_sum_A,
-                dfb_sum_B,
-                dfb_exp_max_diff,
-                dfb_out,
+                dfb_q_in_obj,
+                dfb_k_in_obj,
+                dfb_v_in_obj,
+                dfb_mask_in_obj,
+                dfb_col_identity_obj,
+                dfb_out_im_A_obj,
+                dfb_out_im_B_obj,
+                dfb_max_A_obj,
+                dfb_max_B_obj,
+                dfb_sum_A_obj,
+                dfb_sum_B_obj,
+                dfb_exp_max_diff_obj,
+                dfb_out_obj,
+                dfb_qk_im_obj,
+                dfb_identity_scale_in_obj,
+                dfb_attention_sink_obj,
+                dfb_windowed_k_range_obj,
                 lw_mask,
                 use_zigzag_balancing);
         }
+        if constexpr (use_lightweight_causal_mask) {
+            release_writer_constant(dfb_mask_in_obj, 2);
+        }
     }
+
+    // The writer pushes the identity scale and column identity tiles once; compute reads them by index for
+    // the whole kernel and never pops them. Release them so the buffers are left balanced.
+    release_writer_constant(dfb_identity_scale_in_obj, 1);
+    release_writer_constant(dfb_col_identity_obj, 1);
 }

@@ -38,7 +38,7 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -60,7 +60,6 @@ MAX_RANDOM_LAYERS = 12
 
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole")
 @pytest.mark.parametrize("tokenizer", ["right"], indirect=True, ids=["right_pad"])
-@pytest.mark.parametrize("temperature", [0.0], ids=["greedy"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.parametrize("isl_total, dispatch_buffer_capacity_factor", [(SEQ_LEN_5K, 8)], ids=["5k"])
 @pytest.mark.parametrize(
@@ -68,13 +67,15 @@ MAX_RANDOM_LAYERS = 12
     [pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="full 61-layer prefill only on Galaxy"))],
     ids=["61_layers"],
 )
-@pytest.mark.parametrize("n_routed_experts, gate_fallback_mode", [(384, GateComputeMode.DEVICE)], ids=["e384_device"])
+@pytest.mark.parametrize(
+    "n_routed_experts, gate_fallback_mode", [(384, GateComputeMode.DEVICE_FP32)], ids=["e384_device_fp32"]
+)
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK27Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -96,7 +97,6 @@ def test_dflash_prefill_integration(
     gate_fallback_mode,
     num_links,
     use_pretrained,
-    temperature,
     tokenizer,
     request,
     drafter_cfg,
@@ -223,7 +223,6 @@ def test_dflash_prefill_integration(
         tp_axis=tp_axis,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,  # real cache (pretrained) or None (random)
-        lm_head_is_column_parallel=True,
     )
     del verifier_state_dict
     gc.collect()
@@ -254,7 +253,6 @@ def test_dflash_prefill_integration(
         actual_isl=isl_total,
         return_intermediates=False,
         read_profiler=False,
-        temperature=temperature,
         on_layer_hidden=on_layer_hidden,
     )
 

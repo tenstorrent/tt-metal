@@ -36,6 +36,7 @@
       timeout: 30
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: perf
 
 # --- Dispatch Buffer R/W Bandwidth Benchmark ---
 - name: runtime_perf_rw_buffer
@@ -61,6 +62,7 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: perf
 
 # --- JIT Build (local host compile) Throughput Benchmark ---
 # Adapts DISABLED_TensixCompileStress into a runtime perf gate: real attached
@@ -80,6 +82,7 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: perf
 
 # --- PCIe host/device bandwidth (mem_bench) ---
 # Same command and CIv2 P150b SKU as the former metal-run-microbenchmarks
@@ -95,3 +98,4 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: perf

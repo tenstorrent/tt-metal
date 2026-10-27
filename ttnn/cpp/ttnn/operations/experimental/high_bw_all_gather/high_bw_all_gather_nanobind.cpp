@@ -16,18 +16,21 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
     ttnn::bind_function<"high_bw_all_gather", "ttnn.experimental.">(
         mod,
         R"doc(
-            Gathers a large row-major or tile-layout DRAM tensor over one device-mesh
-            axis, or over a direct-neighbor ring linearized across a complete 2D mesh.
-            This is a one-dimensional Fabric line or ring collective. The
-            operation uses a native one-hop store-and-forward transport and does not
-            provide a composite fallback.
+            Gathers a row-major or tile-layout DRAM tensor over one device-mesh axis, or over the
+            whole 2D mesh, into a preallocated DRAM output.
 
-            Fabric2D supports a direct physical line or ring. A Torus may wrap
-            ``cluster_axis`` when the axis has a distinct wrap neighbor and every
-            ring edge is one physical hop. A size-two torus axis is treated as a
-            line because its ordinary and wrap neighbors are the same device.
-            Plain ``FABRIC_2D`` uses the direct-line schedule; only a Torus
-            configuration that wraps ``cluster_axis`` selects the ring schedule.
+            Per chip, per ring direction and per link one fabric link worker core reads (its own shard
+            from the input, forwarded shards from the output) and sends each fabric chunk one fabric hop
+            into the same pages of the neighbour's output; local copy cores write the chip's own shard
+            (and convert an ND-sharded input). Link workers sit as close as the core grid allows to their
+            link's Ethernet core. Calls are fenced: no chip writes into a neighbour's output before the
+            neighbour has started the same call. Even rings are balanced (the opposite shard travels half
+            each way). With ``cluster_axis=None`` on a torus whose sides are both at least 3, the mesh is
+            covered by two edge-disjoint Hamiltonian cycles, so every chip uses all four neighbours;
+            otherwise by a snake ring. The output is always in row-major chip order.
+
+            Pages move whole, so a ROW_MAJOR tensor cannot be gathered along its innermost dim (every
+            output row would mix ranks); gather a TILE_LAYOUT tensor or another dim instead.
 
             Channel trimming compatibility:
                 Channel trimming is selected during Fabric initialization and is shared
@@ -46,14 +49,10 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 output_tensor: Preallocated persistent output tensor.
 
             Keyword Args:
-                cluster_axis: Device-mesh axis (0 or 1) participating in the
-                    one-dimensional collective. Other mesh axes run independent
-                    all-gathers. Pass ``None`` to gather across every device in a 2D
-                    mesh using a snake Hamiltonian ring. The full-mesh mode requires
-                    at least one even mesh dimension, direct links for every edge of
-                    a row or column snake, and a tensor sharded over ``dim`` across
-                    all mesh devices. The host prefers a row snake, then tries a
-                    column snake if the row route cannot close directly.
+                cluster_axis: Device-mesh axis (0 or 1) participating in the collective; other
+                    mesh axes run independent all-gathers. ``None`` gathers across every device of
+                    the 2D mesh (two Hamiltonian cycles on a torus with both sides >= 3, else a snake
+                    ring); the tensor must be sharded over ``dim`` across all mesh devices.
                 num_links: Optional number of Fabric links to use. ``None`` uses every
                     link reported usable across the selected axis, or the minimum
                     discovered across both axes in full-mesh mode. An explicit value
@@ -96,6 +95,12 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 gathered_slab_global: Block-cyclic slab width in gathered-dim elements
                     (``chunk_local * num_devices``). Required with ``gathered_prefix_tensor`` and hashed,
                     being structural rather than per-chunk.
+                ready_semaphore: Optional caller-owned persistent startup semaphore. Must be
+                    supplied together with ``data_valid_semaphore`` and initialized to zero on
+                    the complete worker-core restriction before the first call.
+                data_valid_semaphore: Optional caller-owned persistent relay/completion semaphore.
+                    Supplying both semaphore handles selects the allocation-free, no-internal-sync
+                    dispatch path intended for sub-device overlap.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -112,7 +117,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("batch_slot_num_layers") = 1,
         nb::arg("batch_slot_layer_idx") = 0,
         nb::arg("gathered_prefix_tensor") = nb::none(),
-        nb::arg("gathered_slab_global") = 0);
+        nb::arg("gathered_slab_global") = 0,
+        nb::arg("ready_semaphore") = nb::none(),
+        nb::arg("data_valid_semaphore") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail

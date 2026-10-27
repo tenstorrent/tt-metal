@@ -64,6 +64,16 @@ def test_nlp_create_qkv_heads_decode(ttnn_mesh_device, reset_seeds, batch):
     U.assert_shape_dtype(k_heads, shape=(1, batch, U.N_KV_HEADS, U.HEAD_DIM), dtype=ttnn.bfloat16, mesh_device=mesh)
     U.assert_shape_dtype(v_heads, shape=(1, batch, U.N_KV_HEADS, U.HEAD_DIM), dtype=ttnn.bfloat16, mesh_device=mesh)
 
+    # Value check (same closed-form split as the sharded case): the Quasar interleaved factory stages every
+    # DRAM read through a node-local scratchpad ("aligned_scratch"), so a wrong scratch address/offset would
+    # return finite-but-incorrect data that shape/dtype/finiteness alone won't catch. PCC vs the torch split.
+    q_ref = xqkv_torch[:, :, :batch, : U.Q_DIM].reshape(1, batch, U.N_HEADS, U.HEAD_DIM)
+    k_ref = xqkv_torch[:, :, :batch, U.Q_DIM : U.Q_DIM + U.KV_DIM].reshape(1, batch, U.N_KV_HEADS, U.HEAD_DIM)
+    v_ref = xqkv_torch[:, :, :batch, U.Q_DIM + U.KV_DIM :].reshape(1, batch, U.N_KV_HEADS, U.HEAD_DIM)
+    U.assert_pcc(q_ref, q_heads, pcc=0.999, mesh_device=mesh)
+    U.assert_pcc(k_ref, k_heads, pcc=0.999, mesh_device=mesh)
+    U.assert_pcc(v_ref, v_heads, pcc=0.999, mesh_device=mesh)
+
 
 @U.with_default_mesh()
 @pytest.mark.parametrize(

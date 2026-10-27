@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_moe_padding_config
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_moe_padding_config REUSE_FROM TTNN::PCHFull)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_moe_padding_config TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_moe_padding_config)
 
 set_target_properties(

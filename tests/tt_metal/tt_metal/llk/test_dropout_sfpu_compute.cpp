@@ -35,10 +35,6 @@
 #include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using std::vector;
 using namespace tt;
@@ -275,6 +271,9 @@ void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
 }  // namespace unit_tests::compute::sfpu::dropout
 
 TEST_F(LLKMeshDeviceFixture, TensixComputeDropout) {
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "Not implemented on Quasar";
+    }
     srand(0);
     int num_tests = 5;
     float fill_constant = 9.0;

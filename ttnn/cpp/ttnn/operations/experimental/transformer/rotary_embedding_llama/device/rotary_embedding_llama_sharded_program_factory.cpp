@@ -49,7 +49,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCoreSharded::c
     const uint32_t n_heads_t = shard_spec->shape[0] / constants::TILE_HEIGHT;
     const uint32_t head_dim_t = shard_spec->shape[1] / constants::TILE_WIDTH;
 
-    tt_metal::IDevice* device = tensor_args.input_tensor.device();
+    tt_metal::distributed::MeshDevice* device = tensor_args.input_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -134,8 +134,16 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCoreSharded::c
     TensorParameter output_param{.unique_id = OUTPUT_PARAM, .spec = output.tensor_spec()};
 
     // hw_config — Style B (see the interleaved factory for the rationale).
-    const ComputeHardwareConfig compute_hw_config =
-        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw_config =
+        ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // Quasar sets the same common fields (gen2_hardware_configs.md shape 4).
+        // TODO(#52269): Quasar unpack_modes are copied from TT-1.x.x and not yet optimized for Quasar.
+        compute_hw_config = ComputeHardwareConfig{
+            .fpu_math_fidelity = math_fidelity,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+        };
+    }
 
     auto self_loop = [](const DFBSpecName& dfb, const std::string& name) {
         return Group<DFBBinding>{

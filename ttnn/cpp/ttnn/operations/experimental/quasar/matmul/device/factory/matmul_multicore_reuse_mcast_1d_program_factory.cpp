@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -52,7 +53,7 @@ namespace reuse_mcast_1d_optimized_helpers {
 uint32_t get_preferred_noc(
     const ttnn::CoreCoord src,
     const ttnn::CoreCoord dst,
-    const tt_metal::IDevice* device,
+    const tt_metal::distributed::MeshDevice& device,
     const bool use_dedicated_noc = false) {
     /*
         NOC0: Preferred +x -> +y
@@ -62,8 +63,8 @@ uint32_t get_preferred_noc(
     uint32_t src_x = src.x, src_y = src.y;
     uint32_t dst_x = dst.x, dst_y = dst.y;
 
-    uint32_t MAX_X = device->grid_size().x;
-    uint32_t MAX_Y = device->grid_size().y;
+    uint32_t MAX_X = device.grid_size().x;
+    uint32_t MAX_Y = device.grid_size().y;
 
     // Get the wrapped distances
     uint32_t dist_right = src_x <= dst_x ? dst_x - src_x : MAX_X - src_x + dst_x;
@@ -87,8 +88,8 @@ uint32_t get_preferred_noc(
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_program_and_create_override_variables(
     tt_metal::Program& program,
     const ttnn::Tensor& a,
-    tt_metal::IDevice* device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -153,7 +154,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -302,11 +306,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
         for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
             in0_mcast_noc_x.push_back(
-                device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
+                device.worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
         }
         for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
             in0_mcast_noc_y.push_back(
-                device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
+                device.worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
         }
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
@@ -326,8 +330,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -533,9 +537,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in1_is_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
@@ -581,14 +585,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     */
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     if (fuse_op && fused_op_signaler->is_all_gather()) {
         // Create semaphores
         fused_op_signaler->init_fused_op(
             program,
-            device,
+            &device,
             in0_mcast_sender_cores,
             in0_is_sharded ? ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE
                            : ttnn::experimental::ccl::FusedOpSignalerMode::MULTI);
@@ -943,7 +947,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     //  * Quasar (single NOC, non-torus): ascending regardless of NOC. in0_noc defaults to NOC_1 on Quasar
     //    too, so the WH/BH swap would degenerate the rectangle to [max..min] and hang the sender on mcast
     //    acks. Force ascending via component-wise min/max. (#48552)
-    if (device->arch() == tt::ARCH::QUASAR) {
+    if (device.arch() == tt::ARCH::QUASAR) {
         CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
         CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
         start_core_noc = lo;
@@ -1116,8 +1120,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_program_and_create_override_variables(
     tt_metal::Program& program,
     const ttnn::Tensor& a,
-    tt_metal::IDevice* device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -1163,11 +1167,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     bool fuse_op = false;
 
     uint32_t num_blocks = K / in0_block_w;
-    // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
-    // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
-    // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
-    // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_tensor.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -1180,7 +1182,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -1307,8 +1312,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     const auto& a_padded_shape =
         operations::experimental::quasar::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
@@ -1492,9 +1497,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
@@ -1534,8 +1539,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     */
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
@@ -1830,7 +1835,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     //  * WH/BH: an in1 NOC_0 multicast runs high->low, so swap start/end (unchanged).
     //  * Quasar (single NOC, non-torus): force ascending via component-wise min/max regardless of NOC,
     //    else the reversed [max..min] rectangle hangs the sender on mcast acks. (#48552)
-    if (device->arch() == tt::ARCH::QUASAR) {
+    if (device.arch() == tt::ARCH::QUASAR) {
         CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
         CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
         start_core_noc = lo;
@@ -1976,8 +1981,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     tt_metal::Program& program,
     const ttnn::Tensor& a,
     const std::vector<ttnn::Tensor>& b_tensors,
-    tt_metal::IDevice* device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -2025,9 +2030,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
     CoreRangeSet all_cores = non_idle_cores;
     std::vector<CoreRange> non_idle_cores_vec;
-    auto subdevice_cores = device->worker_cores(
+    auto subdevice_cores = device.worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+        sub_device_id.has_value() ? *sub_device_id : device.get_sub_device_ids().at(0));
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }
@@ -2206,12 +2211,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
     tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
 
-    uint32_t output_cb_index = base_cb_index + 5;  // output operands start at index 16
-    uint32_t interm0_cb_index = base_cb_index + 6;
+    const uint32_t output_cb_index_base = base_cb_index + 5;  // output operands start at index 16
+    const uint32_t interm0_cb_index_base = base_cb_index + 6;
     tt_metal::CircularBufferConfig interm0_cb_config =
-        tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
+        tt_metal::CircularBufferConfig(0, {{interm0_cb_index_base, interm0_data_format}});
     tt_metal::CircularBufferConfig output_cb_config =
-        tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
+        tt_metal::CircularBufferConfig(0, {{output_cb_index_base, output_data_format}});
     std::vector<tt::tt_metal::CBHandle> cb_outputs;
     std::vector<tt::tt_metal::CBHandle> output_cb_indices;
     std::vector<tt::tt_metal::CBHandle> interm_cb_indices;
@@ -2219,17 +2224,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // interm0
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
-            {interm0_cb_index, interm0_data_format},
+            {interm0_cb_index_base, interm0_data_format},
         };
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
-                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
-                                .set_tile_dims(interm0_cb_index, output_tile);
+                                .set_page_size(interm0_cb_index_base, interm0_single_tile_size)
+                                .set_tile_dims(interm0_cb_index_base, output_tile);
 
         tt_metal::CreateCircularBuffer(program, all_cores, interm0_cb_config);
 
         for (uint32_t i = 0; i < out_buffers.size(); ++i) {
             const auto& out_buffer = out_buffers[i];
-            output_cb_index += i * 2;  // 5, 7, 9...
+            const uint32_t output_cb_index = output_cb_index_base + i * 2;  // 5, 7, 9...
             TT_FATAL(
                 output_cb_index <= tt::CBIndex::c_31,
                 "Output circular buffer index {} exceeds maximum value {}",
@@ -2246,13 +2251,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
             cb_outputs.push_back(cb_output);
             output_cb_indices.push_back(output_cb_index);
-            interm_cb_indices.push_back(interm0_cb_index);
+            interm_cb_indices.push_back(interm0_cb_index_base);
         }
     } else {
         for (uint32_t i = 0; i < out_buffers.size(); ++i) {
             const auto& out_buffer = out_buffers[i];
-            output_cb_index += i * 2;   // 5, 7, 9...
-            interm0_cb_index += i * 2;  // 6, 8, 10...
+            const uint32_t output_cb_index = output_cb_index_base + i * 2;    // 5, 7, 9...
+            const uint32_t interm0_cb_index = interm0_cb_index_base + i * 2;  // 6, 8, 10...
             TT_FATAL(
                 output_cb_index <= tt::CBIndex::c_31,
                 "Output circular buffer index {} exceeds maximum value {}",
@@ -2378,13 +2383,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     bool use_dedicated_noc = true;
     tt_metal::NOC_MODE noc_mode =
@@ -2393,7 +2398,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     // Init the signaler
     if (fused_op_signaler.has_value()) {
         ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-        signaler.init_llama_rs_cores_mm(all_cores, program, device, 0);
+        signaler.init_llama_rs_cores_mm(all_cores, program, &device, 0);
     }
     /* Create the kernels */
     auto mm_kernel_in0_id = tt_metal::CreateKernel(
@@ -2425,6 +2430,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
                 {"cb_sync2", sync_cb2_index},
                 {"cb_remote", remote_cb_index}}});
 
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        for (const auto interm_cb_index : interm_cb_indices) {
+            unpack_to_dest_mode[interm_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
+
     auto mm_kernel = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/compute/"
@@ -2434,6 +2447,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -2464,7 +2478,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
             if (fused_op_signaler.has_value()) {
                 ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-                signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
+                signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, &device);
             }
 
             tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
@@ -2483,11 +2497,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     // On Blackhole: dynamically derived from optimal DRAM bank API; banks split at x <= 6.
     std::map<uint32_t, uint32_t> worker_y_to_dram_bank_first_col;
     std::map<uint32_t, uint32_t> worker_y_to_dram_bank_second_col;
-    uint32_t first_col_max_x = device->arch() == tt::ARCH::WORMHOLE_B0 ? 3 : 7;
+    uint32_t first_col_max_x = device.arch() == tt::ARCH::WORMHOLE_B0 ? 3 : 7;
     uint32_t num_receiver_cores_per_dram = 2;  // default to 2 for wormhole b0 and blackhole
     if (in1_is_dram_sharded) {
         num_receiver_cores_per_dram = ring_size / in1_tensor.shard_spec()->grid.num_cores();
-        if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+        if (device.arch() == tt::ARCH::WORMHOLE_B0) {
             worker_y_to_dram_bank_first_col[0] = 1;
             worker_y_to_dram_bank_first_col[4] = 2;
             worker_y_to_dram_bank_first_col[5] = 3;
@@ -2503,7 +2517,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             worker_y_to_dram_bank_second_col[9] = 5;
         } else {
             // Dynamically derive mapping from optimal DRAM bank API
-            auto optimal_dram_workers = device->get_optimal_dram_bank_to_logical_worker_assignment(in1_noc);
+            auto optimal_dram_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(in1_noc);
             uint32_t num_banks = optimal_dram_workers.size();
             uint32_t banks_in_first_col = num_banks / 2;
 
@@ -2543,7 +2557,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             };
 
             // Build complete maps for all possible y-coordinates (0 to max worker y)
-            auto compute_grid = device->compute_with_storage_grid_size();
+            auto compute_grid = device.compute_with_storage_grid_size();
             for (uint32_t y = 0; y < compute_grid.y; ++y) {
                 if (!first_col_anchors.empty()) {
                     worker_y_to_dram_bank_first_col[y] = find_nearest_bank(y, first_col_anchors);
@@ -2560,7 +2574,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     for (uint32_t i = 0; i < num_cores; ++i) {
         bool send_to_hop_core = i == 0 && use_hop_cores;
         const auto& core = worker_cores_vec[i];
-        const auto& core_noc = device->worker_core_from_logical_core(core);
+        const auto& core_noc = device.worker_core_from_logical_core(core);
 
         /* in0 */
         auto core_type = CORE_TYPE::WORKER_CORE;  // worker core
@@ -2571,7 +2585,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             uint32_t next_i = i == 0 ? num_cores - 1 : i - 1;
             next_core = worker_cores_vec[next_i % num_cores];
         }
-        const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
+        const auto& next_core_noc = device.worker_core_from_logical_core(next_core);
         uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
 
         std::vector<uint32_t> mm_in0_args = {
@@ -2597,31 +2611,19 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             // Look up bank_id based on core.y and which column group core.x belongs to
             if (core.x <= first_col_max_x) {
                 auto it = worker_y_to_dram_bank_first_col.find(core.y);
-                if (it == worker_y_to_dram_bank_first_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in first-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_first_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_first_col.end(),
+                    "Worker core ({}, {}) NOT FOUND in first-col map",
+                    core.x,
+                    core.y);
                 bank_id = it->second;
             } else {
                 auto it = worker_y_to_dram_bank_second_col.find(core.y);
-                if (it == worker_y_to_dram_bank_second_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in second-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_second_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_second_col.end(),
+                    "Worker core ({}, {}) NOT FOUND in second-col map",
+                    core.x,
+                    core.y);
                 bank_id = it->second;
             }
 
@@ -2633,7 +2635,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
              * increases by 1 for each core in the same row*/
             /* TODO: This logic should be removed once all usage of ring matmul asserts that the input core ranges are
              * arranged in row major order*/
-            if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+            if (device.arch() == tt::ARCH::WORMHOLE_B0) {
                 if (core.x % 2 == 0) {
                     dram_read_offset = 1;
                 }
@@ -2656,7 +2658,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         }
         if (fused_op_signaler.has_value()) {
             ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-            signaler.push_llama_rs_rt_args_for_mm(mm_in1_args, core, in1_noc, device);
+            signaler.push_llama_rs_rt_args_for_mm(mm_in1_args, core, in1_noc, &device);
         }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_args);
 
@@ -2679,11 +2681,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
         auto core_type = CORE_TYPE::HOP_CORE;  // hop core
         const auto& core = hop_cores_vec[i];
-        const auto& core_noc = device->worker_core_from_logical_core(core);
+        const auto& core_noc = device.worker_core_from_logical_core(core);
 
         /* in0 */
         CoreCoord next_core = end_of_hop ? worker_cores_vec[num_cores - 1] : hop_cores_vec[i + 1];
-        const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
+        const auto& next_core_noc = device.worker_core_from_logical_core(next_core);
         uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
 
         std::vector<uint32_t> mm_in0_args = {
@@ -2701,7 +2703,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
         if (fused_op_signaler.has_value()) {
             ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-            signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
+            signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, &device);
         }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
 
@@ -2943,8 +2945,8 @@ void override_program_parameters(
 // [[maybe_unused]] suppresses -Wunused-function until it is removed in a follow-up cleanup.
 [[maybe_unused]] static ProgramDescriptor create_program_mcast_in0_descriptor(
     const ttnn::Tensor& a,
-    tt_metal::IDevice* device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -3022,7 +3024,10 @@ void override_program_parameters(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -3158,11 +3163,11 @@ void override_program_parameters(
         in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
         for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
             in0_mcast_noc_x.push_back(
-                device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
+                device.worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
         }
         for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
             in0_mcast_noc_y.push_back(
-                device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
+                device.worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
         }
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
@@ -3182,8 +3187,8 @@ void override_program_parameters(
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -3389,9 +3394,9 @@ void override_program_parameters(
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in1_is_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
@@ -3426,8 +3431,8 @@ void override_program_parameters(
     };
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build Kernel Descriptors
@@ -3799,7 +3804,7 @@ void override_program_parameters(
     //  * Quasar (single NOC, non-torus): ascending regardless of NOC. in0_noc defaults to NOC_1 on Quasar
     //    too, so the WH/BH swap would degenerate the rectangle to [max..min] and hang the sender on mcast
     //    acks. Force ascending via component-wise min/max. (#48552)
-    if (device->arch() == tt::ARCH::QUASAR) {
+    if (device.arch() == tt::ARCH::QUASAR) {
         CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
         CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
         start_core_noc = lo;
@@ -3978,8 +3983,8 @@ void override_program_parameters(
 // create_program_artifacts port. [[maybe_unused]] suppresses -Wunused-function pending removal.
 [[maybe_unused]] static ProgramDescriptor create_program_mcast_in1_descriptor(
     const ttnn::Tensor& a,
-    tt_metal::IDevice* device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -4025,11 +4030,9 @@ void override_program_parameters(
     bool fuse_op = false;
 
     uint32_t num_blocks = K / in0_block_w;
-    // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
-    // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
-    // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
-    // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_tensor.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -4053,7 +4056,10 @@ void override_program_parameters(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -4156,8 +4162,8 @@ void override_program_parameters(
 
     CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     const auto& a_padded_shape =
         operations::experimental::quasar::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
@@ -4345,9 +4351,9 @@ void override_program_parameters(
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
@@ -4376,8 +4382,8 @@ void override_program_parameters(
     };
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build Kernel Descriptors
@@ -4679,7 +4685,7 @@ void override_program_parameters(
     //  * WH/BH: an in1 NOC_0 multicast runs high->low, so swap start/end (unchanged).
     //  * Quasar (single NOC, non-torus): force ascending via component-wise min/max regardless of NOC,
     //    else the reversed [max..min] rectangle hangs the sender on mcast acks. (#48552)
-    if (device->arch() == tt::ARCH::QUASAR) {
+    if (device.arch() == tt::ARCH::QUASAR) {
         CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
         CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
         start_core_noc = lo;
@@ -4906,7 +4912,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::IDevice* device = a.device();
+    const tt_metal::distributed::MeshDevice& device = a.mesh_tensor().device();
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -4947,7 +4953,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         in1_tile.get_width());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
@@ -5058,7 +5064,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     CoreCoord sub_device_start_core = {0, 0};
     if (sub_device_id.has_value()) {
         auto sd_worker_cores =
-            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+            device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
         auto bbox = sd_worker_cores.bounding_box();
         TT_FATAL(
             sd_worker_cores.num_cores() == bbox.size(),
@@ -5207,9 +5213,16 @@ m2::DataMovementHardwareConfig make_datamovement_hardware_config(
     tt::tt_metal::NOC noc,
     bool disable_dfb_implicit_sync_for_all = false) {
     if (arch == tt::ARCH::QUASAR) {
-        return m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
+        return m2::DataMovementHardwareConfig{
+            .config_2xx =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all,
+                },
+        };
     }
-    return m2::DataMovementGen1Config{.processor = processor, .noc = noc};
+    return m2::DataMovementHardwareConfig{
+        .config_1xx = m2::DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc},
+    };
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
@@ -5231,7 +5244,6 @@ const m2::TensorParamName RO_IN0_TENSOR{"in0"};
 const m2::TensorParamName RO_IN1_TENSOR{"in1"};
 const m2::TensorParamName RO_OUT_TENSOR{"out"};
 const m2::TensorParamName RO_BIAS_TENSOR{"bias"};
-const m2::TensorParamName RO_SPARSITY_TENSOR{"sparsity"};
 
 const m2::SemaphoreSpecName RO_IN0_SENDER_SEM{"in0_sender"};
 const m2::SemaphoreSpecName RO_IN0_RECEIVER_SEM{"in0_receiver"};
@@ -5382,8 +5394,8 @@ m2::KernelSpec make_compute_kernel(
 // ---------------------------------------------------------------------------------------------------
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     const ttnn::Tensor& a,
-    tt_metal::IDevice* device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -5451,7 +5463,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -5576,11 +5591,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
         for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
             in0_mcast_noc_x.push_back(
-                device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
+                device.worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
         }
         for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
             in0_mcast_noc_y.push_back(
-                device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
+                device.worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
         }
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
@@ -5594,8 +5609,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -5658,9 +5673,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         mm_kernel_defines["IN0_TRANSPOSE_TILE_PATH"] = "1";
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
@@ -5672,6 +5687,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         mm_kernel_in1_sender_writer_defines["BIAS_SHARDED"] = "1";
     }
     if (output_is_sharded) {
+        // The in1 writer pops batch * out_shard_tiles tiles in one wait_front/pop_front call, which takes a uint16_t.
+        TT_FATAL(
+            in0_B * out_shard_tiles <= std::numeric_limits<uint16_t>::max(),
+            "matmul_multicore_reuse_mcast_1d: a sharded output of {} tiles per core exceeds the maximum of {} "
+            "supported by this program factory",
+            in0_B * out_shard_tiles,
+            std::numeric_limits<uint16_t>::max());
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
     }
     if (in0_mcast_receiver_num_cores == 1) {
@@ -5680,13 +5702,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
     // ---- Tensor parameters (replace buffer-address RTAs + TensorAccessorArgs) ----
-    // The sparsity TensorParameter is inert for resnet50 (batchB == 0; never read); it aliases the
-    // in0 spec so the kernels' tensor::sparsity binding resolves and is supplied in0 at runtime.
     m2::Group<m2::TensorParameter> tensor_parameters = {
         m2::TensorParameter{.unique_id = RO_IN0_TENSOR, .spec = in0_tensor.tensor_spec()},
         m2::TensorParameter{.unique_id = RO_IN1_TENSOR, .spec = in1_tensor.tensor_spec()},
         m2::TensorParameter{.unique_id = RO_OUT_TENSOR, .spec = out_tensor.tensor_spec()},
-        m2::TensorParameter{.unique_id = RO_SPARSITY_TENSOR, .spec = in0_tensor.tensor_spec()},
     };
     if (bias_tensor.has_value()) {
         tensor_parameters.push_back(
@@ -5708,9 +5727,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     // Sparsity scratch DFBs are a single-kernel DMA-landing self-loop (PRODUCER+CONSUMER on one DM
     // kernel), rejected by the Metal 2.0 DM-kernel self-loop validator. This factory never enables
     // sparsity (batchB hardcoded 0; the sparse path is a separate factory), so the sparsity DFBs/
-    // bindings and the kernels' SPARSITY-gated cb_sparsity usage are absent. When the sparse matmul
-    // is ported to Metal 2.0, flip sparsity_enabled, define SPARSITY on the senders, and replace the
-    // self-loop with a scratchpad/LocalTensorAccessor.
+    // bindings, the sparsity TensorParameter, and the kernels' SPARSITY-gated cb_sparsity / tensor::sparsity
+    // usage are absent. When the sparse matmul is ported to Metal 2.0, flip sparsity_enabled, define
+    // SPARSITY on the senders, declare a sparsity TensorParameter bound to the real sparsity tensor
+    // (never an alias of an io tensor: the mesh adapter resolves each binding to its own tensor slot),
+    // and replace the self-loop with a scratchpad/LocalTensorAccessor.
     const bool sparsity_enabled = false;
     if (sparsity_enabled) {
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
@@ -5808,13 +5829,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         m2::SemaphoreSpec{.unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = all_cores},
     };
 
-    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
-        device->arch(),
-        ttnn::ComputeKernelConfig{
-            .math_fidelity = math_fidelity,
-            .math_approx_mode = math_approx_mode,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = false});
+    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+        .math_fidelity = math_fidelity,
+        .math_approx_mode = math_approx_mode,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = false});
 
     // ---- in0 sender kernel CTAs (named) ----
     auto make_in0_sender_cta = [&](uint32_t core_has_output_block_work,
@@ -5874,12 +5893,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         };
     };
 
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
     // [#47797] in1 reader/writer must run on in1_noc (NOC0), the opposite NOC from the in0 mcast
     // (NOC1), exactly like legacy. Relying on the WRITER role hint instead lands it on NOC1 once in0
     // is explicitly pinned, so in1's writes contend with the in0 mcast on NOC1 and never drain
     // (npw_sent=0 -> hang at the final barrier).
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     // in0 sender DFB / semaphore / tensor bindings (interleaved vs sharded).
     auto in0_dfb_bindings = [&]() -> std::vector<m2::DFBBinding> {
@@ -5952,7 +5971,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         .tensor_bindings =
             {
                 m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
-                m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
             },
         .compile_time_args = make_in0_sender_cta(1, 1),
         .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
@@ -5962,7 +5980,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         // multicast that never delivers VALID, and the whole grid hangs at receiver_sem.wait(VALID).
         // Matches the working mcast_2d factory.
         .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-            device->arch(),
+            device.arch(),
             tt::tt_metal::DataMovementProcessor::RISCV_1,
             in0_noc,
             /*disable_dfb_implicit_sync_for_all=*/true),
@@ -5986,13 +6004,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .tensor_bindings =
                 {
                     m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
-                    m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
                 },
             .compile_time_args = make_in0_sender_cta(0, 1),
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
             // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_1,
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -6012,13 +6029,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .tensor_bindings =
                 {
                     m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
-                    m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
                 },
             .compile_time_args = make_in0_sender_cta(0, 0),
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
             // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_1,
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -6056,7 +6072,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             // [#47797] Pin RISCV_1 + in0_noc for NOC parity with the in0 sender (the receiver's
             // sender_sem.up to the sender must use the same NOC as the mcast geometry).
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_1,
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -6086,7 +6102,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         std::vector<m2::TensorBinding> tb = {
             m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"},
             m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
-            m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
         };
         if (bias_tensor.has_value()) {
             b.push_back(m2::DFBBinding{
@@ -6110,6 +6125,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             {"in1_mcast_num_cores", 0u},
             {"KtNt", K * N},
             {"batch", in0_B},
+            {"out_block_num_tiles", out_block_tiles},
             {"bcast_B", (uint32_t)bcast_batch},
             {"batchB", 0u},
             {"sparsity_pagesize", 0u},
@@ -6172,7 +6188,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             // The bare WRITER hint resolves to NOC1 here and the writes never leave the NIU
             // (npw_sent=0), hanging the final barrier.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_0,
                 in1_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -6279,7 +6295,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     //  * Quasar (single NOC, non-torus): ascending regardless of NOC. in0_noc defaults to NOC_1 on Quasar
     //    too, so the WH/BH swap would degenerate the rectangle to [max..min] and hang the sender on mcast
     //    acks. Force ascending via component-wise min/max. (#48552)
-    if (device->arch() == tt::ARCH::QUASAR) {
+    if (device.arch() == tt::ARCH::QUASAR) {
         CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
         CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
         start_core_noc = lo;
@@ -6439,7 +6455,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     run_args.tensor_args.emplace(RO_IN0_TENSOR, in0_tensor);
     run_args.tensor_args.emplace(RO_IN1_TENSOR, in1_tensor);
     run_args.tensor_args.emplace(RO_OUT_TENSOR, out_tensor);
-    run_args.tensor_args.emplace(RO_SPARSITY_TENSOR, in0_tensor);  // inert alias
     if (bias_tensor.has_value()) {
         run_args.tensor_args.emplace(RO_BIAS_TENSOR, *bias_tensor);
     }
@@ -6464,8 +6479,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
 // ---------------------------------------------------------------------------------------------------
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     const ttnn::Tensor& a,
-    tt_metal::IDevice* device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -6510,7 +6525,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     const bool fuse_op = false;
 
     uint32_t num_blocks = K / in0_block_w;
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_tensor.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
@@ -6527,7 +6544,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -6622,8 +6642,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
 
     CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     const auto& a_padded_shape =
         operations::experimental::quasar::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
@@ -6681,9 +6701,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         mm_kernel_defines["IN0_TRANSPOSE_TILE_PATH"] = "1";
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
@@ -6695,6 +6715,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         mm_kernel_in0_sender_defines["EXTRACT_SHARD_SUB_BLOCKS"] = "1";
     }
     if (output_is_sharded) {
+        // The in1 writer pops batch * out_shard_tiles tiles in one wait_front/pop_front call, which takes a uint16_t.
+        TT_FATAL(
+            in0_B * out_shard_tiles <= std::numeric_limits<uint16_t>::max(),
+            "matmul_multicore_reuse_mcast_1d: a sharded output of {} tiles per core exceeds the maximum of {} "
+            "supported by this program factory",
+            in0_B * out_shard_tiles,
+            std::numeric_limits<uint16_t>::max());
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
     }
@@ -6704,12 +6731,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     }
 
     // ---- Tensor parameters ----
-    // Sparsity TensorParameter is inert (batchB == 0); aliases the in0 spec so tensor::sparsity binds.
     m2::Group<m2::TensorParameter> tensor_parameters = {
         m2::TensorParameter{.unique_id = RO_IN0_TENSOR, .spec = in0_tensor.tensor_spec()},
         m2::TensorParameter{.unique_id = RO_IN1_TENSOR, .spec = in1_tensor.tensor_spec()},
         m2::TensorParameter{.unique_id = RO_OUT_TENSOR, .spec = out_tensor.tensor_spec()},
-        m2::TensorParameter{.unique_id = RO_SPARSITY_TENSOR, .spec = in0_tensor.tensor_spec()},
     };
     if (bias_tensor.has_value()) {
         tensor_parameters.push_back(
@@ -6734,9 +6759,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     // Sparsity scratch DFBs are a single-kernel DMA-landing self-loop (PRODUCER+CONSUMER on one DM
     // kernel), rejected by the Metal 2.0 DM-kernel self-loop validator. This factory never enables
     // sparsity (batchB hardcoded 0; the sparse path is a separate factory), so the sparsity DFBs/
-    // bindings and the kernels' SPARSITY-gated cb_sparsity usage are absent. When the sparse matmul
-    // is ported to Metal 2.0, flip sparsity_enabled, define SPARSITY on the senders, and replace the
-    // self-loop with a scratchpad/LocalTensorAccessor.
+    // bindings, the sparsity TensorParameter, and the kernels' SPARSITY-gated cb_sparsity / tensor::sparsity
+    // usage are absent. When the sparse matmul is ported to Metal 2.0, flip sparsity_enabled, define
+    // SPARSITY on the senders, declare a sparsity TensorParameter bound to the real sparsity tensor
+    // (never an alias of an io tensor: the mesh adapter resolves each binding to its own tensor slot),
+    // and replace the self-loop with a scratchpad/LocalTensorAccessor.
     const bool sparsity_enabled = false;
     if (sparsity_enabled) {
         dataflow_buffers.push_back(m2::DataflowBufferSpec{
@@ -6830,26 +6857,24 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = CoreRangeSet(in1_mcast_receiver_cores_bounding_box)},
     };
 
-    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
-        device->arch(),
-        ttnn::ComputeKernelConfig{
-            .math_fidelity = math_fidelity,
-            .math_approx_mode = math_approx_mode,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = false});
+    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+        .math_fidelity = math_fidelity,
+        .math_approx_mode = math_approx_mode,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = false});
 
     // The in1 sender multicasts weights/bias over a dest rectangle whose start/end are swapped based
     // on in1_noc (below). The in1 sender/receiver writer kernels MUST issue NoC ops on that same NOC,
     // or the rectangle is inverted for the actual NOC and the multicast degenerates (delivering only
     // to the corner cores -> receivers never get VALID -> hang). The legacy descriptor pins
     // in1 writers to RISCV_0 + in1_noc; mirror that here instead of leaving the NOC to the role hint.
-    const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
     // in0 sender is pinned to RISCV_1 + in0_noc (below). Leaving it to a plain READER role hint resolves to
     // NOC_0, which collides with the in1 sender/receiver writers (RISCV_0 + in1_noc == NOC_0 on WH): both
     // become dedicated-NOC DM kernels on NOC_0 on the same core, which the program-spec validator rejects
     // (noc_inserted) and which hangs the device. in0_noc (DRAM-write pref) is the opposite NOC of in1_noc
     // (DRAM-read pref), so this gives them distinct NOCs. Mirrors the mcast_in0 factory / legacy descriptor.
-    const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
 
     m2::Group<m2::KernelSpec> kernels;
 
@@ -6886,7 +6911,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .tensor_bindings =
                 {
                     m2::TensorBinding{.tensor_parameter_name = RO_IN0_TENSOR, .accessor_name = "in0"},
-                    m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
                 },
             .compile_time_args =
                 {
@@ -6932,7 +6956,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             // Pin RISCV_1 + in0_noc (not a plain READER hint -> NOC_0) so this does not collide with the
             // in1 sender writer on NOC_0. See the in0_noc comment above.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_1,
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -6962,7 +6986,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         std::vector<m2::TensorBinding> tb = {
             m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"},
             m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
-            m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
         };
         if (bias_tensor.has_value()) {
             b.push_back(m2::DFBBinding{
@@ -6986,6 +7009,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             {"in1_mcast_num_cores", in1_mcast_receiver_num_cores - 1},
             {"KtNt", K * N},
             {"batch", reuse_in0_in_CB ? in1_B : in0_B},
+            {"out_block_num_tiles", out_block_tiles},
             {"bcast_B", (uint32_t)bcast_batch},
             {"batchB", 0u},
             {"sparsity_pagesize", 0u},
@@ -7043,7 +7067,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             // Pin RISCV_0 + in1_noc (legacy parity): the multicast dest rectangle was swapped for
             // in1_noc, so the mcast must issue on in1_noc or it inverts and degenerates.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_0,
                 in1_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -7071,6 +7095,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             {"num_blocks_w_dim", out_num_blocks_x},
             {"num_blocks_h_dim", out_num_blocks_y},
             {"batch", reuse_in0_in_CB ? in1_B : in0_B},
+            {"out_block_num_tiles", out_block_tiles},
             {"out_tensor_stride_w", 1u},
             {"out_tensor_stride_h", N},
             {"out_tensor_next_subblock_stride_w", out_subblock_w},
@@ -7125,7 +7150,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             // Pin RISCV_0 + in1_noc (legacy parity) so the receiver's NoC ops use the same NOC as
             // the sender's multicast geometry.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_0,
                 in1_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -7205,7 +7230,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .source = std::filesystem::path(NOOP_DM_KERNEL_PATH),
             .dfb_bindings = std::move(noop_dm_dfb),
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_0,
                 in1_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -7218,7 +7243,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             // the program-spec validator rejects (noc_inserted). in0_noc is the opposite NOC -> distinct.
             // Mirrors the worker-core split (in0 reader on in0_noc, in1 writer on in1_noc).
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
+                device.arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_1,
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -7266,7 +7291,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     //  * WH/BH: an in1 NOC_0 multicast runs high->low, so swap start/end (unchanged).
     //  * Quasar (single NOC, non-torus): force ascending via component-wise min/max regardless of NOC,
     //    else the reversed [max..min] rectangle hangs the sender on mcast acks. (#48552)
-    if (device->arch() == tt::ARCH::QUASAR) {
+    if (device.arch() == tt::ARCH::QUASAR) {
         CoreCoord lo = {std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
         CoreCoord hi = {std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
         start_core_noc = lo;
@@ -7386,7 +7411,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     run_args.tensor_args.emplace(RO_IN0_TENSOR, in0_tensor);
     run_args.tensor_args.emplace(RO_IN1_TENSOR, in1_tensor);
     run_args.tensor_args.emplace(RO_OUT_TENSOR, out_tensor);
-    run_args.tensor_args.emplace(RO_SPARSITY_TENSOR, in0_tensor);  // inert alias
     if (bias_tensor.has_value()) {
         run_args.tensor_args.emplace(RO_BIAS_TENSOR, *bias_tensor);
     }
@@ -7473,10 +7497,10 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::IDevice* device = &in0_tensor.mutable_device();
+    const tt_metal::distributed::MeshDevice& device = in0_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
     (void)dst_full_sync_en;
 
     const auto in0_B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
@@ -7503,7 +7527,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
 
     CoreCoord sub_device_start_core = program_config.allowed_worker_cores.value().bounding_box().start_coord;
     if (operation_attributes.sub_device_id.has_value()) {
-        auto sd_worker_cores = device->worker_cores(
+        auto sd_worker_cores = device.worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
         auto bbox = sd_worker_cores.bounding_box();
         TT_FATAL(

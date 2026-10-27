@@ -6,7 +6,7 @@ import ttnn
 import torch
 import pytest
 import transformers
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.squeezebert.tt import ttnn_functional_squeezebert

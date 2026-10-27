@@ -32,7 +32,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.llama32_1b_quasar.auto_compose import to_torch_auto_compose
+from models.experimental.llama32_1b_quasar.auto_compose import _infer_mesh_composer_from_topology, to_torch_auto_compose
 from models.experimental.llama32_1b_quasar.utility_functions import comp_allclose, comp_pcc
 
 # =============================================================================
@@ -104,6 +104,14 @@ def to_tt(
         mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=shard_dim)
     else:
         mapper = None
+
+    # Quasar sim rejects WH DataMovementKernel tilize on upload; host-tilize (distributed per `mapper`)
+    # then .to(device). Passing mesh_mapper here preserves the requested replication/sharding — omitting
+    # it uploaded a single per-device tensor, wrong for multi-device (replicated/sharded) callers.
+    if ttnn.get_arch_name() == "quasar":
+        tt_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, mesh_mapper=mapper)
+        return tt_tensor.to(mesh_device, memory_config)
+
     return ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
@@ -115,7 +123,15 @@ def to_tt(
 
 
 def from_tt(tt_tensor: ttnn.Tensor, mesh_device=None) -> torch.Tensor:
-    """ttnn -> torch (host), composing across the mesh. Returns float32."""
+    """ttnn -> torch (host). Returns float32.
+
+    Single-device / fully-replicated tensors read back with plain ``ttnn.to_torch`` — consistent with the e2e
+    test, which composes with ``ttnn.to_torch`` directly. Multi-device tensors (e.g. the (1,2) CCL op tests:
+    all_gather / reduce_scatter / all_gather_matmul) still route through ``to_torch_auto_compose``, which infers
+    the shard/replica composer. The two paths are identical on a (1,1) mesh (the composer is None there), so
+    this is a cosmetic alignment for the common single-device case, not a behavior change."""
+    if _infer_mesh_composer_from_topology(tt_tensor, device=mesh_device) is None:
+        return ttnn.to_torch(tt_tensor).float()
     return to_torch_auto_compose(tt_tensor, mesh_device).float()
 
 
@@ -194,15 +210,32 @@ def _num_to_corerange(num_cores: int, start_core: "ttnn.CoreCoord | None" = None
 # =============================================================================
 
 
-def assert_pcc(torch_ref: torch.Tensor, tt_out: ttnn.Tensor, *, pcc=0.99, mesh_device=None):
-    """Compare a ttnn output against a torch reference by PCC."""
-    got = from_tt(tt_out, mesh_device)
+def assert_pcc(torch_ref: torch.Tensor, tt_out: ttnn.Tensor = None, *, pcc=0.99, mesh_device=None, host=None):
+    """Compare a ttnn output against a torch reference by PCC.
+
+    ``host`` is an already-composed torch tensor for ``tt_out`` (from ``from_tt``). When given it is
+    used directly instead of reading ``tt_out`` back again — so a caller that already read the output
+    for another check (e.g. finiteness) does not pay the device->host readback twice (the sim readback
+    dominates runtime). ``host`` may be a *leading prefix* of the output (the bounded-readback path for
+    oversized tensors), in which case the comparison is made over the overlapping leading region.
+    """
+    got = host if host is not None else from_tt(tt_out, mesh_device)
     ref = torch_ref.float()
-    # Align on the reference's element count when the op pads to tiles.
-    if got.shape != ref.shape and got.numel() >= ref.numel():
-        got = got.reshape(-1)[: ref.numel()].reshape(ref.shape)
-    passing, msg = comp_pcc(ref, got, pcc)
-    _, all_msg = comp_allclose(ref, got)
+    # Compare over the overlapping leading elements. This covers both the op-pads-to-tiles case
+    # (got has more elements than ref) and the bounded-readback case (host is a shorter prefix of ref).
+    got_flat, ref_flat = got.reshape(-1), ref.reshape(-1)
+    # Only a bounded-readback prefix (host is not None) may legitimately be SHORTER than ref. On a full
+    # readback, a shorter output is a real failure (missing/truncated data), so keep the strict numel check
+    # instead of silently comparing just the leading prefix and passing.
+    if host is None:
+        assert got_flat.numel() >= ref_flat.numel(), (
+            f"output has {got_flat.numel()} elements, expected >= {ref_flat.numel()} (ref) "
+            f"— a short full-readback output must not be masked by the leading-prefix compare"
+        )
+    n = min(got_flat.numel(), ref_flat.numel())
+    got_cmp, ref_cmp = got_flat[:n], ref_flat[:n]
+    passing, msg = comp_pcc(ref_cmp, got_cmp, pcc)
+    _, all_msg = comp_allclose(ref_cmp, got_cmp)
     assert passing, f"PCC below {pcc}: {msg} | {all_msg}"
 
 

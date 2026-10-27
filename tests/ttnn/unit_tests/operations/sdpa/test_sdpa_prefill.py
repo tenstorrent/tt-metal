@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import math
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -11,6 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import run_sdpa_block_mask
 
 
 def fa_rand(*shape):
@@ -762,3 +762,158 @@ def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, is_causal, q_
     run_test_sdpa_with_attention_sink(
         device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, is_causal=is_causal, rmse_threshold=rmse_threshold
     )
+
+
+# output_concat_heads: SDPA writing [b x 1 x s x nh*d] directly, against SDPA followed by nlp_concat_heads.
+# Rows dropped from the logical length in the view case; not a tile multiple, so the last tile is partial.
+CONCAT_HEADS_VIEW_PAD_ROWS = 27
+
+
+@pytest.mark.parametrize("pad_rows", [0, CONCAT_HEADS_VIEW_PAD_ROWS], ids=["full", "view"])
+@pytest.mark.parametrize(
+    "b, nh, s, d",
+    [(1, 8, 1024, 64), (1, 32, 1824, 64), (2, 4, 512, 128)],
+    ids=["b1_nh8_s1024_d64", "b1_nh32_s1824_d64", "b2_nh4_s512_d128"],
+)
+def test_sdpa_output_concat_heads(device, b, nh, s, d, pad_rows):
+    """The fused layout must be bit-identical to nlp_concat_heads on the valid rows."""
+    torch.manual_seed(0)
+    valid = s - pad_rows
+    dim = nh * d
+    padded = ttnn.Shape([b, nh, s, d])
+    q, k, v = (
+        ttnn.from_torch(torch.randn(b, nh, s, d), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(3)
+    )
+    if valid != s:
+        logical = ttnn.Shape([b, nh, valid, d])
+        q, k, v = (ttnn.reshape(t, logical, padded) for t in (q, k, v))
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=128,
+        k_chunk_size=128,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
+    )
+    sdpa_kwargs = dict(
+        attn_mask=None, is_causal=False, program_config=program_config, compute_kernel_config=compute_kernel_config
+    )
+
+    ref = ttnn.transformer.scaled_dot_product_attention(q, k, v, **sdpa_kwargs)
+    if valid != s:
+        ref = ttnn.reshape(ref, padded, padded)
+    ref = ttnn.reshape(ttnn.experimental.nlp_concat_heads(ref), (b, s, dim))
+
+    out = ttnn.transformer.scaled_dot_product_attention(q, k, v, output_concat_heads=True, **sdpa_kwargs)
+    assert tuple(out.shape) == (b, 1, valid, dim)
+    if valid != s:
+        full = ttnn.Shape([b, 1, s, dim])
+        out = ttnn.reshape(out, full, full)
+    out = ttnn.reshape(out, (b, s, dim))
+
+    ref_torch, out_torch = ttnn.to_torch(ref), ttnn.to_torch(out)
+    assert out_torch.shape == ref_torch.shape == (b, s, dim)
+    n_diff = int((out_torch[:, :valid] != ref_torch[:, :valid]).sum())
+    assert torch.equal(out_torch[:, :valid], ref_torch[:, :valid]), f"{n_diff} of the valid elements differ"
+
+
+# The nightly prefill file sweeps the masked fraction and chunk sizes at S 2048 and 4096.
+@pytest.mark.parametrize(
+    "s, nkv, bcast_heads, q_chunk_size, k_chunk_size, p_masked",
+    [(1024, 8, True, 128, 128, 0.5), (1024, 2, False, 128, 256, 0.75)],
+)
+def test_sdpa_noncausal_block_mask(device, s, nkv, bcast_heads, q_chunk_size, k_chunk_size, p_masked):
+    run_sdpa_block_mask(device, 1, 8, nkv, s, 128, q_chunk_size, k_chunk_size, p_masked, bcast_heads)
+
+
+def test_sdpa_block_mask_needs_matching_shape(device, expect_error):
+    s, d = 1024, 128
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(), q_chunk_size=128, k_chunk_size=128
+    )
+    q, k, v = (
+        ttnn.from_torch(fa_rand(1, 1, s, d), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(3)
+    )
+    mask = ttnn.from_torch(torch.zeros(1, 1, s, s), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+    bad_map = ttnn.from_torch(
+        torch.ones(1, 1, s // 128, s // 128 + 1, dtype=torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "attn_mask_block_map must be"):
+        ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, attn_mask=mask, program_config=program_config, attn_mask_block_map=bad_map
+        )
+
+
+# One map row (2048 int32 flags, 8 KB) is larger than the whole K CB (two bfp8 tiles), so map sampling must not use it.
+@pytest.mark.parametrize("p_masked", [0.25, 0.75], ids=["chain_keeps", "map_used"])
+def test_sdpa_block_map_row_larger_than_k_cb(device, p_masked):
+    torch.manual_seed(5)
+    b, nh, nkv, sq, sk, d, chunk = 1, 8, 1, 128, 65536, 32, 32
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=chunk,
+        k_chunk_size=chunk,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
+    )
+    Q, K, V = fa_rand(b, nh, sq, d), fa_rand(b, nkv, sk, d), fa_rand(b, nkv, sk, d)
+    masked = torch.bernoulli(torch.full((b, 1, sq // chunk, sk // chunk), p_masked))
+    masked[..., 0] = 0
+    mask = masked.repeat_interleave(chunk, dim=2).repeat_interleave(chunk, dim=3) * -1e9
+    tt_q = ttnn.from_torch(Q, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_k = ttnn.from_torch(K, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_v = ttnn.from_torch(V, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_map = ttnn.from_torch((masked == 0).to(torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    outs = []
+    for m in (None, tt_map):
+        out = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=False,
+            attn_mask=tt_mask,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            attn_mask_block_map=m,
+        )
+        outs.append(ttnn.to_torch(out))
+    K_rep, V_rep = (x.repeat(1, nh // nkv, 1, 1) for x in (K, V))
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K_rep, V_rep, attn_mask=mask)
+    for out in outs:
+        out_pass, out_pcc = comp_pcc(gt, out, 0.99)
+        logger.debug(f"python vs pytorch: {out_pcc}")
+        assert out_pass
+    assert (outs[0] - outs[1]).abs().max().item() < 0.02
+
+
+@pytest.mark.parametrize("mode", ["windowed", "sliding_window"])
+def test_sdpa_block_map_rejects_windowed_and_sliding(device, mode, expect_error):
+    s, d = 512, 128
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(), q_chunk_size=128, k_chunk_size=128
+    )
+    q, k, v = (
+        ttnn.from_torch(fa_rand(1, 1, s, d), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(3)
+    )
+    block_map = ttnn.from_torch(
+        torch.tensor([[[[1, 0, 0, 1]] * 4]], dtype=torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    if mode == "windowed":
+        cu = ttnn.from_torch(
+            torch.tensor([0, s], dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        kwargs = dict(cu_window_seqlens=cu)
+    else:
+        kwargs = dict(sliding_window_size=256)
+    with expect_error(RuntimeError, "attn_mask_block_map cannot be combined"):
+        ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, program_config=program_config, attn_mask_block_map=block_map, **kwargs
+        )

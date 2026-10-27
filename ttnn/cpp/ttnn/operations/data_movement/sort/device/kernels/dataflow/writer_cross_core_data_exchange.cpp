@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cross_core_data_exchange_common.hpp"
-#include "sort_dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/index_tile_dataflow.hpp"
 
 #include "experimental/kernel_args.h"
 
@@ -53,9 +53,11 @@ void kernel_main() {
         // generator here.
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
             if (is_32_bit_data) {
-                generate_index_tile<uint32_t>(dfb::index_tensor, core_id * number_of_tiles_per_core + w);
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(
+                    dfb::index_tensor, core_id * number_of_tiles_per_core + w);
             } else {
-                generate_index_tile<uint16_t>(dfb::index_tensor, core_id * number_of_tiles_per_core + w);
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(
+                    dfb::index_tensor, core_id * number_of_tiles_per_core + w);
             }
         }  // w loop
 

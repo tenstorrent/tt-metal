@@ -46,6 +46,7 @@
 #include <type_traits>
 #include <utility>
 
+// NOLINTBEGIN(bugprone-multi-level-implicit-pointer-conversion,bugprone-undefined-memory-manipulation)
 namespace ttsl::detail::llvm {
 
 template <typename T>
@@ -1335,6 +1336,7 @@ extern template class llvm::SmallVectorBase<uint64_t>;
 #endif
 
 }  // namespace ttsl::detail::llvm
+// NOLINTEND(bugprone-multi-level-implicit-pointer-conversion,bugprone-undefined-memory-manipulation)
 
 namespace std {
 

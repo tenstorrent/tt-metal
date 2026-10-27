@@ -17,12 +17,14 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
+from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
@@ -32,17 +34,14 @@ class GateComputeMode(Enum):
 
     The gate has two stages: matmul (x @ W_gate) and grouped_gate (topk routing).
     Each can independently run on device (TTNN) or host (torch).
-    The device gate has two precision variants: bf16 (default) and fp32.
+    The device gate has one precision variant (fp32).
 
     The device gate routing rule is selected from the model config: the grouped-topk
     op handles both cases, collapsing to a plain top-k when there is a single expert
     group (n_expert_groups == 1, e.g. Kimi) and using grouped routing otherwise.
     """
 
-    DEVICE = "device"  # matmul device, gate device (bf16)
     DEVICE_FP32 = "device_fp32"  # matmul device, gate device (fp32)
-    HOST_GROUPED_GATE = "host_grouped_gate"  # matmul device, grouped gate host
-    HOST_MATMUL = "host_matmul"  # matmul host, grouped gate device (bf16)
     HOST_ALL = "host_all"  # matmul host, grouped gate host
     # DeepSeek-V4 hash routing: expert indices come from a static tid2eid[input_ids] table
     # (not top-k); weights are still score_func(x@W) gathered at those indices, normalized, scaled.
@@ -61,10 +60,7 @@ class GateComputeMode(Enum):
 # moe_grouped_topk.cpp implements only sigmoid/sqrtsoftplus, never softmax, so a GPT-style router
 # (Mistral) run under a "sigmoid" mode produces plausible-looking, wrong-expert routing with no error.
 GATE_MODE_FAMILY = {
-    GateComputeMode.DEVICE: "sigmoid",
     GateComputeMode.DEVICE_FP32: "sigmoid",
-    GateComputeMode.HOST_GROUPED_GATE: "sigmoid",
-    GateComputeMode.HOST_MATMUL: "sigmoid",
     GateComputeMode.HOST_ALL: "sigmoid",
     GateComputeMode.HASH_HOST: "hash",
     GateComputeMode.HASH_DEVICE: "hash",
@@ -77,7 +73,7 @@ def assert_gate_mode_matches_adapter(variant, gate_fallback_mode: GateComputeMod
     """The only other reader of ``adapter.default_gate_mode`` is prefill_runner.py's env-var
     fallback -- nothing ties a test's chosen mode back to it, so the adapter and the test suite can
     silently drift onto different routing families (this is how a wrong manifest gate mode survived
-    review once already). Checked by family, not exact value: HOST_ALL/DEVICE/DEVICE_FP32 rows
+    review once already). Checked by family, not exact value: HOST_ALL/DEVICE_FP32 rows
     intentionally diverge from each other to exercise host-fallback paths, and must keep passing.
     """
     # A dense row drives no MoE gate and passes None: there is no chosen mode to cross-check, and
@@ -189,7 +185,7 @@ class TtMoEGateConfig:
                     mcast_in0=False,
                 )
             ),
-            (GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS): (
+            (GATE_PRODUCTION_SP_DIM, GLM53Config.EMB_SIZE // 4, GLM53Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=12,
@@ -317,7 +313,7 @@ class TtMoEGateConfig:
                     fuse_batch=True,
                 )
             ),
-            (GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS): (
+            (GATE_PRODUCTION_SP_DIM, GLM53Config.EMB_SIZE // 4, GLM53Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(8, 10),
                     in0_block_w=8,
@@ -363,6 +359,20 @@ class TtMoEGateConfig:
                 ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(4, 10),
                     in0_block_w=23,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=2,
+                    out_block_w=1,
+                    per_core_M=2,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, MistralSmall4Config.EMB_SIZE // 4, MistralSmall4Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(4, 10),
+                    in0_block_w=8,
                     out_subblock_h=1,
                     out_subblock_w=1,
                     out_block_h=2,
@@ -475,13 +485,15 @@ class TtMoEGatePrefill(LightweightModule):
         cache_path: Path | None,
         cache_name_prefix: str | None,
         device: ttnn.MeshDevice | None = None,  # None=cache, mesh_device=load
+        *,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ) -> dict | None:
         """
         Shared logic for converting gate weights to TTNN with caching.
 
         Bias handling: Cache stores unbroadcasted (n_experts,) format. On load,
         returns unbroadcasted bias for caller to broadcast to (sp_dim, n_experts).
-        This is required by ttnn.experimental.deepseek_grouped_gate kernel.
+        This is required by the moe_grouped_topk kernel.
 
         Returns:
             If device=None (cache mode): None
@@ -519,15 +531,17 @@ class TtMoEGatePrefill(LightweightModule):
                 mesh_shape=mesh_device.shape,
             ),
             cache_file_name=_cache_name("weight"),
+            cache_dump_mode=cache_dump_mode,
         )
 
-        # Cache bias unbroadcasted (required by deepseek_grouped_gate)
+        # Cache bias unbroadcasted (required by moe_grouped_topk)
         bias_tt = ttnn.as_tensor(
             torch_bias,
             device=None,  # Always load to host first
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             cache_file_name=_cache_name("e_score_correction_bias"),
+            cache_dump_mode=cache_dump_mode,
         )
 
         if device is None:
@@ -571,10 +585,18 @@ class TtMoEGatePrefill(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         cache_path: Path,
         cache_name_prefix: str,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ):
         """Build TTNN cache for gate weights without device copy."""
         TtMoEGatePrefill._convert_and_cache_gate_weights(
-            torch_weight, torch_bias, config, mesh_device, cache_path, cache_name_prefix, device=None
+            torch_weight,
+            torch_bias,
+            config,
+            mesh_device,
+            cache_path,
+            cache_name_prefix,
+            device=None,
+            cache_dump_mode=cache_dump_mode,
         )
 
     def __init__(
@@ -583,16 +605,19 @@ class TtMoEGatePrefill(LightweightModule):
         mesh_device,
         weight: torch.Tensor = None,
         bias: torch.Tensor = None,
-        fallback_mode: GateComputeMode = GateComputeMode.DEVICE,
+        fallback_mode: GateComputeMode = GateComputeMode.DEVICE_FP32,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
         is_balanced: bool = False,
         hash_table: torch.Tensor = None,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ):
         """
         Args:
             weight: Gate weight in HF convention: (n_routed_experts, dim).
                     Transposed internally to (dim, n_routed_experts) for the TTNN matmul path.
+            cache_dump_mode: How a weight-cache miss is written (see ttnn.as_tensor). Pass
+                ttnn.DumpTensorMode.LOCAL when each rank builds different layers (pipeline parallel).
             is_balanced: If True, uses zigzag (balanced) sequence placement across SP devices.
                 Affects per-device real token count computation for padding awareness.
             hash_table: DeepSeek-V4 hash routing tid2eid table, shape (vocab_size, n_activated_experts).
@@ -615,14 +640,30 @@ class TtMoEGatePrefill(LightweightModule):
         # on-device instead and refreshes THIS buffer in place — a stable address the capture can keep
         # writing across replays. Allocated lazily on first use (warm-up, before any capture).
         self._padding_config_device: Optional[ttnn.Tensor] = None
+        # Row-index / sentinel masks for _sentinel_padded_rows, keyed on the indices shape.
+        self._row_masks: dict = {}
 
         if weight is not None and bias is not None:
             weights = self._convert_and_cache_gate_weights(
-                weight, bias, config, mesh_device, weight_cache_path, cache_name_prefix, device=mesh_device
+                weight,
+                bias,
+                config,
+                mesh_device,
+                weight_cache_path,
+                cache_name_prefix,
+                device=mesh_device,
+                cache_dump_mode=cache_dump_mode,
             )
         elif weight_cache_path is not None:
             weights = self._convert_and_cache_gate_weights(
-                None, None, config, mesh_device, weight_cache_path, cache_name_prefix, device=mesh_device
+                None,
+                None,
+                config,
+                mesh_device,
+                weight_cache_path,
+                cache_name_prefix,
+                device=mesh_device,
+                cache_dump_mode=cache_dump_mode,
             )
         else:
             weights = self._convert_and_cache_gate_weights(
@@ -640,7 +681,7 @@ class TtMoEGatePrefill(LightweightModule):
         torch_weight_fallback = weights["torch_weight"]
         torch_bias_fallback = weights["torch_bias"]
 
-        # Broadcast bias for deepseek_grouped_gate kernel
+        # Broadcast bias for moe_grouped_topk kernel
         bias_torch = ttnn.to_torch(bias_tt)
         del bias_tt
         bias_broadcasted = bias_torch.repeat(config.sp_dim).view(config.sp_dim, -1)
@@ -653,12 +694,12 @@ class TtMoEGatePrefill(LightweightModule):
         )
 
         # Torch copies for host fallback paths — keep in HF convention (n_experts, dim)
-        if fallback_mode not in (GateComputeMode.DEVICE, GateComputeMode.DEVICE_FP32):
+        if fallback_mode != GateComputeMode.DEVICE_FP32:
             self.torch_weight = torch_weight_fallback  # (n_experts, dim) - HF format
             self.torch_bias = torch_bias_fallback  # (n_experts,)
 
         # Reference model for host grouped-gate paths
-        if fallback_mode in (GateComputeMode.HOST_GROUPED_GATE, GateComputeMode.HOST_ALL):
+        if fallback_mode == GateComputeMode.HOST_ALL:
             from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 
             self.ref_config = SimpleNamespace(
@@ -876,20 +917,6 @@ class TtMoEGatePrefill(LightweightModule):
         host_x = self._compose_x_to_host(x)
         return F.linear(host_x.float(), self.torch_weight.float())
 
-    def _device_grouped_gate(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Run deepseek_grouped_gate on device."""
-        logger.debug(f"[MoeGate] _device_grouped_gate: logits.shape={logits.shape}, bias.shape={self.bias.shape}")
-        return ttnn.experimental.deepseek_grouped_gate(
-            logits,
-            self.bias,
-            n_groups=self.config.n_expert_groups,
-            summed_experts_per_group=self.config.n_expert_groups // self.config.n_limited_groups,
-            topk_groups=self.config.n_limited_groups,
-            n_activated_experts=self.config.n_activated_experts,
-            route_scale=self.config.route_scale,
-            epsilon=1e-20,
-        )
-
     def build_padding_config(self, actual_isl: int, padding_side: str = "right", actual_start: int = 0) -> ttnn.Tensor:
         """Create the per-SP-shard [local_num_real_tokens, pad_side] config for moe_grouped_topk.
 
@@ -1100,6 +1127,7 @@ class TtMoEGatePrefill(LightweightModule):
             epsilon=1e-20,
             score_func=self.config.score_func,
             padding_config=padding_config,
+            weights_layout=ttnn.ROW_MAJOR_LAYOUT if self.config.n_activated_experts <= 32 else ttnn.TILE_LAYOUT,
         )
         # padding_config is memoized + owned by build_padding_config (reused across forwards/replays). Do
         # NOT deallocate it here even on the owns_padding_config path — freeing it breaks the next cache hit.
@@ -1178,6 +1206,38 @@ class TtMoEGatePrefill(LightweightModule):
         ttnn.deallocate(logits_tiled)
         return scores, indices
 
+    def _sentinel_padded_rows(self, indices: ttnn.Tensor, padding_config: ttnn.Tensor) -> ttnn.Tensor:
+        """Set right-padded rows' expert ids to the n_routed_experts sentinel, as DEVICE_FP32's topk does.
+
+        Right padding only: the caller must reject padding_side != "right" (the config's pad_side is
+        not read here). The masks are built lazily on first use of each shape, so that must be
+        warm-up, before any trace capture (from_torch is illegal inside a capture).
+        """
+        key = tuple(indices.shape)
+        if key not in self._row_masks:
+            rows, k = indices.shape[-2], indices.shape[-1]
+            assert rows <= torch.iinfo(torch.int16).max, f"{rows} rows overflow the int16 row index"
+            row_index = torch.arange(rows, dtype=torch.int16).reshape(rows, 1).expand(rows, k).reshape(key)
+            self._row_masks[key] = tuple(
+                ttnn.from_torch(
+                    t,
+                    device=self.mesh_device,
+                    dtype=indices.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                for t in (row_index, torch.full_like(row_index, self.config.n_routed_experts))
+            )
+        row_index, sentinel = self._row_masks[key]
+        real = ttnn.slice(padding_config, [0, 0], [1, 1])
+        real = ttnn.typecast(ttnn.to_layout(real, ttnn.TILE_LAYOUT), indices.dtype)
+        is_real = ttnn.lt(row_index, real)
+        out = ttnn.where(is_real, indices, sentinel)
+        for t in (real, is_real, indices):
+            ttnn.deallocate(t)
+        return out
+
     def _host_gpt_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """GPT-OSS routing on host. Returns (indices, scores).
 
@@ -1203,13 +1263,12 @@ class TtMoEGatePrefill(LightweightModule):
         actual_start: int = 0,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         mode = self.fallback_mode
-        logger.debug(f"[MoeGate] fallback_mode={mode.value}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"[MoeGate] fallback_mode={mode.value}")
 
         # ---- Phase 1: Logits (matmul) ----
         if mode in (
-            GateComputeMode.DEVICE,
             GateComputeMode.DEVICE_FP32,
-            GateComputeMode.HOST_GROUPED_GATE,
             GateComputeMode.HASH_DEVICE,
             GateComputeMode.GPT_HOST,
             GateComputeMode.GPT_DEVICE,
@@ -1217,21 +1276,13 @@ class TtMoEGatePrefill(LightweightModule):
             logits = self._device_matmul(x)
         elif mode == GateComputeMode.HASH_HOST:
             pass  # the reference HashRouter computes logits from composed host x in Phase 2
-        else:  # HOST_MATMUL, HOST_ALL
+        else:  # HOST_ALL
             host_logits = self._host_matmul(x)
 
         # ---- Phase 2: Grouped gate ----
-        # The device gate kernels select the routing rule from n_expert_groups: with a single expert
+        # The device gate kernel selects the routing rule from n_expert_groups: with a single expert
         # group (n_expert_groups == 1, e.g. Kimi) the grouped-topk op collapses to a plain top-k.
-        single_group = self.config.n_expert_groups == 1
-        if mode == GateComputeMode.DEVICE:
-            # The bf16 grouped gate (deepseek_grouped_gate) only supports the multi-group DeepSeek
-            # shape; single-group models route through moe_grouped_topk (fp32), which handles n_groups == 1.
-            ttnn_scores, ttnn_top_k_experts_indices = (
-                self._device_grouped_gate_fp32(logits) if single_group else self._device_grouped_gate(logits)
-            )
-
-        elif mode == GateComputeMode.DEVICE_FP32:
+        if mode == GateComputeMode.DEVICE_FP32:
             ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate_fp32(
                 logits,
                 actual_isl=actual_isl,
@@ -1239,16 +1290,6 @@ class TtMoEGatePrefill(LightweightModule):
                 padding_config=padding_config,
                 actual_start=actual_start,
             )
-
-        elif mode == GateComputeMode.HOST_GROUPED_GATE:
-            host_logits = self._compose_logits_to_host(logits)
-            host_indices, host_scores = self._host_grouped_gate(host_logits)
-            ttnn_scores = self._host_scores_to_device(host_scores)
-            ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
-
-        elif mode == GateComputeMode.HOST_MATMUL:
-            logits = self._host_logits_to_device(host_logits)
-            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate(logits)
 
         elif mode == GateComputeMode.HOST_ALL:
             host_indices, host_scores = self._host_grouped_gate(host_logits)
@@ -1278,6 +1319,10 @@ class TtMoEGatePrefill(LightweightModule):
 
         elif mode == GateComputeMode.GPT_DEVICE:
             ttnn_scores, ttnn_top_k_experts_indices = self._device_gpt_gate(logits)
+            if padding_config is not None:
+                if padding_side != "right":
+                    raise ValueError(f"GPT_DEVICE padding awareness is right-padding only, got {padding_side!r}")
+                ttnn_top_k_experts_indices = self._sentinel_padded_rows(ttnn_top_k_experts_indices, padding_config)
 
         elif mode == GateComputeMode.GPT_HOST:
             host_logits = self._compose_logits_to_host(logits)

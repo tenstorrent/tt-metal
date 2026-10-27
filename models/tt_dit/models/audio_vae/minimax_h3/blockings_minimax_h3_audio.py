@@ -80,23 +80,55 @@ def h3_audio_channel_widths(
     pairs.add((latent_channels, latent_dim))  # dec_in_proj
     pairs.add((latent_dim, decoder_dim))  # conv_pre
     channels = decoder_dim
-    for _ in decoder_rates:
+    for rate in decoder_rates:
         nxt = channels // 2
-        pairs.add((channels, nxt))  # upsampler inner conv
+        pairs.add((channels, nxt))
+        pairs.add((channels, rate * nxt))
         pairs.add((aligned_channels(nxt), aligned_channels(nxt)))  # AMP convs
         channels = nxt
     pairs.add((aligned_channels(channels), aligned_channels(1)))  # conv_post -> mono
     return pairs
 
 
+# (C_out_block, T_out_block), swept for the decoder's in-kernel split at its 5/10/15 s per-device shapes and picked for
+# the lowest summed time over the three; the encoder shares the k7 keys. (256, 256, 7) is capped at T 24: above it
+# the traced 4x8 decode's live L1 tensors clash with the conv's CBs.
+_SWEPT_BLOCKINGS = {
+    (32, 32, 3): (32, 96),
+    (32, 32, 5): (32, 128),
+    (32, 32, 7): (32, 96),
+    (32, 32, 9): (32, 128),
+    (32, 32, 11): (32, 128),
+    (32, 32, 15): (32, 128),
+    (32, 32, 17): (32, 128),
+    (32, 32, 27): (32, 96),
+    (32, 2048, 1): (128, 32),
+    (64, 64, 3): (32, 96),
+    (64, 64, 7): (32, 128),
+    (64, 64, 11): (32, 32),
+    (128, 128, 3): (32, 128),
+    (128, 128, 7): (32, 128),
+    (128, 128, 11): (32, 96),
+    (256, 256, 3): (32, 128),
+    (256, 256, 7): (32, 24),
+    (256, 256, 11): (64, 64),
+    (512, 512, 3): (64, 32),
+    (512, 512, 7): (64, 128),
+    (512, 512, 11): (32, 32),
+    (512, 1280, 3): (64, 96),
+    (1024, 2560, 3): (256, 32),
+    (2048, 1024, 7): (64, 128),
+}
+
+
 def register_h3_audio_blockings(*, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK, **config) -> int:
     """Seed ``_FP32_BLOCKINGS`` for every H3 audio conv shape. Returns the number added.
 
     ``setdefault``, so a swept value that later lands in ``conv3d.py`` wins over these.
-    Kernels cover every size the model uses: 1 and 3 (projections), 4/7/8/9/10/11 (AMP
-    blocks, strided encoder convs and transposed upsamplers).
+    Kernels cover every size the model can present, 1 to 32: projections, AMP blocks, strided encoder convs, transposed
+    upsamplers and the packed bands' effective kernels (5, 15, 17, 27); the unused sizes cost dict entries only.
     """
-    kernels = (1, 3, 4, 7, 8, 9, 10, 11)
+    kernels = tuple(range(1, 33))
     added = 0
     for in_channels, out_channels in h3_audio_channel_widths(**config):
         for kernel in kernels:
@@ -114,4 +146,8 @@ def register_h3_audio_blockings(*, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
                 # rather than deferring to an entry tuned for a different model.
                 _FP32_BLOCKINGS[key] = (existing[0], existing[1], T_OUT_BLOCK, existing[3], existing[4])
                 added += 1
+    for (in_channels, out_channels, kernel), (c_out_block, t_out_block) in _SWEPT_BLOCKINGS.items():
+        key = (aligned_channels(in_channels), max(32, out_channels), (kernel, 1, 1))
+        existing = _FP32_BLOCKINGS[key]
+        _FP32_BLOCKINGS[key] = (existing[0], c_out_block, t_out_block, existing[3], existing[4])
     return added

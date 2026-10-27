@@ -11,8 +11,8 @@
 #include "fd_kernel.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/context_descriptor.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
 
 namespace tt::tt_metal {
@@ -25,7 +25,6 @@ struct prefetch_static_config_t {
     std::optional<uint32_t> prefetch_q_base;
     std::optional<uint32_t> prefetch_q_size;
     std::optional<uint32_t> prefetch_q_rd_ptr_addr;
-    std::optional<uint32_t> prefetch_q_pcie_rd_ptr_addr;
 
     std::optional<uint32_t> cmddat_q_base;
     std::optional<uint32_t> cmddat_q_size;
@@ -104,7 +103,6 @@ public:
         dispatch_core_manager& dispatch_core_manager,
         const GetControlPlaneFn& get_control_plane = {},
         const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
-        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
 
     void CreateKernel() override;

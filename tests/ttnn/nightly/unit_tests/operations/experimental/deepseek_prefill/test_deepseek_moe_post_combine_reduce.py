@@ -21,7 +21,7 @@ from loguru import logger
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
@@ -33,11 +33,11 @@ PCC_THRESHOLD = 0.999
 
 # Per-model (id, config, extended). Each test reads emb_dim (EMB_SIZE) and the routed-expert
 # count (NUM_ROUTED_EXPERTS) from the config, so every model exercises its own shape:
-#   dsv3 7168/256, glm_51 6144/256, minimax_m27 3072/256,
+#   dsv3 7168/256, glm_53 6144/256, minimax_m27 3072/256,
 #   dsv4_pro 7168/384, dsv4_flash 4096/256, gptoss_120b 2880/128.
 MODELS = [
     ("dsv3", DeepSeekV3Config, False),
-    ("glm_51", GLM51Config, True),
+    ("glm_53", GLM53Config, True),
     ("minimax_m27", MiniMaxM27Config, True),
     ("dsv4_pro", DeepSeekV4ProConfig, True),
     ("dsv4_flash", DeepSeekV4FlashConfig, True),

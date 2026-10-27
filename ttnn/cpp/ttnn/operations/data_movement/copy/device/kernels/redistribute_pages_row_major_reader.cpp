@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -32,16 +33,17 @@ void kernel_main() {
     constexpr auto bytes_per_output_subblock = get_arg(args::bytes_per_output_subblock);
 
     Noc noc;
-    // dfb::in0 is a reader-private L1 scratchpad (self-loop): the reader both fills and
-    // drains it. dfb::in1 is the reader->writer output-page FIFO.
-    DataflowBuffer dfb_in0(dfb::in0);
+    // scratch::in0 is a reader-private L1 scratchpad: the reader stages input pages in it.
+    // dfb::in1 is the reader->writer output-page FIFO.
+    // uint8_t view: the kernel only addresses it by byte offset; a byte element type keeps the
+    // Scratchpad size%sizeof(T) invariant valid for any page size (UINT8/FP8, odd RM widths).
+    Scratchpad<std::uint8_t> in0(scratch::in0);
     DataflowBuffer dfb_in1(dfb::in1);
 
     const auto accessor_src = TensorAccessor(tensor::src);
 
     const std::uint32_t elements_per_output_subblock = bytes_per_output_subblock / bytes_per_element;
     const std::uint32_t elements_per_input_subblock = bytes_per_input_subblock / bytes_per_element;
-    dfb_in0.reserve_back(1);
 
     // To help understand the logic of this kernel, here is a visualization of what a subblock looks like in the
     // input/output tensor: When the tensor page is not too large (i.e., does not cause a DFB OOM error), the subblock
@@ -60,8 +62,6 @@ void kernel_main() {
     // Thus, the start of a page will always align with the start of a subblock. This is required to guarantee
     // aligned noc reads/writes.
 
-    const std::uint32_t input_l1_write_addr = dfb_in0.get_write_ptr();
-
     for (std::uint32_t row = start_row; row < start_row + num_rows_to_process; ++row) {
         std::uint32_t input_start_column = 0;
         std::uint32_t input_end_column = input_start_column + elements_per_input_subblock - 1;
@@ -75,10 +75,9 @@ void kernel_main() {
                     ((input_start_column % elements_per_input_page) / elements_per_input_subblock) *
                     bytes_per_input_subblock;
                 std::uint32_t num_bytes_to_read = (input_end_column - input_start_column + 1) * bytes_per_element;
-                CoreLocalMem<std::uint32_t> dst(input_l1_write_addr);
                 noc.async_read(
                     accessor_src,
-                    dst,
+                    in0,
                     num_bytes_to_read,
                     {.page_id = input_page_id, .offset_bytes = input_subblock_offset},
                     {.offset_bytes = 0});
@@ -110,8 +109,8 @@ void kernel_main() {
                     dfb_in1.get_write_ptr();  // write the output subblock to the output DFB
                 tt::data_movement::common::tt_memmove<false, false, true, 0>(
                     noc,
-                    l1_output_subblock_write_addr + l1_output_subblock_write_addr_offset,
-                    input_l1_write_addr + l1_input_subblock_read_addr_offset,
+                    CoreLocalMem<std::uint8_t>(l1_output_subblock_write_addr + l1_output_subblock_write_addr_offset),
+                    in0.local_mem() + l1_input_subblock_read_addr_offset,
                     bytes_to_write_to_output_subblock);
 
                 if (input_end_column == output_end_column) {
@@ -164,8 +163,8 @@ void kernel_main() {
                     dfb_in1.get_write_ptr();  // Write the output subblock to the output DFB
                 tt::data_movement::common::tt_memmove<false, false, true, 0>(
                     noc,
-                    l1_output_subblock_write_addr + l1_output_subblock_write_addr_offset,
-                    input_l1_write_addr + l1_input_subblock_read_addr_offset,
+                    CoreLocalMem<std::uint8_t>(l1_output_subblock_write_addr + l1_output_subblock_write_addr_offset),
+                    in0.local_mem() + l1_input_subblock_read_addr_offset,
                     bytes_to_write_to_output_subblock);
 
                 // We have processed the entire input subblock, so we must update the start and end indices of the input
@@ -182,8 +181,4 @@ void kernel_main() {
             }
         }
     }
-
-    dfb_in0.push_back(1);
-    dfb_in0.wait_front(1);
-    dfb_in0.pop_front(1);
 }

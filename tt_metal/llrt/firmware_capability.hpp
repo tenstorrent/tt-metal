@@ -6,8 +6,8 @@
 
 #include <optional>
 
-#include <umd/device/types/arch.hpp>
-#include <umd/device/utils/semver.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/utils/semver.hpp>
 
 namespace tt::tt_metal {
 
@@ -19,11 +19,13 @@ struct FirmwareVersions {
 struct FirmwareCapabilityRequest {
     bool enable_2_erisc_mode = false;
     bool dram_programmable_cores = false;
+    bool eth_ptp_trace = false;
 };
 
 struct FirmwareCapabilityResult {
     bool enable_2_erisc_mode = false;
     bool dram_programmable_cores = false;
+    bool eth_ptp_trace = false;
 };
 
 /**

@@ -69,9 +69,14 @@ def run(
         partial(torch_random, low=0.01, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    torch_output_tensor = torch.isreal(
-        torch.complex(torch_input_tensor_ar.to(torch.float32), torch_input_tensor_ac.to(torch.float32))
+    # is_imag is true only where the real part is zero, so the real part has to actually
+    # reach zero for this sweep to exercise the op rather than compare all-false to all-false.
+    torch_input_tensor_ar[..., ::2] = 0
+
+    torch_complex_input = torch.complex(
+        torch_input_tensor_ar.to(torch.float32), torch_input_tensor_ac.to(torch.float32)
     )
+    torch_output_tensor = torch.real(torch_complex_input) == 0
 
     input_tensor_ar = ttnn.from_torch(
         torch_input_tensor_ar,

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -107,17 +108,17 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     uint32_t arg_idx = 0;
-    address_t output_address = get_arg_val<address_t>(arg_idx++);
+    address_t output_address = get_common_arg_val<address_t>(ttnn::ccl::AllGatherCommonArgs::output);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
 
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    size_t barrier_sem = get_common_arg_val<uint32_t>(ttnn::ccl::AllGatherCommonArgs::barrier);
     const uint8_t opposite_core_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t opposite_core_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 0 is forward, 1 is backward
+    size_t out_ready_sem = get_common_arg_val<uint32_t>(ttnn::ccl::AllGatherCommonArgs::semaphore_0 + direction);
     const auto input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
     const auto input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
@@ -223,8 +224,16 @@ void kernel_main() {
 #else
     fabric_connection.open();
 
+    // An edge device of a line has no neighbour in one direction, so the connection manager holds
+    // no sender for it and get_{forward,backward}_connection() would trip its own ASSERT. Every send
+    // below is already gated on detail::valid_targets(direction) (see the comment there: the writers
+    // at the end of the line pointing outward do not send over fabric), and teardown closes the
+    // manager rather than this pointer, so leave it null in that case. Mirrors the USE_WORKER_MUX
+    // path above, which already nulls the pointer when its connection is invalid.
     auto* fabric_direction_connection =
-        direction ? &fabric_connection.get_backward_connection() : &fabric_connection.get_forward_connection();
+        direction
+            ? (fabric_connection.has_backward_connection() ? &fabric_connection.get_backward_connection() : nullptr)
+            : (fabric_connection.has_forward_connection() ? &fabric_connection.get_forward_connection() : nullptr);
 #endif
     // pre-populate packet headers
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();

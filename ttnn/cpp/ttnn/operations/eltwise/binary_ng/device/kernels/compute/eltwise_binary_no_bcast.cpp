@@ -17,7 +17,11 @@ void kernel_main() {
     constexpr auto cb_pre_lhs_id = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs_id = tt::CBIndex::c_1;
 
-    CircularBuffer cb_post_lhs(HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id);
+    constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
+    static_assert(
+        cb_post_lhs_id == BINARY_FPU_SRCA_FORMAT_CB,
+        "binary_ng: FPU SrcA startup operand disagrees with the preprocessing restore reference");
+    CircularBuffer cb_post_lhs(cb_post_lhs_id);
     CircularBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
     CircularBuffer cb_out(tt::CBIndex::c_2);
 

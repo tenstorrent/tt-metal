@@ -12,13 +12,49 @@ import os
 import torch
 from loguru import logger
 from tqdm import tqdm
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
+
+
+def spec_kv_write_conflicts(page_tables, positions, T, block_size):
+    """Cross-user collisions of the grouped verify KV write. Call j writes candidate j of every
+    user (one user per core) to the 32-row cache tile (page_tables[u][pos // block_size],
+    (pos % block_size) // 32) at pos = positions[u] + j; two users on the same tile in the same
+    call race (read-modify-write, one update lost). Writes to block 0 (vLLM's null block: padding rows,
+    padded columns past a row's reservation) are junk by design and skipped. Users with a negative position
+    are skipped.
+    Returns [(j, u_first, u_second, block, tile)], empty when the write is safe."""
+    rows = page_tables.tolist() if isinstance(page_tables, torch.Tensor) else [list(r) for r in page_tables]
+    conflicts = []
+    for j in range(T):
+        owner = {}  # (block, tile) -> first user that writes it in call j
+        for u, p in enumerate(positions):
+            if int(p) < 0:
+                continue
+            pos = int(p) + j
+            if pos // block_size >= len(rows[u]):
+                raise IndexError(f"user {u} writes position {pos}, past its {len(rows[u])}-block page table")
+            blk = int(rows[u][pos // block_size])
+            if blk == 0:
+                continue
+            key = (blk, (pos % block_size) // ttnn.TILE_SIZE)
+            first = owner.setdefault(key, u)
+            if first != u:
+                conflicts.append((j, first, u, *key))
+    return conflicts
+
+
+def _page_table_rows(page_tables):
+    """int32 contiguous [B, nb] torch rows from a tensor or array-like (1-D is one user's row)."""
+    pt = torch.as_tensor(page_tables)
+    return (pt.reshape(1, -1) if pt.dim() == 1 else pt).to(torch.int32).contiguous()
 
 
 class Qwen36Model:
@@ -29,6 +65,8 @@ class Qwen36Model:
         self.device = mesh_device
         self.mesh_device = mesh_device  # Generator reads model.mesh_device
         self.num_devices = mesh_device.get_num_devices()
+        if tpc.is_2d_mesh(mesh_device):
+            self.num_devices = args.num_devices  # the TP degree (mesh axis 1); rows replicate or split the sequence
         # CCL for multi-device all-reduce; None on single device (ops no-op).
         if self.num_devices > 1:
             from models.tt_transformers.tt.ccl import TT_CCL
@@ -38,9 +76,10 @@ class Qwen36Model:
             self.tt_ccl = None
         self.configuration = args  # Generator reads model.configuration.max_seq_len
         self.sampling_dp = 1
-        # RoPE is host-recomputed each step, so refresh all decode trace inputs.
-        self._tt_vllm_always_refresh_decode_trace_inputs = True
-        # On-device sampling: allowlist 1x4/1x8 TP only — vocab/TP must fit Top-K's 64K shard limit (TP=2 does not).
+        # Rope is host-recomputed each step, so callers explicitly request a
+        # full input reload. Sampling does not alias the decode token input.
+        self._tt_supports_decode_token_feedback = False
+        # Reuses the vocab-sharded lm_head as the sampler's shard: needs divisible vocab; 64K = top-k limit.
         mesh_shape = tuple(int(dim) for dim in mesh_device.shape)
         self._supports_on_device_sampling = (
             mesh_shape in ((1, 4), (1, 8))
@@ -111,31 +150,52 @@ class Qwen36Model:
                 else {}
             ),
         )
+        # Speculative-decode feed contract (see spec_feed_rows): the MTP drafter is fed the OUTPUT of
+        # this final norm, not the residual stream before it. spec_norm is that norm with the
+        # trailing all-gather off, so its output keeps the fractured [1,1,*,dim/tp] shape/dtype the
+        # drafter already consumes.
+        self.spec_norm = None
         if self.num_devices > 1:
             # TP: DistributedNorm all-gathers fractured hidden for LM head.
             from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
             self.norm = DistributedNorm(self.norm, args, tt_ccl=self.tt_ccl, TG=args.is_galaxy)
+            # Same RMSNorm object (no weight duplication), all-gather disabled. Only valid when the
+            # PREFILL norm is the distributed (stats-gathered) form, whose inner output is already
+            # fractured to dim/tp; a gather-then-norm PREFILL would hand back the full width instead.
+            if args.is_distributed_norm(Mode.PREFILL):
+                self.spec_norm = DistributedNorm(
+                    self.norm.norm, args, tt_ccl=self.tt_ccl, TG=args.is_galaxy, enable_all_gather=False
+                )
+        else:
+            # Single device: the plain RMSNorm's full-dim output IS the fractured form.
+            self.spec_norm = self.norm
+        assert self.spec_norm is not None, (
+            "the spec feed contract needs the fractured-output distributed final norm "
+            "(args.is_distributed_norm(Mode.PREFILL) is False on this mesh/dim)"
+        )
 
         # LM head [in,out]. Mesh: vocab-sharded (dim=-1); _lm_head all-gathers logits.
         # M=1 decode is weight-read-bound (~1.3GB/token), so sharding cuts bandwidth;
         # gather moves only the logit row. REPLICATED fallback if vocab indivisible.
-        lm_head_weight = state_dict["output.weight"].T.contiguous()  # [dim, vocab_size]
-        self._lmhead_vocab_sharded = self.num_devices > 1 and lm_head_weight.shape[-1] % self.num_devices == 0
+        lm_head_weight = state_dict["output.weight"]  # [vocab_size, dim]; transposed on cache miss only
+        vocab_rows = lm_head_weight.shape[0]
+        self._lmhead_vocab_sharded = self.num_devices > 1 and vocab_rows % self.num_devices == 0
         if self.num_devices > 1 and not self._lmhead_vocab_sharded:
             logger.warning(
-                f"LM-head vocab {lm_head_weight.shape[-1]} not divisible by num_devices "
+                f"LM-head vocab {vocab_rows} not divisible by num_devices "
                 f"{self.num_devices}; falling back to replicated LM head."
             )
         if self._lmhead_vocab_sharded:
             # Separate cache (.vshard): as_tensor ignores mesh_mapper on reload.
-            lm_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+            lm_mapper = tpc.tp_shard_mapper(mesh_device, -1)
             lm_cache = tensor_cache_path / "output.weight.vshard" if tensor_cache_path else None
         else:
             lm_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if self.num_devices > 1 else None
             lm_cache = tensor_cache_path / "output.weight" if tensor_cache_path else None
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
+            preprocess=lambda t: t.T.contiguous(),  # [dim, vocab_size]
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -150,13 +210,11 @@ class Qwen36Model:
         self._paged_kv_caches = None
         # Positions in self.layers of full-attn layers (not checkpoint indices); drives KV cache bind.
         self._attention_layer_indices = [pos for pos, layer in enumerate(self.layers) if layer.is_full_attention]
-        self._deltanet_external_states = None  # (recurrent, conv) tuples; set by allocate_kv_caches
-        # Shared zero buffers for in-place DN reset between traced replays.
-        self._dn_zero_recurrent = None
-        self._dn_zero_conv = None
         # Chunk-outer trace: one all-layer chunk captured, replayed per chunk via DMA inputs.
         # Persistent buffers below; addresses baked into trace.
         self._chunked_trace_id = None
+        self._chunked_prepared_key = None
+        self._gdn_slot_ops_warmed = False
         self._chunked_trace_output = None
         self._chunked_chunk_size = None
         self._chunk_token_buf = None
@@ -196,23 +254,27 @@ class Qwen36Model:
         self._vis_mask_buf = None  # [1, chunk_size, 1] bf16, 1 at image positions else 0
         self._vis_zero_mask_host = None  # cached host zero mask for the clear (text/tail) path
 
+        # MTP (multi-token prediction) drafter head for speculative decode. Built only when the
+        # checkpoint ships mtp.* weights AND the config declares an MTP head. Its own paged KV
+        # cache is allocated alongside the base caches in allocate_kv_caches.
+        self.mtp = None
+        self._mtp_kv_cache = None
+        if getattr(args, "has_mtp", False) and "mtp.fc.weight" in state_dict:
+            from models.demos.blackhole.qwen36.tt.mtp import Qwen36MTP
+
+            logger.info("Building MTP (multi-token prediction) drafter head...")
+            self.mtp = Qwen36MTP(
+                mesh_device, args, state_dict, parent=self, tensor_cache_path=tensor_cache_path, tt_ccl=self.tt_ccl
+            )
+
     def init_vision_model(self, reference_visual=None, vision_args=None, dtype=ttnn.bfloat8_b, debug=False):
         """Build and attach the TT vision tower (DropInVisionTransformer).
 
-        The vision tower runs on the SAME mesh as the text model. It still needs the HF
-        reference visual for the patch embed / positional-interpolation steps that are not
-        ported to TT; if ``reference_visual`` is not supplied it is loaded here via
-        ``VisionModelArgs.reference_vision_model``. Idempotent — returns the existing tower
-        if already built.
-
-        Args:
-            reference_visual: HF ``model.model.visual`` to wrap. Loaded internally if None.
-            vision_args (VisionModelArgs): vision config on this mesh. Built internally if None.
-            dtype (ttnn.dtype): compute dtype for the vision weights.
-            debug (bool): run the reference vision path alongside and log PCC.
-
-        Returns:
-            DropInVisionTransformer: the attached vision tower.
+        Runs on the SAME mesh as the text model. Still needs the HF reference visual for patch embed
+        / positional-interpolation (not ported to TT); if ``reference_visual`` is None it is loaded
+        via ``VisionModelArgs.reference_vision_model``. Idempotent — returns the existing tower if
+        already built. ``vision_args`` / ``dtype`` default internally; ``debug`` runs the reference
+        path alongside and logs PCC.
         """
         if self.vision_model is not None:
             return self.vision_model
@@ -234,17 +296,10 @@ class Qwen36Model:
     def get_image_features(self, pixel_values, image_grid_thw):
         """Run the vision tower over a single user's images.
 
-        Mirrors the HF reference's ``get_image_features`` seam: pixel patches in, packed
-        image embeddings out — one row per image-placeholder token, ready to be spliced
-        into the text embeddings by ``_scatter_vision_tokens``.
-
-        Args:
-            pixel_values (torch.Tensor): patchified pixels ``[num_patches, patch_dim]``.
-            image_grid_thw (torch.Tensor): per-image grid ``(t, h, w)``, ``[num_images, 3]``.
-
-        Returns:
-            ttnn.Tensor: ``[num_image_tokens, H]`` image embeddings, hidden-fractured along
-            the last dim on a mesh (same sharding as the text embeddings).
+        Mirrors HF ``get_image_features``: pixel patches in, packed image embeddings out — one row
+        per image-placeholder token, ready for ``_scatter_vision_tokens``. ``pixel_values`` is
+        ``[num_patches, patch_dim]``; ``image_grid_thw`` is per-image ``(t,h,w)`` ``[num_images, 3]``.
+        Returns ``[num_image_tokens, H]``, hidden-fractured on a mesh like the text embeddings.
         """
         assert self.vision_model is not None, "init_vision_model() must be called before get_image_features()"
         # Stash the grid (as an IMAGE grid) so the prefill paths can build M-RoPE position ids for
@@ -263,19 +318,11 @@ class Qwen36Model:
     def get_video_features(self, pixel_values_videos, video_grid_thw):
         """Run the vision tower over a single user's video frames.
 
-        Mirrors the HF reference's ``get_video_features`` seam, which is just ``get_image_features``
-        on the video pixels/grid — the vision tower forward is identical for image and video. The
-        only differences are downstream: M-RoPE treats the grid as a VIDEO grid (split per frame by
-        timestamps, modality==2), and the embeddings splice into ``video_token_id`` placeholders
-        rather than ``image_token_id``. Both are selected by stashing the grid here as a video grid.
-
-        Args:
-            pixel_values_videos (torch.Tensor): patchified video pixels ``[num_patches, patch_dim]``.
-            video_grid_thw (torch.Tensor): per-video grid ``(t, h, w)``, ``[num_videos, 3]``.
-
-        Returns:
-            ttnn.Tensor: ``[num_video_tokens, H]`` video embeddings, hidden-fractured along the last
-            dim on a mesh (same sharding as the text embeddings).
+        Same forward as ``get_image_features`` on the video pixels/grid. Downstream differs: M-RoPE
+        treats the grid as VIDEO (split per frame by timestamps, modality==2), and embeddings splice
+        into ``video_token_id`` placeholders. Stashing the grid here as a video grid selects both.
+        ``pixel_values_videos`` ``[num_patches, patch_dim]``; ``video_grid_thw`` ``[num_videos, 3]``.
+        Returns ``[num_video_tokens, H]``, hidden-fractured on a mesh like the text embeddings.
         """
         assert self.vision_model is not None, "init_vision_model() must be called before get_video_features()"
         # Stash the grid as a VIDEO grid; clear any stale image grid so the modality (and the
@@ -309,19 +356,13 @@ class Qwen36Model:
     def _alloc_vision_merge_buffers(self, device, chunk_size):
         """Allocate the persistent vision-splice buffers used by the traced prefill path.
 
-        ``_vis_buf`` holds the image embeddings placed at their token positions (zeros elsewhere);
-        ``_vis_mask_buf`` is the 0/1 image mask. Both are zero-initialised, so the ttnn.where baked
-        into the captured forward is the identity until a real multimodal request stages them.
-        Allocating before warmup means the where compiles in the warmup pass (and is then
-        captured), never at request time.
-
-        Shapes/sharding match the activations of the forward that consumes them:
-          - single device: vis [1, chunk_size, dim], mask [1, chunk_size, 1] (the 3D embd output);
-          - TP: vis [1, 1, chunk_size, dim] HIDDEN-SHARDED across the mesh exactly like embd
-            fractures its output (ShardTensor2dMesh dims=(None, -1)), so each device's where sees
-            its own [.., dim/TP] vision columns; mask [1, 1, chunk_size, 1] REPLICATED (it
-            broadcasts over the sharded hidden dim). DropInVisionTransformer fractures its output
-            the same way, so the per-device columns line up.
+        ``_vis_buf`` holds image embeddings at their token positions (zeros elsewhere);
+        ``_vis_mask_buf`` is the 0/1 mask. Both start zero so the captured ttnn.where is identity
+        until a multimodal request stages them. Allocate before warmup so the where compiles in the
+        warmup pass (then captured), never at request time. Shapes match the consuming activations:
+        single device vis [1, chunk_size, dim] / mask [1, chunk_size, 1]; TP vis [1,1,chunk_size,dim]
+        HIDDEN-SHARDED like embd (ShardTensor2dMesh dims=(None,-1)), mask [1,1,chunk_size,1] REPLICATED
+        (broadcasts over sharded hidden). DropInVisionTransformer fractures the same way so columns line up.
         """
         if self._vis_buf is not None:
             return
@@ -374,19 +415,14 @@ class Qwen36Model:
     def _apply_vision_merge(self, x, length):
         """Final text-vs-vision SELECTION of the trace-safe splice: where(mask, vision, x).
 
-        This is NOT a scatter and is not a substitute for one. The scatter — placing the n
-        (variable) vision rows at their n image positions — already happened on host in
-        _set_vision_merge, which is why ``_vis_buf`` here is a FULL [1, chunk_size, dim] buffer
-        (image rows at their positions, zeros elsewhere), the same length as ``x``, NOT the raw
-        [n, dim] vision tensor. So n << seq_len (a few image tokens in a long text prompt) is fine:
-        the [.,1] mask broadcasts over the hidden dim and is 1 only at those n positions, so
-        out == vision there and out == x (text) everywhere else (mask==0 is the exact identity).
-
-        The placement is forced onto the host because aligning a variable n to fixed positions is
-        inherently variable-shape; any on-device form (ttnn.scatter / pad / slice-copy) recompiles
-        per request and would clobber the parked trace. ``length`` selects the segment (chunk_size
-        for a full chunk, bucket for the masked path); the buffers slice down to it. No-op when the
-        buffers are unallocated (text-only / non-traced deployment, which uses the device scatter)."""
+        Not a scatter: host ``_set_vision_merge`` already placed the n vision rows at their image
+        positions, so ``_vis_buf`` is a FULL [1, chunk_size, dim] buffer the same length as ``x``,
+        not the raw [n, dim] vision tensor. The [.,1] mask is 1 only at those n positions, so
+        out == vision there and out == x elsewhere (mask==0 is identity). Placement is on host
+        because aligning variable n is variable-shape; any on-device scatter/pad/slice-copy would
+        recompile per request and clobber the parked trace. ``length`` selects the segment
+        (chunk_size vs bucket); no-op when buffers are unallocated (text-only / device-scatter path).
+        """
         if self._vis_buf is None:
             return x
         if self._vis_buf.shape.rank == 4:
@@ -403,19 +439,15 @@ class Qwen36Model:
         return out
 
     def _set_vision_merge(self, ids_host, vision_tokens, vis_row_offset=0):
-        """Stage the persistent vision buffers for the next forward (host -> device copy only;
-        no program compiles). ``vision_tokens`` None clears the mask (the where becomes identity,
-        for text-only requests); otherwise the packed image rows are read back to host, placed at
-        their token positions in a zero [1, chunk_size, dim] buffer, and uploaded along with the
-        0/1 mask. ``ids_host`` is the segment's token ids (torch), used to locate the image
-        placeholders (== hf_config.image_token_id).
-
-        ``vis_row_offset`` is the number of image-placeholder tokens that appear in the prompt
-        BEFORE this segment, i.e. the index of the first packed vision row belonging to it. A
-        large image whose placeholders span multiple prefill chunks (or spill into the tail) is
-        thus spliced correctly: each segment consumes its own slice
-        ``vis_host[vis_row_offset : vis_row_offset + n]`` of the packed rows. A segment with no
-        image placeholders (text-only chunk / tail) clears the mask (identity merge)."""
+        """Stage the persistent vision buffers for the next forward (host -> device copy only; no
+        program compiles). ``vision_tokens`` None clears the mask (where becomes identity); otherwise
+        packed image rows are read back to host, placed at their token positions in a zero
+        [1, chunk_size, dim] buffer, and uploaded with the 0/1 mask. ``ids_host`` locates image
+        placeholders (== hf_config.image_token_id). ``vis_row_offset`` is the count of image
+        placeholders before this segment, so a large image spanning chunks splices
+        ``vis_host[vis_row_offset : vis_row_offset + n]``. A segment with no placeholders clears
+        the mask (identity merge).
+        """
         if self._vis_buf is None:
             # Fail loudly rather than silently drop the image: a multimodal request must run on a
             # path with the trace-safe buffers (capture_prefill_trace_chunked, single device) or
@@ -492,10 +524,33 @@ class Qwen36Model:
         """Generator mode-change hook; no-op (no prefetcher)."""
         return None
 
-    def _lm_head(self, x):
+    def _lm_head(self, x, out_dtype=None):
         """LM-head matmul. Vocab-sharded mesh: partial logits + all-gather to full replicated.
-        Single device: plain matmul."""
-        logits = ttnn.linear(x, self.lm_head_weight)
+        Single device: plain matmul.
+
+        out_dtype: leave None (default) for the base/verify path — losslessness is defined by the
+        BASE argmax, so that call must stay byte-identical. The MTP drafter passes float32: its
+        argmax only has to rank candidates, and at bf16 4.7-5.5% of draft rejections at 8k/32k were
+        EXACT ties in the drafter's own logits, i.e. tokens thrown away to a rounding coin flip."""
+        kw, ccl_kw = {}, {}
+        if out_dtype is not None:
+            # HiFi2 matches the bfloat8_b weight; fp32 dest accumulation is what actually keeps the
+            # extra bits. packer_l1_acc is off simply because that is the combination measured.
+            kw = dict(
+                dtype=out_dtype,
+                compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                    self.device.arch(),
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
+                ),
+            )
+            # tt_all_gather defaults its CCL dtype to bfloat16 and TYPECASTS anything else on the
+            # way in. That is load-bearing twice over: it would put the bf16 ties straight back, and
+            # the fp32 -> bf16 cast on this [1,1,B,vocab/tp] tensor actually returns garbage (the
+            # drafter's argmax came back with an out-of-range id). Gather at the head's own dtype.
+            ccl_kw = dict(dtype=out_dtype)
+        logits = ttnn.linear(x, self.lm_head_weight, **kw)
         if self._lmhead_vocab_sharded:
             from models.tt_transformers.tt.ccl import tt_all_gather
 
@@ -506,6 +561,7 @@ class Qwen36Model:
                 cluster_axis=None,
                 dim=len(logits.shape) - 1,
                 topology=self.args.ccl_topology(),
+                **ccl_kw,
             )
         return logits
 
@@ -532,6 +588,7 @@ class Qwen36Model:
         n_layers=None,
         layer_indices=None,
         hf_model=None,
+        enable_mtp=None,
     ):
         # HF_MODEL env var (hub or local path) is canonical; hf_model sets it for back-compat.
         if hf_model is not None:
@@ -539,14 +596,17 @@ class Qwen36Model:
 
             os.environ["HF_MODEL"] = hf_model
 
+        # enable_mtp: None -> QWEN36_MTP env if set, else on for dense / off for MoE checkpoints;
+        # False -> no MTP head/weights/KV.
         args = Qwen36ModelArgs(
             mesh_device=device,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
+            enable_mtp=enable_mtp,
         )
 
         # layer_indices: run only these checkpoint layers (e.g. [0,3,31]) for profiling.
-        # Each keeps its real type via full attention_type_list. Overrides n_layers truncation.
+        # Each keeps its real type via full attention_type_list; n_layers below takes the first N layers instead.
         if layer_indices is not None:
             layer_indices = list(layer_indices)
             assert layer_indices, "layer_indices must be non-empty"
@@ -556,8 +616,10 @@ class Qwen36Model:
             args.layer_indices = layer_indices
             args.n_layers = len(layer_indices)
         elif n_layers is not None:
+            # Keep attention_type_list whole: n_layers alone decides how many layers get built
+            # (list(range(args.n_layers))); each kept index's type is unchanged either way, and MTP
+            # needs a real full_attention index from this list -- truncating below 4 layers drops it.
             args.n_layers = n_layers
-            args.attention_type_list = args.attention_type_list[:n_layers]
 
         # NOTE: the warm-ttnn-cache HF-load skip is DISABLED for qwen3.6.
         # Its Gated-DeltaNet loader consumes conv weights on the host without a cache_file_name --
@@ -683,34 +745,13 @@ class Qwen36Model:
     def _scatter_vision_tokens(self, x, token_ids, vision_tokens):
         """Splice vision-model embeddings into the text token embeddings, on device.
 
-        On-device equivalent of the HF reference's
-        ``inputs_embeds.masked_scatter(image_mask, image_embeds)``. The embedding is
-        flattened to ``[rows, H]``; the packed ``vision_tokens`` are placed into a zero
-        buffer at the image-placeholder rows with a dim-0 ``ttnn.scatter``, then merged
-        with the text embeddings via
-        ``ttnn.where(special_image_mask, vision, text)``. The embeddings/vision never
-        leave the device. No-op when ``vision_tokens`` is None or the prompt has no
-        image tokens (the text-only path).
-
-        The image-placeholder mask and placement positions are computed on host from the
-        token ids (which already live on host at every call site), mirroring the HF
-        reference's ``special_image_mask = input_ids == self.config.image_token_id``, then
-        uploaded. The two tiny derived tensors uploaded are the ``[n, H]`` scatter index
-        (hidden-sharded on a mesh, like the embedding activations) and the ``[rows, 1]``
-        where-predicate (replicated on a mesh — it broadcasts over the sharded hidden dim).
-
-        Args:
-            x (ttnn.Tensor): text embeddings from ``self.embd`` — ``[B, T, H]`` (the
-                raw embedding output), hidden fractured along the last dim on a mesh.
-            token_ids (torch.Tensor): the prefill token ids (``input_ids``), ``[B, T]`` on
-                host; image placeholders are the entries equal to ``hf_config.image_token_id``.
-            vision_tokens (ttnn.Tensor): ``[num_image_tokens, H]`` produced by the
-                vision tower (fractured along hidden on a mesh, like ``x``), one row
-                per image placeholder token.
-
-        Returns:
-            ttnn.Tensor: same logical shape / layout / sharding as ``x`` with the
-            vision embeddings scattered in.
+        On-device HF ``masked_scatter``: flatten ``x`` to ``[rows, H]``, ``ttnn.scatter`` packed
+        ``vision_tokens`` into a zero buffer at image-placeholder rows, then ``ttnn.where(mask, vision, text)``.
+        Embeddings/vision never leave the device. No-op if ``vision_tokens`` is None or the prompt has no
+        image tokens. Mask/placement come from host token ids (``input_ids == image_token_id``); uploaded
+        are the ``[n, H]`` scatter index (hidden-sharded like activations) and the ``[rows, 1]``
+        where-predicate (replicated; broadcasts over sharded hidden). ``x`` is ``[B,T,H]`` from
+        ``self.embd``; ``vision_tokens`` is ``[num_image_tokens, H]``. Returns same shape/layout/sharding as ``x``.
         """
         if vision_tokens is None:
             return x
@@ -789,7 +830,7 @@ class Qwen36Model:
             return self.prefill_layer_chunked(token_ids, chunk_size=2048, vision_tokens=vision_tokens)
 
         # Short sequences (<=1024)
-        self.reset_state(batch_size=B)
+        self.reset_state()
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
         x = self.embd(token_ids_ttnn)
@@ -813,7 +854,7 @@ class Qwen36Model:
         DeltaNet uses larger chunk_size (256 vs 64) to limit Neumann-series error
         (4096 tokens -> 16 sub-chunks, PCC >0.98). page_table enables paged prefill."""
         B, T = token_ids.shape
-        self.reset_state(batch_size=B)
+        self.reset_state()
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
         x = self.embd(token_ids_ttnn)
@@ -935,21 +976,33 @@ class Qwen36Model:
 
         return logits
 
-    def _forward_decode(self, token_ids_buf, cos, sin, cur_pos_tensor, page_table, sharded_lm_head=False):
+    def _forward_decode(
+        self, token_ids_buf, cos, sin, cur_pos_tensor, page_table, sharded_lm_head=False, return_hidden=False
+    ):
         """Trace-safe paged decode. All inputs are device tensors.
 
         sharded_lm_head=True: return the pre-gather vocab-sharded logits (no all-gather)
         for the on-device sampler, which does its own cross-device top-k + gather.
+        return_hidden=True: also return the last-decoder-layer output (pre final norm),
+        fractured [1,1,B,dim/tp] — the seed the MTP drafter head consumes. Returns
+        (logits, hidden) in that case.
         """
         x = self.embd(token_ids_buf)
         if self.num_devices > 1:
             # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac].
             x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[-1]))
-        for layer in self.layers:
+        _cap = getattr(self, "_capture_layer", None)
+        for _li, layer in enumerate(self.layers):
             if layer.is_full_attention:
                 x = layer.forward(x, cos, sin, position_tensor=cur_pos_tensor, page_table=page_table, mode="decode")
             else:
                 x = layer.forward(x, mode="decode")
+            if _cap is not None and _li == _cap:  # debug: capture hidden after layer _cap
+                self._cap_rec = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Independent clone of the live last-layer output: the MTP head consumes this hidden on a
+        # LATER forward and all-gathers it, so it must survive the final norm + lm_head below (a
+        # to_memory_config is a no-op alias when x is already DRAM, so the norm would free it).
+        hidden = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG) if return_hidden else None
         x = self._final_norm_decode(x)
         if sharded_lm_head or self._ondev_argmax:
             # Pre-gather vocab-sharded logits (on-device sampling / greedy argmax).
@@ -957,7 +1010,853 @@ class Qwen36Model:
         else:
             logits = self._lm_head(x)
         ttnn.deallocate(x)
+        if return_hidden:
+            return logits, hidden
         return logits
+
+    def ttnn_mtp_prefill_forward(
+        self, hidden_states, tokens, chunk_start, page_table_torch, valid_len=None, flex_sdpa=True
+    ):
+        """Warm the MTP drafter's KV over a whole prompt CHUNK in ONE forward.
+
+        The drafter is a single full-attention decoder layer, so its KV fills like the base model's —
+        one call per 2048-token chunk instead of one decode step per token (what the reference
+        proposer does). ``hidden_states`` [1,1,S,dim/tp] fractured is the base per-position
+        pre-final-norm hidden for this chunk. ``tokens`` torch [1,S] int32: slot i is fused with
+        the token at i+1 (the draft loop's shift pairing). ``chunk_start`` is the absolute position
+        of row 0. ``page_table_torch`` [1, num_blocks] is the MTP layer's own KV page table.
+        ``valid_len``: real rows in this chunk; chunk blocks past them point at the MTP scratch block
+        so padding rows never write K/V into real blocks. ``flex_sdpa``: device chunk_start tensor,
+        one SDPA program per bucket for any chunk position.
+        """
+        assert self.mtp is not None, "MTP head not built (has_mtp/config?)"
+        S = tokens.shape[-1]
+        dev = self.device
+        rep = ttnn.ReplicateTensorToMesh(dev)
+        tok_tt = ttnn.from_torch(
+            tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
+        )
+        # Same absolute positions as the base chunk, so the same RoPE table slice applies.
+        cos_t, sin_t = self._rope_tp_cos_sin_torch(chunk_start, S)
+        cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
+        sin = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
+        block_size = get_block_size(self._paged_kv_caches)
+        blk0 = chunk_start // block_size
+        blkN = num_blocks_in_seq(chunk_start + S, block_size)
+        pt_full = ttnn.from_torch(
+            page_table_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
+        )
+        pt_chunk_torch = page_table_torch[:, blk0:blkN].contiguous()
+        if valid_len is not None:
+            pt_chunk_torch = pt_chunk_torch.clone()
+            keep = max(0, -(-(chunk_start + valid_len) // block_size) - blk0)
+            pt_chunk_torch[:, keep:] = int(self.mtp.attention.paged_k.shape[0]) - 1  # scratch block
+        pt_chunk = ttnn.from_torch(
+            pt_chunk_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
+        )
+        csi = None
+        if flex_sdpa:
+            assert chunk_start % 128 == 0, f"flex SDPA needs chunk_start % 128 == 0, got {chunk_start}"
+            csi = ttnn.from_torch(
+                torch.tensor([chunk_start], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                mesh_mapper=rep,
+            )
+        out = self.mtp.forward_prefill(
+            hidden_states,
+            tok_tt,
+            cos,
+            sin,
+            pt_full,
+            chunk_page_table=pt_chunk,
+            chunk_start_idx=chunk_start,
+            chunk_start_idx_tensor=csi,
+        )
+        for t in (tok_tt, cos, sin, pt_full, pt_chunk, csi, out):
+            if t is not None:
+                ttnn.deallocate(t)
+
+    def prefill_for_spec(self, token_ids, page_table, actual_len, on_chunk, slot=0):
+        """Chunked prompt prefill for speculative decode; hands each chunk's hidden to ``on_chunk``.
+
+        Uses the same 2048-token chunking as the demo. Prefilling the whole prompt as one masked
+        bucket put every length above the largest bucket outside the validated envelope (L1
+        circular-buffer clash at 2642, slice overflow at 8192), so spec could not run 4k/8k/16k.
+        ``on_chunk(hidden, chunk_start, valid_len)`` runs before each chunk's hidden is freed, so
+        the MTP drafter can warm KV one forward per chunk. hidden is [1,1,bucket,dim/tp]; rows >=
+        valid_len are padding. Returns next-token logits at actual_len-1 (device, replicated).
+
+        ``slot``: GDN decode row this user's state ends up in; ``page_table`` is that user's [1, nb] row
+        either way. The prefill itself is B=1, so slot > 0 (or any batched GDN binding) runs it on the
+        persistent B=1 scratch and copies the result on device into row ``slot`` with TPGatedDeltaNet.write_slot,
+        leaving the other users' rows intact (as prefill_paged_slots does). A B=1 model
+        (max_batch_size == 1, slot 0) prefills in place.
+        """
+        assert self.num_devices > 1, "prefill_for_spec is the TP path"
+        assert 0 <= slot < self.args.max_batch_size, f"slot {slot} out of range [0,{self.args.max_batch_size})"
+        if self.args.max_batch_size > 1:
+            dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
+            dram = ttnn.DRAM_MEMORY_CONFIG
+            prev = self._bind_gdn_prefill_scratch()
+            try:
+                logits = self._prefill_for_spec_b1(token_ids, page_table, actual_len, on_chunk)
+                snap = [
+                    (
+                        ttnn.clone(dn.rec_state, memory_config=dram),
+                        [ttnn.clone(c, memory_config=dram) for c in dn.conv_states],
+                    )
+                    for dn in dn_layers
+                ]
+            finally:
+                self._unbind_gdn_prefill_scratch(prev)
+            for dn, (rec, convs) in zip(dn_layers, snap):
+                dn.write_slot(slot, rec, convs)  # consumes the clones
+            return logits
+        return self._prefill_for_spec_b1(token_ids, page_table, actual_len, on_chunk)
+
+    def _prefill_for_spec_b1(self, token_ids, page_table, actual_len, on_chunk):
+        """prefill_for_spec's body: one B=1 prompt into whatever GDN state is currently bound."""
+        chunk_size = self._chunked_chunk_size or 2048
+        num_full = actual_len // chunk_size
+        tail_real = actual_len - num_full * chunk_size
+        self._build_request_rope(token_ids[:, :actual_len], None)
+
+        if num_full == 0:
+            logits, hidden = self.prefill_masked_bucket(
+                token_ids[:, :actual_len], page_table, actual_len=actual_len, chunk_start=0, return_hidden=True
+            )
+            on_chunk(hidden, 0, actual_len)
+            ttnn.deallocate(hidden)
+            return logits
+
+        self._reset_gdn_state_for_new_sequence()
+        last_hidden = None
+        for c in range(num_full):
+            cs = c * chunk_size
+            if last_hidden is not None:
+                ttnn.deallocate(last_hidden)
+            last_hidden = self._forward_prefill_chunk_masked_tp(
+                token_ids[:, cs : cs + chunk_size],
+                chunk_size,
+                cs,
+                page_table,
+                chunk_size,
+                flex_sdpa=True,
+                full_chunk=True,
+            )
+            ttnn.synchronize_device(self.device)
+            # Not the last chunk, or there is a tail after it: the base hidden is consumed here.
+            if c < num_full - 1 or tail_real > 0:
+                on_chunk(last_hidden, cs, chunk_size)
+        if tail_real > 0:
+            ttnn.deallocate(last_hidden)
+            cs = num_full * chunk_size
+            logits, hidden = self.prefill_masked_bucket(
+                token_ids[:, cs:actual_len], page_table, actual_len=tail_real, chunk_start=cs, return_hidden=True
+            )
+            on_chunk(hidden, cs, tail_real)
+            ttnn.deallocate(hidden)
+            return logits
+        # Exact multiple of chunk_size: the last chunk supplies both the logits and the last hidden.
+        logits = self._masked_bucket_logits_tp(last_hidden, chunk_size, chunk_size)
+        on_chunk(last_hidden, (num_full - 1) * chunk_size, chunk_size)
+        ttnn.deallocate(last_hidden)
+        return logits
+
+    def ttnn_mtp_decode_forward(
+        self,
+        hidden_states,
+        token_id,
+        position,
+        page_table,
+        sharded_lm_head=False,
+        need_logits=True,
+    ):
+        """One MTP draft step over B rows at absolute ``position``. Builds the partial-RoPE cos/sin
+        for the MTP positions (base + rope_delta), then runs the drafter head.
+
+        hidden_states : fractured [1,1,B,dim/tp] — the base's drafter feed (spec_feed_rows: the
+                        fractured final-norm output) or the previous MTP step's next_hidden
+                        (chaining).
+        token_id      : the token at each row's ``position``. int (B=1), list[int] of length B, or a
+                        device [B,1] uint32 tensor (on-device draft chaining).
+        position      : int (all rows at the same slot) or list[int] of length B (one per user).
+        page_table    : device int32 page table [B, nb] for the MTP layer's own KV cache.
+        Returns (logits, next_hidden).
+        """
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
+
+        assert self.mtp is not None, "MTP head not built (has_mtp/config?)"
+        pos_list = [int(p) for p in position] if isinstance(position, (list, tuple, torch.Tensor)) else [int(position)]
+        cos, sin = rot_mats_decode(
+            self.device,
+            self.args.rope_head_dim,
+            self.args.max_seq_len,
+            self.args.rope_theta,
+            torch.tensor([p + self.rope.rope_delta for p in pos_list], dtype=torch.int32),
+        )
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+        # A device [B,1] uint32 token_id (on-device draft chaining) is used as is, skipping a host round trip.
+        if isinstance(token_id, ttnn.Tensor):
+            tok = token_id
+        else:
+            _ids = [int(t) for t in token_id] if isinstance(token_id, (list, tuple, torch.Tensor)) else [int(token_id)]
+            assert len(_ids) == len(pos_list), f"{len(_ids)} tokens for {len(pos_list)} positions"
+            tok = ttnn.from_torch(
+                torch.tensor(_ids, dtype=torch.int32).reshape(len(_ids), 1),
+                dtype=ttnn.uint32,
+                device=self.device,
+                mesh_mapper=rep,
+            )
+        cur_pos_tt = ttnn.from_torch(
+            torch.tensor(pos_list, dtype=torch.int32), dtype=ttnn.int32, device=self.device, mesh_mapper=rep
+        )
+        return self.mtp.forward_decode(
+            hidden_states,
+            tok,
+            cur_pos_tt,
+            cos,
+            sin,
+            page_table,
+            sharded_lm_head=sharded_lm_head,
+            need_logits=need_logits,
+        )
+
+    def spec_feed_rows(self, rows):
+        """Map base per-position hidden rows to what the MTP drafter is fed (the spec "feed contract").
+
+        ``rows`` is [1,1,*,dim/tp] fractured bf16: residual leaving the last decoder layer, BEFORE
+        the final norm. Every site that hands base hidden to the drafter (prompt warm, seed, verify
+        rows -> reseed / anchor) goes through here. Returns a NEW tensor — the OUTPUT of the base
+        final norm, kept fractured to dim/tp by ``spec_norm`` (same weights, no trailing all-gather).
+        Matching chain-side half: Qwen36MTP.forward_decode feeds back mtp.norm's output. Caller owns
+        both tensors and frees ``rows`` when the result ``is not rows``. Trace-safe (fixed-shape norm).
+        """
+        return self.spec_norm(rows, mode=Mode.PREFILL)
+
+    # ------------------------------------------------------------------------------------------
+    # Traced speculative verify (the eager-loop fix). The verify forward is a fixed-shape forward over
+    # exactly B users x T = K+1 candidate tokens, so — like the per-user bucket prefill trace
+    # (capture_prefill_trace_bucket) — it can be captured once and replayed, turning the loop's
+    # dominant cost from host-launched-per-op (eager) to a single execute_trace. The GDN recurrent
+    # path is trace-safe (persistent pad + fixed-address GDN state buffers + a fixed per-token
+    # state ring); B*T is constant across replays (unlike variable-length prompts), so every shape
+    # in it bakes into the trace (there is no GDN mask: no padded rows).
+    #
+    # Row layout (the invariant the whole spec stack shares): B*T <= TILE_SIZE rows of one decode
+    # tile, user-major, so row r = u*T + j is user u's candidate j. Full attention sees every row as
+    # a pseudo-user (per-row KV write at its own absolute position) folded into per-user SDPA
+    # groups; GDN reshapes the rows to [B, T, C], a plain reshape because the rows are user-major.
+    #
+    # The commit is a deferred select, not a device phase: after readback the host writes each
+    # user's accepted-prefix index mi_u into two small shared device selectors (_vfy_state_idx,
+    # _vfy_conv_sel) before the next replay. The recurrent kernel then starts user u from ring
+    # block mi_u and the conv1d from window row mi_u, so nothing is copied between iterations.
+    # ------------------------------------------------------------------------------------------
+    def _rope_tp_cos_sin_decode_torch(self, positions):
+        """Torch cos/sin [1, B, 1, rope_head_dim] in the DECODE rope layout — one rotation per ROW.
+
+        Byte-identical to what prepare_decode_inputs_host builds for a decode step at those positions
+        (same inv_freq / outer / cat / bf16 cast). The hybrid verify pushes its candidates through the
+        DECODE attention kernel as B pseudo-users, so it needs this per-row table, not the
+        prefill [1,1,S,rd] one."""
+        rd = self.args.rope_head_dim
+        pos_vec = positions.to(torch.int32).reshape(-1)
+        # RoPE position is the KV position offset by rope_delta (0 for text); same as decode.
+        rope_pos_vec = pos_vec + self.rope.rope_delta
+        B = rope_pos_vec.shape[0]
+        inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
+        freqs = torch.outer(rope_pos_vec.float(), inv_freq)  # [B, rd/2], per-row rotation
+        emb = torch.cat([freqs, freqs], dim=-1)
+        cos = emb.cos().reshape(1, B, 1, rd).to(torch.bfloat16)
+        sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
+        return cos, sin
+
+    def _spec_tail(self, x):
+        """Shared tail of the verify and seed bodies: residual ``x`` [1,1,R,dim] (freed here) ->
+        (logits [1,1,R,vocab] replicated per device, feed [1,1,R,dim/tp] fractured).
+
+        The bucket is exactly the R real rows, so there is no row-select. ``feed`` is the post-norm
+        drafter feed (spec_feed_rows); its programs are the inner norm's, already compiled by the
+        self.norm call."""
+        rows = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x)
+        normed = self.norm(rows, mode=Mode.PREFILL)  # -> full [1,1,R,dim]
+        logits = self._lm_head(normed)
+        ttnn.deallocate(normed)
+        feed = self.spec_feed_rows(rows)
+        if feed is not rows:
+            ttnn.deallocate(rows)
+        return logits, feed
+
+    def _forward_verify_bucket_tp(self, n_users):
+        """Trace body: recurrent verify over the persistent B*T-row bucket buffers -> per-position
+        logits + hidden. Reads only fixed-address buffers so it is trace-capturable. Full-attention
+        layers run the decode flash kernel with the rows as pseudo-users (see capture_verify_trace).
+        GDN stays on seq-dim recurrent verify per user (batch dim is not a valid recurrence axis) and
+        takes its per-user starting state through the two shared selectors. Returns (logits, rows,
+        ids, logits_rm): ``rows`` is the drafter feed [1,1,B*T,dim/tp] bf16 (spec_feed_rows).
+        ``logits_rm`` is the ROW_MAJOR bf16 copy the in-trace argmax needs, kept for the sampling path.
+        """
+        T = self._vfy_T
+        rows = n_users * T
+        x = self.embd(self._vfy_token_buf)
+        x = ttnn.reshape(x, (1, 1, rows, x.shape[-1]))
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        for layer in self.layers:
+            if layer.is_full_attention:
+                # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos for row u*T+j is
+                # p_u+j, so the decode SDPA's causal bound gives that row exactly [0, p_u+j]; the candidate
+                # rows above it are written but masked out. alias_kv_write=True because a user's T rows
+                # share one page table (see TPAttention._write_kv_aliased). At n_users > 1 the write goes
+                # out per candidate (T calls of n_users rows, one per user) and _vfy_kvpt_users, the
+                # [B, nb] per-user table, is reused by every group.
+                x_new = layer.forward(
+                    x,
+                    cos=self._vfy_cos_buf,
+                    sin=self._vfy_sin_buf,
+                    mode="decode",
+                    position_tensor=self._vfy_kvpos_buf,
+                    page_table=self._vfy_kvpt_buf,
+                    alias_kv_write=True,
+                    spec_user_page_table=self._vfy_kvpt_users,
+                    # The SDPA read folds those rows into a few batch rows (spec_multi_pos_tiles: groups
+                    # of 4 candidates, n_users x the single-user split), so the KV cache streams out of
+                    # DRAM once per group per layer instead of once per row. The op wants one aliased
+                    # page-table row per group; the per-row KV write above still needs the full row-count
+                    # alias table. A T with no L1-fitting split (7, 11, ...) uses the legacy per-row call.
+                    spec_verify_mode=True,
+                    spec_page_table=self._vfy_kvpt1_buf,
+                    n_users=n_users,
+                )
+            else:
+                x_new = layer.forward(
+                    x,
+                    mode="prefill",
+                    chunk_size=self.args.gdn_chunk_size,
+                    valid_len=rows,
+                    gdn_recurrent=True,
+                    decode_cfg=True,
+                    n_users=n_users,
+                    state_blk_idx=self._vfy_state_idx,
+                    conv_sel=self._vfy_conv_sel,
+                )
+            ttnn.deallocate(x)
+            x = x_new
+        logits, rows_out = self._spec_tail(x)  # [1,1,B*T,vocab] replicated, drafter feed [1,1,B*T,dim/tp]
+        # Greedy acceptance compares token ids, so argmax the verify rows inside the trace and read back
+        # B*T uint32 instead of B*T x 151936 floats. ttnn.argmax needs ROW_MAJOR input (a TILE tensor
+        # takes a single-core internal untilize that is hopeless at this vocab width), so untilize first.
+        # No 32-row pad: the multicore argmax is correct below a full tile of rows, and padding would
+        # multiply the bytes untilize and argmax touch (see mtp.argmax_last).
+        u = ttnn.untilize(logits, use_multicore=True)
+        ids = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,B*T] uint32 ROW_MAJOR
+        # `u` is NOT deallocated: it is handed back as the ROW_MAJOR logits copy. The sampling path
+        # reads THAT back instead of the TILE `logits`, which costs an untilize on host.
+        return logits, rows_out, ids, u
+
+    def _vfy_row_positions(self, positions):
+        """Per-ROW absolute positions for the user-major bucket: row u*T + j is positions[u] + j."""
+        T = self._vfy_T
+        return torch.tensor([int(positions[u]) + j for u in range(self._vfy_B) for j in range(T)], dtype=torch.int32)
+
+    def _vfy_page_table_host(self, pt):
+        """Host forms (torch int32, matching the device buffers) of the verify's
+        persistent page-table buffers (_vfy_kvpt_buf, _vfy_kvpt_users, _vfy_kvpt1_buf), in that
+        order. ``pt``: int32 [B, nb], one row per user.
+
+        * per-row [B*T, nb]: row u*T+j is user u's block table (repeat_interleave, since the rows are
+          user-major); read by the per-row KV write and the legacy per-row SDPA.
+        * per-user [B, nb]: row u = user u's blocks, for the grouped aliased KV write. Group j holds
+          rows {u*T + j}, one per user, so one persistent buffer serves all T groups
+          (TPAttention._write_kv_aliased).
+        * per-group [spec_sdpa_groups, nb]: one row per candidate group, for the fused spec SDPA
+          (spec_multi_pos_tiles), which splits each user's T candidates across spec_sdpa_groups(T, B)/B
+          batch rows and wants one aliased page-table row per group. The per-row KV write must not
+          slice a narrower table full-span (a full-span ttnn.slice aliases its input), so both
+          row-count forms are kept.
+        """
+        T, B, G = self._vfy_T, self._vfy_B, self._vfy_spec_groups
+        pt = pt.to(torch.int32)
+        if G >= B and G % B == 0:
+            pt1 = pt.repeat_interleave(G // B, dim=0)
+        else:
+            pt1 = pt[:1].repeat(G, 1)  # fused path off: the buffer exists but is unread
+        return pt.repeat_interleave(T, dim=0).contiguous(), pt.contiguous(), pt1.contiguous()
+
+    def _vfy_check_kv_writes(self, pt, positions):
+        """Assert the grouped verify KV write has no same-tile, same-call collision between users
+        for block tables ``pt`` [B, nb] and first verify slots ``positions`` (spec_kv_write_conflicts)."""
+        bad = spec_kv_write_conflicts(pt, positions, self._vfy_T, get_block_size(self._paged_kv_caches))
+        assert not bad, (
+            f"the grouped spec KV write needs distinct (block, 32-row tile) per user within each "
+            f"candidate call, but {len(bad)} collide; first (call j, user, user, block, tile): "
+            f"{bad[:4]}. Set QWEN36_SPEC_KV_GROUP_WRITE=0 to fall back to the per-row write."
+        )
+
+    def release_verify_trace(self):
+        """Drop the captured verify trace. No-op when nothing is captured.
+
+        The trace bakes in the paged KV caches' addresses and every GDN layer's _spec_ring /
+        _verify_win_buf, all of which allocate_kv_caches + prepare_spec_verify re-allocate, so it
+        must never outlive them: free_kv_caches calls this, and so does a re-capture.
+        """
+        if getattr(self, "_vfy_trace_id", None) is not None:
+            ttnn.release_trace(self.mesh_device, self._vfy_trace_id)
+            self._vfy_trace_id = None
+
+    @staticmethod
+    def _fit_spec_page_table(pt, nb):
+        """Host page table -> int32 contiguous [B, nb]: [w] is one row; zero-padded when w < nb (never
+        touched while positions stay inside the real table), clipped when w > nb."""
+        pt = pt if isinstance(pt, torch.Tensor) else torch.as_tensor(pt)
+        pt = pt.reshape(1, -1) if pt.dim() == 1 else pt
+        pt = pt.to(torch.int32)
+        w = int(pt.shape[1])
+        if w < nb:
+            pt = torch.nn.functional.pad(pt, (0, nb - w))
+        elif w > nb:
+            pt = pt[:, :nb]
+        return pt.contiguous()
+
+    def capture_verify_trace(self, page_tables, T, warm_positions):
+        """One-shot wrapper: release any trace, force a re-prepare, then prepare_verify_trace +
+        record_verify_trace. Prefer preparing and recording once at startup."""
+        self.release_verify_trace()
+        self._vfy_prepared_key = None
+        self.prepare_verify_trace(page_tables, T, warm_positions)
+        self.record_verify_trace()
+
+    def prepare_verify_trace(self, page_tables, T, warm_positions):
+        """Allocate and compile everything the verify trace needs without capturing (warmup phase 1);
+        record_verify_trace captures it (phase 2); verify_traced replays it.
+        Bucket is a fixed B x T (T = len([pending] + drafts) per user, B = max_batch_size users).
+        GDN state is carried (not reset): the trace advances a per-token ring in place and the host
+        points the next replay at each user's accepted slot (mi) instead of copying anything back.
+        ``page_tables``: torch int32 [B, num_blocks], one row per user, staged here; verify_traced
+        keeps them unless it is handed new ``page_tables`` (continuous batching).
+        ``warm_positions``: B absolute positions the two throwaway warmup/capture passes write KV at.
+        Capture happens after prompt prefill (so those programs cannot clobber the parked trace), so
+        point the writes past each user's prompt frontier; the first real verify overwrites them.
+        Idempotent for the same (B, T, nb); a different key releases any live trace first.
+        """
+        from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
+        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
+
+        assert self.num_devices > 1, "traced verify is the TP path"
+        assert self._paged_kv_caches is not None, "allocate_kv_caches first"
+        pt = _page_table_rows(page_tables)
+        B = int(pt.shape[0])
+        nb = int(pt.shape[1])
+        # B is the model's decode width, not a per-request choice: GDN's fused recurrent decode and
+        # its batched state are both allocated at max_batch_size, and the verify shares them.
+        assert B == self.args.max_batch_size, (
+            f"verify runs the full decode width: page_tables has {B} rows, max_batch_size is "
+            f"{self.args.max_batch_size}"
+        )
+        assert len(warm_positions) == B, f"warm_positions needs one position per user ({B})"
+        rows = B * T
+        # One decode tile carries every row of every user: the hard cap on B*(K+1) (nlp_create /
+        # concat_heads_decode cap at 32 users, and every decode matmul config is a single tile row).
+        assert rows <= ttnn.TILE_SIZE, f"verify bucket {B} users x T={T} = {rows} rows exceeds one tile"
+        # The TILE_SIZE bucket runs the DECODE matmul config so every layer takes the DRAM-sharded
+        # decode kernels and the weight load is amortized across the B*T tokens (a 32-row M-tile
+        # costs the same as a 1-row one; the 128-row prefill bucket is compute-bound even at T=1).
+        # Not bit-exact with a prefill-config verify (different matmul kernels round near-ties
+        # differently), so spec need not reproduce target greedy exactly.
+        # Hybrid verify skips chunked prefill SDPA (6 cores serially scanning KV; it int-divides
+        # chunk_start by 32, so an unaligned anchor drops up to 31 recent tokens). Candidates go
+        # through decode flash as pseudo-users: write all K/V, then one SDPA-decode with per-row
+        # cur_pos so row u*T+j attends [0, p_u+j]. Causality is free and the KV scan spreads over
+        # the full grid.
+        key = (B, T, nb)
+        if getattr(self, "_vfy_prepared_key", None) == key and getattr(self, "_vfy_token_buf", None) is not None:
+            return
+        dev = self.device
+        rep = ttnn.ReplicateTensorToMesh(dev)
+
+        # A re-prepare must not leave the old trace parked: its buffers are about to be replaced
+        # (prepare_spec_verify reallocates on a shape change) and its id would leak.
+        self.release_verify_trace()
+        self._vfy_prepared_key = None
+        self._vfy_T, self._vfy_B = T, B
+        self._vfy_nb = nb
+
+        # Persistent per-replay input buffers (addresses baked into the trace).
+        self._vfy_token_buf = ttnn.from_torch(
+            torch.zeros(1, rows, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            mesh_mapper=rep,
+        )
+        # Positions are staged per replay; they are only allocated here, at the captured width, and
+        # re-staged per replay by verify_traced (same convention as the prefill traces).
+        # KV is written position-exact (paged_update_cache at absolute slots), not block-aligned.
+        warm = self._vfy_row_positions(warm_positions)
+        self._vfy_kvpos_buf = ttnn.from_torch(
+            warm, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
+        )
+        # Grouped aliased KV write (TPAttention._write_kv_aliased): checked here for the warm passes and on
+        # every replay (verify_traced), while the tables are still torch; see spec_kv_write_conflicts.
+        self._vfy_pt_host = pt.clone()
+        self._vfy_kv_grouped = B > 1 and T > 1 and KV_GROUP_WRITE_OK
+        if self._vfy_kv_grouped:
+            self._vfy_check_kv_writes(pt, warm_positions)
+        # The three persistent page-table buffers (see _vfy_page_table_host) are allocated before the
+        # warmup so their addresses bake into the trace; verify_traced(page_tables=...) re-stages them
+        # in place.
+        _att0 = next(layer.attention for layer in self.layers if layer.is_full_attention)
+        _spec_groups = int(_att0.spec_sdpa_groups(T, B))
+        self._vfy_spec_groups = _spec_groups
+        self._vfy_kvpt_buf, self._vfy_kvpt_users, self._vfy_kvpt1_buf = (
+            ttnn.from_torch(h, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
+            for h in self._vfy_page_table_host(pt)
+        )
+        # RoPE tables. Hybrid verify feeds the DECODE attention kernel, whose cos/sin are
+        # [1, rows, 1, rope_dim] (one rotation per ROW at that row's own position) — not the prefill
+        # [1, 1, S, rope_dim] table. Same host math the plain decode step uses, so the two paths'
+        # rotations are byte-identical and near-ties round the same way.
+        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(warm)
+        self._vfy_cos_buf = ttnn.from_torch(
+            cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
+        )
+        self._vfy_sin_buf = ttnn.from_torch(
+            sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
+        )
+
+        # The deferred commit's two selectors, shared by all GDN layers (pure index / one-hot data, so one
+        # pair of buffers is staged per iteration instead of one per layer). state_blk_idx picks each
+        # (user, v-head)'s starting block in the per-token state ring; conv_sel picks each user's conv
+        # window rows out of [E_prev | new qkv]. Both start at mi = 0 for every user, as the seed leaves them.
+        gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        assert gdn, "the hybrid verify needs GDN layers"
+        Nv, Kc = gdn[0].Nv, gdn[0].K
+        self._vfy_Nv, self._vfy_Kc = Nv, Kc
+        _mi0 = [0] * B
+        self._vfy_state_idx = ttnn.from_torch(
+            spec_state_blk_idx(_mi0, B, Nv),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            mesh_mapper=rep,
+        )
+        self._vfy_conv_sel = ttnn.from_torch(
+            spec_conv_sel(_mi0, B, T, Kc),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            mesh_mapper=rep,
+        )
+
+        # Allocate each GDN layer's spec-verify buffers (per-token state ring + conv window) before
+        # the warmup pass: the trace bakes their addresses in, and nothing may allocate later.
+        for dn in gdn:
+            dn.prepare_spec_verify(B, T)
+
+        # Throwaway seed, only to fill the program cache. The spec loop calls seed_spec_state() again after
+        # this capture (the warmup/capture passes below overwrite the ring and the window), and that call
+        # must be a pure cache hit: a program compiled while a trace is parked lands its kernel binaries
+        # in memory the replay writes over. Safe now: rec_state and the conv window are valid and the
+        # verify writes neither, so this only fills the spec buffers with contents the real seed overwrites.
+        for dn in gdn:
+            dn.seed_spec_state()
+        ttnn.synchronize_device(dev)
+
+        # Warmup outside the trace compiles every program (a compile during replay clobbers the trace);
+        # the capture pass runs in record_verify_trace. Both passes overwrite the ring and the conv window;
+        # the spec loop calls dn.seed_spec_state() after capture, which re-initialises token-slot 0 from
+        # the live decode state, and the first replay then runs at mi = 0.
+        for t in self._forward_verify_bucket_tp(n_users=B):
+            ttnn.deallocate(t)
+        ttnn.synchronize_device(dev)
+        self._vfy_att0 = _att0
+        self._vfy_prepared_key = key
+
+    def record_verify_trace(self):
+        """Capture the verify trace over the buffers prepare_verify_trace allocated (warmup phase 2).
+        Idempotent: a live trace is kept."""
+        assert getattr(self, "_vfy_prepared_key", None) is not None, "call prepare_verify_trace first"
+        if getattr(self, "_vfy_trace_id", None) is not None:
+            return
+        dev = self.device
+        B, T = self._vfy_B, self._vfy_T
+        rows = B * T
+        _att0 = self._vfy_att0
+        _spec_groups = self._vfy_spec_groups
+        _kv_grouped = self._vfy_kv_grouped
+
+        self._vfy_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+        (
+            self._vfy_logits_out,
+            self._vfy_rows_out,
+            self._vfy_ids_out,
+            self._vfy_logits_rm_out,
+        ) = self._forward_verify_bucket_tp(n_users=B)
+        ttnn.end_trace_capture(dev, self._vfy_trace_id, cq_id=0)
+        self._vfy_capture_count = getattr(self, "_vfy_capture_count", 0) + 1
+        # Fused grouped SDPA read (spec_multi_pos_tiles) or the legacy per-row call; a T with no
+        # L1-fitting split (7, 11, ...) stays legacy.
+        _fused = _att0.spec_sdpa_enabled(T)
+        _how = (
+            f"FUSED spec_multi_pos_tiles ({_spec_groups} groups x Tg={rows // _spec_groups})"
+            if _fused
+            else f"legacy {rows} pseudo-users"
+        )
+        _kvw = (
+            f"GROUPED ({T} calls x {B} rows per K/V per layer)"
+            if self._vfy_kv_grouped
+            else f"per-row ({rows} calls per K/V per layer)"
+        )
+        logger.info(
+            f"Verify trace (B={B} users x T={T} = {rows} rows) captured "
+            f"successfully! verify SDPA: {_how}; verify KV write: {_kvw}"
+        )
+
+    def verify_traced(self, tokens, positions, mi_prev, read_logits=False, page_tables=None, inactive=None):
+        """Replay the captured verify trace for B users x T candidates.
+
+        ``tokens``: B lists of T ids ([pending] + drafts per user). ``positions``: B ints, user u's
+        first verify slot this iteration (row u*T+j lands at positions[u]+j). ``mi_prev``: B ints,
+        each user's accepted-prefix index from the previous iteration (0 right after the seed). It
+        is the whole commit: it selects user u's starting recurrent state (ring block) and conv
+        window rows, so no state is copied between iterations.
+
+        Returns (ids: B*T host ints, feed_rows: the trace's persistent [1,1,B*T,dim/tp] drafter feed,
+        logits: torch [B*T, vocab] or None). ``read_logits`` pulls the full logits to host (for the
+        sampler; greedy needs only the in-trace argmax ids). It reads the trace's ROW_MAJOR copy
+        (_vfy_logits_rm_out) with no cast, which avoids a host untilize; the sampler converts to
+        float32 lazily per row.
+
+        ``page_tables``: int32 [B, num_blocks] block tables (array-like; 1-D only for B == 1), one
+        row per user. When given, every persistent page-table buffer is re-staged for this replay,
+        with columns clipped or padded with block 0 (vLLM's null block) to the captured width.
+        None keeps the tables staged last. A grouped KV write that would put two users on the same
+        (block, 32-row tile) in the same call (block 0 excepted) raises AssertionError before anything is staged.
+        The MTP drafter's own table (``SpeculativeDecoder.mtp_pt``) is a separate buffer this argument does
+        not touch. ``inactive``: length-B bools; those users are skipped by the KV-write collision check only
+        (their rows write the null block).
+
+        ``feed_rows`` is the trace's own output buffer: do not deallocate it, and finish with it
+        before the next replay (the spec loop reads its anchor rows and reseeds the drafter within
+        the iteration).
+        """
+        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
+
+        assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
+        T, B = self._vfy_T, self._vfy_B
+        rows = B * T
+        assert len(tokens) == B, f"expected {B} users, got {len(tokens)}"
+        assert all(len(t) == T for t in tokens), f"expected {T} tokens per user"
+        assert len(positions) == B and len(mi_prev) == B, "one position and one mi per user"
+        dev = self.device
+        rep = ttnn.ReplicateTensorToMesh(dev)
+
+        # Page tables: normalise to the captured width (clip, or pad with the null block 0) and check
+        # the grouped KV write before staging anything, so a refused replay leaves the device alone.
+        pt = self._vfy_pt_host
+        if page_tables is not None:
+            pt = torch.as_tensor(page_tables)
+            assert pt.dim() == 2 or (pt.dim() == 1 and B == 1), "page_tables must be [B, nb] (1-D only for B == 1)"
+            pt = _page_table_rows(pt)
+            assert pt.shape[0] == B, f"page_tables has {pt.shape[0]} rows, expected {B} users"
+            W = int(self._vfy_pt_host.shape[1])
+            pt = pt[:, :W]
+            if pt.shape[1] < W:
+                pt = torch.cat([pt, torch.zeros(B, W - pt.shape[1], dtype=torch.int32)], dim=1)
+            pt = pt.contiguous()
+        if self._vfy_kv_grouped:
+            chk = positions if inactive is None else [-1 if x else int(p) for p, x in zip(positions, inactive)]
+            self._vfy_check_kv_writes(pt, chk)
+        if page_tables is not None:
+            bufs = (self._vfy_kvpt_buf, self._vfy_kvpt_users, self._vfy_kvpt1_buf)
+            for host, buf in zip(self._vfy_page_table_host(pt), bufs):
+                _h = ttnn.from_torch(host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
+                ttnn.copy_host_to_device_tensor(_h, buf)
+            self._vfy_pt_host = pt
+
+        # Stage per-replay inputs into the persistent buffers (addresses preserved). Row-major flatten
+        # of the B x T token lists is the user-major row order.
+        tok = torch.tensor([int(t) for row in tokens for t in row], dtype=torch.int32).reshape(1, rows)
+        _h = ttnn.from_torch(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, self._vfy_token_buf)
+        # Absolute cache slot for each row: positions[u] + j. This doubles as the decode SDPA's
+        # per-row cur_pos, which is what makes the hybrid verify causal.
+        pos = self._vfy_row_positions(positions)
+        _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, self._vfy_kvpos_buf)
+        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
+        _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, self._vfy_cos_buf)
+        _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, self._vfy_sin_buf)
+        # The deferred commit (see prepare_verify_trace): where each user's recurrence and conv
+        # window resume. Two small host-built tensors, shared by every GDN layer.
+        _h = ttnn.from_torch(
+            spec_state_blk_idx(mi_prev, B, self._vfy_Nv),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None,
+            mesh_mapper=rep,
+        )
+        ttnn.copy_host_to_device_tensor(_h, self._vfy_state_idx)
+        _h = ttnn.from_torch(
+            spec_conv_sel(mi_prev, B, T, self._vfy_Kc),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=None,
+            mesh_mapper=rep,
+        )
+        ttnn.copy_host_to_device_tensor(_h, self._vfy_conv_sel)
+
+        ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(dev)
+
+        # Replicated ids (the trace argmaxed the replicated logits): one replica is the whole answer,
+        # and it is B*T uint32 instead of B*T x vocab floats.
+        ids = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_ids_out)[0]).reshape(-1)
+        ids = [int(v) for v in ids[:rows]]
+        lt = None
+        if read_logits:
+            lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
+            lt = lt.reshape(-1, self.vocab_size)[:rows]
+        return ids, self._vfy_rows_out, lt
+
+    def _forward_seed_bucket_tp(self, token_buf, kvpos, kvpt, cos, sin, n_users):
+        """``_forward_verify_bucket_tp`` at T = 1: the seed's device body, one row per user.
+
+        The same forward as the verify trace body, layer for layer, with two differences that T = 1
+        forces:
+          * GDN takes ``gdn_seed=True`` -> forward_seed_recurrent, which advances the durable state;
+            the ring and E_prev it would otherwise read do not exist yet (capture_verify_trace
+            allocates them after the seed).
+          * the rows are B different users, one candidate each, so the KV write is the ordinary
+            batched paged_update_cache (``alias_kv_write=False``): the per-row loop exists only
+            because a user's T candidates share a page table and collide on a cache tile.
+            ``spec_verify_mode`` is moot: spec_sdpa_enabled(1) is False, so the verify body would
+            take the legacy per-row SDPA call here too.
+
+        Everything else (decode-config norms, the per-row decode SDPA with per-row cur_pos, the final
+        norm + LM head + spec_feed_rows tail) is the verify body's. Runs eagerly and before any trace
+        capture, so every program it compiles is safe.
+
+        Returns (logits [1,1,B,vocab] replicated, feed [1,1,B,dim/tp] fractured).
+        """
+        x = self.embd(token_buf)
+        x = ttnn.reshape(x, (1, 1, n_users, x.shape[-1]))
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        for layer in self.layers:
+            if layer.is_full_attention:
+                x_new = layer.forward(
+                    x,
+                    cos=cos,
+                    sin=sin,
+                    mode="decode",
+                    position_tensor=kvpos,
+                    page_table=kvpt,
+                    n_users=n_users,
+                )
+            else:
+                x_new = layer.forward(
+                    x,
+                    mode="prefill",
+                    chunk_size=self.args.gdn_chunk_size,
+                    valid_len=n_users,
+                    gdn_recurrent=True,
+                    gdn_seed=True,
+                    decode_cfg=True,
+                    n_users=n_users,
+                )
+            ttnn.deallocate(x)
+            x = x_new
+        return self._spec_tail(x)
+
+    def seed_spec_step(self, tokens, positions, page_tables):
+        """One eager verify-style forward over B users, T = 1: the spec loop's seed, and the only
+        place the base model runs outside the verify trace once a generation starts.
+
+        Consumes each user's first predicted token at its own absolute position and returns
+        (logits: torch [B, vocab] host, feed_rows: ttnn [1,1,B,dim/tp]). The inputs are staged
+        as capture_verify_trace stages the trace's, at one row per user instead of T:
+        tokens [1,B] uint32, cur_pos/KV slot [B] int32, page table [B,nb], per-row decode RoPE from
+        _rope_tp_cos_sin_decode_torch. The feed rows go through spec_feed_rows, so the drafter is
+        handed the tensor the verify's rows would have produced.
+
+        The seed is verify-style rather than a plain decode step because it writes the GDN state the
+        whole generation resumes from, and the decode path builds its conv differently from the
+        verify: a K-tap shift-register MAC versus the packed KDA conv over each user's [K, C] window
+        (gdn _kda_conv_packed). The two are not bit-equal, so a decode-formulated seed hands the loop
+        a state its own formulation would never have produced, and greedy near-ties fork off the
+        trajectory the verify would have taken.
+        """
+        assert self.num_devices > 1, "seed_spec_step is the TP path"
+        assert not self._ondev_argmax, "seed_spec_step reads gathered logits; on-device argmax is off on the spec path"
+        B = len(tokens)
+        assert B == self.args.max_batch_size, f"seed runs the full decode width ({self.args.max_batch_size}), got {B}"
+        assert len(positions) == B, "one position per user"
+        assert B <= ttnn.TILE_SIZE, f"the seed is one decode tile: {B} users"
+        assert self._paged_kv_caches is not None, "allocate_kv_caches first"
+        pt = _page_table_rows(page_tables)
+        assert pt.shape[0] == B, f"page_tables must have one row per user, got {tuple(pt.shape)}"
+
+        dev = self.device
+        rep = ttnn.ReplicateTensorToMesh(dev)
+        toks = torch.tensor([int(t) for t in tokens], dtype=torch.int32).reshape(1, B)
+        pos = torch.tensor([int(p) for p in positions], dtype=torch.int32)
+        token_buf = ttnn.from_torch(toks, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
+        # Absolute cache slot per row, doubling as the decode SDPA's cur_pos (the trace's _vfy_kvpos_buf at T = 1).
+        kvpos = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
+        kvpt = ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
+        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
+        cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
+        sin = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
+
+        logits, feed = self._forward_seed_bucket_tp(token_buf, kvpos, kvpt, cos, sin, B)
+        # _lm_head all-gathers, so the logits are replicated across the TP mesh: read one replica
+        # instead of concatenating every rank (the idiom process_output_decode uses).
+        lt = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).reshape(-1, self.vocab_size)[:B].float()
+        ttnn.deallocate(logits)
+        for t in (token_buf, kvpos, kvpt, cos, sin):
+            ttnn.deallocate(t)
+        return lt, feed
+
+    def decode_step_paged(self, token_id, pos, page_table):
+        """One paged base decode at absolute ``pos`` (B=1), returning host logits + the pre-final-norm
+        hidden. Advances GDN (recurrent) + writes paged KV at ``pos``.
+
+        page_table : torch [1, num_blocks] identity table.
+        Returns (logits [vocab] host float, hidden [1,1,1,dim/tp] fractured device — the MTP seed).
+        """
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
+
+        rep = ttnn.ReplicateTensorToMesh(self.device) if self.num_devices > 1 else None
+        mk = dict(mesh_mapper=rep) if rep is not None else {}
+        tok = ttnn.from_torch(
+            torch.tensor([[int(token_id)]], dtype=torch.int32), dtype=ttnn.uint32, device=self.device, **mk
+        )
+        cos, sin = rot_mats_decode(
+            self.device,
+            self.args.rope_head_dim,
+            self.args.max_seq_len,
+            self.args.rope_theta,
+            torch.tensor([pos + self.rope.rope_delta], dtype=torch.int32),
+        )
+        cur_pos_tt = ttnn.from_torch(torch.tensor([pos], dtype=torch.int32), dtype=ttnn.int32, device=self.device, **mk)
+        pt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        logits, hidden = self._forward_decode(tok, cos, sin, cur_pos_tt, pt, return_hidden=True)
+        if self._ondev_argmax:
+            # _forward_decode returned the PRE-gather vocab-sharded logits; the ranks are different
+            # vocab slices, so they really do have to be concatenated to rebuild the full row.
+            lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+        else:
+            # _lm_head all-gathered: the logits are REPLICATED, so read one replica instead of
+            # pulling every rank back only to drop all but the first (process_output_decode's idiom).
+            lt = ttnn.to_torch(ttnn.get_device_tensors(logits)[0])
+        ttnn.deallocate(logits)
+        lt = lt.reshape(-1)[: self.vocab_size].float()
+        return lt, hidden
 
     def _forward_prefill_chunk(
         self, token_buf, cos_buf, sin_buf, chunk_start_idx_tensor, full_page_table, chunk_page_table
@@ -1002,12 +1901,26 @@ class Qwen36Model:
         return cos, sin
 
     def _forward_prefill_chunk_tp(
-        self, token_buf, cos_buf, sin_buf, chunk_start_idx_tensor, full_page_table, chunk_page_table
+        self,
+        token_buf,
+        cos_buf,
+        sin_buf,
+        chunk_start_idx_tensor,
+        full_page_table,
+        chunk_page_table,
+        seq_len=None,
+        gdn_capture_state=True,
+        gdn_carry_state=True,
+        sp=None,
     ):
         """TP trace-safe single-chunk prefill (replicated persistent buffers).
         Full chunk (valid_len==chunk_size); flexible SDPA via device chunk_start_idx.
-        Returns hidden [1,1,chunk_size,dim]."""
-        chunk_size = self._chunked_chunk_size
+        seq_len: tokens in token_buf (default _chunked_chunk_size); another size serves a prefill-only bucket.
+        gdn_capture_state=False skips the GDN decode-state (conv_states) refresh, for prefill-only traces.
+        gdn_carry_state=False: GDN layers start from zero state and drop their final state (prefill-only bucket traces).
+        sp: tt/sp.py SeqParallel; token_buf/cos/sin hold this row's seq_len tokens of a sequence split over mesh rows.
+        Returns hidden [1,1,seq_len,dim]."""
+        chunk_size = self._chunked_chunk_size if seq_len is None else seq_len
         x = self.embd(token_buf)
         x = ttnn.reshape(x, (1, 1, chunk_size, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -1025,43 +1938,74 @@ class Qwen36Model:
                     page_table=full_page_table,
                     chunk_page_table=chunk_page_table,
                     chunk_start_idx_tensor=chunk_start_idx_tensor,
+                    sp=sp,
                 )
             else:
                 # valid_len=None: no GDN mask; trace-safe static conv capture (matches valid_len==chunk_size).
-                x_new = layer.forward(x, mode="prefill", chunk_size=self.args.gdn_chunk_size, valid_len=None)
+                x_new = layer.forward(
+                    x,
+                    mode="prefill",
+                    chunk_size=self.args.gdn_chunk_size,
+                    valid_len=None,
+                    gdn_capture_state=gdn_capture_state,
+                    gdn_carry_state=gdn_carry_state,
+                    sp=sp,
+                )
             ttnn.deallocate(x)
             x = x_new
         return x
 
-    def capture_prefill_trace_chunked(
-        self, device, page_table, chunk_size=2048, warmup_masked_buckets=True, capture_chunk_trace=True
-    ):
+    def capture_prefill_trace_chunked(self, device, page_table, chunk_size=2048, warmup_masked_buckets=True):
         """Capture one chunk's all-layer prefill as a trace; replayed per chunk.
 
         Chunk-outer prefill stays under the 4 GiB trace limit at long context.
-        Flexible SDPA (runtime chunk_start) makes one trace serve all chunk positions.
+        Flexible SDPA (runtime chunk_start) makes one trace serve all chunk positions."""
+        self.prepare_prefill_trace_chunked(device, page_table, chunk_size, warmup_masked_buckets)
+        self.record_prefill_trace_chunked(device)
 
-        capture_chunk_trace=False warms the masked-bucket programs but skips parking the chunk trace.
-        The batched (B>1) vLLM path passes capture_chunk_trace=True with the PERSISTENT B=1 prefill
-        scratch bound (_bind_gdn_prefill_scratch), so the trace bakes that scratch's addresses and
-        long prompts replay the traced chunk path per user (prefill_paged_slots rebinds the scratch)."""
+    def prepare_prefill_trace_chunked(self, device, page_table, chunk_size=2048, warmup_masked_buckets=True):
+        """Allocate + compile everything the chunk trace needs. No-op if already prepared for these args."""
+        key = (chunk_size, tuple(page_table.shape), bool(warmup_masked_buckets))
+        if self._chunked_prepared_key == key:
+            return
+        if self._chunked_trace_id is not None:
+            ttnn.release_trace(device, self._chunked_trace_id)
+            self._chunked_trace_id = None
         if self.num_devices > 1:
-            return self._capture_prefill_trace_chunked_tp(
-                device,
-                page_table,
-                chunk_size=chunk_size,
-                warmup_masked_buckets=warmup_masked_buckets,
-                capture_chunk_trace=capture_chunk_trace,
+            self._prepare_prefill_trace_chunked_tp(device, page_table, chunk_size, warmup_masked_buckets)
+        else:
+            self._prepare_prefill_trace_chunked_single(device, page_table, chunk_size, warmup_masked_buckets)
+        self._chunked_prepared_key = key
+
+    def record_prefill_trace_chunked(self, device):
+        """Capture the chunk trace on prepare_prefill_trace_chunked's buffers; allocates nothing outside capture."""
+        assert self._chunked_prepared_key is not None, "Call prepare_prefill_trace_chunked first"
+        if self._chunked_trace_id is not None:
+            ttnn.release_trace(device, self._chunked_trace_id)
+            self._chunked_trace_id = None
+        tp = self.num_devices > 1
+        self._reset_gdn_state_for_new_sequence()
+        forward = self._forward_prefill_chunk_tp if tp else self._forward_prefill_chunk
+        # The trace output is read right after each replay, before any other trace can run.
+        with trace_allocation_tracker.corruptible_allocation_scope(device):
+            self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            self._chunked_trace_output = forward(
+                self._chunk_token_buf,
+                self._chunk_cos_buf,
+                self._chunk_sin_buf,
+                self._chunk_start_idx_tensor,
+                self._chunk_full_page_table_buf,
+                self._chunk_page_table_buf,
             )
-        assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
+            ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
+        logger.info(f"Chunked prefill trace{' (TP)' if tp else ''} captured successfully!")
+
+    def _prepare_prefill_trace_chunked_single(self, device, page_table, chunk_size, warmup_masked_buckets):
+        assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
         assert chunk_size % 128 == 0, f"chunk_size {chunk_size} must be a multiple of 128"
         B = 1
         block_size = get_block_size(self._paged_kv_caches)
         blocks_per_chunk = chunk_size // block_size
-
-        if self._chunked_trace_id is not None:
-            ttnn.release_trace(device, self._chunked_trace_id)
-            self._chunked_trace_id = None
 
         self._chunked_chunk_size = chunk_size
 
@@ -1100,25 +2044,8 @@ class Qwen36Model:
             device=device,
         )
 
-        # Bind GDN to persistent external state; enable in-place carry across replays.
-        for layer, (ext_rec, ext_conv) in zip(
-            (l for l in self.layers if not l.is_full_attention), self._deltanet_external_states
-        ):
-            dn = layer.attention
-            dn.recurrent_state = ext_rec
-            dn.fused_conv_state = ext_conv
-            dn.conv_state_q = None
-            dn.conv_state_k = None
-            dn.conv_state_v = None
-            if dn.split_conv_state is not None:
-                for buf in dn.split_conv_state:
-                    ttnn.deallocate(buf)
-                dn.split_conv_state = None
-            dn._chunk_inplace_state = True
-        self._init_dn_zero_buffers()
-
         # Warmup outside trace: compile per-chunk programs.
-        self._reset_dn_state_inplace()
+        self._reset_gdn_state_for_new_sequence()
         warmup_out = self._forward_prefill_chunk(
             self._chunk_token_buf,
             self._chunk_cos_buf,
@@ -1134,36 +2061,18 @@ class Qwen36Model:
         # Dummy prefills dirty state/KV; reset below before capture.
         if warmup_masked_buckets:
             self.warmup_prefill_masked_buckets(page_table)
+        self._reset_gdn_state_for_new_sequence()
 
-        # Capture trace.
-        self._reset_dn_state_inplace()
-        self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        self._chunked_trace_output = self._forward_prefill_chunk(
-            self._chunk_token_buf,
-            self._chunk_cos_buf,
-            self._chunk_sin_buf,
-            self._chunk_start_idx_tensor,
-            self._chunk_full_page_table_buf,
-            self._chunk_page_table_buf,
-        )
-        ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
-        logger.info("Chunked prefill trace captured successfully!")
+    def _prepare_prefill_trace_chunked_tp(self, device, page_table, chunk_size, warmup_masked_buckets):
+        """TP fork of _prepare_prefill_trace_chunked_single.
 
-    def _capture_prefill_trace_chunked_tp(
-        self, device, page_table, chunk_size=2048, warmup_masked_buckets=True, capture_chunk_trace=True
-    ):
-        """TP fork of capture_prefill_trace_chunked.
-
-        Replicated persistent buffers; rope_tp cos/sin; GDN uses _stable_state (not external buffers).
+        Replicated persistent buffers; rope_tp cos/sin; GDN uses its module-owned state.
         Trace replays _forward_prefill_chunk_tp."""
-        assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
+        assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
         assert chunk_size % 128 == 0, f"chunk_size {chunk_size} must be a multiple of 128"
         block_size = get_block_size(self._paged_kv_caches)
         blocks_per_chunk = chunk_size // block_size
 
-        if self._chunked_trace_id is not None:
-            ttnn.release_trace(device, self._chunked_trace_id)
-            self._chunked_trace_id = None
         self._chunked_chunk_size = chunk_size
 
         # Allocate the hidden-sharded vision-splice buffers BEFORE warmup so the fixed-shape
@@ -1222,29 +2131,7 @@ class Qwen36Model:
         # Warmup masked-bucket/tail programs outside trace (same GDN mode; avoids trace clobber).
         if warmup_masked_buckets:
             self.warmup_prefill_masked_buckets(page_table)
-
-        if not capture_chunk_trace:
-            # Batched (B>1) vLLM path: masked-bucket programs are warmed above; skip parking the
-            # chunk trace (it would bake the B=1 prefill scratch that is freed after warmup, and
-            # batched serving handles short prompts only). num_full==0 prompts never need it.
-            self._chunked_trace_id = None
-            self._reset_gdn_state_for_new_sequence()
-            logger.info("Masked-bucket prefill programs (TP) warmed; chunk trace skipped (batched path).")
-            return
-
-        # Capture trace.
         self._reset_gdn_state_for_new_sequence()
-        self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        self._chunked_trace_output = self._forward_prefill_chunk_tp(
-            self._chunk_token_buf,
-            self._chunk_cos_buf,
-            self._chunk_sin_buf,
-            self._chunk_start_idx_tensor,
-            self._chunk_full_page_table_buf,
-            self._chunk_page_table_buf,
-        )
-        ttnn.end_trace_capture(device, self._chunked_trace_id, cq_id=0)
-        logger.info("Chunked prefill trace (TP) captured successfully!")
 
     # ----------------------------------------------------------------------- #
     # Traced batched SHORT-prompt prefill (B=32 / ISL<=128)
@@ -1273,19 +2160,21 @@ class Qwen36Model:
                     dn.conv_states,
                     dn.conv_carry,
                     dn._zero_conv0,
-                    dn._stable_state,
+                    # _zero_rec is B-shaped like _zero_conv0 and travels with the binding: reset_state_inplace
+                    # copies it into rec_state, and a [B,...] zero over a [1,...] scratch (or the reverse) is a
+                    # hard shape TT_FATAL.
+                    dn._zero_rec,
                 )
             )
             # reset_state allocates against self.B, so set B=1 first.
             dn.B = 1
             dn.reset_state()  # builds rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_conv0
-            dn._stable_state = True  # in-place carry so the trace's baked addresses survive replays
         return prev
 
     def _restore_gdn_batched(self, prev):
         """Restore the batched [B,...] GDN bindings saved by _alloc_gdn_scratch_b1 and free
         the B=1 scratch, so decode reads the assembled batched state."""
-        for dn, B_b, rec_b, conv_b, carry_b, zero0_b, stable_b in prev:
+        for dn, B_b, rec_b, conv_b, carry_b, zero0_b, zerorec_b in prev:
             # Free the B=1 scratch allocated for the prefill trace.
             if dn.rec_state is not None:
                 ttnn.deallocate(dn.rec_state)
@@ -1295,13 +2184,15 @@ class Qwen36Model:
                 ttnn.deallocate(dn.conv_carry)
             if dn._zero_conv0 is not None:
                 ttnn.deallocate(dn._zero_conv0)
+            if dn._zero_rec is not None:
+                ttnn.deallocate(dn._zero_rec)
             # Rebind the batched decode buffers.
             dn.B = B_b
             dn.rec_state = rec_b
             dn.conv_states = conv_b
             dn.conv_carry = carry_b
             dn._zero_conv0 = zero0_b
-            dn._stable_state = stable_b
+            dn._zero_rec = zerorec_b
 
     def _ensure_gdn_prefill_scratch(self):
         """Allocate the PERSISTENT B=1 GDN prefill scratch once (idempotent).
@@ -1320,11 +2211,26 @@ class Qwen36Model:
             dn = layer.attention
             # reset_state allocates fresh B=1 buffers and assigns them WITHOUT freeing the current
             # (batched) ones, so save+restore the batched bindings and keep the scratch handles alive.
-            saved = (dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state)
+            # _zero_rec is saved and restored with the rest of the binding (see _alloc_gdn_scratch_b1).
+            saved = (
+                dn.B,
+                dn.rec_state,
+                dn.conv_states,
+                dn.conv_carry,
+                dn._zero_conv0,
+                dn._zero_rec,
+            )
             dn.B = 1
             dn.reset_state()  # builds rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_conv0
-            scratch.append((dn, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0))
-            dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state = saved
+            scratch.append((dn, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._zero_rec))
+            (
+                dn.B,
+                dn.rec_state,
+                dn.conv_states,
+                dn.conv_carry,
+                dn._zero_conv0,
+                dn._zero_rec,
+            ) = saved
         self._gdn_prefill_scratch = scratch
 
     def _bind_gdn_prefill_scratch(self):
@@ -1334,26 +2240,37 @@ class Qwen36Model:
         allocating a throwaway per call (so the chunk trace's baked addresses stay valid)."""
         self._ensure_gdn_prefill_scratch()
         prev = []
-        for dn, rec, conv, carry, zero0 in self._gdn_prefill_scratch:
-            prev.append((dn, dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state))
+        for dn, rec, conv, carry, zero0, zerorec in self._gdn_prefill_scratch:
+            prev.append(
+                (
+                    dn,
+                    dn.B,
+                    dn.rec_state,
+                    dn.conv_states,
+                    dn.conv_carry,
+                    dn._zero_conv0,
+                    dn._zero_rec,
+                )
+            )
             dn.B = 1
             dn.rec_state = rec
             dn.conv_states = conv
             dn.conv_carry = carry
             dn._zero_conv0 = zero0
-            dn._stable_state = True  # in-place carry so the trace's baked addresses survive replays
+            # The scratch's own [1,...] zero state: reset_state_inplace copies it into the bound rec_state.
+            dn._zero_rec = zerorec
         return prev
 
     def _unbind_gdn_prefill_scratch(self, prev):
         """Rebind the batched [B,...] decode buffers saved by _bind_gdn_prefill_scratch, WITHOUT freeing
         the persistent scratch (unlike _restore_gdn_batched, whose scratch is throwaway)."""
-        for dn, B_b, rec_b, conv_b, carry_b, zero0_b, stable_b in prev:
+        for dn, B_b, rec_b, conv_b, carry_b, zero0_b, zerorec_b in prev:
             dn.B = B_b
             dn.rec_state = rec_b
             dn.conv_states = conv_b
             dn.conv_carry = carry_b
             dn._zero_conv0 = zero0_b
-            dn._stable_state = stable_b
+            dn._zero_rec = zerorec_b
 
     def _snapshot_gdn_scratch(self):
         """Snapshot the B=1 GDN scratch (host torch) to restore around the throwaway capture run."""
@@ -1390,19 +2307,13 @@ class Qwen36Model:
                 ttnn.deallocate(cc)
 
     def capture_prefill_trace_bucket(self, device, page_table, bucket=128):
-        """Capture ONE B=1 full-bucket prefill trace (all-layer forward, valid_len=None) for
-        batched serving of prompts whose length is EXACTLY the bucket. GDN points at a B=1
-        scratch. Replay once per user via prefill_traced_bucket_batched.
-
-        Only full-bucket prompts are traced: valid_len cannot be masked inside a trace, so a
-        short prompt would pad through the GDN recurrence and corrupt the decode state. Callers
-        route actual_len < bucket prompts to eager prefill_paged_peruser.
-
-        Args:
-          device: mesh device.
-          page_table: torch.Tensor [1, bpu] int32 — one user's row (buffer width fixed across
-            replays; each replay DMAs a different user's row in).
-          bucket: fixed bucket length (128 for ISL==128; must be a multiple of 128).
+        """Capture ONE B=1 full-bucket prefill trace (all-layer forward, valid_len=None) for batched
+        serving of prompts whose length is EXACTLY the bucket. GDN points at a B=1 scratch. Replay
+        once per user via prefill_traced_bucket_batched. Only full-bucket prompts are traced:
+        valid_len cannot be masked inside a trace, so a short prompt would pad through the GDN
+        recurrence and corrupt decode state. Callers route actual_len < bucket to eager
+        prefill_paged_peruser. ``page_table`` torch [1, bpu] int32 — one user's row (buffer width
+        fixed; each replay DMAs a different user's row). ``bucket`` must be a multiple of 128.
         """
         assert self.num_devices > 1, "capture_prefill_trace_bucket is the TP (num_devices>1) path"
         assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
@@ -1546,16 +2457,15 @@ class Qwen36Model:
             self._gdn_batched_prev = None
 
     def prefill_traced_bucket_batched(self, token_ids_list, page_table, valid_lens=None):
-        """Traced batched short-prompt prefill: replay the captured B=1 full-bucket trace once
-        per user, stitching each replay's B=1 GDN state into row u of the batched [B,...] decode
-        buffer. Attention fills each user's physical blocks via the per-user page-table row
-        (batch_idx=0 baked into the trace). Returns a list of B device logits [1, 1, vocab].
-
-        CORRECTNESS CONTRACT: every user's actual_len MUST equal the captured bucket. The trace
-        runs valid_len=None (no GDN mask); for a short prompt padded to the bucket that would push
-        padding tokens through the GDN recurrence and corrupt the decode state. Short prompts must
-        be routed to eager prefill_paged_peruser. Asserts actual_len == bucket and never pads.
-        Call capture_prefill_trace_bucket first; release_prefill_trace_bucket before decode.
+        """Traced batched short-prompt prefill: replay the captured B=1 full-bucket trace once per
+        user, stitching each replay's B=1 GDN state into row u of the batched [B,...] decode buffer.
+        Attention fills each user's physical blocks via the per-user page-table row (batch_idx=0
+        baked into the trace). Returns a list of B device logits [1, 1, vocab]. Every user's
+        actual_len MUST equal the captured bucket: the trace runs valid_len=None (no GDN mask), so
+        a short prompt padded to the bucket would push padding through the GDN recurrence and
+        corrupt decode state. Short prompts go to eager prefill_paged_peruser. Asserts
+        actual_len == bucket and never pads. Call capture_prefill_trace_bucket first;
+        release_prefill_trace_bucket before decode.
         """
         assert self.num_devices > 1, "prefill_traced_bucket_batched is the TP (num_devices>1) path"
         assert getattr(self, "_bucket_trace_id", None) is not None, "Call capture_prefill_trace_bucket first"
@@ -1661,7 +2571,7 @@ class Qwen36Model:
                 self._restore_gdn_batched(self._gdn_batched_prev)
                 self._gdn_batched_prev = None
 
-        # Assemble the per-user states into row u in place (_stable_state path).
+        # Assemble the per-user states into row u in place.
         self._assemble_per_user_gdn(per_user_rec, per_user_conv)
 
         # Re-upload the per-user logits as stable device tensors after all allocations.
@@ -1670,7 +2580,7 @@ class Qwen36Model:
     def _assemble_per_user_gdn(self, per_user_rec, per_user_conv):
         """Stitch B per-user B=1 GDN states (host torch) into row u of the batched [B,...] decode
         buffers via assemble_batched_state. The batched GDN bindings MUST already be rebound (writes
-        in place under _stable_state). Shared by prefill_traced_bucket_batched/prefill_chunked_peruser.
+        in place). Shared by prefill_traced_bucket_batched/prefill_chunked_peruser.
 
         per_user_rec[u][li]:  host rec_state snapshot for user u, GDN layer li (mesh dim 0 = devices).
         per_user_conv[u][li]: list of K host conv_states snapshots for user u, GDN layer li.
@@ -1732,24 +2642,15 @@ class Qwen36Model:
 
     def prefill_paged_slots(self, token_ids_list, page_table, empty_slots, valid_lens=None):
         """vLLM continuous-batching TP prefill: prefill each new request into ITS decode slot.
-
-        The per-slot analogue of prefill_paged_peruser for online serving. Under vLLM a new
-        request is prefilled while the other decode slots are live, so each user's B=1 state must
-        land in row empty_slots[u] WITHOUT disturbing the others (GDN state is a fixed [B,...]
-        buffer indexed by slot, not paged). Mirrors prefill_traced_bucket_batched's machinery —
-        bind a B=1 GDN scratch, run the trace-safe pre-warmed masked-bucket prefill per user,
-        snapshot its B=1 state — but writes each snapshot into its slot via write_slot (preserving
-        the live rows) instead of assembling the whole batch. Attention fills each user's physical
-        blocks via its page-table row (the same blocks decode reads via the decode page table).
-
-        token_ids_list: list of N torch.Tensor [1, T_u].
-        page_table:     torch.Tensor [N, max_blocks] int32 — row u = request u's blocks.
-        empty_slots:    list of N ints — request u's persistent decode slot.
-        valid_lens:     optional list of N real token counts (defaults to each T_u).
-        Returns:        list of N host torch logits [1, 1, vocab_size] (one per request, in call order).
-
-        Call allocate_kv_caches(batch_size=B) + the batched warmup first. Any prompt length is served:
-        prefill_traced_chunked chunks long prompts via pre-warmed programs (no post-park compile).
+        Per-slot analogue of prefill_paged_peruser: a new request is prefilled while other decode
+        slots are live, so each user's B=1 state must land in row empty_slots[u] WITHOUT disturbing
+        the others (GDN is a fixed [B,...] buffer indexed by slot, not paged). Each request runs B=1 on
+        the persistent GDN scratch (pre-warmed masked bucket / chunk trace), then its state is cloned on
+        device and written into its slot with write_slot (preserving live rows) before the next request.
+        Attention fills each user's blocks via its page-table row. ``token_ids_list`` N [1,T_u];
+        ``page_table`` [N, max_blocks]; ``empty_slots`` N ints; ``valid_lens`` optional. Returns N host
+        torch logits [1,1,vocab] in call order. Call allocate_kv_caches(batch_size=B) + batched warmup
+        first; long prompts use prefill_traced_chunked via pre-warmed programs (no post-park compile).
         """
         assert self.num_devices > 1, "prefill_paged_slots is the TP (num_devices>1) path"
         N = len(token_ids_list)
@@ -1758,72 +2659,71 @@ class Qwen36Model:
         assert pt.shape[0] == N, "page_table must have one row per request"
         comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         dn_states = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        dram = ttnn.DRAM_MEMORY_CONFIG
 
-        # Bind the persistent B=1 GDN prefill scratch: prefill runs B=1 and its per-sequence reset
-        # would otherwise zero the batched [B,...] decode buffer (clobbering the live rows). This is
-        # the SAME scratch whose addresses the chunk-prefill trace baked at warmup, so the traced
-        # long-prompt path replays correctly; short prompts use the masked bucket on the same scratch.
-        prev = self._bind_gdn_prefill_scratch()
         host_logits = []
-        per_user_rec = []
-        per_user_conv = []
-        try:
-            for u in range(N):
-                toks = token_ids_list[u]
-                assert toks.shape[0] == 1, f"request {u}: token_ids must be [1, T_u]"
-                actual = int(valid_lens[u]) if valid_lens is not None else toks.shape[1]
-                assert actual >= 1, f"request {u}: empty prompt (actual_len={actual})"
-                # Trace-safe prefill into the B=1 scratch: prefill_traced_chunked runs short prompts in
-                # one masked-bucket forward and chunks longer ones; GDN state carries + is snapshotted below.
+        for u in range(N):
+            toks = token_ids_list[u]
+            assert toks.shape[0] == 1, f"request {u}: token_ids must be [1, T_u]"
+            actual = int(valid_lens[u]) if valid_lens is not None else toks.shape[1]
+            assert actual >= 1, f"request {u}: empty prompt (actual_len={actual})"
+            # Bind the persistent B=1 GDN prefill scratch: prefill runs B=1 and its per-sequence reset
+            # would otherwise zero the batched [B,...] decode buffer (clobbering the live rows). This is
+            # the SAME scratch whose addresses the chunk-prefill trace baked at warmup, so the traced
+            # long-prompt path replays correctly; short prompts use the masked bucket on the same scratch.
+            prev = self._bind_gdn_prefill_scratch()
+            try:
+                # prefill_traced_chunked runs short prompts in one masked-bucket forward and chunks longer ones.
                 lg = self.prefill_traced_chunked(toks[:, :actual], pt[u : u + 1], actual_len=actual)
                 host_logits.append(
                     ttnn.to_torch(lg, mesh_composer=comp).reshape(-1, self.args.vocab_size)[:1].float().view(1, 1, -1)
                 )
                 ttnn.deallocate(lg)
-                # Snapshot this user's B=1 scratch state (host round trip — the next user's reset
-                # overwrites the scratch in place; see prefill_traced_bucket_batched for why not clone).
-                per_user_rec.append([ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states])
-                per_user_conv.append(
-                    [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_states]
-                )
-        finally:
-            # Always rebind the batched decode buffers (a mid-loop assert must not leave GDN on scratch).
-            # Does NOT free the scratch — it persists for the next request and keeps the trace valid.
-            self._unbind_gdn_prefill_scratch(prev)
-
-        # Write each user's snapshot into its decode slot, preserving the other live rows.
-        for u in range(N):
-            self._write_gdn_slot(int(empty_slots[u]), per_user_rec[u], per_user_conv[u])
+                # write_slot consumes these clones below, before the next request's chunk-trace replay
+                # could overwrite them (see prefill_traced_bucket_batched).
+                snap = [
+                    (
+                        ttnn.clone(dn.rec_state, memory_config=dram),
+                        [ttnn.clone(c, memory_config=dram) for c in dn.conv_states],
+                    )
+                    for dn in dn_states
+                ]
+            finally:
+                # Always rebind the batched decode buffers (a mid-call assert must not leave GDN on scratch).
+                # Does NOT free the scratch — it persists for the next request and keeps the trace valid.
+                self._unbind_gdn_prefill_scratch(prev)
+            for dn, (rec, convs) in zip(dn_states, snap):
+                dn.write_slot(int(empty_slots[u]), rec, convs)  # preserves the other live rows
         return host_logits
 
-    def _write_gdn_slot(self, slot, rec_snap, conv_snap):
-        """Upload one request's B=1 GDN state snapshot (host torch, per GDN layer) and write it
-        into decode `slot` of the batched buffers via TPGatedDeltaNet.write_slot (preserving the
-        other live rows). Shapes/mappers mirror _assemble_per_user_gdn (mesh dim 0 = devices).
-
-        rec_snap[li]:  host [num_devices, Nv, Dk, Dv]; conv_snap[li]: list of K host [num_devices, 1, D].
-        """
-        mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
-        dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
-        for li, dn in enumerate(dn_layers):
-            rec = ttnn.from_torch(
-                rec_snap[li],
-                dtype=dn.rec_state.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                mesh_mapper=mapper,
-            )
-            convs = [
-                ttnn.from_torch(
-                    conv_snap[li][m],
-                    dtype=dn.conv_states[m].dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.mesh_device,
-                    mesh_mapper=mapper,
-                )
-                for m in range(dn.K)
+    def warmup_gdn_slot_ops(self):
+        """Compile the per-slot GDN state edits (write_slot per slot, remap_slots) before any trace is live."""
+        if self._gdn_slot_ops_warmed:
+            return
+        dn_states = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        prev = self._bind_gdn_prefill_scratch()
+        try:
+            # The prefill paths' device copy: clone from the bound scratch, then write_slot.
+            dev_snaps = [
+                [
+                    (
+                        ttnn.clone(dn.rec_state, memory_config=dram),
+                        [ttnn.clone(c, memory_config=dram) for c in dn.conv_states],
+                    )
+                    for dn in dn_states
+                ]
+                for _ in range(self.args.max_batch_size)
             ]
-            dn.write_slot(slot, rec, convs)
+        finally:
+            self._unbind_gdn_prefill_scratch(prev)
+        for slot in range(self.args.max_batch_size):
+            for dn, (r, cs) in zip(dn_states, dev_snaps[slot]):
+                dn.write_slot(slot, r, cs)
+        # A full permutation touches every row, so one remap compiles every gather program.
+        self._remap_gdn_slots(list(range(self.args.max_batch_size))[::-1])
+        ttnn.synchronize_device(self.mesh_device)
+        self._gdn_slot_ops_warmed = True
 
     def _remap_gdn_slots(self, remap):
         """Apply a vLLM batch-condense slot_remap to every GDN layer's batched decode state
@@ -1834,24 +2734,38 @@ class Qwen36Model:
             if not layer.is_full_attention:
                 layer.attention.remap_slots(remap)
 
+    def set_gdn_fused_decode(self, enabled: bool) -> None:
+        """Select the GDN decode recurrence for EVERY GDN layer: the single fused device op
+        (``fused_recurrent_gated_delta_rule``) when ``enabled``, else the composite op chain.
+
+        Spec decode requires the fused op: the traced verify advances GDN with it, and decode must
+        use identical math or greedy near-ties flip between the two paths (acceptance measured
+        2.82 -> 2.00 / 3 when they disagreed at ~1e-5). The fused op is also faster per layer
+        (0.345 vs 0.541 ms eager) and closer to the FLA reference, but today it supports only the
+        full batch width (B == max_batch_size). This is the ONE place the switch flips: it is a
+        visible, model-scoped choice, never a side effect of building a SpeculativeDecoder, because
+        on a shared model it changes every later plain decode as well.
+        """
+        for layer in self.layers:
+            if not layer.is_full_attention:
+                layer.attention.use_fused_recurrent_decode = bool(enabled)
+
+    @property
+    def gdn_fused_decode(self) -> bool:
+        """True when every GDN layer decodes with the fused recurrent op (see set_gdn_fused_decode)."""
+        gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        return bool(gdn) and all(dn.use_fused_recurrent_decode for dn in gdn)
+
     def prefill_chunked_peruser(self, token_ids_list, page_table, valid_lens=None):
         """Batched per-user LONG-prefill (TP, eager). Runs the single-user chunk-outer path
         (prefill_traced_chunked) for each user into a B=1 GDN scratch, then stitches each user's
-        final GDN state into row u of the batched [B,...] decode buffers.
-
-        Handles ANY prompt length with exact valid_len masking (no last-token padding through the
-        GDN recurrence): short -> masked bucket; long -> chunk-outer + masked tail. The long-prompt
-        counterpart to prefill_traced_bucket_batched (full-bucket-only) and prefill_paged_peruser
-        (single-pass). Call allocate_kv_caches(batch_size=B) first.
-
-        token_ids_list: list of B torch.Tensor [1, T_u] (lengths may differ).
-        page_table:      torch.Tensor [B, max_blocks_per_seq] int32 — row u = user u's blocks.
-                         IMPORTANT: max_blocks_per_seq MUST be a multiple of 8. The chunked SDPA
-                         reads each row as a ROW_MAJOR int32 stick requiring stick_size
-                         (width * 4 bytes) % 32 == 0, i.e. width % 8 == 0. A misaligned width
-                         makes the SDPA read the wrong KV.
-        valid_lens:      optional list of B ints (real token counts); defaults to each T_u.
-        Returns:         list of B ttnn logits [1, 1, vocab] (replicated; at valid_len-1).
+        final GDN state into row u of the batched [B,...] decode buffers. Handles ANY prompt length
+        with exact valid_len masking (no last-token padding through GDN): short -> masked bucket;
+        long -> chunk-outer + masked tail. Long-prompt counterpart to prefill_traced_bucket_batched
+        (full-bucket-only) and prefill_paged_peruser (single-pass). Call allocate_kv_caches(batch_size=B)
+        first. ``token_ids_list`` B [1, T_u]; ``page_table`` [B, max_blocks_per_seq] — width MUST be
+        a multiple of 8 (chunked SDPA reads each row as a ROW_MAJOR int32 stick; stick_size
+        (width*4) % 32 == 0, else it reads the wrong KV). ``valid_lens`` optional. Returns B ttnn logits [1,1,vocab] (replicated; at valid_len-1).
         """
         assert self.num_devices > 1, "prefill_chunked_peruser is the TP (num_devices>1) path"
         assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
@@ -2022,7 +2936,15 @@ class Qwen36Model:
         return x
 
     def _forward_prefill_chunk_masked_tp(
-        self, token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=True, vision_tokens=None
+        self,
+        token_buf,
+        valid_len,
+        chunk_start,
+        page_table,
+        bucket,
+        flex_sdpa=True,
+        vision_tokens=None,
+        full_chunk=False,
     ):
         """TP (num_devices>1) masked fixed-bucket single-chunk prefill forward.
 
@@ -2075,7 +2997,8 @@ class Qwen36Model:
             if flex_sdpa
             else None
         )
-        for layer in self.layers:
+        _cap = getattr(self, "_capture_layer", None)
+        for _li, layer in enumerate(self.layers):
             if layer.is_full_attention:
                 x_new = layer.forward(
                     x,
@@ -2089,9 +3012,17 @@ class Qwen36Model:
                     valid_len=valid_len,  # unused by full attention
                 )
             else:
-                x_new = layer.forward(x, mode="prefill", chunk_size=self.args.gdn_chunk_size, valid_len=valid_len)
+                x_new = layer.forward(
+                    x,
+                    mode="prefill",
+                    chunk_size=self.args.gdn_chunk_size,
+                    # full_chunk: GDN takes the traced body's conv (KDA) so eager == traced
+                    valid_len=None if full_chunk else valid_len,
+                )
             ttnn.deallocate(x)
             x = x_new
+            if _cap is not None and _li == _cap:  # debug: capture hidden after layer _cap
+                self._cap_chunk = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Deallocate per-chunk inputs; only hidden survives (avoids OOM in eager 64k loop).
         ttnn.deallocate(cos)
         ttnn.deallocate(sin)
@@ -2111,22 +3042,17 @@ class Qwen36Model:
         flex_sdpa=True,
         vision_tokens=None,
         vis_row_offset=0,
+        return_hidden=False,
     ):
         """Masked fixed-bucket prefill for a segment of `actual_len` real tokens.
 
-        Pads the segment up to a fixed bucket length, runs all layers ONCE, and masks the GDN
-        recurrent + conv state so they reflect exactly `actual_len` real tokens — numerically
-        equivalent to the eager exact-length path (prefill_paged) but using one of only a few
-        bucket-sized programs instead of compiling a fresh program per prompt length. That
-        bounded program set is what makes warmup able to compile every code path before a trace
-        is parked, so a short request can never trigger the compile-clobbers-trace hang.
-
-        `chunk_start` is the segment's absolute start position (0 for a from-scratch short
-        prompt; num_full*chunk_size for the tail of a long prompt — the carried GDN/KV state
-        must already be in place). `vis_row_offset` is the number of image-placeholder tokens
-        before this segment (so a tail that holds the bottom of a large image splices the right
-        slice of the packed vision rows). Returns ttnn.Tensor (host) [1, 1, vocab_size]: the
-        logit after position actual_len-1.
+        Pads to a fixed bucket, runs all layers ONCE, and masks GDN recurrent + conv state to exactly
+        `actual_len` real tokens — numerically equivalent to eager exact-length (prefill_paged) but
+        using one of a few bucket-sized programs, so warmup can compile every path before a trace is
+        parked (avoids the compile-clobbers-trace hang). ``return_hidden`` also returns per-position
+        pre-final-norm hidden [1,1,bucket,dim/tp] (MTP KV-warming; caller deallocates). ``chunk_start``
+        is the segment's absolute start (0 for a short prompt; num_full*chunk_size for a long tail —
+        carried GDN/KV must already be in place). ``vis_row_offset`` is image-placeholder tokens before this segment. Returns host [1,1,vocab] logits at actual_len-1.
         """
         B_batch, _ = token_ids.shape
         assert B_batch == 1, "masked-bucket prefill is single-sequence"
@@ -2161,7 +3087,11 @@ class Qwen36Model:
         ttnn.synchronize_device(self.device)
 
         if self.num_devices > 1:
-            return self._masked_bucket_logits_tp(hidden, actual_len, bucket)
+            logits = self._masked_bucket_logits_tp(hidden, actual_len, bucket)
+            if return_hidden:
+                return logits, hidden
+            ttnn.deallocate(hidden)
+            return logits
 
         # One-hot matmul for last row (fixed program per bucket; slice would recompile per length).
         sel = torch.zeros(1, 1, bucket, dtype=torch.float32)
@@ -2172,6 +3102,9 @@ class Qwen36Model:
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
         x_last = self.norm(x_last, mode=Mode.PREFILL)
         logits = self._lm_head(x_last)
+        if return_hidden:
+            return logits.cpu(), hidden
+        ttnn.deallocate(hidden)
         return logits.cpu()
 
     def _masked_bucket_logits_tp(self, hidden, actual_len, bucket):
@@ -2195,15 +3128,13 @@ class Qwen36Model:
     def warmup_prefill_masked_buckets(self, page_table, buckets=None):
         """Compile every masked-bucket prefill program up front, so a request never compiles after
         a trace is parked (a post-park compile clobbers the trace -> second-request hang, #48536).
-
-        Two program kinds:
-          * bucket-keyed (SDPA / GDN mask / norm / MLP-or-MoE): one per (bucket, is_full). Warmed
-            by a dummy forward at each bucket, once masked (actual_len < bucket) and once full (==).
-          * fill-width-keyed (paged_fill_cache): hashes on the fill shape, so it recompiles per
-            fill width. Warmed directly by _warmup_paged_fill_widths (no full forward).
-
-        MUST run in GDN serving state, before any trace is parked (capture_prefill_trace_chunked
-        calls this just before begin_trace_capture). page_table must cover the largest bucket."""
+        Two program kinds: bucket-keyed (SDPA / GDN mask / norm / MLP-or-MoE), one per (bucket,
+        is_full), warmed by a dummy forward at each bucket once masked and once full; and
+        fill-width-keyed (paged_fill_cache), hashed on fill shape, warmed by
+        _warmup_paged_fill_widths (no full forward). MUST run in GDN serving state, before any
+        trace is parked (capture_prefill_trace_chunked calls this just before begin_trace_capture).
+        page_table must cover the largest bucket.
+        """
         if buckets is None:
             buckets = self._PREFILL_MASK_BUCKETS
         block_size = get_block_size(self._paged_kv_caches)
@@ -2272,28 +3203,22 @@ class Qwen36Model:
                 ttnn.deallocate(pt)
             ttnn.deallocate(k_full)
 
-    def prefill_traced_chunked(self, token_ids, page_table, actual_len, vision_tokens=None):
-        """Prefill by replaying the captured per-chunk trace for each FULL 2048-token chunk,
-        then processing the final partial chunk eagerly with minimal padding.
+    def prefill_traced_chunked(self, token_ids, page_table, actual_len, vision_tokens=None, on_chunk=None):
+        """Prefill by replaying the captured per-chunk trace for each FULL 2048-token chunk, then
+        processing the final partial chunk eagerly with minimal padding. Only the real prompt
+        (token_ids[:, :actual_len]) is processed. Full chunks replay from the trace; the tail
+        (< chunk_size) is eager so GDN zero-pads to the next multiple of 128 (matching the
+        non-traced path) instead of repeating bucket padding through the recurrence (which
+        corrupts decode state at long context). Next-token logit is at actual_len-1; returns host
+        [1,1,vocab]. vision_tokens splice trace-safely: captured forward runs a FIXED-shape
+        ttnn.where(mask, vision, text) over persistent buffers staged per chunk via copy_host_to_device
+        (no request-time compiles). Each chunk/tail splices its packed-vision slice (vis_row_offset =
+        image tokens before it); no image tokens -> identity mask. Works on single device (3D) and TP (4D hidden-sharded; see _set_vision_merge / _alloc_vision_merge_buffers).
 
-        Only the real prompt (token_ids[:, :actual_len]) is processed; any bucket padding in
-        token_ids is ignored. Full chunks (num_full = actual_len // chunk_size) are replayed
-        from the trace; the remaining tail (< chunk_size tokens) is run eagerly so the GDN
-        kernel zero-pads it to the next multiple of 128 (matching the non-traced path) instead
-        of repeating the bucket padding through the recurrence — which corrupts the decode
-        state at long context. actual_len is the real prompt length; the next-token logit is
-        extracted at actual_len-1. Returns ttnn.Tensor (host) [1, 1, vocab_size].
-
-        vision_tokens (multimodal) are spliced trace-safely: the captured forward runs a
-        FIXED-shape ttnn.where(mask, vision, text) over persistent buffers (_vis_buf /
-        _vis_mask_buf) that this method stages per chunk via copy_host_to_device — no program
-        compiles at request time, so the parked trace is never clobbered. Each chunk (and the tail)
-        splices its own slice of the packed vision rows (vis_row_offset = image tokens before the
-        chunk), so a large image whose placeholders span multiple chunks is handled; a segment with
-        no image tokens clears the mask (the where becomes the identity). Works on both single
-        device (3D buffers) and TP (4D hidden-sharded buffers; the vision rows are gathered to full
-        hidden on host in _set_vision_merge, placed along seq, then re-sharded — see
-        _alloc_vision_merge_buffers).
+        ``on_chunk(hidden, chunk_start, valid_len)`` (TP traced only; same contract as prefill_for_spec):
+        called per full chunk right after its replay is enqueued, then for the tail / short prompt.
+        hidden is the pre-final-norm [1,1,2048,dim/tp]; on_chunk must NOT free it (it is the trace's
+        persistent output), and must enqueue its reads before returning (the next replay overwrites it).
         """
         # Default to the standard 2048-token chunk when no trace is captured (e.g. the TP MVP,
         # which serves <=2048 prompts entirely via the masked bucket below and so needs no chunk
@@ -2341,15 +3266,37 @@ class Qwen36Model:
                     )
                 elif page_table.shape[1] > buf_blocks:
                     page_table = page_table[:, :buf_blocks]
+            if on_chunk is not None:
+                logits, hidden = self.prefill_masked_bucket(
+                    token_ids[:, :actual_len],
+                    page_table,
+                    actual_len=actual_len,
+                    chunk_start=0,
+                    vision_tokens=vision_tokens,
+                    return_hidden=True,
+                )
+                on_chunk(hidden, 0, actual_len)
+                ttnn.deallocate(hidden)
+                return logits
             return self.prefill_masked_bucket(
                 token_ids[:, :actual_len], page_table, actual_len=actual_len, chunk_start=0, vision_tokens=vision_tokens
             )
 
+        assert on_chunk is None or (
+            self.num_devices > 1 and self._chunked_trace_id is not None
+        ), "on_chunk needs the TP traced chunk path"
         if self.num_devices > 1:
             # TP long prompt: traced replay preferred; eager masked-bucket fallback if no trace.
             if self._chunked_trace_id is not None:
                 return self._prefill_traced_chunked_tp(
-                    token_ids, page_table, actual_len, num_full, chunk_size, tail_real, vision_tokens=vision_tokens
+                    token_ids,
+                    page_table,
+                    actual_len,
+                    num_full,
+                    chunk_size,
+                    tail_real,
+                    vision_tokens=vision_tokens,
+                    on_chunk=on_chunk,
                 )
             # Eager fallback: flexible qk=64 SDPA matches traced path.
             return self._prefill_chunked_eager_tp(
@@ -2494,7 +3441,7 @@ class Qwen36Model:
         return logits
 
     def _prefill_traced_chunked_tp(
-        self, token_ids, page_table, actual_len, num_full, chunk_size, tail_real, vision_tokens=None
+        self, token_ids, page_table, actual_len, num_full, chunk_size, tail_real, vision_tokens=None, on_chunk=None
     ):
         """TP traced chunk-outer prefill: replay the captured per-chunk trace
         (_forward_prefill_chunk_tp) for each FULL chunk, then run the partial tail through the
@@ -2591,6 +3538,9 @@ class Qwen36Model:
             )
 
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
+            if on_chunk is not None:
+                # Enqueued before the next replay (same cq), so it reads this chunk's output; no host sync.
+                on_chunk(self._chunked_trace_output, cs, chunk_size)
 
             # Bound in-flight depth; after a sync the completed DMAs' host tensors can be released.
             if (c + 1) % _SYNC_EVERY == 0:
@@ -2610,6 +3560,19 @@ class Qwen36Model:
         # Tail via masked bucket, or _masked_bucket_logits_tp if no tail (TP 4D hidden).
         if tail_real > 0:
             cs = num_full * chunk_size
+            if on_chunk is not None:
+                logits, hidden = self.prefill_masked_bucket(
+                    token_ids[:, cs:actual_len],
+                    page_table,
+                    actual_len=tail_real,
+                    chunk_start=cs,
+                    vision_tokens=vision_tokens,
+                    vis_row_offset=self._vis_row_offset_for(token_ids, cs),
+                    return_hidden=True,
+                )
+                on_chunk(hidden, cs, tail_real)
+                ttnn.deallocate(hidden)
+                return logits
             return self.prefill_masked_bucket(
                 token_ids[:, cs:actual_len],
                 page_table,
@@ -2620,70 +3583,22 @@ class Qwen36Model:
             )
         return self._masked_bucket_logits_tp(self._chunked_trace_output, chunk_size, chunk_size)
 
-    def reset_state(self, batch_size=None):
-        """Reset layer state for a new sequence (eager/pre-trace path; trace uses _reset_dn_state_inplace)."""
+    def reset_state(self):
+        """Reset layer state for a new sequence."""
         for layer in self.layers:
             if layer.is_full_attention:
                 layer.attention.reset_cache()
             else:
-                layer.attention.reset_state(batch_size)
+                layer.attention.reset_state_inplace()
 
     def _reset_gdn_state_for_new_sequence(self):
         """Zero GDN recurrent+conv at sequence start.
 
         Trace capture runs forward twice; GDN state is non-idempotent. Must re-zero before each
-        real sequence. In-place buffers (_chunk_inplace_state) use _reset_dn_state_inplace."""
-        if self.num_devices > 1:
-            # TP: reset_state_inplace preserves decode-trace baked addresses.
-            for layer in self.layers:
-                if not layer.is_full_attention:
-                    layer.attention.reset_state_inplace()
-            return
-        inplace = any(
-            (not l.is_full_attention) and getattr(l.attention, "_chunk_inplace_state", False) for l in self.layers
-        )
-        if inplace:
-            self._reset_dn_state_inplace()
-        else:
-            self.reset_state(batch_size=1)
-
-    def _reset_dn_state_inplace(self):
-        """Zero DN state in place via pre-allocated zero buffers (trace addresses fixed)."""
-        assert self._dn_zero_recurrent is not None, "Call _init_dn_zero_buffers first"
+        real sequence."""
         for layer in self.layers:
-            if layer.is_full_attention:
-                continue
-            dn = layer.attention
-            ttnn.copy(self._dn_zero_recurrent, dn.recurrent_state)
-            ttnn.copy(self._dn_zero_conv, dn.fused_conv_state)
-            # split_conv_state rebuilt lazily on first decode.
-            if dn.split_conv_state is not None:
-                for buf in dn.split_conv_state:
-                    ttnn.deallocate(buf)
-                dn.split_conv_state = None
-
-    def _init_dn_zero_buffers(self):
-        """Allocate shared zero buffers for DN recurrent and conv shapes."""
-        if self._dn_zero_recurrent is not None:
-            return
-        # First DN layer defines shared zero-buffer shapes.
-        first_dn = next(layer.attention for layer in self.layers if not layer.is_full_attention)
-        rec_shape = list(first_dn.recurrent_state.shape)
-        conv_shape = list(first_dn.fused_conv_state.shape)
-        self._dn_zero_recurrent = ttnn.zeros(
-            rec_shape,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self._dn_zero_conv = ttnn.zeros(
-            conv_shape,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+            if not layer.is_full_attention:
+                layer.attention.reset_state_inplace()
 
     def set_paged_kv_caches(self, kv_caches):
         """Attach paged KV caches to the 8 attention layers."""
@@ -2694,7 +3609,9 @@ class Qwen36Model:
 
     def allocate_kv_caches(self, kv_cache_shape, dtype, batch_size=1):
         """Allocate caches for all 32 layers. Returns only the attention KV caches (for vLLM)."""
-        assert self._deltanet_external_states is None, "allocate_kv_caches already called; deallocate first"
+        assert self._paged_kv_caches is None, "allocate_kv_caches already called; deallocate first"
+        # GDN reset_state frees the spec ring/E_prev a prepared verify trace points at.
+        self._vfy_prepared_key = None
         # QWEN_SDPA_BF8: bf8 paged KV for SDPA; halves KV memory (gated — validate PCC at long ctx).
         if os.environ.get("QWEN_SDPA_BF8", "0") == "1":
             dtype = ttnn.bfloat8_b
@@ -2707,49 +3624,73 @@ class Qwen36Model:
             v_cache = ttnn.zeros(kv_cache_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
             kv_caches.append([k_cache, v_cache])
         self.set_paged_kv_caches(kv_caches)
-
-        self._deltanet_external_states = []
-        for layer in self.layers:
-            if not layer.is_full_attention:
-                dn = layer.attention
-                rec = ttnn.from_torch(
-                    torch.zeros(batch_size, dn.num_v_heads, dn.head_k_dim, dn.head_v_dim, dtype=torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                )
-                conv = ttnn.from_torch(
-                    torch.zeros(
-                        batch_size,
-                        dn.conv_kernel_size - 1,
-                        dn.cfg.q_dim + dn.cfg.k_dim + dn.cfg.v_dim,
-                        dtype=torch.bfloat16,
-                    ),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                )
-                dn.set_external_state(rec, conv)
-                self._deltanet_external_states.append((rec, conv))
-
+        self._allocate_mtp_kv_cache(kv_cache_shape, dtype, batch_size, replicate=False)
         return kv_caches
 
+    def _allocate_mtp_kv_cache(self, kv_cache_shape, dtype, batch_size, replicate):
+        """Allocate + bind the MTP drafter's own paged KV cache (one full-attention layer).
+
+        Separate from the base caches (own page table); shape matches a base attention layer except
+        for ONE EXTRA BLOCK at the end. That extra block is the spec-decode batched reseed's
+        scratch: padding rows point their whole page-table row at the cache's extra last block
+        (index ``num_blocks``, derived from the cache size, never from the page table's width) so
+        their (discarded) KV write lands somewhere harmless. A block of its own — instead of
+        borrowing the sequence's last one — lets a sequence use the full ``num_blocks x block_size``
+        span (needed at 256k: 262016 prompt + 100 new vs 4096 x 64 = 262144). The page table never
+        names that block; only the reseed's padding rows do. No-op with no MTP head. Fixed address + _stable_state for decode-trace reuse.
+        """
+        if self.mtp is None:
+            return
+
+        mtp_cache_shape = [kv_cache_shape[0] + 1, *kv_cache_shape[1:]]
+
+        def _mk():
+            if replicate:
+                return ttnn.as_tensor(
+                    torch.zeros(mtp_cache_shape, dtype=torch.bfloat16),
+                    device=self.device,
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                )
+            return ttnn.zeros(mtp_cache_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+
+        mtp_k, mtp_v = _mk(), _mk()
+        self.mtp.attention.set_paged_kv_cache(mtp_k, mtp_v)
+        self.mtp.attention.B = batch_size
+        self.mtp.attention._stable_state = True
+        self._mtp_kv_cache = [mtp_k, mtp_v]
+
     def free_kv_caches(self):
-        """Release KV caches + GDN state for a fresh generation run."""
-        if self._deltanet_external_states is None:
+        """Release KV caches for a fresh generation run."""
+        # The verify trace bakes in the paged KV caches freed below and the GDN spec buffers that the
+        # next allocate_kv_caches -> reset_state drops, so it goes even when the KV-cache marker is
+        # already clear (hence before the early-out).
+        eng = getattr(self, "_spec_engine", None)
+        if eng is not None:
+            eng.shutdown()  # also releases the verify trace
+            self._spec_engine = None
+        self.release_verify_trace()
+        # Force prepare_verify_trace to re-allocate against the new caches.
+        self._vfy_prepared_key = None
+        if self._paged_kv_caches is None:
             return
         if getattr(self, "_chunked_trace_id", None) is not None:
             ttnn.release_trace(self.device, self._chunked_trace_id)
             self._chunked_trace_id = None
-        for rec, conv in self._deltanet_external_states:
-            ttnn.deallocate(rec)
-            ttnn.deallocate(conv)
-        self._deltanet_external_states = None
+        self._chunked_prepared_key = None
         if getattr(self, "_paged_kv_caches", None) is not None:
             for k_cache, v_cache in self._paged_kv_caches:
                 ttnn.deallocate(k_cache)
                 ttnn.deallocate(v_cache)
             self._paged_kv_caches = None
+        if getattr(self, "_mtp_kv_cache", None) is not None:
+            for cache in self._mtp_kv_cache:
+                ttnn.deallocate(cache)
+            self._mtp_kv_cache = None
+            if self.mtp is not None:
+                self.mtp.attention.use_paged = False
 
     def _allocate_kv_caches_tp(self, kv_cache_shape, dtype, batch_size):
         """TP paged KV allocation (B=1). Replicated per device; GDN self-manages state."""
@@ -2770,10 +3711,7 @@ class Qwen36Model:
             if not layer.is_full_attention:
                 layer.attention.B = batch_size
                 layer.attention.reset_state()
-                # Fixed-address GDN state for decode trace compatibility.
-                layer.attention._stable_state = True
-        # Marker for re-entry assert; TP GDN state lives in module, not external buffers.
-        self._deltanet_external_states = []
+        self._allocate_mtp_kv_cache(kv_cache_shape, dtype, batch_size, replicate=True)
         return kv_caches
 
     def _prefill_paged_tp(self, token_ids, page_table, valid_len=None, vision_tokens=None, gdn_collect=False):
@@ -2825,15 +3763,12 @@ class Qwen36Model:
     def prefill_paged_peruser(self, token_ids_list, page_table, valid_lens=None):
         """Batched per-user TP prefill (the batched serving contract).
 
-        Prefills B users into ONE shared paged KV cache + the batched GDN decode state, one user at
-        a time. Each user's full-attention layers fill their own blocks via the per-user page-table
-        row; each GDN layer collects that user's from-scratch state, stitched into row u of the
-        batched decode buffers by finalize_pending(). Call allocate_kv_caches(batch_size=B) first.
-
-        token_ids_list: list of B torch.Tensor [1, T_u] (lengths may differ).
-        page_table:      torch.Tensor [B, max_blocks_per_seq] int32 — row u = user u's blocks.
-        valid_lens:      optional list of B ints (real token counts); defaults to each T_u.
-        Returns:         list of B ttnn logits [1, 1, vocab_size] (one per user, at valid_len-1).
+        Prefills B users into ONE shared paged KV cache + batched GDN decode state, one user at a
+        time. Full-attention layers fill each user's blocks via the per-user page-table row; each
+        GDN layer collects that user's from-scratch state, stitched into row u of the batched
+        decode buffers by finalize_pending(). Call allocate_kv_caches(batch_size=B) first.
+        ``token_ids_list`` B [1, T_u]; ``page_table`` [B, max_blocks_per_seq]; ``valid_lens``
+        optional. Returns B ttnn logits [1,1,vocab] (one per user, at valid_len-1).
         """
         assert self.num_devices > 1, "prefill_paged_peruser is the TP (num_devices>1) path"
         B = len(token_ids_list)
@@ -2870,10 +3805,20 @@ class Qwen36Model:
             if layer.is_full_attention:
                 continue
             dn = layer.attention
-            prev.append((dn, dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state))
+            # Same 7-field binding as _alloc_gdn_scratch_b1 (_restore_gdn_batched unpacks both).
+            prev.append(
+                (
+                    dn,
+                    dn.B,
+                    dn.rec_state,
+                    dn.conv_states,
+                    dn.conv_carry,
+                    dn._zero_conv0,
+                    dn._zero_rec,
+                )
+            )
             dn.B = bg
             dn.reset_state()  # builds rec_state [bg,Nv,Dk,Dv], conv_states[*] [1,bg,D], carry, zero0
-            dn._stable_state = True  # forward_prefill_batched writes state in place under this flag
         return prev
 
     def _assemble_groups_gdn_dev(self, group_rec_dev, group_conv_dev):
@@ -2881,7 +3826,7 @@ class Qwen36Model:
         forward_prefill_batched) into the full [B,...] batched decode buffers via device-side
         concat — no host round-trip. rec: concat groups along dim 0 -> [B,Nv,Dk,Dv]; conv_states[m]:
         concat groups along dim 1 -> [1,B,D]. The batched GDN bindings MUST already be rebound
-        (writes in place under _stable_state). Row u == user u because groups are contiguous
+        (writes in place). Row u == user u because groups are contiguous
         (group g = users [g*group_size : ...])."""
         dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
         ng = len(group_rec_dev)
@@ -2904,19 +3849,13 @@ class Qwen36Model:
     def prefill_paged_grouped(self, token_ids_list, page_table, valid_lens=None, group_size=4):
         """Grouped batched SHORT-prompt prefill (single-pass, every valid_len <= one GDN bucket):
         process users in groups of <= group_size through ONE hybrid forward per group instead of B
-        sequential B=1 forwards. Within a group the GDN layers run BATCHED (forward_prefill_batched,
-        per-row valid_len masking — bit-exact per user, see test_gdn_tp_batched_prefill) and the
-        full-attention layers run PER-USER (attention prefill is B=1 only). Groups of <=4 respect the
-        GDN kernel cap BH=B*Nv_tp<=32. Numerically the batched GDN + per-user attention is the same
-        math as prefill_paged_peruser, so per-user output (incl. DIFFERENT prompts/lengths) is
-        unchanged; it just amortizes the underutilized GDN over the group.
-
-        token_ids_list: list of B torch.Tensor [1, T_u] (lengths may differ).
-        page_table:      torch.Tensor [B, blocks_per_user] int32 (row u = user u's blocks).
-        valid_lens:      optional list of B ints; defaults to each T_u. Every valid_len MUST be <=
-                         the derived bucket (a single GDN chunk-set); callers route longer prompts
-                         to the chunked path.
-        Returns:         list of B ttnn logits [1, 1, vocab] (prefill_paged_peruser contract).
+        sequential B=1 forwards. Within a group GDN runs BATCHED (forward_prefill_batched, per-row
+        valid_len masking — bit-exact, see test_gdn_tp_batched_prefill) and full-attention runs
+        PER-USER (attention prefill is B=1 only). Groups of <=4 respect the GDN kernel cap
+        BH=B*Nv_tp<=32. Same math as prefill_paged_peruser (including different prompts/lengths);
+        it just amortizes underutilized GDN over the group. ``token_ids_list`` B [1, T_u];
+        ``page_table`` [B, blocks_per_user]; ``valid_lens`` optional — every valid_len MUST be <=
+        the derived bucket; longer prompts go to the chunked path. Returns B ttnn logits [1,1,vocab].
         """
         assert self.num_devices > 1, "prefill_paged_grouped is the TP (num_devices>1) path"
         assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
@@ -3031,7 +3970,7 @@ class Qwen36Model:
                     ttnn.deallocate(x)
                     ttnn.deallocate(attn_out)
                     ff_in = layer.ffn_norm(h, mode=Mode.PREFILL)
-                    ff_out = layer.feed_forward.forward(ff_in)
+                    ff_out = layer.feed_forward.forward(ff_in, mode="prefill")
                     ttnn.deallocate(ff_in)
                     x = ttnn.add(h, ff_out)
                     ttnn.deallocate(h)
@@ -3083,15 +4022,9 @@ class Qwen36Model:
     def prefill_paged(self, token_ids, page_table, valid_len=None, vision_tokens=None):
         """Prefill using paged attention for long sequences, concat for short.
 
-        For T > 1024: uses paged prefill (paged_fill_cache + chunked_sdpa)
-        via prefill_layer_chunked with page_table.
-        For T <= 1024: uses direct concat prefill + post-hoc paged cache fill.
-
-        Args:
-            token_ids: torch.Tensor [B, T] token IDs
-            page_table: torch.Tensor or ttnn.Tensor [B, max_blocks_per_seq] int32
-        Returns:
-            logits: ttnn.Tensor [B, 1, vocab_size]
+        T > 1024: paged prefill (paged_fill_cache + chunked_sdpa) via prefill_layer_chunked with
+        page_table. T <= 1024: direct concat prefill + post-hoc paged cache fill. ``token_ids``
+        [B, T]; ``page_table`` [B, max_blocks_per_seq] int32. Returns logits [B, 1, vocab_size].
         """
         if self.num_devices > 1:
             return self._prefill_paged_tp(token_ids, page_table, valid_len=valid_len, vision_tokens=vision_tokens)
@@ -3102,7 +4035,7 @@ class Qwen36Model:
         self._build_request_rope(token_ids[:, :valid_len] if valid_len else token_ids, vision_tokens)
         # Keep page_table as torch.Tensor for CPU slicing in prefill_layer_chunked.
         page_table_torch = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
-        self.reset_state(batch_size=B)
+        self.reset_state()
 
         # Concat-based prefill for SDPA.
         if T > 1024:
@@ -3130,26 +4063,6 @@ class Qwen36Model:
             page_table_torch, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
         )
         self._fill_paged_cache_from_prefill(page_table_device)
-
-        # Fuse DeltaNet conv states for decode.
-        for layer in self.layers:
-            if not layer.is_full_attention:
-                dn = layer.attention
-                if dn.fused_conv_state is None and dn.conv_state_q is not None:
-                    dn.fused_conv_state = ttnn.concat([dn.conv_state_q, dn.conv_state_k, dn.conv_state_v], dim=2)
-                    dn.fused_conv_state = ttnn.to_layout(dn.fused_conv_state, ttnn.TILE_LAYOUT)
-
-        # Copy DeltaNet state into external pre-allocated buffers.
-        if self._deltanet_external_states is not None:
-            dn_idx = 0
-            for layer in self.layers:
-                if not layer.is_full_attention:
-                    dn = layer.attention
-                    ext_rec, ext_conv = self._deltanet_external_states[dn_idx]
-                    ttnn.copy(dn.recurrent_state, ext_rec)
-                    if dn.fused_conv_state is not None:
-                        ttnn.copy(dn.fused_conv_state, ext_conv)
-                    dn_idx += 1
 
         return logits
 
@@ -3304,7 +4217,7 @@ class Qwen36Model:
                 saved.append(
                     {
                         "recurrent": ttnn.to_torch(dn.recurrent_state),
-                        "conv": ttnn.to_torch(dn.fused_conv_state) if dn.fused_conv_state is not None else None,
+                        "conv": ttnn.to_torch(dn.fused_conv_state),
                     }
                 )
         return saved
@@ -3321,11 +4234,9 @@ class Qwen36Model:
                 )
                 ttnn.copy(restored, dn.recurrent_state)
                 ttnn.deallocate(restored)
-                if saved["conv"] is not None:
-                    restored_conv = ttnn.from_torch(
-                        saved["conv"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-                    )
-                    ttnn.copy(restored_conv, dn.fused_conv_state)
-                    ttnn.deallocate(restored_conv)
-                    dn._restore_split_conv_from_fused()
+                restored_conv = ttnn.from_torch(
+                    saved["conv"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                )
+                ttnn.copy(restored_conv, dn.fused_conv_state)
+                ttnn.deallocate(restored_conv)
                 idx += 1

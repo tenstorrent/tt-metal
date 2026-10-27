@@ -13,7 +13,11 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_equal
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_accurate,
+    assert_equal,
+    make_actual_start,
+)
 
 pytestmark = run_for_blackhole()
 
@@ -41,9 +45,12 @@ def _tp_rank(physical_index: int, mesh_columns: int, tensor_parallel_axis: int) 
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
+# A bounded gate (Kimi-K3) folds the per-head decay scale into the decay projection and bias at load.
+@pytest.mark.parametrize("gate_lower_bound", [None, -5.0], ids=["softplus-gate", "bounded-gate"])
 def test_device_weight_placement(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
+    gate_lower_bound: float | None,
 ) -> None:
     config = KDAConfig(
         hidden_size=64,
@@ -52,6 +59,7 @@ def test_device_weight_placement(
         head_v_dim=32,
         conv_kernel_size=4,
         norm_eps=1e-5,
+        gate_lower_bound=gate_lower_bound,
     )
     state_dict = random_weights(config)
     weights = load_kda_weights(
@@ -64,9 +72,16 @@ def test_device_weight_placement(
     local_heads = config.num_heads // tensor_parallel_size
     gate_projection = state_dict["g_b_proj.weight"].reshape(config.num_heads, config.head_v_dim, config.head_v_dim)
     direct_gate = torch.matmul(gate_projection, state_dict["g_a_proj.weight"]).reshape(config.v_dim, config.hidden_size)
-    decay_scale = -state_dict["A_log"].float().exp()
+    decay_scale = state_dict["A_log"].float().exp()
+    decay_scale = decay_scale if gate_lower_bound is not None else -decay_scale
     decay_scale = decay_scale.expand(-1, -1, -1, config.head_k_dim).reshape(1, 1, config.q_dim)
     decay_bias = state_dict["dt_bias"].reshape(1, 1, config.q_dim)
+    decay_output = state_dict["f_b_proj.weight"].T
+    if gate_lower_bound is not None:
+        # The fold runs on device after load, from the BF16 tensors: FP32 product, rounded to BF16 once.
+        scale_bf16 = decay_scale.to(torch.bfloat16).float()
+        decay_output = decay_output.to(torch.bfloat16).float() * scale_bf16.reshape(1, -1)
+        decay_bias = decay_bias.to(torch.bfloat16).float() * scale_bf16
 
     assert weights.tensor_parallel_size == tensor_parallel_size
     assert weights.tensor_parallel_axis == tensor_parallel_axis
@@ -115,7 +130,7 @@ def test_device_weight_placement(
         ).reshape(1, 1, -1)
         expected = {
             "input": torch.cat((expected_qkv, expected_auxiliary), dim=-1),
-            "decay_output": state_dict["f_b_proj.weight"].T[:, key_start:key_stop],
+            "decay_output": decay_output[:, key_start:key_stop],
             "output": state_dict["o_proj.weight"][:, value_start:value_stop].T,
             "decay_scale": decay_scale[..., key_start:key_stop],
             "decay_bias": decay_bias[..., key_start:key_stop],
@@ -152,7 +167,7 @@ def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshD
     )
     golden_output, golden_state = kda_forward_reference(hidden, state_dict, config)
 
-    layer = ttKDA(mesh_device, config, state_dict, tt_ccl=TT_CCL(mesh_device))
+    layer = ttKDA(mesh_device, config, state_dict, tt_ccl=TT_CCL(mesh_device), active_seq_len=sequence)
     initial_state = layer.allocate_state(batch_size=1)
     hidden_tt = ttnn.from_torch(
         hidden,
@@ -163,7 +178,7 @@ def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshD
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output, state = layer.forward(hidden_tt, initial_state)
+        output, state = layer.forward(hidden_tt, initial_state, make_actual_start(layer.device))
 
     actual_output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
     recurrent_shards = _host_shards(state.recurrent)
@@ -194,4 +209,4 @@ def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshD
         ("recurrent state", golden_state.recurrent, actual_recurrent),
         ("convolution state", golden_convolution, actual_convolution),
     ):
-        assert_accurate(golden, actual, name=f"TP=8 {name}", pcc_threshold=0.999)
+        assert_accurate(golden, actual, name=f"TP=8 {name}", pcc_threshold=0.999, nrmse_threshold=0.03)

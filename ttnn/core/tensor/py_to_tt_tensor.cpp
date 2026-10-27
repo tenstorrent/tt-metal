@@ -54,7 +54,7 @@ bool can_exec_ops_on_device(DataType type) {
         case DataType::UINT8:
             // https://github.com/tenstorrent/tt-metal/issues/21682 (typecast doesn't support uint8)
         case DataType::INT8:
-            // https://github.com/tenstorrent/tt-metal/issues/50401 (int8 device typecast/tilize not yet supported)
+            // https://github.com/tenstorrent/tt-metal/issues/50401 (tilize/untilize doesn't support int8)
         case DataType::FP8_E4M3:
             // https://github.com/tenstorrent/tt-metal/issues/43909 (typecast uses TILE, but FP8_E4M3 is RM-only)
             return false;

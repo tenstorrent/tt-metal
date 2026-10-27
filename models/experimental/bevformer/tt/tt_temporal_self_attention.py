@@ -13,7 +13,6 @@ Based on the reference PyTorch implementation but optimized for TTNN.
 """
 
 import ttnn
-import torch
 import warnings
 from loguru import logger
 
@@ -49,6 +48,7 @@ class TTTemporalSelfAttention:
         num_points (int): Number of sampling points in deformable attention.
         num_bev_queue (int): Number of BEV timesteps (typically 2: current + history).
         batch_first (bool): Whether the first dimension of input is batch_size.
+        spatial_shapes: BEV grid shape [1, 2] for deformable attention.
         **kwargs: Additional arguments.
     """
 
@@ -62,6 +62,8 @@ class TTTemporalSelfAttention:
         num_points: int = 4,
         num_bev_queue: int = 2,
         batch_first: bool = True,
+        *,
+        spatial_shapes,
         **kwargs,
     ):
         self.device = device
@@ -97,7 +99,7 @@ class TTTemporalSelfAttention:
         # Initialize TTNN MSDeformableAttention using existing implementation
         # Pass params directly since TSA doesn't have its own parameters beyond deformable attention
         self.deformable_attention = TTMSDeformableAttention(
-            deform_config, device, self.params  # Pass params directly to deformable attention
+            deform_config, device, self.params, spatial_shapes=spatial_shapes
         )
 
     def forward(
@@ -108,8 +110,6 @@ class TTTemporalSelfAttention:
         query_pos=None,
         key_padding_mask=None,
         reference_points=None,
-        spatial_shapes=None,
-        level_start_index=None,
         prev_bev=None,
         **kwargs,
     ):
@@ -124,8 +124,6 @@ class TTTemporalSelfAttention:
             query_pos: Query positional encoding.
             key_padding_mask: Key padding mask.
             reference_points: Reference points for deformable attention.
-            spatial_shapes: Spatial shapes of BEV features.
-            level_start_index: Start index of each level.
             prev_bev: Previous BEV features [B, num_queries, embed_dims].
             **kwargs: Additional arguments.
 
@@ -153,16 +151,6 @@ class TTTemporalSelfAttention:
         # Use reference points as-is for simplified version
         ref_points = reference_points
 
-        # Prepare level start index if not provided
-        if level_start_index is None:
-            level_start_index = torch.tensor([0], dtype=torch.long)
-
-        # Convert level_start_index to ttnn if needed
-        if isinstance(level_start_index, torch.Tensor):
-            level_start_index = ttnn.from_torch(
-                level_start_index, device=self.device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-
         if ENABLE_LOGGING:
             logger.info("TSA Tensor Conversion Complete")
 
@@ -173,8 +161,6 @@ class TTTemporalSelfAttention:
             query=query,
             value=value,
             reference_points=ref_points,
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
             key_padding_mask=key_padding_mask,
             **kwargs,
         )

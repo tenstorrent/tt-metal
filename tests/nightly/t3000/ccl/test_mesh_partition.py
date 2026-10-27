@@ -180,9 +180,18 @@ def run_mesh_partition_test(
 
         logger.info("Capturing Trace")
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tt_outs = run_op(num_iters, store_all_results=False)
+        tt_out_tensor_list = run_op(num_iters, store_all_results=False)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
+
+        # Rebind live arguments to another input; the captured output must still match input 0.
+        cache_entries = mesh_device.num_program_cache_entries()
+        eager_output = ttnn.mesh_partition(
+            tt_input_tensors_list[-1], dim, cluster_axis=cluster_axis, memory_config=output_memory_config
+        )
+        assert mesh_device.num_program_cache_entries() == cache_entries
+        ttnn.synchronize_device(mesh_device)
+        del eager_output
 
         logger.info("Starting Trace perf test...")
         profiler.start("reduce-scatter-trace-warmup")
@@ -319,6 +328,7 @@ def test_mesh_partition(
 @pytest.mark.parametrize("mesh_axes", [[0, 1]])
 @pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("use_sharding", [False, True])
 def test_mesh_partition_rm(
     mesh_device,
     mesh_shape,
@@ -331,7 +341,15 @@ def test_mesh_partition_rm(
     mesh_axes,
     input_memory_config,
     output_memory_config,
+    use_sharding,
 ):
+    if use_sharding:
+        input_shape = list(per_device_output_shape)
+        input_shape[dim] *= mesh_device.get_num_devices() if cluster_axis is None else mesh_shape[cluster_axis]
+        input_memory_config, output_memory_config = [
+            ttnn.create_sharded_memory_config(shape, ttnn.CoreGrid(y=1, x=8), ttnn.ShardStrategy.HEIGHT)
+            for shape in (input_shape, per_device_output_shape)
+        ]
     num_iters = 2
     warmup_iters = 0
 

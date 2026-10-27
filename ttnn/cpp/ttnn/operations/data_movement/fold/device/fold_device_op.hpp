@@ -4,14 +4,25 @@
 
 #pragma once
 
+#include <optional>
+#include <string>
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/operations/data_movement/common/fold_common.hpp"
 
 namespace ttnn::operations::data_movement {
+
+// Re-export shared tile-native-fold gate symbols; single source of truth in common/fold_common.hpp.
+using fold_common::fold_output_dtype;
+using fold_common::is_tile_native_fold_supported;
+using fold_common::kFoldL1CodeStackReserveBytes;
+using fold_common::kFoldSrcCbDepthPerCTile;
+using fold_common::tile_native_fold_rejection_reason;
+using fold_common::tile_native_fold_scratch_bytes;
 
 // Fast path: L1 + HS + RM + concrete shard_spec. Shared by composite and device_op.
 bool is_fast_path_input(const Tensor& t);

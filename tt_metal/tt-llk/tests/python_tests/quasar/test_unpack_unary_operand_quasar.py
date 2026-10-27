@@ -5,6 +5,8 @@ from typing import List
 
 import pytest
 import torch
+from helpers.constraints import is_valid_data_format_conversion
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     DataCopyGolden,
@@ -13,10 +15,10 @@ from helpers.golden_generators import (
     quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
+    BlocksCalculationAlgorithm,
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     PerfRunType,
     Transpose,
     UnpackerEngine,
@@ -24,7 +26,8 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     generate_perf_input_dimensions,
-    generate_unary_input_dimensions,
+    generate_reduced_input_dimensions,
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
     runtime,
@@ -39,11 +42,12 @@ from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
+    NUM_BLOCKS,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -79,6 +83,8 @@ def generate_unpack_unary_operand_combinations(
     dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
 
     for fmt in formats_list:
+        if not is_valid_data_format_conversion(fmt):
+            continue
         in_fmt = fmt.input_format
 
         dest_acc_modes = (
@@ -96,9 +102,9 @@ def generate_unpack_unary_operand_combinations(
         )
 
         if is_perf:
-            # Same packer constraint as the correctness path: non-Fp32 input cannot
-            # pack to Fp32 when dest is in 16-bit mode.
-            if in_fmt != DataFormat.Float32 and fmt.output_format == DataFormat.Float32:
+            # Same packer constraint as the correctness path: a non-32-bit input cannot
+            # pack to a 32-bit format when dest is in 16-bit mode.
+            if not in_fmt.is_32_bit() and fmt.output_format.is_32_bit():
                 continue
             dest_acc_modes = (
                 dest_acc_modes if in_fmt.is_32_bit() else (DestAccumulation.No,)
@@ -106,12 +112,23 @@ def generate_unpack_unary_operand_combinations(
 
         for dest_acc in dest_acc_modes:
             if (
-                in_fmt != DataFormat.Float32
-                and fmt.output_format == DataFormat.Float32
+                not in_fmt.is_32_bit()
+                and fmt.output_format.is_32_bit()
                 and dest_acc == DestAccumulation.No
             ):
-                # Skip if input format is not Float32 and output format is Float32 and dest_acc is No
+                # Skip if input format is not 32-bit and output format is 32-bit and dest_acc is No
                 # This combination is not supported in the Quasar Packer format conversions
+                continue
+            # Int8<->UInt8 conversion requires dest_acc enabled.
+            src_reg_fmt = {
+                DataFormat.Int4: DataFormat.Int8,
+                DataFormat.UInt4: DataFormat.UInt8,
+            }.get(in_fmt, in_fmt)
+            if (
+                dest_acc == DestAccumulation.No
+                and src_reg_fmt in (DataFormat.Int8, DataFormat.UInt8)
+                and src_reg_fmt != fmt.output_format
+            ):
                 continue
             for dest_sync in dest_sync_modes:
                 for transpose_en in transpose_modes:
@@ -143,7 +160,7 @@ def generate_unpack_unary_operand_combinations(
                                     dest_acc, dest_sync, tile_shape
                                 )
                                 if is_perf
-                                else generate_unary_input_dimensions(
+                                else generate_reduced_input_dimensions(
                                     dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
                                 )
                             )
@@ -155,7 +172,7 @@ def generate_unpack_unary_operand_combinations(
                                         dest_sync,
                                         transpose_en,
                                         unpacker_sel,
-                                        dimensions,
+                                        runtime(dimensions),
                                         runtime(tile_dims),
                                     )
                                 )
@@ -168,6 +185,13 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
+        DataFormat.Int32,
+        DataFormat.Int8,
+        DataFormat.UInt8,
+        DataFormat.Int4,
+        DataFormat.UInt4,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,
@@ -220,6 +244,15 @@ def test_unpack_unary_operand_quasar(
 
     num_faces = tile_shape.total_num_faces()
 
+    num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync_mode,
+        dest_acc,
+        formats,
+        input_dimensions,
+        tile_dimensions,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
     golden_src = (
         src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
     )  # use A for UnpA and UnpDest
@@ -270,7 +303,6 @@ def test_unpack_unary_operand_quasar(
         "test_name": "sources/quasar/unpack_unary_operand_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             UNPACKER_ENGINE_SEL(unpacker_sel),
             DATA_COPY_TYPE(
                 DataCopyType.B2D
@@ -290,6 +322,8 @@ def test_unpack_unary_operand_quasar(
             TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(tiles_in_block),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             LOOP_FACTOR(loop_factor),
@@ -308,11 +342,8 @@ def test_unpack_unary_operand_quasar(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        "unpack_to_dest": (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        "unpack_to_dest": unpacks_to_dest(formats.input_format, dest_acc),
         "dest_acc": dest_acc,
-        "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
     configuration = create_test_or_perf_config(

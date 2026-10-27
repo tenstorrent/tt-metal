@@ -13,7 +13,7 @@
 #include "internal/debug/sanitize.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #include "hostdev/dev_msgs.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "api/kernel_thread_globals.h"
 
 #if defined(PROFILE_KERNEL)
@@ -41,6 +41,9 @@ uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+#if defined(NOC_API_V1)
+uint32_t noc_cmd_buf_lock[NOC_NUM_CMD_BUFS] __attribute__((used));
+#endif
 
 thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
@@ -94,7 +97,6 @@ inline void wait_subordinates() {
 
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
-overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
 
@@ -108,6 +110,7 @@ extern "C" uint32_t _start1() {
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
+        zero_semaphore_regions();
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];
@@ -117,7 +120,11 @@ extern "C" uint32_t _start1() {
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
     }
     WAYPOINT("I");
-    DPRINT("DISPATCH DM0-FW: initialized\n");
+    if (hartid == 0) {
+        // Reset the shared print lock and announce from DM0 only.
+        DEVICE_PRINT_INITIALIZE_LOCK();
+        DPRINT("DISPATCH DM0-FW: initialized\n");
+    }
 
     mailboxes->launch_msg_rd_ptr = 0;
     noc_index = 0;
@@ -125,6 +132,8 @@ extern "C" uint32_t _start1() {
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
     device_setup();
+    // NoC command-buffer state is private to each DM and persists across kernel launches.
+    overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {
@@ -133,7 +142,11 @@ extern "C" uint32_t _start1() {
         noc_bank_table_init(MEM_DISPATCH_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
         wait_subordinates();
-        mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+        mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
+#if WATCHER_ASSERT_ENABLED
+        // Quasar-only: per-VC initiator throttler desynchronises the router state machine for that VC; stays at reset.
+        ASSERT(noc_throttler_at_reset());
+#endif
 
         noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
         DeviceProfilerInit();
@@ -141,7 +154,8 @@ extern "C" uint32_t _start1() {
             WAYPOINT("GW");
             uint8_t go_message_signal = RUN_MSG_DONE;
             DPRINT("DISPATCH DM0-FW: waiting for GO message\n");
-            while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
+            while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].slot[0].signal) !=
+                    RUN_MSG_GO) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {
                 if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
@@ -154,8 +168,9 @@ extern "C" uint32_t _start1() {
                             DeviceTraceOnlyProfilerInit();
                         }
                         uint32_t go_message_index = mailboxes->go_message_index;
-                        uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+                        uint64_t dispatch_addr =
+                            calculate_dispatch_addr(&mailboxes->go_messages[go_message_index].slot[0]);
+                        mailboxes->go_messages[go_message_index].slot[0].signal = RUN_MSG_DONE;
                         DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                         notify_dispatch_core_done(dispatch_addr, noc_index);
                     }
@@ -180,7 +195,6 @@ extern "C" uint32_t _start1() {
 
                 my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
                 my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
-                overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
                 uint32_t tt_l1_ptr* dfb_l1_base =
                     (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
@@ -205,18 +219,13 @@ extern "C" uint32_t _start1() {
 
                 wait_subordinates();
 
-                if (g_remapper_configurator.is_remapper_enabled()) {
-                    g_remapper_configurator.clear_all_pairs();
-                    g_remapper_configurator.disable_remapper();
-                }
-
                 uint32_t go_message_index = mailboxes->go_message_index;
-                mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+                mailboxes->go_messages[go_message_index].slot[0].signal = RUN_MSG_DONE;
 
                 if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                     launch_msg_address->kernel_config.enables = 0;
                     launch_msg_address->kernel_config.preload = 0;
-                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index].slot[0]);
                     DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                     CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                     notify_dispatch_core_done(dispatch_addr, noc_index);
@@ -250,7 +259,6 @@ extern "C" uint32_t _start1() {
         setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
-        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
         WAYPOINT("R1");
         while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {

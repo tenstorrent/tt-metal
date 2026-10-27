@@ -37,6 +37,9 @@
  * @param red_dim_units_this_core Number of reduction dimension units assigned to this core
  * @param in_vals Pointer to L1 memory containing input values with data type determined by data_format template
  * parameter
+ * @param j_start First inner-dimension index owned by this data movement processor
+ * @param j_end One past the last inner-dimension index owned by this processor
+ * @param src_dfb_offset Byte offset of this processor's half of the input dataflow buffer
  */
 template <bool reduce_all, DataFormat data_format, typename AddrGen, typename SrcDfb>
 inline void find_argmax_for_core(
@@ -54,8 +57,12 @@ inline void find_argmax_for_core(
     uint32_t& max_idx,
     decltype(get_default_value<data_format>())& max_val,
     volatile tt_l1_ptr uint32_t* red_idxs,
-    volatile tt_l1_ptr decltype(get_default_value<data_format>())* red_vals) {
-    for (uint32_t j = 0; j < inner_dim_units; ++j) {
+    volatile tt_l1_ptr decltype(get_default_value<data_format>())* red_vals,
+    const uint32_t j_start,
+    const uint32_t j_end,
+    const uint32_t src_dfb_offset) {
+    // inner_dim_units stays the FULL count: it is the page stride and part of the reduce_all index.
+    for (uint32_t j = j_start; j < j_end; ++j) {
         // Cores that sub_core_grids leaves without work skip the empty NoC read but still publish a default partial.
         if (red_dim_units_this_core > 0) {
             noc.async_read(
@@ -63,7 +70,7 @@ inline void find_argmax_for_core(
                 src_dfb,
                 src_read_size,
                 {.page_id = (outer_idx * inner_dim_units) + j, .offset_bytes = src_offset},
-                {.offset_bytes = 0});
+                {.offset_bytes = src_dfb_offset});
             noc.async_read_barrier();
         }
 
@@ -78,7 +85,7 @@ inline void find_argmax_for_core(
                 uint16_t val = in_vals[i - red_dim_offset];
                 process_value_comparison<data_format, uint16_t, reduce_all>(
                     val, max_val, max_idx, i, outer_idx, j, inner_dim_units, red_dim_units, [](uint16_t a, uint16_t b) {
-                        return bfloat16_greater(a, b);
+                        return argmax_bfloat16_greater(a, b);
                     });
 
             } else if constexpr (data_format == DataFormat::UInt16) {
@@ -92,7 +99,7 @@ inline void find_argmax_for_core(
                 const uint32_t val = in_vals[i - red_dim_offset];
                 process_value_comparison<data_format, uint32_t, reduce_all>(
                     val, max_val, max_idx, i, outer_idx, j, inner_dim_units, red_dim_units, [](uint32_t a, uint32_t b) {
-                        return float32_greater(a, b);
+                        return argmax_float32_greater(a, b);
                     });
 
             } else if constexpr (data_format == DataFormat::Int32) {
@@ -102,12 +109,14 @@ inline void find_argmax_for_core(
                         return int32_greater(a, b);
                     });
 
+#ifndef ARCH_QUASAR  // Quasar's kernel DataFormat enum has no UInt32; this input branch is unused (bf16 input)
             } else if constexpr (data_format == DataFormat::UInt32) {
                 uint32_t val = in_vals[i - red_dim_offset];
                 process_value_comparison<data_format, uint32_t, reduce_all>(
                     val, max_val, max_idx, i, outer_idx, j, inner_dim_units, red_dim_units, [](uint32_t a, uint32_t b) {
                         return a > b;
                     });
+#endif
 
             } else {
                 // We need a value-dependent expression (gcc-12) that is not
@@ -171,7 +180,7 @@ inline uint32_t find_argmax_from_intermediate_outputs(
 
             process_core_data<data_format>(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint16_t a, uint16_t b) {
-                    return bfloat16_greater(a, b);
+                    return argmax_bfloat16_greater(a, b);
                 });
 
         } else if constexpr (data_format == DataFormat::UInt16) {
@@ -187,7 +196,7 @@ inline uint32_t find_argmax_from_intermediate_outputs(
 
             process_core_data<data_format>(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint32_t a, uint32_t b) {
-                    return float32_greater(a, b);
+                    return argmax_float32_greater(a, b);
                 });
 
         } else if constexpr (data_format == DataFormat::Int32) {
@@ -199,12 +208,14 @@ inline uint32_t find_argmax_from_intermediate_outputs(
                     return int32_greater(a, b);
                 });
 
+#ifndef ARCH_QUASAR  // Quasar's kernel DataFormat enum has no UInt32; this input branch is unused (bf16 input)
         } else if constexpr (data_format == DataFormat::UInt32) {
             volatile tt_l1_ptr auto i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 red_val_dfb_local_base_addr + (i * red_val_size_per_core));
 
             process_core_data<data_format>(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint32_t a, uint32_t b) { return a > b; });
+#endif
 
         } else {
             // We need a value-dependent expression (gcc-12) that is not
@@ -287,6 +298,24 @@ void kernel_main() {
     constexpr auto num_cores0 = get_arg(args::num_cores0);  // Number of cores in group 0
     constexpr auto num_cores1 = get_arg(args::num_cores1);  // Number of cores in group 1
 
+    // This processor's half of the inner loop: [j_start, j_end).
+    constexpr auto j_start = get_arg(args::j_start);
+    constexpr auto j_end = get_arg(args::j_end);
+
+    // This processor's private half of src: primary 0, secondary one entry in.
+    constexpr auto src_dfb_offset = get_arg(args::src_dfb_offset);
+
+    // Runs the cross-core protocol and writes the output.
+    constexpr bool owns_reduction = get_arg(args::owns_reduction) == 1;
+
+    // A second data movement processor is active on this core.
+    constexpr bool has_secondary_dm = get_arg(args::has_secondary_dm) == 1;
+
+    static_assert(j_start < j_end, "Empty inner range: this processor would do no work.");
+    static_assert(
+        !(reduce_all && has_secondary_dm), "reduce_all cannot be split: its accumulator spans the whole inner range.");
+    static_assert(owns_reduction || has_secondary_dm, "Secondary launched without a primary.");
+
     //-------------------------------------------------------------------------
     // Flag to identify if this core will collate intermediate outputs
     const bool is_reduce_core = (core_id == reduce_core_id);
@@ -307,7 +336,7 @@ void kernel_main() {
 
     // DFB in L1 memory for storing input
     constexpr DataFormat src_dfb_addr_data_format = get_dataformat(dfb::src);
-    const uint32_t src_dfb_addr = src_dfb.get_write_ptr();
+    const uint32_t src_dfb_addr = src_dfb.get_write_ptr() + src_dfb_offset;
     volatile tt_l1_ptr auto* in_vals = get_tt_l1_ptr_based_on_data_format<src_dfb_addr_data_format>(src_dfb_addr);
 
     // DFB in L1 memory of reducer core for storing output
@@ -338,6 +367,8 @@ void kernel_main() {
     // Semaphores
     Semaphore start_sem(sem::start);
     Semaphore done_sem(sem::done);
+    // Monotonic per launch, reset after the loop; wait_min invalidates L1, making the secondary's stores visible.
+    Semaphore partial_ready_sem(sem::partial_ready);
 
     uint32_t max_idx = 0;
     auto max_val = get_default_value<src_dfb_addr_data_format>();
@@ -345,7 +376,8 @@ void kernel_main() {
     // -------------------------------------------------------------------------
     // Main loop - run by all cores
     for (uint32_t k = 0; k < outer_dim_units; ++k) {
-        if (is_reduce_core) {
+        // Only the primary drives start_sem: semaphores are per-core, and the multicast must issue from NOC1.
+        if (is_reduce_core && owns_reduction) {
             // done_sem is zero-initialized by the dispatcher before the kernel
             // launches (and restored to zero at the end of this kernel so trace
             // replays see the same state), so the k == 0 iteration needs no
@@ -400,9 +432,23 @@ void kernel_main() {
             max_idx,
             max_val,
             red_idxs,
-            red_vals);
+            red_vals,
+            j_start,
+            j_end,
+            src_dfb_offset);
 
         if constexpr (not reduce_all) {
+            // Hands off its half; the start_sem wait above stops it overwriting a partial still being shipped.
+            if constexpr (not owns_reduction) {
+                partial_ready_sem.up(1);
+                continue;
+            }
+
+            // Wait for this core's secondary to fill its half before shipping the slot.
+            if constexpr (has_secondary_dm) {
+                partial_ready_sem.wait_min(k + 1);
+            }
+
             // We now write these local values to the equivalent position in the reduction core.
             //
             // A DFB handed to async_write as the source is read at its read pointer. That is the
@@ -500,7 +546,12 @@ void kernel_main() {
     // core's slice on the first outer row). These resets are race-free: the final done_sem.wait
     // above guarantees every worker's increment for the last iteration has landed, and workers
     // never read start_sem again after their final wait.
-    if (is_reduce_core) {
+    // owns_reduction, not just is_reduce_core: the secondary would zero these mid-flight and multicast from NOC0.
+    if constexpr (owns_reduction && has_secondary_dm) {
+        partial_ready_sem.set(0);
+    }
+
+    if (is_reduce_core && owns_reduction) {
         done_sem.set(0);
         start_sem.set(0);
         if constexpr (num_cores > 1) {

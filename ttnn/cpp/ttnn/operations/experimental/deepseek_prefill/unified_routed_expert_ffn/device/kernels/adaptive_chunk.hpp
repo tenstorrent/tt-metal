@@ -14,9 +14,10 @@
 // host from an `expected_tokens` argument now happens at runtime, so no caller
 // has to know the token count in advance.
 //
-// CBs are sized on the host to the compile-time MAX shape (per_core_M = 8,
-// chunk_M_tiles = 64; a big-model L1 guard may lower the max, passed in as
-// `max_chunk`). The picker never returns more than `max_chunk`, so the runtime
+// CBs are sized on the host to the MAX chunk, passed in as `max_chunk`
+// (= per_core_M_max * kGridY: the factory requests per_core_M 4, widens it to 8
+// only where the avoided weight traffic pays for it, and its L1 guard may lower
+// it). The picker never returns more than `max_chunk`, so the runtime
 // per_core_M always fits the allocated CBs; a smaller pick simply uses fewer of
 // the reserved tiles and shrinks every M-dimension loop.
 //
@@ -35,8 +36,8 @@ constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGrid
 // count (each chunk re-reads the full gate/up/down weights, the DRAM bottleneck)
 // AND minimizes phantom M-work (the tail covers only the leftover rows), so
 // per_core_M adapts to the actual token count per chunk with essentially no
-// wasted rows — e.g. 160 tiles -> 64 + 64 + 32 (per_core_M 8,8,4), 3 chunks,
-// zero phantom.
+// wasted rows — e.g. with max_chunk 64, 160 tiles -> 64 + 64 + 32
+// (per_core_M 8,8,4), 3 chunks, zero phantom.
 //
 // CRITICAL — per_core_M BOUNDS WORK, IT DOES NOT SIZE CB BLOCKS.
 //
@@ -73,8 +74,11 @@ constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGrid
 // pattern cb_in0_down_full and cb_out already use. The adaptive win is untouched:
 // no MAC, tilize, DRAM read or multicast byte is spent on the padded rows.
 //
-// The tail per_core_M is still returned as a DIVISOR of per_core_M_max, so the
-// runtime rows always tile evenly inside the constant block.
+// The tail per_core_M is therefore free to be ANY value in [1, per_core_M_max]:
+// it bounds work only, and each CB still moves its whole constant block (the
+// runtime remainder arrives as a pointer-only pad). The host asserts every ring
+// is a whole number of the granule its kernels push, which is the property the
+// FIFO wrap actually depends on.
 
 // Clamp a DEVICE-PROVIDED token-tile count to what this expert can actually
 // hold: its region (`m_tiles_full` tile-rows), and — as a backstop — the chunk
@@ -134,9 +138,8 @@ inline uint32_t num_chunks(uint32_t count_tiles, uint32_t max_chunk) {
 }
 
 // per_core_M for chunk index `c`: per_core_M_max for the full chunks; for the
-// tail chunk, the smallest DIVISOR of per_core_M_max whose *kGridY covers the
-// tail tiles (so the tail does the least M-work while its block still tiles
-// evenly into the CBs).
+// tail chunk, exactly the rows/core needed to cover the tail tiles, so no MAC,
+// DRAM read or multicast byte is spent on a row the tail does not hold.
 inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t max_chunk) {
     const uint32_t per_core_M_max = max_chunk / kGridY;
     const uint32_t num_full = count_tiles / max_chunk;
@@ -148,12 +151,7 @@ inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t 
     if (need < 1) {
         need = 1;
     }
-    for (uint32_t d = need; d <= per_core_M_max; ++d) {
-        if ((per_core_M_max % d) == 0) {
-            return d;
-        }
-    }
-    return per_core_M_max;
+    return (need < per_core_M_max) ? need : per_core_M_max;
 }
 
 }  // namespace adaptive_chunk

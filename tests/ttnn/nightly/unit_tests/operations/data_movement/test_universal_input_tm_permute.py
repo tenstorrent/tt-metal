@@ -773,6 +773,28 @@ def test_permute_tile_sharded_uneven(shape, dims, mc_factory, device):
             lambda _d: L1_INTERLEAVED,
             id="2013_RM_height_to_interleaved",
         ),
+        # Guards permute's WH-lambda delegation to transpose(-2,-1) on the shard_height < H path.
+        *[
+            pytest.param(
+                (1, 1, 64, 128),
+                (0, 1, 3, 2),
+                lambda d, nc=nc: _height_shard_config((1, 1, 64, 128), d, num_cores=nc, layout=ttnn.ROW_MAJOR_LAYOUT),
+                lambda d, nc=nc: _width_shard_config((1, 1, 128, 64), d, num_cores=nc, layout=ttnn.ROW_MAJOR_LAYOUT),
+                id=f"WH_RM_height_to_width_c{nc}",
+            )
+            for nc in (2, 4, 8)
+        ],
+        # Composed (0,3,1,2) = transpose_hc(transpose_wh(input)) hits the same WH-lambda on H-split shards.
+        *[
+            pytest.param(
+                (1, 1, 64, 128),
+                (0, 3, 1, 2),
+                lambda d, nc=nc: _height_shard_config((1, 1, 64, 128), d, num_cores=nc, layout=ttnn.ROW_MAJOR_LAYOUT),
+                lambda _d: L1_INTERLEAVED,
+                id=f"0312_RM_height_split_c{nc}",
+            )
+            for nc in (2, 4, 8)
+        ],
     ],
 )
 def test_permute_row_major_sharded(shape, dims, input_factory, output_factory, device):

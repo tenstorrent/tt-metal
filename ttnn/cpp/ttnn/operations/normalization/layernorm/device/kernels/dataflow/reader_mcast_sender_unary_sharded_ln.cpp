@@ -299,6 +299,13 @@ void kernel_main() {
                 noc.async_write_barrier();
             }
         }
+
+        // The combined-result buffer is waited before the gather, which reads this core's copy and,
+        // over the NOC, the copies held by the other all-to-all workers. That gather finishes at the
+        // read barrier above; the multicast that follows sends the global buffer, not this one, and
+        // does not run at all for a single block. Nothing reads this buffer after the barrier, so
+        // pop the waited count here.
+        dfb_ex_obj.pop_front(static_cast<uint16_t>(num_tiles_per_worker * num_tiles_scaler));
     };
 
     // RMSNorm has no mean to reduce, so its buffers are not declared and the call is compiled out.
@@ -309,6 +316,12 @@ void kernel_main() {
     // Welford produces the mean and variance together in the pass above, so it has no separate
     // variance reduction and those buffers are not declared either.
 #ifndef USE_WELFORD
+#ifdef TWO_STAGE_REDUCE
     global_reduce_sender(dfb::ex_partial2, dfb::ex_external2, dfb::ex2pe, dfb::ex_global, dfb::ex2, 1);
+#else
+    // A single-stage reduce has no first-stage result, so ex2 does not exist. The argument goes unused;
+    // ex2pe stands in for it, as ex does in the E[x] call above.
+    global_reduce_sender(dfb::ex_partial2, dfb::ex_external2, dfb::ex2pe, dfb::ex_global, dfb::ex2pe, 1);
+#endif
 #endif
 }

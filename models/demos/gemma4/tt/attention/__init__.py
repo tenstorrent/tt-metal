@@ -28,6 +28,60 @@ from .prefill import flush_deferred_bounded_fills, prefill_forward
 _UNSET = object()
 
 
+#: Ring headroom, in 64-token blocks, added on top of the sliding window.
+#: 0 (default) keeps the historical exact-window ring.
+SPEC_RING_HEADROOM_ENV = "GEMMA4_SPEC_RING_HEADROOM_BLOCKS"
+_RING_HEADROOM_BLOCK = 64
+
+
+def bounded_ring_modulo(sliding_window):
+    """Ring size for a bounded sliding layer: the window plus optional headroom.
+
+    A ring of EXACTLY ``sliding_window`` slots is correct for plain decode (slot
+    p%W holds exactly the window), but it breaks SPECULATIVE decode: verify
+    writes candidates at p+1..p+K, and slot (p+j)%W currently holds position
+    p+j-W, which for j>=1 is still inside the live window [p-W+1, p]. Every
+    draft therefore evicts an in-window token, accepted or rejected. Measured at
+    32k: K=1 stays token-correct, K=5 corrupts from the first token.
+
+    Extra blocks push those speculative slots outside the window; SDPA still
+    masks to the true ``sliding_window``, so decode semantics are unchanged.
+    Opt-in (the spec path sets it) because it costs one block per user per
+    sliding layer.
+    """
+    if sliding_window is None:
+        return None
+    try:
+        extra = int(os.environ.get(SPEC_RING_HEADROOM_ENV, "0"))
+    except ValueError:
+        extra = 0
+    ring = int(sliding_window) + max(0, extra) * _RING_HEADROOM_BLOCK
+    # The ring must stay a power of two. Chunk starts have to be multiples of the
+    # ring (paged_fill_cache writes row r to slot r % ring, with no start offset)
+    # AND of SDPA's q_chunk_size, which TT_FATALs otherwise. An odd factor makes
+    # those two nearly unsatisfiable (a 1088 ring aligns only every 8704 tokens).
+    if ring & (ring - 1):
+        raise ValueError(
+            f"bounded sliding ring must be a power of two, got {ring} "
+            f"(sliding_window={sliding_window}, {SPEC_RING_HEADROOM_ENV}={extra} blocks). "
+            f"Pick headroom that doubles the window, e.g. {int(sliding_window) // _RING_HEADROOM_BLOCK} blocks."
+        )
+    return ring
+
+
+def _stashed_tail_end(chunk_start_idx, valid_seq_len, seq_len):
+    """Absolute position one past the last row of the sliding tail a prefill call stashes.
+
+    The tail is the last rows of ``min(seq_len, valid_seq_len)`` K/V rows of a
+    chunk starting at ``chunk_start_idx``. None when the offset is a device tensor
+    (traced) or the valid length is per slot (batched).
+    """
+    if isinstance(chunk_start_idx, ttnn.Tensor) or isinstance(valid_seq_len, (list, tuple, ttnn.Tensor)):
+        return None
+    rows = int(seq_len) if valid_seq_len is None else min(int(seq_len), int(valid_seq_len))
+    return int(chunk_start_idx or 0) + rows
+
+
 class Gemma4AttentionConfig:
     """Configuration for a single attention layer, derived from HF config + layer type."""
 
@@ -104,7 +158,7 @@ class Gemma4Attention:
             bounded_sliding_kv_cache and config.is_sliding and config.sliding_window is not None
         )
         if self.bounded_sliding_kv_cache:
-            config.cache_position_modulo = config.sliding_window
+            config.cache_position_modulo = bounded_ring_modulo(config.sliding_window)
 
         self.weights = load_attention_weights(
             mesh_device=mesh_device,
@@ -318,6 +372,10 @@ class Gemma4Attention:
                 # tail — releasing the shared slot here wiped tails other
                 # requests still needed (second victim mode of the same bug).
                 self._release_sliding_prefill_tail(req_key=_req_key)
+            tail_ends = getattr(self, "_sliding_tail_ends", None)
+            if tail_ends is None:
+                tail_ends = {}
+                self._sliding_tail_ends = tail_ends
             tt_out, kept_kv, sliding_tail_out = prefill_forward(
                 hidden_states=hidden_states,
                 cos_cache=cos_cache,
@@ -337,10 +395,18 @@ class Gemma4Attention:
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
                 sliding_tail_in=self._get_sliding_tail(_req_key),
+                sliding_tail_end=tail_ends.get(_req_key),
             )
             # prefill_forward consumed (deallocated) the incoming tail; stash the
             # new one for the next chunk under this request's key.
             self._put_sliding_tail(_req_key, sliding_tail_out)
+            tail_ends.pop(_req_key, None)
+            if sliding_tail_out is not None:
+                end = _stashed_tail_end(chunk_start_idx, valid_seq_len, hidden_states.shape[-2])
+                if end is not None:
+                    tail_ends[_req_key] = end
+                while len(tail_ends) > self._SLIDING_TAIL_MAX_KEYS:
+                    tail_ends.pop(next(iter(tail_ends)))
             self._last_kv = kept_kv
             return tt_out
 

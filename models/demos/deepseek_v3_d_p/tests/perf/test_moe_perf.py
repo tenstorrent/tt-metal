@@ -20,10 +20,31 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_m
 
 # `and pad0`/`and pad50` pins the padding parametrize so each command selects
 # exactly one production TorusXY case.
-_CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad0' --wrapper-invocation"
-_CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad50' --wrapper-invocation"
+_CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad0'"
+_CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad50'"
 _CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and torus-y-8x1 and pad0' --wrapper-invocation"
-_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0' --wrapper-invocation"
+_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0'"
+
+# Mistral Small 4 has its own driver rather than a row in test_ds_moe: its reference stores all 128
+# experts as one fused stacked parameter and its router is bias-free.
+#
+# fabric2d-8x4 is the only mesh test_mistral4_moe declares, so this number is NOT comparable to the
+# TorusXY deepseek rows above.
+_MISTRAL4_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_mistral4_moe"
+_CMD_MISTRAL4_8X4 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and fabric2d-8x4'"
+# SP=8 x TP=1 on a LoudBox: the stage shape PP=4 runs. Blaze builds without Tracy, so this is the
+# only Tracy-capable CI home for it.
+_CMD_MISTRAL4_8X1 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and torus-y-8x1'"
+
+# Record-only: one local run on a different fabric from every sibling row, so the margin admits any
+# measurement. Replace both with the first CI result on this fabric.
+_MISTRAL4_MOE_NS_UNCALIBRATED = 2_661_495
+# Mean of 20 CI LoudBox runs, 37862944023 through 38733452366 (3,578,022-3,652,521 ns, sd 0.5%).
+# Previously single run 37547491707 (4_204_313), cut before main stepped down at 496333d8fac.
+# 10% rather than the sibling rows' 3% because this keeps moving while the branch is pre-merge;
+# re-cut it tight once landed.
+_MISTRAL4_MOE_LB_8X1_NS = 3_606_900
+_MISTRAL4_MOE_LB_8X1_MARGIN = 0.10
 
 
 _IGNORE_POWER = os.environ.get("DS_PERF_IGNORE_POWER") == "1"
@@ -49,18 +70,19 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Re-cut 2026-08-28 on the CI LoudBox (bh_loudbox), run 33194029504. One sample.
-        # The 2D matmul program configs are the whole delta: against main on the same box and day
-        # the Matmul bucket falls 2,201,295 -> 381,174 ns while Other (3,615,143 -> 3,617,678) and
-        # CCL (17,690 -> 22,700) hold, so 5_895_298 centred on a matmul shape nothing builds now.
-        expected_ns_8x1=4_021_552,
+        # Re-cut 2026-10-15: mean of 23 CI LoudBox (bh_loudbox) runs, 37705811976 through
+        # 38733452366 (3,000,492-3,066,813 ns, sd 0.6%). Main stepped down between
+        # ca3797a3df8 (last pass, run 37648881647) and 496333d8fac (first miss, run 37705811976).
+        expected_ns_8x1=3_031_260,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
-        # Re-cut 2026-08-28 on the CI LoudBox (bh_loudbox), run 33194029504. One sample,
-        # superseding the 9_339_547 two-run CI mean cut earlier the same day. Same cause as 8x1:
-        # Matmul 715,503 -> 216,878 ns against main, Other flat within 0.2%. This gate still has
-        # to be cut on the CI runner -- the dev box bh-lb-15 reads it 2.7% slower.
-        expected_ns_2x4=8_840_595,
+        # Re-cut 2026-10-15 alongside the 8x1 slot: 5 of the same 23 runs read 5,439,456-5,442,690 ns,
+        # just under the old 5,445,465 floor, and the rest passed just above it (passing values are
+        # not logged), so the centre sits at that floor.
+        # AVG DEVICE KERNEL DURATION is a SUM, so a truncated capture reads low exactly like a
+        # speedup -- diff the Matmul/CCL/Other split against a main run before trusting a miss.
+        # This gate has to be cut on the CI runner -- the dev box bh-lb-15 reads it 2.7% slower.
+        expected_ns_2x4=5_445_000,
         model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,
@@ -114,4 +136,55 @@ def test_deepseek_v3_moe_perf_galaxy_pad50():
         batch_size=1,
         margin=margin,
         comments="isl5k_glx_8x4_ground_truth_padded_50_percent_w_awareness",
+    )
+
+
+@_REQUIRE_HIGH_POWER
+@pytest.mark.timeout(0)
+def test_mistral4_moe_perf_galaxy():
+    """Mistral Small 4 MoE on the 8x4 Galaxy at the chunked-prefill shape (640 tokens/chip).
+
+    RECORD-ONLY: uncalibrated baseline, margin admits any measurement. MoE does not grow with KV
+    depth, so this row shows an MLA change has not moved the flat part of the layer.
+
+    Runs on unwrapped FABRIC_2D, so it deliberately makes no _require_certified_torus_xy call.
+    """
+    if not _is_galaxy_env():
+        pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
+
+    run_model_device_perf_test_with_merge(
+        command=_CMD_MISTRAL4_8X4,
+        # None is what record-only means: it logs the measurement and skips check_device_perf
+        # entirely. A finite margin does not, however wide -- _MISTRAL4_MOE_NS_UNCALIBRATED
+        # with margin=10.0 still built an 11x UPPER bound and published threshold fields, so a
+        # genuine speedup could fail the row. Wire the constant in when a CI sample arms it.
+        expected_device_perf_ns_per_iteration=None,
+        subdir="mistral4_moe",
+        model_name="mistral4_moe_glx_8x4_fabric2d",
+        num_iterations=1,
+        batch_size=1,
+        comments="isl5k_glx_8x4_fabric2d_record_only",
+    )
+
+
+@pytest.mark.timeout(0)
+def test_mistral4_moe_perf_loudbox():
+    """Mistral Small 4 MoE at the PP=4 stage shape (SP=8 x TP=1) on the CI LoudBox.
+
+    This is the op-level row that matches what PP=4 actually runs. The 8x4 galaxy row measures the
+    single-rank shape, and its lever ranking does not carry across: collectives are ~21% of a layer
+    at TP=4 and 0.2% at TP=1, and MoE routing goes 26% -> 37%.
+
+    Gated: threshold and margin cut from run 34399947211 (see the constants above). If this proves
+    noisy, widen the margin rather than chasing the centre.
+    """
+    run_model_device_perf_test_with_merge(
+        command=_CMD_MISTRAL4_8X1,
+        expected_device_perf_ns_per_iteration=_MISTRAL4_MOE_LB_8X1_NS,
+        subdir="mistral4_moe",
+        model_name="mistral4_moe_lb_8x1_torus_y",
+        num_iterations=1,
+        batch_size=1,
+        margin=_MISTRAL4_MOE_LB_8X1_MARGIN,
+        comments="isl5k_lb_8x1_torus_y",
     )

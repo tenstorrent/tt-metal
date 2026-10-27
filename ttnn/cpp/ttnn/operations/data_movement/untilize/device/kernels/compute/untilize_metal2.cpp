@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 fork of untilize.cpp (beside it). Carries the Metal 2.0 rewrite (named args + DFB
-// bindings) so ops ported to Metal 2.0 can bind the untilize compute kernel without converting the
-// legacy original in place (which would break its many still-legacy binders). Created by the
-// data_movement/fold port (the first Metal 2.0 consumer); other Metal 2.0 consumers reuse it.
+// Metal 2.0 fork of untilize.cpp (beside it), created by the data_movement/fold port (the first
+// Metal 2.0 consumer) and reused by the ones that followed. No program factory binds the original
+// any more, but TestCrossOpCompilation in
+// tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py still reads
+// its source text as fusion input, so it is not retired and changes here likely belong there too.
 // Its binding names (dfb::src / dfb::out) and named args are the shared interface — do not rename.
 
 #include <cstdint>

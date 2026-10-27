@@ -5,20 +5,17 @@
 #include "extract_program_factory.hpp"
 
 #include <cstdint>
-#include <utility>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-
-#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::extract {
 
-ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
+tt::tt_metal::ProgramDescriptor ExtractProgramFactory::create_descriptor(
     const ExtractParams& operation_attributes, const ExtractInputs& tensor_args, Tensor& tensor_return_value) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::ProgramDescriptor desc;
 
     const auto& global_tensor = tensor_args.global_tensor;
     const auto& start = tensor_args.start;
@@ -53,6 +50,11 @@ ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
     auto* counts_buffer = counts.buffer();
     auto* global_expert_idx_table_buffer = global_expert_idx_table.buffer();
     auto* output_buffer = output_tensor.buffer();
+    TT_FATAL(global_buffer != nullptr, "global_tensor buffer must be allocated on device");
+    TT_FATAL(start_buffer != nullptr, "start buffer must be allocated on device");
+    TT_FATAL(counts_buffer != nullptr, "counts buffer must be allocated on device");
+    TT_FATAL(global_expert_idx_table_buffer != nullptr, "global_expert_idx_table buffer must be allocated on device");
+    TT_FATAL(output_buffer != nullptr, "output buffer must be allocated on device");
 
     const tt::DataFormat tile_data_format = tt::tt_metal::datatype_to_dataformat_converter(global_tensor.dtype());
     const uint32_t single_tile_size = tt::tile_size(tile_data_format);
@@ -86,42 +88,38 @@ ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
     constexpr uint32_t cb_global_expert_idx_scratch_reader = tt::CBIndex::c_4;
     constexpr uint32_t cb_global_expert_idx_scratch_writer = tt::CBIndex::c_5;
 
+    auto add_cb = [&](uint32_t cb_idx, uint32_t total_size, uint32_t page_size, tt::DataFormat data_format) {
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = total_size,
+            .core_ranges = core_range_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_idx),
+                .data_format = data_format,
+                .page_size = page_size,
+            }}},
+        });
+    };
+
     // Deep pipeline so the reader can race ahead of the writer (and vice versa)
     // without stalling on cb_reserve_back / cb_wait_front. Each tile is small
     // (e.g. ~1 KB for bfp8_b) so even 32 slots is only ~32 KB of L1.
     constexpr uint32_t tile_buffering = 32;
-    tt::tt_metal::CircularBufferConfig cb_tile_config =
-        tt::tt_metal::CircularBufferConfig(tile_buffering * single_tile_size, {{cb_tile, tile_data_format}})
-            .set_page_size(cb_tile, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_tile_config);
-
-    tt::tt_metal::CircularBufferConfig cb_start_config =
-        tt::tt_metal::CircularBufferConfig(start_page_size, {{cb_start_scratch, idx_data_format}})
-            .set_page_size(cb_start_scratch, start_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_start_config);
-
-    tt::tt_metal::CircularBufferConfig cb_counts_reader_config =
-        tt::tt_metal::CircularBufferConfig(counts_page_size, {{cb_counts_scratch_reader, idx_data_format}})
-            .set_page_size(cb_counts_scratch_reader, counts_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_counts_reader_config);
-
-    tt::tt_metal::CircularBufferConfig cb_counts_writer_config =
-        tt::tt_metal::CircularBufferConfig(counts_page_size, {{cb_counts_scratch_writer, idx_data_format}})
-            .set_page_size(cb_counts_scratch_writer, counts_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_counts_writer_config);
+    add_cb(cb_tile, tile_buffering * single_tile_size, single_tile_size, tile_data_format);
+    add_cb(cb_start_scratch, start_page_size, start_page_size, idx_data_format);
+    add_cb(cb_counts_scratch_reader, counts_page_size, counts_page_size, idx_data_format);
+    add_cb(cb_counts_scratch_writer, counts_page_size, counts_page_size, idx_data_format);
 
     // Per-core scratch for the global_expert_idx_table (one page each for reader / writer).
-    tt::tt_metal::CircularBufferConfig cb_global_expert_idx_reader_config =
-        tt::tt_metal::CircularBufferConfig(
-            global_expert_idx_table_page_size, {{cb_global_expert_idx_scratch_reader, idx_data_format}})
-            .set_page_size(cb_global_expert_idx_scratch_reader, global_expert_idx_table_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_global_expert_idx_reader_config);
-
-    tt::tt_metal::CircularBufferConfig cb_global_expert_idx_writer_config =
-        tt::tt_metal::CircularBufferConfig(
-            global_expert_idx_table_page_size, {{cb_global_expert_idx_scratch_writer, idx_data_format}})
-            .set_page_size(cb_global_expert_idx_scratch_writer, global_expert_idx_table_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_global_expert_idx_writer_config);
+    add_cb(
+        cb_global_expert_idx_scratch_reader,
+        global_expert_idx_table_page_size,
+        global_expert_idx_table_page_size,
+        idx_data_format);
+    add_cb(
+        cb_global_expert_idx_scratch_writer,
+        global_expert_idx_table_page_size,
+        global_expert_idx_table_page_size,
+        idx_data_format);
 
     // Reader compile-time args: CB ids, scalars, then TensorAccessorArgs for
     // global/start/counts/global_expert_idx_table.
@@ -156,71 +154,35 @@ ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(global_expert_idx_table_buffer).append_to(writer_compile_time_args);
 
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/extract/device/kernels/dataflow/reader_extract.cpp",
-        core_range_set,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    tt::tt_metal::KernelDescriptor reader_kernel_desc;
+    reader_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/extract/device/kernels/dataflow/reader_extract.cpp";
+    reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = core_range_set;
+    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/extract/device/kernels/dataflow/writer_extract.cpp",
-        core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    tt::tt_metal::KernelDescriptor writer_kernel_desc;
+    writer_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/extract/device/kernels/dataflow/writer_extract.cpp";
+    writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel_desc.core_ranges = core_range_set;
+    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     // Per-core runtime args: buffer addresses + trailing core_id. The core_id
     // selects which chunk of tile rows this core processes.
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         const auto& core = cores[core_id];
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            reader_kernel_id,
-            core,
-            {global_buffer->address(),
-             start_buffer->address(),
-             counts_buffer->address(),
-             global_expert_idx_table_buffer->address(),
-             core_id});
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {output_buffer->address(), counts_buffer->address(), global_expert_idx_table_buffer->address(), core_id});
+        reader_kernel_desc.emplace_runtime_args(
+            core, {global_buffer, start_buffer, counts_buffer, global_expert_idx_table_buffer, core_id});
+        writer_kernel_desc.emplace_runtime_args(
+            core, {output_buffer, counts_buffer, global_expert_idx_table_buffer, core_id});
     }
 
-    return cached_program_t{
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id, .cores = cores}};
-}
-
-void ExtractProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ExtractParams& /*operation_attributes*/,
-    const ExtractInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const auto writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& cores = cached_program.shared_variables.cores;
-
-    const uint32_t global_addr = tensor_args.global_tensor.buffer()->address();
-    const uint32_t start_addr = tensor_args.start.buffer()->address();
-    const uint32_t counts_addr = tensor_args.counts.buffer()->address();
-    const uint32_t global_expert_idx_table_addr = tensor_args.global_expert_idx_table.buffer()->address();
-    const uint32_t output_addr = tensor_return_value.buffer()->address();
-
-    for (const auto& core : cores) {
-        auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
-        reader_args[0] = global_addr;
-        reader_args[1] = start_addr;
-        reader_args[2] = counts_addr;
-        reader_args[3] = global_expert_idx_table_addr;
-
-        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
-        writer_args[0] = output_addr;
-        writer_args[1] = counts_addr;
-        writer_args[2] = global_expert_idx_table_addr;
-    }
+    desc.kernels.push_back(std::move(reader_kernel_desc));
+    desc.kernels.push_back(std::move(writer_kernel_desc));
+    return desc;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::extract

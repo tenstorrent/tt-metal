@@ -215,7 +215,7 @@ def test_gelu_bw(device):
     )
 
     # Call the gelu_bw function with approximation method
-    output = ttnn.gelu_bw(grad_tensor, input_tensor, approximate="none")
+    output = ttnn.gelu_bw(grad_tensor, input_tensor, variant=ttnn.GeluVariant.Accurate)
     logger.info(f"GELU Backward: {output}")
 
 

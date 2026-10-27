@@ -47,14 +47,8 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
     // Two semaphores:
     // - barrier_sem: one-shot init handshake ("I'm alive") to the neighbor.
     // - data_valid_sem: chunks upstream has relayed into our output (relay gate + completion).
-    bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
-    auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
-    if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
-        log_warning(
-            tt::LogOp,
-            "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
-            "allocations. Configure an L1_SMALL region to mitigate this.");
-    }
+    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
+    ttnn::ccl::warn_if_semaphores_fall_back_to_l1(sem_buffer_type);
     auto barrier_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     auto data_valid_sem =
@@ -166,7 +160,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         // workers_per_dir in {3,4,5} is a reproducible NOC/core-placement pessimum -- worse than
         // 2 and than >=6 -- so the ramp jumps 2->8->12 and must never emit them.
         const uint32_t txn_bytes = std::min(input_page_size, output_page_size);  // NOC transaction size
-        const uint64_t total_output_bytes = output_tensor.buffer()->num_pages() * output_page_size;
+        const uint64_t total_output_bytes =
+            static_cast<uint64_t>(output_tensor.buffer()->num_pages()) * output_page_size;
         const uint64_t per_link_bytes = total_output_bytes / std::max(1u, num_links);
         constexpr uint32_t bw_bound_txn_bytes = 1536;              // NOC txn size needed to benefit from >2 workers
         constexpr uint64_t bw_bound_link_bytes = 4000000ULL;       // bytes/link where fabric link starts saturating
@@ -270,7 +265,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         /*num_header_only_channels=*/0,
         /*num_buffers_full_size_channel=*/num_buffers_per_channel,
         /*num_buffers_header_only_channel=*/0,
-        /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
+        /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device),
         /*base_l1_address=*/mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
 
     tt::tt_metal::KernelHandle mux_kernel_id = 0;

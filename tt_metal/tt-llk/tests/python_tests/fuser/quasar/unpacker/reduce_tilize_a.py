@@ -2,23 +2,24 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.reduce_tilize_a import reduce_tilize_a_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource, L1AccessMode, bfd_current
-from fuser.tile_loop import LoopTileByTile, TileLoop
+from fuser.operand import BfdResource, L1AccessMode
 
 
 class UnpackReduceTilize(Unpacker):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
 
-    def __init__(self, reduce_dim, reduce_pool):
-        self.reduce_dim = reduce_dim
+    golden_fn = staticmethod(reduce_tilize_a_golden)
+
+    def __init__(self, reduce_pool):
         self.reduce_pool = reduce_pool
 
     def get_headers(self) -> List[str]:
@@ -26,19 +27,6 @@ class UnpackReduceTilize(Unpacker):
             "llk_unpack_common.h",
             "llk_unpack_reduce_col_tilizeA_strided.h",
         ]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        return (
-            self.tilize_golden(tensor_a, config, operation, compute_unit),
-            tensor_b,
-        )
 
     def perf_set_valid(
         self,
@@ -74,17 +62,20 @@ class UnpackReduceTilize(Unpacker):
         block: BlockData,
     ) -> str:
         bfd_program = compute_unit.src_a.bfd_alloc_and_program(
-            BfdResource.UNP0, L1AccessMode.STRIDED
-        ) + compute_unit.src_b.bfd_alloc_and_program(BfdResource.UNP1)
-        id_a = bfd_current(BfdResource.UNP0)
-        id_b = bfd_current(BfdResource.UNP1)
+            BfdResource.UNP0, L1AccessMode.STRIDED, result_name="bfd_a"
+        ) + compute_unit.src_b.bfd_alloc_and_program(
+            BfdResource.UNP1, result_name="bfd_b"
+        )
         full_ct_dim = compute_unit.src_a.tile_count_x
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         reduce_pool = self.reduce_pool.cpp_enum_value
 
         return (
-            bfd_program + f"_llk_unpack_reduce_col_tilizeA_strided_init_<{reduce_pool}>"
-            f"({id_a}, {id_b}, {full_ct_dim}, {tensor_shape});\n"
+            "{\n"
+            + bfd_program
+            + f"_llk_unpack_reduce_col_tilizeA_strided_init_<{reduce_pool}>"
+            f"(bfd_a, bfd_b, {full_ct_dim}, {tensor_shape});\n"
+            "}\n"
         )
 
     def unpack(
@@ -95,17 +86,15 @@ class UnpackReduceTilize(Unpacker):
         block: BlockData,
     ) -> str:
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
-        row_stride = (
-            compute_unit.src_a.tile_count_x
-            * compute_unit.src_a.tile_shape.total_row_dim()
-        )
-        l1_row_idx = (
-            f"{row_stride} * ({block.block_y} + tile_y) + ({block.block_x} + tile_x)"
-        )
+        full_ct_dim = compute_unit.src_a.tile_count_x
+        row_stride = full_ct_dim * compute_unit.src_a.tile_shape.total_row_dim()
+        tile_row = f"({block.tile_id_src_a}) / {full_ct_dim}"
+        tile_col = f"({block.tile_id_src_a}) % {full_ct_dim}"
+        l1_row_idx = f"{row_stride} * ({tile_row}) + ({tile_col})"
 
         return (
             f"_llk_unpack_reduce_col_tilizeA_strided_"
-            f"({tensor_shape}, {l1_row_idx}, 0);\n"
+            f"({tensor_shape}, {l1_row_idx}, {block.tile_id_src_b});\n"
         )
 
     def uninit(

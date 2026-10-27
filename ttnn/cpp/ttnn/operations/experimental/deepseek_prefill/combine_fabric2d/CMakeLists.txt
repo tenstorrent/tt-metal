@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_combine_fabric2d
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_combine_fabric2d REUSE_FROM TTNN::PCHFull)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_combine_fabric2d TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_combine_fabric2d)
 
 set_target_properties(
@@ -16,7 +16,11 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*.cpp)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_experimental_deepseek_prefill_combine_fabric2d

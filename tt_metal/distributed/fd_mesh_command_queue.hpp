@@ -26,7 +26,13 @@ class FDMeshCQTestAccessor;
 
 #include "trace/trace_node.hpp"
 
+namespace tt::tt_metal {
+class Device;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal::distributed {
+
+class SubDeviceSetupCacheTestAccessor;
 
 struct MeshReadEventDescriptor;
 struct MeshBufferReadDescriptor;
@@ -35,16 +41,30 @@ struct MeshCoreDataReadDescriptor;
 using MeshCompletionReaderVariant =
     std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
 
+// Words to write at a byte offset of an interleaved DRAM MeshBuffer on every device in device_range. The offset and
+// size must be DRAM-aligned, and the span must not cross a page.
+struct MeshBufferPatch {
+    MeshCoordinateRange device_range;
+    uint32_t offset = 0;
+    ttsl::Span<const uint32_t> data;
+};
+
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
     // This class can now access private members of FDMeshCommandQueue
     // This is used to access the system memory manager from cq test fixtures
     friend class tt_dispatch_tests::Common::FDMeshCQTestAccessor;
+    friend class SubDeviceSetupCacheTestAccessor;
 
     void populate_read_descriptor_queue();
     void populate_virtual_program_dispatch_core();
     CoreCoord virtual_program_dispatch_core() const;
     CoreType dispatch_core_type() const;
+
+    void submit_replay_buffer(
+        const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
+        const std::vector<SubDeviceId>& sub_device_ids,
+        const MeshBuffer& buffer);
 
     void increment_num_entries_in_completion_queue();
     MeshEvent enqueue_record_event_helper(
@@ -52,7 +72,7 @@ private:
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
     void write_program_commands_to_devices(
-        const std::vector<IDevice*>& devices,
+        const std::vector<Device*>& devices,
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program);
@@ -65,7 +85,7 @@ private:
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
-        bool unicast_go_signals,
+        uint32_t go_ring_slot,
         const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();
@@ -87,6 +107,19 @@ private:
     // Shared across all MeshCommandQueue instances for a MeshDevice.
     std::shared_ptr<CQSharedState> cq_shared_state_;
 
+    // Value keys avoid retaining manager pointers/IDs after removal. Device-specific command bytes
+    // live with this CQ and runtime context. Include device order to handle mesh reshaping.
+    struct SubDeviceSetupCommands {
+        std::vector<Device*> devices;
+        std::vector<uint32_t> workers;
+        std::vector<std::pair<CoreRangeSet, uint32_t>> core_mapping;
+        bool reset_launch_msg_state;
+        std::vector<std::vector<vector_aligned<uint32_t>>> device_batches;
+    };
+    // Most recently used first. Bound retained per-chip blobs and linear lookup cost.
+    static constexpr size_t max_sub_device_setup_cache_entries = 8;
+    std::vector<SubDeviceSetupCommands> sub_device_setup_commands_;
+
     DispatchArray<uint32_t> expected_num_workers_completed_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
     // CrossNode programs rewrite a program-owned config Buffer at launch. For each
@@ -102,7 +135,6 @@ private:
     struct MeshTraceNode {
         std::vector<std::pair<MeshCoordinateRange, TraceNode>> trace_nodes;
         bool multicast_go_signals{false};
-        bool unicast_go_signals{false};
         SubDeviceId sub_device_id;
     };
 
@@ -261,12 +293,22 @@ public:
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data,
         const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
         ttsl::Span<const uint32_t> workers_per_sub_device) override;
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
+    // Enqueue a command list without entering the mesh-trace lifecycle.
+    void enqueue_command_list(
+        const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
+        const std::vector<SubDeviceId>& sub_device_ids,
+        const MeshBuffer& buffer,
+        SubDeviceManagerId sub_device_manager_id,
+        bool blocking);
+    // Overwrite parts of a command-list buffer. Ordered after earlier replays, and later replays read the new bytes.
+    void enqueue_command_list_patch(const MeshBuffer& buffer, ttsl::Span<const MeshBufferPatch> patches);
+    // Wait until this host's queued device work completes.
+    void drain_device_work();
     // Main function (event loop) for the Completion Queue Reader
     void read_completion_queue();
     // Helper function - read events from Completion Queue

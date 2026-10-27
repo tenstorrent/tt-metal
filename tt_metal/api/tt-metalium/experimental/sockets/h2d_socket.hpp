@@ -4,16 +4,14 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <cstdint>
 #include <memory>
 #include <optional>
-#include <utility>
+#include <string>
+#include <vector>
 
-namespace tt::umd {
-class TlbWindow;
-}
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace tt::tt_metal::experimental::detail {
 struct H2DSocketTryWriteAccess;
@@ -22,9 +20,8 @@ struct H2DSocketDramRecvAccess;
 
 namespace tt::tt_metal::distributed {
 
-class NamedShm;
-class PCIeCoreWriter;
-struct HDSocketConnectorState;
+class H2DSocketImpl;
+class MeshDevice;
 struct HDSocketDescriptor;
 
 /**
@@ -51,6 +48,14 @@ enum class H2DMode : uint8_t {
  * and the device kernel updates `bytes_acked` to indicate consumed data. The host blocks
  * on write() if the FIFO is full until the device acknowledges data.
  *
+ * Thread safety:
+ * - The FIFO is single-producer/single-consumer: one host producer writes data and one
+ *   device consumer acknowledges it.
+ * - An H2DSocket instance is not internally synchronized. Calls on the same instance
+ *   must not overlap across host threads unless the caller provides external synchronization.
+ * - A descriptor attaches another handle to the same FIFO; it does not create an independent
+ *   channel. At most one host process may actively write through the owner/connector handles.
+ *
  * Supports cross-process usage: the owner process creates the socket and exports a
  * flatbuffer descriptor. A remote process connects via the descriptor using only UMD
  * (no MetalContext required).
@@ -76,6 +81,12 @@ public:
      * Allocates named shared memory for host-side buffers, pins it for device DMA,
      * and sets up device-side config and data buffers. The socket can be exported
      * via export_descriptor() for cross-process attachment.
+     *
+     * All ranks sharing the mesh must construct the socket to reserve device buffers together.
+     * Shared meshes support worker-core endpoints only; claimed service cores are rejected on every rank.
+     * Only the rank owning recv_core maps host memory and may write or export the socket.
+     * Non-owning ranks may set the page size and query configuration; barrier() is a no-op.
+     * Host I/O on a non-owning rank throws. Descriptor connectors retain host I/O access.
      *
      * If `recv_core` is a claimed service core, the device-side buffers are allocated
      * from that core's service-core L1 region instead of the worker-grid BankManager.
@@ -105,10 +116,10 @@ public:
      *                   coord of an L2CPU tile on the target device.
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
      * @param config_buffer_address LIM address on the receiver L2CPU for the socket metadata.
-     *                              Must be PCIe-aligned and within the L2CPU's static TLB window.
+     *                              Must be PCIe-aligned and within the L2CPU's IoWindow.
      * @param data_fifo_address LIM address for the data FIFO. In HOST_PUSH this is the ring
      *                          itself and must be PCIe-aligned, disjoint from the config buffer,
-     *                          and fit with fifo_size inside the L2CPU's static TLB window. In
+     *                          and fit with fifo_size inside the L2CPU's IoWindow. In
      *                          DEVICE_PULL the ring lives in pinned host memory and this is the
      *                          base the device computes ring offsets against.
      * @param h2d_mode Transfer mode: HOST_PUSH or DEVICE_PULL.
@@ -176,22 +187,22 @@ public:
      */
     ~H2DSocket() noexcept;
 
-    uint32_t get_page_size() const { return page_size_; }
+    uint32_t get_page_size() const;
 
-    uint32_t get_config_buffer_address() const { return config_buffer_address_; }
+    uint32_t get_config_buffer_address() const;
 
-    uint32_t get_fifo_size() const { return fifo_size_; }
+    uint32_t get_fifo_size() const;
 
     bool has_space(std::optional<uint32_t> num_bytes_to_check);
 
     // Cumulative bytes pushed into the FIFO (wraps modulo 2^32). Snapshot this
     // after a write() call to get a watermark, then pass it to acked_past()
     // later to test whether the device has consumed up to that point.
-    uint32_t get_bytes_sent() const { return bytes_sent_; }
+    uint32_t get_bytes_sent() const;
 
     // Returns true iff the device has acked past `watermark`. Uses the
-    // cached bytes_acked_ on the fast path; mfences + refreshes from
-    // bytes_acked_ptr_[0] only when the cache is insufficient.
+    // cached acknowledgement count on the fast path; mfences + refreshes from
+    // the device-written counter only when the cache is insufficient.
     bool acked_past(uint32_t watermark);
 
     void set_page_size(uint32_t page_size);
@@ -215,21 +226,18 @@ public:
      * if it exited via crash, _exit, or kill. Useful for warning the operator
      * or running cleanup (e.g. discard_pending_pages on the paired D2H socket).
      */
-    bool had_clean_prior_shutdown() const { return prior_clean_shutdown_; }
+    bool had_clean_prior_shutdown() const;
 
+    // Non-copyable and non-movable: the destructor drains the device acknowledgement and
+    // releases pinned/shared memory, so the instance must stay put. Hold it by unique_ptr.
     H2DSocket(const H2DSocket&) = delete;
     H2DSocket& operator=(const H2DSocket&) = delete;
+    H2DSocket(H2DSocket&&) = delete;
+    H2DSocket& operator=(H2DSocket&&) = delete;
 
 private:
-    H2DSocket() = default;
-
-    // Programmable-core type of the receiver core. Recorded explicitly at
-    // construction rather than inferred at use sites: logical coordinates
-    // overlap across core types (DRAM logical (x,y) is a different physical
-    // core than Tensix logical (x,y)), and keying off the DRAM-L1 NOC offset
-    // conflates "needs an L1 offset" with "is a DRAM core". The DRAM-recv ctor
-    // sets Dram; every other path (owner worker ctor, connect()) is Tensix.
-    enum class RecvCoreType { Tensix, Dram };
+    // Wrap an already-built implementation object (connect paths).
+    explicit H2DSocket(std::unique_ptr<H2DSocketImpl> impl);
 
     // DRAM-receiver ctor (invoked only by H2DSocketDramRecvAccess). Bypasses the
     // MeshBuffer paths (which have no DRAM-core L1 allocator) and consumes
@@ -243,91 +251,25 @@ private:
         uint32_t data_l1_local_addr,
         uint64_t dram_l1_noc_offset);
 
-    struct PinnedBufferInfo {
-        uint32_t pcie_xy_enc = 0;
-        uint32_t addr_lo = 0;
-        uint32_t addr_hi = 0;
-    };
-
-    PinnedBufferInfo init_bytes_acked_buffer(
-        const std::shared_ptr<MeshDevice>& mesh_device,
-        const MeshCoordinateRangeSet& device_range,
-        uint32_t pcie_alignment,
-        const std::string& shm_name);
-
-    PinnedBufferInfo init_host_data_buffer(
-        const std::shared_ptr<MeshDevice>& mesh_device,
-        const MeshCoordinateRangeSet& device_range,
-        uint32_t pcie_alignment,
-        const std::string& shm_name);
-
-    void init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device);
-    void init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t pcie_alignment);
-    void write_socket_metadata(
-        const std::shared_ptr<MeshDevice>& mesh_device,
-        const PinnedBufferInfo& bytes_acked_info,
-        const PinnedBufferInfo& data_info);
-    void init_receiver_tlb(
-        const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
-
-    // Mock owner only: alias bytes_acked_ptr_ to bytes_sent_ so the FIFO reads as drained.
-    // Connectors remain context-free and do not use this path.
-    void enable_mock_flow_control(const MeshDevice& mesh_device);
-
-    void reserve_bytes(uint32_t num_bytes);
-    void push_bytes(uint32_t num_bytes);
-    void notify_receiver();
-
     // Non-blocking write. Returns false immediately if the FIFO can't fit `num_pages`
     // without spinning. Accessible only via tt::tt_metal::experimental::detail::try_write.
     bool try_write_impl(void* data, uint32_t num_pages);
+    // Writes as many of the `num_pages` pages at `pages` (one pointer per page, each get_page_size() bytes)
+    // as the FIFO has room for, in order, without store fences or a receiver notification, and returns how
+    // many it wrote. Only the pages it writes are read. They are counted as sent and reach the receiver only
+    // through publish_staged. Accessible only via tt::tt_metal::experimental::detail::try_stage /
+    // publish_staged.
+    uint32_t try_stage_impl(const uint8_t* const* pages, uint32_t num_pages);
+    // Publishes bytes_sent to the receiver without a store fence after it. Accessible only via
+    // tt::tt_metal::experimental::detail::publish_staged.
+    void notify_receiver_unfenced();
 
     friend struct tt::tt_metal::experimental::detail::H2DSocketTryWriteAccess;
     friend struct tt::tt_metal::experimental::detail::H2DSocketDramRecvAccess;
 
-    std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
-    std::shared_ptr<MeshBuffer> data_buffer_ = nullptr;
-    // Set only when recv_core_ is a claimed service core; the dtor releases them to the per-core allocator.
-    std::optional<DeviceAddr> svc_config_l1_addr_;
-    std::optional<DeviceAddr> svc_data_l1_addr_;
-    MeshCoreCoord recv_core_;
-    BufferType buffer_type_ = BufferType::L1;
-    uint32_t fifo_size_ = 0;
-    uint32_t page_size_ = 0;
-    uint32_t bytes_sent_ = 0;
-    uint32_t bytes_acked_ = 0;
-    uint32_t write_ptr_ = 0;
-    uint32_t fifo_curr_size_ = 0;
-    uint32_t aligned_data_buf_start_ = 0;
-    uint32_t config_buffer_address_ = 0;
-    uint32_t pcie_alignment_ = 0;
-    tt::umd::TlbWindow* receiver_core_tlb_ = nullptr;
-    std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
-    std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
-    uint32_t* bytes_acked_ptr_ = nullptr;
-    std::function<void(void*, uint32_t, uint64_t)> pcie_writer = nullptr;
-    H2DMode h2d_mode_ = H2DMode::HOST_PUSH;
-    std::unique_ptr<NamedShm> shm_;
-    std::unique_ptr<PCIeCoreWriter> pcie_writer_instance_;
-    MeshDevice* mesh_device_ = nullptr;
-    bool is_owner_ = true;
-    std::string descriptor_path_;
-    HDSocketConnectorState* connector_state_ = nullptr;
-    uint32_t connector_state_offset_ = 0;
-    bool prior_clean_shutdown_ = true;
-    // Non-zero when the recv_core is a DRAM programmable core: every NOC write
-    // from host to its L1 must add this offset on top of the local L1 address.
-    // Zero for worker recv cores (worker L1 has local==NOC space). Captured
-    // into the pcie_writer lambda in init_receiver_tlb so write() can keep
-    // passing local addresses.
-    uint64_t dram_l1_noc_offset_ = 0;
-    // Receiver core type, set at construction. The authoritative signal for
-    // CoreType resolution and the DRAM-recv write path in init_receiver_tlb.
-    RecvCoreType recv_core_type_ = RecvCoreType::Tensix;
-
-    // True when the receiver is an L2CPU tile. Selects the L2CPU code paths in
-    // init_receiver_tlb() / write_socket_metadata() and blocks descriptor export.
-    bool is_l2cpu_ = false;
+    // All state lives in the implementation object (tt_metal/distributed/h2d_socket_impl.hpp) so
+    // this header stays free of MeshBuffer, PinnedMemory, UMD and SHM types.
+    std::unique_ptr<H2DSocketImpl> pimpl_;
 };
 
 }  // namespace tt::tt_metal::distributed

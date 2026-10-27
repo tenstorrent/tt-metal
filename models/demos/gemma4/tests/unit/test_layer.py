@@ -66,6 +66,13 @@ def _create_hf_reference_layer(hf_text_config, layer_idx):
                     param.data.fill_(1.0)
                 else:
                     param.data.normal_(0, 0.02)
+        # Peak the router like test_router.py does. With N(0, 0.02) the expert
+        # probabilities all sit near 1/E, so the top-k choice turns on bf16
+        # rounding (and topk tie order) rather than on the model: #53643 moved
+        # one decode token's 2nd expert from #2 to #3 (PCC 0.998 -> 0.933).
+        # Trained Gemma4 routers are peaked, so mirror that here.
+        if getattr(hf_layer, "router", None) is not None:  # dense variants (31B, 12B) have no router
+            hf_layer.router.proj.weight.normal_(0, 1.0)
     hf_layer.eval()
     return hf_layer
 

@@ -89,6 +89,7 @@ HostTensor host_tensor_from_vector_with_pad_value(const std::vector<T>& buffer, 
 }
 
 template <typename T>
+// NOLINTNEXTLINE(performance-unnecessary-value-param) -- Preserve the by-value factory API and caller move semantics.
 HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, TensorSpec spec, T pad_value) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(buffer.size() == volume, "Buffer size {} differs from shape volume {}", buffer.size(), volume);

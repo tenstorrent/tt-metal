@@ -11,7 +11,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/rand/device/rand_device_operation.hpp"
 #include "ttnn/operations/uniform/uniform_range.hpp"
-#include "ttnn/core/distributed/distribution_mode.hpp"
+#include "core/distributed/distribution_mode.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <ttnn/distributed/tensor_topology.hpp>
 

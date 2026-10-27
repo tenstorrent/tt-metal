@@ -136,7 +136,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     std::optional<ttnn::MeshCoordinate>& backward_coord,
     ReduceToRootOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
-    auto* mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor_l.device());
+    auto* mesh_device = tensor_args.input_tensor_l.device();
     const auto& input_tensor_l = tensor_args.input_tensor_l;
     const auto& input_tensor_s = tensor_args.input_tensor_s;
     const auto& input_tensor_m = tensor_args.input_tensor_m;
@@ -472,7 +472,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     const uint32_t num_workers_per_direction = 4;
-    const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const auto buffer_size_bytes_full_size_channel =
+        tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
 
     std::vector<CoreCoord> mux_cores = {
         CoreCoord(2, 0), CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)};  // to be modified based on device type

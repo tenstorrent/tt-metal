@@ -16,3 +16,10 @@ def isolated_program_cache(device):
     # Teardown: remove programs created by the test and restore the enabled, empty state.
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
+
+
+@pytest.fixture
+def zero_actual_start(device):
+    from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
+
+    return make_actual_start(device, 0)

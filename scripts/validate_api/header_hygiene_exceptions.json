@@ -1,0 +1,37 @@
+[
+  {
+    "source": "tt-metalium/mesh_device_view.hpp",
+    "include": "tt-metalium/experimental/fabric/fabric_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Existing stable mesh view dependency on experimental fabric types (FabricNodeId, MeshId).",
+    "remove_when": "The stable mesh view interface no longer requires the experimental fabric types header."
+  },
+  {
+    "source": "tt-metalium/program_descriptors.hpp",
+    "include": "tt-metalium/experimental/blaze/named_kernel_args.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Existing ProgramDescriptor exposes experimental Blaze named kernel arguments.",
+    "remove_when": "Blaze-specific arguments are segregated from the stable descriptor or graduate through design review."
+  },
+  {
+    "source": "tt-metalium/program_descriptors.hpp",
+    "include": "internal/reload_table.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "ProgramDescriptor carries internal runtime-reload metadata used by Blaze.",
+    "remove_when": "Runtime-reload metadata is removed from the stable descriptor."
+  },
+  {
+    "source": "tt-metalium/system_mesh.hpp",
+    "include": "tt-metalium/experimental/fabric/fabric_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Existing stable system mesh dependency on experimental fabric types (FabricNodeId).",
+    "remove_when": "The stable system mesh interface no longer requires the experimental fabric types header."
+  },
+  {
+    "source": "tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp",
+    "include": "internal/disaggregation/kv_chunk_address_table.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Deprecated forwarding header retained during the disaggregation move into internal APIs.",
+    "remove_when": "tt-llm-engine and tt-blaze have migrated and the deprecated experimental forwarding header is removed."
+  }
+]

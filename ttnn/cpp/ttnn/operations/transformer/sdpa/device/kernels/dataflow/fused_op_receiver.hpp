@@ -23,20 +23,31 @@ struct RingSDPAOpReceiver {
 
     RingSDPAOpReceiver() {}
 
-    RingSDPAOpReceiver(bool wait_for_op_signal, uint32_t& rt_args_idx) : wait_for_op_signal(wait_for_op_signal) {
-        uint32_t ring_size = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t ring_index = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t forward_writes_expected = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t backward_writes_expected = get_arg_val<uint32_t>(rt_args_idx++);
+    RingSDPAOpReceiver(bool wait_for_op_signal, uint32_t& rt_args_idx) :
+        RingSDPAOpReceiver(
+            wait_for_op_signal, rt_args_idx, [](uint32_t index) { return get_arg_val<uint32_t>(index); }) {}
 
+    template <typename ReadArg>
+    RingSDPAOpReceiver(bool wait_for_op_signal, uint32_t& rt_args_idx, ReadArg read_arg) :
+        wait_for_op_signal(wait_for_op_signal) {
+        uint32_t ring_size = read_arg(rt_args_idx++);
+        uint32_t ring_index = read_arg(rt_args_idx++);
+        uint32_t forward_writes_expected = read_arg(rt_args_idx++);
+        uint32_t backward_writes_expected = read_arg(rt_args_idx++);
+
+        // Read the whole pushed block either way, so rt_args_idx lands on the caller's own args in
+        // both modes. First semaphore is AllGather's BWD (direction 1), second its FWD (direction 0).
+        const uint32_t bwd_semaphore_id = read_arg(rt_args_idx++);
+        const uint32_t fwd_semaphore_id = read_arg(rt_args_idx++);
+        const uint32_t split_forwarding = read_arg(rt_args_idx++);
+        const uint32_t split_shard = read_arg(rt_args_idx++);
+        const uint32_t split_wait = read_arg(rt_args_idx++);
         if (this->wait_for_op_signal) {
-            // First semaphore is AllGather's BWD semaphore. It belongs to direction 1.
-            signal_op_semaphore_ids[1] = get_arg_val<uint32_t>(rt_args_idx++);
-            // Second is AllGather's FWD semaphore. It belongs to direction 0.
-            signal_op_semaphore_ids[0] = get_arg_val<uint32_t>(rt_args_idx++);
-            split_forwarding_enabled = get_arg_val<uint32_t>(rt_args_idx++) == 1;
-            split_shard_id = get_arg_val<uint32_t>(rt_args_idx++);
-            split_second_half_wait = get_arg_val<uint32_t>(rt_args_idx++);
+            signal_op_semaphore_ids[1] = bwd_semaphore_id;
+            signal_op_semaphore_ids[0] = fwd_semaphore_id;
+            split_forwarding_enabled = split_forwarding == 1;
+            split_shard_id = split_shard;
+            split_second_half_wait = split_wait;
         }
 
         seq = RingIdSequencer(ring_index, ring_size, backward_writes_expected, forward_writes_expected);

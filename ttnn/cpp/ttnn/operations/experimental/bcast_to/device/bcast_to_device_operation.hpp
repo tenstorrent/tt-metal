@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::experimental::broadcast_to {
@@ -34,29 +35,17 @@ struct BcastToOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    struct BcastToTileFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id{};
-            tt::tt_metal::KernelHandle writer_kernel_id{};
-            tt::tt_metal::KernelHandle compute_kernel_id{};
-            CoreCoord compute_with_storage_grid_size;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
+    struct BcastToProgramFactory {
+        // Every per-core runtime arg other than the two buffer addresses is derived from the output
+        // shape and the input spec, both of which are part of the program hash — so a cache hit means
+        // they are unchanged, and declaring the addresses as bindings is enough to refresh the program.
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& c);
+            tensor_return_value_t& tensor_return_value);
     };
+    using program_factory_t = std::variant<BcastToProgramFactory>;
 
-    using program_factory_t = std::variant<BcastToTileFactory>;
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

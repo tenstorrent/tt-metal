@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/transformer/sdpa/sparse_sdpa.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_device_operation.hpp"
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <cmath>
 
@@ -22,7 +21,8 @@ ttnn::Tensor sparse_sdpa(
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
-    bool block_cyclic_cache_tp_sharded) {
+    bool block_cyclic_cache_tp_sharded,
+    const std::optional<ttnn::Tensor>& attention_sink) {
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
 
@@ -75,15 +75,25 @@ ttnn::Tensor sparse_sdpa(
     // fp8 q/kv must be tilized through a 32-bit dest accumulator, so default fp32_dest_acc_en on for fp8.
     const bool any_fp8 = (kv.dtype() == ttnn::DataType::FP8_E4M3) || (q.dtype() == ttnn::DataType::FP8_E4M3);
     auto kernel_config = init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(),
+        q.device()->arch(),
         compute_kernel_config,
-        /*default_fidelity=*/MathFidelity::HiFi2,
+        /*default_fidelity=*/tt::tt_metal::MathFidelity::HiFi2,
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/any_fp8,
         /*default_l1_acc=*/false);
 
     return ttnn::prim::sparse_sdpa(
-        q, kv, indices, resolved_scale, v_dim, kv_format, k_chunk_size, kernel_config, cache_batch_idx, block_cyclic);
+        q,
+        kv,
+        indices,
+        resolved_scale,
+        v_dim,
+        kv_format,
+        k_chunk_size,
+        kernel_config,
+        cache_batch_idx,
+        block_cyclic,
+        attention_sink);
 }
 
 }  // namespace ttnn::transformer

@@ -468,9 +468,10 @@ def test_llk_tree_include_roots_expands_one_arch_tree():
     """``-I`` is not recursive; consumers rely on this to point at a
     proprietary ``tt_llk_<arch>`` tree with one call."""
     roots = TestConfig.llk_tree_include_roots(Path("/nonexistent/tt_llk_blackhole"))
-    assert [Path(r).name for r in roots] == ["llk_lib", "inc", "sfpu"]
+    assert [Path(r).name for r in roots] == ["llk_lib", "hal", "inc", "sfpu"]
     assert [Path(r).parent.name for r in roots] == [
         "tt_llk_blackhole",
+        "llk_lib",
         "common",
         "inc",
     ]
@@ -512,6 +513,10 @@ def test_out_of_tree_driver_compiles():
     Under ``--compile-producer`` the harness compiles and then skips, which is
     what makes this runnable in CI with no silicon attached.
     """
+    if not (Path(__file__).resolve().parents[4] / "hw" / "inc").is_dir():
+        pytest.skip(
+            "tt-metal hw/inc is absent; the driver includes ckernel.h from that tree"
+        )
     configuration = _compilable_variant()
 
     # The compile is the assertion, so this calls ``prepare()`` rather than

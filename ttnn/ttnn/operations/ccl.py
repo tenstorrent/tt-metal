@@ -2,11 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
+
 import ttnn
 
 Topology = ttnn._ttnn.operations.ccl.Topology
 
 get_usable_topology = ttnn._ttnn.operations.ccl.get_usable_topology
+get_num_links = ttnn._ttnn.operations.ccl.get_num_links
 
 # Experimental CCL enums for all_to_all_dispatch_metadata operation
 DispatchAlgorithm = ttnn._ttnn.operations.experimental.ccl_experimental.DispatchAlgorithm
@@ -32,7 +35,6 @@ def _preprocess_collective_golden_inputs(function_args, function_kwargs):
         placement.dim if isinstance(placement, ttnn.PlacementShard) else None
         for placement in tensor_topology.placements()
     )
-
     function_args = list(function_args)
     function_kwargs = dict(function_kwargs)
     if function_args:
@@ -48,20 +50,24 @@ def _preprocess_collective_golden_inputs(function_args, function_kwargs):
 def _mesh_coordinate_to_index(coordinate, mesh_shape):
     """Convert a row-major mesh coordinate to its flat device index."""
 
+    coordinate_key = tuple(int(value) for value in coordinate)
     index = 0
-    for value, dimension in zip(coordinate, mesh_shape):
-        index = index * dimension + int(value)
+    for value, dimension in zip(coordinate_key, mesh_shape):
+        index = index * dimension + value
     return index
 
 
 def _get_collective_groups(mesh_shape, cluster_axis):
     """Return row-major device indices grouped along the collective axis."""
 
-    import itertools
     import math
 
     if cluster_axis is None:
         return [list(range(math.prod(mesh_shape)))]
+    if cluster_axis < 0:
+        cluster_axis += len(mesh_shape)
+    if cluster_axis < 0 or cluster_axis >= len(mesh_shape):
+        raise ValueError(f"Collective axis {cluster_axis} is invalid for mesh shape {mesh_shape}")
 
     groups = {}
     for coordinate in itertools.product(*(range(dimension) for dimension in mesh_shape)):
@@ -73,7 +79,6 @@ def _get_collective_groups(mesh_shape, cluster_axis):
 def _compose_mesh_golden_outputs(per_device_outputs, mesh_shape, mesh_shard_dims):
     """Compose per-device Torch values according to mesh shard placements."""
 
-    import itertools
     import math
     import torch
 
@@ -147,6 +152,118 @@ def _golden_function_all_broadcast(
 ttnn.attach_golden_function(
     ttnn.all_broadcast,
     golden_function=_golden_function_all_broadcast,
+    preprocess_golden_function_inputs=_preprocess_collective_golden_inputs,
+)
+
+
+def _golden_function_broadcast(
+    input_tensor,
+    sender_coord,
+    *args,
+    cluster_axis=None,
+    _ttnn_golden_mesh_shape=None,
+    _ttnn_golden_mesh_shard_dims=None,
+    **kwargs,
+):
+    if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
+        return None
+
+    # Copy the sender's shard to every device in the sender's cluster-axis group; other groups are untouched.
+    sender_index = _mesh_coordinate_to_index(sender_coord, _ttnn_golden_mesh_shape)
+    source = input_tensor[sender_index]
+    per_device_outputs = [None] * len(input_tensor)
+    for group in _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis):
+        for device_index in group:
+            per_device_outputs[device_index] = source if sender_index in group else input_tensor[device_index]
+
+    # After broadcast the tensor is replicated along the cluster axis.
+    output_shard_dims = list(_ttnn_golden_mesh_shard_dims)
+    if cluster_axis is None:
+        output_shard_dims = [None] * len(output_shard_dims)
+    else:
+        output_shard_dims[cluster_axis] = None
+    return _compose_mesh_golden_outputs(per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims)
+
+
+ttnn.attach_golden_function(
+    ttnn.broadcast,
+    golden_function=_golden_function_broadcast,
+    preprocess_golden_function_inputs=_preprocess_collective_golden_inputs,
+)
+
+
+def _golden_function_mesh_partition(
+    input_tensor,
+    dim,
+    *args,
+    cluster_axis=None,
+    _ttnn_golden_mesh_shape=None,
+    _ttnn_golden_mesh_shard_dims=None,
+    **kwargs,
+):
+    import torch
+
+    if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
+        return None
+
+    normalized_dim = _normalize_dim(dim, input_tensor[0].ndim)
+    mesh_shape = tuple(_ttnn_golden_mesh_shape)
+    shard_dims = tuple(_ttnn_golden_mesh_shard_dims)
+    if cluster_axis is not None and cluster_axis < 0:
+        cluster_axis += len(mesh_shape)
+    if _mesh_partition_keeps_input_label(mesh_shape, shard_dims, normalized_dim, cluster_axis):
+        # The op cannot state this result with a TensorTopology and leaves the input's label on it; comparison mode
+        # would compose the device output by that label and no host composition matches it. Decline to compare.
+        return None
+
+    # Every device keeps its own slice along dim: position-th chunk of ITS OWN input within its cluster-axis group.
+    # For the usual replicated input that is a slice of the shared tensor; for an input already sharded along dim
+    # (the op's "output bytes" stance) each device partitions the shard it holds.
+    per_device_outputs = [None] * len(input_tensor)
+    for group in _get_collective_groups(mesh_shape, cluster_axis):
+        for position, device_index in enumerate(group):
+            per_device_outputs[device_index] = torch.chunk(input_tensor[device_index], len(group), dim=dim)[position]
+
+    # After partition the tensor is sharded along dim across the cluster axis. With no cluster axis device k holds
+    # chunk k in row-major device order, i.e. dim is sharded on every mesh axis (the op labels that output as the
+    # collapsed {N}, [Shard(dim)]), so the composition concatenates every device along dim.
+    output_shard_dims = list(shard_dims)
+    if cluster_axis is not None:
+        output_shard_dims[cluster_axis] = normalized_dim
+    else:
+        output_shard_dims = [normalized_dim] * len(output_shard_dims)
+    return _compose_mesh_golden_outputs(per_device_outputs, mesh_shape, output_shard_dims)
+
+
+def _mesh_partition_keeps_input_label(mesh_shape, shard_dims, dim, cluster_axis):
+    """The cases in which mesh_partition's output-topology hook declines and the result keeps the input's label
+    (the CCL topology helper's partition rules, ccl_topology_utils.hpp), as far as a label's placements show them: a
+    whole-mesh partition of a tensor sharded on another dim along a non-trivial axis; a cluster-axis
+    partition along an axis that itself shards another dim (each device would keep its chunk of that dim next to its
+    new piece of `dim`); a cluster-axis partition of a dim another non-trivial axis already shards unless that axis
+    is outer and every further axis is trivial; a cluster axis the label has no placement for (a collapsed label on
+    a multi-axis mesh, which this golden's mesh model cannot represent)."""
+    if cluster_axis is None:
+        return any(
+            size > 1 and shard_dim is not None and shard_dim != dim for size, shard_dim in zip(mesh_shape, shard_dims)
+        )
+    if cluster_axis >= len(shard_dims):
+        return True
+    if shard_dims[cluster_axis] is not None and shard_dims[cluster_axis] != dim:
+        return True
+    partitioned_composes = shard_dims[cluster_axis] is None or shard_dims[cluster_axis] == dim
+    for axis, (size, shard_dim) in enumerate(zip(mesh_shape, shard_dims)):
+        if axis == cluster_axis or shard_dim != dim or size == 1:
+            continue
+        other_axes_trivial = all(s == 1 for other, s in enumerate(mesh_shape) if other not in (axis, cluster_axis))
+        if not (axis < cluster_axis and partitioned_composes and other_axes_trivial):
+            return True
+    return False
+
+
+ttnn.attach_golden_function(
+    ttnn.mesh_partition,
+    golden_function=_golden_function_mesh_partition,
     preprocess_golden_function_inputs=_preprocess_collective_golden_inputs,
 )
 
@@ -532,6 +649,7 @@ def _golden_function_moe_expert_token_remap(
 ttnn.attach_golden_function(
     ttnn.moe_expert_token_remap,
     golden_function=_golden_function_moe_expert_token_remap,
+    output_tensor_kwarg_names=("optional_output_mapping_tensor", "optional_output_reduced_tensor"),
 )
 
 
@@ -542,6 +660,9 @@ def _preprocess_moe_routing_remap_golden_inputs(function_args, function_kwargs):
     golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
         function_args, function_kwargs
     )
+    # cluster_axis indexes the physical device mesh, so use the physical mesh shape (the
+    # tensor's distribution shape may differ, e.g. a default replicated topology is 1D
+    # even on a 2D device mesh).
     golden_kwargs["_ttnn_golden_mesh_shape"] = tuple(input_tensor.device().shape)
     return golden_args, golden_kwargs
 
@@ -555,6 +676,8 @@ def _golden_function_moe_routing_remap(
     _ttnn_golden_mesh_shape=None,
     **kwargs,
 ):
+    import math
+
     import torch
 
     if _ttnn_golden_mesh_shape is None:
@@ -563,22 +686,22 @@ def _golden_function_moe_routing_remap(
     non_zero_indices = torch.nonzero(routing_weights_tensor.flatten(), as_tuple=False).flatten()
     local_non_zero_size = non_zero_weight_size // expert_parallel_size
 
-    num_devices = 1
-    for dimension in _ttnn_golden_mesh_shape:
-        num_devices *= dimension
+    if cluster_axis < 0:
+        cluster_axis += len(_ttnn_golden_mesh_shape)
+    if cluster_axis < 0 or cluster_axis >= len(_ttnn_golden_mesh_shape):
+        raise ValueError(f"Collective axis {cluster_axis} is invalid for mesh shape {_ttnn_golden_mesh_shape}")
     member_stride = 1
     for dimension in _ttnn_golden_mesh_shape[cluster_axis + 1 :]:
         member_stride *= dimension
 
     per_device_outputs = []
-    for device_index in range(num_devices):
+    for device_index in range(math.prod(_ttnn_golden_mesh_shape)):
         member_index = (device_index // member_stride) % _ttnn_golden_mesh_shape[cluster_axis]
         local_start = member_index * local_non_zero_size
         local_indices = non_zero_indices[local_start : local_start + local_non_zero_size]
         output = torch.zeros_like(routing_weights_tensor)
         output.flatten()[local_indices] = routing_weights_tensor.flatten()[local_indices]
         per_device_outputs.append(output)
-    # Comparison composes the mesh output by concatenating its per-device [1, experts] rows.
     return torch.cat(per_device_outputs, dim=0)
 
 
@@ -591,6 +714,7 @@ ttnn.attach_golden_function(
 __all__ = [
     "Topology",
     "get_usable_topology",
+    "get_num_links",
     "DispatchAlgorithm",
     "WorkerMode",
     "MoEActivationFunction",

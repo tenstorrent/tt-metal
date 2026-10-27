@@ -126,7 +126,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
     log_debug(tt::LogOp, "transpose_hc_rm");
     log_debug(tt::LogOp, "dfb_data_format: {}", dfb_data_format);
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
@@ -171,7 +171,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_sticks_per_core_read", "num_read_per_barrier", "start_id", "curr_c", "curr_h", "curr_n"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -186,7 +186,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args = {{"W_size_bytes", stick_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_sticks_per_core_read", "num_read_per_barrier", "start_id"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     });
 
     spec.work_units.push_back(WorkUnitSpec{

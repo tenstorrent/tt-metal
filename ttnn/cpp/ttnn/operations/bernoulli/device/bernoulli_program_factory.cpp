@@ -89,7 +89,7 @@ ProgramDescriptor BernoulliDeviceOperation::BernoulliProgramFactory::create_desc
     tensor_return_value_t& output) {
     const Tensor& input = tensor_args.input;
 
-    IDevice* device = output.device();
+    MeshDevice* device = output.device();
     const auto ws = bernoulli_work_split(output);
     const auto& all_cores = ws.all_cores;
 

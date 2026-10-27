@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include <cstdint>
+#include <mutex>
 #include <ranges>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -19,6 +20,8 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tracy/Tracy.hpp>
 #include "ttnn/graph/graph_serialization.hpp"
 
@@ -48,6 +51,28 @@ using ttnn::Tensor;
 
 namespace ttnn {
 
+namespace {
+
+// The label of a tensor allocated across the mesh without a mapper, one shard per device: Replicate along every mesh
+// axis, over every coordinate. create_device_tensor and allocate_tensor_on_host label their tensors alike.
+TensorTopology replicated_over_mesh(const tt::tt_metal::distributed::MeshShape& mesh_shape) {
+    // TODO (#25340): Implement correct logic and add test for this
+    // River: why are we constructing the topology here like this instead of using the
+    // TensorTopology::create_fully_replicated_tensor_topology function?
+    //
+    // Use Replicate as default value for placements in MeshMapperConfig
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(
+        mesh_shape.dims(), tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> coordinates;
+    coordinates.reserve(mesh_shape.mesh_size());
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
+        coordinates.push_back(coord);
+    }
+    return TensorTopology{mesh_shape, std::move(placements), std::move(coordinates)};
+}
+
+}  // namespace
+
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
 
@@ -68,9 +93,8 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::dist
         },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(
-        host_tensor_from_buffer_with_topology(std::move(distributed_host_buffer), tensor_spec, TensorTopology{}));
+    return Tensor(host_tensor_from_buffer_with_topology(
+        std::move(distributed_host_buffer), tensor_spec, replicated_over_mesh(device->shape())));
 }
 
 Tensor create_device_tensor(
@@ -91,22 +115,7 @@ Tensor create_device_tensor(
         if (tensor_topology.has_value()) {
             return std::move(*tensor_topology);
         }
-        // TODO (#25340): Implement correct logic and add test for this
-        // River: why are we constructing the topology here like this instead of using the
-        // TensorTopology::create_fully_replicated_tensor_topology function?
-        //
-        // Use Replicate as default value for placements in MeshMapperConfig
-        const auto& mesh_shape = mesh_device->shape();
-        ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements(
-            mesh_shape.dims(), tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
-
-        std::vector<tt::tt_metal::distributed::MeshCoordinate> coordinates;
-        coordinates.reserve(mesh_shape.mesh_size());
-        for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
-            coordinates.push_back(coord);
-        }
-
-        return TensorTopology{mesh_shape, placements, std::move(coordinates)};
+        return replicated_over_mesh(mesh_device->shape());
     });
 
     output = Tensor(allocate_mesh_tensor_on_device_with_topology(*mesh_device, tensor_spec, topology));
@@ -236,6 +245,9 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
         output = Tensor(tt::tt_metal::non_uniform_data_movement::enqueue_read_tensor(
             cq, input_tensor.mesh_tensor(), coords, blocking));
     }
+    // The read labels the host tensor with the MeshTensor's topology; a storage that labels its own shards
+    // (get_device_tensors) carries that label to the host instead.
+    output.update_tensor_topology(input_tensor.tensor_topology());
     output = ttnn::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -382,6 +394,60 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
             shard_spec.shape[0] = shard_volume / shard_spec.shape[1];
             output_memory_config =
                 MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
+        } else if (
+            input_memory_config.created_with_nd_shard_spec() && input_memory_config.shard_spec().has_value() &&
+            input_memory_config.nd_shard_spec().has_value() && new_padded_shape != input_tensor.padded_shape()) {
+            // Gated on created_with_nd_shard_spec: TensorSpec auto-populates a shadow nd spec on
+            // every 2D-sharded config, so without it this rewrite would fire for ordinary sharded
+            // views (ttnn::view is called in loops by repeat, expand, split) and replace a working
+            // config wholesale. Only a user-authored ND spec carries the stale rank/extents.
+            //
+            // A config built from an ND shard spec that normalizes to 2D keeps the nd_shard_spec
+            // attached. Once the padded shape changes it no longer describes the tensor (its rank may
+            // exceed the new rank, or its extents were sized for the old shape), so drop it and keep
+            // only the equivalent 2D shard_spec that the downstream view/recompute path relies on.
+            // TensorSpec then re-derives an equivalent rank-<=2 nd spec for the new shape, so what is
+            // actually lost is the ND provenance and the original shard rank, not the distribution.
+            // Re-deriving a higher-rank ND spec here instead would be wrong: a view aliases the input
+            // buffer's existing device_local_config, and an nd_shard_spec unconditionally overrides
+            // the 2D distribution when sharding args are built, so the spec would describe a
+            // shard->bank mapping the allocation does not have.
+            {
+                // Once per process -- views run in per-step model loops, and reshape_tiled takes
+                // this path on its internal rank-normalizing view.
+                static std::once_flag nd_shard_spec_dropped_warned;
+                std::call_once(nd_shard_spec_dropped_warned, [&] {
+                    log_warning(
+                        tt::LogOp,
+                        "Tensor::view: this view changes the padded shape ({} -> {}), so the "
+                        "nd_shard_spec (shard_shape {}) no longer describes the tensor and is "
+                        "dropped; the view keeps the equivalent 2D shard_spec and is {}-sharded, not "
+                        "ND-sharded. If this view is an op's final output, pass an explicit ND "
+                        "memory_config to keep ND sharding. This message is emitted once per process.",
+                        input_tensor.padded_shape(),
+                        new_padded_shape,
+                        input_memory_config.nd_shard_spec()->shard_shape,
+                        input_memory_config.memory_layout());
+                });
+            }
+            // Carried over by hand: the 3-arg ctor drops the allocation flags, and unlike
+            // nd_shard_spec they are not regenerated downstream. They are mutually exclusive, so at
+            // most one of these runs, and both require the L1 sharded config this still is.
+            const bool per_core =
+                tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(input_memory_config);
+            const bool range_lockstep =
+                tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(
+                    input_memory_config);
+            output_memory_config = MemoryConfig{
+                input_memory_config.memory_layout(),
+                input_memory_config.buffer_type(),
+                input_memory_config.shard_spec()};
+            if (per_core) {
+                tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(output_memory_config, true);
+            } else if (range_lockstep) {
+                tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(
+                    output_memory_config, true);
+            }
         }
     }
 

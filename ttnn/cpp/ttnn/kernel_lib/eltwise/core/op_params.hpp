@@ -19,8 +19,4 @@ namespace compute_kernel_lib {
 /// precise path, `Fast` selects the lower-precision fast approximation.
 enum class Approx : bool { Exact = false, Fast = true };
 
-/// Legacy code-path toggle. Currently used only by `Rsqrt`, whose `rsqrt_tile<...>` takes a
-/// leading `legacy` template bool selecting the older implementation. `Off` = modern path.
-enum class Legacy : bool { Off = false, On = true };
-
 }  // namespace compute_kernel_lib

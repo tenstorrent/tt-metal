@@ -16,6 +16,8 @@
 
 namespace ttnn::prim {
 
+// The default hash is load-bearing: logical_n_tensor presence must reach it -- the kernels compile
+// differently when set. Any future custom compute_program_hash must include that presence bit.
 struct ExpRingJointSDPADeviceOperation {
     using operation_attributes_t = ExpRingJointSDPAParams;
     using tensor_args_t = ExpRingJointSDPAInputs;
@@ -51,6 +53,8 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     uint32_t num_workers_per_link = 1,
-    uint32_t num_buffers_per_channel = 8);
+    uint32_t num_buffers_per_channel = 8,
+    // When set, logical_n above is the worst-case placeholder and the live value is read on-device.
+    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

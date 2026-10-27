@@ -114,7 +114,7 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
             for (std::uint32_t p = 0; p < replay_pacrs; p++)
             {
                 const bool is_last_pacr_of_face = (p == pacrs_per_face - 1);
-                ckernel::instrn_buffer[0]       = is_last_pacr_of_face ? pacr_mod2 : pacr_mod0;
+                TT_INSN(is_last_pacr_of_face ? pacr_mod2 : pacr_mod0);
             }
         }
     }

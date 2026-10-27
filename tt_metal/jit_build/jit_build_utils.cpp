@@ -8,12 +8,15 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <random>
 #include <string>
 #include <system_error>
@@ -68,6 +71,74 @@ std::vector<std::string> tokenize_flags(const std::string& flags) {
         tokens.emplace_back(flags, start, i - start);
     }
     return tokens;
+}
+
+std::string compiler_version(const std::string& gpp) {
+    static std::mutex mutex;
+    static std::unordered_map<std::string, std::string> versions;
+    std::lock_guard lock(mutex);
+    if (auto it = versions.find(gpp); it != versions.end()) {
+        return it->second;
+    }
+
+    auto args = tokenize_flags(gpp);
+    if (args.empty()) {
+        throw std::runtime_error("Cannot query an empty compiler command");
+    }
+    args.emplace_back("--version");
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (auto& arg : args) {
+        argv.push_back(arg.data());
+    }
+    argv.push_back(nullptr);
+
+    // A private, automatically removed file captures stdout without a pipe buffer limit.
+    // Stderr remains separate so diagnostics cannot become the compiler identity.
+    const auto close_file = [](FILE* file) { std::fclose(file); };
+    const std::unique_ptr<FILE, decltype(close_file)> output(std::tmpfile(), close_file);
+    if (!output || fcntl(fileno(output.get()), F_SETFD, FD_CLOEXEC) == -1) {
+        throw std::runtime_error(fmt::format("Cannot capture compiler version for {}: {}", gpp, std::strerror(errno)));
+    }
+    posix_spawn_file_actions_t actions;
+    int error = posix_spawn_file_actions_init(&actions);
+    if (error != 0) {
+        throw std::runtime_error(fmt::format("Cannot initialize compiler version probe: {}", std::strerror(error)));
+    }
+    error = posix_spawn_file_actions_adddup2(&actions, fileno(output.get()), STDOUT_FILENO);
+    pid_t pid = 0;
+    if (error == 0) {
+        error = posix_spawnp(&pid, argv[0], &actions, nullptr, argv.data(), ::environ);
+    }
+    posix_spawn_file_actions_destroy(&actions);
+    if (error != 0) {
+        throw std::runtime_error(fmt::format("Cannot query compiler version for {}: {}", gpp, std::strerror(error)));
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            throw std::runtime_error(
+                fmt::format("Cannot wait for compiler version from {}: {}", gpp, std::strerror(errno)));
+        }
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        throw std::runtime_error(fmt::format("Compiler version probe failed for {} (wait status {})", gpp, status));
+    }
+    if (fseek(output.get(), 0, SEEK_SET) != 0) {
+        throw std::runtime_error(fmt::format("Cannot read compiler version for {}", gpp));
+    }
+    std::string version;
+    for (int ch; (ch = fgetc(output.get())) != EOF;) {
+        version.push_back(static_cast<char>(ch));
+        if (ch == '\n') {
+            break;
+        }
+    }
+    if (ferror(output.get()) || version.empty() || version == "\n") {
+        throw std::runtime_error(fmt::format("Compiler version probe returned no readable version for {}", gpp));
+    }
+    versions.emplace(gpp, version);
+    return version;
 }
 
 std::vector<std::string> build_gpp_argv(

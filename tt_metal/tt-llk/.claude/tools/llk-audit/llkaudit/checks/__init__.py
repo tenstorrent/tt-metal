@@ -6,6 +6,7 @@ from .cb_sync import CbSync
 from .cfg_word_overlap import CfgWordOverlap
 from .mailbox_sync import MailboxSync
 from .mmio_race import MmioRace
+from .mop_replay import MopReplay
 from .noc_atomic_exit import NocAtomicExit
 from .noc_l1_invalidate import NocL1Invalidate
 from .noc_read_barrier import NocReadBarrier
@@ -28,6 +29,7 @@ ALL = {
         ReconfigStall,
         SrcRegBank,
         MailboxSync,
+        MopReplay,
         CbSync,
         NocSync,
         NocAtomicExit,

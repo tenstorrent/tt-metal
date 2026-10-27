@@ -10,6 +10,7 @@
 #include <string>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"

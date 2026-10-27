@@ -109,7 +109,8 @@ ReduceScatterDirectGeometry reduce_scatter_direct_geometry(
 
     const uint32_t single_tile_bytes = input_tensor.buffer()->page_size();
     const uint32_t interm_tiles_per_packet =
-        static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes()) / single_tile_bytes;
+        static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*input_tensor.device())) /
+        single_tile_bytes;
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4u : 8u;
     const uint32_t tile_granularity = std::min(4u * std::min(4u, interm_tiles_per_packet), max_dst_size);
 
@@ -204,8 +205,7 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterMinimalDirectProgramFactory::creat
     // Parked on the descriptor's `semaphores` slot, which keeps them alive for the cached workload's
     // lifetime -- the kernels take their addresses as runtime args. Order is the contract in
     // SemaphoreIndex: arrivals [0..N-1], then reader_gen, writer_gen, compute_gen, init_sync.
-    bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
-    auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
+    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
     auto& sems = workload_descriptor.semaphores;
     sems.reserve(SemaphoreIndex::count(operation_attributes.num_devices));
     for (size_t s = 0; s < SemaphoreIndex::count(operation_attributes.num_devices); ++s) {

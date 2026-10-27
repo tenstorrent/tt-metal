@@ -222,7 +222,7 @@ But `ip link show ens5f0np0` shows `state UP` (and `ip addr` shows a valid IP).
 **Cause**: The error message is misleading. The interface check in `utils/mpi_if_selection.sh` does **not** test whether the link is up — it runs a real MPI probe against the **first host** in `--hosts` and checks the exit code:
 
 ```bash
-timeout 3 mpirun --host "$FIRST_HOST" \
+timeout 30 mpirun --host "$FIRST_HOST" \
     --mca oob_tcp_if_include "$interface" \
     --mca btl_tcp_if_include "$interface" \
     -np 1 hostname &>/dev/null
@@ -314,7 +314,7 @@ while attempting to start process rank 0.
 
 **Solution** (simplest first):
 
-- **On Exabox, run from the vetted pre-built path** - `cd /data/local-syseng-manual/tt-metal-recover` and run `recover.sh` from there. It's already built, so there's nothing to compile. This is the recommended path for a quick health check.
+- **On Exabox, use the `recover-hosts` helper** - `export HOSTS=<hosts>` then `recover-hosts`. It runs the vetted pre-built path `/data/local-syseng-manual/tt-metal-recover`, so there's nothing to compile, and it records the run in cluster health. This is the recommended route for a quick health check - see [Quick Health Check](./README.md#quick-health-check-for-developers).
 - **Build tt-metal yourself** - only needed if you're running from your own checkout or on a site without the vetted path. See [Quick Health Check](./README.md#quick-health-check-for-developers) for build instructions.
 - **Or use Docker-based validation** - run `./run_validation.sh --hosts <hosts> --image <docker-image>`, which doesn't require a build.
 

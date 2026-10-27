@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Packer W-stride restore test for the custom_mm family's block_uninit (Blackhole only).
+Packer stride restore test for the custom_mm family's block_uninit (Blackhole only).
 
 ``custom_mm_block_uninit`` and ``compressed_custom_mm_block_uninit``
 (api/compute/experimental/{custom_mm,compressed_custom_mm}.h) reached main via tt-metal
-#52727. **As merged, both do exactly one thing:**
+#52727. They restore only the packer strides their init changed, in pack source units:
 
-    dense_packing -> W-stride back to the default 64-row tile-to-tile spacing
+    Dense   -> W-stride back to the default 64-row tile-to-tile spacing
+    Compact -> W-stride back to 64 rows and Z-stride back to the 16-row face spacing
 
 Scope changed under this test, and that is worth stating plainly. Earlier revisions of
 #52727 also restored the tile-pack MOP -- first unconditionally, then behind a
@@ -18,11 +19,10 @@ restore and no such flag; the fused caller is expected to pair ``pack_block_cont
 with its own uninit instead. The MOP-restore coverage is therefore gone, because the
 behaviour is gone, and what replaces it is a test that the uninit does *not* touch the MOP.
 
-Note what the driver does NOT do: it replicates the uninit body rather than calling either
-compute-API function, because a tt-llk test cannot include tt_metal/hw/inc/api/compute. So
-this pins the behaviour the two headers share, and a divergence between them is what it
-cannot catch. ``test_custom_mm_uninit_parity.py`` guards that textually;
-catching it properly needs a metal-side test calling the real entry points.
+The driver calls the same raw PACK init/uninit helper as both compute APIs, because a
+tt-llk test cannot include tt_metal/hw/inc/api/compute. The stride implementation is shared
+rather than copied into the driver. ``test_custom_mm_uninit_parity.py`` guards that both
+compute APIs and the driver continue delegating to that helper.
 
 How it works
 ------------
@@ -31,7 +31,7 @@ Three runs, per the header comment in sources/custom_mm_uninit_restore_test.cpp:
   run 0  Default pack baseline + the dense W-stride if selected, then the
          block-contiguous packer MOP swapped in -- what a caller's
          ``pack_block_contiguous_init`` does. Output not asserted.
-  uninit The function under test: the conditional W-stride write, and nothing else.
+  uninit The function under test: the layout's stride restore, and nothing else.
   run 1  Plain per-tile ``_llk_pack_<PackMode::Default>``, no packer re-init, so it packs
          through whatever the uninit left.
 
@@ -49,9 +49,9 @@ the two tests below use it deliberately:
 entirely, so "the stride was restored" cannot be confused with "nothing needed restoring".
 """
 
-import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import DataCopyGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
@@ -66,23 +66,27 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 ELEMENTS_PER_TILE = 1024
 
-# Same-in-same-out: this test varies packer *state*, not conversion. A mixed pair would
-# only add format-conversion noise on top of the layout question being asked.
+# Same-in-same-out: this test varies packer *state*, not conversion. Float16_b with dest_acc=Yes still packs from a
+# source half the DEST width, which sets the units of the strides being restored.
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True)
 
 # 4 tiles is the smallest count that makes a tile-to-tile stride error visible on more
 # than one tile while staying inside DEST half-sync capacity at fp32 (4 tiles).
 NUM_TILES = 4
 
-# The two uninits have identical bodies, and custom_mm_uninit_restore_test.cpp
-# replicates that shared body rather than calling either compute-API function (a tt-llk
-# test cannot include tt_metal/hw/inc/api/compute). So there is deliberately no
-# per-family axis: it would build the identical ELF twice and could not catch the one
-# thing it would exist to catch, a future divergence between the two headers. Guarding
-# that divergence needs a test on the metal side that calls the real entry points.
+# Both compute uninits and the driver call the same raw PACK helper. A per-family
+# axis would build the identical ELF twice; the static parity test guards delegation
+# from each compute API to the implementation exercised here.
 
 
-def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
+def _run(
+    formats,
+    dest_acc,
+    dense_packing,
+    skip_uninit,
+    block_mop_num_faces=4,
+    compact_packing=False,
+):
     torch.manual_seed(0)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -99,6 +103,7 @@ def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
             PACK_NUM_TILES(NUM_TILES),
             CUSTOM_MM_UNINIT(
                 dense_packing=dense_packing,
+                compact_packing=compact_packing,
                 skip=skip_uninit,
                 block_mop_num_faces=block_mop_num_faces,
             ),
@@ -137,45 +142,8 @@ def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
     return golden, device
 
 
-# Found by this test: the dense_packing W-stride constants in custom_mm.h /
-# compressed_custom_mm.h are hardcoded for a 16-bit pack source and are wrong for a
-# 32-bit one.
-#
-# The canonical writer, cpack_common.h set_packer_strides, computes
-#     w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * datum_size_in_bytes(fmt)
-# while both compute-API headers spell the same expression with a literal `* 2`:
-#     init   dense:   (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2   = 1024
-#     uninit restore:  TILE_NUM_FACES      * FACE_C_DIM * FACE_R_DIM * 2   = 2048
-# For a Float32 pack source datum_size_in_bytes is 4, so the correct values are 2048 and
-# 4096. The uninit therefore does not restore what _llk_pack_init_ programmed, and the
-# following pack reads tiles at half the intended stride.
-#
-# Measured on BH p100a, Float32 in/out, dest_acc=Yes, dense_packing=True: run 1 matches
-# on tile 0 only (0.25 overall) regardless of restore_tile_pack_mop, i.e. the W-stride
-# restore does not recover. The 16-bit path is unaffected and fully correct.
-#
-# This is pre-existing -- #52727 kept the demo's structure -- but the promotion ships it
-# in packaged metalium via HW_JIT_API_HEADERS, so it now reaches more callers. Marked
-# xfail rather than skipped so the suite stays green while recording the defect, and
-# flips to XPASS the moment the constants become format-aware (or a static_assert
-# restricts dense_packing to 16-bit pack sources).
-_DENSE_FP32_XFAIL = (
-    "custom_mm dense_packing W-stride is hardcoded *2 (16-bit pack source); "
-    "wrong for a 32-bit pack source, so the uninit cannot restore it"
-)
-
-
 def _skip_unsupported(formats, dest_acc):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
-    if (
-        formats.input_format == DataFormat.Float16_b
-        and dest_acc == DestAccumulation.Yes
-    ):
-        pytest.skip(
-            "Float16_b with dest_acc=Yes adds nothing here: the pack layout, "
-            "not the DEST width, is what this test varies"
-        )
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
 
 @parametrize(
@@ -183,22 +151,16 @@ def _skip_unsupported(formats, dest_acc):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dense_packing=[False, True],
 )
-def test_custom_mm_uninit_restores_dense_wstride(
-    request, formats, dest_acc, dense_packing
-):
+def test_custom_mm_uninit_restores_dense_wstride(formats, dest_acc, dense_packing):
     """The uninit must put the 64-row tile-to-tile W-stride back.
 
-    This is the whole of what ``*_block_uninit`` does as merged. The run-0 block MOP is
+    This is all the Dense uninit does. The run-0 block MOP is
     programmed at the geometry run 1 needs (4 faces), so the MOP is not a confound and
     run 1 is correct exactly when the stride was restored. With ``dense_packing=False``
     there is nothing to restore and run 1 must be correct trivially -- that arm is the
     baseline proving the driver itself is sound.
     """
     _skip_unsupported(formats, dest_acc)
-    if dense_packing and formats.output_format.is_32_bit():
-        request.node.add_marker(
-            pytest.mark.xfail(reason=_DENSE_FP32_XFAIL, strict=False)
-        )
 
     golden, device = _run(formats, dest_acc, dense_packing, skip_uninit=False)
 
@@ -206,6 +168,47 @@ def test_custom_mm_uninit_restores_dense_wstride(
         f"custom_mm/compressed_custom_mm _block_uninit<dense_packing={dense_packing}> "
         "did not leave the packer able to pack plain tiles: the following plain "
         "_llk_pack_ did not reproduce the DEST tiles"
+    )
+
+
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_custom_mm_uninit_restores_compact_strides(formats, dest_acc):
+    """The compact uninit must put both the 16-row face stride and the 64-row tile stride back.
+
+    The strides are in pack source datums, so a Float16_b output from a 32-bit DEST restores
+    narrower strides than a Float32 one.
+    """
+    _skip_unsupported(formats, dest_acc)
+
+    golden, device = _run(
+        formats, dest_acc, dense_packing=False, skip_uninit=False, compact_packing=True
+    )
+
+    assert passed_test(golden, device, formats.output_format), (
+        "custom_mm_block_uninit<compact_packing> did not leave the packer able to pack "
+        "plain tiles: the following plain _llk_pack_ did not reproduce the DEST tiles"
+    )
+
+
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_custom_mm_compact_uninit_is_load_bearing(formats, dest_acc):
+    """Negative control for the compact restore: skip the uninit and the pack must be wrong."""
+    _skip_unsupported(formats, dest_acc)
+
+    golden, device = _run(
+        formats, dest_acc, dense_packing=False, skip_uninit=True, compact_packing=True
+    )
+
+    assert not passed_test(golden, device, formats.output_format, print_errors=False), (
+        "run 1 reproduced the DEST tiles even though the uninit was skipped and the "
+        "compact 8-row face / 16-row tile strides were left in place, so the compact "
+        "restore test above proves nothing."
     )
 
 

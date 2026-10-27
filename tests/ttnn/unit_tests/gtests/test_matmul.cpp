@@ -678,6 +678,27 @@ TEST_F(MatmulSmoke, Mcast1DIn0Wide) {
     detail::expect_close(detail::to_float_vector(out), expected, 0.05f, std::max(1.0f, K * 0.02f), 0.999f);
 }
 
+// Regression for #54639: sub-tile M (M=4, below the 32-row tile height) used to make
+// create_simple_matmul_program_config's Mt (matmul_program_config.cpp, get_M_dim floor-divides
+// the padded dim by tile height) come out as 0, which underflowed the unsigned
+// "(Mt - 1) / per_core_M + 1" block-count expression and crashed the host with SIGFPE. Shape
+// mirrors the issue's MNIST fc1 repro (4x9216 @ 9216x128), all DRAM interleaved, auto-dispatch.
+TEST_F(MatmulSmoke, SubTileMDoesNotCrash) {
+    auto& device = *device_;
+    constexpr uint32_t M = 4, K = 9216, N = 128;
+    const auto a = detail::mm_rand_bf16(static_cast<std::size_t>(M) * K, 301);
+    const auto b = detail::mm_rand_bf16(static_cast<std::size_t>(K) * N, 302);
+    const auto a_dev =
+        detail::make_device_tensor(device, ttnn::Shape({1, 1, M, K}), a, DataType::BFLOAT16, Layout::TILE);
+    const auto b_dev = detail::make_device_tensor(device, ttnn::Shape({K, N}), b, DataType::BFLOAT16, Layout::TILE);
+
+    const auto out = matmul(a_dev, b_dev);
+
+    const auto expected = detail::cpu_matmul(a, b, 1, M, K, N);
+    // Random data + bf16 accumulation over K=9216 forces tolerance-based verification.
+    detail::expect_close(detail::to_float_vector(out), expected, 0.05f, std::max(1.0f, K * 0.02f), 0.999f);
+}
+
 // Program factory: MatmulMultiCoreReuseMultiCast1D, mcast_in0 = false, AUTO-routed.
 // [1,1,1024,32] x [32,64], all DRAM interleaved: height/width = 1024 vs 64, ratio 16 > 8
 // => is_narrow; width < height => is_tall => use_mcast_1d_in1_config

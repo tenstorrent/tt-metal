@@ -116,7 +116,7 @@ inline void llk_matmul_pack(
         StateVal<Operand<Exu::Pack>::PartialFace>(get_output_partial_face(output_id)),
         StateVal<Operand<Exu::Pack>::NarrowTile>(get_output_narrow_tile(output_id)),
         StateDiscard<std::uint32_t>(start_tile_index),
-        StateVal<OperationPack::NumTiles>(ntiles),
+        StateDiscard<std::uint32_t>(ntiles),
         StateDiscard<std::uint32_t>(output_tile_index)));
 
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {

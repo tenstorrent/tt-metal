@@ -31,7 +31,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 NB_MAKE_OPAQUE(std::vector<tt::tt_metal::UnpackToDestMode>);
@@ -561,16 +561,20 @@ void py_module_types(nb::module_& mod) {
         &ttnn::get_cb_address,
         nb::arg("descriptor"),
         R"pbdoc(
-            Get the L1 byte address of a CB descriptor.
+            Get the L1 byte address a CB descriptor is programmed at.
 
-            Returns buffer base address + address_offset when a buffer is present,
-            or just address_offset when no buffer is set (manually placed CB).
+            Returns the backing buffer's address on the descriptor's cores + address_offset,
+            or just address_offset when no buffer or tensor is set.
 
             Args:
                 descriptor: A CBDescriptor to get the address from
 
             Returns:
                 The L1 byte address of the circular buffer
+
+            Raises:
+                RuntimeError: If a per-core-allocated buffer's address differs across the
+                    descriptor's cores, or one of them has no shard.
         )pbdoc");
 
     // Bind KernelDescriptor related types
@@ -1136,7 +1140,37 @@ void py_module_types(nb::module_& mod) {
         .def_rw(
             "custom_program_hash",
             &tt::tt_metal::ProgramDescriptor::custom_program_hash,
-            "Optional memoized program hash (skips full descriptor walk when set)");
+            "Optional memoized program hash (skips full descriptor walk when set)")
+        // Blaze-only internal runtime binary reload (internal::ReloadTable), exposed as
+        // the two values Blaze sets. Setting the address to None drops the table.
+        .def_prop_rw(
+            "reload_table_addr",
+            [](const tt::tt_metal::ProgramDescriptor& self) -> std::optional<uint32_t> {
+                return self.reload_table ? std::optional<uint32_t>(self.reload_table->address) : std::nullopt;
+            },
+            [](tt::tt_metal::ProgramDescriptor& self, std::optional<uint32_t> addr) {
+                if (!addr.has_value()) {
+                    self.reload_table.reset();
+                } else if (self.reload_table) {
+                    self.reload_table->address = *addr;
+                } else {
+                    self.reload_table = tt::tt_metal::internal::ReloadTable{*addr, CoreRangeSet{}};
+                }
+            },
+            "L1 address of the runtime binary-reload stage table; None if this program does not reload")
+        .def_prop_rw(
+            "reload_core_ranges",
+            [](const tt::tt_metal::ProgramDescriptor& self) {
+                return self.reload_table ? self.reload_table->cores : CoreRangeSet{};
+            },
+            [](tt::tt_metal::ProgramDescriptor& self, const CoreRangeSet& cores) {
+                if (self.reload_table) {
+                    self.reload_table->cores = cores;
+                } else {
+                    self.reload_table = tt::tt_metal::internal::ReloadTable{0, cores};
+                }
+            },
+            "Cores that walk the reload table; every other core in the program ignores it");
 
     mod.def(
         "merge_program_descriptors",

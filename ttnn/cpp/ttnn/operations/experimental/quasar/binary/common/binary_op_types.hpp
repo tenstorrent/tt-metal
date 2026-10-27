@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <variant>
+
 namespace ttnn::operations::experimental::quasar::binary {
 
 enum class BinaryOpType {
@@ -53,5 +55,15 @@ enum class BinaryOpType {
     WHERE_TTS,
     ISCLOSE,
 };
+
+// Parameters for ops that need more than their BinaryOpType to describe what to compile. One
+// struct per such op, gathered in the variant below so a generic interface can carry any op's
+// parameters. Plain aggregates rather than a class hierarchy: these ride in the operation
+// attributes, which the program cache hashes structurally.
+struct BiasGeluParams {
+    bool fast_and_approximate = false;
+};
+
+using BinaryOpParams = std::variant<BiasGeluParams>;
 
 }  // namespace ttnn::operations::experimental::quasar::binary

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -53,7 +54,7 @@ inline std::shared_ptr<Buffer> make_cross_node_data_buffer(
     BufferType buffer_type = BufferType::L1) {
     const uint32_t ring_size = entry_size * num_entries;
     const uint32_t num_cores = all_cores.num_cores();
-    return Buffer::create(
+    return BufferImpl::create(
         &device,
         ring_size * num_cores,
         ring_size,
@@ -64,7 +65,8 @@ inline std::shared_ptr<Buffer> make_cross_node_data_buffer(
 }
 
 inline uint32_t data_pattern_for_write_primitive(uint32_t write_primitive) {
-    if (write_primitive == 1) {
+    // 1 (write_strided) and 6 (write_strided_and_push_back) scatter strided staging.
+    if (write_primitive == 1 || write_primitive == 6) {
         return static_cast<uint32_t>(SenderDataPattern::StridedPerReceiver);
     }
     if (write_primitive == 2 || write_primitive == 3) {

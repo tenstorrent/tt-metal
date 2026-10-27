@@ -20,11 +20,20 @@ from models.tt_transformers.tests.test_utils import (
 from tools.tracy.common import PROFILER_DEFAULT_OP_SUPPORT_COUNT
 from tools.tracy.process_model_log import get_latest_ops_log_filename
 
-
 # This pytest flag is necessary to ensure that we do NOT open the device in the main process for device perf tests that run
 # the test inside a subprocess since UMD does not allow multiple subprocesses opening the device at the same time.
+# The demo subprocess is its own pytest session, so it would otherwise inherit the 300 s default from pytest.ini.
+# Llama 3.3-70B on a 4-chip Blackhole box spends ~3 min compiling profiler kernels before the first prefill, so give
+# the inner run the 600 s this test used to have as a whole. This test itself gets 1350 s: it was 900 s (the budget
+# the pipeline yaml already asks for with --timeout 900; the marker takes precedence over the command line, so that
+# value never applied), scaled with the Llama 3.1-8B wh_n150 leg budget going from 20 to 30 minutes. On a slow N150
+# VM episode the tracy post-processing after the demo exits can take several minutes on its own (vm-115, 2026-10-02:
+# demo 321 s, post-processing still running at 900 s), and that part is outside the inner run's own timeout.
+INNER_DEMO_TIMEOUT_S = 600
+
+
 @pytest.mark.no_reset_default_device
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1350)
 @pytest.mark.parametrize("export_measurements", [True, False])
 @pytest.mark.parametrize("batch_size", [1, 32])
 @pytest.mark.parametrize("data_parallel", [1, 2, 4, 8])
@@ -45,7 +54,7 @@ def test_device_perf_one_iter(
     max_generated_tokens,
     export_measurements,
 ):
-    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k 'device-perf and performance' --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size} --mode {mode} --use_prefetcher True"
+    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k 'device-perf and performance' --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size} --mode {mode} --use_prefetcher True --timeout {INNER_DEMO_TIMEOUT_S}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
     subdir = f"ttt-device-perf-{mode}"

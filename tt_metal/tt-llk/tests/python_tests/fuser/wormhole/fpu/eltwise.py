@@ -2,20 +2,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_fpu import Fpu
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.fpu.eltwise import eltwise_accumulate_golden, eltwise_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
 from helpers.llk_params import MathOperation
 
 
 class EltwiseFpu(Fpu):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
 
     def __init__(self, operation: MathOperation):
         if not operation in MathOperation.get_fpu_binary_operations():
@@ -23,31 +23,17 @@ class EltwiseFpu(Fpu):
                 f"Operation {operation} is not a valid FPU binary operation."
             )
         self.operation = operation
+        self.golden_fn = (
+            eltwise_accumulate_golden
+            if operation == MathOperation.Elwmul
+            else eltwise_golden
+        )
 
     def get_headers(self) -> List[str]:
         return [
             "llk_math_common.h",
             "llk_math_eltwise_binary.h",
         ]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        tensor_dst: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return self.eltwise_golden(
-            tensor_a,
-            tensor_b,
-            tensor_dst,
-            config,
-            operation,
-            compute_unit,
-            accumulate_on_dest=self.operation == MathOperation.Elwmul,
-        )
 
     def init(
         self,
@@ -89,7 +75,7 @@ class EltwiseFpu(Fpu):
         return (
             f"_llk_math_eltwise_binary_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {dest_sync},\n"
             f"{dest_acc}, {math_fidelity}, {reuse_dest}>"
-            f"({tensor_shape}, {block.tile_id_block}, {clear_fp32_dst_acc});\n"
+            f"({tensor_shape}, {block.tile_id_dest}, {clear_fp32_dst_acc});\n"
         )
 
     def uninit(

@@ -15,6 +15,7 @@
 
 #if defined(TRACY_ENABLE)
 #include <common/TracyTTDeviceData.hpp>
+#include <tracy/Tracy.hpp>
 #endif
 
 namespace tt::tt_metal {
@@ -22,14 +23,24 @@ namespace tt::tt_metal {
 namespace {
 
 #if defined(TRACY_ENABLE)
+// Synthetic core for the real-time profiler's Tracy lanes: programs go on BRISC, sync checks on NCRISC.
+constexpr uint32_t kRealtimeProfilerCore_X = 100;
+constexpr uint32_t kRealtimeProfilerCore_Y = 100;
+
+uint32_t lane_thread_id(uint32_t chip_id, tracy::RiscType risc) {
+    tracy::TTDeviceMarker lane{};
+    lane.chip_id = chip_id;
+    lane.core_x = kRealtimeProfilerCore_X;
+    lane.core_y = kRealtimeProfilerCore_Y;
+    lane.risc = risc;
+    return lane.get_thread_id();
+}
+
 tracy::TTDeviceMarker make_marker(
     const tt::ProgramRealtimeRecord& record,
     uint64_t timestamp,
     tracy::TTDeviceMarkerType type,
     const std::string& file_str) {
-    constexpr uint32_t kRealtimeProfilerCore_X = 100;
-    constexpr uint32_t kRealtimeProfilerCore_Y = 100;
-
     tracy::TTDeviceMarker marker;
     marker.chip_id = record.chip_id;
     marker.core_x = kRealtimeProfilerCore_X;
@@ -91,6 +102,9 @@ RealtimeProfilerTracyHandler::~RealtimeProfilerTracyHandler() {
     MaybeEmitSkippedZoneSummaryLocked();
 
     for (auto& entry : tracy_contexts_) {
+        FlushDispatchStallMessageLocked(entry.first);
+    }
+    for (auto& entry : tracy_contexts_) {
         TracyTTDestroy(entry.second);
     }
     tracy_contexts_.clear();
@@ -114,6 +128,11 @@ void RealtimeProfilerTracyHandler::AddDevice(
     std::string name = fmt::format("Device {}:", chip_id);
     TracyTTContextName(ctx, name.c_str(), name.size());
 
+    // The GUI labels a lane with the thread name registered for its id; register before the first zone.
+    tracy::SetThreadName(lane_thread_id(chip_id, tracy::RiscType::BRISC), "Programs");
+    tracy::SetThreadName(lane_thread_id(chip_id, tracy::RiscType::NCRISC), "Sync check");
+    tracy::SetThreadName(lane_thread_id(chip_id, tracy::RiscType::NONE), "Dispatch stall");
+
     tracy_contexts_[chip_id] = ctx;
 #endif
 }
@@ -125,6 +144,7 @@ void RealtimeProfilerTracyHandler::RemoveDevice([[maybe_unused]] uint32_t chip_i
     if (it == tracy_contexts_.end()) {
         return;
     }
+    FlushDispatchStallMessageLocked(chip_id);
     TracyTTDestroy(it->second);
     tracy_contexts_.erase(it);
 #endif
@@ -246,11 +266,8 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
         return;
     }
 
-    // Sync-check zones go on a dedicated Tracy lane (RiscType::SYNC) so they don't have to
+    // Sync-check zones go on a dedicated Tracy lane (NCRISC) so they don't have to
     // strictly nest with program zones — overlap there caused zones to disappear or duplicate.
-    constexpr uint32_t kRealtimeProfilerCore_X = 100;
-    constexpr uint32_t kRealtimeProfilerCore_Y = 100;
-
     tracy::TTDeviceMarker start_marker;
     start_marker.chip_id = chip_id;
     start_marker.core_x = kRealtimeProfilerCore_X;
@@ -273,6 +290,91 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
     std::lock_guard<std::mutex> lock(mutex_);
     TracyTTPushStartMarker(ctx, start_marker);
     TracyTTPushEndMarker(ctx, end_marker);
+#endif
+}
+
+void RealtimeProfilerTracyHandler::PushDispatchStallMarker(
+    [[maybe_unused]] uint32_t chip_id,
+    [[maybe_unused]] uint64_t stall_end_timestamp,
+    [[maybe_unused]] uint32_t stall_cycles,
+    [[maybe_unused]] double frequency) {
+#if defined(TRACY_ENABLE)
+    if (!tracy::GetProfiler().IsConnected()) {
+        return;
+    }
+    TracyTTCtx ctx = GetContext(chip_id);
+    if (!ctx) {
+        return;
+    }
+
+    // Own lane, so stall zones never have to nest with program or sync-check zones. RiscType::NONE because the
+    // lane is not a RISC; red because a stall is an error.
+    tracy::TTDeviceMarker start_marker;
+    start_marker.chip_id = chip_id;
+    start_marker.core_x = kRealtimeProfilerCore_X;
+    start_marker.core_y = kRealtimeProfilerCore_Y;
+    start_marker.risc = tracy::RiscType::NONE;
+    start_marker.color = tracy::Color::Red;
+    start_marker.timestamp = stall_end_timestamp - stall_cycles;
+    start_marker.runtime_host_id = 0;
+    start_marker.marker_name = "DISPATCH STALL: RT profiler record ring full";
+    start_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_START;
+    start_marker.file = "realtime_profiler";
+    start_marker.line = 0;
+
+    tracy::TTDeviceMarker end_marker = start_marker;
+    end_marker.timestamp = stall_end_timestamp;
+    end_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_END;
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    TracyTTPushStartMarker(ctx, start_marker);
+    TracyTTPushEndMarker(ctx, end_marker);
+
+    auto& state = dispatch_stall_messages_[chip_id];
+    state.frequency = frequency;
+    const auto now = std::chrono::steady_clock::now();
+    if (state.last_message_time != std::chrono::steady_clock::time_point{} &&
+        now - state.last_message_time < DispatchStallMessageState::kMinInterval) {
+        state.suppressed++;
+        state.suppressed_cycles += stall_cycles;
+        return;
+    }
+    const double us_per_cycle = frequency > 0.0 ? 1.0 / (frequency * 1000.0) : 0.0;
+    std::string text = fmt::format(
+        "Device {}: dispatch stalled {:.2f} us waiting for the real-time profiler (record ring full); "
+        "profiler records are delayed, not lost",
+        chip_id,
+        stall_cycles * us_per_cycle);
+    if (state.suppressed != 0) {
+        text += fmt::format(
+            " (+{} more stalls, {:.2f} us, since the last message)",
+            state.suppressed,
+            state.suppressed_cycles * us_per_cycle);
+    }
+    TracyLogString(tracy::MessageSeverity::Error, 0xFF0000, TRACY_CALLSTACK, text.size(), text.c_str());
+    state.last_message_time = now;
+    state.suppressed = 0;
+    state.suppressed_cycles = 0;
+#endif
+}
+
+void RealtimeProfilerTracyHandler::FlushDispatchStallMessageLocked([[maybe_unused]] uint32_t chip_id) {
+#if defined(TRACY_ENABLE)
+    auto it = dispatch_stall_messages_.find(chip_id);
+    if (it == dispatch_stall_messages_.end() || it->second.suppressed == 0 || !tracy::GetProfiler().IsConnected()) {
+        return;
+    }
+    auto& state = it->second;
+    const double us_per_cycle = state.frequency > 0.0 ? 1.0 / (state.frequency * 1000.0) : 0.0;
+    const std::string text = fmt::format(
+        "Device {}: dispatch stalled {} more time(s), {:.2f} us, waiting for the real-time profiler (record ring "
+        "full) since the last message; profiler records are delayed, not lost",
+        chip_id,
+        state.suppressed,
+        state.suppressed_cycles * us_per_cycle);
+    TracyLogString(tracy::MessageSeverity::Error, 0xFF0000, TRACY_CALLSTACK, text.size(), text.c_str());
+    state.suppressed = 0;
+    state.suppressed_cycles = 0;
 #endif
 }
 

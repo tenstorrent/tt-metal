@@ -276,8 +276,9 @@ def test_reduce_w_height_sharded_mixed_l1_dram(device, op_name, dram_side):
     torch.manual_seed(0)
     ttnn_op, torch_op = REDUCE_OPS[op_name]
 
-    tensor_shape = (1, 1, 256, 256)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    num_cores = min(device.dram_grid_size().x, device.compute_with_storage_grid_size().x)
+    tensor_shape = (1, 1, 32 * num_cores, 256)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
     input_spec = ttnn.ShardSpec(shard_grid, (32, 256), ttnn.ShardOrientation.ROW_MAJOR)
     output_spec = ttnn.ShardSpec(shard_grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)
 
@@ -463,3 +464,31 @@ def test_reduce_dram_nd_sharded_requires_explicit_output_nd_shard_spec(device, e
 
     with expect_error(RuntimeError, "requires an explicit nd_shard_spec"):
         ttnn.sum(input_tensor, dim=-2, keepdim=True, memory_config=output_config_no_spec)
+
+
+def _row_grid(x_start, x_end):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x_start, 0), ttnn.CoreCoord(x_end, 0))})
+
+
+def test_reduce_h_legacy_width_sharded_output_outside_sub_core_grids_is_rejected(device, expect_error):
+    """A legacy WIDTH_SHARDED output shard grid must be inside sub_core_grids, otherwise the call is rejected."""
+    input_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_row_grid(0, 3), (128, 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_row_grid(4, 7), (32, 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    assert output_config.nd_shard_spec is None
+    input_tensor = ttnn.from_torch(
+        torch.randn((1, 1, 128, 256), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_config,
+    )
+
+    with expect_error(RuntimeError, "must be contained in program core grid"):
+        ttnn.sum(input_tensor, dim=-2, keepdim=True, memory_config=output_config, sub_core_grids=_row_grid(0, 3))

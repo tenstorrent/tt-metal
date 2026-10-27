@@ -5,25 +5,32 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <utility>
 
 #include "device.hpp"
 #include "mesh_device.hpp"
 #include "mesh_device_impl.hpp"
+#include "mesh_event_impl.hpp"
 #include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
+#include "impl/program/slow_dispatch.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/tt_cluster.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "emule_mesh_command_queue.hpp"
+#endif
 
 namespace tt::tt_metal::distributed {
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
     // Short-circuit for inactive MeshDevices (no-op)
-    if (mesh_cq.device()->get_view().get_devices().empty()) {
+    if (mesh_cq.device()->get_device_ids().empty()) {
         return;
     }
 
@@ -33,7 +40,8 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     //
     // No-mixing contract: a workload is entirely a service workload (every program on claimed service
     // cores) or entirely a normal one.
-    auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+    auto& mesh_impl = mesh_cq.device()->impl();
+    auto& svc = mesh_impl.metal_context().get_service_core_manager();
     auto& programs = mesh_workload.impl().get_programs();
     if (svc.impl().has_any_claims()) {
         // Classify the workload as service vs normal once and cache it on the workload, so steady-state
@@ -105,19 +113,22 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
                             svc.impl().mark_launched(device->id(), core);  // launch-once
                         }
                     }
-                    tt::tt_metal::detail::LaunchProgram(device, program, false, true);
+                    tt::tt_metal::slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/true);
                 }
             }
             return;
         }
     }
 
-    auto& ctx = tt::tt_metal::MetalContext::instance();
-    if (ctx.rtoptions().get_fast_dispatch()) {
+    auto& env = mesh_impl.metal_env();
+    // Emulated devices have no dispatch firmware: tt-emule's queue compiles and launches each program itself
+    // through the slow-dispatch path, so the fast-dispatch compile, binary upload and command generation are skipped.
+    const bool emulated = env.get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+    if (env.get_rtoptions().get_fast_dispatch() && !emulated) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
-    } else if (ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    } else if (env.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         // Slow dispatch normally JIT-compiles inside LaunchProgram, but the SD mesh CQ
         // short-circuits for mock devices (no hardware to dispatch to). Compile here so
         // kernel artifacts are still produced; the SD CQ then no-ops the skipped dispatch.
@@ -128,25 +139,41 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 }
 
 void EventSynchronize(const MeshEvent& event) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
+        // Slow dispatch records no event, so wait for the recording queue's workloads to finish.
+        event.device()->mesh_command_queue(event.impl().mesh_cq_id()).enqueue_wait_for_event(event);
         return;
     }
-    for (const auto& coord : event.device_range()) {
+#ifdef TT_METAL_USE_EMULE
+    // tt-emule's queue tracks its events itself; there are no sysmem completion counters to poll.
+    if (event.device()->impl().metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+        emule::event_synchronize(event);
+        return;
+    }
+#endif
+    for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
-        while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
+        while (physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) <
+               event.impl().id()) {
             ;
         }
     }
 }
 
 bool EventQuery(const MeshEvent& event) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
         return true;
     }
+#ifdef TT_METAL_USE_EMULE
+    if (event.device()->impl().metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+        return emule::event_query(event);
+    }
+#endif
     bool event_completed = true;
-    for (const auto& coord : event.device_range()) {
+    for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
-        event_completed &= physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) >= event.id();
+        event_completed &=
+            physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) >= event.impl().id();
     }
     return event_completed;
 }
@@ -187,10 +214,6 @@ void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_
     mesh_cq.finish(sub_device_ids);
 }
 
-bool UsingDistributedEnvironment() {
-    using multihost::DistributedContext;
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    return DistributedContext::is_initialized() && *(distributed_context.size()) > 1;
-}
+bool UsingDistributedEnvironment() { return *(multihost::DistributedContext::get_current_world()->size()) > 1; }
 
 }  // namespace tt::tt_metal::distributed

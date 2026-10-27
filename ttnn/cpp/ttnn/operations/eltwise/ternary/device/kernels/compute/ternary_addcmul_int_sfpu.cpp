@@ -20,6 +20,10 @@ void kernel_main() {
     constexpr auto dfb_in1_id = tt::CBIndex::c_1;
     constexpr auto dfb_in2_id = tt::CBIndex::c_2;
     constexpr auto dfb_out_id = tt::CBIndex::c_3;
+    DataflowBuffer dfb_in0(dfb_in0_id);
+    DataflowBuffer dfb_in1(dfb_in1_id);
+    DataflowBuffer dfb_in2(dfb_in2_id);
+    DataflowBuffer dfb_out(dfb_out_id);
 
     compute_kernel_hw_startup(dfb_in0_id, dfb_out_id);
 
@@ -32,7 +36,7 @@ void kernel_main() {
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D0>{},
+            ckl::Dst::D0>{dfb_in0},
         ckl::CopyTile<
             ckl::input(
                 dfb_in1_id,
@@ -40,7 +44,7 @@ void kernel_main() {
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D1>{},
+            ckl::Dst::D1>{dfb_in1},
         ckl::CopyTile<
             ckl::input(
                 dfb_in2_id,
@@ -48,7 +52,7 @@ void kernel_main() {
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D2>{},
+            ckl::Dst::D2>{dfb_in2},
         ckl::FillInt<ADDCMUL_DATA_FORMAT, ckl::Dst::D3>{scalar_arg},
         ckl::MulIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D3>{},  // D3 = scalar*in1
         ckl::MulIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D2, ckl::Dst::D2>{},  // D2 = D3*in2
@@ -57,5 +61,5 @@ void kernel_main() {
             dfb_out_id,
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
-            ckl::DataFormatReconfig::Disabled)>{});
+            ckl::DataFormatReconfig::Disabled)>{dfb_out});
 }

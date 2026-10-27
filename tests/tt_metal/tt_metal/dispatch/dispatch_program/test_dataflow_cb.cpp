@@ -44,8 +44,8 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowCb) {
     // CB index configuration
     constexpr uint32_t start_cb = 0;
     constexpr uint32_t stride = 8;
-    const uint32_t strided_cb_count = max_cbs_ / stride;  // CBs at 0, 8, 16, ...
-    const uint32_t topmost_cb = max_cbs_ - 1;
+    const uint32_t strided_cb_count = max_dfbs_ / stride;  // CBs at 0, 8, 16, ...
+    const uint32_t topmost_cb = max_dfbs_ - 1;
     const uint32_t total_cbs = strided_cb_count + 1;  // Strided + topmost
 
     const uint32_t num_tiles = tiles_to_transfer_per_cb * total_cbs;
@@ -68,7 +68,7 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowCb) {
     };
 
     // Create CBs at 0, 8, 16, ...
-    for (uint32_t cb_idx = 0; cb_idx < max_cbs_; cb_idx += stride) {
+    for (uint32_t cb_idx = 0; cb_idx < max_dfbs_; cb_idx += stride) {
         create_cb(cb_idx);
     }
     // Also test topmost
@@ -129,7 +129,7 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowDfb) {
         tiles_to_transfer_per_dfb % writer_ublock_size == 0,
         "tiles_to_transfer_per_dfb must be divisible by writer_ublock_size");
 
-    const uint32_t total_dfbs = max_cbs_;
+    const uint32_t total_dfbs = max_dfbs_;
 
     const uint32_t num_tiles = tiles_to_transfer_per_dfb * total_dfbs;
     const uint32_t dram_buffer_size = single_tile_size * num_tiles;

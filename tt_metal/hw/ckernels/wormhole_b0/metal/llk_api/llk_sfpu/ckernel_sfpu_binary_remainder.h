@@ -78,6 +78,8 @@ sfpi_inline sfpi::vFloat unsigned_remainder_recip(const sfpi::vInt& b_signed) {
 template <bool numerator_can_be_int_min = true>
 sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vMag a, sfpi::vFloat a_f, const sfpi::vInt& b_signed, const sfpi::vFloat& inv_b_f) {
+    sfpi::lreg_pressure _;
+
     // Initial quotient approximation : q = a * 1/b
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
     // Fill the quotient MAD dependency slot with the divisor magnitude.
@@ -114,7 +116,9 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vFloat lo_biased = lo + MANTISSA_ALIGNMENT_OFFSET;
     sfpi::vFloat hi_sum = q1 * b1 + hi_biased;
 
-    sfpi::vUInt qb = (sfpi::exman(lo_biased) << CHUNK_BITS) + (sfpi::exman(hi_sum) << HIGH_CHUNK_SHIFT);
+    // These left shifts discard all sign/exponent bits, so raw encodings need no mantissa extraction.
+    sfpi::vUInt qb =
+        (sfpi::as<sfpi::vUInt>(lo_biased) << CHUNK_BITS) + (sfpi::as<sfpi::vUInt>(hi_sum) << HIGH_CHUNK_SHIFT);
 
     // Compute remainder from the retained numerator magnitude.
     sfpi::vInt r{a - qb};
@@ -153,7 +157,10 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     mid += MANTISSA_ALIGNMENT_OFFSET;
     top += MANTISSA_ALIGNMENT_OFFSET;
 
-    sfpi::vInt tmp{sfpi::exman(low) + (sfpi::exman(mid) << CHUNK_BITS) + (sfpi::exman(top) << HIGH_CHUNK_SHIFT)};
+    // Only the unshifted low chunk needs mantissa extraction.
+    sfpi::vInt tmp{
+        sfpi::exman(low) + (sfpi::as<sfpi::vUInt>(mid) << CHUNK_BITS) +
+        (sfpi::as<sfpi::vUInt>(top) << HIGH_CHUNK_SHIFT)};
     // When q is zero, qb is also zero, so r=INT_MIN is the positive magnitude
     // 2**31. A negative residual with nonzero q instead needs a negative correction.
     if constexpr (numerator_can_be_int_min) {
@@ -385,7 +392,7 @@ inline void remainder_uint32_init() {
 
 template <bool APPROXIMATION_MODE>
 inline void remainder_binary_init() {
-    recip_init<APPROXIMATION_MODE, false, false>();
+    recip_init<APPROXIMATION_MODE, false>();
 }
 
 }  // namespace ckernel::sfpu

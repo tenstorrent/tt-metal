@@ -22,7 +22,12 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
             One fused device op (per-chip reader/compute/writer with a fabric-forwarder
             all-gather): per-row partial sum-of-squares, all-gather of the partial stats
             across `cluster_axis`, then finalize x * rsqrt(E[x^2] + eps) with optional head
-            split, RoPE, and output-dtype cast.
+            split, RoPE, and output-dtype cast. `cluster_axis=None` normalizes locally on
+            every device (no gather), for tensors that are replicated or independent per device.
+
+            `affine_tile_row_map` (row-major uint32 [1, 1, 1, T] on the input's mesh, at least one entry per input
+            tile row): per-token weight/bias tile row r is read from row map[r], so weight/bias can be a small
+            table of tile rows.
         )doc",
         &ttnn::experimental::dit_fused_distributed_rmsnorm,
         nb::arg("input_tensor"),
@@ -44,7 +49,8 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("num_preferred_links") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("affine_tile_row_map") = nb::none());
 
     ttnn::bind_function<"dit_fused_distributed_layernorm", "ttnn.experimental.">(
         mod,
@@ -55,6 +61,8 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
             but computes a numerically-stable Welford mean/variance and applies
             (x - mean) * rsqrt(var + eps) with optional weight/bias, head split, RoPE, and
             output-dtype cast. Only the fused device op path exists for LayerNorm.
+            `cluster_axis=None` normalizes locally on every device (no gather), for tensors
+            that are replicated or independent per device.
 
             Pass `reciprocals` (== ttnn.create_layer_norm_reciprocals) to let the Welford
             LLK do an array load of 1/(N+1) instead of a soft-float divide per sample.
@@ -86,9 +94,9 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
         R"doc(
             Allocate the persistent stats DRAM scratch buffer required by
             `dit_fused_distributed_rmsnorm`'s all-gather path (TP>1, whole-row norm).
-            Returns None when the op reduces locally and needs no scratch (TP=1 or
-            per_head_norm). Hold the returned tensor across launches and pass it in via
-            the `persistent_output_buffer` kwarg.
+            Returns None when the op reduces locally and needs no scratch (TP=1,
+            `cluster_axis=None`, or per_head_norm). Hold the returned tensor across
+            launches and pass it in via the `persistent_output_buffer` kwarg.
         )doc",
         &ttnn::experimental::dit_fused_distributed_rmsnorm_create_stats_buffer,
         nb::arg("input_tensor"),
@@ -110,7 +118,7 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
             `dit_fused_distributed_layernorm`'s all-gather path. LayerNorm transports 2
             stats/token (mean+var) vs RMS's 1, so this buffer is 2x wider than the RMS
             one — use this variant for LayerNorm ops. Returns None when the op needs no
-            scratch (TP=1).
+            scratch (TP=1 or `cluster_axis=None`).
         )doc",
         &ttnn::experimental::dit_fused_distributed_layernorm_create_stats_buffer,
         nb::arg("input_tensor"),

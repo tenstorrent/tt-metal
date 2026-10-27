@@ -11,6 +11,11 @@
 
 #include "quasar_fds_epoch.h"
 
+// Which lane carries which core is not known, so a mask naming only the expected lane could not tell
+// "wrong lane" apart from "signal never arrived". Kernels enable every lane of the register map instead
+// (all_worker_lanes_mask and dispatch_lane_mask in overlay/fds_signalling.hpp), which also bounds their
+// scan loops.
+
 // Slot 0 of every status block. Extra slots are per-kernel and documented next to the kernel that
 // writes them.
 constexpr uint32_t kSlotResult = 0;
@@ -54,14 +59,22 @@ inline void finish(status_ptr status, uint32_t l1_address, uint32_t num_slots, u
 
 inline status_ptr begin_dispatch(uint32_t l1_address, uint32_t num_slots) {
     status_ptr status = begin(l1_address, num_slots);
+    // Interrupts are disabled defensively, for a sharper version of the reason below: a kernel that
+    // died while armed would leave a level standing on this node, and the level is derived rather
+    // than latched, so no later program could quiet it by acknowledging anything. Out of reset
+    // every threshold and every count is zero, which is a firing condition, so this also covers a
+    // node whose enable register was set before its groups were configured.
+    overlay::FdsDispatch::fds_config_interrupt_en(0);
     // Auto dispatch is disabled defensively: a kernel that died between enabling it and its
     // teardown would leave the output multiplexer on the queue path, turning every later direct
     // write on this engine into silence far from the fault. The outbox parks on the output bus,
     // so that even a mistimed enable diverts only writes that were headed for the wire anyway.
-    // This is everything software can reset. The pacing counter is unreachable and keeps running
-    // across kernels, and one test process shares one device, so pacing state from an earlier
-    // test is still live here. The pacing register is therefore left alone: writing it while the
-    // counter is mid-interval strands the queue until a 32 bit wrap.
+    // The pacing register is left alone: the AD kernels wait the drain bound before disabling, so
+    // the counter is at rest at exit even though its register value persists across kernels, and
+    // writing it mid-interval would strand the queue until a 32 bit wrap.
+    // Disabling auto dispatch here is the opposite of the production steady state on both tiles;
+    // that is safe only because the FDS fixture runs in slow dispatch mode, where the production
+    // firmware is built without FDS.
     overlay::FdsDispatch::fds_disable_auto_dispatch();
     overlay::FdsDispatch::fds_config_auto_dispatch_outbox(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR);
     overlay::FdsDispatch::fds_config_filter_length(kNoDeglitchFilter);
@@ -70,10 +83,12 @@ inline status_ptr begin_dispatch(uint32_t l1_address, uint32_t num_slots) {
 
 inline status_ptr begin_worker(uint32_t l1_address, uint32_t num_slots) {
     status_ptr status = begin(l1_address, num_slots);
-    // Same defensive disable as begin_dispatch, and the same limit on what it can reset. The
-    // outbox park matters more on this map: zero is input register 0, and a stale zero outbox
-    // under a mistimed enable would divert a status-clearing write into the queue and emit it as
-    // an outgoing done.
+    // Same defensive interrupt disable as begin_dispatch, for the same reason: this register map
+    // has its own enable register and its own all-zero reset state.
+    overlay::FdsNeo::fds_config_interrupt_en(0);
+    // Same defensive disable and pacing handling as begin_dispatch. The outbox park matters more
+    // on this map: zero is input register 0, and a stale zero outbox under a mistimed enable would
+    // divert a status-clearing write into the queue and emit it as an outgoing done.
     overlay::FdsNeo::fds_disable_auto_dispatch();
     overlay::FdsNeo::fds_config_auto_dispatch_outbox(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR);
     overlay::FdsNeo::fds_config_filter_length(kNoDeglitchFilter);
@@ -109,6 +124,32 @@ inline bool received_go(
     return false;
 }
 
+// On IP variants where group status is sticky, a bit stays set after its lane stops carrying group_id: writing
+// 0 clears a bit and writing 1 leaves it unchanged. Clear the bits of lanes no longer carrying group_id, so the
+// register reads as it would where status is live.
+inline void refresh_dispatch_group_status(uint32_t group_id) {
+    uint32_t stale_lanes = 0;
+    const uint32_t set_lanes = overlay::FdsDispatch::fds_read_group_status(group_id);
+    for (uint32_t mask = set_lanes, neo = 0; mask != 0; mask >>= 1, neo++) {
+        if ((mask & 1u) != 0 &&
+            FDS_INTF_READ(TT_FDS_DISPATCH_TENSIX_TO_DISPATCH_0__REG_ADDR + (neo * sizeof(uint32_t))) != group_id) {
+            stale_lanes |= uint32_t{1} << neo;
+        }
+    }
+    overlay::FdsDispatch::fds_write_group_status(group_id, ~stale_lanes);
+}
+
+inline void refresh_worker_group_status(uint32_t group_id) {
+    uint32_t stale_lanes = 0;
+    const uint32_t set_lanes = overlay::FdsNeo::fds_read_group_status(group_id);
+    for (uint32_t mask = set_lanes, inst = 0; mask != 0; mask >>= 1, inst++) {
+        if ((mask & 1u) != 0 && overlay::FdsNeo::fds_read_de_status(inst) != group_id) {
+            stale_lanes |= uint32_t{1} << inst;
+        }
+    }
+    overlay::FdsNeo::fds_write_group_status(group_id, ~stale_lanes);
+}
+
 inline bool wait_group_count_nonzero(uint32_t group_id, uint32_t poll_iterations) {
     for (uint32_t i = 0; i < poll_iterations; i++) {
         if (overlay::FdsDispatch::fds_read_group_count(group_id) != 0) {
@@ -132,6 +173,7 @@ inline bool wait_group_count(uint32_t group_id, uint32_t threshold, uint32_t pol
 
 inline bool wait_group_count_zero(uint32_t group_id, uint32_t poll_iterations, uint32_t& count) {
     for (uint32_t i = 0; i < poll_iterations; i++) {
+        refresh_dispatch_group_status(group_id);
         count = overlay::FdsDispatch::fds_read_group_count(group_id);
         if (count == 0) {
             return true;
@@ -194,4 +236,32 @@ constexpr uint32_t kTokenSilenceChecked = 10;
 constexpr uint32_t kTokenDelivered = 11;
 constexpr uint32_t kMismatchedGo = 2;
 constexpr uint32_t kMatchedGo = 3;
+// Where the OFFSET and ADDR forms are the same address, no outbox value can mismatch the write. Both
+// kernels then report kFormsAlias and return without touching FDS, and the host test skips.
+constexpr bool kFormsAreOneAddress =
+    TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_OFFSET == TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR;
+constexpr uint32_t kFormsAlias = 0x5A5A0062;
 }  // namespace fds_outbox
+
+// Status slots and failure codes shared by the interrupt kernels, whose protocol lives in
+// quasar_fds_interrupt.h. Slot 0 is the result word as everywhere else. The interrupt count in
+// slot 1 doubles as the handler's flag: the handler bumps it last, so a kernel that sees it move
+// knows the handler ran to the end, and the kernels wait on it rather than on a separate word.
+namespace fds_interrupt_status {
+constexpr uint32_t kSlotInterruptCount = 1;
+// The PLIC source the handler claimed. Kernels that make no claim check put something else in
+// slot 2 and name it themselves.
+constexpr uint32_t kSlotClaimedSource = 2;
+
+// The armed interrupt never arrived.
+constexpr uint32_t kTimeoutInterrupt = 0x5A5A0070;
+// One arrived inside a window that had to stay quiet.
+constexpr uint32_t kUnexpectedInterrupt = 0x5A5A0071;
+// The claim named a source other than 16 + the group under test.
+constexpr uint32_t kWrongSource = 0x5A5A0072;
+// mcause was not a machine external interrupt.
+constexpr uint32_t kWrongCause = 0x5A5A0073;
+// mhartid landed outside the PLIC's context range, so no context offset could be computed and
+// nothing was armed at all.
+constexpr uint32_t kBadHartContext = 0x5A5A0074;
+}  // namespace fds_interrupt_status

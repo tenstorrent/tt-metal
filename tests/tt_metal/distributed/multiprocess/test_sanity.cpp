@@ -14,6 +14,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -212,13 +213,35 @@ TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
     }
 }
 
+TEST_F(BigMeshDualRankTest2x4, WorkerCoreFromLogicalCoreRejectsCoordinatesOwnedByAnotherRank) {
+    const CoreCoord logical_core{0, 0};
+    int remote_coordinates = 0;
+
+    for (const auto& mesh_coordinate : MeshCoordinateRange(mesh_device_->shape())) {
+        if (mesh_device_->impl().is_local(mesh_coordinate)) {
+            EXPECT_EQ(
+                tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+                    *mesh_device_, mesh_coordinate, logical_core),
+                mesh_device_->impl().get_device(mesh_coordinate)->worker_core_from_logical_core(logical_core));
+        } else {
+            ++remote_coordinates;
+            EXPECT_ANY_THROW(tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+                *mesh_device_, mesh_coordinate, logical_core));
+        }
+    }
+
+    // The rejection is the point of this test: a binding that gives one rank the whole mesh would
+    // pass every assertion above without exercising it.
+    EXPECT_GT(remote_coordinates, 0);
+}
+
 TEST_F(BigMeshDualRankTest2x4, SubmeshCreationSingleSubmesh) {
     auto submesh = mesh_device_->create_submesh(MeshShape(2, 2));
     ASSERT_NE(submesh, nullptr);
     EXPECT_EQ(submesh->shape(), MeshShape(2, 2));
 
     // Make sure the inactive rank returns a DummyMeshCommandQueue
-    if (submesh->get_view().get_devices().empty()) {
+    if (submesh->get_device_ids().empty()) {
         auto& cq = submesh->mesh_command_queue();
         EXPECT_TRUE(dynamic_cast<DummyMeshCommandQueue*>(&cq) != nullptr);
     }

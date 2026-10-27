@@ -590,3 +590,45 @@ def test_insert_stress_dram_utilization_single_expert(device, count):
     torch.testing.assert_close(out_torch[start : start + rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
     local_slice = local_torch[:rows, :].float()
     assert_with_pcc(local_slice, out_torch[start : start + rows, :].float(), pcc=0.9999)
+
+
+def test_insert_program_cache_hit_patches_addresses(device):
+    """A cache hit must write the new local tensor into the new global tensor, not the buffers from the miss."""
+    device.enable_program_cache()
+    global_rows, local_rows, hidden_dim = 160, 64, 64
+    expert_id = 0
+    cases = (
+        (0, [0, 32, 64, 96], [32, 32, 32, 32]),
+        (1, [16, 0, 64, 80], [48, 32, 32, 32]),
+    )
+    retained = []
+    written = []
+    entries_after_miss = None
+
+    for seed, starts, counts in cases:
+        torch.manual_seed(seed)
+        global_torch = torch.randn(global_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+        local_torch = torch.randn(local_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+        g = _to_tile_bfp8(device, global_torch)
+        l = _to_tile_bfp8(device, local_torch)
+        s = _make_index_from_values(device, starts)
+        c = _make_index_from_values(device, counts)
+        retained.extend([g, l, s, c])
+
+        before = device.num_program_cache_entries()
+        out = _run(g, l, s, c, global_expert_id=expert_id)
+        if entries_after_miss is None:
+            entries_after_miss = device.num_program_cache_entries()
+            assert entries_after_miss > before
+        else:
+            assert device.num_program_cache_entries() == entries_after_miss
+
+        out_torch = ttnn.to_torch(out)
+        retained.append(out)
+        rows = _ceil_to_tile(counts[expert_id])
+        start = starts[expert_id]
+        expected = ttnn.to_torch(l)[:rows, :]
+        torch.testing.assert_close(out_torch[start : start + rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
+        written.append(out_torch[start : start + rows, :].clone())
+
+    assert not torch.equal(written[0], written[1])

@@ -51,14 +51,13 @@ using std_type_t = typename df_to_std<df>::std_type;
 constexpr uint32_t ONE_PAGE = 1;
 constexpr uint32_t FIRST_STICK = 0;
 
+// Compile-time args 0-2 are unused placeholders. Buffer addresses are runtime args,
+// and the empty slots keep TensorAccessorArgs at index 11.
 template <
     typename elements_accessor_args_type,
     typename test_elements_accessor_args_type,
     typename output_accessor_args_type>
 struct IsInCTAs {
-    const uint32_t elements_tensor_addr;
-    const uint32_t test_elements_tensor_addr;
-    const uint32_t output_tensor_addr;
     const uint32_t elements_cb;
     const uint32_t test_elements_cb;
     const uint32_t output_cb;
@@ -67,6 +66,7 @@ struct IsInCTAs {
     const uint32_t single_fetch_subchunk_size;
     const bool invert;
     const uint32_t elements_tensor_datum_size;
+    const uint32_t output_tensor_datum_size;
     const elements_accessor_args_type elements_accessor_args;
     const test_elements_accessor_args_type test_elements_accessor_args;
     const output_accessor_args_type output_accessor_args;
@@ -74,13 +74,10 @@ struct IsInCTAs {
 
 // get compile-time arguments by any kernel
 FORCE_INLINE constexpr auto get_ctas() {
-    constexpr auto elements_args = TensorAccessorArgs<11>();
+    constexpr auto elements_args = TensorAccessorArgs<12>();
     constexpr auto test_elements_args = TensorAccessorArgs<elements_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<test_elements_args.next_compile_time_args_offset()>();
     return IsInCTAs<decltype(elements_args), decltype(test_elements_args), decltype(output_args)>{
-        get_compile_time_arg_val(0),
-        get_compile_time_arg_val(1),
-        get_compile_time_arg_val(2),
         get_compile_time_arg_val(3),
         get_compile_time_arg_val(4),
         get_compile_time_arg_val(5),
@@ -89,6 +86,7 @@ FORCE_INLINE constexpr auto get_ctas() {
         get_compile_time_arg_val(8),
         get_compile_time_arg_val(9) != 0,
         get_compile_time_arg_val(10),
+        get_compile_time_arg_val(11),
         elements_args,
         test_elements_args,
         output_args};

@@ -322,7 +322,7 @@ def _forward_prefill_deepseek_chunk(
         idx_for_routing = ttnn.to_layout(idx_u16, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(idx_u16)
 
-    tt_offsets, tt_counts, expert_region_offsets, _ = pc.routing_setup(
+    tt_offsets, tt_counts, expert_region_offsets, _, _ = pc.routing_setup(
         ttnn_top_k_experts_indices=idx_for_routing,
         num_routed_experts=config.num_experts,
         num_experts_per_tok=config.num_experts_per_tok,

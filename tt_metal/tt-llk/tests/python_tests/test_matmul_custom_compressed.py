@@ -13,8 +13,10 @@ from helpers.compressed_utils import (
     generate_exact_assignment,
     run_compressed,
 )
+from helpers.llk_params import CustomMmDestLayout, DestSync
 from helpers.param_config import parametrize
-from helpers.tile_constants import DEFAULT_TILE_C_DIM
+from helpers.test_variant_parameters import CUSTOM_MM_CALLS
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 
 
 def promote_assignment(assignment, ct):
@@ -41,7 +43,15 @@ SUPPORTED_M = {1, 2, 4, 8}
 SUPPORTED_FORMATS = {FMT_CODE[f] for f in ("bfp0", "bfp2", "bfp4", "bfp8")}
 
 
-def run_tile_compressed(M, K, N, assignment, pcc_threshold=None):
+def run_tile_compressed(
+    M,
+    K,
+    N,
+    assignment,
+    pcc_threshold=None,
+    dest_layout=CustomMmDestLayout.Dense,
+    dest_sync=DestSync.Half,
+):
     run_compressed(
         M,
         K,
@@ -55,6 +65,8 @@ def run_tile_compressed(M, K, N, assignment, pcc_threshold=None):
         pack_b,
         encode_meta,
         pcc_threshold=pcc_threshold,
+        dest_layout=dest_layout,
+        dest_sync=dest_sync,
     )
 
 
@@ -191,6 +203,55 @@ def test_matmul_custom_compressed_deepseek(shape, seed):
 
 
 # ---------------------------------------------------------------------------
+# DEST layouts besides the Dense default the other tests run: Default puts tiles 64 rows apart, Compact puts
+# output face 1 at row 8 and tiles 16 rows apart. The widths fit the Default layout's 8 tiles. The SplitAcc
+# layouts are not supported: finalizing a skipped (bfp0) weight tile hangs math.
+
+LAYOUTS = [CustomMmDestLayout.Default, CustomMmDestLayout.Compact]
+LAYOUT_SHAPES = [
+    (1, 64, 32),  #  2x1
+    (8, 256, 128),  #  8x4
+    (8, 512, 224),  # 16x7
+]
+
+
+@blackhole_only
+@parametrize(
+    shape=LAYOUT_SHAPES,
+    formats=[("bfp4", "bfp2", "bfp0")],
+    dest_layout=LAYOUTS,
+)
+def test_matmul_custom_compressed_layouts(shape, formats, dest_layout):
+    M, K, N = shape
+    assignment = assign_random(K, N, formats, COMPRESSION_GRANULARITY)
+    run_tile_compressed(M, K, N, assignment, dest_layout=dest_layout)
+
+
+# Only DEST capacity bounds ct_dim: the unpacker walks the weight tiles one by one from the metadata and math loops
+# over them, so neither has a width limit of its own. The widest outputs: Compact fits 32 tiles in a 16-bit SyncHalf
+# DEST and 64 in a SyncFull one, Dense 32 in SyncFull.
+WIDE_CASES = [
+    # (id, M, K, N, layout, dest sync)
+    ("compact-ct32-half", 8, 64, 1024, CustomMmDestLayout.Compact, DestSync.Half),
+    ("compact-ct64-full", 1, 64, 2048, CustomMmDestLayout.Compact, DestSync.Full),
+    ("compact-ct64-full-m8", 8, 128, 2048, CustomMmDestLayout.Compact, DestSync.Full),
+    ("dense-ct32-full", 8, 128, 1024, CustomMmDestLayout.Dense, DestSync.Full),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,K,N,dest_layout,dest_sync",
+    [pytest.param(*case[1:], id=case[0]) for case in WIDE_CASES],
+)
+def test_matmul_custom_compressed_wide(M, K, N, dest_layout, dest_sync):
+    assignment = assign_random(K, N, ("bfp4", "bfp2", "bfp0"), COMPRESSION_GRANULARITY)
+    run_tile_compressed(
+        M, K, N, assignment, dest_layout=dest_layout, dest_sync=dest_sync
+    )
+
+
+# ---------------------------------------------------------------------------
 # Metadata-word boundary.
 #
 # The unpacker walks the format metadata 10 tile indices per u32
@@ -234,3 +295,84 @@ def test_matmul_custom_compressed_metadata_word_boundary(shape, formats):
     M, K, N = shape
     assignment = assign_clustered(K, N, formats, COMPRESSION_GRANULARITY)
     run_tile_compressed(M, K, N, assignment)
+
+
+# Multi-call: K splits over back-to-back calls that accumulate into one DEST, every call repeating one
+# tile pattern with its metadata restarting on the previous-format sentinel, as the blaze host builds
+# it. The kernel holds math back before each call, so the unpacker reaches the next call while math
+# still holds the previous one's banks (see CUSTOM_MM_CALLS).
+#   race      bfp8/bfp4 only, so nothing inside a call clears SrcA: a both-bank SrcB clear issued while
+#             math still holds the banks drops the SrcA writes it overlaps
+#   rearm     the same with a -inf SrcA clear after every call, which the end-of-call stall's clear to 0
+#             would otherwise mask
+#   boundary  each call ends on bfp2: only the end-of-call stall separates that unpack from the next
+#             call's bfp4/bfp8 format change
+MULTI_CALL_CASES = [
+    # (id, M, K, N, per-call tiles (row-major kt_per_call x ct), rearm)
+    ("race", 1, 1024, 32, ["bfp8", "bfp4"], False),
+    ("race-m8", 8, 1024, 32, ["bfp8", "bfp4"], False),
+    ("rearm", 1, 1024, 32, ["bfp8", "bfp4"], True),
+    ("rearm-m8", 8, 1024, 32, ["bfp8", "bfp4"], True),
+    ("boundary-bfp4", 1, 2048, 32, ["bfp4", "bfp4", "bfp4", "bfp2"], False),
+    ("boundary-bfp8-m8", 8, 2048, 32, ["bfp8", "bfp8", "bfp8", "bfp2"], False),
+    ("boundary-ct2", 1, 1024, 64, ["bfp4", "bfp8", "bfp4", "bfp2"], False),
+]
+# Per-call weight slots are sized for the largest compressed tile (bfp8, 32x32).
+BFP8_TILE_BYTES = 1088
+# A missing stall corrupts part of one tile per boundary, which the default tolerance misses on
+# some shapes; on Blackhole these land at PCC >= 0.9998 with the stall and <= 0.998 without it.
+# The race cases fall far below that.
+MULTI_CALL_PCC = 0.9995
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,K,N,pattern,rearm",
+    [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
+)
+def test_matmul_custom_compressed_multi_call(M, K, N, pattern, rearm):
+    """Back-to-back calls into one DEST, checked against the full-K golden."""
+    kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM
+    tiles_per_call = len(pattern)
+    num_calls = kt * ct // tiles_per_call
+
+    def pack_b_per_call(tiles):
+        # Contiguous within a call, one bfp8-sized slot per call.
+        calls = [
+            tiles[c * tiles_per_call : (c + 1) * tiles_per_call]
+            for c in range(num_calls)
+        ]
+        return (
+            b"".join(
+                b"".join(full for _, full in call).ljust(
+                    tiles_per_call * BFP8_TILE_BYTES, b"\0"
+                )
+                for call in calls
+            ),
+            None,
+        )
+
+    def encode_meta_per_call(assignment, ct, kt, aux):
+        # One metadata stream per call, each restarting on the previous-format sentinel.
+        return b"".join(
+            encode_tile_meta(
+                assignment[c * tiles_per_call : (c + 1) * tiles_per_call], ct
+            )
+            for c in range(num_calls)
+        )
+
+    run_compressed(
+        M,
+        K,
+        N,
+        [FMT_CODE[f] for f in pattern] * num_calls,
+        "sources/matmul_custom_compressed_test.cpp",
+        COMPRESSION_GRANULARITY,
+        SUPPORTED_M,
+        SUPPORTED_FORMATS,
+        promote_assignment,
+        pack_b_per_call,
+        encode_meta_per_call,
+        pcc_threshold=MULTI_CALL_PCC,
+        calls=CUSTOM_MM_CALLS(num_calls=num_calls, rearm=rearm),
+    )

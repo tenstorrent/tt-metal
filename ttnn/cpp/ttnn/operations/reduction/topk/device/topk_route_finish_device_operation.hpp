@@ -51,7 +51,7 @@ namespace program {
 struct TopkRouteFinishSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
-    std::vector<CoreCoord> cores{};
+    std::vector<CoreCoord> cores;
 };
 
 struct TopkRouteFinishProgramFactory {

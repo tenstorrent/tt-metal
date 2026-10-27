@@ -160,7 +160,7 @@ void test_tensor_move_semantics(distributed::MeshDevice* device) {
     // dev tensor updated with dev tensor copy assignment
     auto random_tensor_five = ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
     auto bfloat_data_five = host_buffer::get_as<bfloat16>(random_tensor_five);
-    Tensor dev_b = random_tensor_four.to_device(device);
+    Tensor dev_b = random_tensor_five.to_device(device);
     Tensor dev_b_copy = dev_e_copy.to_device(device);
     dev_b_copy = std::move(dev_b);
     TT_FATAL(dev_b_copy.storage_type() == StorageType::DEVICE, "Test Failed");

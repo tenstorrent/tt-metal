@@ -1,8 +1,10 @@
 ---
 description: Reviews pull requests using Matt Pocock's engineering skills to provide targeted, high-quality improvement suggestions based on the type of changes
 emoji: 🔍
-engine: copilot
-model: claude-sonnet-5
+engine:
+  id: copilot
+  max-continuations: 6
+model: claude-sonnet-5.5
 features:
   gh-aw-detection: true
 cache:
@@ -88,7 +90,7 @@ permissions:
   pull-requests: read
 network: defaults
 tools:
-  bash: ["cat", "ls", "find", "grep", "head", "tail", "wc"]
+  bash: [":*"]
   github:
     toolsets: [pull_requests, repos]
     lockdown: false

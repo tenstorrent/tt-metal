@@ -7,7 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/hal_types.hpp>  // HalProgrammableCoreType, NumHalProgrammableCoreTypes
+#include "llrt/hal_types.hpp"  // HalProgrammableCoreType, NumHalProgrammableCoreTypes
 
 namespace tt::tt_metal {
 

@@ -15,6 +15,7 @@
 //      - Two buffers at distinct positions in the same kernel
 //      - Error path: buffer not enumerated in tensor_buffers
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -39,6 +40,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "multi_device_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -59,11 +61,11 @@ KernelDescriptor MakeBlankReaderKernel(CoreCoord core = {0, 0}) {
 }
 
 std::shared_ptr<Buffer> MakeDramBuffer(IDevice* device, uint32_t size = 2048) {
-    return Buffer::create(device, size, size, BufferType::DRAM);
+    return BufferImpl::create(device, size, size, BufferType::DRAM);
 }
 
 std::shared_ptr<Buffer> MakeL1Buffer(IDevice* device, uint32_t size = 2048) {
-    return Buffer::create(device, size, size, BufferType::L1);
+    return BufferImpl::create(device, size, size, BufferType::L1);
 }
 
 MeshTensor MakeSingleTileL1MeshTensor(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -174,7 +176,7 @@ TEST(DescriptorPatching, CPU_ResolvedBindings_EmptyAfterAddingCb_IsFalse) {
 
 class DescriptorPatchingDeviceTest : public GenericMeshDeviceFixture {
 protected:
-    IDevice* device() { return get_mesh_device()->get_devices()[0]; }
+    auto* device() { return get_mesh_device()->impl().get_devices()[0]; }
 };
 
 // resolve_bindings correctly maps a single per-core buffer arg.

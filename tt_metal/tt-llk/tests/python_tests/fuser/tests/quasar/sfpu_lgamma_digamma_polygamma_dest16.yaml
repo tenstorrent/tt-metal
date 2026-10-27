@@ -1,0 +1,42 @@
+# lgamma (the Stirling kernel, x >= 0.5), digamma and polygamma (n = 1) on [0.5, 20] with 1,
+# 1.5, 2, 3 and 10. polygamma reads APPROXIMATION_MODE (its reciprocal), so both modes run; the
+# approximate variants of lgamma and digamma repeat their exact ones.
+#
+# Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
+# dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
+# the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
+# Special points sit outside the random ranges, so each is drawn about as often as a unit of range.
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b, Float16]
+    stimuli:
+      include:
+        - [0.5, 0.99]
+        - [1.01, 1.49]
+        - [1.51, 1.99]
+        - [2.01, 2.99]
+        - [3.01, 9.99]
+        - [10.01, 20.0]
+        - 1.0
+        - 1.5
+        - 2.0
+        - 3.0
+        - 10.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float16_b
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [Lgamma, Digamma, Polygamma]
+        approximation_mode: [false, true]
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}

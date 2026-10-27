@@ -62,7 +62,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxCLar
 
     // create circular buffers
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    auto intermed_data_format = get_intermed_data_format(data_format, fp32_dest_acc_en);
     const std::uint32_t tile_size_data = tile_size(data_format);
     const std::uint32_t tile_size_intermed = tile_size(intermed_data_format);
 
@@ -121,7 +121,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxCLar
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"num_tiles", "tile_offset", "outer_stride", "inner_size", "dim_size"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -132,7 +132,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxCLar
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"num_tiles", "tile_offset", "outer_stride", "inner_size", "dim_size"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     auto outer_stride = Ht * Wt;
@@ -151,15 +151,16 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxCLar
     if (op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["LOG"] = "1";
     }
-    if (fp32_dest_acc_en) {
+    // Bfp8_b input needs the format reconfig this define enables.
+    if (fp32_dest_acc_en || data_format == tt::DataFormat::Bfp8_b) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     // create compute kernel
     auto make_compute_hw = [&]() {
-        auto hw = ttnn::to_compute_hardware_config(arch, compute_kernel_config);
+        auto hw = ttnn::to_compute_hardware_config(compute_kernel_config);
         if (fp32_dest_acc_en) {
-            std::get<ComputeGen1Config>(hw).unpack_modes = {
+            hw.unpack_modes = {
                 {IN, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {EXPS, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {RECIP, tt::tt_metal::UnpackMode::UnpackToSrc},

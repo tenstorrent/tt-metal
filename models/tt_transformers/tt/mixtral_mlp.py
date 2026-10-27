@@ -82,7 +82,13 @@ class TtMixtralMLP(LightweightModule):
             else:
                 pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"]
                 pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"]
-                pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"]
+                # 128 < seq_len < prefill_len_cutoff (e.g. batched prefill 2 x 128 = 256) still routes
+                # FF2 through minimal_matmul below, which only accepts MinimalMatmulConfig.
+                pc_2 = (
+                    self.model_args.get_mlp_ff2_prg_config(Mode.PREFILL, seq_len, None)
+                    if self.model_args.use_minimal_prefill_matmul(seq_len)
+                    else self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"]
+                )
 
             w1_out = ttnn.linear(
                 x,
@@ -110,7 +116,7 @@ class TtMixtralMLP(LightweightModule):
             ttnn.deallocate(w3_out)
             ttnn.deallocate(w1_out)
 
-            if seq_len > 128:
+            if self.model_args.use_minimal_prefill_matmul(seq_len):
                 w2_out = ttnn.experimental.minimal_matmul(
                     w2_in,
                     self.w2,

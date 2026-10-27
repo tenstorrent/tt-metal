@@ -10,6 +10,7 @@ import pytest
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "perf: mark explicit KDA performance tests")
+    config.addinivalue_line("markers", "extended_actual_start: exhaustive aligned-start local acceptance")
 
 
 @pytest.fixture

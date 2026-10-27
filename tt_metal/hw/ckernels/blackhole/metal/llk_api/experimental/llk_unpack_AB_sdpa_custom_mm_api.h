@@ -8,7 +8,7 @@
 #include "llk_unpack_common_api.h"
 #include "sanitizer/api.h"
 
-template <bool read_transposed = false>
+template <bool read_transposed = false, bool configure_mask_extent = false>
 inline void llk_unpack_AB_sdpa_custom_mm(
     const std::uint32_t operand0,
     const std::uint32_t operand1,
@@ -17,7 +17,8 @@ inline void llk_unpack_AB_sdpa_custom_mm(
     const std::uint32_t tile_index_1,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1,
-    const bool mask_chunk = false) {
+    const bool mask_chunk = false,
+    const std::uint32_t row_stride = 0) {
     SAN_HOOK(unsupported());
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandA_id = get_operand_id(operand1);
@@ -30,7 +31,7 @@ inline void llk_unpack_AB_sdpa_custom_mm(
     const std::uint32_t tile_size_B = get_local_cb_interface(operandB_id).fifo_page_size;
     std::uint32_t base_address_mask =
         mask_chunk ? get_local_cb_interface(get_operand_id(operand_mask)).fifo_rd_ptr - 1 : 0;
-    _llk_unpack_AB_sdpa_custom_mm_<read_transposed>(
+    _llk_unpack_AB_sdpa_custom_mm_<read_transposed, configure_mask_extent>(
         base_address_A,
         base_address_B,
         base_address_mask,
@@ -40,5 +41,7 @@ inline void llk_unpack_AB_sdpa_custom_mm(
         tile_size_B,
         kt_dim,
         ct_dim,
-        mask_chunk);
+        mask_chunk,
+        get_operand_face_r_dim(operandB_id),
+        row_stride);
 }

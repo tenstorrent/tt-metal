@@ -258,13 +258,8 @@ inline constexpr std::uint32_t canonical_unpA_z_stride(const std::uint32_t unpac
     return FACE_C_DIM * FACE_R_DIM * canonical_unpA_x_stride(unpack_dst_format);
 }
 
-// Canonical srcA tile-descriptor baseline programmed by configure_unpack_AB.
-// Per-op uninits restore the tile descriptor to this state.
-//
-// Y-dim (lower 16 bits of TileDescriptor word 1): always 1.
-// X-dim (upper 16 bits of TileDescriptor word 0): 0 for srcA because Tile_x_dim_cntx0 overrides it.
-// Z-dim (upper 16 bits of TileDescriptor word 1): equals the operand's num_faces (used directly at call sites).
-constexpr std::uint32_t CANONICAL_UNPA_TILE_Y_DIM = 1;
+// Canonical srcA tile-descriptor X-dim programmed by configure_unpack_AB. 0 because
+// Tile_x_dim_cntx0 overrides it for srcA.
 constexpr std::uint32_t CANONICAL_UNPA_TILE_X_DIM = 0;
 
 // Mask for the upper halfword of a TileDescriptor config word, where the X/Y/Z dim fields live.
@@ -912,7 +907,6 @@ inline void configure_unpack_AB(
     cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = face_dim | (face_dim << 16);
 
     constexpr std::uint32_t face_dim_16x16 = FACE_R_DIM * FACE_C_DIM;
-    regfile[p_gpr_unpack::FACE_DIM_16x16]  = (face_dim_16x16 / 1) | ((face_dim_16x16 / 1) << 16);
     regfile[p_gpr_unpack::FACE_DIM_8x16]   = (face_dim_16x16 / 2) | ((face_dim_16x16 / 2) << 16);
     regfile[p_gpr_unpack::FACE_DIM_4x16]   = (face_dim_16x16 / 4) | ((face_dim_16x16 / 4) << 16);
     regfile[p_gpr_unpack::FACE_DIM_2x16]   = (face_dim_16x16 / 8) | ((face_dim_16x16 / 8) << 16);

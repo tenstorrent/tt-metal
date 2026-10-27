@@ -62,7 +62,8 @@ def test_decode_only_unseeded_sampling_initializes_rng(mesh_device, reset_seeds,
 
     This reproduces the vLLM ``sample_on_device_mode=decode_only`` lifecycle:
     device prefill sampling state is deliberately skipped, then the first
-    device decode arrives with ``reset_batch=True`` and no request seed.
+    device decode arrives with ``reset_sampling_state=True`` and no request
+    seed.
     Sampling traces are disabled so this test isolates seed initialization
     from the separate sampling-trace correctness issue.
     """
@@ -95,8 +96,9 @@ def test_decode_only_unseeded_sampling_initializes_rng(mesh_device, reset_seeds,
             [tt_logits],
             sampling_params=params,
             start_pos=[positions],
-            reset_batch=step == 0,
             enable_trace=False,
+            reload_sampling_params=step == 0,
+            reset_sampling_state=step == 0,
         )
         tt_tokens, _ = outputs[0]
         sampled_tokens.append(_extract_user_zero_token(tt_tokens))

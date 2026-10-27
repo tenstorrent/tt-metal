@@ -7,10 +7,13 @@
 // (api/compute/experimental/{custom_mm,compressed_custom_mm}.h, merged to main by
 // tt-metal #52727).
 //
-// As merged, both uninits do exactly one thing:
+// The uninits restore the packer strides their init changed, in units of the pack source format:
 //
-//   dense_packing -> cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW> back to the
-//                    default 64-row tile-to-tile stride
+//   Dense   -> the tile (W) stride back to the default 64 rows
+//   Compact -> the tile (W) stride back to 64 rows and the face (Z) stride back to 16 rows, since the Compact
+//              layout packs faces 8 rows apart. UNINIT_COMPACT_PACKING drives that case.
+//
+// They change nothing else.
 //
 // An earlier revision of #52727 also restored the tile-pack MOP, first unconditionally
 // and then behind a restore_tile_pack_mop flag. **Neither survived review** -- main's
@@ -29,8 +32,8 @@
 //          stride the packer assumes (32 rows) disagrees with where the datacopy put the
 //          tiles (64 rows) on purpose.
 //
-//   uninit The function under test, replicated statement-for-statement from the compute
-//          API -- which is now just the conditional W-stride write.
+//   uninit Call the raw pack helper used by the compressed custom-mm compute API.
+//          It restores the strides the selected layout changed.
 //
 //   run 1  A plain per-tile _llk_pack_<PackMode::Default>, with NO packer re-init, so it
 //          packs through whatever state the uninit left.
@@ -133,16 +136,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "experimental/llk_pack_block.h"
+#include "experimental/llk_pack_custom_mm.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
 using namespace ckernel;
 
-// The two W-stride values custom_mm_block_init / _uninit write. Spelled out here exactly
-// as the compute API spells them so a change to either side shows up as a diff.
-constexpr std::uint32_t DENSE_WSTRIDE   = (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2;
-constexpr std::uint32_t DEFAULT_WSTRIDE = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2;
+static_assert(!(UNINIT_DENSE_PACKING && UNINIT_COMPACT_PACKING), "pick one of dense and compact");
+constexpr CustomMmDestLayout uninit_layout = UNINIT_COMPACT_PACKING ? CustomMmDestLayout::Compact
+                                             : UNINIT_DENSE_PACKING ? CustomMmDestLayout::Dense
+                                                                    : CustomMmDestLayout::Default;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -154,11 +158,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
-    if constexpr (UNINIT_DENSE_PACKING)
-    {
-        // custom_mm_block_init's dense_packing branch: 32 rows between tiles.
-        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(DENSE_WSTRIDE);
-    }
+    _llk_pack_custom_mm_init_<uninit_layout>(formats.pack_src);
 
     // What a caller's pack_block_contiguous_init does: replace the MOP, keep the
     // ADDR_MODs/strides from the init above.
@@ -180,10 +180,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // ---- the function under test ----
     if constexpr (!UNINIT_SKIP)
     {
-        if constexpr (UNINIT_DENSE_PACKING)
-        {
-            cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(DEFAULT_WSTRIDE);
-        }
+        _llk_pack_custom_mm_uninit_<uninit_layout>(formats.pack_src);
     }
 
     // ---- run 1: plain per-tile pack, deliberately with NO packer re-init ----
