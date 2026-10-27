@@ -45,14 +45,12 @@ void kernel_main() {
     constexpr uint32_t cb_index = get_compile_time_arg_val(2);
     constexpr uint32_t cb_src = get_compile_time_arg_val(3);
     constexpr uint32_t Wt_output = get_compile_time_arg_val(4);
-    // The host passes the INDEX tensor's geometry (Wt_index, idx_valid_*) for these; the names
-    // say src because the host slices src to the index's shape before dispatch, so the two
-    // tensors share tile geometry here.
-    constexpr uint32_t Wt_src = get_compile_time_arg_val(5);
+    // Index and src share this geometry: validate requires src to carry index's shape.
+    constexpr uint32_t Wt_index = get_compile_time_arg_val(5);
     constexpr uint32_t num_cores = get_compile_time_arg_val(6);
-    constexpr uint32_t src_valid_h_last = get_compile_time_arg_val(7);
-    constexpr uint32_t src_valid_w_last = get_compile_time_arg_val(8);
-    constexpr uint32_t Ht_per_batch_src = get_compile_time_arg_val(9);
+    constexpr uint32_t idx_valid_h_last = get_compile_time_arg_val(7);
+    constexpr uint32_t idx_valid_w_last = get_compile_time_arg_val(8);
+    constexpr uint32_t Ht_per_batch_index = get_compile_time_arg_val(9);
     constexpr uint32_t output_logical_w = get_compile_time_arg_val(10);
     constexpr auto index_ta_args = TensorAccessorArgs<11>();
     constexpr auto src_ta_args = TensorAccessorArgs<index_ta_args.next_compile_time_args_offset()>();
@@ -99,8 +97,8 @@ void kernel_main() {
         const bool has_src_data = map_scatter_input_page<4>(h, h_src);
 
         // Determine valid H for this tile-row (padding bounds)
-        const bool is_last_h_tile = has_src_data && ((h_src % Ht_per_batch_src) == (Ht_per_batch_src - 1));
-        const uint32_t valid_h = is_last_h_tile ? src_valid_h_last : tile_height;
+        const bool is_last_h_tile = has_src_data && ((h_src % Ht_per_batch_index) == (Ht_per_batch_index - 1));
+        const uint32_t valid_h = is_last_h_tile ? idx_valid_h_last : tile_height;
 
         // --- Phase 1: Wait for input from writer, copy to output buffer ---
         in_cb.wait_front(Wt_output);
@@ -122,14 +120,14 @@ void kernel_main() {
             continue;
         }
 
-        for (uint32_t w = 0; w < Wt_src; w++) {
-            const bool is_last_w_tile = (w == Wt_src - 1);
-            const uint32_t valid_w = is_last_w_tile ? src_valid_w_last : tile_width;
+        for (uint32_t w = 0; w < Wt_index; w++) {
+            const bool is_last_w_tile = (w == Wt_index - 1);
+            const uint32_t valid_w = is_last_w_tile ? idx_valid_w_last : tile_width;
 
-            // Read index + src tiles from DRAM (batched, single barrier)
+            // Read index + src tiles from their buffers (batched, single barrier)
             index_cb.reserve_back(one_tile);
             src_cb.reserve_back(one_tile);
-            const uint32_t tile_id = h_src * Wt_src + w;
+            const uint32_t tile_id = h_src * Wt_index + w;
             noc.async_read(
                 index_accessor,
                 index_cb,
@@ -199,7 +197,7 @@ void kernel_main() {
 
             index_cb.pop_front(one_tile);
             src_cb.pop_front(one_tile);
-        }  // Wt_src loop
+        }  // Wt_index loop
 
         // --- Phase 3: Push completed output for writer ---
         out_cb.push_back(Wt_output);

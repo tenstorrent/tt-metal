@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <iostream>
-#include <utility>
 #include <enchantum/enchantum.hpp>
 
 #include "scatter.hpp"
@@ -302,8 +301,9 @@ bool codegen_can_serve(
 
 // The live-L1 half of routing, asked last and on the same original tensors: whether the ROW_MAJOR
 // plan fits the L1 free right now. Kept apart from codegen_can_serve() because the forced entry
-// and the prim's validate consult the static scope only.
-bool codegen_plan_fits_live_l1(
+// and the prim's validate consult the static scope only. Resolves the call's memory config and
+// reduce string for scatter_ns::codegen_plan_fits_live_l1.
+bool call_fits_live_l1(
     const Tensor& input_tensor,
     const int32_t& dim,
     const Tensor& index_tensor,
@@ -560,8 +560,10 @@ Tensor scatter(
     //                                                                      -> native (demoted)
     //   - ROW_MAJOR whose resident input/output sticks do not fit the L1 free right now
     //                                                                      -> native
-    //   - TILE with at most 32 post-transpose tile rows, NOC-aligned sticks that fit L1 and an output
-    //     in the input's placement        -> untilize, ROW_MAJOR factory, tilize (the detour)
+    //   - TILE with at most kRowMajorRerouteMaxHt post-transpose tile rows, input and index sticks of
+    //     at most kRowMajorRerouteMaxStickElems elements whose raw byte widths are multiples of
+    //     kRowMajorRerouteNocAlign, that fit live L1, and an output in the input's placement
+    //                                      -> untilize, ROW_MAJOR factory, tilize (the detour)
     //   - otherwise -> codegen: the TILE interleaved/streaming factory, or the ROW_MAJOR plain or
     //     bf16-reduce factory, chosen by the prim's select_program_factory()
     const bool use_codegen =
@@ -569,7 +571,7 @@ Tensor scatter(
         detail::codegen_can_serve(
             input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string) &&
         !scatter_ns::is_demoted(input_tensor, dim, index_tensor, source_tensor, final_memory_config) &&
-        detail::codegen_plan_fits_live_l1(
+        detail::call_fits_live_l1(
             input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string);
 
     return use_codegen ? detail::scatter_codegen_dispatch(
