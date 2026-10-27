@@ -22,6 +22,8 @@ format_dict = {
     DataFormat.UInt16: torch.int32,
     DataFormat.Int8: torch.int8,
     DataFormat.UInt8: torch.uint8,
+    DataFormat.Int4: torch.int8,
+    DataFormat.UInt4: torch.uint8,
     DataFormat.MxFp8R: torch.bfloat16,
     DataFormat.MxFp8P: torch.bfloat16,
     DataFormat.MxFp4: torch.bfloat16,
@@ -80,6 +82,7 @@ class MathOperation(Enum):
     # Whole-tile column-wise cumulative sum; not element-wise, so its golden works on the
     # tilized tensor rather than per datum.
     Cumsum = OpSpec("cumsum", MathOpType.SFPU_UNARY)
+    Dropout = OpSpec("dropout", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
     # Whole-tile column-wise EMA; its golden works on the tilized tensor.
     Ema = OpSpec("ema", MathOpType.SFPU_UNARY)
@@ -102,6 +105,7 @@ class MathOperation(Enum):
     Neg = OpSpec("negative", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
     Relu = OpSpec("relu", MathOpType.SFPU_UNARY)
+    ReshuffleRows = OpSpec("reshuffle_rows", MathOpType.SFPU_UNARY)
     Rsqrt = OpSpec("rsqrt", MathOpType.SFPU_UNARY)
     Sigmoid = OpSpec("sigmoid", MathOpType.SFPU_UNARY)
     Sin = OpSpec("sine", MathOpType.SFPU_UNARY)
@@ -266,6 +270,8 @@ class MathOperation(Enum):
     SfpuElwpow = OpSpec("POW", MathOpType.SFPU_BINARY)
     SfpuLogaddexp = OpSpec("LOGADDEXP", MathOpType.SFPU_BINARY)
     SfpuLogaddexp2 = OpSpec("LOGADDEXP2", MathOpType.SFPU_BINARY)
+    # Fuser-only binary form of reshuffle_rows with a fixed mask (in1 = in0 + 1, out = in1).
+    SfpuReshuffleRows = OpSpec("RESHUFFLE_ROWS", MathOpType.SFPU_BINARY)
     SfpuElwmulInt = OpSpec("MUL", MathOpType.SFPU_BINARY_INT)
     SfpuGtInt = OpSpec("GT_INT", MathOpType.SFPU_BINARY_INT)
     SfpuLtInt = OpSpec("LT_INT", MathOpType.SFPU_BINARY_INT)
@@ -306,6 +312,7 @@ class MathOperation(Enum):
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
+    SfpuIscloseEqualNan = OpSpec("ISCLOSE_EQNAN", MathOpType.SFPU_BINARY)
     SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
     SfpuQuant = OpSpec("QUANT", MathOpType.SFPU_BINARY)
     SfpuRequant = OpSpec("REQUANT", MathOpType.SFPU_BINARY)
@@ -517,13 +524,11 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
-class SfpuSrcsImpl(Enum):
-    LoadMacro = True
-    Sfpi = False
+class SfpuImpl(Enum):
+    """Which implementation runs an SFPU op (ckernel::sfpu::SfpuImpl); never changes the math."""
 
-    @property
-    def cpp_enum_value(self):
-        return str(self.value).lower()
+    Sfpi = "Sfpi"
+    LoadMacro = "LoadMacro"
 
 
 class DstRoundingMode(Enum):
@@ -565,6 +570,30 @@ class DestSync(Enum):
     @property
     def cpp_enum_value(self):
         return f"DstSync::{self.value}"
+
+
+class CustomMmDestLayout(Enum):
+    """Where custom_mm puts its output tiles in DEST; the values of ckernel::CustomMmDestLayout."""
+
+    Default = 0
+    DefaultSplitAcc = 1
+    Dense = 2
+    DenseSplitAcc = 3
+    Compact = 4
+
+    @property
+    def split_acc(self):
+        return self in (
+            CustomMmDestLayout.DefaultSplitAcc,
+            CustomMmDestLayout.DenseSplitAcc,
+        )
+
+    @property
+    def tile_rows(self):
+        """DEST rows from one output tile to the next, as custom_mm_tile_rows."""
+        if self in (CustomMmDestLayout.Dense, CustomMmDestLayout.DenseSplitAcc):
+            return 32
+        return 16 if self == CustomMmDestLayout.Compact else 64
 
 
 class NarrowTile(Enum):
@@ -720,6 +749,8 @@ format_tile_sizes = {
     DataFormat.UInt16: 2048,
     DataFormat.Int8: 1024,  # 1 byte * 1024 elements
     DataFormat.UInt8: 1024,  # 1 byte * 1024 elements
+    DataFormat.Int4: 512,  # 0.5 byte * 1024 elements
+    DataFormat.UInt4: 512,  # 0.5 byte * 1024 elements
     # MX formats: 1 byte per element + 1 scale (8 bits) per 32 elements
     # 1024 elements = 32 blocks × (1 scale + 32 elements) = 1056 bytes
     DataFormat.MxFp8R: 1056,
@@ -886,6 +917,7 @@ class TopKXLSortMode(Enum):
     Dispatch = 0
     Generic = 1
     EarlyExitK64 = 2
+    Columns = 3
 
 
 class VectorMode(Enum):

@@ -9,8 +9,8 @@ user_invocable: true
 ## Goal
 
 Spend variants where they change hardware behavior. A Quasar sweep that
-multiplies out every dimension, format and fidelity adds build time to the
-`llk-build-quasar` CI job but tests no more of the pipeline. It also routinely
+multiplies out every dimension, format and fidelity adds runtime to the
+Quasar ttsim PR-gate and sanity shards but tests no more of the pipeline. It also routinely
 misses dest bank switching entirely. Variant count is not coverage.
 
 Three rules. Apply all three to any new or edited `tests/python_tests/quasar/test_[op]_quasar.py`. Perf tests have their own sweep rules: use `quasar-perf-test` instead.

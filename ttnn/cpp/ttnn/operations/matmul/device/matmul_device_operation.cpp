@@ -208,11 +208,19 @@ void validate_matmul_optional_tensors(
     if (is_optional_output_tensor) {
         const auto& optional_output_tensor_c = optional_output_tensors.at(0);
         const auto& optional_output_tensor_shape = optional_output_tensor_c->logical_shape();
+        const auto computed_shape = operations::matmul::utilities::compute_matmul_output_shape(
+            args.input_tensors.at(0), args.input_tensors.at(1), attributes.transpose_a, attributes.transpose_b);
+        const uint32_t out_tile_h = optional_output_tensor_c->tensor_spec().tile().get_height();
+        const bool same_rows =
+            optional_output_tensor_shape[-2] == computed_shape[-2] ||
+            (computed_shape[-2] % out_tile_h == 0 && optional_output_tensor_shape[-2] % out_tile_h == 0);
         TT_FATAL(
-            optional_output_tensor_shape == output_tensor_spec.logical_shape(),
-            "Shape of Optional Output Tensor {} doesn't match Output Tensor {}",
+            optional_output_tensor_shape[-1] == computed_shape[-1] && same_rows &&
+                optional_output_tensor_shape.volume() == computed_shape.volume(),
+            "Shape of Optional Output Tensor {} doesn't match Output Tensor {}: the volume and the last dimension must "
+            "match, and leading dimensions may only be folded into whole tile rows",
             optional_output_tensor_shape,
-            output_tensor_spec.logical_shape());
+            computed_shape);
         TT_FATAL(
             optional_output_tensor_c->dtype() == attributes.output_dtype.value(),
             "Type mismatch between optional output tensor {} & output tensor {}",
@@ -694,12 +702,22 @@ void validate_matmul_compute_grid_and_per_core_dims(
                 if constexpr (std::is_same_v<
                                   ProgramConfigType,
                                   operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                    dram_sharded_helpers::validate_num_workers_per_dram_bank(program_config.num_workers_per_dram_bank);
-                    TT_FATAL(
-                        program_config.num_workers_per_dram_bank == 1 ||
-                            input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
-                        "{}: num_workers_per_dram_bank > 1 is currently supported only on Blackhole",
-                        config_name);
+                    if (program_config.use_multicore_pipeline) {
+                        // Whether the call qualifies for the pipeline is known only with the tensors;
+                        // validate_matmul_dram_sharded_config finishes the check.
+                        TT_FATAL(
+                            program_config.num_workers_per_dram_bank >= 1,
+                            "{}: num_workers_per_dram_bank must be at least 1",
+                            config_name);
+                    } else {
+                        dram_sharded_helpers::validate_num_workers_per_dram_bank(
+                            program_config.num_workers_per_dram_bank);
+                        TT_FATAL(
+                            program_config.num_workers_per_dram_bank == 1 ||
+                                input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
+                            "{}: num_workers_per_dram_bank > 1 is currently supported only on Blackhole",
+                            config_name);
+                    }
                 }
             }
         },
@@ -1290,8 +1308,11 @@ void validate_prefetcher_pipes_in1_delivery(
         in1_block_size_bytes);
 }
 
+}  // namespace
+
 // mcast_in0 over PrefetcherPipes. A worker-sender pipe's producer delivers receiver i the K-blocks of
-// output column block i, in K order.
+// output column block i, in K order. Declared in the header: the sparse matmul over pipes runs the same
+// body and checks it the same way.
 void validate_prefetcher_pipes_mcast_in0_geometry(
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const Tensor& input_tensor_b,
@@ -1305,6 +1326,8 @@ void validate_prefetcher_pipes_mcast_in0_geometry(
         in1_k_block_size_bytes(input_tensor_b, in1_tile, program_config.in0_block_w, program_config),
         "mcast_in0");
 }
+
+namespace {
 
 // gather_in0 over PrefetcherPipes: each worker's in1 K-blocks arrive one per ring position, and compute
 // takes them in ring order, the worker's own first, as the in0 shards come round. With stream_in1 they
@@ -1578,11 +1601,12 @@ void validate_matmul_multicore_config(
         attributes.output_mem_config.memory_layout());
 }
 
-// DRAMSharded config: in0 width-sharded in L1, in1 width-sharded in DRAM; height must
-// be a single tile (M == 1) and K/shard dims divide in0_block_w.
+// DRAMSharded config: in0 width-sharded in L1, in1 width-sharded in DRAM. Each activation
+// shard spans all M tile rows; the multicast path also requires compatible K/shard block widths.
 void validate_matmul_dram_sharded_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
+    bool has_bias,
     const MatmulParams& attributes,
     const ttnn::Shape& a_shape_padded,
     const tt::tt_metal::Tile& in0_tile,
@@ -1617,35 +1641,70 @@ void validate_matmul_dram_sharded_config(
         "{}: Input A shard orientation must be ROW_MAJOR, got: {}",
         config_name,
         input_tensor_a.shard_spec().value().orientation);
-    const auto M = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
+    // Width shards hold the flattened batch and M dimensions, as in the factory and
+    // output specification. Every row uses the same weight matrix.
+    TT_FATAL(
+        get_batch_size(input_tensor_b.padded_shape()) == 1,
+        "{}: input B must contain one weight matrix; use the batched DRAM-sharded config for per-batch weights",
+        config_name);
+    const auto M = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/true);
     const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
     uint32_t per_core_M = program_config.per_core_M;
     auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
-    // No padding
+    // Each width shard spans all padded row tiles.
     TT_FATAL(M == per_core_M, "{}: M ({}) must equal per_core_M ({})", config_name, M, per_core_M);
-    TT_FATAL(M == 1, "{}: currently only support in0 tensor height of tile height", config_name);
     TT_FATAL(
         per_core_M == (shard_shape[0] / in0_tile.get_height()),
         "{}: per_core_M ({}) must equal shard_shape[0] / in0_tile.get_height() ({})",
         config_name,
         per_core_M,
         (shard_shape[0] / in0_tile.get_height()));
-    TT_FATAL(
-        K % program_config.in0_block_w == 0,
-        "{}: K ({}) must be divisible by in0_block_w ({})",
-        config_name,
-        K,
-        program_config.in0_block_w);
-    // A block is either a fraction of one storage shard or a whole number of consecutive shards.
-    const uint32_t in0_shard_width_tiles = shard_shape[1] / in0_tile.get_width();
-    TT_FATAL(
-        in0_shard_width_tiles % program_config.in0_block_w == 0 ||
-            program_config.in0_block_w % in0_shard_width_tiles == 0,
-        "{}: shard_shape[1] / in0_tile.get_width() ({}) and in0_block_w ({}) must divide one another",
-        config_name,
-        in0_shard_width_tiles,
-        program_config.in0_block_w);
+    // Without use_multicore_pipeline this is main's single-reader validation, unchanged.
+    if (dram_sharded_helpers::use_dram_sharded_multicore(
+            program_config.use_multicore_pipeline,
+            program_config.num_workers_per_dram_bank,
+            has_bias,
+            program_config.fused_activation.has_value(),
+            attributes.untilize_out,
+            input_tensor_a.tensor_spec().tile(),
+            input_tensor_b.tensor_spec().tile(),
+            input_tensor_a.logical_shape()[-1],
+            input_tensor_a.memory_config().buffer_type(),
+            attributes.output_mem_config)) {
+        // The multi-core pipeline reads activation rows straight from their shards and takes a ragged
+        // last K block, so neither divisibility rule below applies to it.
+        TT_FATAL(
+            input_tensor_b.memory_config().buffer_type() == BufferType::DRAM,
+            "{}: input B must be in DRAM",
+            config_name);
+    } else {
+        if (program_config.use_multicore_pipeline) {
+            // Opted in but not qualifying: the single-reader program, with the reader checks that
+            // validate_matmul_compute_grid_and_per_core_dims skips for an opted-in config.
+            dram_sharded_helpers::validate_num_workers_per_dram_bank(program_config.num_workers_per_dram_bank);
+            TT_FATAL(
+                program_config.num_workers_per_dram_bank == 1 || input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
+                "{}: num_workers_per_dram_bank > 1 with a bias, a fused activation, untilize_out or 16-row tiles "
+                "is supported only on Blackhole",
+                config_name);
+        }
+        TT_FATAL(
+            K % program_config.in0_block_w == 0,
+            "{}: K ({}) must be divisible by in0_block_w ({})",
+            config_name,
+            K,
+            program_config.in0_block_w);
+        // A block is either a fraction of one storage shard or a whole number of consecutive shards.
+        const uint32_t in0_shard_width_tiles = shard_shape[1] / in0_tile.get_width();
+        TT_FATAL(
+            in0_shard_width_tiles % program_config.in0_block_w == 0 ||
+                program_config.in0_block_w % in0_shard_width_tiles == 0,
+            "{}: shard_shape[1] / in0_tile.get_width() ({}) and in0_block_w ({}) must divide one another",
+            config_name,
+            in0_shard_width_tiles,
+            program_config.in0_block_w);
+    }
 
     // tensor in1
     TT_FATAL(
@@ -2428,6 +2487,14 @@ void validate_matmul_mcast1d_config(
             config_name,
             input_tensor_b.memory_config().memory_layout());
     }
+    // With a sharded output, the in0 and in1 multicast programs (mcast_in0 true or false) use the core's output shard
+    // as the output buffer, which holds the output of one batch. gather_in0 uses different kernels, which this check
+    // does not cover.
+    if (!program_config.gather_in0) {
+        const uint32_t B = program_config.fuse_batch ? 1u : get_batch_size(a_shape_padded);
+        operations::matmul::utilities::validate_block_sharded_output_batch(
+            attributes.output_mem_config.is_sharded(), B, program_config.per_core_M, program_config.per_core_N);
+    }
 }
 
 // Shared Mcast2D/Mcast1D preamble — the fuse_batch gate. Fused batch requires B batch==1,
@@ -2655,7 +2722,13 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 validate_matmul_dram_sharded_config(
-                    input_tensor_a, input_tensor_b, attributes, a_shape_padded, in0_tile, program_config);
+                    input_tensor_a,
+                    input_tensor_b,
+                    optional_input_tensors.at(0).has_value(),
+                    attributes,
+                    a_shape_padded,
+                    in0_tile,
+                    program_config);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::
@@ -2810,8 +2883,22 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                             uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                             uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                             uint32_t num_cores = num_blocks_x * num_blocks_y;
-                            auto cwsg_1d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
-                            CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, cwsg_1d, true);
+                            // Mirror MatmulMultiCoreReuseMcast1DProgramFactory::create_program_artifacts anchor.
+                            const auto& worker_bbox = program_config.allowed_worker_cores.value().bounding_box();
+                            CoreCoord start_core = worker_bbox.start_coord;
+                            if (attributes.sub_device_id.has_value()) {
+                                start_core = input_tensor_a.device()
+                                                 ->worker_cores(
+                                                     tt::tt_metal::HalProgrammableCoreType::TENSIX,
+                                                     attributes.sub_device_id.value())
+                                                 .bounding_box()
+                                                 .start_coord;
+                            }
+                            const auto cwsg_1d = worker_bbox.grid_size();
+                            const CoreRangeSet matmul_core_rect(CoreRange(
+                                start_core, CoreCoord(start_core.x + cwsg_1d.x - 1, start_core.y + cwsg_1d.y - 1)));
+                            CoreRangeSet all_cores = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+                                start_core, num_cores, matmul_core_rect, /*row_wise=*/true);
                             tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                                 all_cores,
                                 {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
@@ -3143,7 +3230,9 @@ MatmulParams create_matmul_attributes(
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // When inputs are FLOAT32 (which drives fp32_dest_acc_en=True by default), use HiFi3 on Wormhole B0.
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    math_fidelity = are_inputs_32F ? (is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4) : math_fidelity;
+    math_fidelity = are_inputs_32F
+                        ? (is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4)
+                        : math_fidelity;
 
     bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(
         input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b, parameters.program_config));

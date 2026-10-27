@@ -8,7 +8,7 @@ import torch
 import pytest
 import ttnn
 from ttnn.comparison import ulp
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal, assert_with_ulp
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     assert_finite_matches_golden,

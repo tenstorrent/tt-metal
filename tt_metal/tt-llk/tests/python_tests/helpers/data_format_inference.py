@@ -9,11 +9,12 @@ the unpacking, math, and packing stages of compute pipelines, handling
 architecture-specific differences between Wormhole and Blackhole.
 """
 
-from typing import List, Optional
+from enum import Enum
+from typing import List, Optional, Union
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .format_config import DataFormat, FormatConfig
-from .llk_params import DestAccumulation
+from .llk_params import DestAccumulation, Tilize
 
 VALID_QUASAR_SRC_REG_FORMATS = [
     DataFormat.Float16_b,
@@ -163,6 +164,63 @@ def effective_dest_acc(
     return DestAccumulation.Yes if arch != ChipArchitecture.QUASAR else dest_acc
 
 
+def _two_state_flag(value: Union[bool, Enum, None], param: str, enum_name: str) -> bool:
+    """Normalise a two-state Enum-or-bool test flag to a plain bool.
+
+    DestAccumulation and ApproximationMode wrap True and False, so ``bool(member)`` is True
+    for *both* — ``.No`` included, which silently selects the True branch. Read ``.value``
+    for an enum, take a bool as-is, reject anything else.
+
+    *enum_name* is checked too, because both enums' ``.Yes`` wraps True and duck-typing on
+    ``.value`` would accept the wrong one.
+    """
+    flag = getattr(value, "value", value)
+    if not isinstance(flag, bool):
+        raise TypeError(
+            f"{param} must be a bool or a {enum_name} member, got "
+            f"{value!r} ({type(value).__name__})"
+        )
+    if isinstance(value, Enum) and type(value).__name__ != enum_name:
+        raise TypeError(
+            f"{param} must be a bool or a {enum_name} member, got the "
+            f"{type(value).__name__} member {value!r} -- both wrap a bool, so this would "
+            f"otherwise select a branch silently"
+        )
+    return flag
+
+
+def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:
+    """Normalise a 32-bit-destination flag to a plain bool.
+
+    DestAccumulation is an Enum whose two members wrap True and False, so ``bool(member)``
+    is True for *both* of them -- ``DestAccumulation.No`` included, which would evaluate
+    every triple as the 32-bit-dest case and silently flip specials on and off for whole
+    rows of the matrix.
+
+    Read ``.value`` when handed the enum, take a bool as-is, and reject anything else
+    rather than guessing.
+    """
+    return _two_state_flag(dest_acc, "dest_acc", "DestAccumulation")
+
+
+def unpacks_to_dest(
+    input_format: DataFormat,
+    dest_acc: Union[bool, DestAccumulation],
+    tilize: Tilize = Tilize.No,
+) -> bool:
+    """Does *input_format* unpack straight into Dest instead of through SrcA? A 32-bit
+    input at dest_acc=Yes, except a tilized Float32 input."""
+    if tilize == Tilize.Yes and input_format == DataFormat.Float32:
+        return False
+    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+
+
+def dest_acc_for(data_format: DataFormat) -> DestAccumulation:
+    """The Dest width *data_format* needs: ``Yes`` for a 32-bit format, so its datums
+    are not truncated to 16 bits in Dest, otherwise ``No``."""
+    return DestAccumulation.Yes if data_format.is_32_bit() else DestAccumulation.No
+
+
 _2X_L1_FORMAT = {
     DataFormat.MxFp4_2x_A: DataFormat.MxFp4,
     DataFormat.MxFp4_2x_B: DataFormat.MxFp4,
@@ -210,6 +268,12 @@ def infer_unpack_out(
                 f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
             )
         return register_format_hint
+
+    # Int4/UInt4 are L1-only; the unpacker widens them to Int8/UInt8.
+    if input_format == DataFormat.Int4:
+        return DataFormat.Int8
+    if input_format == DataFormat.UInt4:
+        return DataFormat.UInt8
 
     # MX formats can only exist in L1, not in registers. Hardware unpacks MX to bfloat16 for math.
     # it can also unpack into float16 and TF32 but bfloat16 is the default for MX inputs and default in metal in general.
@@ -453,6 +517,11 @@ def infer_data_formats(
 
     if chip_arch is None:
         chip_arch = get_chip_architecture()
+
+    if output_format.is_4bit_integer():
+        raise ValueError(
+            f"{output_format.name} is an L1 input-only format; the packer cannot output it"
+        )
 
     # On Quasar the math and SFPU data formats can differ. Quasar has only one 16-bit integer HW
     # encoding, Int16 -- the unpacker, the SrcA/SrcB/dest register files, and the packer all lack a

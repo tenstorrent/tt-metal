@@ -86,14 +86,15 @@ ttnn:
     wh_llmbox_civ2: 40
     sim_wh_n150: 695
     sim_bh_p150: 680
+    sim_quasar: 45
   unit:
     wh_llmbox: 50
     wh_galaxy: 125
     bh_galaxy: 40
     bh_p100: 815
-    bh_p150b_civ2: 870
-    wh_n150_civ2: 1040
-    wh_n300_civ2: 1190
+    bh_p150b_civ2: 880
+    wh_n150_civ2: 1050
+    wh_n300_civ2: 1200
     bh_p150b_civ2_viommu: 125
     bh_p300: 60
     bh_quietbox_2: 60
@@ -194,7 +195,7 @@ shield:
     wh_n300_civ2: 10
     bh_p150: 60
   demo:
-    bh_sc4: 360
+    bh_sc4: 380
     bh_sc1: 120
     bh_sc1_high_power: 210
 
@@ -232,7 +233,7 @@ scaleout:
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
-    bh_galaxy: 155
+    bh_galaxy: 175
     bh_sc1: 20
     bh_sc4: 160
     bh_sc16: 150
@@ -263,7 +264,7 @@ runtime:
     sim_wh_n150: 30
     sim_bh_p150: 30
     sim_wh_galaxy: 10
-    sim_bh_galaxy: 10
+    sim_bh_galaxy: 15
   unit:
     wh_n150_civ2: 232
     wh_n300_civ2: 139
@@ -287,6 +288,7 @@ runtime:
     wh_n300_civ2: 52
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
+    bh_loudbox: 20
   perf:
     wh_n300_civ2: 65
     bh_p150_perf: 50
@@ -308,9 +310,12 @@ llk:
   pr_gate:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 45
+    sim_quasar_xl: 30
+    cpu_xlarge: 10
   sanity:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 45
+    sim_quasar_xl: 30
   unit:
     wh_n150_civ2: 40
     wh_n300_civ2: 40
@@ -343,7 +348,7 @@ llk:
 
 models:
   agentic_research_tier3:
-    bh_quietbox_2: 102
+    bh_quietbox_2: 182
     bh_p150: 30
   merge_gate:
     wh_galaxy_merge_gate: 5
@@ -366,7 +371,7 @@ models:
     bh_p150: 27
     bh_quietbox_2: 434
     bh_galaxy: 78
-    bh_sc1: 335
+    bh_sc1: 355
     bh_sc4: 160
   e2e_tier2:
     wh_llmbox_perf: 270
@@ -385,7 +390,7 @@ models:
     bh_p300: 13
     bh_quietbox_2: 62
   unit_tier1:
-    wh_llmbox: 335
+    wh_llmbox: 347  # TT-DiT encoder unit leg 45 -> 60 min (PR #61849)
     wh_n150: 133
     wh_galaxy: 260
     wh_galaxy_perf: 65
@@ -425,7 +430,7 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 1836
+    bh_sc1: 2375
     bh_sc1_high_power: 498
     bh_sc4: 60
     wh_n150: 500
@@ -441,19 +446,20 @@ models:
     bh_p300: 800
   # Request-behavior additions reserve declared job timeouts, not measured usage.
   # See tests/model_behavior/README.md#ci-runtime-accounting for each delta.
+  # Trace allocation sweeps reserve twice the source e2e job time for diagnostics.
   sweep_tier1:
     wh_llmbox: 131
-    wh_n150: 30
+    wh_n150: 52
     wh_n150_civ2: 45
     wh_galaxy: 40
-    wh_galaxy_perf: 205
-    bh_p150: 30
+    wh_galaxy_perf: 265
+    bh_p150: 52
     bh_p150b_civ2: 45
-    bh_quietbox_2: 405
-    bh_galaxy: 90
+    bh_quietbox_2: 609
+    bh_galaxy: 150
   sweep_tier2:
     wh_n150: 30
-    wh_llmbox_perf: 225
+    wh_llmbox_perf: 271
     bh_quietbox_2: 75
     bh_p150: 30
   vllm:

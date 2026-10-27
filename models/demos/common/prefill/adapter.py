@@ -69,6 +69,8 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
+    # Dense KV dedup; sparse models always dedup.
+    tp_shard_kv: bool = False
     # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
     # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
     sparse_kv_cache_format: Optional[object] = None
@@ -86,6 +88,8 @@ class PrefillRunParams:
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
     mtp_levels: int = 0
+    # Decode's MTP level count, 0 = mtp_levels. Levels past mtp_levels reuse its KV: table aliases + acks.
+    mtp_decode_levels: int = 0
 
     @property
     def sp_factor(self) -> int:
@@ -140,7 +144,17 @@ class PrefillModelAdapter(ABC):
     # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
+    # Whether the runner may build the drafter with PREFILL_USE_TRACE=0. Off by default: DFlash is gated
+    # traced. A model whose trace serves one slot only turns it on for multi-user runs.
+    dflash_allows_eager: bool = False
+    # The drafter partial travels as its own D2D plane next to the model's planes; False packs it beside the
+    # hidden instead, widening the activation to 2H.
+    dflash_partial_separate_plane: bool = False
     supports_mtp: bool = False
+    supports_tp_shard_kv: bool = False
+    tp_shard_kv_default: bool = False
+    # Fail PCC verification unless the producer drained exactly one completion per layer per chunk.
+    verify_layer_completions: bool = False
 
     def fabric_payload_size(self) -> int:
         """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is
@@ -215,11 +229,9 @@ class PrefillModelAdapter(ABC):
 
     def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
         """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of
-        these). ``None`` => unconstrained (dense models — any split is fine). A DSA cross-layer-reuse
-        model returns its ``full`` layer indices: each rank must begin on a layer that seeds that rank's
-        indexer-reuse chain (a rank starting on a ``shared`` layer has no prior top-k — see
-        ``tt_prefill_transformer``). The runner (``compute_layer_split``) snaps the default even split
-        onto these and rejects any split whose rank starts fall off them."""
+        these). ``None`` => unconstrained (dense models — any split is fine). The runner
+        (``compute_layer_split``) snaps the default even split onto these and rejects any split whose
+        rank starts fall off them."""
         return None
 
     @abstractmethod
@@ -329,6 +341,9 @@ ADAPTER_PATHS = {
     # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
+    # DeepSeek-V4: hyper-connection residual, per-layer SWA / HCA / CSA attention; serving is single-rank, eager.
+    "deepseek_v4_flash": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4:DeepSeekV4FlashAdapter",
+    "deepseek_v4_pro": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4:DeepSeekV4ProAdapter",
     "gemma4_d_p": "models.demos.gemma4_d_p.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
     # GLM-5.2: runnable through the runner only (no tests / CI); same architecture as GLM-5.3.
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",

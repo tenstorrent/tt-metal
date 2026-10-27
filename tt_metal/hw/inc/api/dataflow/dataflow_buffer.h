@@ -253,6 +253,12 @@ public:
     friend void preload_posted_counter(DataflowBuffer<P, C>&, uint16_t);
     template <dfb::AccessPattern P, dfb::AccessPattern C>
     friend void preload_acked_counter(DataflowBuffer<P, C>&, uint16_t);
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
+    friend void preload_posted_cursor(DataflowBuffer<P, C>&, uint16_t);
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
+    friend void preload_acked_cursor(DataflowBuffer<P, C>&, uint16_t);
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
+    friend void preload_counters_lockstep(DataflowBuffer<P, C>&, uint16_t);
 #endif
 
 #ifndef COMPILE_FOR_TRISC
@@ -546,7 +552,8 @@ private:
 #endif
 
 #ifdef ARCH_QUASAR
-    // Metadata for implicit sync
+#ifndef COMPILE_FOR_TRISC
+    // Metadata for implicit sync (DM only)
     uint16_t ptxn_id_loop_cnt_ = 0;
     uint8_t ptxn_id_index_ = 0;
     uint32_t ptiles_read_ = 0;  // running total of tiles read (32-bit so it never wraps in a launch)
@@ -561,11 +568,15 @@ private:
     uint32_t pshare_txn_id_ = 0;
     uint16_t cshare_pos_ = 0;
     uint32_t cshare_txn_id_ = 0;
+#endif
 
     // The implicit copy constructor copies this pointer, so every copy points at the original. Traffic is
     // recorded on the original, and only the original drains.
     DataflowBuffer* drain_owner_ = this;
+#ifndef COMPILE_FOR_TRISC
+    // DM only
     bool has_outbound_writes_ = false;
+#endif
 #endif
 };
 

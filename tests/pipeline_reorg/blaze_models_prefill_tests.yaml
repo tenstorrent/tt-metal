@@ -262,7 +262,7 @@
       timeout: 5
       tier: 1
       release_ready: false
-  owner_id: U089NPHL0GN # Diego Gomez
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: unit
   sp_config: sc1
@@ -276,6 +276,7 @@
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "torus-xy" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_runner_kv_cache_table -k "torus-xy and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm53_kv_cache_table -k "torus-xy-8x4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm53_tp_sharded_kv_cache_mock -k "8x4 and line and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
@@ -563,6 +564,61 @@
   budget_type: demo
   sp_config: sc1
 
+- name: "(Kimi-K3-2.8T) DSpark drafter accuracy 5k + 55k vs GPU trace, and K3 taps L25"
+  # The DFlash drafter tests of the Kimi-K2.7 components suite, on RadixArk's Kimi-K3-DSpark checkpoint,
+  # plus the golden check that feeds the drafter the GPU taps, and the K3 side of those taps.
+  cmd: |
+    # Stops at the first failure, as the suites above.
+    k3_dspark_drafter() (
+      export MESH_DEVICE=TG
+      export TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+      export PREFILL_TORUS_XY_CERTIFIED=1
+      export DFLASH_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-DSpark
+      export PREFILL_DFLASH_GOLDEN_KV_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/structured_kv
+      export PREFILL_DFLASH_GOLDEN_TAPS_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/taps
+      timeout -k 2m 30m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "torus-xy-8x4 and pretrained and ctx5k-1chunk" -vvv --tb=short --timeout=1200
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_multiturn_pcc -k "torus-xy-8x4 and pretrained and (aligned_min or midchip_straddle or lastchip or rot_partial)" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash_trace.py -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_golden_pcc -vvv --tb=short
+      '
+    )
+
+    k3_dspark_taps() (
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+      export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      export PREFILL_DFLASH_GOLDEN_TAPS_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/taps
+      timeout -k 2m 60m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_dspark_taps.py -k "L25" -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/2] (Kimi-K3-2.8T) DSpark drafter accuracy 5k + 55k vs GPU trace ====="
+    k3_dspark_drafter || exit $?
+    echo "===== [2/2] (Kimi-K3-2.8T) DSpark taps L25 vs GPU trace ====="
+    k3_dspark_taps || exit $?
+    echo "===== both sections passed ====="
+  test_type: k3_dspark_suite
+  test_tags: [kimi_k3, dflash, dspark]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 20
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 # ===== GLM-5.3-744B ====================================================================================
 
 - name: "(GLM-5.3-744B) sparse MLA, prefill block, MTP and MoE accuracy 5k"
@@ -711,7 +767,7 @@
 # * Each section runs in its own subshell under `timeout -k 2m <N>m`; a timeout is a FAIL.
 # * The first failed section ends the job with its exit code, and later sections report NOT RUN:
 #   nothing resets the devices between sections (tt-metal#57706).
-- name: "(DeepSeek-V4-Flash, DeepSeek-V4-Pro) HCA chunked accuracy 6k@5k + SWA chunked accuracy 55k@5k + teacher-forced block chunked accuracy 55k@5k + CSA chunked accuracy 13k@5k"
+- name: "(DeepSeek-V4-Flash, DeepSeek-V4-Pro) HCA chunked accuracy 6k@5k + SWA chunked accuracy 55k@5k + teacher-forced block chunked accuracy 55k@5k + CSA chunked accuracy 13k@5k + runtime contract + mHC head TP-sharded accuracy"
   fabric_profile: torus_xy
   cmd: |
     titles=(
@@ -720,6 +776,8 @@
       "(DeepSeek-V4) teacher-forced block chunked 55k@5k"
       "(DeepSeek-V4-Flash) CSA chunked accuracy 13k@5k"
       "(DeepSeek-V4-Pro) CSA chunked accuracy 13k@5k"
+      "(DeepSeek-V4) runtime contract"
+      "(DeepSeek-V4) mHC head TP-sharded accuracy"
     )
     summary=""
     section_start() {
@@ -743,7 +801,7 @@
       for ((j = sec_n + 1; j <= ${#titles[@]}; j++)); do
         summary+="[$j/${#titles[@]}] NOT RUN ${titles[$((j - 1))]}"$'\n'
       done
-      echo "===== DeepSeek-V4 prefill suite summary ====="
+      echo "===== DeepSeek-V4 prefill attention suite summary ====="
       printf '%s' "$summary"
     }
 
@@ -794,6 +852,24 @@
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    section_start 6
+    (
+      timeout -k 2m 2m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_runtime_contract.py -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 7
+    (
+      timeout -k 2m 3m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_hc_head_tp_sharded -k "torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
     finish
   test_type: dsv4_prefill_suite
   # Per-section tokens: `-f test-type=<token>` selects this job.
@@ -801,9 +877,96 @@
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the section timeouts (6+8+12+15+25 = 66). No margin: models/demo/bh_sc1 in
-      # .github/time_budget.yaml is full (1790/1790), so anything above 66 fails verify-time-budgets.
-      timeout: 66
+      # Sum of the section timeouts (6+8+12+15+25+2+3 = 71).
+      timeout: 71
+      tier: 2
+      release_ready: false
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(DeepSeek-V4) transformer accuracy 5k + transformer chunked accuracy 10k@5k + transformer pipeline-split accuracy 5k + transformer chunked accuracy 55k@5k vs vLLM golden"
+  fabric_profile: torus_xy
+  cmd: |
+    titles=(
+      "(DeepSeek-V4) transformer accuracy 5k"
+      "(DeepSeek-V4) transformer chunked accuracy 10k@5k"
+      "(DeepSeek-V4) transformer pipeline-split accuracy 5k"
+      "(DeepSeek-V4) transformer chunked accuracy 55k@5k vs vLLM golden"
+    )
+    summary=""
+    section_start() {
+      sec_n=$1
+      sec_title=${titles[$((sec_n - 1))]}
+      sec_t0=$SECONDS
+      echo "::group::[$sec_n/${#titles[@]}] $sec_title"
+    }
+    section_end() {
+      local rc=$1 s=$((SECONDS - sec_t0)) st=PASS note=""
+      echo "::endgroup::"
+      if [ "$rc" -ne 0 ]; then st=FAIL; fi
+      if [ "$rc" -eq 124 ]; then note=", timed out"; fi
+      if [ "$rc" -eq 137 ]; then note=", killed"; fi
+      local line="[$sec_n/${#titles[@]}] $st (exit $rc$note, $((s / 60)).$((s % 60 * 10 / 60)) min) $sec_title"
+      echo "$line"
+      summary+="$line"$'\n'
+    }
+    finish() {
+      local j
+      for ((j = sec_n + 1; j <= ${#titles[@]}; j++)); do
+        summary+="[$j/${#titles[@]}] NOT RUN ${titles[$((j - 1))]}"$'\n'
+      done
+      echo "===== DeepSeek-V4 prefill transformer suite summary ====="
+      printf '%s' "$summary"
+    }
+
+    section_start 1
+    (
+      timeout -k 2m 37m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer.py -k "torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 2
+    (
+      timeout -k 2m 34m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_chunked.py -k "torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 3
+    (
+      timeout -k 2m 27m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_pipeline_split.py -k "torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 4
+    (
+      timeout -k 2m 30m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_golden.py -k "torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    finish
+  test_type: dsv4_prefill_suite
+  # Per-section tokens: `-f test-type=<token>` selects this job.
+  test_tags: [dsv4_flash, dsv4_pro, transformer, v4_transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Sum of the section timeouts (37+34+27+30 = 128).
+      timeout: 128
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
@@ -880,6 +1043,143 @@
   budget_type: demo
   sp_config: sc1
 
+# Runs only when named: excluded from "all", tags and the nightly by its own test_group (see the
+# dsv4-depth job in blaze-models-prefill-tests.yaml). Flash and Pro are separate legs so a failure in
+# one does not stop the other. Pro runs as three sections in one leg: layers 0-9 graded per layer, then
+# the end-to-end tail graded at the last layer; each section after the first reads the streams the one
+# before it writes to generated/v4_depth_handoff.
+- name: "(DeepSeek-V4-Flash) transformer full-depth chunked accuracy 55k@5k vs vLLM golden"
+  fabric_profile: torus_xy
+  cmd: |
+    titles=(
+      "(DeepSeek-V4-Flash) transformer layers 0-42 chunked accuracy 55k@5k vs vLLM golden"
+    )
+    summary=""
+    section_start() {
+      sec_n=$1
+      sec_title=${titles[$((sec_n - 1))]}
+      sec_t0=$SECONDS
+      echo "::group::[$sec_n/${#titles[@]}] $sec_title"
+    }
+    section_end() {
+      local rc=$1 s=$((SECONDS - sec_t0)) st=PASS note=""
+      echo "::endgroup::"
+      if [ "$rc" -ne 0 ]; then st=FAIL; fi
+      if [ "$rc" -eq 124 ]; then note=", timed out"; fi
+      if [ "$rc" -eq 137 ]; then note=", killed"; fi
+      local line="[$sec_n/${#titles[@]}] $st (exit $rc$note, $((s / 60)).$((s % 60 * 10 / 60)) min) $sec_title"
+      echo "$line"
+      summary+="$line"$'\n'
+    }
+    finish() {
+      local j
+      for ((j = sec_n + 1; j <= ${#titles[@]}; j++)); do
+        summary+="[$j/${#titles[@]}] NOT RUN ${titles[$((j - 1))]}"$'\n'
+      done
+      echo "===== DeepSeek-V4 transformer full-depth summary ====="
+      printf '%s' "$summary"
+    }
+
+    section_start 1
+    (
+      timeout -k 2m 67m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_flash_transformer_depth -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    finish
+  test_type: dsv4_transformer_depth
+  test_group: dsv4_transformer_depth
+  skus:
+    bh_sc1:
+      # Measured 52.3 min x 1.25 + 1, charged to models/demo/bh_sc1.
+      timeout: 67
+      tier: 2
+      release_ready: false
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+- name: "(DeepSeek-V4-Pro) transformer layers 0-9 + end-to-end chunked accuracy 55k@5k vs vLLM golden, three processes"
+  fabric_profile: torus_xy
+  cmd: |
+    titles=(
+      "(DeepSeek-V4-Pro) transformer layers 0-9 chunked accuracy 55k@5k vs vLLM golden"
+      "(DeepSeek-V4-Pro) transformer end-to-end layers 10-35 chunked 55k@5k"
+      "(DeepSeek-V4-Pro) transformer end-to-end layers 36-60 chunked accuracy 55k@5k vs vLLM golden"
+    )
+    summary=""
+    section_start() {
+      sec_n=$1
+      sec_title=${titles[$((sec_n - 1))]}
+      sec_t0=$SECONDS
+      echo "::group::[$sec_n/${#titles[@]}] $sec_title"
+    }
+    section_end() {
+      local rc=$1 s=$((SECONDS - sec_t0)) st=PASS note=""
+      echo "::endgroup::"
+      if [ "$rc" -ne 0 ]; then st=FAIL; fi
+      if [ "$rc" -eq 124 ]; then note=", timed out"; fi
+      if [ "$rc" -eq 137 ]; then note=", killed"; fi
+      local line="[$sec_n/${#titles[@]}] $st (exit $rc$note, $((s / 60)).$((s % 60 * 10 / 60)) min) $sec_title"
+      echo "$line"
+      summary+="$line"$'\n'
+    }
+    finish() {
+      local j
+      rm -rf generated/v4_depth_handoff
+      for ((j = sec_n + 1; j <= ${#titles[@]}; j++)); do
+        summary+="[$j/${#titles[@]}] NOT RUN ${titles[$((j - 1))]}"$'\n'
+      done
+      echo "===== DeepSeek-V4 transformer full-depth summary ====="
+      printf '%s' "$summary"
+    }
+
+    section_start 1
+    (
+      timeout -k 2m 66m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_pro_transformer_depth_head -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 2
+    (
+      timeout -k 2m 117m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py -k "test_v4_pro_transformer_e2e and layers10to35" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 3
+    (
+      timeout -k 2m 106m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py -k "test_v4_pro_transformer_e2e and layers36to60" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    finish
+  test_type: dsv4_transformer_depth
+  test_group: dsv4_transformer_depth
+  skus:
+    bh_sc1:
+      # Sum of the section timeouts, each measured x 1.25 + 1 (51.7 -> 66, 92.1 -> 117, 83.8 -> 106),
+      # charged to models/demo/bh_sc1.
+      timeout: 289
+      tier: 2
+      release_ready: false
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 
 # ===== Gemma4-31B D_P =================================================================================
 
@@ -940,6 +1240,38 @@
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
+  team: models
+  sp_config: sc1
+
+# Prefill accuracy outside the migration path: one traced runtime prefills each GPU-trace dataset, then
+# checks every KV head and the next-token likelihoods (per context-depth bin) against the trace.
+- name: "(Gemma4-31B-it) D_P prefill KV and next-token likelihood accuracy 256k@8k"
+  fabric_profile: 1d
+  artifact_subdir: gemma4_d_p_prefill_accuracy
+  cmd: |
+    export TT_METAL_HOME=/home/user/tt-metal
+    export PYTHONPATH="$TT_METAL_HOME" PYTHONUNBUFFERED=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    # The Weka copy of the traces reads much faster than /mnt/models.
+    export GEMMA4_GPU_TRACE_ROOT=/mnt/weka/model-weights/llm/ref-data/gpu_traces/gemma4_d_p
+    export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
+    mpirun --bind-to none --pernode --tag-output \
+      python3 -m pytest \
+        'models/demos/gemma4_d_p/tests/test_prefill_accuracy.py::test_prefill_accuracy[blackhole-256k-8x4]' \
+        -sv --tb=short --junitxml="$PREFILL_SUMMARIES/{artifact_subdir}/junit.xml"
+  test_type: gemma4_d_p_prefill_accuracy
+  test_tags: [gemma4_d_p, kv_cache, accuracy]
+  test_group: module
+  budget_type: demo
+  skus:
+    bh_sc1:
+      timeout: 30
+      tier: 1
+      release_ready: false
+  owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
   team: models
   sp_config: sc1
 
@@ -1165,7 +1497,7 @@
 
       timeout -k 2m 44m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "mistral4 and cpu and scalar and no_determinism and torus-xy-8x4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "mistral4 and cpu and scalar and no_determinism and torus-xy-8x4 and sp_only" -vvv --tb=short
       '
     ) || rc=$?
     section_end "$rc"
@@ -1331,18 +1663,63 @@
   sp_config: sc1
 # ===== GPT-OSS-120B ==================================================================================
 
+# Disaggregated-prefill gate for the GPT-OSS chat: live KV-table tests, then the canonical SC1 launcher's
+# PCC over two 1K chunks per slot (a 2048 cache, the multi-chunk ring path the chat migrates), all 36
+# layers and both slots. 35 min includes the tilized-cache read over NFS, JIT and readback. GPT-OSS
+# reports layer completion through the host callback, so PREFILL_LAYER_ACK_D2H=0.
+- name: "(GPT-OSS-120B) prefill KV table and runner accuracy 2k in 1k chunks, all layers, two slots"
+  fabric_profile: torus_xy
+  cmd: |
+    set -euo pipefail
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export MESH_DEVICE=TG
+    export PREFILL_MODEL=gpt_oss_d_p
+    export PREFILL_FABRIC_MODE=2d_torus_xy
+    export PREFILL_SP=4
+    export PREFILL_TP=8
+    export PREFILL_NUM_LAYERS=36
+    export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+    export PREFILL_HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+    export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
+    export PREFILL_TTNN_CACHE=/mnt/models/blaze/openai/gpt-oss-120b
+    export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+    export GPT_OSS_WEIGHTS_FROM_CACHE=1
+    export EXPERT_DTYPE=bf8
+    export PREFILL_STANDALONE_CHUNKED_PCC=0.85
+    export PREFILL_LAYER_ACK_D2H=0
+    export TABLE_WAIT_SECS=1800
+    export TT_METAL_OPERATION_TIMEOUT_SECONDS=300  # The runner idles in H2D receive between requests.
+    exec timeout -k 2m 35m bash models/demos/gpt_oss_d_p/scripts/ci/run_prefill_acceptance.sh
+  test_type: gpt_oss_prefill_runner
+  test_tags: [gpt_oss_prefill_runner, runner, kv_cache]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1:
+      timeout: 35
+      tier: 2
+      release_ready: false
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 # GPT-OSS-120B prefill suite: sections run serially on one allocation, each time-bounded; the job
 # stops at the first failed section.
 #
-# [1/3] producer/runner e2e through the common prefill runner (the production path).
-# [2/3] chunked prefill KV accuracy longbook 5k@1k: full-model real-weights chunked prefill +
+# [1/2] chunked prefill KV accuracy longbook 5k@1k: full-model real-weights chunked prefill +
 # per-layer KV PCC (models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py, standalone harness, not
 # pytest; the GPT-OSS analog of the MiniMax-M3 KV-accuracy stage above) at the small variable-chunk
-# size (PREFILL_CHUNK_SIZE=1024 -> 5 chunks over the 5k golden). Auto-SKIP (rc 0) off-galaxy or when
-# PREFILL_TRACE_DIR is unset.
+# size (PREFILL_CHUNK_SIZE=1024 -> 5 chunks over the 5k golden), then a follow-up turn resuming
+# mid-chunk (PREFILL_RESUME_AT). Auto-SKIP (rc 0) off-galaxy or when PREFILL_TRACE_DIR is unset.
 # GPT_OSS_KV_PCC_MIN=0.85 is a floor under the measured ~0.92 min KV PCC (ring chunked and
 # 1k-chunk configs, EXPERT_DTYPE=bf8), keeping headroom for bf8/golden noise.
-# [3/3] variable-chunk smoke (models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py): one
+# [2/2] variable-chunk smoke (models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py): one
 # runtime built for {1k, 8k} prefills the same 1024 real tokens as a native 1k chunk vs padded
 # into an 8k chunk and reports both timings. No PCC/golden -- it catches the multi-chunk-size
 # runtime build or small-chunk ring path breaking. Auto-SKIPs off-galaxy; no PREFILL_TRACE_DIR.
@@ -1354,52 +1731,19 @@
 #                        must hold "tensor_cache_bfp8_MeshShape([4, 8])"; without it the run
 #                        cold-tilizes from safetensors and will blow the timeout
 #   PREFILL_TRACE_DIR -> /mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
-#                        (KV accuracy sections only)
+#                        (KV accuracy section only)
 # fabric_profile torus_xy: every chunk drives the SP ring cache-read (FABRIC_1D_RING), which
 # needs the certified TorusXY wraparound links the impl workflow provides.
 #
-# Per-section bounds (timeout -k 2m, a timeout counts as FAIL and the next section still runs):
-#   [1/3] 35 min: producer/runner e2e through the common prefill runner (the production path):
-#         11 x 5120-token chunks for one user, producer KV PCC over the 5k golden prefix. Runner ready
-#         measured 14-29 min (tilized-cache read over NFS + JIT); chunks + PCC readback ~1 min.
-#         GPT-OSS reports layer completion through the host callback, so PREFILL_LAYER_ACK_D2H=0.
-#   [2/3] 35 min: standalone harness, cache load + JIT + prefill + PCC readback (5 ring chunks), with
-#         headroom for cold kernel JIT and the ~180 GB tilized-cache read over NFS. A cold cache BUILD exceeds it.
-#   [3/3] 30 min: one runtime build + 6 short prefills, no golden readback; cache read + JIT dominate.
-- name: "(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k + chunked prefill KV accuracy longbook 5k@1k + variable-chunk smoke 1k vs 8k"
+# Per-section bounds (timeout -k 2m, a timeout counts as FAIL and stops the suite):
+#   [1/2] 35 min: standalone harness, cache load + JIT + prefill + PCC readback (5 ring chunks plus the
+#         resumed turn), with headroom for cold kernel JIT and the ~180 GB tilized-cache read over NFS.
+#         A cold cache BUILD exceeds it.
+#   [2/2] 30 min: one runtime build + 6 short prefills, no golden readback; cache read + JIT dominate.
+- name: "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@1k + variable-chunk smoke 1k vs 8k"
   fabric_profile: torus_xy
   cmd: |
     # Section bodies run in a subshell "( ... )" so one section's exports cannot leak into the next.
-    gpt_oss_prefill_runner() (
-      export LOGURU_LEVEL=INFO
-      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
-      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-      export MESH_DEVICE=TG
-      export PREFILL_MODEL=gpt_oss_d_p
-      export PREFILL_FABRIC_MODE=2d_torus_xy
-      export PREFILL_SP=4
-      export PREFILL_TP=8
-      export PREFILL_NUM_LAYERS=36
-      export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-      export PREFILL_HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-      export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
-      export PREFILL_TTNN_CACHE=/mnt/models/blaze/openai/gpt-oss-120b
-      export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
-      export GPT_OSS_WEIGHTS_FROM_CACHE=1
-      export EXPERT_DTYPE=bf8
-      export PREFILL_PCC_GOLDEN_LEN=5000
-      export PREFILL_STANDALONE_CHUNKED_PCC=0.85
-      export PREFILL_LAYER_ACK_D2H=0
-      export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1800
-      export PREFILL_CI_PRODUCER_TIMEOUT_S=900
-      export PREFILL_RUNNER_LAUNCH=ci
-      timeout -k 2m 35m mpirun --bind-to none --pernode --tag-output bash -lc '
-        export OMP_NUM_THREADS=$(nproc)
-        export TT_METAL_OPERATION_TIMEOUT_SECONDS=300  # 5 min; the runner idles in the H2D recv between chunks
-        python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=2040
-      '
-    )
-
     gpt_oss_kv_pcc_1k() (
       export LOGURU_LEVEL=INFO
       export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
@@ -1413,6 +1757,7 @@
       export PREFILL_CHUNK_SIZE=1024
       export PREFILL_TPS_ITERS=1
       export GPT_OSS_KV_PCC_MIN=0.85
+      export PREFILL_RESUME_AT=992  # also gate a follow-up turn resuming mid-chunk
       timeout -k 2m 35m mpirun --pernode --tag-output bash -lc '
         python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
       '
@@ -1448,19 +1793,16 @@
       echo "[$tag] PASS ($((d / 60)) min $((d % 60)) s)  $title"
     }
 
-    run_section 1/3 "(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k vs 5k golden prefix" gpt_oss_prefill_runner
-    run_section 2/3 "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@1k" gpt_oss_kv_pcc_1k
-    run_section 3/3 "(GPT-OSS-120B) variable-chunk prefill smoke 1k vs 8k" gpt_oss_varchunk_smoke
+    run_section 1/2 "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@1k" gpt_oss_kv_pcc_1k
+    run_section 2/2 "(GPT-OSS-120B) variable-chunk prefill smoke 1k vs 8k" gpt_oss_varchunk_smoke
   test_type: gpt_oss_prefill_suite
   # Per-section tokens: `-f test-type=<token>` selects this job.
-  test_tags: [gpt_oss_prefill_runner, gpt_oss_prefill_kv_pcc_1k, gpt_oss_varchunk_smoke]
+  test_tags: [gpt_oss_prefill_kv_pcc_1k, gpt_oss_varchunk_smoke]
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (35 + 35 + 30), no margin: the models/demo/bh_sc1
-      # time budget bucket is exactly full, so this entry cannot carry any. Worst case (a section
-      # hits its limit plus the 2 min kill grace) the last section may be cut short by this timeout.
-      timeout: 100
+      # Exactly the sum of the per-section bounds (35 + 30), no margin.
+      timeout: 65
   owner_id: U08HM8SL5U4 # Maciek Dragula
   team: models
   budget_type: demo
@@ -1674,8 +2016,6 @@
   sp_config: sc4
 
 
-# Separate launcher from the verifier legs above: the drafter path is not trace-captured, so this one runs
-# PREFILL_USE_TRACE=0 and its 250k timing is not comparable to theirs. PCC stops at 55k, where the golden does.
 - name: "(Kimi-K2.7-1T) DFlash drafter KV accuracy 55k@5k + perf 250k@5k, SC4"
   cmd: |
     set -euo pipefail
@@ -1684,7 +2024,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_dflash_pcc.sh kimi27
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 --variant dflash
   test_type: prefill_runner_kv_pcc
   test_tags: [kimi_k2_7, runner, kv_cache, dflash]
   test_group: disagg_prefill
@@ -1701,9 +2041,10 @@
   sp_config: sc4
 
 
-# 4-galaxy (SC4) GLM-5.3 MTP1 prefill KV accuracy and throughput, sharing a launcher with the SC1 MTP1
-# entry below. MTP is gated against its own tail-trace golden, not the manifest golden the entries above use.
-- name: "(GLM-5.3-744B) MTP1 prefill KV accuracy + perf 55k@5k, SC4"
+# Kimi-K3 with RadixArk's DSpark drafter, through the same launcher. Eager at 1M with 34 slots, the ceiling the
+# drafter's K/V leaves on the last rank, as K3's own leg runs eager at its ceiling. Slot 0 is PCC'd on 55k,
+# where the drafter golden stops; the request is timed to 1M.
+- name: "(Kimi-K3-2.8T) DSpark drafter KV accuracy, eager 34 users, 55k@5k + perf 1M@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1711,7 +2052,33 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc4 1
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3 sc4 --variant dspark
+  test_type: k3_dspark_runner
+  test_tags: [kimi_k3, runner, kv_cache, dflash, dspark]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      timeout: 20
+      tier: 1
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
+# 4-galaxy (SC4) GLM-5.3 MTP KV share prefill KV accuracy and throughput: prefill computes MTP level 1 and
+# publishes its KV for all 4 of decode's MTP levels. Shares a launcher with the SC1 entry below. MTP is gated
+# against its own tail-trace golden, not the manifest golden the entries above use.
+- name: "(GLM-5.3-744B) MTP KV share prefill KV accuracy 55k@5k + perf 1M@5k, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4 --variant mtp_kv_share
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace]
   test_group: disagg_prefill
@@ -1777,7 +2144,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_dflash_pcc.sh kimi27 sc1
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 sc1 --variant dflash
   test_type: prefill_runner_kv_pcc
   test_tags: [kimi_k2_7, runner, kv_cache, dflash]
   test_group: disagg_prefill
@@ -1792,9 +2159,9 @@
   sp_config: sc1
 
 
-# Single-galaxy (SC1) GLM-5.3 MTP1 prefill KV accuracy, same launcher as the SC4 entry above and the
-# control for it: one rank skips the D2D union-embedding transport, so a failure here is MTP1 itself.
-- name: "(GLM-5.3-744B) MTP1 prefill KV accuracy + perf 55k@5k, SC1"
+# Single-galaxy (SC1) GLM-5.3 MTP KV share prefill KV accuracy, same launcher as the SC4 entry above and the
+# control for it: one rank skips the D2D union-id transport, so a failure here is MTP prefill itself.
+- name: "(GLM-5.3-744B) MTP KV share prefill KV accuracy + perf 55k@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1802,8 +2169,8 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    echo "===== [1/2] (GLM-5.3-744B) MTP1 prefill KV accuracy + perf 55k@5k, runner ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc1 1 || exit $?
+    echo "===== [1/2] (GLM-5.3-744B) MTP KV share prefill KV accuracy + perf 55k@5k, runner ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 --variant mtp_kv_share || exit $?
     echo "===== [2/2] (GLM-5.3-744B) MTP1 predictor multi-turn accuracy, 8 turn schedules ====="
     (
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
@@ -1846,9 +2213,9 @@
 # so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
 # Fabric comes from the manifest and the descriptor from run_multirank_pcc.sh, so this leg carries
 # no fabric_profile -- same as the Kimi-K2.7 and GLM-5.3 disagg legs beside it.
-# Traced, and the request runs to 1M like GLM-5.3's: only the 55k the golden spans is PCC'd, the
-# tail is timed. Its throughput lands on the run page through the "(Kimi-K3-2.8T) disaggregated
-# prefill SC4 perf" summary job.
+# 83 slots (manifest), so eager: traced K3 holds one KDA slot. The request runs to 1M like GLM-5.3's:
+# only the 55k the golden spans is PCC'd, the tail is timed. Its throughput lands on the run page
+# through the "(Kimi-K3-2.8T) disaggregated prefill SC4 perf" summary job.
 # Own test_type per rung, unlike the Kimi-K2.7 and GLM-5.3 pairs that share prefill_runner_kv_pcc:
 # four galaxies is the scarcest resource in the pool, so this leg has to be dispatchable without
 # also claiming a single-galaxy one. The `runner` and `kv_cache` tags still select both rungs.
@@ -1888,8 +2255,8 @@
 # Single-galaxy rung of the same launcher. 93 layers do not fit one galaxy, so the sc1 arm overrides
 # the manifest depth to 24 -- which ends on an MLA layer and is the deepest depth the golden's
 # decoder-output stream covers, making this a real accuracy gate rather than a smaller copy of sc4.
-# Traced like sc4, and timed to 250k like the other sc1 legs; 24 layers are no baseline for 93, so
-# its numbers stay in this job's log and out of the sc4 summary.
+# sc4's 83 slots, so eager like sc4, and timed to 250k like the other sc1 legs; 24 layers are no
+# baseline for 93, so its numbers stay in this job's log and out of the sc4 summary.
 - name: "(Kimi-K3-2.8T) disaggregated prefill L24 KV accuracy 55k@5k + perf 250k@5k, SC1"
   cmd: |
     set -euo pipefail
@@ -1958,6 +2325,10 @@
   # runtime arguments. Only it can catch a regression in that path -- a trace replay never re-runs the
   # host runtime-arg patch the scalar form depends on. It shares this job because the fabric bring-up
   # dominates the step, so a separate job would roughly double the cost of the same coverage.
+  #
+  # The fabric suite runs a smoke subset (32-rank snake ring: bf16 gathers, slot select, multi-packet
+  # pages; traced metadata and the GLM sub-device path) to stay inside this bucket's 20 min budget.
+  # The full matrix (~100 cases on this torus, 4+ min) is not run here.
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -1971,6 +2342,8 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_ci_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and full_mesh and ((test_gather and bf16) or test_slot_select_partial_extent or test_pages_larger_than_payload)" || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and (test_metadata_traced or test_subdevice_external_semaphores)" || rc=1
       exit $rc
     '
   test_type: high_bw_all_gather_perf
