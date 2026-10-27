@@ -228,6 +228,23 @@ class OptimizedDecoder(LightweightModule):
         logical_n = self.logical_widths[id(w)]
         group = "mlp" if role in ("gate", "up", "gateup", "down") else "attention"
         cfg = self.policy.get(role, {})
+        flat_shape = None
+        if (self.policy.get("flat_prefill") and self.policy.get("_prefill_phase")
+                and len(x.shape) == 3 and x.shape[0] in (8, 16, 32) and x.shape[1] in (256, 512)
+                and not decode_batch and x.layout == ttnn.TILE_LAYOUT and not x.is_sharded()
+                and w.dtype == ttnn.bfloat4_b
+                and cfg.get("fidelity", self.policy.get("fidelity")) == "LoFi"):
+            # Bound the opt-in to the measured native prefill geometries. Tiled
+            # S makes B*S contiguous; preserve K blocking, dtype and all math.
+            blocks = {"mix": (4, 16), "out": (4,), "down": (4,), "gate": (20,), "up": (20,)}
+            grid = tuple(cfg.get("prefill_grid", self.policy.get("prefill_grid", [8, 4])))
+            if (cfg.get("prefill_block", self.policy.get("prefill_block", 4)) in blocks.get(role, ())
+                    and grid in ((11, 10), (11, 8))):
+                flat_shape = list(x.shape)
+                x = reshape(x, [1, flat_shape[0] * flat_shape[1], flat_shape[2]])
+                cfg = dict(cfg)
+                # H16 exceeds gate/up's available L1 at K20; retain H8 there.
+                cfg["prefill_out_block_h"] = 8 if role in ("gate", "up") else 16
         activation_name = self.policy.get(group + "_activation", "bfloat16")
         if self.policy.get("_prefill_phase"):
             activation_name = cfg.get("prefill_activation", activation_name)
@@ -292,7 +309,8 @@ class OptimizedDecoder(LightweightModule):
             kwargs["core_grid"] = ttnn.CoreGrid(x=11,y=10)
         y = ttnn.linear(x, w, compute_kernel_config=ckc, dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG, **kwargs)
-        return y[..., :logical_n] if logical_n != w.shape[-1] else y
+        y = y[..., :logical_n] if logical_n != w.shape[-1] else y
+        return reshape(y, [flat_shape[0], flat_shape[1], logical_n]) if flat_shape else y
 
     def _norm(self, x, w):
         if self.policy.get("sharded_norm") and x.shape[-1] == 5120 and (x.shape[-2] == 1 or (self.policy.get("prefill_sharded_norm") and math.prod(list(x.shape)[:-1]) <= self.policy.get("prefill_norm_max_tokens", 512))):

@@ -1,0 +1,23 @@
+{
+  "status": "metadata/case-selection defect fixed; production model sources unchanged",
+  "cause": "Compute config default repr contained process-specific address. Sorting JSON descriptors by that repr made case indices unstable. The driver failed closed on inventory mismatch; no cross-role speedup was accepted.",
+  "old_probe_sha256": "33a9870fabcf4979194586d59ce5bb989542d7f2af1a74ebf2bfc0b4a1a1ef58",
+  "new_probe_sha256": "351eff45a21a8b40c1a97bf93254dde150e1a2188adfd5575d2559ff6bc1c3db",
+  "math_functions_AST_exact": [
+    "variant",
+    "run",
+    "checks"
+  ],
+  "change": "Structured compute attributes, stable layer/role sorting and explicit --case-ids. Original two receipts and their old source retained without rewriting.",
+  "retained_actual_measurements": [
+    {
+      "file": "l1-native-s512-attempt1.json",
+      "actual": "layer0 out native L1 exact/slower; layer3 gate native L1 capacity clash"
+    },
+    {
+      "file": "l1-role-1-h4.json",
+      "actual": "layer0 up H4 L1 exact/slower, despite old requested case-index1 label. Reused only by explicit actual layer/role metadata."
+    }
+  ],
+  "new_driver": "run_l1_role_screen_v2.py checks allsemanticgeometrycontracts and actualLoFi/false/false/true compute fields, preservesnormalclose beforeindependentattempts"
+}

@@ -1,6 +1,6 @@
 # Qwen3.8 SWE optimization — 27 October 2026
 
-Status: local full-model decode improvement validated; clean SWE accuracy and SWE100/500 remain pending.
+Status: local decode/prefill improvements validated; isolated SWE8 and frozen SWE25 controls audited. Candidate scaling and SWE100/500 remain pending.
 
 Target: useful SWE-bench Verified throughput on one QB2 (four Blackhole chips),
 with correctness and small scored samples established before expansion to 100
@@ -12,6 +12,40 @@ autoport `models/autoports/qwen_qwen3_8_27b`, all 64 layers, native 262144 conte
 The separate `models/demos/qwen38_27b_qb2` is not the implementation under test.
 Worktree: `/home/mvasiljev/build/tt-metal-qwen38-swe`, branch
 `mvasiljevic/qwen38-swe-opt`; the existing Granite checkout is preserved.
+
+## Current measured state
+
+- Isolated SWE8 control: **7/8 solved**, all eight normal submissions, 5718.577 s
+  trial envelope. See [compact control](isolated-swe8-control.json).
+- Frozen SWE25 B8/256/C8 medium control: **16/25 solved (64%)**, all 25 normal
+  submissions, no exceptions, 9323.502 s trial envelope. All isolation phases and
+  stable audit hashes pass. All 923 server responses are accounted: 922 tool-call
+  endings and one capped 16384-token response omitted from the saved trajectory,
+  recovered on successful Sphinx7889. Observed network retrieval attempts failed
+  DNS; inspected Git history is historical/setup content. This is not a matched
+  GPU parity or absence-of-pretraining-memorization verdict. See
+  [audited SWE25](isolated-swe25-control.json).
+- Grouped B16/512/C8 SWE8 candidate: 6/8 solved, two agent timeouts, 6363.251 s
+  envelope. This does **not** establish accuracy parity or a SWE speedup. See
+  [complete accounting](isolated-swe8-grouped.json).
+- Masked-state C1 integration smoke: normal submission and reward1 on one known
+  task, complete9/9 API responses and isolation audit. This is integration
+  evidence, not an accuracy estimate. See [smoke](masked-serving-smoke.json).
+- Flat-prefill local stage: independent **clean-pass**, exact full-model states,
+  logits and outputs; clean median TTFT **8771.253→7727.073 ms (11.9046% lower)**,
+  unchanged decode. L1-input and larger-grid alternatives were adapted, measured
+  and retained as slower/capacity results. The feature is default off. See
+  [implementation/evidence](FLAT_PREFILL.md) and
+  [independent review](FLAT_PREFILL_FINAL_REVIEW.md).
+- C16 masked SWE25 candidate and isolated low-effort SWE8 pilot are still running.
+  Candidate run40585466415 attempt1 failed before model loading in fabric topology
+  setup; attempt2 uses identical sources on another assigned runner. No task
+  score is inferred from the infrastructure failure. Flat serving-image validation
+  and actual SWE100/500 have not completed.
+
+Raw CSV/Tracy, token arrays, logs and archives remain local or in CI. Only code
+and compact documentation are published. Keep the distinct cohorts, resident
+batch sizes, HTTP concurrency and policy labels when comparing these rows.
 
 ## References and existing evidence
 

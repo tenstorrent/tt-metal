@@ -1,0 +1,95 @@
+{
+  "status": "Paired profiles and applicable L1/grid experiments complete; independent final review pending",
+  "scope": "Bounded flat-prefill geometry stage, not a claim that every possible model optimization is exhausted",
+  "baseline_reports_sha256": {
+    "prefill_window_perf_report.txt": "65d8bea80745295aa2cc8217c8ab3ed0375dd6a7bf34d756253bc85d185d3566",
+    "decode_window_perf_report.txt": "7bf1bc8b0c802a81f17707f3a21ee9a0ea36369dc4a4839959f2ce5c872c3318"
+  },
+  "decisions": [
+    {
+      "advice": "HiFi2 may improve fused rowprojection",
+      "finding": "Raw embeddedmatmul compute_kernel_config LoFi; aggregateHiFi4 comes from trailingreduce. This specificadvice is metadata driven and not an actionablefidelity speedup. Preserve allselectedprecision."
+    },
+    {
+      "advice": "Increase fusedprojection grid from22cores",
+      "finding": "22 aggregatecorecount is not matmulgrid: inspectedfirstfusedprogram10x1, LoFi. Prior samephysical32rowBFP4/LoFi native8/10/11core andKblock controls exist; no currentlargergridgain claimed. Match actualprogram and residualcontract before anyfollowup."
+    },
+    {
+      "advice": "DRAM-shard LM head / increase headfidelity",
+      "finding": "CurrentheadBF8/HiFi2, noaccuracychangeinthisstage. PriorBF16headtopologytrialsarehistoricalcontext only, not rejectionevidenceforBF8. Current~931usmatmul is~1.46% full64decode-step time, despite26% reducedfixture; leaveBF8DRAMshardingunmeasuredfollowup rather thanclaiminvalidorendlessretuningbeforeSWE."
+    },
+    {
+      "advice": "Moveprefillinput0toL1",
+      "finding": "Completed real native B16/M8/S512 screen all10layer/roles with placement+matmul cost, exact all4ASICs before/after90 replays. Seven native capacity clashes were adapted to largest smaller legal fitting H2/H4. All10 fitting candidates slower (ratios0.74994..0.95995). Retain selected DRAM path; no global L1-family rejection. See prefill-flat-l1-input-comparison.json and all raw role receipts."
+    },
+    {
+      "advice": "UseHiFi2/4 withBF16foraccuracy",
+      "finding": "SelectedprojectionBF4/LoFi policyunchanged; all64fullstate/logits/tokens andqualityexact. Changingfidelitywouldbe a separateaccuracy/performanceexperiment, not requiredtoimplementgeometry-equivalentflatpath."
+    },
+    {
+      "advice": "Use tracing toremovehighopgaps",
+      "finding": "Actualdecodewindowalreadyreplaystraces1and3, nohostrefresh/readbackinside tracedwork. Genericadvice doesnotestablishuntracedexecution."
+    },
+    {
+      "advice": "Finalcandidateincreaseprefillgate/up grid88to110",
+      "finding": "Completed all4gate/up roles with unchanged K/dtype/fidelity and DRAMinput/output. AlllegalH26/13/2/1 atperCoreM26 tested: H26static2235008>physical1572864;H13static1323136>first1293696. H2/H1 exact90replays butslower onall4roles; best ratios0.88732..0.90911. Retain selected11x8 grid. See prefill-flat-grid-comparison.json."
+    }
+  ],
+  "prior_reference_sha256": {
+    "optimized_full_model/profiler_conclusions.md": "0b515bfb5240d176030abd144ba9f3f27ec916aa2fb1f14ab133c55481862e3a",
+    "optimized_full_model/rejection_ledger.json": "9ef4b52c56a63124f0f3f570c5194b8a9f85573f97a8e2dddb3e7ae19b987a8c",
+    "optimized_multichip_decoder/decode_rs_grid_selection.json": "0711ece418bbf041a30cb311dea502bb340d624c6b3cb8031eaf6f0118bda479"
+  },
+  "remaining": "BF8headsharding is an explicitly unmeasured broader opportunity, not rejected by historicalBF16trials; not a gate for this isolated prefillgeometry. All directly applicable L1/grid advice now has measured outcomes. Final independent review still required.",
+  "candidate_reports_sha256": {
+    "prefill_window_perf_report.txt": "7b31257ed01479ed86d3a64c0c805eb156ac9f932a401b46561902811dba106b",
+    "decode_window_perf_report.txt": "dc99990f797304a82e546628aeef6167d8f91684f0b9fc63b7fbb06f7f2c6173"
+  },
+  "actual_advice_counts": {
+    "baseline": {
+      "prefill": {
+        "- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)": 80,
+        "- in0_block_w=16 and output subblock 1x2 look good \ud83e\udd37": 8,
+        "- in0_block_w=4 and output subblock 1x5 look good \ud83e\udd37": 32,
+        "- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy": 32,
+        "- in0_block_w=20 and output subblock 2x1 look good \ud83e\udd37": 32,
+        "- in0_block_w=4 and output subblock 2x1 look good \ud83e\udd37": 8,
+        "- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further": 8,
+        "- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy": 8
+      },
+      "decode": {
+        "- in0_block_w=6 and output subblock 1x4 look good \ud83e\udd37": 1,
+        "- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4": 2,
+        "- Increase grid size (currently using 22 of 110)": 2,
+        "- in0_block_w=24 and output subblock 1x4 look good \ud83e\udd37": 1,
+        "- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further": 1,
+        "- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy": 1
+      }
+    },
+    "flat": {
+      "prefill": {
+        "- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)": 64,
+        "- in0_block_w=16 and output subblock 1x2 look good \ud83e\udd37": 8,
+        "- in0_block_w=4 and output subblock 1x5 look good \ud83e\udd37": 32,
+        "- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy": 32,
+        "- in0_block_w=20 and output subblock 8x1 look good \ud83e\udd37": 16,
+        "- Increase grid size (currently using 88 of 110)": 16,
+        "- in0_block_w=4 and output subblock 4x1 look good \ud83e\udd37": 8,
+        "- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further": 8,
+        "- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy": 8
+      },
+      "decode": {
+        "- in0_block_w=6 and output subblock 1x4 look good \ud83e\udd37": 1,
+        "- HiFi2 may also work, it discards the lowest bit of the activations and has 2x the throughput of HiFi4": 2,
+        "- Increase grid size (currently using 22 of 110)": 2,
+        "- in0_block_w=24 and output subblock 1x4 look good \ud83e\udd37": 1,
+        "- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further": 1,
+        "- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy": 1
+      }
+    }
+  },
+  "completed_experiments_sha256": {
+    "prefill-flat-l1-input-comparison.json": "a59b2867d0e732aa82502585a6c2439b24af499af3ba177f858013c097a1acf6",
+    "prefill-flat-grid-comparison.json": "cc3dc004c9888f110852b6c7d7882737f8e697a72e3b28f73b898b4873f2b79e"
+  }
+}

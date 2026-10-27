@@ -1,0 +1,220 @@
+{
+  "status": "complete, retain selected DRAM path",
+  "scope": "B16/M8 physical512 real layers0/3 projection calls. Transfer+matmul included, unchanged precision/K/grid/output. Exact controls and tracked traced timings; not full-model/SWE performance or a global rejection of L1 layouts.",
+  "roles": [
+    {
+      "case_id": "0:down",
+      "input": [
+        1,
+        8192,
+        4352
+      ],
+      "weight": [
+        4352,
+        5120
+      ],
+      "input_dtype": "DataType.BFLOAT16",
+      "native_l1": "capacity",
+      "fitting_h_override": 2,
+      "baseline_us": 1558.4133720646303,
+      "l1_copy_matmul_us": 2078.0564906696477,
+      "speedup": 0.7499379247204373,
+      "exact_all4_ASICs_before_after90": true,
+      "capacity_attempts": 1
+    },
+    {
+      "case_id": "0:gate",
+      "input": [
+        1,
+        8192,
+        5120
+      ],
+      "weight": [
+        5120,
+        4352
+      ],
+      "input_dtype": "DataType.BFLOAT8_B",
+      "native_l1": "capacity",
+      "fitting_h_override": 4,
+      "baseline_us": 1626.4564357697964,
+      "l1_copy_matmul_us": 1837.392368664344,
+      "speedup": 0.8851982099784798,
+      "exact_all4_ASICs_before_after90": true,
+      "capacity_attempts": 1
+    },
+    {
+      "case_id": "0:mix",
+      "input": [
+        1,
+        8192,
+        5120
+      ],
+      "weight": [
+        5120,
+        4608
+      ],
+      "input_dtype": "DataType.BFLOAT8_B",
+      "native_l1": "capacity",
+      "fitting_h_override": 2,
+      "baseline_us": 1461.647233615319,
+      "l1_copy_matmul_us": 1924.7816720356543,
+      "speedup": 0.7593833912962591,
+      "exact_all4_ASICs_before_after90": true,
+      "capacity_attempts": 1
+    },
+    {
+      "case_id": "0:out",
+      "input": [
+        1,
+        8192,
+        1536
+      ],
+      "weight": [
+        1536,
+        5120
+      ],
+      "input_dtype": "DataType.BFLOAT16",
+      "native_l1": "pass",
+      "fitting_h_override": null,
+      "baseline_us": 1010.9789048631986,
+      "l1_copy_matmul_us": 1053.1558655202389,
+      "speedup": 0.9599518342556013,
+      "exact_all4_ASICs_before_after90": true,
+      "capacity_attempts": 0
+    },
+    {
+      "case_id": "0:up",
+      "input": [
+        1,
+        8192,
+        5120
+      ],
+      "weight": [
+        5120,
+        4352
+      ],
+      "input_dtype": "DataType.BFLOAT8_B",
+      "native_l1": "capacity",
+      "fitting_h_override": 4,
+      "baseline_us": 1488.6646686742704,
+      "l1_copy_matmul_us": 1678.4111969172955,
+      "speedup": 0.8869487235359674,
+      "exact_all4_ASICs_before_after90": true,
+      "capacity_attempts": 1
+    },
+    {
+      "case_id": "3:down",
+      "input": [
+        1,
+        8192,
+        4352
+      ],
+      "weight": [
+        4352,
+        5120
+      ],
+      "input_dtype": "DataType.BFLOAT16",
+      "native_l1": "capacity",
+      "fitting_h_override": 2,
+      "baseline_us": 1573.4483643124502,
+      "l1_copy_matmul_us": 2088.6146929115057,
+      "speedup": 0.753345444543953,
+      "exact_all4_ASICs_before_after90": true,
+      "capacity_attempts": 1
+    },
+    {
+      "case_id": "3:gate",
+      "input": [
+        1,
+        8192,
+        5120
+      ],
+      "weight": [
+        5120,
+        4352
+      ],
+      "input_dtype": "DataType.BFLOAT8_B",
+      "native_l1": "capacity",
+      "fitting_h_override": 4,
+      "baseline_us": 1632.0269244412582,
+      "l1_copy_matmul_us": 1845.4390422751505,
+      "speedup": 0.8843569942192254,
+      "exact_all4_ASICs_before_after90": true,
+      "capacity_attempts": 1
+    },
+    {
+      "case_id": "3:mix",
+      "input": [
+        1,
+        8192,
+        5120
+      ],
+      "weight": [
+        5120,
+        3584
+      ],
+      "input_dtype": "DataType.BFLOAT8_B",
+      "native_l1": "pass",
+      "fitting_h_override": null,
+      "baseline_us": 1401.4807219306629,
+      "l1_copy_matmul_us": 1540.1600239177544,
+      "speedup": 0.9099578616289958,
+      "exact_all4_ASICs_before_after90": true,
+      "capacity_attempts": 0
+    },
+    {
+      "case_id": "3:out",
+      "input": [
+        1,
+        8192,
+        1536
+      ],
+      "weight": [
+        1536,
+        5120
+      ],
+      "input_dtype": "DataType.BFLOAT16",
+      "native_l1": "pass",
+      "fitting_h_override": null,
+      "baseline_us": 1012.6234032213688,
+      "l1_copy_matmul_us": 1055.5886973937352,
+      "speedup": 0.9592973150636717,
+      "exact_all4_ASICs_before_after90": true,
+      "capacity_attempts": 0
+    },
+    {
+      "case_id": "3:up",
+      "input": [
+        1,
+        8192,
+        5120
+      ],
+      "weight": [
+        5120,
+        4352
+      ],
+      "input_dtype": "DataType.BFLOAT8_B",
+      "native_l1": "capacity",
+      "fitting_h_override": 4,
+      "baseline_us": 1497.2743733475606,
+      "l1_copy_matmul_us": 1692.3622228205204,
+      "speedup": 0.884724530693067,
+      "exact_all4_ASICs_before_after90": true,
+      "capacity_attempts": 1
+    }
+  ],
+  "roles_checked": 10,
+  "all_fitting_candidates_slower": true,
+  "allocation_tracking": 1,
+  "program_cache_skip": 0,
+  "method": "Native H first; if capacity clashes, retry largest smaller legal divisor H in fresh bounded process, stop at first fitting exact candidate. Native and adapted measurements all retained.",
+  "case_identity_fix": "prefill-probe-case-identity-fix.json; old receipts retained under actual layer/role, no raw rewriting.",
+  "evidence_sha256": {
+    "l1-role-screen-v2-progress.json": "1fd523fa13bb0d36fba21164dca00d130ce56576b177b0291194951881390e84",
+    "prefill-probe-case-identity-fix.json": "16c8252ff6d5e2416127c22ecd94d132e5b0cfff604745050402f6565f9e6ea3"
+  },
+  "probe_sha256s": [
+    "33a9870fabcf4979194586d59ce5bb989542d7f2af1a74ebf2bfc0b4a1a1ef58",
+    "351eff45a21a8b40c1a97bf93254dde150e1a2188adfd5575d2559ff6bc1c3db"
+  ]
+}

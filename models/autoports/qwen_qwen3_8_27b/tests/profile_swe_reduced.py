@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Reduced real layers0/3 plus full terminal; never an all64-layer timing."""
+
 import argparse
 import hashlib
 import json
@@ -15,8 +16,10 @@ from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint", default="/data/mvasiljev/weights/Qwen3.8-27B")
     parser.add_argument("--grouped", action="store_true")
     parser.add_argument("--masked-recurrence", action="store_true")
+    parser.add_argument("--flat-prefill", action="store_true")
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--active-requests", type=int)
     parser.add_argument("--prefill-chunk-size", type=int, default=256)
@@ -28,6 +31,7 @@ def main():
     assert not os.getenv("TT_METAL_WATCHER"), "Watcher and profiler require separate runs"
     os.environ["QWEN38_GROUPED_RECURRENCE"] = "1" if args.grouped else "0"
     os.environ["QWEN38_MASKED_RECURRENCE"] = "1" if args.masked_recurrence else "0"
+    os.environ["QWEN38_FLAT_PREFILL"] = "1" if args.flat_prefill else "0"
     torch.set_num_threads(8)
     root = Path(__file__).resolve().parents[1]
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
@@ -36,7 +40,7 @@ def main():
         gen = build_generator(
             root,
             mesh,
-            checkpoint="/data/mvasiljev/weights/Qwen3.8-27B",
+            checkpoint=args.checkpoint,
             layer_indices=[0, 3],
             batch_size=args.batch,
             context_length=8192,
@@ -84,6 +88,8 @@ def main():
             scope="Reduced real layers0/3 plus embedding/norm/head/sampling/feedback; not all64 layers",
             grouped=args.grouped,
             masked_recurrence=args.masked_recurrence,
+            flat_prefill=args.flat_prefill,
+            checkpoint=args.checkpoint,
             batch=args.batch,
             active_requests=active_requests,
             prompt=4096,

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """All64-layer token-out comparison of the opt-in grouped recurrence policy."""
+
 import argparse
 import hashlib
 import json
@@ -18,6 +19,8 @@ def main():
     parser.add_argument("--checkpoint", default="/data/mvasiljev/weights/Qwen3.8-27B")
     parser.add_argument("--grouped", action="store_true")
     parser.add_argument("--masked-recurrence", action="store_true")
+    parser.add_argument("--flat-prefill", action="store_true")
+    parser.add_argument("--cache-state-fields", choices=("linear", "all"), default="linear")
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--active-requests", type=int, help="Useful requests; remaining resident rows stay inactive")
     parser.add_argument(
@@ -44,6 +47,7 @@ def main():
     delta_source = None
     os.environ["QWEN38_GROUPED_RECURRENCE"] = "1" if args.grouped else "0"
     os.environ["QWEN38_MASKED_RECURRENCE"] = "1" if args.masked_recurrence else "0"
+    os.environ["QWEN38_FLAT_PREFILL"] = "1" if args.flat_prefill else "0"
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=128 * 1024**2)
     result = dict(
@@ -55,6 +59,8 @@ def main():
         layer_indices=args.debug_layers or list(range(64)),
         grouped=args.grouped,
         masked_recurrence=args.masked_recurrence,
+        flat_prefill=args.flat_prefill,
+        cache_state_fields=args.cache_state_fields,
         batch=args.batch,
         active_requests=active_requests,
         tested_cache_context=args.context,
@@ -81,7 +87,9 @@ def main():
                 ttnn.to_torch(part).contiguous().view(torch.uint8).numpy().tobytes()
             ).hexdigest()
             for index, state in enumerate(gen.kv_cache)
-            for field in ("conv", "recurrent")
+            for field in (
+                ("conv", "recurrent", "key", "value") if args.cache_state_fields == "all" else ("conv", "recurrent")
+            )
             if hasattr(state, field)
             for device, part in enumerate(ttnn.get_device_tensors(getattr(state, field)))
         }
@@ -266,14 +274,14 @@ def main():
         raise
     finally:
         root = Path(__file__).resolve().parents[1]
-        sources = [
-            Path(__file__),
-            root / "tt/grouped_recurrence.py",
-            root / "tt/precision.py",
-            root / "tt/generator.py",
-            root / "tt/multichip_decoder.py",
-            *root.glob("tt/kernels/*grouped_recurrence.cpp"),
-        ]
+        sources = sorted(
+            {
+                Path(__file__),
+                *root.glob("tt/*.py"),
+                root / "tt/selected_precision_config.json",
+                *root.glob("tt/kernels/*.cpp"),
+            }
+        )
         result["source_sha256"] = {
             str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources
         }

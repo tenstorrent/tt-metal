@@ -1,0 +1,22 @@
+{
+  "status": "pass",
+  "run": 40579353560,
+  "task": "astropy__astropy-14309",
+  "reward": 1,
+  "normal_submission": true,
+  "trial_envelope_seconds": 431.823082,
+  "http_starts": 9,
+  "http_complete_ends": 9,
+  "all_finish_reasons": "tool_calls",
+  "server_and_saved_completion_tokens": 2447,
+  "missing_saved_responses": 0,
+  "actual_isolation": "pass",
+  "native_context": 262144,
+  "all_layers": 64,
+  "resident_batch": 16,
+  "block_size": 512,
+  "masked_recurrence_layers": 48,
+  "image_digest": "5f4e1cb60794ee32df3d409bc6d57a0a0fcd019993273d574c5b56d00f9b85ce",
+  "metal_source": "543bac09167b5ef556cfaf2ab823014d794045ba",
+  "scope": "Single-task serving/API integration smoke; not a general SWE accuracy or performance estimate"
+}

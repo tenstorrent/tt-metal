@@ -1,0 +1,69 @@
+{
+  "status": "complete, retain selected11x8 gate/up grid",
+  "scope": "B16/M8 physical512 real gate/up calls in layers0/3, DRAM input/output, identical K/dtypes/fidelity. Tests everylegalH26/13/2/1 forperCoreM26 atgrid11x10. Not fullmodel/SWE performance or globalgridoptimality.",
+  "rows": [
+    {
+      "case_id": "0:gate",
+      "best_fitting_h": 2,
+      "baseline_us": 1627.5591993083556,
+      "grid110_us": 1790.2771787097056,
+      "speedup": 0.9091101750408143,
+      "capacity_h": [
+        26,
+        13
+      ],
+      "all_fitting_H_exact_all4_before_after90": true
+    },
+    {
+      "case_id": "0:up",
+      "best_fitting_h": 2,
+      "baseline_us": 1492.9920124510925,
+      "grid110_us": 1673.7817631413538,
+      "speedup": 0.8919872622157412,
+      "capacity_h": [
+        26,
+        13
+      ],
+      "all_fitting_H_exact_all4_before_after90": true
+    },
+    {
+      "case_id": "3:gate",
+      "best_fitting_h": 2,
+      "baseline_us": 1644.9684587617714,
+      "grid110_us": 1834.4313216706116,
+      "speedup": 0.8967184758182732,
+      "capacity_h": [
+        26,
+        13
+      ],
+      "all_fitting_H_exact_all4_before_after90": true
+    },
+    {
+      "case_id": "3:up",
+      "best_fitting_h": 2,
+      "baseline_us": 1493.6571009457111,
+      "grid110_us": 1683.3383589982986,
+      "speedup": 0.8873184009390359,
+      "capacity_h": [
+        26,
+        13
+      ],
+      "all_fitting_H_exact_all4_before_after90": true
+    }
+  ],
+  "attempts": 16,
+  "capacity_results": 8,
+  "exact_slower_results": 8,
+  "capacity_bytes": {
+    "H26_static": 2235008,
+    "physical_max_L1": 1572864,
+    "H13_static": 1323136,
+    "first_live_L1_allocation": 1293696
+  },
+  "evidence_sha256": {
+    "flat-grid-screen-progress.json": "4b5b0b5e9b644d3d82458120483a556284c2e3863fa82d0d439eb20b9a04609c"
+  },
+  "probe_sha256s": [
+    "351eff45a21a8b40c1a97bf93254dde150e1a2188adfd5575d2559ff6bc1c3db"
+  ]
+}

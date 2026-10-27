@@ -1,0 +1,314 @@
+{
+  "run": 40572176883,
+  "status": "Audited isolated frozen25 B8/256/C8 medium control; no matched GPU parity verdict",
+  "model_source": "805f873d19d8c21c90757420c8da76ad0308cd69",
+  "tti_source": "6bf14aa424d6383144041d10f5222f7fe625120c",
+  "image_digest": "47319d8b11749575cc921bae9c03458d37be2667433d7e8e7e0faa3be7a3d895",
+  "protocol": {
+    "tasks": 25,
+    "selection": "Every fourth ordered historical frozen Gemma SWE100 identity, before Qwen outcomes",
+    "seed": 1234,
+    "reasoning_effort": "medium",
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "agent_timeout_sec": 6300,
+    "llm_timeout_sec": 3600,
+    "output_cap": 16384,
+    "suite_timeout_sec": 27000,
+    "native_context": 262144,
+    "actual_isolation_all_tasks": "pass"
+  },
+  "results": {
+    "task_count": 25,
+    "solved": 16,
+    "score_percent": 64.0,
+    "no_exception": 25,
+    "exceptions": {},
+    "trial_envelope_seconds": 9323.501869,
+    "saved_completion_tokens": 560908,
+    "missing_responses": 1
+  },
+  "http": {
+    "starts": 923,
+    "complete_responses": 923,
+    "http200": 923,
+    "tool_calls": 922,
+    "length_capped": 1,
+    "server_output_tokens": 577292,
+    "saved_output_tokens": 560908,
+    "unsaved_complete_length_tokens": 16384,
+    "unsaved_task": "sphinx-doc__sphinx-7889",
+    "recovered_tool_feedback": "No tool calls; task still submitted normally with reward1"
+  },
+  "retrieval_review": "No successful network retrieval observed. PyPI urllib and public GitHub curl/clone attempts failed DNS. git show/log inspected recorded ancestors or the synthetic SWE-bench setup commit; URL strings in local request/repro tests are not network retrieval. Pretraining memorization is not assessed.",
+  "tasks": [
+    {
+      "task": "astropy__astropy-12907",
+      "checksum": "8c9eaafa26b847f98e579685d56f2162674bb06b11a43086cf0749e220f6189f",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 1104.279688,
+      "saved_completion_tokens": 12186,
+      "missing_responses": 0
+    },
+    {
+      "task": "astropy__astropy-14309",
+      "checksum": "9f200334dcd1bbf887de59eb4e097cb699f3d4c4231f89ea44b643c0bb5c7514",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 367.620337,
+      "saved_completion_tokens": 4945,
+      "missing_responses": 0
+    },
+    {
+      "task": "django__django-11099",
+      "checksum": "4655c271234c63adeb74998a16d6988d788f1cf2d0cc91ec729b50fcc4404b51",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 144.287908,
+      "saved_completion_tokens": 1889,
+      "missing_responses": 0
+    },
+    {
+      "task": "django__django-11206",
+      "checksum": "30269588dd390f55db027e675f9ca2710bd4cd3555c88134ed399aecc583727e",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 877.915985,
+      "saved_completion_tokens": 12557,
+      "missing_responses": 0
+    },
+    {
+      "task": "django__django-11433",
+      "checksum": "26529de6007b0e164f194b16f22f75b87f73d8129d53a8f92a5ee82d7647d65b",
+      "reward": 0.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 4171.953867,
+      "saved_completion_tokens": 48361,
+      "missing_responses": 0
+    },
+    {
+      "task": "django__django-11815",
+      "checksum": "53b6b11095771c47b1ac40c8a7e4117e0cef81d4a0429cebed5cc8fb6463ad82",
+      "reward": 0.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 725.547231,
+      "saved_completion_tokens": 10013,
+      "missing_responses": 0
+    },
+    {
+      "task": "django__django-11964",
+      "checksum": "1f7f6587d407a309cbb7eb98ba0680118686ef095eeb3e0668c34bf6b621a198",
+      "reward": 0.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 4145.195356,
+      "saved_completion_tokens": 47640,
+      "missing_responses": 0
+    },
+    {
+      "task": "django__django-13344",
+      "checksum": "5e43870d5c408ba7906065208ceff63393cbb4f46ae8263479b798fd69010e05",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 4482.265878,
+      "saved_completion_tokens": 57795,
+      "missing_responses": 0
+    },
+    {
+      "task": "django__django-14238",
+      "checksum": "b7cff70262f91ee9f7cc011da43f044573fcb271761410ec0ffe4591eabe53c3",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 712.270614,
+      "saved_completion_tokens": 9183,
+      "missing_responses": 0
+    },
+    {
+      "task": "django__django-14771",
+      "checksum": "c2d17bafbcc03c6022e37e8e31a0eea9ab980f99108cf7299474d7611217249c",
+      "reward": 0.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 436.303435,
+      "saved_completion_tokens": 5617,
+      "missing_responses": 0
+    },
+    {
+      "task": "django__django-15104",
+      "checksum": "38287cbbc86ecbdef19d1db56916b7b558620bdb2368d30e682291bc441e5f0d",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 557.684785,
+      "saved_completion_tokens": 7131,
+      "missing_responses": 0
+    },
+    {
+      "task": "django__django-15814",
+      "checksum": "3ae6aad2175796e7500d960981c07c38af9c64bb8f39b8329395140922deda8a",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 3420.042356,
+      "saved_completion_tokens": 38607,
+      "missing_responses": 0
+    },
+    {
+      "task": "django__django-16642",
+      "checksum": "0d4ac9a4f65302fdc18ba4091e7ffaf16b7dbbea2951d4469aae2c555107f7e0",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 348.861993,
+      "saved_completion_tokens": 4309,
+      "missing_responses": 0
+    },
+    {
+      "task": "django__django-16901",
+      "checksum": "589f0b75ac8efee6d43801236b332bdc70fa0a9af5f4c27404ca56eee8ca7c99",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 696.454056,
+      "saved_completion_tokens": 8901,
+      "missing_responses": 0
+    },
+    {
+      "task": "matplotlib__matplotlib-25332",
+      "checksum": "eb297a86d6154ab49a2cffd38e156a563a7049f930da5d07c7587ffc0aeb3642",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 2442.201504,
+      "saved_completion_tokens": 29071,
+      "missing_responses": 0
+    },
+    {
+      "task": "psf__requests-2931",
+      "checksum": "ba1a719d5165600fe237ee225b151f3a6f6e91cec3443c47e7454a367034aef0",
+      "reward": 0.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 749.31086,
+      "saved_completion_tokens": 10008,
+      "missing_responses": 0
+    },
+    {
+      "task": "pydata__xarray-6938",
+      "checksum": "db64228ceb7e0824d65907564ba0cb2a6f5aa12ae6ef22e332431dc00d9cc867",
+      "reward": 0.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 782.294177,
+      "saved_completion_tokens": 8987,
+      "missing_responses": 0
+    },
+    {
+      "task": "pytest-dev__pytest-5631",
+      "checksum": "bb831440405c77368eb9dae6ec01d1b6aa990d56633c5a15dc42df1e10f3d2f8",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 949.057195,
+      "saved_completion_tokens": 13193,
+      "missing_responses": 0
+    },
+    {
+      "task": "scikit-learn__scikit-learn-10297",
+      "checksum": "55bcbf5914e87937174fb0e7fc0574d07390b2b4e8798c717456e6405b586812",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 437.330189,
+      "saved_completion_tokens": 5139,
+      "missing_responses": 0
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25931",
+      "checksum": "ccf65b1246e56b3d5ac7dda01728763451ba21fd741157c8d4a922dddbfe8ece",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 1209.287998,
+      "saved_completion_tokens": 15471,
+      "missing_responses": 0
+    },
+    {
+      "task": "sphinx-doc__sphinx-7889",
+      "checksum": "c5031d55fe1f85c779e738511d89f75e615448bb30d5f4f51eaa6334ea18c04e",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 6279.069996,
+      "saved_completion_tokens": 65018,
+      "missing_responses": 1
+    },
+    {
+      "task": "sphinx-doc__sphinx-8638",
+      "checksum": "a1202c4eab730bcbba3501da15e76795fa8a41c29c49d3d49c0b00dd949fe5f2",
+      "reward": 0.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 5908.342688,
+      "saved_completion_tokens": 78762,
+      "missing_responses": 0
+    },
+    {
+      "task": "sympy__sympy-13974",
+      "checksum": "034c8845770e5b3169fa4cd2ffd3ca55470f26fad725f5670a027cf378aba8d8",
+      "reward": 0.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 1862.743108,
+      "saved_completion_tokens": 25081,
+      "missing_responses": 0
+    },
+    {
+      "task": "sympy__sympy-18763",
+      "checksum": "45168fc3864b43534eec885f0959fdd2bbd1d501383883ba8a68a49683188af2",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 503.562609,
+      "saved_completion_tokens": 6474,
+      "missing_responses": 0
+    },
+    {
+      "task": "sympy__sympy-20438",
+      "checksum": "de42d2805fffd917428d9dfef69d210c7287e3c20b1541a69c74b5d220f124c2",
+      "reward": 0.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 2714.069304,
+      "saved_completion_tokens": 34570,
+      "missing_responses": 0
+    }
+  ],
+  "stable_archive": {
+    "sha256": "dc00c95b78adc5b8dd2caac7cab9e4b6f80d7f9f5a8505f94f4feaa1ed89aa3b",
+    "compressed_bytes": 4397812,
+    "raw_file_bytes": 86623686,
+    "all_file_hashes_and_two_read_stability_verified": true
+  },
+  "evidence_sha256": {
+    "isolated25-b8-summary.json": "e436a2d843a528c0f75c67cf63321bde7a57a3380e352528564f875d7817c149",
+    "isolated25-b8-isolation.json": "11933b58de2c298cf4295f6485e6aa95ddcdb8ec7eb4fd2b2fcafa9b375c2010",
+    "isolated25-b8-http-summary.json": "5b3fa15e481307a701355ac4096f183f619133629443425dfd684abb7d7fbe23",
+    "isolated25-b8-trajectory-review.json": "0caa47332d49fa7e10d174c19446220637f1af080c04b0f76b7c6e3929372bc0"
+  },
+  "limits": [
+    "Trial envelope excludes startup and collection. All25 attempts retained.",
+    "SWE-bench Pro61.7 is not a matched Verified reference. No score equivalence or optimization speedup claimed from this control alone.",
+    "Raw logs, token arrays and archives remain local/CI; compact documentation only."
+  ]
+}

@@ -86,4 +86,9 @@ def decoder_policy(config, index):
         raise ValueError('QWEN38_MASKED_RECURRENCE must be 0 or 1')
     if masked == '1':
         policy['masked_recurrence'] = True
+    flat_prefill = os.environ.get('QWEN38_FLAT_PREFILL', '0')
+    if flat_prefill not in ('0', '1'):
+        raise ValueError('QWEN38_FLAT_PREFILL must be 0 or 1')
+    if flat_prefill == '1':
+        policy['flat_prefill'] = True
     return policy

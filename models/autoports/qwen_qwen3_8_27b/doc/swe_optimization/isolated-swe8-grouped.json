@@ -1,0 +1,138 @@
+{
+  "scope": "Isolated fixed8 SWE serving comparison; all attempts retained. B16/C8 does not establish final C16 scaling.",
+  "control_run": 40554052639,
+  "candidate_run": 40559423498,
+  "reference": "Published61.7 is SWE-bench Pro, not a matched Verified GPU reference.",
+  "protocol": {
+    "reasoning_effort": "medium",
+    "seed": 1234,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "agent_timeout_sec": 6300,
+    "llm_timeout_sec": 3600,
+    "output_cap": 16384,
+    "native_context": 262144,
+    "actual_isolation_all8": "pass",
+    "same_task_checksums": true
+  },
+  "control": {
+    "solved": 7,
+    "task_count": 8,
+    "no_exception": 8,
+    "exceptions": {},
+    "trial_envelope_seconds": 5718.577171,
+    "saved_completion_tokens": 203752,
+    "missing_responses": 1
+  },
+  "candidate": {
+    "solved": 6,
+    "task_count": 8,
+    "no_exception": 6,
+    "exceptions": {
+      "AgentTimeoutError": 2
+    },
+    "trial_envelope_seconds": 6363.251308,
+    "saved_completion_tokens": 190934,
+    "missing_responses": 1
+  },
+  "candidate_http": {
+    "starts": 280,
+    "ends_with_http200_headers": 280,
+    "complete_tool_calls": 277,
+    "complete_length": 1,
+    "incomplete_body_metadata_at_agent_timeout": 2,
+    "completed_server_output_tokens": 207318,
+    "saved_output_tokens": 190934,
+    "unsaved_complete_length_response_tokens": 16384
+  },
+  "decision": "No SWE accuracy parity or runtime improvement claimed. Test frozen25 at actual target C16 separately.",
+  "tasks": [
+    {
+      "task": "astropy__astropy-13398",
+      "checksum": "3e28f3f0b22af6ed382828b5391100aec18268bf859e8b64d99ec8fbe43d1163",
+      "control_reward": 0.0,
+      "candidate_reward": 0.0,
+      "control_agent_seconds": 5650.481154,
+      "candidate_agent_seconds": 6300.208791,
+      "candidate_exception": "AgentTimeoutError",
+      "candidate_exit_status": ""
+    },
+    {
+      "task": "astropy__astropy-13453",
+      "checksum": "781503f811e7e3f95641993ca311894f46fc770085b1e561ab5b87e4585a9f88",
+      "control_reward": 1.0,
+      "candidate_reward": 1.0,
+      "control_agent_seconds": 1213.902651,
+      "candidate_agent_seconds": 1416.337743,
+      "candidate_exception": null,
+      "candidate_exit_status": "Submitted"
+    },
+    {
+      "task": "astropy__astropy-14309",
+      "checksum": "9f200334dcd1bbf887de59eb4e097cb699f3d4c4231f89ea44b643c0bb5c7514",
+      "control_reward": 1.0,
+      "candidate_reward": 1.0,
+      "control_agent_seconds": 439.779235,
+      "candidate_agent_seconds": 1383.746441,
+      "candidate_exception": null,
+      "candidate_exit_status": "Submitted"
+    },
+    {
+      "task": "astropy__astropy-7166",
+      "checksum": "f2c39dca6e3f63a22da93c0b3f8f4211374bb08f5629a64718c6a8c9e9349abb",
+      "control_reward": 1.0,
+      "candidate_reward": 1.0,
+      "control_agent_seconds": 507.186445,
+      "candidate_agent_seconds": 1417.811965,
+      "candidate_exception": null,
+      "candidate_exit_status": "Submitted"
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13135",
+      "checksum": "8d22a5cea28b7b67c94275c2866af098502495f5ec73d42d0752fcccf6de9bdd",
+      "control_reward": 1.0,
+      "candidate_reward": 1.0,
+      "control_agent_seconds": 398.993134,
+      "candidate_agent_seconds": 441.45096,
+      "candidate_exception": null,
+      "candidate_exit_status": "Submitted"
+    },
+    {
+      "task": "sphinx-doc__sphinx-8459",
+      "checksum": "a2491749a5a5055f59e0d73c5edded4f23cf62889059aadc31fa91a3ba431b7a",
+      "control_reward": 1.0,
+      "candidate_reward": 1.0,
+      "control_agent_seconds": 2668.290562,
+      "candidate_agent_seconds": 1535.479178,
+      "candidate_exception": null,
+      "candidate_exit_status": "Submitted"
+    },
+    {
+      "task": "sympy__sympy-18698",
+      "checksum": "b37cd628d9ca81c111945995018ae80d540d79683a37278ce1253fadf0e76833",
+      "control_reward": 1.0,
+      "candidate_reward": 1.0,
+      "control_agent_seconds": 2320.069054,
+      "candidate_agent_seconds": 3634.434475,
+      "candidate_exception": null,
+      "candidate_exit_status": "Submitted"
+    },
+    {
+      "task": "sympy__sympy-21612",
+      "checksum": "8ee326e4be753ae0692f72704f084ff6a503d6ae8af21252d19ef69c27070ef1",
+      "control_reward": 1.0,
+      "candidate_reward": 0.0,
+      "control_agent_seconds": 1964.374879,
+      "candidate_agent_seconds": 6300.29267,
+      "candidate_exception": "AgentTimeoutError",
+      "candidate_exit_status": ""
+    }
+  ],
+  "trajectory_review": "No successful upstream-fix retrieval observed; curl attempts had blank tool results and pip antlr failed DNS. Tool outputs matched by tool_call_id. Successful sympy18698 recovered from one capped/no-tool response. Agent timeouts on astropy13398 and sympy21612 retained. Pretraining memorization not assessed.",
+  "sources_sha256": {
+    "isolated-clean8-control-summary.json": "6eb84a6987eb375ddad94d839159be0f0addbbfe10ef72e1977edca0d7bf08b9",
+    "isolated-clean8-grouped-summary.json": "4c49715a719a48956f770ea7bde3fbb43bd0abe5f1a44dccc0c8fbdb81ba8807",
+    "isolated-clean8-grouped-stable-audit-review.json": "84e333a3c8445a3dd0433d70d4b6565805c24ace55a91a42f2f54046d126befd"
+  }
+}

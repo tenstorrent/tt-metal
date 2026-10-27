@@ -61,7 +61,8 @@ class Qwen38ForCausalLM:
               f"precision={obj.model.precision_config} "
               f"grouped_recurrence_layers={sum(bool(layer.policy.get('grouped_recurrence')) for layer in obj.model.layers)} "
               f"resident_batch={max_batch_size} "
-              f"masked_recurrence_layers={sum(layer.layer_type == 'linear_attention' and bool(layer.policy.get('masked_recurrence')) for layer in obj.model.layers)}", flush=True)
+              f"masked_recurrence_layers={sum(layer.layer_type == 'linear_attention' and bool(layer.policy.get('masked_recurrence')) for layer in obj.model.layers)} "
+              f"flat_prefill_layers={sum(bool(layer.policy.get('flat_prefill')) for layer in obj.model.layers)}", flush=True)
         if os.environ.get('QWEN38_BENCHMARK_PHASES'):
             from .benchmark_phases import install
             install(obj)

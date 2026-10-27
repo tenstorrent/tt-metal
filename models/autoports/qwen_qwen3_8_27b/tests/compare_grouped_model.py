@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """CPU comparison of completed split/grouped all64-layer evidence receipts."""
+
 import argparse
 import hashlib
 import json
@@ -9,9 +10,9 @@ from pathlib import Path
 
 def compare(baseline, candidate, require_states=True, policy="grouped"):
     assert baseline["status"] == candidate["status"] == "pass"
-    assert policy in ("grouped", "masked_recurrence")
+    assert policy in ("grouped", "masked_recurrence", "flat_prefill")
     assert baseline.get(policy, False) is False and candidate.get(policy, False) is True
-    for key in ("grouped", "masked_recurrence"):
+    for key in ("grouped", "masked_recurrence", "flat_prefill"):
         if key != policy:
             assert baseline.get(key, False) == candidate.get(key, False), f"Unmatched policy: {key}"
     active_requests = baseline.get("active_requests", baseline["batch"])
@@ -37,6 +38,11 @@ def compare(baseline, candidate, require_states=True, policy="grouped"):
     ):
         assert baseline[key] == candidate[key], f"Unmatched configuration: {key}"
     assert baseline["mixed_repeat_exact"] and candidate["mixed_repeat_exact"]
+    state_fields = baseline.get("cache_state_fields", "linear")
+    assert state_fields in ("linear", "all")
+    assert state_fields == candidate.get("cache_state_fields", "linear")
+    if policy == "flat_prefill" and require_states:
+        assert state_fields == "all", "Flat-prefill acceptance requires paged K/V as well as linear state"
     assert baseline["mixed_outputs"] == candidate["mixed_outputs"], "Ragged token mismatch"
     bqual, cqual = baseline["qualitative"], candidate["qualitative"]
     for key in ("source_sha256", "prompt_mode", "max_output_tokens"):
@@ -45,7 +51,15 @@ def compare(baseline, candidate, require_states=True, policy="grouped"):
     assert len(baseline["records"]) == len(candidate["records"]) > 0
 
     def state_pair(left, right, label):
-        assert len(left) == len(right) == 48 * 2 * 4, f"Incomplete state receipt: {label}"
+        expected = {
+            f"{index}/{field}/{device}"
+            for index in range(64)
+            for field in (
+                ("conv", "recurrent") if index % 4 != 3 else (("key", "value") if state_fields == "all" else ())
+            )
+            for device in range(4)
+        }
+        assert set(left) == set(right) == expected, f"Incomplete state receipt: {label}"
         assert left == right, f"State mismatch: {label}"
 
     for left, right in zip(baseline["records"], candidate["records"]):
@@ -69,7 +83,9 @@ def compare(baseline, candidate, require_states=True, policy="grouped"):
             state_pair(left["state_sha256"], right["state_sha256"], f"continuation{phase}")
             assert len(left["logits_sha256"]) == len(right["logits_sha256"]) == 4
             assert left == right, f"Continuation logits or protocol mismatch: {phase}"
-    candidate_label = "grouped" if policy == "grouped" else "masked_commit"
+    candidate_label = {"grouped": "grouped", "masked_recurrence": "masked_commit", "flat_prefill": "flat_prefill"}[
+        policy
+    ]
     medians = {
         name: {
             key: statistics.median(r["metrics"][key] for r in arm["records"])
@@ -88,6 +104,7 @@ def compare(baseline, candidate, require_states=True, policy="grouped"):
         continuation_logits_exact=True if require_states else None,
         medians=medians,
         decode_speedup=medians["baseline"]["decode_seconds"] / medians[candidate_label]["decode_seconds"],
+        prefill_speedup=medians["baseline"]["ttft_ms"] / medians[candidate_label]["ttft_ms"],
     )
 
 
@@ -96,7 +113,7 @@ def main():
     parser.add_argument("baseline", type=Path)
     parser.add_argument("candidate", type=Path)
     parser.add_argument("--tokens-only", action="store_true", help="Explicitly omit full-state acceptance")
-    parser.add_argument("--policy", choices=("grouped", "masked_recurrence"), default="grouped")
+    parser.add_argument("--policy", choices=("grouped", "masked_recurrence", "flat_prefill"), default="grouped")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     result = compare(
