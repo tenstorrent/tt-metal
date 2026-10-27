@@ -832,8 +832,16 @@ its price.
   fastest engine on every tight case. Keep the colour pre-check in front of it for tight
   multi-mesh rings; add an area pre-check (one no-1x1 ring with area 160 on 128 slices ran to
   the cap). Treat budget exhaustion and the wall-clock cap as "unknown", never "reject".
-- **C2: the resolver, unchanged**, on the footprint's slots. Worst case 36 ms over 139 carves, and
-  it catches the chip-level collisions the slice-level carve cannot see (5.5).
+- **C2 in the mapper is only a chip-collision check.** At slice level the carve already fixes
+  everything the mapper has to decide: which rank each stage gets and which cables the ring
+  crosses on, and a cable is a chip pair, so `R` is read straight off the carve. The chips
+  inside each rank (exit and entry chip per edge, core slots, host I/O) are the runtime's
+  business: blaze calls the resolver when it builds the pipeline whatever the mapper did. The
+  mapper only has to be sure the runtime will not fail there, which happens when the endpoints a
+  rank must host do not fit its chips (two cables on one chip, or more endpoints than slots).
+  The cheapest exact check is the resolver itself on the carve's slots, 36 ms worst case over
+  139 carves; a per-stage matching of endpoints to chips would do the same in a few lines if
+  the dependency is unwanted. Either way it is a check, not a search.
 - **The blaze planner** stays what it is: a planner for ring-of-columns fabrics, not for
   these. Porting it to C++ (design 3.2) does not buy a C1 for grid meshes.
 - **The per-slice encoding** keeps one use: single-slice rings where the solver's bijection
