@@ -12,9 +12,8 @@
 #include "metal/ttnn_all_includes.hpp"
 
 // Everything the SDPA forward program depends on besides the kernels themselves: how the user knobs
-// turn into chunk sizes, how much L1 the circular buffers take, how the work items are shared out and
-// the cost model that picks the default. Shared by validate (early errors) and the program factory
-// (which also serves the ring SDPA path).
+// turn into chunk sizes, how much L1 the circular buffers take and how the work items are shared out.
+// Shared by validate (early errors) and the program factory (which also serves the ring SDPA path).
 namespace ttml::metal::ops::sdpa_fw::device {
 
 struct SDPAForwardShape {
@@ -84,27 +83,18 @@ struct ItemRun {
 using CoreItemRuns = std::vector<ItemRun>;
 
 uint32_t num_work_items(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks);
-uint32_t num_kv_steps(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t item);
 
 // Per-core item runs for num_cores cores: causal chunks as light/heavy pairs when there are enough pairs,
 // otherwise contiguous blocks; falls back to contiguous blocks when the lists would not fit the runtime args.
 std::vector<CoreItemRuns> split_work(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores);
 
-// Predicted time of the busiest core in microseconds (Blackhole constants; the ranking is what matters).
-double predict_us(
-    const SDPAForwardShape& shape,
-    const SDPAForwardChunks& chunks,
-    const std::vector<CoreItemRuns>& per_core_runs,
-    uint32_t num_cores);
-
 // Cheap knob checks for validate: each set knob must divide its axis, and a fully specified config must
-// fit l1_budget_bytes. Throws otherwise. (Picking the unset knobs is a search; the program factory does
-// that once per program-cache miss with resolve_chunks.)
+// fit l1_budget_bytes. Throws otherwise.
 void check_chunks(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape, uint64_t l1_budget_bytes);
 
-// check_chunks, then picks the unset knobs by the cost model among the configs that fit l1_budget_bytes.
-// Throws when nothing fits.
+// check_chunks, then picks the unset knobs by a shape rule, shrinking them until they fit l1_budget_bytes
+// and keep num_available_cores busy. Throws when even the smallest chunks do not fit.
 SDPAForwardChunks resolve_chunks(
     const SDPAForwardProgramConfig& config,
     const SDPAForwardShape& shape,

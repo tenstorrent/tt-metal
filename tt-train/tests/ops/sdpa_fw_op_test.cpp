@@ -1707,7 +1707,7 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_None_DiffVDim_Gate) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
-    // With the knobs at 0 the cost model picks the chunking: larger than main's one Q row / four K tiles
+    // With the knobs at 0 the shape rule picks the chunking: larger than main's one Q row / four K tiles
     // where L1 allows, and always something that fits.
     using namespace ttml::metal::ops::sdpa_fw::device;
     constexpr uint64_t kBudget = 1'300'000U;  // a Blackhole core's usable L1
