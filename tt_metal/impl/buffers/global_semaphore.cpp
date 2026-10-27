@@ -10,7 +10,7 @@
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_metal.hpp>
 #include <cstdint>
 #include <memory>
