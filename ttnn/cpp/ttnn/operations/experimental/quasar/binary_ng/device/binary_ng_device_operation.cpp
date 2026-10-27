@@ -393,6 +393,14 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         return output_tensor->tensor_spec();
     }
 
+    // An ND_SHARDED config is_sharded() with an empty shard_spec(), but its nd_shard_spec applies to any shape
+    // as is, so keep it instead of treating the missing legacy spec as unspecified and dereferencing it below.
+    if (attributes.memory_config.is_sharded() && !attributes.memory_config.shard_spec().has_value() &&
+        attributes.memory_config.nd_shard_spec().has_value()) {
+        return tt::tt_metal::TensorSpec(
+            output_shape, TensorLayout(output_dtype, PageConfig(attributes.output_layout), attributes.memory_config));
+    }
+
     if (attributes.memory_config.is_sharded()) {
         const auto& memory_layout = attributes.memory_config.memory_layout();
         const auto& buffer_type = attributes.memory_config.buffer_type();

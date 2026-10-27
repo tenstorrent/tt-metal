@@ -35,6 +35,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/topology_check.hpp"
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
@@ -292,6 +293,22 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                const ttnn::Shape& shape,
                DataType dtype,
                Layout layout,
+               const MemoryConfig& memory_config,
+               const std::optional<Tile>& tile) {
+                new (t) tt::tt_metal::TensorSpec(shape, TensorLayout(dtype, PageConfig(layout, tile), memory_config));
+            },
+            nb::arg("shape"),
+            nb::arg("dtype"),
+            nb::arg("layout"),
+            nb::arg("memory_config"),
+            nb::arg("tile") = nb::none(),
+            R"doc(Create a tensor specification preserving the complete memory configuration, including per-core placement.)doc")
+        .def(
+            "__init__",
+            [](tt::tt_metal::TensorSpec* t,
+               const ttnn::Shape& shape,
+               DataType dtype,
+               Layout layout,
                BufferType buffer_type,
                const std::optional<Tile>& tile) {
                 new (t) tt::tt_metal::TensorSpec(
@@ -379,8 +396,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                const std::vector<int32_t>& dims,
                CoreRangeSet grid,
                ShardOrientation orientation) {
-                return self.sharded_across_dims_except(
-                    ttsl::Span<const int32_t>(dims), std::move(grid), orientation);
+                return self.sharded_across_dims_except(ttsl::Span<const int32_t>(dims), std::move(grid), orientation);
             },
             nb::arg("dims"),
             nb::arg("grid"),
@@ -466,6 +482,20 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def_prop_ro("dtype", &tt::tt_metal::TensorSpec::data_type, "Dtype of a tensor")
         .def_prop_ro("tile", &tt::tt_metal::TensorSpec::tile, "Tile of a tensor")
         .def_prop_ro("memory_config", &tt::tt_metal::TensorSpec::memory_config, "Memory config of a tensor")
+        .def(
+            "compute_page_size_bytes",
+            &tt::tt_metal::TensorSpec::compute_page_size_bytes,
+            "Return the unaligned transfer page size.")
+        .def(
+            "compute_packed_buffer_size_bytes",
+            &tt::tt_metal::TensorSpec::compute_packed_buffer_size_bytes,
+            "Return the packed tensor size before device page alignment.")
+        .def(
+            "compute_consumed_memory_bytes_per_bank",
+            &tt::tt_metal::TensorSpec::compute_consumed_memory_bytes_per_bank,
+            nb::arg("page_alignment"),
+            nb::arg("num_banks"),
+            "Return the padded storage footprint per bank using the existing tensor layout calculation.")
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 
@@ -524,6 +554,13 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             },
             nb::arg("enable"),
             "Enable or disable experimental per-core L1 allocation on this MemoryConfig.")
+        .def(
+            "experimental_is_per_core_allocation",
+            [](const MemoryConfig& self) {
+                // Read the placement policy without constructing a tensor.
+                return experimental::per_core_allocation::is_per_core_allocation(self);
+            },
+            "Return whether this MemoryConfig requests per-core SRAM allocation.")
         .def(
             "experimental_set_range_lockstep_allocation",
             [](MemoryConfig& self, bool enable) {
@@ -691,6 +728,19 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Load tensor to file using FlatBuffer format with inline file storage.
+            )doc")
+        .def(
+            "verify_shards_match_topology",
+            &ttnn::verify_shards_match_topology,
+            nb::arg("tensor"),
+            nb::arg("compare_replica_contents") = true,
+            nb::call_guard<nb::gil_scoped_release>(),
+            R"doc(
+                Check that a host tensor's topology label describes its shards: every populated shard is labelled,
+                every labelled coordinate holds a shard, and shards the label calls replicas of each other have the
+                same size and, unless compare_replica_contents is False, the same values (tile padding is not
+                compared). Raises RuntimeError naming
+                the coordinates and the label otherwise.
             )doc");
 
     nb::class_<OverlappedTensorView>(m_tensor, "OverlappedTensor", R"doc(

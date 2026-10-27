@@ -10,6 +10,7 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 namespace ttnn::experimental::prim {
 void StridedAllGatherAsync::validate_on_program_cache_miss(
@@ -31,6 +32,17 @@ StridedAllGatherAsync::tensor_return_value_t StridedAllGatherAsync::create_outpu
         return {tensor_args.persistent_output_buffer.value()};
     }
     return {create_device_tensor(compute_output_specs(attributes, tensor_args), tensor_args.input_tensor.device())};
+}
+
+std::vector<tt::tt_metal::TensorTopology> StridedAllGatherAsync::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // The output (or the caller's persistent output buffer, which is the output) holds every device's `dim` piece
+    // along `cluster_axis`: Replicate on the cluster axis, the input's placements elsewhere; a gather that would
+    // interleave the shards of a 1-D-mapped tensor is refused. With no honest label (nullopt, already reported) the
+    // output keeps the input's label.
+    const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
+        tensor_args.input_tensor, attributes.cluster_axis, static_cast<int32_t>(attributes.dim));
+    return {output_topology.value_or(tensor_args.input_tensor.tensor_topology())};
 }
 
 tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(

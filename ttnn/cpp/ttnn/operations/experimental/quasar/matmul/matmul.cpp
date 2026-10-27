@@ -105,18 +105,27 @@ static bool get_post_process_bias(
     const MemoryConfig& output_mem_config,
     const ttnn::Tensor& input_tensor_a_adjusted,
     const ttnn::Tensor& input_tensor_b_adjusted,
-    const bool transpose_a) {
+    const bool transpose_a,
+    const bool fp32_dest_acc_en) {
     // Determine if we should post-process bias based on the program config
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
+    if (bias.has_value() && program_config.has_value() &&
+        std::holds_alternative<MatmulUnifiedProgramConfig>(program_config.value())) {
+        // The unified kernels add one bias row (broadcast down M) to every batch, through a row broadcast into a
+        // 16-bit DST (the Wormhole LLK misplaces its rows in a 32-bit one).
+        const tt::tt_metal::Tile A_tile = input_tensor_a_adjusted.tensor_spec().tile();
+        const uint32_t A_tile_height = transpose_a ? A_tile.get_width() : A_tile.get_height();
+        const bool bias_is_one_row =
+            bias.value().logical_shape()[-2] == 1 && bias.value().padded_shape()[-2] == A_tile_height;
+        const bool bias_is_batched = detail::is_input_batched(bias.value().logical_shape());
+        return !bias_is_one_row || bias_is_batched || fp32_dest_acc_en;
+    }
     if (bias.has_value()) {
-        // Quasar: the fused matmul+bias path was historically avoided (bmm_large..._fused_bias TILE_COUNTERS
-        // fault). But (a) the post-process add is a BROADCAST ([M,N]+[1,N]) and Quasar has NO broadcast/repeat
-        // DFB op -> it lowers to a legacy DataMovementKernel and CRASHES; and (b) the mcast_1d m2 factory now
-        // wires FUSE_BIAS with the in1/bias DM reader carrying disable_dfb_implicit_sync_for_all (the known
-        // TILE_COUNTERS fix), so the fault comment is stale for that path. So FUSE the bias into the 1D-mcast
-        // matmul when the bias is tile-aligned; only fall back to post-process (which itself only works for a
-        // no-broadcast sharded add on Quasar) for other configs.
+        // Quasar: the mcast_1d m2 factory wires FUSE_BIAS with the in1/bias DM reader carrying
+        // disable_dfb_implicit_sync_for_all (the bmm_large..._fused_bias TILE_COUNTERS fix), so the bias is fused
+        // into the 1D-mcast matmul when it is tile-aligned. Other configs add it after the op through the Quasar
+        // binary add, whose DFB factory broadcasts the bias row for bf16 operands of one dtype.
         if (input_tensor_a_adjusted.device()->arch() == tt::ARCH::QUASAR) {
             const auto& q_tile_shape = input_tensor_a_adjusted.tensor_spec().tile().get_tile_shape();
             const uint32_t q_tile_height = transpose_a ? q_tile_shape[1] : q_tile_shape[0];
@@ -146,9 +155,8 @@ static bool get_post_process_bias(
         if (bias_padded_shape[-2] != tile_height) {
             post_process_bias = true;
         } else if (program_config.has_value()) {
-            // MatmulMultiCoreProgramConfig and MatmulUnifiedProgramConfig do not fuse bias
-            post_process_bias = std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config.value()) ||
-                                std::holds_alternative<MatmulUnifiedProgramConfig>(program_config.value());
+            // MatmulMultiCoreProgramConfig does not fuse bias
+            post_process_bias = std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config.value());
         } else if (!user_core_coord.has_value()) {
             // When program_config and user_core_coord are not provided, config is auto-generated
 
@@ -218,13 +226,17 @@ static ttnn::Tensor bound_matmul(
         auto bias_data_format = datatype_to_dataformat_converter(bias.value().dtype());
         bias_single_tile_size = tt::tile_size(bias_data_format);
     }
-    MatmulProgramConfig chosen_program_config = get_program_config(
-        input_tensor_a,
-        input_tensor_b,
-        parameters.transpose_a,
-        parameters.transpose_b,
-        bias_single_tile_size,
-        matmul_struct);
+    // An explicit config is taken as given here; a unified one without cores gets its placement from the op, on the
+    // operands after the transposes and reshape below.
+    MatmulProgramConfig chosen_program_config = parameters.program_config.has_value()
+                                                    ? parameters.program_config.value()
+                                                    : get_program_config(
+                                                          input_tensor_a,
+                                                          input_tensor_b,
+                                                          parameters.transpose_a,
+                                                          parameters.transpose_b,
+                                                          bias_single_tile_size,
+                                                          matmul_struct);
     //----------------------------------------------------------------------------------------------
 
     // Decide if we need to manually transpose or if the program config will handle it
@@ -234,6 +246,15 @@ static ttnn::Tensor bound_matmul(
           std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(chosen_program_config));
     bool needs_manual_transpose_a = parameters.transpose_a && needs_manual_transpose;
     bool needs_manual_transpose_b = parameters.transpose_b && needs_manual_transpose;
+    if (!parameters.program_config.has_value() &&
+        std::holds_alternative<MatmulUnifiedProgramConfig>(chosen_program_config)) {
+        // The auto-config chose the unified matmul, placed on the user's core grid and with the activation fused, for
+        // the compute config resolved above: the op runs that config with that compute config.
+        parameters.program_config = chosen_program_config;
+        parameters.compute_kernel_config = matmul_struct.compute_kernel_config;
+        parameters.user_core_coord = std::nullopt;
+        parameters.user_fused_activation = std::nullopt;
+    }
 
     const auto& input_tensor_a_adjusted = needs_manual_transpose_a
                                               ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config())
@@ -263,7 +284,25 @@ static ttnn::Tensor bound_matmul(
         parameters.output_mem_config,
         input_tensor_a_adjusted,
         input_tensor_b_adjusted,
-        parameters.transpose_a);
+        parameters.transpose_a,
+        get_fp32_dest_acc_en(matmul_struct.compute_kernel_config));
+
+    // Activations the op does not fuse run after it, in order: a unified config's when the bias is added after the op
+    // (the kernels run it on the finished sum), then the caller's unless a user grid has the op fuse it into its auto
+    // config with the bias. The op is passed only an activation it fuses.
+    std::vector<ttnn::operations::unary::EltwiseUnaryWithParam> activations_after_op;
+    if (post_process_bias && parameters.program_config.has_value()) {
+        auto* unified = std::get_if<MatmulUnifiedProgramConfig>(&parameters.program_config.value());
+        if (unified != nullptr && unified->fused_activation.has_value()) {
+            activations_after_op.push_back(unified->fused_activation.value());
+            unified->fused_activation = std::nullopt;
+        }
+    }
+    if (parameters.user_fused_activation.has_value() &&
+        (!parameters.user_core_coord.has_value() || post_process_bias)) {
+        activations_after_op.push_back(parameters.user_fused_activation.value());
+        parameters.user_fused_activation = std::nullopt;
+    }
 
     auto attributes = ttnn::prim::qsr::create_matmul_attributes(
         input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
@@ -325,11 +364,9 @@ static ttnn::Tensor bound_matmul(
         output_tensor = ttnn::operations::experimental::quasar::reshape(output_tensor, result_shape);
     }
 
-    if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
-        const UnaryWithParam& activation = parameters.user_fused_activation.value();
-
-        output_tensor =
-            ttnn::unary_chain(output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
+    if (!activations_after_op.empty()) {
+        output_tensor = ttnn::unary_chain(
+            output_tensor, activations_after_op, output_tensor.memory_config(), optional_output_tensor);
     }
 
     return output_tensor;

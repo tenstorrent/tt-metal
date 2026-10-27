@@ -119,9 +119,10 @@ AxisConstants axis_constants(uint32_t extent, bool align_corners, bool grid_spac
 }
 
 // CB depths for the geometry pipeline. Both the reader and the compute kernel
-// run one sampling point ahead of the work they are feeding, so the pipes
-// between them hold up to two points' worth; each depth below is that pipe's
-// floor plus any slack, as noted.
+// run at most one sampling point ahead of the work they are feeding (where the
+// reader's push sits depends on the split gather; see the pipelining note in
+// fused_msda_reader_common.hpp), so the pipes between them hold up to two
+// points' worth; each depth below is that pipe's floor plus any slack, as noted.
 //
 // kScalarCbPages is a hard deadlock floor: at the fourth corner_weight of point
 // j+1 the PACK thread holds 7 pages and reserves the 8th, and UNPACK cannot free
@@ -160,6 +161,19 @@ constexpr uint8_t frac_x_cb = tt::CBIndex::c_14;
 constexpr uint8_t frac_y_cb = tt::CBIndex::c_15;
 constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;
 constexpr uint8_t tiled_input_cb = tt::CBIndex::c_17;
+constexpr uint8_t gather_mailbox_cb = tt::CBIndex::c_18;
+
+// Row-major staging: when D is a whole number of tile widths, the reader
+// lands the four corners of a point side by side as a row-major block and
+// compute tilizes it on the unpacker, so the reader copies nothing. Other
+// D fall back to the reader scattering sticks into tile faces.
+bool uses_rm_staging(const MSDAShapes& s) { return s.head_dim % kTileWidth == 0; }
+
+// Split gather (msda_gather_rows.hpp): the writer RISC takes part of every
+// row-major block. Blackhole only, as Wormhole has not been measured; the
+// scatter path (D % 32 != 0) is always reader-only. Decided only here, by the
+// CB plan; create_descriptor reads the decision back from the plan.
+bool uses_split_gather(const MSDAShapes& s, tt::ARCH arch) { return uses_rm_staging(s) && arch == tt::ARCH::BLACKHOLE; }
 
 uint32_t page_size_for_cb(const MSDACircularBufferPlan& plan, uint8_t index) {
     const auto *const it = std::find_if(plan.begin(), plan.end(), [index](const auto& spec) { return spec.index == index; });
@@ -200,10 +214,14 @@ MSDAWorkSplit msda_work_split(
     // themselves are not used, since every core gets that many slots.
     split.slots = slots_group_1;
 
+    // Heads innermost: each core takes a contiguous run of tiles, so most of
+    // its consecutive tiles share (b, q_start), and the V2 reader stages the
+    // head-invariant reference points once per query block in its run rather
+    // than once per tile.
     for (uint32_t b = 0; b < s.batch; ++b) {
         const uint32_t q_end = attrs.num_valid_queries.empty() ? s.num_queries : attrs.num_valid_queries[b];
-        for (uint32_t h = 0; h < s.num_heads; ++h) {
-            for (uint32_t q_start = 0; q_start < q_end; q_start += kTileMaxRows) {
+        for (uint32_t q_start = 0; q_start < q_end; q_start += kTileMaxRows) {
+            for (uint32_t h = 0; h < s.num_heads; ++h) {
                 split.tiles.push_back({b, h, q_start, std::min(kTileMaxRows, q_end - q_start)});
             }
         }
@@ -277,9 +295,10 @@ MSDARuntimeArgs msda_runtime_args(
         }
 
         auto& writer = args.writer.emplace_back();
-        writer.reserve(2 + slots * 3);
+        writer.reserve(3 + slots * 3);
         writer.push_back(output.buffer()->address());
         writer.push_back(count);
+        writer.push_back(tensor_args.value.buffer()->address());
 
         for (uint32_t t = 0; t < count; ++t) {
             const auto& asn = split.tiles[tile_cursor + t];
@@ -288,7 +307,7 @@ MSDARuntimeArgs msda_runtime_args(
             writer.insert(writer.end(), {asn.batch * s.num_queries + asn.q_start, asn.head, asn.v_rows});
         }
         reader.resize(5 + 3 * s.num_levels + slots * 4, 0u);
-        writer.resize(2 + slots * 3, 0u);
+        writer.resize(3 + slots * 3, 0u);
 
         // `mul_unary_tile` takes its scalar as a runtime uint32 and the level
         // index is a runtime value, so the per-level constants are runtime args.
@@ -306,6 +325,11 @@ MSDARuntimeArgs msda_runtime_args(
 constexpr uint32_t kReaderKernel = 0;
 constexpr uint32_t kComputeKernel = 1;
 constexpr uint32_t kWriterKernel = 2;
+
+// One split-gather point's arguments, reader -> writer. Both kernels get the
+// allocated page size as a compile-time arg and static_assert that PointArgs
+// fits it.
+constexpr uint32_t kGatherMailboxNbytes = 64;
 
 }  // namespace
 
@@ -347,11 +371,7 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
     const auto output_format = datatype_to_dataformat_converter(output_dtype);
     const uint32_t tile_nbytes = tt::tile_size(data_format);
 
-    // Row-major staging: when D is a whole number of tile widths, the reader
-    // lands the four corners of a point side by side as a row-major block and
-    // compute tilizes it on the unpacker, so the reader copies nothing. Other
-    // D fall back to the reader scattering sticks into tile faces.
-    const bool rm_staging = s.head_dim % kTileWidth == 0;
+    const bool rm_staging = uses_rm_staging(s);
     // Row-major staging packs the four corner slots of a row back to back, so a
     // slot must be exactly D*2 bytes; alignment padding would shift the tile
     // columns compute tilizes.
@@ -419,6 +439,11 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
     push(output_tile_cb, 2 * n_d_tiles, tile_nbytes, output_format);
     // Writer-only scratch.
     push(output_scratch_cb, 1, head_stick_aligned, output_format);
+    if (uses_split_gather(s, value.device()->arch())) {
+        // Reader -> writer, one point's gather arguments at a time. Raw uint32
+        // words; the format only satisfies the CB config.
+        push(gather_mailbox_cb, 1, kGatherMailboxNbytes, tt::DataFormat::UInt32);
+    }
     return plan;
 }
 
@@ -500,8 +525,21 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
             }}},
         });
     }
-    const bool rm_staging = s.head_dim % kTileWidth == 0;
+    const bool rm_staging = uses_rm_staging(s);
     const bool ref_fp32 = attrs.from_offsets && tensor_args.reference_points->dtype() == DataType::FLOAT32;
+    // The mailbox CB, the semaphores and both kernels' SPLIT_GATHER must agree,
+    // so all of them follow the CB plan.
+    const bool split_gather =
+        std::any_of(cb_plan.begin(), cb_plan.end(), [](const auto& spec) { return spec.index == gather_mailbox_cb; });
+    const uint32_t gather_mailbox_nbytes = split_gather ? page_size_for_cb(cb_plan, gather_mailbox_cb) : 0u;
+    constexpr uint32_t gather_ready_sem = 0;
+    constexpr uint32_t gather_done_sem = 1;
+    if (split_gather) {
+        descriptor.semaphores.push_back(SemaphoreDescriptor{
+            .id = gather_ready_sem, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
+        descriptor.semaphores.push_back(SemaphoreDescriptor{
+            .id = gather_done_sem, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
+    }
 
     // ---- reader ----
     // Compile-time arg order is fixed by fused_msda_reader_common.hpp; both
@@ -540,6 +578,11 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         y0_cb,
         kGeomCbPages,
         static_cast<uint32_t>(rm_staging),
+        static_cast<uint32_t>(split_gather),
+        gather_ready_sem,
+        gather_done_sem,
+        gather_mailbox_cb,
+        gather_mailbox_nbytes,
     };
     TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*attn.buffer()).append_to(reader_ct);
@@ -606,13 +649,26 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     compute_desc.config = compute_cfg;
 
     // ---- writer (shared by V1 and V2) ----
+    // Compile-time arg order is fixed by writer_msda.cpp.
     KernelDescriptor::CompileTimeArgs writer_ct{
         output_tile_cb,
         output_scratch_cb,
         output_page_aligned,
         s.head_dim,
+        static_cast<uint32_t>(split_gather),
+        gather_ready_sem,
+        gather_done_sem,
+        gather_mailbox_cb,
+        gather_mailbox_nbytes,
+        s.num_levels * s.num_points,
+        s.num_heads,
+        s.num_keys,
+        static_cast<uint32_t>(s.value_packed),
+        value_stick_aligned,
+        static_cast<uint32_t>(value.buffer()->page_size()),
     };
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
+    TensorAccessorArgs(*value.buffer()).append_to(writer_ct);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = std::string(kKernelDir) + "dataflow/writer_msda.cpp";

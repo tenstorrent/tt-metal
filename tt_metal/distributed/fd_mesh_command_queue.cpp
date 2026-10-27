@@ -93,7 +93,8 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
 class SubDeviceRecorder {
 public:
     SubDeviceRecorder(MeshDevice* mesh_device, SubDeviceId sub_device_id) :
-        context_id_(extract_context_id(mesh_device)), manager_id_(*mesh_device->get_active_sub_device_manager_id()) {
+        context_id_(mesh_device->impl().get_context_id()),
+        manager_id_(*mesh_device->get_active_sub_device_manager_id()) {
         // Skip programs that didn't opt into a user-defined sub-device manager.
         enabled_ = manager_id_ != *mesh_device->get_default_sub_device_manager_id() &&
                    tt::IsProgramMetadataRecordingEnabled(context_id_);
@@ -109,7 +110,7 @@ public:
             context_id_, device_id, manager_id_, runtime_id, sub_device_id, num_available_worker_cores_);
     }
 
-    void record(const std::vector<IDevice*>& devices, uint64_t runtime_id, SubDeviceId sub_device_id) const {
+    void record(const std::vector<Device*>& devices, uint64_t runtime_id, SubDeviceId sub_device_id) const {
         if (!enabled_) {
             return;
         }
@@ -618,7 +619,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
-    IDevice* device = mesh_device_->impl().get_device(address.device_coord);
+    Device* device = mesh_device_->impl().get_device(address.device_coord);
     address.address = device_dispatch::add_bank_offset_to_address(device, address.virtual_core_coord, address.address);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
@@ -663,7 +664,7 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
         if (!mesh_device_->impl().is_local(target.device_coord)) {
             continue;
         }
-        IDevice* device = mesh_device_->impl().get_device(target.device_coord);
+        Device* device = mesh_device_->impl().get_device(target.device_coord);
         // target.address is the full device destination (the caller pre-applies the
         // DRAM L1 NOC offset). Use the unchecked write: the DRAM-banked bounds check
         // in write_to_core rejects programmable DRAM-core (DRISC) L1. `value` is copied
@@ -705,7 +706,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
-    IDevice* device = mesh_device_->impl().get_device(address.device_coord);
+    Device* device = mesh_device_->impl().get_device(address.device_coord);
     address.address = device_dispatch::add_bank_offset_to_address(device, address.virtual_core_coord, address.address);
 
     device_dispatch::validate_core_read_write_bounds(device, address.virtual_core_coord, address.address, size_bytes);
@@ -738,7 +739,7 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
         return;
     }
 
-    if (tt::IsProgramRealtimeProfilerActive(extract_context_id(mesh_device_))) {
+    if (tt::IsProgramRealtimeProfilerActive(mesh_device_->impl().get_context_id())) {
         for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
             const uint32_t wait_count = expected_num_workers_completed_[*sub_device_id];
             for (auto* device : mesh_device_->impl().get_devices()) {
@@ -1170,7 +1171,7 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDesc
     if (!mesh_device_->impl().is_local(read_l1_data_descriptor.device_coord)) {
         return;
     }
-    IDevice* device = mesh_device_->impl().get_device(read_l1_data_descriptor.device_coord);
+    Device* device = mesh_device_->impl().get_device(read_l1_data_descriptor.device_coord);
     const auto cid = mesh_device_->impl().get_context_id();
     const ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance(cid).get_cluster().get_associated_mmio_device(device->id());
@@ -1265,7 +1266,7 @@ void FDMeshCommandQueue::reset_worker_state(
 }
 
 void FDMeshCommandQueue::write_program_commands_to_devices(
-    const std::vector<IDevice*>& devices,
+    const std::vector<Device*>& devices,
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program) {
@@ -1495,7 +1496,8 @@ void FDMeshCommandQueue::submit_replay_buffer(
         sub_device.take_ownership(sub_device_id, this->id_);
     }
 
-    auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(extract_context_id(mesh_device_), num_sub_devices);
+    auto cmd_sequence_sizeB =
+        trace_dispatch::compute_trace_cmd_size(mesh_device_->impl().get_context_id(), num_sub_devices);
 
     trace_dispatch::TraceDispatchMetadata dispatch_md(
         cmd_sequence_sizeB,

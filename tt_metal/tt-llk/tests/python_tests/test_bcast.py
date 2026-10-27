@@ -4,6 +4,7 @@
 
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -213,8 +214,7 @@ def _run_unpack_bcast_test(
             use_dense_tile_dimensions=True,
         ),
         "dest_acc": dest_acc,
-        "unpack_to_dest": formats.input_format.is_32_bit()
-        and dest_acc == DestAccumulation.Yes,
+        "unpack_to_dest": unpacks_to_dest(formats.input_format, dest_acc),
     }
 
     configuration = create_test_or_perf_config(

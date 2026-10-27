@@ -4,20 +4,19 @@
 # Structure: Each architecture has its own section with all tests to skip.
 # Tests that apply to all architectures are duplicated in each section.
 # Paths are pytest node ids from the repo root, the same form ttnn sim legs pass
-# to --deselect.
+# to --deselect. Each entry must load as a yaml string: quote an id that ends in
+# ':' (yaml would otherwise read it as a mapping key).
 #
 # run_ttsim_regression.sh reads this file too. It keeps entries under
 # tt_metal/tt-llk/tests/python_tests/ and drops that prefix, because the LLK
-# suite collects pytest with python_tests/ as rootdir. ttnn sim legs only apply
-# wormhole_b0 and blackhole, so quasar entries are LLK-only. The weekly
-# workflow passes --no-ignore; these LLK entries are for callers that must
-# stay green, such as the quasar ttsim PR gate.
+# suite collects pytest with python_tests/ as rootdir.
 
 wormhole_b0:
   # Job-level timeouts -- can be cut down still
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
@@ -32,6 +31,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
   - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
@@ -61,10 +61,18 @@ quasar:
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float32]
   # ttsim: tensix_cfg_wr32 reg=82 (PRNG_SEED_OVERRIDE_CTRL, dropout's seeding) is unimplemented.
   - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_dropout_reseed_quasar
-  - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_eltwise_unary_sfpu_quasar[mathop_formats_dest_acc_sync_input_dims:(<MathOperation.Dropout:
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_eltwise_unary_sfpu_quasar[mathop_formats_dest_acc_sync_input_dims:(<MathOperation.Dropout:"
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_dropout_
-  # ttsim: check_unpack_formats, Int4/UInt4 → Int8/UInt8 widening is unimplemented.
-  - tt_metal/tt-llk/tests/python_tests/quasar/test_unpack_unary_operand_quasar.py::test_unpack_unary_operand_quasar[formats_dest_acc_sync_transpose_unpack_sel_dims:(InputOutputFormat[A:Int4,
-  - tt_metal/tt-llk/tests/python_tests/quasar/test_unpack_unary_operand_quasar.py::test_unpack_unary_operand_quasar[formats_dest_acc_sync_transpose_unpack_sel_dims:(InputOutputFormat[A:UInt4,
-  - tt_metal/tt-llk/tests/python_tests/quasar/test_pack_quasar.py::test_pack_quasar[formats_dest_acc_sync_dims_relu:(InputOutputFormat[A:Int4,
-  - tt_metal/tt-llk/tests/python_tests/quasar/test_pack_quasar.py::test_pack_quasar[formats_dest_acc_sync_dims_relu:(InputOutputFormat[A:UInt4,
+
+  # --- Sanity ttnn sim_quasar tests ---
+  - models/experimental/llama32_1b_quasar/tests/graph_ops/test_paged_update_cache.py::test_paged_update_cache[00_128x8x32x64_bf8_int-dram-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_softmax.py::test_softmax[l_s-640-dfl-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_nlp_concat_heads_decode.py::test_nlp_concat_heads_decode[00_32x128_bf16_hs-l1-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_plus_one.py::test_plus_one[01_1_u32_int-dram-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_channel[detect_out-640-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_channel[dist2bbox-640-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_detect_cv2cv3[hw20-ttnn_mesh_device0]  # #62417: hang in tilize kernel
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_detect_cv2cv3[hw40-ttnn_mesh_device0]  # #62417
+  - models/experimental/ops/quasar/tests/yolo_ops/test_permute.py::test_permute_detect[dfl_nhwc_to_nchw-ttnn_mesh_device0]  # #62417
+  - models/experimental/ops/quasar/tests/yolo_ops/test_permute.py::test_permute_detect[dfl_transpose-ttnn_mesh_device0]  # #62417
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_plus_one.py::test_plus_one[00_1_i32_int-dram-ttnn_mesh_device0]  # #55526: DM self-loop DFB

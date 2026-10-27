@@ -15,7 +15,11 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    compute_constants,
+    extract_mesh_config,
+    routed_expert_combine_overlap_arg,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
@@ -510,6 +514,9 @@ class TtPrefillBlock(LightweightModule):
             # Same source as the block's attn_norm and ffn_norm, so the three cannot disagree.
             rms_norm_eps=config.rms_norm_eps,
             max_gate_seq_len_per_chip=getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
+            # Only configs that opt in (Kimi K2.7, GLM 5.3, Mistral Small 4) overlap the routed expert with
+            # combine_fabric2d.
+            overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(model_cfg),
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists

@@ -479,6 +479,13 @@ const std::unordered_map<tt::tt_metal::CoreCoord, int32_t>& Cluster::get_virtual
     return this->virtual_routing_to_profiler_flat_id_.at(this->get_board_type(chip_id));
 }
 
+IpVariant Cluster::get_quasar_ip_variant() const {
+    return this->get_soc_desc(*this->driver_->get_target_device_ids().begin())
+        .get_arch_descriptor()
+        .get_ip_variant()
+        .value_or(IpVariant::GRENDEL);
+}
+
 void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
@@ -1358,6 +1365,26 @@ void Cluster::configure_ethernet_cores_for_fabric_routers(
         }
         this->release_ethernet_cores_for_fabric_routers();
     }
+}
+
+void Cluster::configure_ethernet_cores_for_remote_transfers(
+    ChipId mmio_chip_id, const std::set<tt_fabric::chan_id_t>& eth_chans) {
+    if (this->arch_ != tt::ARCH::WORMHOLE_B0 || this->target_type_ != tt::TargetDevice::Silicon || eth_chans.empty()) {
+        return;
+    }
+    const auto& soc_desc = this->get_soc_desc(mmio_chip_id);
+    std::unordered_set<tt::umd::CoreCoord> eth_cores;
+    std::string eth_chans_str;
+    for (const auto eth_chan : eth_chans) {
+        eth_cores.insert(soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL));
+        eth_chans_str += fmt::format("{}{}", eth_chans_str.empty() ? "" : ", ", eth_chan);
+    }
+    log_debug(
+        tt::LogMetal,
+        "Pinning remote transfer cores of MMIO chip {} to ethernet channel(s) {}",
+        mmio_chip_id,
+        eth_chans_str);
+    this->driver_->configure_active_ethernet_cores_for_mmio_device(mmio_chip_id, eth_cores);
 }
 
 void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_planes) {

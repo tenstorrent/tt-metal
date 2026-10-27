@@ -127,6 +127,7 @@ enum class SfpuType : std::uint32_t
     less_than_equal_zero,
     greater_than_equal_zero,
     cumsum,
+    cumprod,
     reduce,
     add1,
     hardsigmoid,

@@ -17,7 +17,7 @@
 #ifdef UNTILIZE_OUT
 #include "api/compute/pack_untilize.h"
 #endif
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
@@ -136,6 +136,10 @@ void kernel_main() {
     // Row-major input staging; the tilize step below turns it into tiles in dfb_in.
     constexpr auto dfb_in_rm_id = dfb::in_rm;
     DataflowBuffer dfb_in_rm(dfb_in_rm_id);
+#endif
+#ifdef UNTILIZE_OUT
+    constexpr auto dfb_out_rm_id = dfb::out_rm;
+    DataflowBuffer dfb_out_rm(dfb_out_rm_id);
 #endif
 
     constexpr int onetile = 1;
@@ -413,8 +417,6 @@ void kernel_main() {
         dfb_xmm.pop_front(total_buffer_size);
 
 #ifdef UNTILIZE_OUT
-        constexpr auto dfb_out_rm_id = dfb::out_rm;
-        DataflowBuffer dfb_out_rm(dfb_out_rm_id);
         untilize_all_blocks_from_dfb<block_size>(dfb_out, dfb_out_rm, Wt);
 #endif
     }  // NCHt loop
