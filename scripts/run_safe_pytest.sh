@@ -393,7 +393,9 @@ _print_total_runtime() {
     printf 'SAFE_PYTEST_TOTAL_RUNTIME: %dm%02ds (%ds total, device-lock-acquired -> exit)\n' \
         $((elapsed / 60)) $((elapsed % 60)) "$elapsed" >&2
 }
-trap _print_total_runtime EXIT
+# A new `trap ... EXIT` replaces the previous one, so each EXIT trap lists every handler.
+# _emit_device_timing goes first: it reads the exit status from $?.
+trap '_emit_device_timing; _print_total_runtime' EXIT
 
 # --- Acquire flock (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
@@ -596,7 +598,7 @@ emit_missing_ttexalens_warning() {
         echo "SAFE_PYTEST: Install with: uv pip install -r tools/triage/requirements.txt"
     fi
 }
-trap '_emit_device_timing; emit_missing_ttexalens_warning' EXIT
+trap '_emit_device_timing; emit_missing_ttexalens_warning; _print_total_runtime' EXIT
 
 # --- Build the pytest command ---
 # Wrapper-injected options go FIRST and the user's args LAST, verbatim and contiguous. Both halves
@@ -845,7 +847,8 @@ if [[ "$IS_HANG" == true ]]; then
         echo ""
     fi
 
-    # Print the triage report path as the last line so machine-readers can find it.
+    # Print the triage report path last on stdout so machine-readers can find it (the EXIT trap
+    # still prints SAFE_PYTEST_TOTAL_RUNTIME after it, on stderr).
     if [[ -f "$TRIAGE_REPORT" ]]; then
         echo "SAFE_PYTEST: triage report: ${TRIAGE_REPORT}"
     fi
