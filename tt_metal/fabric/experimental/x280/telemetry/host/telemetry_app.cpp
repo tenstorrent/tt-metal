@@ -8,48 +8,71 @@
 #include <common/telemetry_table.h>
 
 #include <iostream>
+#include <iomanip>
 
-inline {
-    void get_telemetry_table() {
-        // RequirePrepared never primes; an unprimed chip is reported instead.
-        auto opened =
-            X280Runtime::open(mesh, RuntimeOpenConfig{.priming_policy = LimEccPrimingPolicy::RequirePrepared});
-        if (!opened.ready()) {
-            std::fprintf(stderr, "open: %s: %s\n", to_string(opened.outcome), opened.diagnostic.c_str());
-            if (opened.requires_preparation()) {
-                std::fprintf(stderr, "run with --prime first, then tt-smi -r 0\n");
-            }
-            return 1;
-        }
-        auto& runtime = *opened.runtime;
+namespace {
 
-        const auto ids = runtime.tile_ids();
-        if (ids.empty()) {
-            std::fprintf(stderr, "no enabled X280 tiles\n");
-            return 1;
+using namespace x280;
+bool get_telemetry_table(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh) {
+    // RequirePrepared never primes; an unprimed chip is reported instead.
+    auto opened = X280Runtime::open(mesh, RuntimeOpenConfig{.priming_policy = LimEccPrimingPolicy::RequirePrepared});
+    if (!opened.ready()) {
+        std::fprintf(stderr, "open: %s: %s\n", to_string(opened.outcome), opened.diagnostic.c_str());
+        if (opened.requires_preparation()) {
+            std::cerr << "run with --prime first, then tt-smi -r 0\n";
         }
-        auto& tile = runtime.tile(ids.front());
+        return false;
+    }
+    auto& runtime = *opened.runtime;
 
-        const auto state = tile.inspect();
-        if (!state.observation_valid) {
-            std::fprintf(stderr, "inspect: %s\n", state.invalid_reason.c_str());
-            return 1;
-        }
-        if (!state.resident_idle_live) {
-            MultiTileBootRequest boot;
-            boot.tiles = {ids.front()};
-            boot.idle_image_path = std::string(X280_IMAGE_DIR) + "/firmware-lim-idle.bin";
-            boot.allow_reset_release = true;
-            const auto booted = runtime.boot_tiles(boot);
-            if (!booted.ready()) {
-                std::fprintf(stderr, "boot idle: %s\n", booted.diagnostic.c_str());
-                for (const auto& report : booted.tiles) {
-                    std::fprintf(stderr, "  %s\n", report.result.diagnostic.c_str());
-                }
-                return 1;
-            }
-            std::printf("booted resident idle\n");
-        }
+    const auto ids = runtime.tile_ids();
+    if (ids.empty()) {
+        std::cerr << "no enabled X280 tiles\n";
+        return false;
+    }
+    auto& tile = runtime.tile(ids.front());
+
+    const auto state = tile.inspect();
+    if (!state.observation_valid) {
+        std::cerr << "inspect: " << state.invalid_reason.c_str() << "\n";
+        return false;
     }
 
-    int main(int argc, char* argv[]) {}
+    auto bytes = tile.read_available_lim(TABLE_ADDR, sizeof(TelemetryTable));
+    std::cout << "Bytes Read: " << bytes.size() << "\n";
+
+    TelemetryTable table;
+    std::memcpy(&table, bytes.data(), sizeof(table));
+    std::cout << "Version: " << std::hex << table.header.table_version << "\n";
+    std::cout << "Num rows: " << table.header.num_rows << "\n";
+    std::cout << std::left;
+    for (int i = 0; i < table.header.num_rows; ++i) {
+        std::cout << std::setw(32) << table.rows[i].metric_name << " | ";
+        if (table.rows[i].metric_type == MetricType::metric_type_string) {
+            std::cout << " string | ";
+            std::cout << std::setw(64) << table.rows[i].str_data << " | ";
+        } else {
+            std::cout << " number | ";
+            std::cout << std::setw(64) << table.rows[i].num_data << " | ";
+        }
+        std::cout << "\n";
+    }
+
+    return true;
+}
+
+}  // namespace
+
+int main(int argc, char* argv[]) {
+    for (int i = 0; i < argc; ++i) {
+        std::cout << "argv[" << i << "] = " << argv[i] << "\n";
+    }
+
+    auto mesh = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0);
+    auto result = get_telemetry_table(mesh);
+
+    if (!result) {
+        return 1;
+    }
+    return 0;
+}
