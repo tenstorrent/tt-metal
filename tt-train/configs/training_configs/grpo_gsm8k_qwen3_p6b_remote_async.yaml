@@ -1,0 +1,56 @@
+# Two-rank Qwen3-0.6B GRPO on GSM8K with asynchronous remote rollouts: 1 TTML training chip
+# (rank 0) + 1 TTT rollout chip (rank 1), 2 chips total on one host. Rank 1 generates and
+# scores batches continuously with the newest weights it has received.
+# Launch with grpo/gsm8k/run_remote_rollout.sh --config <this file>.
+
+training_config:
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b.yaml"
+
+  # HuggingFace Hub id of the SFT'd think-tagged Qwen3 checkpoint (the GRPO starting point).
+  model_source: "ichovpanTT/qwen3-0.6b-base-think-sft"
+  # Seeds the training rank only: tt-transformers seeds rollout sampling randomly, so remote runs are not reproducible.
+  seed: 42
+
+  optimizer:
+    type: MorehAdamW
+    lr: 1.0e-5
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.0
+    amsgrad: false
+    kahan_summation: false
+
+  grpo_config:
+    rollout_backend: "ttt_remote_async"
+    # Push the policy weights to the rollout rank every N optimizer steps.
+    weight_sync_every: 1
+    # Drop a batch generated with weights more than this many optimizer steps older than the policy.
+    max_staleness: 1
+    epsilon: 0.2
+    per_device_train_batch_size: 16   # one prompt's group of 16 completions
+    num_iterations: 1
+    gradient_accumulation_steps: 2    # 2 prompts x 16 completions = 32 per generate call
+    logging_steps: 1
+    checkpointing: true
+    checkpoint_interval: 20
+    prompts_to_train: 200             # 100 optimizer steps x 2 prompts per batch
+    temperature: 1.0
+    max_completion_length: 512
+    num_generations: 16
+    warmup_steps: 20
+
+device_config:
+  enable_ddp: false
+  mesh_shape: [1, 1]
+  device_ids: [0]
+
+# Rollout rank (rank 1) settings: its mesh, the tt-transformers batch size per
+# device and sequence length. max_batch_size covers one generate call
+# (per_device_train_batch_size * gradient_accumulation_steps).
+remote_rollout_config:
+  mesh_shape: [1, 1]
+  max_batch_size: 32
+  max_seq_len: 1024
+  # Scored batches buffered on each rank.
+  rollout_queue_capacity: 2
