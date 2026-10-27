@@ -71,8 +71,6 @@ class Sharding:
 
     def describe(self) -> str:
         """The layout as a short string for messages, e.g. ``[Replicate, Shard(3)] over mesh [1, 2]``."""
-        if self._placements is None:
-            return "no topology (single device)"
         names = [f"Shard({p.dim})" if isinstance(p, ttnn.PlacementShard) else "Replicate" for p in self._placements]
         return f"[{', '.join(names)}] over mesh {list(self._dist_shape)}"
 
