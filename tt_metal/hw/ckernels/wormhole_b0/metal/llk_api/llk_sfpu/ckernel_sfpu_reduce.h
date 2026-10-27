@@ -50,14 +50,24 @@ constexpr std::uint32_t CLEAR_REG = p_sfpu::LREG12;
 // reduce with fp32 dest accumulation: the datum lives in the low 16 bits of a 32-bit dest word and
 // the high 16 bits are garbage, which would otherwise corrupt integer compare/add operations.
 template <bool clear_high_bits>
-inline void load_and_clear_high_bits(
+sfpi_inline void load_and_clear_high_bits(
     const std::uint32_t lreg_ind,
     const InstrModLoadStore instr_mod0,
     const std::uint32_t sfpu_addr_mode,
     const std::uint32_t dest_reg_addr) {
-    TT_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr);
-    if constexpr (clear_high_bits) {
-        TT_SFPAND(0, CLEAR_REG, lreg_ind, 0);
+    // In the unrolled column paths every operand folds to a constant: issue the instruction directly
+    // (TTI_) instead of building its encoding on the RISC at runtime (TT_). Same SFPU instructions.
+    // Always inlined so the check sees the caller's constants (at -Os the two-branch body is not).
+    if (__builtin_constant_p(lreg_ind) && __builtin_constant_p(sfpu_addr_mode) && __builtin_constant_p(dest_reg_addr)) {
+        TTI_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr);
+        if constexpr (clear_high_bits) {
+            TTI_SFPAND(0, CLEAR_REG, lreg_ind, 0);
+        }
+    } else {
+        TT_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr);
+        if constexpr (clear_high_bits) {
+            TT_SFPAND(0, CLEAR_REG, lreg_ind, 0);
+        }
     }
 }
 
