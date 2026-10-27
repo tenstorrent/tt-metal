@@ -32,8 +32,8 @@ work can resume as-is.
 | Chunked prefill, full 36-layer model, real weights | merged; every chunk goes through the cache-backed ring SDPA |
 | Variable chunk sizes (one runtime serving several sizes) | merged |
 | Bounded sliding-window KV cache (circular window for the 18 sliding layers) | merged, opt-in (`GPT_OSS_BOUNDED_SLIDING_KV=1`) |
-| Per-layer KV-PCC validation vs a CPU golden, in one galaxy CI job (runner e2e, 5k@1k harness, variable-chunk smoke) | merged |
-| GPT-OSS through the common prefill runner (producer/runner e2e), with its galaxy CI section | merged, [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) |
+| Per-layer KV-PCC validation vs a CPU golden, in two galaxy CI jobs (runner gate; 5k@1k harness and variable-chunk smoke suite) | merged |
+| GPT-OSS through the common prefill runner (`run_multirank_pcc.sh gptoss120b sc1`), with its galaxy CI section | merged, [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) |
 | Trace capture of the prefill chunk | planned, [#56661](https://github.com/tenstorrent/tt-metal/issues/56661) (stage one [#56660](https://github.com/tenstorrent/tt-metal/issues/56660), stage two [#56115](https://github.com/tenstorrent/tt-metal/issues/56115)) |
 | Bounded sliding cache as the default, KV migration of a bounded cache | planned, [#55646](https://github.com/tenstorrent/tt-metal/issues/55646) |
 | Hoisting shared prefill scaffolding into `common/prefill` | open, [#55647](https://github.com/tenstorrent/tt-metal/issues/55647) |
