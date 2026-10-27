@@ -135,8 +135,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         timeout-minutes: 20
+        # Only the scripts, with no history and no blobs. The full clone took up to 13 of
+        # the 15 minutes an ubuntu-slim job gets. The warehouse step fetches the history it needs.
         with:
-          fetch-depth: 0
+          sparse-checkout: |
+            .github/scripts
+            tt_metal/tt-llk/perf
+          filter: blob:none
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
@@ -216,6 +221,8 @@ jobs:
         run: |
           COMMITS_ARG=()
           if [ -n "$MATCH_REF" ]; then
+            # Commits and trees only: enough for the merge base and the 200 commits before it.
+            git fetch --no-tags --filter=blob:none --depth=250 origin "$(git rev-parse HEAD)"
             # An empty list is passed on, so the reader skips instead of taking any run.
             COMMITS=$(.github/scripts/llk-perf-baseline-commits.sh "$MATCH_REF") \
               || { echo "::warning::No LLK perf change found before ${MATCH_REF}; no baseline."; COMMITS=""; }
