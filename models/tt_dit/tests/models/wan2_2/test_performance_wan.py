@@ -142,8 +142,10 @@ def test_pipeline_performance(
 
     benchmark_profiler = BenchmarkProfiler()
     traced = mesh_shape == (4, 32)  # trace only for quadx32
-    # VBENCH_EXPORT_DIR leaves the bundle for a CI step that scores it after pytest has closed the
-    # devices; without it rank 0 scores the bundle at the end of the test.
+    # Setting VBENCH_EXPORT_DIR means the test writes the gate clips and manifest there and does not score
+    # them; a later `vbench_bundle evaluate` step scores them. Without it, rank 0 scores them at the end of
+    # the test. CI sets VBENCH_EXPORT_DIR for the bh_sc4 perf legs because scoring is minutes of CPU work,
+    # and doing it after pytest releases the devices keeps them and the other ranks from sitting idle.
     run_vbench = os.environ.get("RUN_VBENCH", "0") == "1"
     vbench_export_dir = os.environ.get("VBENCH_EXPORT_DIR")
     vbench_dir = Path(vbench_export_dir) if vbench_export_dir else tmp_path / "vbench"
