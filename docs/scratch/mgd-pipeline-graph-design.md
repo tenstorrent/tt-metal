@@ -651,11 +651,29 @@ for (const auto& pipeline : part.pipeline_descriptors()) {
   spans the parts is the reason to merge (for example, per-galaxy MGDs merged into one
   supercluster).
 
-**Several pipelines: checked together, as one graph.** An MGD may declare more than one
-pipeline, and merging parts that each declare one gives several. The parts' pipelines are
-disconnected from each other, because no part can name another part's stages. Rather than
-check them one at a time, the mapper combines them into **one pipeline graph whose
-components are the pipelines**, and sets every constraint on that graph in one go:
+**Several pipelines: separate in the MGD, one graph in the mapper, one solve.** The
+descriptor keeps them separate. `pipeline_descriptors` is a repeated field, one
+`PipelineDescriptorData` per pipeline, and Tier A checks each record on its own. Stage ids
+are unique only inside that record, so two pipelines may both have an `s0`. An MGD may
+declare more than one, and merging parts that each declare one appends those records. The
+parts' pipelines stay disconnected, because no part can name another part's stages. Merge
+does not join them.
+
+The topology mapper does not place that list one pipeline at a time.
+`build_pipeline_problem` merges every record of the merged MGD into **one target graph**,
+and that graph is the representation C1 and C2 solve:
+
+- A node is `<pipeline name>/<stage id>`. There are no edges between pipelines, so each
+  pipeline is one component of the same graph.
+- One seating builds one position graph for that target. One footprint solve places every
+  stage of every pipeline onto disjoint slices. Two pipelines that each fit alone can still
+  fail together, because they compete for the same slices and the same cables.
+- The mapping that comes back is split per pipeline
+  (`PipelineMappingResult::pipelines`). The chip-level resolver runs once per component on
+  the carve that single solve returned. Those calls check the carve; they are not a second
+  placement (3.4, "Several pipelines").
+
+On that one graph:
 
 - **Names.** Pipeline names must be unique across the merged MGD; a clash is a merge error
   that names both parts. In the combined graph a stage is `<pipeline>/<stage id>`, so stage
@@ -666,8 +684,6 @@ components are the pipelines**, and sets every constraint on that graph in one g
   each fit alone can fail together (2.2).
 - **Plan 1** takes `k_AB` over the combined projections, so it sums the STRICT crossings of
   every pipeline (4.4).
-- **Tier C** places all components on disjoint slices of one seating, and resolves each
-  component as its own graph (3.4, "Several pipelines").
 
 A part's pipeline still binds across the whole merged fabric, not just to that part's
 meshes. Byte-identical copies of one pipeline (the same file in two parts) clash on the name
@@ -1865,9 +1881,11 @@ A3, B3+B2, B1+B0, A0, and `s3 → s0` goes over host, which is also blaze's answ
 
 #### Several pipelines
 
-Several pipelines (1.5) are one target graph with several components on the same position
-graph; the resource constraint keeps them on disjoint slices, and each pipeline is checked by
-its own resolver call. Two copies of `ring4` (four 4x2 stages) on the `mixed4` meshes with
+The descriptor stores one record per pipeline (1.5). The mapper's representation is the
+merge of those records: one target graph, one component per pipeline, on one position
+graph. One footprint solve places every stage of every pipeline; the resource constraint
+keeps the components on disjoint slices. Each pipeline is then checked by its own resolver
+call on that carve. Two copies of `ring4` (four 4x2 stages) on the `mixed4` meshes with
 cables A0–B0, A2–B2, A3–B3: only one 4-cycle exists (A2 A3 B3 B2), so the seating has no
 mapping. Adding cable A1–B1 gives a second 4-cycle (A0 A1 B1 B0) and the seating is accepted
 with every slice used.
@@ -2004,7 +2022,7 @@ struct PipelineEdgeSpec {
     // RELAXED (later): EdgePolicy policy = EdgePolicy::STRICT;
 };
 
-struct PipelineGraph {                    // one pipeline; several are components of one problem
+struct PipelineGraph {                    // one descriptor record. The mapper merges the vector into one target graph (1.5).
     std::string name;
     std::vector<PipelineStageSpec> stages;
     std::vector<PipelineEdgeSpec> edges;
@@ -2030,9 +2048,11 @@ struct TopologyMappingConfig {
   when it builds the config (beside `mesh_validation_modes`), unless the kill switch is set.
   `generate_rank_bindings` fills it from the merged parts (1.5: pipeline names unique, stages
   do not name meshes, so no id remap is needed).
-- **Inside the enumerator.** The constructor turns `config.pipelines` into a `PipelineProblem`
-  once: global stage indices across all pipelines, the target graph of STRICT edges, each
-  stage's chip count and core demand, and Tier B's binding sets. Every seating reuses it; only the position graph (C1) is per seating.
+- **Inside the enumerator.** The constructor merges `config.pipelines` into one
+  `PipelineProblem`: global stage indices across all pipelines, one target graph of STRICT
+  edges (one component per pipeline, no edges between them), each stage's chip count and
+  core demand, and Tier B's binding sets. One footprint solve per seating places every
+  component. Every seating reuses the problem; only the position graph (C1) is per seating.
 - **Where Tier C lives.** Beside Tier B in `pipeline_builder.cpp`, with two entry points in
   `pipeline_builder.hpp`'s `detail` namespace. The footprint solve (C1 and C2) is in the same
   file: `build_pipeline_footprint_graph`, `apply_pipeline_footprint_constraints` and the one
@@ -2291,8 +2311,9 @@ or by a candidate cable. This one graph covers blaze's planned carve, per-rank t
 single-mesh tiling (3.4), except a stage smaller than a host slice (open question 15).
 Positions are generated from each stage's chip shape per mesh, so host slices of different
 shapes need no special case: an 8-chip stage is one 4x2 slice on one mesh and a 2x2 block of
-2x2 slices on another. Several pipelines are one target graph with several components; the
-resource constraint keeps them on disjoint slices.
+2x2 slices on another. Several pipelines are already one target graph here (1.5): one
+component per pipeline, no edges between them, and one solve of this position graph places
+every component. The resource constraint keeps them on disjoint slices.
 
 In Case B (both crossings on one slice pair, 2.3) with every edge STRICT, the solve finds no
 mapping, and the seating goes to C4. RELAXED (later): with `s3 → s0` a soft edge (3.4), the

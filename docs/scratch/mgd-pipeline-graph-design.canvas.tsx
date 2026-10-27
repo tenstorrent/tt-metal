@@ -1538,7 +1538,7 @@ std::vector<tt::tt_metal::ExitNodeConnection> inter_mesh_cables(
     steps: [
       "Input: TopologyMappingConfig::pipelines (std::vector<PipelineGraph>); empty means off. TopologyMapper fills it with build_pipeline_graphs(mesh_graph_.get_mesh_graph_descriptor()) unless the kill switch is set; generate_rank_bindings fills it from the merged parts.",
       "Tier C sits beside Tier B in pipeline_builder.cpp: two entry points in pipeline_builder.hpp's detail namespace, build_pipeline_problem and check_pipeline_seating, with the pre-checks and R recording as file-local helpers. The header forward-declares PipelineProblem, PlacedMesh, TopologyMappingResult and PhysicalSystemDescriptor, so the ttnn and nanobind files that include it pull in no mapper or solver headers.",
-      "The enumerator constructor builds a PipelineProblem once from config.pipelines (detail::build_pipeline_problem), held as unique_ptr<const PipelineProblem> beside placement_session_: global stage indices, the STRICT target graph, chip counts and core demand, Tier B binding sets.",
+      "The enumerator constructor merges config.pipelines into one PipelineProblem (detail::build_pipeline_problem), held as unique_ptr<const PipelineProblem> beside placement_session_. The vector of descriptor records becomes one target graph: global stage indices, one component per pipeline, no edges between pipelines, chip counts and core demand, Tier B binding sets. One footprint solve places every component.",
       "Output: TopologyMappingResult::pipeline (PipelineMappingResult: per pipeline the stage slots (mesh, chip rectangle, host ranks, host I/O chips) and edge layouts (exit, entry, crossing), plus idle host ranks); pipeline stats on TopologyMappingStats. split_mapping_to_local_parts remaps it per part.",
       "TopologyMapper stores mapping_result.pipeline on rank 0 (pipeline_mapping_, get_pipeline_mapping()). R is copied to pipeline_required_links_ and broadcast with the chip info, because every rank checks it after the pairing (P9); the rest of the pipeline mapping stays on rank 0.",
       "detail::check_pipeline_seating: candidates -> slices -> pre-checks (area, lattice, colour) -> one position graph (P5) -> one solve_footprint -> the resolver on that carve (a throw is the reason) -> R as exact channels -> demand.",
@@ -1548,7 +1548,7 @@ std::vector<tt::tt_metal::ExitNodeConnection> inter_mesh_cables(
       "failure_stage pipeline_carve / pipeline_layout; cap rejections per run (kMaxPipelineRejections, proposed 256, overridable for sweeps) and report the last reason.",
       "Feedback is whole-seating exclusion only; the seat-pair clause and per-seat forbid wait for attributed failures (P13).",
       "Record pipeline rejections per run in the placement stats (seatings tried before the first accept), so the sweep and CI show whether P10 is needed.",
-      "Several pipelines: one target graph with one component per pipeline in the same solve; the resource constraint keeps them on disjoint slices; one resolver call per pipeline.",
+      "Several pipelines stay separate PipelineDescriptorData records in the MGD. The mapper merges them into one target graph (one component per pipeline, no edges between them) and places that graph in one footprint solve. The resource constraint keeps them on disjoint slices. One resolver call per pipeline checks that carve; it is not a second placement.",
     ],
     code: [
       {
