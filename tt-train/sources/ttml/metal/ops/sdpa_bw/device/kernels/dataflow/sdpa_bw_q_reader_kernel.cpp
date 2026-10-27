@@ -7,6 +7,28 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
+// Q, the intermediates, K, V and the mask are only read for grad_Q's K/V loop. dY is always read.
+#ifdef COMPUTE_GRAD_QUERY
+constexpr bool compute_grad_query = true;
+#else
+constexpr bool compute_grad_query = false;
+#endif
+
+// Y is read for u = rowsum(dY * Y) (grad_Q and the u_scaler output) and for grad_gate, not for the gated dO alone.
+#if defined(COMPUTE_GRAD_QUERY) || defined(COMPUTE_U_SCALER) || (defined(HAS_GATE) && defined(COMPUTE_GRAD_GATE))
+constexpr bool read_attn_output = true;
+#else
+constexpr bool read_attn_output = false;
+#endif
+
+// G is read whenever the compute kernel runs the gate helper (see sdpa_bw_q_compute_kernel.cpp).
+#if defined(HAS_GATE) && \
+    (defined(COMPUTE_GRAD_QUERY) || defined(COMPUTE_GATED_GRAD_OUTPUT) || defined(COMPUTE_GRAD_GATE))
+constexpr bool read_gate = true;
+#else
+constexpr bool read_gate = false;
+#endif
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     const uint32_t grad_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);    // grad_output buffer address
@@ -74,6 +96,7 @@ void kernel_main() {
     const uint32_t num_of_interm_tiles = 1U;
 
 #ifdef BALANCED_PARALLELISM
+    static_assert(compute_grad_query, "Balanced pairing only balances the grad_Q K/V loop");
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     auto read_row = [&](const uint32_t global_row_idx) {
@@ -132,19 +155,41 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         const uint32_t global_row_idx = start_row + i;
 
-        // Read attn_output and grad_output rows (V-dim width)
+        // The row's dY, Y, Q and G (dY, Y and G are V-dim wide, Q is Q/K-dim wide) share one read barrier.
         const uint32_t vo_start_idx = global_row_idx * vWt;
-        read_tiles_by_row(cb_attn_output, attn_output_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
-        read_tiles_by_row(cb_grad_output, grad_output_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
-
-        // Read query row (Q/K-dim width)
-        const uint32_t q_start_idx = global_row_idx * qWt;
-        read_tiles_by_row(cb_query, query_addr_generator, q_start_idx, qWt, tile_bytes, qWt);
-
+        read_tiles_by_row</* UseBarrier */ false>(
+            cb_grad_output, grad_output_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
+        if constexpr (read_attn_output) {
+            read_tiles_by_row</* UseBarrier */ false>(
+                cb_attn_output, attn_output_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
+        }
+        if constexpr (compute_grad_query) {
+            const uint32_t q_start_idx = global_row_idx * qWt;
+            read_tiles_by_row</* UseBarrier */ false>(
+                cb_query, query_addr_generator, q_start_idx, qWt, tile_bytes, qWt);
+        }
 #ifdef HAS_GATE
-        // Read gate row (V-dim width)
-        read_tiles_by_row(cb_gate, gate_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
+        if constexpr (read_gate) {
+            read_tiles_by_row</* UseBarrier */ false>(cb_gate, gate_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
+        }
 #endif
+        noc_async_read_barrier();
+        cb_push_back(cb_grad_output, vWt);
+        if constexpr (read_attn_output) {
+            cb_push_back(cb_attn_output, vWt);
+        }
+        if constexpr (compute_grad_query) {
+            cb_push_back(cb_query, qWt);
+        }
+#ifdef HAS_GATE
+        if constexpr (read_gate) {
+            cb_push_back(cb_gate, vWt);
+        }
+#endif
+
+        if constexpr (!compute_grad_query) {
+            continue;  // the rest of the row feeds the K/V loop only
+        }
 
         const uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;  // which head of Q we are processing right now
 

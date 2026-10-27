@@ -63,17 +63,32 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
         grad_output.device() == query.device() && query.device() == key.device() && key.device() == value.device(),
         "All input tensors must be on the same device");
 
-    TT_FATAL(tensor_args.u_scaler.device() == query.device(), "u_scaler must be on the same device as query");
-    check_device_tensor(
-        tensor_args.u_scaler,
-        "SDPABackwardKV",
-        "u_scaler",
-        {.dtypes = {tt::tt_metal::DataType::FLOAT32}, .memory_layout = std::nullopt});
+    // Requested outputs. Only grad_K consumes u_scaler (through dS).
+    TT_FATAL(
+        operation_attributes.compute_grad_key || operation_attributes.compute_grad_value,
+        "SDPABackwardKV: at least one of compute_grad_key and compute_grad_value must be set");
+    TT_FATAL(
+        operation_attributes.compute_grad_key || !tensor_args.preallocated_grad_key.has_value(),
+        "SDPABackwardKV: preallocated_grad_key given but compute_grad_key is false");
+    TT_FATAL(
+        operation_attributes.compute_grad_value || !tensor_args.preallocated_grad_value.has_value(),
+        "SDPABackwardKV: preallocated_grad_value given but compute_grad_value is false");
+    TT_FATAL(
+        !operation_attributes.compute_grad_key || tensor_args.u_scaler.has_value(),
+        "SDPABackwardKV: u_scaler is required when compute_grad_key is set");
 
     const auto [qB, qH, qS, qE] = query_shape.to_array_4D();
 
-    {
-        const auto u_shape = tensor_args.u_scaler.padded_shape();
+    if (tensor_args.u_scaler.has_value()) {
+        const auto& u_scaler = tensor_args.u_scaler.value();
+        TT_FATAL(u_scaler.device() == query.device(), "u_scaler must be on the same device as query");
+        check_device_tensor(
+            u_scaler,
+            "SDPABackwardKV",
+            "u_scaler",
+            {.dtypes = {tt::tt_metal::DataType::FLOAT32}, .memory_layout = std::nullopt});
+
+        const auto u_shape = u_scaler.padded_shape();
         const auto expected_rows = qB * qH * qS;
         TT_FATAL(
             u_shape[-2] == expected_rows && u_shape[-1] == tt::constants::TILE_WIDTH,
@@ -200,22 +215,28 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
 SDPABackwardKVDeviceOperation::spec_return_value_t SDPABackwardKVDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Handle grad_key spec
-    tt::tt_metal::TensorSpec grad_key_spec =
-        tensor_args.preallocated_grad_key.has_value()
-            ? tensor_args.preallocated_grad_key->tensor_spec()
-            : tt::tt_metal::TensorSpec(
-                  tensor_args.key.logical_shape(),
-                  tt::tt_metal::TensorLayout(
-                      tensor_args.key.dtype(), tt::tt_metal::Layout::TILE, tensor_args.key.memory_config()));
+    std::optional<tt::tt_metal::TensorSpec> grad_key_spec = std::nullopt;
+    if (operation_attributes.compute_grad_key) {
+        grad_key_spec =
+            tensor_args.preallocated_grad_key.has_value()
+                ? tensor_args.preallocated_grad_key->tensor_spec()
+                : tt::tt_metal::TensorSpec(
+                      tensor_args.key.logical_shape(),
+                      tt::tt_metal::TensorLayout(
+                          tensor_args.key.dtype(), tt::tt_metal::Layout::TILE, tensor_args.key.memory_config()));
+    }
 
     // Handle grad_value spec
-    tt::tt_metal::TensorSpec grad_value_spec =
-        tensor_args.preallocated_grad_value.has_value()
-            ? tensor_args.preallocated_grad_value->tensor_spec()
-            : tt::tt_metal::TensorSpec(
-                  tensor_args.value.logical_shape(),
-                  tt::tt_metal::TensorLayout(
-                      tensor_args.value.dtype(), tt::tt_metal::Layout::TILE, tensor_args.value.memory_config()));
+    std::optional<tt::tt_metal::TensorSpec> grad_value_spec = std::nullopt;
+    if (operation_attributes.compute_grad_value) {
+        grad_value_spec =
+            tensor_args.preallocated_grad_value.has_value()
+                ? tensor_args.preallocated_grad_value->tensor_spec()
+                : tt::tt_metal::TensorSpec(
+                      tensor_args.value.logical_shape(),
+                      tt::tt_metal::TensorLayout(
+                          tensor_args.value.dtype(), tt::tt_metal::Layout::TILE, tensor_args.value.memory_config()));
+    }
 
     return {grad_key_spec, grad_value_spec};
 }
@@ -225,14 +246,20 @@ SDPABackwardKVDeviceOperation::tensor_return_value_t SDPABackwardKVDeviceOperati
     auto [grad_key_spec, grad_value_spec] = compute_output_specs(operation_attributes, tensor_args);
 
     // Handle grad_key
-    ttnn::Tensor grad_key = tensor_args.preallocated_grad_key.has_value()
-                                ? tensor_args.preallocated_grad_key.value()
-                                : ttnn::create_device_tensor(grad_key_spec, tensor_args.key.device());
+    std::optional<ttnn::Tensor> grad_key = std::nullopt;
+    if (grad_key_spec.has_value()) {
+        grad_key = tensor_args.preallocated_grad_key.has_value()
+                       ? tensor_args.preallocated_grad_key.value()
+                       : ttnn::create_device_tensor(grad_key_spec.value(), tensor_args.key.device());
+    }
 
     // Handle grad_value
-    ttnn::Tensor grad_value = tensor_args.preallocated_grad_value.has_value()
-                                  ? tensor_args.preallocated_grad_value.value()
-                                  : ttnn::create_device_tensor(grad_value_spec, tensor_args.value.device());
+    std::optional<ttnn::Tensor> grad_value = std::nullopt;
+    if (grad_value_spec.has_value()) {
+        grad_value = tensor_args.preallocated_grad_value.has_value()
+                         ? tensor_args.preallocated_grad_value.value()
+                         : ttnn::create_device_tensor(grad_value_spec.value(), tensor_args.value.device());
+    }
 
     return {grad_key, grad_value};
 }
@@ -249,14 +276,19 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_
     ttml::metal::AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
-    const ttnn::Tensor& u_scaler,
+    const std::optional<ttnn::Tensor>& u_scaler,
     const float dropout_probability,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value) {
+    const std::optional<ttnn::Tensor>& preallocated_grad_value,
+    bool compute_grad_key,
+    bool compute_grad_value) {
     using OperationType = ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation;
 
-    auto operation_attributes =
-        OperationType::operation_attributes_t{.mask_type = mask_type, .dropout_probability = dropout_probability};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .mask_type = mask_type,
+        .dropout_probability = dropout_probability,
+        .compute_grad_key = compute_grad_key,
+        .compute_grad_value = compute_grad_value};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,

@@ -84,36 +84,58 @@ constexpr uint32_t cb_value = tt::CBIndex::c_4;        // Original value
 constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;  // Original mask
 #endif
 constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;       // Forward pass intermediates
-constexpr uint32_t cb_mat_mul_reduction = tt::CBIndex::c_7;   // Temporary computations
 constexpr uint32_t cb_grad_value_accum = tt::CBIndex::c_8;    // L1 accumulator for grad_value
 constexpr uint32_t cb_grad_key_accum = tt::CBIndex::c_9;      // L1 accumulator for grad_key
 constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;  // Recomputed attention weights = softmax(QK^T / sqrt(Et))
 constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_11;  // Gradient w.r.t. attention: dL/dP
 constexpr uint32_t cb_grad_scores_transposed = tt::CBIndex::c_12;   // dS^T, packed directly from DST
 constexpr uint32_t cb_attn_weights_transposed = tt::CBIndex::c_13;  // P^T, packed directly from DST
-constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;       // u_scalar per row (precomputed by Q kernel)
-constexpr uint32_t cb_grad_key = tt::CBIndex::c_15;           // Output: grad_K
-constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;         // Output: grad_V
+constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;             // u_scalar per row (precomputed by Q kernel)
+constexpr uint32_t cb_grad_key = tt::CBIndex::c_15;                 // Output: grad_K
+constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;               // Output: grad_V
 
 const uint32_t qk_tiles = qWt;            // Q/K inner dim tiles
 const uint32_t v_tiles = vWt;             // V/dO/O inner dim tiles
 const uint32_t num_of_interm_tiles = 1U;  // single FP32 logsumexp tile per Q row
 
+// Which outputs to produce. Both need P (recomputed from Q, K, mask and lse) and dO. grad_V = P^T @ dO needs
+// nothing else; grad_K additionally needs V (dP = dO @ V^T), u_scaler and dS. CBs of a skipped chain do not exist.
+#ifdef COMPUTE_GRAD_KEY
+constexpr bool compute_grad_key = true;
+#else
+constexpr bool compute_grad_key = false;
+#endif
+
+#ifdef COMPUTE_GRAD_VALUE
+constexpr bool compute_grad_value = true;
+#else
+constexpr bool compute_grad_value = false;
+#endif
+
+static_assert(compute_grad_key || compute_grad_value, "SDPA backward KV: nothing to produce");
+
+// The conditional (2-arg) pack reconfigs name the previous PACK target, which depends on which chains run:
+// the last output of a row, and the last accumulator update of an iteration.
+constexpr uint32_t cb_last_output = compute_grad_key ? cb_grad_key : cb_grad_value;
+constexpr uint32_t cb_last_accum = compute_grad_key ? cb_grad_key_accum : cb_grad_value_accum;
+
 /**
  * Process a single K/V row of the SDPA backward KV computation.
- * For each K/V row k, streams through Q, dO, O rows and accumulates dK and dV.
+ * For each K/V row k, streams through the Q and dO rows and accumulates dK and dV.
  *
  * @param global_row_idx The global row index (across all batches/groups/sequences)
  */
 FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     cb_wait_front(cb_key, qk_tiles);
-    cb_wait_front(cb_value, v_tiles);
+    if constexpr (compute_grad_key) {
+        cb_wait_front(cb_value, v_tiles);
+    }
 
     // The last PACK targets of the previous row are the BF16 outputs (pack_tiles_to_output),
     // while every PACK target inside the loop below is Float32. Reconfigure once per row here
     // so the 2-arg (conditional) pack_reconfig calls in the loop can skip the reprogram — the
     // 1-arg form would pay an unconditional reprogram (and implicit SFPU drain) every iteration.
-    pack_reconfig_data_format(cb_grad_key, cb_attention_weights);
+    pack_reconfig_data_format(cb_last_output, cb_attention_weights);
 
 #ifdef CAUSAL_MASK
     const uint32_t k_row_tile = global_row_idx % Ht;
@@ -170,49 +192,61 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             tile_regs_wait();
             cb_reserve_back(cb_attention_weights, onetile);
             // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured
-            // one. The previous PACK target is cb_grad_key_accum (update_grad_key of the previous
-            // iteration); on the first iteration of a row the actual format is set by the row-start
-            // reconfig above, so the skip stays correct.
-            pack_reconfig_data_format(cb_grad_key_accum, cb_attention_weights);
+            // one. The previous PACK target is the accumulator of the previous iteration's last update
+            // (update_grad_key, or update_grad_value without grad_K); on the first iteration of a row the
+            // actual format is set by the row-start reconfig above, so the skip stays correct.
+            pack_reconfig_data_format(cb_last_accum, cb_attention_weights);
             pack_tile(matmul_accum_reg, cb_attention_weights);
             tile_regs_release();
             cb_push_back(cb_attention_weights, onetile);
 
-            // u_scaler is precomputed by Q kernel and loaded by reader into cb_u_scalar_row
+            const bool do_accumulate = q_idx > 0 || head_idx > 0;
 
-            compute_grad_attn_weights(
-                cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, cb_attention_weights, scaler_bits);
+            if constexpr (compute_grad_key) {
+                // u_scaler is precomputed by Q kernel and loaded by reader into cb_u_scalar_row
 
-            compute_grad_scores_and_transposes(
-                cb_grad_attn_weights,
-                cb_attention_weights,
-                cb_u_scalar_row,
-                scaler_bits,
-                cb_grad_scores_transposed,
-                cb_attn_weights_transposed);
+                compute_grad_attn_weights(
+                    cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, cb_attention_weights, scaler_bits);
 
-            update_grad_value(
-                cb_attn_weights_transposed,
-                cb_grad_output,
-                cb_grad_value_accum,
-                v_tiles,
-                block_size_v,
-                /* do_accumulate */ q_idx > 0 || head_idx > 0);
-            cb_wait_front(cb_grad_value_accum, v_tiles);
+                compute_grad_scores_and_transposes</* PackAttnWeightsTransposed */ compute_grad_value>(
+                    cb_grad_attn_weights,
+                    cb_attention_weights,
+                    cb_u_scalar_row,
+                    scaler_bits,
+                    cb_grad_scores_transposed,
+                    cb_attn_weights_transposed);
+            } else {
+                compute_attn_weights_transposed(cb_attention_weights, cb_attn_weights_transposed);
+            }
 
-            update_grad_key(
-                cb_grad_scores_transposed,
-                cb_query,
-                cb_grad_key_accum,
-                qk_tiles,
-                block_size_q,
-                /* cb_prev_pack */ cb_grad_value_accum,
-                /* cb_prev_srca */ cb_grad_output,
-                /* do_accumulate */ q_idx > 0 || head_idx > 0);
-            cb_wait_front(cb_grad_key_accum, qk_tiles);
+            if constexpr (compute_grad_value) {
+                update_grad_value(
+                    cb_attn_weights_transposed,
+                    cb_grad_output,
+                    cb_grad_value_accum,
+                    v_tiles,
+                    block_size_v,
+                    do_accumulate);
+                cb_wait_front(cb_grad_value_accum, v_tiles);
+            }
 
-            cb_pop_front(cb_u_scalar_row, onetile);
-            cb_pop_front(cb_grad_attn_weights, onetile);
+            if constexpr (compute_grad_key) {
+                // The previous PACK target and UNPACK-A operand: update_grad_value's when it ran, otherwise
+                // compute_grad_scores_and_transposes' (it packs dS^T last and copies P through SrcA).
+                update_grad_key(
+                    cb_grad_scores_transposed,
+                    cb_query,
+                    cb_grad_key_accum,
+                    qk_tiles,
+                    block_size_q,
+                    /* cb_prev_pack */ compute_grad_value ? cb_grad_value_accum : cb_grad_scores_transposed,
+                    /* cb_prev_srca */ compute_grad_value ? cb_grad_output : cb_attention_weights,
+                    do_accumulate);
+                cb_wait_front(cb_grad_key_accum, qk_tiles);
+
+                cb_pop_front(cb_u_scalar_row, onetile);
+                cb_pop_front(cb_grad_attn_weights, onetile);
+            }
             cb_pop_front(cb_attention_weights, onetile);
             cb_pop_front(cb_intermediates, num_of_interm_tiles);
 
@@ -221,11 +255,17 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         }
     }
 
-    pack_tiles_to_output(cb_grad_value_accum, cb_grad_value, v_tiles);
-    pack_tiles_to_output(cb_grad_key_accum, cb_grad_key, qk_tiles);
+    if constexpr (compute_grad_value) {
+        pack_tiles_to_output(cb_grad_value_accum, cb_grad_value, v_tiles);
+    }
+    if constexpr (compute_grad_key) {
+        pack_tiles_to_output(cb_grad_key_accum, cb_grad_key, qk_tiles);
+    }
 
     cb_pop_front(cb_key, qk_tiles);
-    cb_pop_front(cb_value, v_tiles);
+    if constexpr (compute_grad_key) {
+        cb_pop_front(cb_value, v_tiles);
+    }
 }
 
 void kernel_main() {
@@ -240,8 +280,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_grad_output, cb_query, cb_key);
     copy_init(cb_query);
-
-    cb_wait_front(cb_mat_mul_reduction, onetile);
 
     // compute_kernel_hw_startup above does the one-time HW config; each matmul site below
     // re-establishes its state with reconfig_data_format + matmul_init.
