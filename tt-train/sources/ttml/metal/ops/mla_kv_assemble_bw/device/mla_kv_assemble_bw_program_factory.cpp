@@ -50,6 +50,9 @@ constexpr uint32_t kCbDoubleBuffer = 2U;
 // since the only compute is the small dk_pe head-axis reduction. Matches the forward op.
 constexpr uint32_t block_size = 8U;
 
+const std::string kComputeGradKvUpDefineKey = "COMPUTE_GRAD_KV_UP";
+const std::string kComputeGradKPeDefineKey = "COMPUTE_GRAD_K_PE";
+
 }  // namespace
 
 namespace ttml::metal::ops::mla_kv_assemble_bw::device {
@@ -66,8 +69,8 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& dK = tensor_args.dK;
     const auto& dV = tensor_args.dV;
-    auto& dkv_up = output[0];
-    auto& dk_pe = output[1];
+    const bool compute_grad_kv_up = args.compute_grad_kv_up;
+    const bool compute_grad_k_pe = args.compute_grad_k_pe;
 
     auto* device = dK.device();
     tt::tt_metal::Program program{};
@@ -112,44 +115,62 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
 
     // dK_nope / dV are sized 2 * block_size (see block_size above). cb_dkpe_in instead holds all
     // Tr tiles for the whole block because the writer broadcasts them to every head; Tr is small
-    // and inherent to the broadcast.
+    // and inherent to the broadcast. An output's CBs are only created when its grad is requested.
     const uint32_t io_cb_num_tiles = kCbDoubleBuffer * block_size;
     const uint32_t kpe_cb_num_tiles = kCbDoubleBuffer * Tr;
 
-    [[maybe_unused]] auto cb_dknope =
-        create_circular_buffer(program, all_cores, kDKnopeCbIndex, data_format, single_tile_size, io_cb_num_tiles);
-    [[maybe_unused]] auto cb_dv =
-        create_circular_buffer(program, all_cores, kDVCbIndex, data_format, single_tile_size, io_cb_num_tiles);
-    [[maybe_unused]] auto cb_dkpe_in =
-        create_circular_buffer(program, all_cores, kDKpeInCbIndex, data_format, single_tile_size, kpe_cb_num_tiles);
-    [[maybe_unused]] auto cb_dkpe_out =
-        create_circular_buffer(program, all_cores, kDKpeOutCbIndex, data_format, single_tile_size, kpe_cb_num_tiles);
+    if (compute_grad_kv_up) {
+        [[maybe_unused]] auto cb_dknope =
+            create_circular_buffer(program, all_cores, kDKnopeCbIndex, data_format, single_tile_size, io_cb_num_tiles);
+        [[maybe_unused]] auto cb_dv =
+            create_circular_buffer(program, all_cores, kDVCbIndex, data_format, single_tile_size, io_cb_num_tiles);
+    }
+    if (compute_grad_k_pe) {
+        [[maybe_unused]] auto cb_dkpe_in =
+            create_circular_buffer(program, all_cores, kDKpeInCbIndex, data_format, single_tile_size, kpe_cb_num_tiles);
+        [[maybe_unused]] auto cb_dkpe_out = create_circular_buffer(
+            program, all_cores, kDKpeOutCbIndex, data_format, single_tile_size, kpe_cb_num_tiles);
+    }
 
     // ── Kernels ──
     auto* dK_buffer = dK.buffer();
     auto* dV_buffer = dV.buffer();
-    auto* dkv_up_buffer = dkv_up.buffer();
-    auto* dk_pe_buffer = dk_pe.buffer();
+    auto* dkv_up_buffer = compute_grad_kv_up ? output[0].value().buffer() : nullptr;
+    auto* dk_pe_buffer = compute_grad_k_pe ? output[1].value().buffer() : nullptr;
 
     std::vector<uint32_t> reader_compile_time_args = {Th, Tn, Tr, Tv, H, k_HtWt, v_HtWt, Ts, block_size};
     tt::tt_metal::TensorAccessorArgs(dK_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dV_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, Tv, H, block_size};
-    tt::tt_metal::TensorAccessorArgs(dkv_up_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dk_pe_buffer).append_to(writer_compile_time_args);
+    // A skipped output gets placeholder args so the writer's accessor offsets do not depend on the flags.
+    for (auto* buffer : {dkv_up_buffer, dk_pe_buffer}) {
+        if (buffer != nullptr) {
+            tt::tt_metal::TensorAccessorArgs(buffer).append_to(writer_compile_time_args);
+        } else {
+            tt::tt_metal::TensorAccessorArgs().append_to(writer_compile_time_args);
+        }
+    }
 
     const std::vector<uint32_t> compute_compile_time_args = {Tr, H};
 
-    const std::map<std::string, std::string> defines;
+    std::map<std::string, std::string> defines;
+    if (compute_grad_kv_up) {
+        defines[kComputeGradKvUpDefineKey] = "1";
+    }
+    if (compute_grad_k_pe) {
+        defines[kComputeGradKPeDefineKey] = "1";
+    }
 
     MLAKVAssembleBwKernels kernels;
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
-    // fp32 dest accumulation: the dk_pe head-axis sum adds up to n_heads BF16 tiles, so accumulating in
-    // fp32 (instead of BF16 dest) keeps the gradient accurate for large head counts.
-    kernels.compute = create_compute_kernel(
-        program, all_cores, compute_compile_time_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+    // The compute kernel only does the dk_pe head-axis sum. fp32 dest accumulation: the sum adds up to n_heads BF16
+    // tiles, so accumulating in fp32 (instead of BF16 dest) keeps the gradient accurate for large head counts.
+    if (compute_grad_k_pe) {
+        kernels.compute = create_compute_kernel(
+            program, all_cores, compute_compile_time_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+    }
 
     // ── Runtime args ──
     for_each_core_with_work(
@@ -177,16 +198,19 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
                  sb_start,
                  dK_block_base_start,
                  dV_block_base_start});
+            // A skipped output's address is 0.
             SetRuntimeArgs(
                 program,
                 kernels.writer,
                 core,
-                {dkv_up_buffer->address(),
-                 dk_pe_buffer->address(),
+                {dkv_up_buffer != nullptr ? dkv_up_buffer->address() : 0U,
+                 dk_pe_buffer != nullptr ? dk_pe_buffer->address() : 0U,
                  num_blocks,
                  dkv_up_block_base_start,
                  dk_pe_block_base_start});
-            SetRuntimeArgs(program, kernels.compute, core, {num_blocks});
+            if (compute_grad_k_pe) {
+                SetRuntimeArgs(program, kernels.compute, core, {num_blocks});
+            }
         });
 
     return cached_program_t{
@@ -200,7 +224,7 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
 
 void MLAKVAssembleBwProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*args*/,
+    const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& shared = cached_program.shared_variables;
@@ -208,8 +232,8 @@ void MLAKVAssembleBwProgramFactory::override_runtime_arguments(
 
     auto* dK_buffer = tensor_args.dK.buffer();
     auto* dV_buffer = tensor_args.dV.buffer();
-    auto* dkv_up_buffer = output[0].buffer();
-    auto* dk_pe_buffer = output[1].buffer();
+    auto* dkv_up_buffer = args.compute_grad_kv_up ? output[0].value().buffer() : nullptr;
+    auto* dk_pe_buffer = args.compute_grad_k_pe ? output[1].value().buffer() : nullptr;
 
     auto& reader_runtime_args = GetRuntimeArgs(program, shared.reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, shared.writer_kernel_id);
@@ -222,8 +246,12 @@ void MLAKVAssembleBwProgramFactory::override_runtime_arguments(
         }
         {
             auto& ra = writer_runtime_args[core.x][core.y];
-            ra[kWriterArgDKVUpAddr] = dkv_up_buffer->address();
-            ra[kWriterArgDKPeAddr] = dk_pe_buffer->address();
+            if (dkv_up_buffer != nullptr) {
+                ra[kWriterArgDKVUpAddr] = dkv_up_buffer->address();
+            }
+            if (dk_pe_buffer != nullptr) {
+                ra[kWriterArgDKPeAddr] = dk_pe_buffer->address();
+            }
         }
     });
 }

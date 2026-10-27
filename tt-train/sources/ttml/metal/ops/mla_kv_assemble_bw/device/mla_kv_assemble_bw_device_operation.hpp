@@ -39,6 +39,8 @@ ttml_mla_kv_assemble_bw(
     uint32_t n_heads,
     uint32_t qk_nope_dim,
     uint32_t qk_rope_dim,
-    uint32_t v_dim);
+    uint32_t v_dim,
+    bool compute_grad_kv_up = true,
+    bool compute_grad_k_pe = true);
 
 }  // namespace ttnn::prim

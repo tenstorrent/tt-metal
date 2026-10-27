@@ -20,6 +20,9 @@ void MLAKVAssembleBwDeviceOperation::validate_on_program_cache_miss(
     check_device_tensor(dV, "MLAKVAssembleBw", "dV");
 
     TT_FATAL(dK.device() == dV.device(), "MLAKVAssembleBw: dK and dV must be on the same device.");
+    TT_FATAL(
+        args.compute_grad_kv_up || args.compute_grad_k_pe,
+        "MLAKVAssembleBw: at least one of compute_grad_kv_up and compute_grad_k_pe must be set");
 
     const auto dK_shape = dK.padded_shape();
     const auto dV_shape = dV.padded_shape();
@@ -77,8 +80,8 @@ void MLAKVAssembleBwDeviceOperation::validate_on_program_cache_miss(
 
 MLAKVAssembleBwDeviceOperation::spec_return_value_t MLAKVAssembleBwDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    spec_return_value_t output_specs;
-    output_specs.reserve(2U);
+    // Both slots are always present so that indices stay [dkv_up, dk_pe].
+    spec_return_value_t output_specs(2U, std::nullopt);
 
     const auto& dK = tensor_args.dK;
     const auto dK_shape = dK.logical_shape();
@@ -89,8 +92,12 @@ MLAKVAssembleBwDeviceOperation::spec_return_value_t MLAKVAssembleBwDeviceOperati
     const ttnn::Shape dk_pe_shape({B, 1U, S, args.qk_rope_dim});
 
     auto dk_layout = tt::tt_metal::TensorLayout(dK.dtype(), tt::tt_metal::Layout::TILE, dK.memory_config());
-    output_specs.emplace_back(dkv_up_shape, dk_layout);
-    output_specs.emplace_back(dk_pe_shape, dk_layout);
+    if (args.compute_grad_kv_up) {
+        output_specs[0] = tt::tt_metal::TensorSpec(dkv_up_shape, dk_layout);
+    }
+    if (args.compute_grad_k_pe) {
+        output_specs[1] = tt::tt_metal::TensorSpec(dk_pe_shape, dk_layout);
+    }
 
     return output_specs;
 }
@@ -99,7 +106,13 @@ MLAKVAssembleBwDeviceOperation::tensor_return_value_t MLAKVAssembleBwDeviceOpera
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto specs = compute_output_specs(args, tensor_args);
     auto* device = tensor_args.dK.device();
-    return {ttnn::create_device_tensor(specs[0], device), ttnn::create_device_tensor(specs[1], device)};
+    tensor_return_value_t outputs;
+    outputs.reserve(specs.size());
+    for (const auto& spec : specs) {
+        outputs.push_back(
+            spec.has_value() ? std::make_optional(ttnn::create_device_tensor(*spec, device)) : std::nullopt);
+    }
+    return outputs;
 }
 
 ttsl::hash::hash_t MLAKVAssembleBwDeviceOperation::compute_program_hash(
@@ -131,7 +144,9 @@ ttml_mla_kv_assemble_bw(
     uint32_t n_heads,
     uint32_t qk_nope_dim,
     uint32_t qk_rope_dim,
-    uint32_t v_dim) {
+    uint32_t v_dim,
+    bool compute_grad_kv_up,
+    bool compute_grad_k_pe) {
     using OperationType = ttml::metal::ops::mla_kv_assemble_bw::device::MLAKVAssembleBwDeviceOperation;
 
     auto attrs = OperationType::operation_attributes_t{
@@ -139,6 +154,8 @@ ttml_mla_kv_assemble_bw(
         .qk_nope_dim = qk_nope_dim,
         .qk_rope_dim = qk_rope_dim,
         .v_dim = v_dim,
+        .compute_grad_kv_up = compute_grad_kv_up,
+        .compute_grad_k_pe = compute_grad_k_pe,
     };
     auto tensor_args = OperationType::tensor_args_t{.dK = dK, .dV = dV};
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
