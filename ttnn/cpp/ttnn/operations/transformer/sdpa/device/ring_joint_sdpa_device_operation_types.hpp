@@ -124,6 +124,7 @@ struct RingJointSDPAParams {
         "logical_n",
         "logical_l",
         "ring_size",
+        "output_memory_config",
         "compute_kernel_config",
         "program_config",
         "ccl_core_grid_offset",
@@ -142,10 +143,11 @@ struct RingJointSDPAParams {
             std::cref(is_causal),
             std::cref(is_balanced),
             std::cref(is_cross),
-            // Reflection only; the program hash is computed explicitly (kv_pad_rotation_active needs the tensors).
+            // Keyed unless dynamic_key leaves it out (KV-pad rotation needs the tensors to tell).
             std::cref(logical_n),
             std::cref(logical_l),
             std::cref(ring_size),
+            std::cref(output_memory_config),
             std::cref(compute_kernel_config),
             std::cref(program_config),
             std::cref(ccl_core_grid_offset),

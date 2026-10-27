@@ -3477,3 +3477,58 @@ def test_untilize_block_per_node_cb_size(device, tensor_shape, dtype):
             ), "untilize must reuse the cached program on a cache hit"
 
     device.disable_and_clear_program_cache()
+
+
+# Packed sequence lengths of the MiniMax-H3 DiT on 4x8 (8 chips x 74..470 tile rows).
+_H3_UNTILIZE_ROWS = [rows * 32 * 8 for rows in (148, 74, 287, 427, 470)]
+
+
+def _untilize_rows(device, rows, width, runtime_rows, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    torch_input = torch.randn((rows, width), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    # The native multi-core prim: the routed ttnn.untilize may take the codegen prim, which keys the full shape.
+    tt_output = _force_native(tt_input, memory_config=memory_config, use_multicore=True, runtime_rows=runtime_rows)
+    assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
+    return ttnn.to_torch(tt_input), ttnn.to_torch(tt_output)
+
+
+@pytest.mark.parametrize("width", [96, 32])
+def test_untilize_runtime_rows_share_one_program(device, width):
+    """The rows are declared dynamic, so the framework keys one program for every served length."""
+    torch.manual_seed(0)
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    for rows in _H3_UNTILIZE_ROWS + [32]:
+        expected, actual = _untilize_rows(device, rows, width, runtime_rows=True)
+        assert_equal(expected, actual)
+        assert device.num_program_cache_entries() == 1
+
+
+def test_untilize_default_rows_key_every_height(device):
+    """Without the opt-in the rows stay in the key: every height builds its own program."""
+    torch.manual_seed(0)
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    heights = _H3_UNTILIZE_ROWS[:3] + [32]
+    for count, rows in enumerate(heights, start=1):
+        expected, actual = _untilize_rows(device, rows, 96, runtime_rows=False)
+        assert_equal(expected, actual)
+        assert device.num_program_cache_entries() == count
+
+
+def test_untilize_runtime_rows_keys_everything_else(device):
+    """Only the rows are dynamic: a new width, dtype or output memory config needs its own program."""
+    torch.manual_seed(0)
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    variants = [
+        (256, 128, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, 1),
+        (4096, 128, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, 1),
+        (256, 256, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, 2),
+        (256, 128, ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG, 3),
+        (256, 128, ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG, 4),
+    ]
+    for rows, width, dtype, memory_config, entries in variants:
+        expected, actual = _untilize_rows(device, rows, width, True, dtype, memory_config)
+        assert_quality(expected, actual, dtype)
+        assert device.num_program_cache_entries() == entries

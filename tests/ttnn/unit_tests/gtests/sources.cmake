@@ -6,6 +6,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_dynamic_length.cpp
     sdpa/test_ring_joint_ksplit.cpp
     sdpa/test_ring_joint_sdpa_capacity.cpp
+    sdpa/test_ring_joint_sdpa_key.cpp
     sdpa/test_ring_mla_packing_plan.cpp
     sdpa/test_sliding_window_work_plan.cpp
     test_to_and_from_json.cpp

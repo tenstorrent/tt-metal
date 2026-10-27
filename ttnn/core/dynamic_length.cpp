@@ -58,4 +58,78 @@ void validate_axes(std::span<const DynamicAxis> axes, std::string_view operation
     }
 }
 
+DynamicKey& DynamicKey::dim(const Tensor& tensor, int dim) {
+    dims_.push_back({&tensor, dim});
+    return *this;
+}
+
+DynamicKey& DynamicKey::dim(const std::optional<Tensor>& tensor, int dim) {
+    return tensor.has_value() ? this->dim(*tensor, dim) : *this;
+}
+
+namespace detail {
+
+KeyEncoder::KeyEncoder(const DynamicKey& dynamic_key, std::string_view operation_name) :
+    dynamic_key_(dynamic_key),
+    operation_name_(operation_name),
+    dim_matched_(dynamic_key.dims_.size(), false),
+    value_matched_(dynamic_key.values_.size(), false) {}
+
+bool KeyEncoder::is_left_out(const void* address, int type) {
+    bool left_out = false;
+    for (std::size_t i = 0; i < dynamic_key_.values_.size(); ++i) {
+        if (dynamic_key_.values_[i].address == address && dynamic_key_.values_[i].type == type) {
+            value_matched_[i] = true;
+            left_out = true;
+        }
+    }
+    return left_out;
+}
+
+// Mirrors the Tensor's own key (storage kind, logical shape, layout), with a declared dim encoded as absent.
+// The padded shape follows from the logical shape and the layout's alignment, so it is left out as well.
+void KeyEncoder::append_tensor(const Tensor& tensor) {
+    const auto& shape = tensor.logical_shape();
+    const int rank = static_cast<int>(shape.rank());
+    std::vector<std::optional<std::uint32_t>> extents(shape.cbegin(), shape.cend());
+    for (std::size_t i = 0; i < dynamic_key_.dims_.size(); ++i) {
+        const auto& declared = dynamic_key_.dims_[i];
+        if (declared.tensor != &tensor) {
+            continue;
+        }
+        const int dim = declared.dim < 0 ? declared.dim + rank : declared.dim;
+        TT_FATAL(
+            dim >= 0 && dim < rank,
+            "{}: dynamic dim {} is out of range for a rank-{} tensor",
+            operation_name_,
+            declared.dim,
+            rank);
+        TT_FATAL(
+            !tensor.memory_config().is_sharded(),
+            "{}: dynamic dim {} is declared on a sharded tensor, whose shard spec still carries the extent",
+            operation_name_,
+            declared.dim);
+        extents[dim] = std::nullopt;
+        dim_matched_[i] = true;
+    }
+    key_ += ttsl::hash::canonical_key(tensor.storage_type(), extents, tensor.tensor_spec().tensor_layout());
+}
+
+std::string KeyEncoder::finish() && {
+    TT_FATAL(
+        std::ranges::all_of(dim_matched_, std::identity{}),
+        "{}: a declared dynamic dim does not point at one of the op's tensor arguments",
+        operation_name_);
+    TT_FATAL(
+        std::ranges::all_of(value_matched_, std::identity{}),
+        "{}: a declared dynamic value is not an attribute reached by reference",
+        operation_name_);
+    // Length-prefixed, so the derived values cannot be read as part of the arguments' encoding.
+    key_ += ttsl::hash::canonical_key(std::uint64_t{dynamic_key_.derived_.size()});
+    key_ += dynamic_key_.derived_;
+    return std::move(key_);
+}
+
+}  // namespace detail
+
 }  // namespace ttnn::dynamic_length

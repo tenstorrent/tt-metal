@@ -81,6 +81,9 @@ auto compute_program_hash(
         return ttsl::hash::hash_objects_with_default_seed(
             ttsl::hash::type_hash<device_operation_t>,
             device_operation_t::compute_program_hash(operation_attributes, tensor_args));
+    } else if constexpr (HasDynamicKey<device_operation_t>) {
+        ZoneScopedN("Compute dynamic program hash");
+        return MeshDeviceOperationAdapter<device_operation_t>::compute_program_hash(operation_attributes, tensor_args);
     } else {
         ZoneScopedN("Compute default program hash");
         return ttsl::hash::hash_objects_with_default_seed(
@@ -444,9 +447,7 @@ ProgramCacheLookup look_up_program_cache(
     }
     // The cache key is the 64-bit hash plus an exact canonical encoding; a hash collision is
     // resolved by std::unordered_map's own operator== on the canonical part (issue #45821).
-    lookup.key.hash =
-        mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
-    lookup.key.canonical = mesh_device_operation_t::compute_mesh_workload_canonical_key(
+    lookup.key = mesh_device_operation_t::compute_mesh_workload_key(
         mesh_device,
         ttsl::get_type_name<typename mesh_device_operation_t::device_operation_t>(),
         operation_attributes,
