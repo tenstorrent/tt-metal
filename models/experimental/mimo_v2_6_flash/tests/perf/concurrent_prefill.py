@@ -80,12 +80,80 @@ def run(models, prompts, users, chunk, label):
     return out, total
 
 
+def skip_to(model, slot, start, chunk, pair):
+    """The SWA blocks of ``slot``'s chunks before ``start`` from a new request (the cache keeps what it holds): a
+    later chunk at ``start`` then runs as in a whole prompt (timing only: its keys are not the prompt's)."""
+    for s in range(0, start, chunk):
+        model.swa_table.prefill(slot, s, s + chunk, s + prefill_padded_len(chunk, s, pair))
+
+
+def sampled(models, prompts, users, chunk, label, prefix, samples, rounds, pair):
+    """Extrapolated time of a whole concurrent prefill: the rounds from 0 to ``prefix`` run as in ``run`` (measured),
+    then ``rounds`` rounds at each start in ``samples`` (the earlier chunks skipped: SWA bookkeeping only), each
+    giving a round time at its position; the rounds past ``prefix`` are integrated piecewise linearly between the
+    prefix's last 8 rounds and the samples (flat past the last sample)."""
+    n = prompts[(0, 0)].numel()
+    keys = [(r, s) for r in range(len(models)) for s in range(users)]
+
+    def rounds_from(start, count):
+        times, host = [], []
+        for c in range(start, start + count * chunk, chunk):
+            t1 = time.perf_counter()
+            hs = [
+                models[r].prefill_enqueue(prompts[(r, s)][c : c + chunk], s, start_pos=c, chunk_size=chunk)
+                for r, s in keys
+            ]
+            host.append(time.perf_counter() - t1)
+            for h in hs:
+                if not h.get("persistent"):
+                    h["logits"].deallocate(True)
+            times.append(t1)
+        for m in models:
+            ttnn.synchronize_device(m.mesh_device)
+        times.append(time.perf_counter())
+        return [b - a for a, b in zip(times, times[1:])], host
+
+    t0 = time.time()
+    walls, host = rounds_from(0, prefix // chunk)
+    t_prefix = time.time() - t0
+    points = [(prefix - 4 * chunk, sum(walls[-8:]) / 8, sum(host[-8:]) / 8)]
+    for start in samples:
+        for r, s in keys:
+            skip_to(models[r], s, start, chunk, pair)
+        w, h = rounds_from(start, rounds)
+        w, h = w[1:], h[1:]  # the first round fills an empty queue
+        points.append((start + rounds * chunk // 2, sum(w) / len(w), sum(h) / len(h)))
+        say(
+            f"{label}: {rounds} rounds at {start}: wall {1e3 * points[-1][1]:.0f} ms, host {1e3 * points[-1][2]:.0f} ms per round"
+        )
+    total = t_prefix
+    for c in range(prefix, n, chunk):
+        x = c + chunk // 2
+        lo = max((p for p in points if p[0] <= x), key=lambda p: p[0])
+        hi = [p for p in points if p[0] > x]
+        if not hi:
+            total += lo[1]
+            continue
+        hi = min(hi, key=lambda p: p[0])
+        total += lo[1] + (hi[1] - lo[1]) * (x - lo[0]) / (hi[0] - lo[0])
+    say(
+        f"RESULT {label} EXTRAPOLATED: {len(keys)} users x {n} tokens: measured {t_prefix:.1f} s to {prefix}, "
+        f"whole prompt ~{total:.1f} s, ~{len(keys) * n / total:.0f} tok/s total; round samples (pos, wall ms, host ms) "
+        f"{[(p[0], round(1e3 * p[1]), round(1e3 * p[2])) for p in points]}"
+    )
+    return total
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--context", type=int, default=524288)
     parser.add_argument("--chunk", type=int, default=4096)
     parser.add_argument("--rows", default="1,2,4")
-    parser.add_argument("--users", type=int, default=1, help="users per row prefilling at once")
+    parser.add_argument("--users", default="1", help="users per row prefilling at once (a list: one run each)")
+    parser.add_argument("--prefix", type=int, default=0, help="eager only: extrapolate from a run to here (0: whole)")
+    parser.add_argument("--samples", default="", help="--prefix: starts of the sampled late rounds")
+    parser.add_argument("--sample-rounds", type=int, default=6)
+    parser.add_argument("--save", default="/data/dwadhwani/trace-logs/logits", help="logits files prefix")
     parser.add_argument("--modes", default="eager,traced")
     parser.add_argument("--trace-region-mb", type=int, default=400)
     kv = parser.add_mutually_exclusive_group()
@@ -93,6 +161,7 @@ def main():
     kv.add_argument("--kv-pair-split", action="store_true")
     args = parser.parse_args()
     row_counts = [int(r) for r in args.rows.split(",")]
+    user_counts = [int(u) for u in args.users.split(",")]
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(
@@ -106,7 +175,7 @@ def main():
             MiMoCheckpoint(common.MODEL_PATH, cfg),
             os.path.join(common.CACHE_ROOT, "model_bfp4experts"),
             dp=4,
-            users_per_replica=args.users,
+            users_per_replica=max(user_counts),
             max_seq_len=args.context + 512,
             replicate_global_kv=args.replicate_global_kv,
             kv_pair_split=args.kv_pair_split,
@@ -117,8 +186,12 @@ def main():
                 0, cfg.vocab_size, (args.context,), generator=torch.Generator().manual_seed(1000 + 4 * s + r)
             )
             for r in range(len(models))
-            for s in range(args.users)
+            for s in range(max(user_counts))
         }
+        from models.experimental.mimo_v2_6_flash.tests.test_model_long_tp8_dp4 import dram_gb
+
+        used, total = dram_gb(models[0].mesh_device)
+        say(f"DRAM per chip with KV for {max(user_counts)} users x {args.context + 512}: {used:.2f} of {total:.2f} GB")
         # Compile every program eagerly first (one prompt through all rows), then the traces: nothing compiles after.
         t0 = time.time()
         warm = min(args.context, 65536 + 2 * args.chunk)
@@ -133,20 +206,34 @@ def main():
         say(f"warm-up and traces {keys} in {time.time() - t0:.0f} s")
         results = {}
         for rows in row_counts:
-            for mode in args.modes.split(","):
-                for m, traces in zip(models, saved):
-                    m.chunk_traces = traces if mode == "traced" else {}
-                label = f"{rows} rows x {args.users} users {mode}"
-                out, total = run(models[:rows], prompts, args.users, args.chunk, label)
-                results[(rows, mode)] = (out, total)
-            if ("eager" in args.modes) and ("traced" in args.modes):
-                (eo, et), (to, tt) = results[(rows, "eager")], results[(rows, "traced")]
-                d = max(float((eo[k].float() - to[k].float()).abs().max()) for k in eo)
-                top = all(int(eo[k].argmax()) == int(to[k].argmax()) for k in eo)
-                say(
-                    f"SPEEDUP {rows} rows x {args.users} users: eager {et:.1f} s, traced {tt:.1f} s, "
-                    f"x{et / tt:.2f}; logits max|d| {d:.4g}, top1 equal {top}"
-                )
+            for users in user_counts:
+                for mode in args.modes.split(","):
+                    for m, traces in zip(models, saved):
+                        m.chunk_traces = traces if mode == "traced" else {}
+                    label = f"ISL {args.context} {rows} rows x {users} users (c={rows * users}) {mode}"
+                    if args.prefix:
+                        samples = [int(x) for x in args.samples.split(",") if x]
+                        sampled(
+                            models[:rows],
+                            prompts,
+                            users,
+                            args.chunk,
+                            label,
+                            args.prefix,
+                            samples,
+                            args.sample_rounds,
+                            args.kv_pair_split,
+                        )
+                        continue
+                    out, total = run(models[:rows], prompts, users, args.chunk, label)
+                    path = f"{args.save}_{args.context}_{rows}x{users}_{mode}.pt"
+                    torch.save({k: v.float() for k, v in out.items()}, path)
+                    other = f"{args.save}_{args.context}_{rows}x{users}_{'eager' if mode == 'traced' else 'traced'}.pt"
+                    if os.path.exists(other):
+                        ref = torch.load(other)
+                        d = max(float((ref[k] - out[k].float()).abs().max()) for k in out)
+                        top = all(int(ref[k].argmax()) == int(out[k].argmax()) for k in out)
+                        say(f"CHECK {label} vs {other}: logits max|d| {d:.4g}, top1 equal {top}")
     finally:
         for submesh in mesh.get_submeshes():
             ttnn.close_mesh_device(submesh)
