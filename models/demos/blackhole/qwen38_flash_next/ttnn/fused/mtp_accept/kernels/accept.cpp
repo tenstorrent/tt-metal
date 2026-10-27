@@ -11,8 +11,8 @@
 // split verify's decision buffers as write_verify_decision writes them (accept tile, accept index, next token, the
 // alignment lanes [d_1 .. d_a*, x*, sentinel ...]) and a statistics row.
 // Named compile-time args: cb_stage, rows (k + 1), lanes (128), table_size.  Compile-time args: TensorAccessorArgs of
-// rows, drafts, policy, uniforms, table, accept_tile, accept_index, next_token, alignment, stats.  Runtime args: the
-// ten addresses in that order.
+// candidate_rows, draft_row, policy, uniforms, table, accept_tile, accept_index, next_token, alignment, stats.  Runtime
+// args: the ten addresses in that order.
 
 #include <cstdint>
 
@@ -87,6 +87,8 @@ FORCE_INLINE uint32_t as_bits(float value) {
     return pun.word;
 }
 
+namespace {
+
 // The policy row's sampling parameters.
 struct SamplingPolicy {
     uint32_t top_k;
@@ -125,12 +127,12 @@ void build_row(
         for (uint32_t d = 0; d < lanes / shard_lanes; ++d) {
             uint32_t shard_min_key = 0xFFFFFFFFu;
             for (uint32_t c = 0; c < shard_lanes; ++c) {
-                const uint32_t j = d * shard_lanes + c;
-                values[j] = row_lanes[d * 2 * shard_lanes + c];
-                ids[j] = static_cast<uint32_t>(as_float(row_lanes[d * 2 * shard_lanes + shard_lanes + c]));
-                keys[j] = key_of(values[j]);
-                if (keys[j] < shard_min_key) {
-                    shard_min_key = keys[j];
+                const uint32_t lane = d * shard_lanes + c;
+                values[lane] = row_lanes[d * 2 * shard_lanes + c];
+                ids[lane] = static_cast<uint32_t>(as_float(row_lanes[d * 2 * shard_lanes + shard_lanes + c]));
+                keys[lane] = key_of(values[lane]);
+                if (keys[lane] < shard_min_key) {
+                    shard_min_key = keys[lane];
                 }
             }
             if (shard_min_key > floor_key) {
@@ -247,6 +249,8 @@ uint32_t draw(
     }
     return sorted_ids[kept - 1];
 }
+
+}  // namespace
 
 void kernel_main() {
     constexpr auto candidate_rows_args = TensorAccessorArgs<0>();
