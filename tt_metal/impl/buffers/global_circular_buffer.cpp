@@ -119,7 +119,7 @@ void reject_conflicting_dram_receivers(
     const std::vector<CoreCoord>& senders,
     const std::vector<std::vector<CoreCoord>>& receivers_per_sender) {
     const Cluster& cluster = MetalContext::instance(mesh_device.impl().get_context_id()).get_cluster();
-    for (const IDevice* device : mesh_device.get_devices()) {
+    for (const IDevice* device : mesh_device.impl().get_devices()) {
         const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(device->id());
         std::unordered_map<uint32_t, CoreCoord> sender_by_index;
         for (const CoreCoord& sender_logical : senders) {
@@ -342,7 +342,7 @@ void GlobalCircularBufferImpl::write_dram_receiver_config_pages() {
     page_words[kDramReceiverFifoStartAddrOffset / sizeof(uint32_t)] = buffer_address;
     page_words[kDramReceiverFifoSizeOffset / sizeof(uint32_t)] = size_;
     page_words[kDramReceiverFifoRdPtrOffset / sizeof(uint32_t)] = buffer_address;
-    for (IDevice* dev : device_->get_devices()) {
+    for (IDevice* dev : device_->impl().get_devices()) {
         const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(dev->id());
         for (size_t s = 0; s < sender_receiver_core_mapping_.size(); ++s) {
             const std::vector<CoreCoord>& receivers_vec = receiver_logical_cores_per_sender_[s];
@@ -727,7 +727,7 @@ GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
             "DRAM receivers are Quasar CCEs; on {} pass worker receivers as a CoreRangeSet per bank",
             mesh_device.arch());
     }
-    const std::vector<IDevice*> devices = mesh_device.get_devices();
+    const std::vector<IDevice*> devices = mesh_device.impl().get_devices();
     TT_FATAL(!devices.empty(), "Cannot build a DRAM-receiver GlobalCircularBuffer for a mesh with no local devices");
     std::vector<CoreCoord> senders;
     std::vector<std::vector<CoreCoord>> receivers_per_sender;

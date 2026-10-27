@@ -2423,7 +2423,7 @@ TensorPrefetcherPreconditions tensor_prefetcher_preconditions(const MeshDevice& 
     }
 
     const Cluster& cluster = metal.get_cluster();
-    const std::vector<IDevice*> devices = mesh_device.get_devices();
+    const std::vector<IDevice*> devices = mesh_device.impl().get_devices();
     for (const IDevice* device : devices) {
         const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(device->id());
         const uint32_t num_views = static_cast<uint32_t>(soc_desc.get_num_dram_views());
