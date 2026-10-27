@@ -236,6 +236,13 @@ coherent; for scale, each mode agrees with itself on 6 of 16 between two c=16 ru
 c=16, so these prompts flip on rounding near-ties, and the split changes the attention's rounding in every global
 layer.
 
+16 users x 1M, every request a full 1M-token prompt (`long_context_16x1m.md`; client `tests/perf/vllm_long_prompts.py`):
+- At the default 6.7 GB pool all 16 complete in 57 minutes.
+- Each lane prefills its four requests one after another, ~855 s each, so the TTFTs are 14, 29, 43 and 57 minutes.
+- One 1M prompt alone takes 356 s (2.95K tok/s). Four lanes prefilling together reach only 1.7x that throughput:
+  host dispatch is the bound.
+- Decode at 1M for one request alone: 12.3 ms per token.
+
 ## Device RoPE tables
 
 Decode, the verify and the MTP draft read their RoPE cos / sin as rows of device tables at their own position inputs
