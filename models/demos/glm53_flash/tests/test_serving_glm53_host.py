@@ -48,7 +48,7 @@ def expect_error(error, message):
         logger.info(f'[EXPECTED_ERROR END] {error.__name__} message="{message}"')
 
 
-ONE_COPY = {1048576: 4, 524288: 8, 262144: 16, 131072: 32}
+ONE_COPY = {1048576: 4, 524288: 8, 262144: 16, 131072: 28}
 # with BOTH layouts (the streaming decode copy next to the regions lists: +9.4 GiB per chip)
 TWO_COPIES = {1048576: 0, 524288: 0, 262144: 4, 131072: 8}
 
@@ -66,6 +66,9 @@ def _plan(cfg, keep_stacked: bool) -> MemoryPlan:
 
 
 # --------------------------------------------------------------------------------------------- capacity
+# (the two-expert-layout table and the keep-the-second-copy rule are retired: GLM53_REGIONS_DECODE=stream, the
+# default since 2026-10-27, never builds the stacked copy; the 128 K cell is 28 since the prefill-chunk working-set
+# floor of tt/memory_plan.py: 32 users per row ran out of DRAM in the served warm-up)
 def test_capacity_table_with_one_expert_layout(cfg):
     plan = _plan(cfg, keep_stacked=False)
     for isl, users in ONE_COPY.items():
@@ -77,31 +80,14 @@ def test_capacity_table_with_one_expert_layout(cfg):
     assert 17.5 < plan.weights_bytes / GIB < 17.8
 
 
-def test_capacity_table_with_two_expert_layouts(cfg):
-    plan = _plan(cfg, keep_stacked=True)
-    for isl, users in TWO_COPIES.items():
-        assert plan.max_users_per_row(isl) == users, (isl, plan.max_users_per_row(isl))
-    assert 26.9 < plan.weights_bytes / GIB < 27.2  # +9.4 GiB per chip for the second copy
-
-
-def test_model_keeps_the_second_copy_only_where_it_fits(cfg):
-    """``GLM53MeshModel.__init__`` (GLM53_PREFILL_EXPERTS=auto): the streaming decode copy is kept next to the regions
-    lists iff the planner with keep_stacked=True fits (max_batch users per row x max_seq_len)."""
-    two = _plan(cfg, keep_stacked=True)
-    assert not two.fits(4, 1048576), "1 M profile: regions only (the README's 1 M rows)"
-    assert not two.fits(32, 131072), "128 K profile at 32 users per row: regions only"
-    assert two.fits(4, 65536), "the README's 64 K x 4 row ran with the stacked copy kept"
-    assert two.fits(8, 131072) and not two.fits(9, 131072)
-
-
 def test_planner_gate_at_the_catalog_points(cfg):
     plan = _plan(cfg, keep_stacked=False)
     ServingGeometry(rows=ROWS, cols=COLS, users_per_row=4, max_seq_len=1048576).check_memory_plan(plan)
-    ServingGeometry(rows=ROWS, cols=COLS, users_per_row=32, max_seq_len=131072).check_memory_plan(plan)
+    ServingGeometry(rows=ROWS, cols=COLS, users_per_row=28, max_seq_len=131072).check_memory_plan(plan)
     with expect_error(ValueError, "do not fit"):
         ServingGeometry(rows=ROWS, cols=COLS, users_per_row=8, max_seq_len=1048576).check_memory_plan(plan)
     with expect_error(ValueError, "do not fit"):
-        ServingGeometry(rows=ROWS, cols=COLS, users_per_row=36, max_seq_len=131072).check_memory_plan(plan)
+        ServingGeometry(rows=ROWS, cols=COLS, users_per_row=32, max_seq_len=131072).check_memory_plan(plan)
     with expect_error(ValueError, "% cols"):  # 5 per row: the column partition needs a multiple of 4
         ServingGeometry(rows=ROWS, cols=COLS, users_per_row=5, max_seq_len=1048576)
 
