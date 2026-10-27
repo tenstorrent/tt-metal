@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""One-device check of ``LlamaCompositeKV.weights_ref_hf_dict``."""
+"""One-device check of ``LlamaHfExport.weights_ref_hf_dict``."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import ttml
 from ttml.models import WeightTyingType
 from ttml.models.llama import LlamaConfig
 
-from grpo_remote_rollout.utils.llama_overrides import LlamaCompositeKV
+from grpo_remote_rollout.utils.llama_overrides import LlamaHfExport
 
 pytestmark = pytest.mark.requires_device
 
@@ -46,9 +46,13 @@ def test_weights_ref_hf_dict_slices_fused_projections():
         max_position_embeddings=64,
         weight_tying=WeightTyingType.Enabled,
     )
-    model = LlamaCompositeKV(config)
+    model = LlamaHfExport(config)
     params = model.parameters()
     rng = np.random.default_rng(0)
+    # Every gamma starts at ones, which would let a swapped pair of norms pass.
+    for name, param in params.items():
+        if name.endswith("/gamma"):
+            ttml.autograd.assign_numpy(param, bf16_block(rng, 1))
 
     expected: dict[str, np.ndarray] = {}
     for i in range(NUM_LAYERS):

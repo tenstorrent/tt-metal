@@ -187,12 +187,12 @@ def patch_llama_weight_loading(monkeypatch, tmp_path_factory):
     _patch_tiny_checkpoint(monkeypatch, tmp_path_factory.mktemp("tiny_llama"))
 
 
-def _tiny_completer(max_tokens_to_complete: int = 4) -> LlamaGRPOCompleter:
+def _tiny_completer(max_tokens_to_complete: int = 4, model_source: str = HF_MODEL_ID) -> LlamaGRPOCompleter:
     return LlamaGRPOCompleter(
         ctx=LlamaCompletionCtx(max_tokens_to_complete=max_tokens_to_complete, temperature=1.0),
         transformer_config=TINY_TRANSFORMER_CONFIG,
         device_config=DEVICE_CONFIG,
-        model_source=HF_MODEL_ID,
+        model_source=model_source,
     )
 
 
@@ -236,22 +236,13 @@ def _save_trainer_checkpoint(completer, output_dir) -> str:
     return str(checkpoint_dir)
 
 
-def _resumed_completer(checkpoint_dir: str) -> LlamaGRPOCompleter:
-    return LlamaGRPOCompleter(
-        ctx=LlamaCompletionCtx(max_tokens_to_complete=4, temperature=1.0),
-        transformer_config=TINY_TRANSFORMER_CONFIG,
-        device_config=DEVICE_CONFIG,
-        model_source=checkpoint_dir,
-    )
-
-
 @pytest.mark.requires_device
 def test_resumes_from_a_trainer_checkpoint(patch_llama_weight_loading, tmp_path):
     saved = _tiny_completer()
     checkpoint_dir = _save_trainer_checkpoint(saved, tmp_path)
     expected = {name: param.to_numpy(ttnn.DataType.FLOAT32) for name, param in saved.model.parameters().items()}
 
-    resumed = _resumed_completer(checkpoint_dir)
+    resumed = _tiny_completer(model_source=checkpoint_dir)
 
     for name, param in resumed.model.parameters().items():
         assert np.array_equal(param.to_numpy(ttnn.DataType.FLOAT32), expected[name]), f"{name} was not resumed"
@@ -270,7 +261,7 @@ def test_rejects_a_trainer_checkpoint_missing_a_parameter(patch_llama_weight_loa
     save_file(weights, weights_path)
 
     with expect_error(RuntimeError, "lacks 1 of the model's"):
-        _resumed_completer(checkpoint_dir)
+        _tiny_completer(model_source=checkpoint_dir)
 
 
 @pytest.mark.requires_device

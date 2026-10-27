@@ -35,7 +35,7 @@ from ttml.models.llama import LlamaConfig, load_from_safetensors
 from ttml.trainers.grpo_trainer import GRPOCompleter
 
 from .mpi_rollout import MPIRolloutClient
-from .llama_overrides import LlamaCompositeKV
+from .llama_overrides import LlamaHfExport
 
 
 @dataclass
@@ -141,7 +141,7 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
                 f"the tokenizer has {len(tokenizer)} tokens but the checkpoint embeds {llama_cfg.vocab_size}"
             )
 
-        tt_model = LlamaCompositeKV(llama_cfg)
+        tt_model = LlamaHfExport(llama_cfg)
 
         if enable_ddp:
             autograd_ctx.initialize_parallelism_context(

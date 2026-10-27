@@ -8,7 +8,7 @@ from ttml.models import WeightTyingType
 from ttml.models.llama import Llama, compute_swiglu_intermediate_size
 
 
-class LlamaCompositeKV(Llama):
+class LlamaHfExport(Llama):
     """Extends Llama with weights_ref_hf_dict() -- an HF-keyed export of live ttml ttnn.Tensor
     handles, shaped for tt-transformers' Transformer.update_weights(...). This is the ttml->ttt
     bridge format the remote-rollout weight sync depends on, and it doesn't exist upstream."""

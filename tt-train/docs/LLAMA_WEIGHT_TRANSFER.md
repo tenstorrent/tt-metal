@@ -5,7 +5,7 @@ Reference for two related dict formats:
 1. The HuggingFace `transformers` Llama state-dict (the format on the
    HF Hub).
 2. The on-device dict that
-   [`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo_remote_rollout/utils/llama_overrides.py)
+   [`LlamaHfExport.weights_ref_hf_dict()`](../sources/examples/grpo_remote_rollout/utils/llama_overrides.py)
    produces for transfer to
    [`tt_transformers.tt.model.Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
    This same dict is also the wire format consumed by the cross-rank
@@ -115,7 +115,7 @@ lm_head.weight                                   shape=(128256, 2048)
 
 ## 3. Transfer format: `ttml → tt-transformers`
 
-[`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo_remote_rollout/utils/llama_overrides.py)
+[`LlamaHfExport.weights_ref_hf_dict()`](../sources/examples/grpo_remote_rollout/utils/llama_overrides.py)
 returns a `dict[str, ttnn.Tensor]` that is the **wire format** between
 ttml and tt-transformers'
 [`Transformer.update_weights(hf_state_dict, hf_rope=False)`](../../models/tt_transformers/tt/model.py).
@@ -264,7 +264,9 @@ End-to-end smoke test (cross-rank):
 
 * HF reference implementation: `transformers.models.llama.modeling_llama`
   ([huggingface/transformers](https://github.com/huggingface/transformers/tree/main/src/transformers/models/llama)).
-* ttml model definition: `LlamaCompositeKV` in
+* ttml model definition: `ttml.models.llama.Llama`
+  ([`models/llama/__init__.py`](../sources/ttml/ttml/models/llama/__init__.py)); the exporter is its
+  subclass `LlamaHfExport` in
   [`grpo_remote_rollout/utils/llama_overrides.py`](../sources/examples/grpo_remote_rollout/utils/llama_overrides.py).
 * tt-transformers dispatcher:
   [`Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
