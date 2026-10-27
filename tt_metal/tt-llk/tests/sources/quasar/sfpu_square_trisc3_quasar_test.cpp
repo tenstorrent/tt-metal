@@ -17,6 +17,7 @@
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -53,8 +54,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
     }
 
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+    if constexpr (unpack_to_dest)
+    {
+        _llk_unpack_dest_init_();
+        _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+        _llk_unpack_unary_operand_to_dest_block_(0 /*l1_tile_idx*/, 0 /*dst_tile_idx*/, TILE_CNT);
+    }
+    else
+    {
+        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+    }
 
     if (unpack_to_dest)
     {

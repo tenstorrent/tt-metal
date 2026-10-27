@@ -16,6 +16,7 @@
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 // Swiglu is a binary SFPU kernel: it requires TWO input tiles (gate, up) in
@@ -24,8 +25,7 @@
 //   buffer_A: 2 concatenated tiles (tile 0 = gate, tile 1 = up)
 //   Dest:     tile 0 = gate, tile 1 = up, tile 2 = output
 //   buffer_Res: 1 output tile (the value of dest tile 2 packed out)
-// We unpack 2 tiles to Dest via the unary operand path (unpacker advances
-// through tiles 0,1 automatically from the init argument).
+// We unpack 2 tiles to Dest as one block (tiles 0,1 land at Dest tiles 0,1).
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -61,8 +61,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
     }
 
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, 2 /*gate + up*/);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+    if constexpr (unpack_to_dest)
+    {
+        _llk_unpack_dest_init_();
+        _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+        _llk_unpack_unary_operand_to_dest_block_(0 /*l1_tile_idx*/, 0 /*dst_tile_idx*/, 2 /*num_tiles: gate + up*/);
+    }
+    else
+    {
+        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+            bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, 2 /*gate + up*/);
+        _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+    }
 
     if (unpack_to_dest)
     {
