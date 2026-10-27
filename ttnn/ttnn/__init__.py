@@ -408,11 +408,14 @@ from ttnn.decorators import (
     dump_operations,
     get_golden_function,
     get_fallback_function,
+    get_worker_cores,
     query_registered_operations,
     register_cpp_operation,
     register_post_operation_hook,
     register_pre_operation_hook,
     register_python_operation,
+    sub_device,
+    worker_cores,
 )
 
 

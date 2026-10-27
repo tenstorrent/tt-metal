@@ -33,6 +33,7 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/device_operation_detail.hpp"
+#include "ttnn/worker_cores.hpp"
 
 namespace ttnn::device_operation {
 
@@ -86,25 +87,86 @@ auto compute_program_hash(
     }
 }
 
+// Whether a WorkloadFactory builds its programs on the worker cores it is given. The adapters for the other factory
+// concepts say so for the factory they wrap; a factory that is itself a MeshWorkloadFactory takes them as a trailing
+// `const CoreRangeSet& worker_cores` on create_mesh_workload or create_at.
+template <typename WorkloadFactory, typename device_operation_t>
+consteval bool factory_takes_worker_cores() {
+    if constexpr (requires { WorkloadFactory::takes_worker_cores; }) {
+        return WorkloadFactory::takes_worker_cores;
+    } else {
+        return requires(
+                   const typename device_operation_t::operation_attributes_t& operation_attributes,
+                   const ttnn::MeshCoordinateRangeSet& tensor_coords,
+                   const typename device_operation_t::tensor_args_t& tensor_args,
+                   typename device_operation_t::tensor_return_value_t& tensor_return_value,
+                   const CoreRangeSet& worker_cores) {
+            WorkloadFactory::create_mesh_workload(
+                operation_attributes, tensor_coords, tensor_args, tensor_return_value, worker_cores);
+        } ||
+               requires(
+                   const typename device_operation_t::operation_attributes_t& operation_attributes,
+                   const ttnn::MeshCoordinate& mesh_coordinate,
+                   const typename device_operation_t::tensor_args_t& tensor_args,
+                   typename device_operation_t::tensor_return_value_t& tensor_return_value,
+                   const CoreRangeSet& worker_cores) {
+                   WorkloadFactory::create_at(
+                       operation_attributes, mesh_coordinate, tensor_args, tensor_return_value, worker_cores);
+               };
+    }
+}
+
 // Helper to create a mesh workload from a WorkloadFactory that may or may not
 // provide create_mesh_workload. If missing, synthesize it from create_at.
+// `worker_cores` reaches the factory only if it takes them (factory_takes_worker_cores).
 template <typename WorkloadFactory, typename device_operation_t>
 auto create_mesh_workload_from_workload_factory(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const typename device_operation_t::tensor_args_t& tensor_args,
-    typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+    typename device_operation_t::tensor_return_value_t& tensor_return_value,
+    const CoreRangeSet& worker_cores) {
     using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
     if constexpr (requires(
                       const typename device_operation_t::operation_attributes_t& operation_attributes,
                       const ttnn::MeshCoordinateRangeSet& tensor_coords,
                       const typename device_operation_t::tensor_args_t& tensor_args,
-                      typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+                      typename device_operation_t::tensor_return_value_t& tensor_return_value,
+                      const CoreRangeSet& worker_cores) {
                       WorkloadFactory::create_mesh_workload(
-                          operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+                          operation_attributes, tensor_coords, tensor_args, tensor_return_value, worker_cores);
                   }) {
         return WorkloadFactory::create_mesh_workload(
+            operation_attributes, tensor_coords, tensor_args, tensor_return_value, worker_cores);
+    } else if constexpr (requires(
+                             const typename device_operation_t::operation_attributes_t& operation_attributes,
+                             const ttnn::MeshCoordinateRangeSet& tensor_coords,
+                             const typename device_operation_t::tensor_args_t& tensor_args,
+                             typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+                             WorkloadFactory::create_mesh_workload(
+                                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+                         }) {
+        return WorkloadFactory::create_mesh_workload(
             operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+    } else if constexpr (requires(
+                             const typename device_operation_t::operation_attributes_t& operation_attributes,
+                             const ttnn::MeshCoordinate& mesh_coordinate,
+                             const typename device_operation_t::tensor_args_t& tensor_args,
+                             typename device_operation_t::tensor_return_value_t& tensor_return_value,
+                             const CoreRangeSet& worker_cores) {
+                             WorkloadFactory::create_at(
+                                 operation_attributes, mesh_coordinate, tensor_args, tensor_return_value, worker_cores);
+                         }) {
+        using shared_variables_t = typename WorkloadFactory::shared_variables_t;
+        tt::tt_metal::distributed::MeshWorkload mesh_workload;
+        std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+        for (const auto& coord : tensor_coords.coords()) {
+            auto cached_program =
+                WorkloadFactory::create_at(operation_attributes, coord, tensor_args, tensor_return_value, worker_cores);
+            mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+            shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+        }
+        return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
     } else if constexpr (requires(
                              const typename device_operation_t::operation_attributes_t& operation_attributes,
                              const ttnn::MeshCoordinate& mesh_coordinate,
@@ -313,7 +375,10 @@ void handle_mesh_adapter_cache_hit(
     });
 }
 
-// Helper for creating and caching a mesh workload
+// Helper for creating and caching a mesh workload.
+// Inside a worker-cores scope (`scoped_worker_cores`), the selected factory must take worker cores, is given the
+// scope's, and must keep its kernels on them; outside one, a factory that takes worker cores is given the whole
+// compute grid.
 template <DeviceOperationConcept mesh_device_operation_t, typename UseWorkload>
 void create_and_cache_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -322,6 +387,7 @@ void create_and_cache_mesh_workload(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     const ProgramCacheKey& program_key,
+    const std::optional<CoreRangeSet>& scoped_worker_cores,
     const UseWorkload& use_workload) {
     mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
 
@@ -332,8 +398,28 @@ void create_and_cache_mesh_workload(
             tt::LogOp,
             "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch performance.");
     };
+    const auto factory_name = [&program_factory] {
+        return std::visit(
+            [](const auto& factory) -> std::string_view {
+                return ttsl::long_type_name<std::decay_t<decltype(factory)>>;
+            },
+            program_factory);
+    };
     // WorkloadFactory is unconstrained — dispatch_to_mesh_workload_factory resolves the type.
     dispatch_to_mesh_workload_factory<mesh_device_operation_t>(program_factory, [&]<typename WorkloadFactory>() {
+        constexpr bool takes_worker_cores = factory_takes_worker_cores<WorkloadFactory, mesh_device_operation_t>();
+        if constexpr (!takes_worker_cores) {
+            if (scoped_worker_cores.has_value()) {
+                throw_factory_does_not_take_worker_cores(
+                    get_operation_name<mesh_device_operation_t>(operation_attributes),
+                    factory_name(),
+                    *scoped_worker_cores);
+            }
+        }
+        const CoreRangeSet worker_cores = scoped_worker_cores.has_value() ? *scoped_worker_cores
+                                          : takes_worker_cores            ? ttnn::get_worker_cores(*mesh_device)
+                                                                          : CoreRangeSet{};
+
         ttnn::MeshCoordinateRangeSet tensor_coords;
         if (mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
             // Fast path - a range covers the entire mesh.
@@ -347,7 +433,15 @@ void create_and_cache_mesh_workload(
             }
         }
         auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
-            operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+            operation_attributes, tensor_coords, tensor_args, tensor_return_value, worker_cores);
+        // Taking worker cores is a promise, not a proof: a factory can still place some branch's kernels elsewhere.
+        if (scoped_worker_cores.has_value()) {
+            validate_workload_on_worker_cores(
+                cached_workload.workload,
+                *scoped_worker_cores,
+                get_operation_name<mesh_device_operation_t>(operation_attributes),
+                factory_name());
+        }
         // Cached only after this use returns, so a use that throws leaves the cache unchanged.
         use_workload(cached_workload.workload);
 
@@ -373,6 +467,7 @@ template <DeviceOperationConcept mesh_device_operation_t, typename UseWorkload>
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     const ProgramCacheKey& program_key,
+    const std::optional<CoreRangeSet>& scoped_worker_cores,
     const UseWorkload& use_workload) {
     auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
     std::string alloc_ctx =
@@ -382,7 +477,14 @@ template <DeviceOperationConcept mesh_device_operation_t, typename UseWorkload>
     }
     tt::tt_metal::AllocationContextGuard ctx_guard(alloc_ctx);
     create_and_cache_mesh_workload<mesh_device_operation_t>(
-        operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_key, use_workload);
+        operation_attributes,
+        tensor_args,
+        tensor_return_value,
+        mesh_device,
+        program_cache,
+        program_key,
+        scoped_worker_cores,
+        use_workload);
 }
 
 struct ProgramCacheLookup {
@@ -391,11 +493,14 @@ struct ProgramCacheLookup {
 };
 
 // Throws on a miss while cache misses are forbidden. With the cache disabled, returns an empty key and no hit.
+// Inside a worker-cores scope the key also holds the scope's cores: the same operation builds a different program on
+// other cores. Outside any scope the key is the operation's alone.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 ProgramCacheLookup look_up_program_cache(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
-    ttnn::MeshDevice* mesh_device) {
+    ttnn::MeshDevice* mesh_device,
+    const std::optional<CoreRangeSet>& scoped_worker_cores) {
     auto& program_cache = mesh_device->get_program_cache();
     ProgramCacheLookup lookup;
     if (!program_cache.is_enabled()) {
@@ -410,6 +515,10 @@ ProgramCacheLookup look_up_program_cache(
         ttsl::get_type_name<typename mesh_device_operation_t::device_operation_t>(),
         operation_attributes,
         tensor_args);
+    if (scoped_worker_cores.has_value()) [[unlikely]] {
+        lookup.key.hash = ttsl::hash::hash_objects(lookup.key.hash, *scoped_worker_cores);
+        lookup.key.canonical += ttsl::hash::canonical_key(*scoped_worker_cores);
+    }
     lookup.hit = program_cache.contains(lookup.key);
     if (!lookup.hit && !program_cache.cache_misses_allowed()) {
         auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
@@ -427,9 +536,11 @@ void use_mesh_workload(
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     ttnn::MeshDevice* mesh_device,
     const ProgramCacheLookup& lookup,
+    const std::optional<CoreRangeSet>& scoped_worker_cores,
     const UseWorkload& use_workload) {
     auto& program_cache = mesh_device->get_program_cache();
     if (lookup.hit) {
+        // The key holds the scope's cores, so a hit is a program already built and checked on them.
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, program_cache, lookup.key, use_workload);
     } else if (tt::tt_metal::trace_allocation_tracking_enabled()) [[unlikely]] {
@@ -440,6 +551,7 @@ void use_mesh_workload(
             mesh_device,
             program_cache,
             lookup.key,
+            scoped_worker_cores,
             use_workload);
     } else {
         create_and_cache_mesh_workload<mesh_device_operation_t>(
@@ -449,6 +561,7 @@ void use_mesh_workload(
             mesh_device,
             program_cache,
             lookup.key,
+            scoped_worker_cores,
             use_workload);
     }
 }
@@ -467,7 +580,9 @@ void launch_operation_with_adapter(
         }
     }
 
-    const auto lookup = look_up_program_cache<mesh_device_operation_t>(operation_attributes, tensor_args, mesh_device);
+    const auto scoped_worker_cores = ttnn::get_scoped_worker_cores(*mesh_device);
+    const auto lookup = look_up_program_cache<mesh_device_operation_t>(
+        operation_attributes, tensor_args, mesh_device, scoped_worker_cores);
 
     log_operation<mesh_device_operation_t>(
         mesh_device->id(), operation_attributes, tensor_args, lookup.key.hash, lookup.hit);
@@ -478,6 +593,7 @@ void launch_operation_with_adapter(
         tensor_return_value,
         mesh_device,
         lookup,
+        scoped_worker_cores,
         [&](tt::tt_metal::distributed::MeshWorkload& workload) {
             enqueue_mesh_workload<mesh_device_operation_t>(
                 operation_attributes, tensor_args, tensor_return_value, mesh_device, workload, lookup.hit);
@@ -513,13 +629,16 @@ void prepare_operation_with_adapter(
         }
     }
 
-    const auto lookup = look_up_program_cache<mesh_device_operation_t>(operation_attributes, tensor_args, mesh_device);
+    const auto scoped_worker_cores = ttnn::get_scoped_worker_cores(*mesh_device);
+    const auto lookup = look_up_program_cache<mesh_device_operation_t>(
+        operation_attributes, tensor_args, mesh_device, scoped_worker_cores);
     use_mesh_workload<mesh_device_operation_t>(
         operation_attributes,
         tensor_args,
         tensor_return_value,
         mesh_device,
         lookup,
+        scoped_worker_cores,
         [&](tt::tt_metal::distributed::MeshWorkload& workload) {
             tt::tt_metal::experimental::program_preparation::prepare(*mesh_device, workload);
         });

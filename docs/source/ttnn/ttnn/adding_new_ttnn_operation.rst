@@ -183,6 +183,48 @@ with ``create_descriptor`` and put them in a variant:
    This enables automated tooling to introspect which circular buffers each kernel
    references without parsing the kernel source.
 
+**Running on part of the device: worker cores**
+
+Callers can confine every operation they launch to some of the device's Tensix cores, for instance
+to run compute on one sub-device while a collective runs on another:
+
+.. code-block:: python
+
+   with ttnn.sub_device(0):        # or ttnn.worker_cores(core_range_set)
+       y = ttnn.my_op(x)
+
+A program factory opts in by taking the cores it may use as a trailing parameter, and places all its
+kernels on them instead of on the device's grid:
+
+.. code-block:: cpp
+
+   struct MultiCore {
+       static tt::tt_metal::ProgramDescriptor create_descriptor(
+           const operation_attributes_t&,
+           const tensor_args_t&,
+           tensor_return_value_t&,
+           const CoreRangeSet& worker_cores);
+   };
+
+   // In create_descriptor: split over the cores you are given, which need not start at (0, 0).
+   auto [num_cores, all_cores, group_1, group_2, units_1, units_2] = split_work_to_cores(worker_cores, num_tiles);
+   for (const CoreCoord& core : corerange_to_cores(all_cores, num_cores, /*row_wise=*/false)) { ... }
+
+Outside any scope ``worker_cores`` is the whole compute grid, so the program is the one the factory
+always built. Inside a scope, ``launch`` refuses a factory without the parameter, rather than letting
+it place kernels across the whole device, and checks that the program it builds stays on
+``worker_cores``. Every factory kind accepts it: ``create``, ``create_program_artifacts``,
+``create_descriptor`` (after the optional mesh coordinate), ``create_workload_descriptor``,
+``create_mesh_workload``, ``create_at`` and ``create_mesh_workload_artifacts``. A factory whose cache-hit
+hook re-derives per-core arguments (``override_runtime_arguments`` on a descriptor or Metal 2.0 spec
+factory) takes ``worker_cores`` there too, and is given the cores the cached program was built on.
+
+A factory whose cores are fixed by its tensors, such as one that works on each shard where it lives,
+takes ``worker_cores`` to check that those cores are among them and to raise a clear error if not.
+Code that sizes a program before its factory runs (a default program config, a worker grid computed
+in the prim) reads the cores in force from ``ttnn::get_scoped_worker_cores(device)`` (or
+``ttnn::get_worker_cores(device)``, which is the whole grid outside a scope).
+
 Full example files:
 
 .. literalinclude::  examples/example/device/example_device_operation.hpp

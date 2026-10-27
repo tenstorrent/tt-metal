@@ -63,22 +63,28 @@ struct ExampleDeviceOperation {
     // Each factory returns a ProgramDescriptor. The framework handles program
     // construction, caching, and runtime argument patching automatically --
     // no shared_variables_t or override_runtime_arguments needed.
+    //
+    // Both take `worker_cores`: the Tensix cores they may place kernels on. That is the
+    // device's whole compute grid, or the cores of a ttnn.sub_device / ttnn.worker_cores
+    // scope; a factory without the parameter refuses to run inside such a scope.
     // -------------------------------------------------------------------------
 
-    // Single-core: pins work to core {0,0}
+    // Single-core: puts all the work on the first worker core
     struct SingleCore {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& tensor_return_value,
+            const CoreRangeSet& worker_cores);
     };
 
-    // Multi-core: distributes tiles across all available cores
+    // Multi-core: distributes tiles across the worker cores
     struct MultiCore {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& tensor_return_value,
+            const CoreRangeSet& worker_cores);
     };
 
     using program_factory_t = std::variant<SingleCore, MultiCore>;

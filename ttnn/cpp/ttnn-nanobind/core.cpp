@@ -20,6 +20,7 @@
 #include <reflect>
 
 #include "ttnn/core.hpp"
+#include "ttnn/worker_cores.hpp"
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
@@ -208,6 +209,24 @@ void py_module(nb::module_& mod) {
     mod.def("get_current_command_queue_id_for_thread", &ttnn::core::get_current_command_queue_id_for_thread);
     mod.def("push_current_command_queue_id_for_thread", &ttnn::core::push_current_command_queue_id_for_thread);
     mod.def("pop_current_command_queue_id_for_thread", &ttnn::core::pop_current_command_queue_id_for_thread);
+
+    mod.def(
+        "push_sub_device_scope_for_thread",
+        [](tt::tt_metal::SubDeviceId sub_device_id) { ttnn::push_worker_cores_scope_for_thread(sub_device_id); },
+        nb::arg("sub_device_id"));
+    mod.def(
+        "push_worker_cores_scope_for_thread",
+        [](const tt::tt_metal::CoreRangeSet& worker_cores) { ttnn::push_worker_cores_scope_for_thread(worker_cores); },
+        nb::arg("worker_cores"));
+    mod.def("pop_worker_cores_scope_for_thread", &ttnn::pop_worker_cores_scope_for_thread);
+    mod.def(
+        "get_worker_cores",
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device) { return ttnn::get_worker_cores(mesh_device); },
+        nb::arg("mesh_device"),
+        R"doc(
+        The Tensix cores operations launched now may place kernels on: those of the innermost ``ttnn.sub_device`` or
+        ``ttnn.worker_cores`` scope, or the whole compute grid of ``mesh_device`` outside any scope.
+        )doc");
 }
 
 }  // namespace ttnn::core

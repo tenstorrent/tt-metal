@@ -266,17 +266,47 @@ public:
         using shared_variables_t = typename ProgramFactory::shared_variables_t;
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
+        // The factory keeps whatever its override_runtime_arguments needs, the cores included, in its own
+        // shared_variables_t.
+        static constexpr bool takes_worker_cores = requires(
+            ProgramFactory program_factory,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const CoreRangeSet& worker_cores) {
+            program_factory.create(attrs, tensor_args, tensor_return_value, worker_cores);
+        };
+
+        // The same for a factory that does not take worker cores, for callers outside launch() that compose this
+        // adapter into their own factory.
         static auto create_mesh_workload(
             const operation_attributes_t& attrs,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value) {
+            tensor_return_value_t& tensor_return_value)
+            requires(!takes_worker_cores)
+        {
+            return create_mesh_workload(attrs, tensor_coords, tensor_args, tensor_return_value, CoreRangeSet{});
+        }
+
+        static auto create_mesh_workload(
+            const operation_attributes_t& attrs,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const CoreRangeSet& worker_cores) {
             ProgramFactory program_factory;
 
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
             for (const auto& range : tensor_coords.ranges()) {
-                auto cached_program = program_factory.create(attrs, tensor_args, tensor_return_value);
+                auto cached_program = [&] {
+                    if constexpr (takes_worker_cores) {
+                        return program_factory.create(attrs, tensor_args, tensor_return_value, worker_cores);
+                    } else {
+                        return program_factory.create(attrs, tensor_args, tensor_return_value);
+                    }
+                }();
                 mesh_workload.add_program(range, std::move(cached_program.program));
                 shared_variables[range] = std::move(cached_program.shared_variables);
             }
@@ -343,15 +373,52 @@ public:
         // tt::tt_metal::WorkloadDescriptor?  The return-type check pins
         // the requirement so an accidental wrong signature surfaces as a clean
         // concept failure rather than silent fallback to the ProgramDescriptor variant.
-        static constexpr bool has_workload_descriptor = requires(
-            const operation_attributes_t& a,
-            const tensor_args_t& t,
-            tensor_return_value_t& r,
-            const ttnn::MeshCoordinateRangeSet& tc) {
-            {
-                DescriptorFactory::create_workload_descriptor(a, t, r, tc)
-            } -> std::same_as<tt::tt_metal::WorkloadDescriptor>;
-        };
+        static constexpr bool has_workload_descriptor =
+            requires(
+                const operation_attributes_t& a,
+                const tensor_args_t& t,
+                tensor_return_value_t& r,
+                const ttnn::MeshCoordinateRangeSet& tc) {
+                {
+                    DescriptorFactory::create_workload_descriptor(a, t, r, tc)
+                } -> std::same_as<tt::tt_metal::WorkloadDescriptor>;
+            } ||
+            requires(
+                const operation_attributes_t& a,
+                const tensor_args_t& t,
+                tensor_return_value_t& r,
+                const ttnn::MeshCoordinateRangeSet& tc,
+                const CoreRangeSet& worker_cores) {
+                {
+                    DescriptorFactory::create_workload_descriptor(a, t, r, tc, worker_cores)
+                } -> std::same_as<tt::tt_metal::WorkloadDescriptor>;
+            };
+
+        // Whether the factory builds its programs on the worker cores it is given: its create_workload_descriptor or
+        // create_descriptor takes a trailing `const CoreRangeSet& worker_cores`. An operation that puts
+        // create_descriptor on itself (DirectDescriptorFactory) cannot take them yet.
+        static constexpr bool takes_worker_cores =
+            requires(
+                const operation_attributes_t& a,
+                const tensor_args_t& t,
+                tensor_return_value_t& r,
+                const ttnn::MeshCoordinateRangeSet& tc,
+                const CoreRangeSet& worker_cores) {
+                DescriptorFactory::create_workload_descriptor(a, t, r, tc, worker_cores);
+            } ||
+            requires(
+                const operation_attributes_t& a,
+                const tensor_args_t& t,
+                tensor_return_value_t& r,
+                const CoreRangeSet& worker_cores) { DescriptorFactory::create_descriptor(a, t, r, worker_cores); } ||
+            requires(
+                const operation_attributes_t& a,
+                const tensor_args_t& t,
+                tensor_return_value_t& r,
+                const std::optional<ttnn::MeshCoordinate>& coord,
+                const CoreRangeSet& worker_cores) {
+                DescriptorFactory::create_descriptor(a, t, r, coord, worker_cores);
+            };
 
         // Signature-mismatch guard: a factory that defines a
         // `create_workload_descriptor` with a wrong signature/return type would
@@ -359,13 +426,23 @@ public:
         // `create_descriptor` and produces a deep template error).  Surface
         // the problem clearly at concept-check time.
         static_assert(
-            !requires(
-                const operation_attributes_t& a,
-                const tensor_args_t& t,
-                tensor_return_value_t& r,
-                const ttnn::MeshCoordinateRangeSet& tc) {
-                DescriptorFactory::create_workload_descriptor(a, t, r, tc);
-            } || has_workload_descriptor,
+            !(
+                requires(
+                    const operation_attributes_t& a,
+                    const tensor_args_t& t,
+                    tensor_return_value_t& r,
+                    const ttnn::MeshCoordinateRangeSet& tc) {
+                    DescriptorFactory::create_workload_descriptor(a, t, r, tc);
+                } ||
+                requires(
+                    const operation_attributes_t& a,
+                    const tensor_args_t& t,
+                    tensor_return_value_t& r,
+                    const ttnn::MeshCoordinateRangeSet& tc,
+                    const CoreRangeSet& worker_cores) {
+                    DescriptorFactory::create_workload_descriptor(a, t, r, tc, worker_cores);
+                }) ||
+                has_workload_descriptor,
             "Factory has create_workload_descriptor but its return type isn't "
             "tt::tt_metal::WorkloadDescriptor. "
             "Expected: static tt::tt_metal::WorkloadDescriptor create_workload_descriptor("
@@ -383,6 +460,9 @@ public:
             // Non-empty when the factory used emplace_runtime_args() with
             // Buffer* args (or, for the WorkloadDescriptor variant, declared any CB buffer binding).
             tt::tt_metal::ResolvedBindings resolved_bindings;
+            // The worker cores the program was built on, handed back to the factory when a cache hit rebuilds the
+            // descriptor or calls override_runtime_arguments. Empty unless the factory takes worker cores.
+            CoreRangeSet worker_cores;
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -437,13 +517,22 @@ public:
                 };
             } else {
                 return requires(
-                    const operation_attributes_t& attrs,
-                    const tensor_args_t& tensor_args,
-                    tensor_return_value_t& tensor_return_value,
-                    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+                           const operation_attributes_t& attrs,
+                           const tensor_args_t& tensor_args,
+                           tensor_return_value_t& tensor_return_value,
+                           const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
                     DescriptorFactory::create_descriptor(
                         attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
-                };
+                } ||
+                       requires(
+                           const operation_attributes_t& attrs,
+                           const tensor_args_t& tensor_args,
+                           tensor_return_value_t& tensor_return_value,
+                           const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
+                           const CoreRangeSet& worker_cores) {
+                           DescriptorFactory::create_descriptor(
+                               attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate, worker_cores);
+                       };
             }
         }
 
@@ -461,15 +550,53 @@ public:
         //
         // Only the factory is probed.  An override_runtime_arguments() on the DeviceOperation is
         // IGNORED — it compiles, and it is never invoked.
-        static consteval bool has_override_runtime_arguments() {
+        static consteval bool override_runtime_arguments_takes_worker_cores() {
             return requires(
                 tt::tt_metal::Program& program,
                 const operation_attributes_t& attrs,
                 const tensor_args_t& tensor_args,
                 tensor_return_value_t& tensor_return_value,
-                const std::optional<ttnn::MeshCoordinate>& coord) {
-                DescriptorFactory::override_runtime_arguments(program, attrs, tensor_args, tensor_return_value, coord);
+                const std::optional<ttnn::MeshCoordinate>& coord,
+                const CoreRangeSet& worker_cores) {
+                DescriptorFactory::override_runtime_arguments(
+                    program, attrs, tensor_args, tensor_return_value, coord, worker_cores);
             };
+        }
+
+        static consteval bool has_override_runtime_arguments() {
+            return override_runtime_arguments_takes_worker_cores() ||
+                   requires(
+                       tt::tt_metal::Program& program,
+                       const operation_attributes_t& attrs,
+                       const tensor_args_t& tensor_args,
+                       tensor_return_value_t& tensor_return_value,
+                       const std::optional<ttnn::MeshCoordinate>& coord) {
+                       DescriptorFactory::override_runtime_arguments(
+                           program, attrs, tensor_args, tensor_return_value, coord);
+                   };
+        }
+
+        // A factory that builds on the cores it is given re-derives per-core state from the same cores on a hit;
+        // without them its override would rebuild the runtime arguments for some other set of cores.
+        static_assert(
+            !takes_worker_cores || !has_override_runtime_arguments() || override_runtime_arguments_takes_worker_cores(),
+            "A program factory that takes worker cores in create_descriptor must take them in "
+            "override_runtime_arguments too: (Program&, const operation_attributes_t&, const tensor_args_t&, "
+            "tensor_return_value_t&, const std::optional<MeshCoordinate>&, const CoreRangeSet& worker_cores).");
+
+        static void call_override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& coord,
+            const CoreRangeSet& worker_cores) {
+            if constexpr (override_runtime_arguments_takes_worker_cores()) {
+                DescriptorFactory::override_runtime_arguments(
+                    program, attrs, tensor_args, tensor_return_value, coord, worker_cores);
+            } else {
+                DescriptorFactory::override_runtime_arguments(program, attrs, tensor_args, tensor_return_value, coord);
+            }
         }
 
         // Same hook declared at DeviceOperation scope, which the adapter no longer probes.
@@ -519,11 +646,24 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
-            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
+            const CoreRangeSet& worker_cores) {
             if constexpr (requires {
                               DescriptorFactory::create_descriptor(
-                                  attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
+                                  attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate, worker_cores);
                           }) {
+                return DescriptorFactory::create_descriptor(
+                    attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate, worker_cores);
+            } else if constexpr (requires {
+                                     DescriptorFactory::create_descriptor(
+                                         attrs, tensor_args, tensor_return_value, worker_cores);
+                                 }) {
+                (void)mesh_dispatch_coordinate;
+                return DescriptorFactory::create_descriptor(attrs, tensor_args, tensor_return_value, worker_cores);
+            } else if constexpr (requires {
+                                     DescriptorFactory::create_descriptor(
+                                         attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
+                                 }) {
                 return DescriptorFactory::create_descriptor(
                     attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
             } else {
@@ -532,13 +672,28 @@ public:
             }
         }
 
+        // The same for a factory that does not take worker cores, for callers outside launch() that compose this
+        // adapter into their own factory.
         static auto create_mesh_workload(
             const operation_attributes_t& attrs,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value) {
+            tensor_return_value_t& tensor_return_value)
+            requires(!takes_worker_cores)
+        {
+            return create_mesh_workload(attrs, tensor_coords, tensor_args, tensor_return_value, CoreRangeSet{});
+        }
+
+        static auto create_mesh_workload(
+            const operation_attributes_t& attrs,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const CoreRangeSet& worker_cores) {
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+            // Only a factory that takes worker cores reads them back on a hit.
+            const CoreRangeSet recorded_worker_cores = takes_worker_cores ? worker_cores : CoreRangeSet{};
 
             if constexpr (has_workload_descriptor) {
                 // WorkloadDescriptor variant — declarative: the factory builds the entire
@@ -552,8 +707,15 @@ public:
                 // shared_variables copy only needs to carry the resources
                 // (semaphores, buffers) and resolved bindings.  The per-coord
                 // ProgramDescriptors have already been consumed into Programs.
-                tt::tt_metal::WorkloadDescriptor workload_descriptor = DescriptorFactory::create_workload_descriptor(
-                    attrs, tensor_args, tensor_return_value, tensor_coords);
+                tt::tt_metal::WorkloadDescriptor workload_descriptor = [&] {
+                    if constexpr (takes_worker_cores) {
+                        return DescriptorFactory::create_workload_descriptor(
+                            attrs, tensor_args, tensor_return_value, tensor_coords, worker_cores);
+                    } else {
+                        return DescriptorFactory::create_workload_descriptor(
+                            attrs, tensor_args, tensor_return_value, tensor_coords);
+                    }
+                }();
                 auto programs = std::move(workload_descriptor.programs);
                 for (auto& [device_range, desc] : programs) {
                     tt::tt_metal::Program program{desc};
@@ -573,7 +735,9 @@ public:
                         /*allow_inplace_output_tensor_alias=*/true);
                     mesh_workload.add_program(device_range, std::move(program));
                     shared_variables[device_range] = shared_variables_t{
-                        .workload_descriptor = workload_descriptor, .resolved_bindings = std::move(bindings)};
+                        .workload_descriptor = workload_descriptor,
+                        .resolved_bindings = std::move(bindings),
+                        .worker_cores = recorded_worker_cores};
                 }
                 return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
             } else {
@@ -583,7 +747,8 @@ public:
                 const auto build_and_add_program =
                     [&](const ttnn::MeshCoordinateRange& device_range,
                         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-                        auto desc = invoke_per_coord(attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
+                        auto desc = invoke_per_coord(
+                            attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate, worker_cores);
                         // An empty ProgramDescriptor (no kernels/CBs/semaphores) means this coordinate has no
                         // work. Skip it entirely.
                         if (desc.kernels.empty() && desc.cbs.empty() && desc.semaphores.empty()) {
@@ -594,14 +759,14 @@ public:
                             // The op re-derives all per-dispatch state on every hit via
                             // override_runtime_arguments(); no resolve_bindings needed.
                             mesh_workload.add_program(device_range, std::move(program));
-                            shared_variables[device_range] = shared_variables_t{};
+                            shared_variables[device_range] = shared_variables_t{.worker_cores = recorded_worker_cores};
                         } else {
                             auto collected = collect_tensor_buffers(tensor_args, tensor_return_value, empty_descriptor);
                             auto bindings = tt::tt_metal::resolve_bindings(
                                 program, desc, collected.buffers, collected.num_input_buffers);
                             mesh_workload.add_program(device_range, std::move(program));
-                            shared_variables[device_range] =
-                                shared_variables_t{.resolved_bindings = std::move(bindings)};
+                            shared_variables[device_range] = shared_variables_t{
+                                .resolved_bindings = std::move(bindings), .worker_cores = recorded_worker_cores};
                         }
                     };
 
@@ -664,12 +829,13 @@ public:
                     }
                     // Cache hit never rebuilds; re-apply hash-excluded args via the override hook.
                     if constexpr (has_override_runtime_arguments()) {
-                        DescriptorFactory::override_runtime_arguments(
+                        call_override_runtime_arguments(
                             program,
                             attrs,
                             tensor_args,
                             tensor_return_value,
-                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()),
+                            sv.worker_cores);
                     } else {
                         apply_dynamic_runtime_args_if_declared(
                             program, attrs, tensor_args, tensor_return_value, coordinate_range);
@@ -680,12 +846,13 @@ public:
                     // every runtime arg AND every tensor-backed CB address — for the current tensors.
                     // No resolve_bindings (address inference) and no get_dynamic; correct by
                     // construction for in-place, mixed-aliasing, and work-set shifts.
-                    DescriptorFactory::override_runtime_arguments(
+                    call_override_runtime_arguments(
                         program,
                         attrs,
                         tensor_args,
                         tensor_return_value,
-                        std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                        std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()),
+                        sv.worker_cores);
 #ifdef TT_DESCRIPTOR_PATCHING_PARITY_CHECK
                     // Same regression net as the legacy fast path: assert the op's override reproduced a
                     // full rebuild exactly (rt-args AND CB addresses).
@@ -694,7 +861,8 @@ public:
                             attrs,
                             tensor_args,
                             tensor_return_value,
-                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()),
+                            sv.worker_cores);
                         tt::tt_metal::Program parity_scratch{parity_desc};
                         tt::tt_metal::apply_descriptor_runtime_args(parity_scratch, parity_desc);
                         tt::tt_metal::assert_fastpath_parity(
@@ -748,7 +916,8 @@ public:
                                 attrs,
                                 tensor_args,
                                 tensor_return_value,
-                                std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                                std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()),
+                                sv.worker_cores);
                             tt::tt_metal::Program parity_scratch{parity_desc};
                             tt::tt_metal::apply_descriptor_runtime_args(parity_scratch, parity_desc);
                             tt::tt_metal::assert_fastpath_parity(
@@ -758,7 +927,8 @@ public:
                     } else {
                         const ttnn::MeshCoordinate mesh_coord = coordinate_range.start_coord();
                         const std::optional<ttnn::MeshCoordinate> mesh_dispatch_coordinate(mesh_coord);
-                        auto desc = invoke_per_coord(attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
+                        auto desc = invoke_per_coord(
+                            attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate, sv.worker_cores);
                         tt::tt_metal::apply_descriptor_runtime_args(program, desc);
                     }
                 }
@@ -818,6 +988,9 @@ public:
             // outlive the cache miss and every program on the occupied ranges can reference them.
             // Shared ownership keeps the device allocation alive for the life of the cache entry.
             std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors;
+            // The worker cores the program was built on, handed back to override_runtime_arguments on a hit.
+            // Empty unless the factory takes worker cores.
+            CoreRangeSet worker_cores;
         };
 
         // Cache-hit tensor refresh, shared so the two adapters' hit paths cannot drift apart.
@@ -948,11 +1121,20 @@ public:
         using shared_variables_t = typename SpecBindingSupport::SpecSharedVariables;
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
+        static constexpr bool takes_worker_cores = requires(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const CoreRangeSet& worker_cores) {
+            SpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value, worker_cores);
+        };
+
         // Resolve one artifacts' tensor bindings and park its op-owned tensors. Consumes
         // artifacts.op_owned_tensors; a vector move keeps the run_params references valid.
         static shared_variables_t make_shared_variables(
             ProgramArtifacts& artifacts,
-            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
+            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors,
+            const CoreRangeSet& worker_cores) {
             auto mesh_tensors = io_mesh_tensors;
             for (const auto& op_owned_tensor : artifacts.op_owned_tensors) {
                 mesh_tensors.push_back(std::cref(op_owned_tensor));
@@ -960,14 +1142,28 @@ public:
             return shared_variables_t{
                 .bindings = SpecBindingSupport::resolve_bindings(artifacts.run_params.tensor_args, mesh_tensors),
                 .op_owned_tensors =
-                    std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(std::move(artifacts.op_owned_tensors))};
+                    std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(std::move(artifacts.op_owned_tensors)),
+                .worker_cores = takes_worker_cores ? worker_cores : CoreRangeSet{}};
+        }
+
+        // The same for a factory that does not take worker cores, for callers outside launch() that compose this
+        // adapter into their own factory.
+        static auto create_mesh_workload(
+            const operation_attributes_t& attrs,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value)
+            requires(!takes_worker_cores)
+        {
+            return create_mesh_workload(attrs, tensor_coords, tensor_args, tensor_return_value, CoreRangeSet{});
         }
 
         static auto create_mesh_workload(
             const operation_attributes_t& attrs,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value) {
+            tensor_return_value_t& tensor_return_value,
+            const CoreRangeSet& worker_cores) {
             auto* mesh_device = SpecBindingSupport::source_mesh_device(tensor_args, tensor_return_value);
 
             // Enumerate io tensors (inputs + outputs); each artifacts appends its own
@@ -983,8 +1179,14 @@ public:
 
             // One ProgramArtifacts mapped onto every occupied range; bindings and op-owned tensors
             // are identical for every program built from it.
-            auto artifacts = SpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
-            auto sv = make_shared_variables(artifacts, io_mesh_tensors);
+            auto artifacts = [&] {
+                if constexpr (takes_worker_cores) {
+                    return SpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value, worker_cores);
+                } else {
+                    return SpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
+                }
+            }();
+            auto sv = make_shared_variables(artifacts, io_mesh_tensors, worker_cores);
             for (const auto& range : tensor_coords.ranges()) {
                 shared_variables.emplace(range, sv);
                 program_specs.emplace(range, artifacts.spec);
@@ -1024,6 +1226,22 @@ public:
         using Base = ProgramSpecMeshWorkloadFactoryAdapter<CustomSpecFactory>;
         using typename Base::cached_mesh_workload_t;
 
+        // The override re-derives per-core run args, so it must see the cores create_program_artifacts was given.
+        static_assert(
+            !Base::takes_worker_cores ||
+                requires(
+                    const operation_attributes_t& attrs,
+                    const tensor_args_t& tensor_args,
+                    tensor_return_value_t& tensor_return_value,
+                    const std::optional<ttnn::MeshCoordinate>& coord,
+                    const CoreRangeSet& worker_cores) {
+                    CustomSpecFactory::override_runtime_arguments(
+                        attrs, tensor_args, tensor_return_value, coord, worker_cores);
+                },
+            "A program factory that takes worker cores in create_program_artifacts must take them in "
+            "override_runtime_arguments too: (const operation_attributes_t&, const tensor_args_t&, "
+            "tensor_return_value_t&, const std::optional<MeshCoordinate>&, const CoreRangeSet& worker_cores).");
+
         static void apply_descriptor(
             cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& attrs,
@@ -1031,11 +1249,20 @@ public:
             tensor_return_value_t& tensor_return_value) {
             const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                auto run_args = CustomSpecFactory::override_runtime_arguments(
-                    attrs,
-                    tensor_args,
-                    tensor_return_value,
-                    std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                const std::optional<ttnn::MeshCoordinate> coord(coordinate_range.start_coord());
+                auto run_args = [&] {
+                    if constexpr (Base::takes_worker_cores) {
+                        return CustomSpecFactory::override_runtime_arguments(
+                            attrs,
+                            tensor_args,
+                            tensor_return_value,
+                            coord,
+                            cached_workload.shared_variables.at(coordinate_range).worker_cores);
+                    } else {
+                        return CustomSpecFactory::override_runtime_arguments(
+                            attrs, tensor_args, tensor_return_value, coord);
+                    }
+                }();
                 tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, skip_validation);
             }
         }
@@ -1063,32 +1290,76 @@ public:
         using shared_variables_t = typename SpecBindingSupport::SpecSharedVariables;
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
+        static constexpr bool takes_worker_cores = requires(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const CoreRangeSet& worker_cores) {
+            WorkloadSpecFactory::create_mesh_workload_artifacts(
+                attrs, tensor_args, tensor_return_value, tensor_coords, worker_cores);
+        };
+
+        // With worker cores the override takes them last, as create_mesh_workload_artifacts does.
         static consteval bool has_override_runtime_arguments() {
-            return requires(
-                const operation_attributes_t& attrs,
-                const tensor_args_t& tensor_args,
-                tensor_return_value_t& tensor_return_value,
-                const ttnn::MeshCoordinateRange& range) {
-                WorkloadSpecFactory::override_runtime_arguments(attrs, tensor_args, tensor_return_value, range);
-            };
+            if constexpr (takes_worker_cores) {
+                return requires(
+                    const operation_attributes_t& attrs,
+                    const tensor_args_t& tensor_args,
+                    tensor_return_value_t& tensor_return_value,
+                    const ttnn::MeshCoordinateRange& range,
+                    const CoreRangeSet& worker_cores) {
+                    WorkloadSpecFactory::override_runtime_arguments(
+                        attrs, tensor_args, tensor_return_value, range, worker_cores);
+                };
+            } else {
+                return requires(
+                    const operation_attributes_t& attrs,
+                    const tensor_args_t& tensor_args,
+                    tensor_return_value_t& tensor_return_value,
+                    const ttnn::MeshCoordinateRange& range) {
+                    WorkloadSpecFactory::override_runtime_arguments(attrs, tensor_args, tensor_return_value, range);
+                };
+            }
         }
 
         // Otherwise a near-miss signature leaves run args stale on every hit with nothing to say why.
         static_assert(
             !detail::HasSpecRuntimeArgsOverride<WorkloadSpecFactory> || has_override_runtime_arguments(),
             "override_runtime_arguments must take (operation_attributes_t, tensor_args_t, tensor_return_value_t, "
-            "const MeshCoordinateRange&) to be called on the cache-hit path. It is called once per range, "
-            "not once per device.");
+            "const MeshCoordinateRange&), followed by const CoreRangeSet& worker_cores when "
+            "create_mesh_workload_artifacts takes them, to be called on the cache-hit path. It is called once per "
+            "range, not once per device.");
+
+        // The same for a factory that does not take worker cores, for callers outside launch() that compose this
+        // adapter into their own factory.
+        static auto create_mesh_workload(
+            const operation_attributes_t& attrs,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value)
+            requires(!takes_worker_cores)
+        {
+            return create_mesh_workload(attrs, tensor_coords, tensor_args, tensor_return_value, CoreRangeSet{});
+        }
 
         static auto create_mesh_workload(
             const operation_attributes_t& attrs,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value) {
+            tensor_return_value_t& tensor_return_value,
+            const CoreRangeSet& worker_cores) {
             auto* mesh_device = SpecBindingSupport::source_mesh_device(tensor_args, tensor_return_value);
 
-            auto artifacts = WorkloadSpecFactory::create_mesh_workload_artifacts(
-                attrs, tensor_args, tensor_return_value, tensor_coords);
+            auto artifacts = [&] {
+                if constexpr (takes_worker_cores) {
+                    return WorkloadSpecFactory::create_mesh_workload_artifacts(
+                        attrs, tensor_args, tensor_return_value, tensor_coords, worker_cores);
+                } else {
+                    return WorkloadSpecFactory::create_mesh_workload_artifacts(
+                        attrs, tensor_args, tensor_return_value, tensor_coords);
+                }
+            }();
             TT_FATAL(!artifacts.programs.empty(), "create_mesh_workload_artifacts returned no programs");
 
             const auto mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
@@ -1118,7 +1389,8 @@ public:
                     per_coord.range,
                     shared_variables_t{
                         .bindings =
-                            SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors)});
+                            SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
+                        .worker_cores = takes_worker_cores ? worker_cores : CoreRangeSet{}});
                 run_params.emplace(per_coord.range, std::move(per_coord.run_params));
             }
 
@@ -1137,8 +1409,19 @@ public:
             if constexpr (has_override_runtime_arguments()) {
                 const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
                 for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                    auto run_args = WorkloadSpecFactory::override_runtime_arguments(
-                        attrs, tensor_args, tensor_return_value, coordinate_range);
+                    auto run_args = [&] {
+                        if constexpr (takes_worker_cores) {
+                            return WorkloadSpecFactory::override_runtime_arguments(
+                                attrs,
+                                tensor_args,
+                                tensor_return_value,
+                                coordinate_range,
+                                cached_workload.shared_variables.at(coordinate_range).worker_cores);
+                        } else {
+                            return WorkloadSpecFactory::override_runtime_arguments(
+                                attrs, tensor_args, tensor_return_value, coordinate_range);
+                        }
+                    }();
                     tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, skip_validation);
                 }
             } else {

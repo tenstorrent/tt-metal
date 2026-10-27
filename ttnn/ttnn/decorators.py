@@ -298,6 +298,11 @@ push_current_command_queue_id_for_thread = ttnn._ttnn.core.push_current_command_
 pop_current_command_queue_id_for_thread = ttnn._ttnn.core.pop_current_command_queue_id_for_thread
 get_current_command_queue_id_for_thread = ttnn._ttnn.core.get_current_command_queue_id_for_thread
 
+push_sub_device_scope_for_thread = ttnn._ttnn.core.push_sub_device_scope_for_thread
+push_worker_cores_scope_for_thread = ttnn._ttnn.core.push_worker_cores_scope_for_thread
+pop_worker_cores_scope_for_thread = ttnn._ttnn.core.pop_worker_cores_scope_for_thread
+get_worker_cores = ttnn._ttnn.core.get_worker_cores
+
 
 @contextmanager
 def register_pre_operation_hook(hook):
@@ -354,6 +359,48 @@ def command_queue(cq_id: int):
                 f"Restoring to original value {cq_id}."
             )
         pop_current_command_queue_id_for_thread()
+
+
+@contextmanager
+def sub_device(sub_device_id):
+    """Context manager that confines every TTNN operation launched within it to the Tensix cores of a sub-device.
+
+    The sub-device is one of the active sub-device manager's, looked up on each operation's device when it launches.
+    An operation runs only if its program factory takes worker cores; one that does not raises instead of placing
+    kernels elsewhere on the device, as does a factory whose program strays off the sub-device. Scopes nest, and the
+    innermost one applies. ``ttnn.get_worker_cores(device)`` returns the cores in force, for sizing explicit core
+    grids and program configs.
+
+    Args:
+        sub_device_id (ttnn.SubDeviceId or int): the sub-device to run on.
+
+    Example:
+        with ttnn.sub_device(0):
+            y = ttnn.typecast(x, ttnn.bfloat16)  # runs on sub-device 0's cores, or raises
+    """
+    if isinstance(sub_device_id, int):
+        sub_device_id = ttnn.SubDeviceId(sub_device_id)
+    push_sub_device_scope_for_thread(sub_device_id)
+    try:
+        yield
+    finally:
+        pop_worker_cores_scope_for_thread()
+
+
+@contextmanager
+def worker_cores(core_range_set):
+    """Context manager that confines every TTNN operation launched within it to a set of Tensix cores.
+
+    The same as ``ttnn.sub_device``, with the cores named directly.
+
+    Args:
+        core_range_set (ttnn.CoreRangeSet): the cores to run on, inside the device's compute grid.
+    """
+    push_worker_cores_scope_for_thread(core_range_set)
+    try:
+        yield
+    finally:
+        pop_worker_cores_scope_for_thread()
 
 
 @contextmanager
