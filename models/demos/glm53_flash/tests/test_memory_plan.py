@@ -40,5 +40,6 @@ def test_memory_plan_8x4_table():
     # 2026-10-27: the 128 K x 32-users served boot ran out of DRAM in the 32 K warm-up prompt (fragmented 0.6 GB left);
     # the chunk working-set term keeps >= 2 GiB after the caches: 28 users per row (7 slots per chip) is the 128 K profile
     assert not part.fits(32, 131072) and part.fits(28, 131072) and part.max_users_per_row(131072) == 28
-    assert rep.fits(4, 65536), "v22: 4 users per row at 64 K with both expert forms ran"
-    assert MemoryPlan.estimate(cfg, 8, 4, partition=False, keep_stacked=True).fits(4, 65536)
+    assert rep.fits(4, 65536), "4 users per row at 64 K (one expert copy: the regions-sourced streaming decode) runs"
+    # (the 2026-10-2x "both expert forms at 64 K x 4" pin is retired: GLM53_REGIONS_DECODE=stream never builds the
+    # stacked copy, and the chunk working-set floor sizes the reserve for the one-copy configurations only)
