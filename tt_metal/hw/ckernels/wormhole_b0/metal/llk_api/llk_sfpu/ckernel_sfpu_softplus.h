@@ -93,7 +93,18 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
     return result;
 }
 
-inline void softplus_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void softplus_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+#ifdef INP_FLOAT32
+    sfpi::vConstFloatPrgm0 = SOFTPLUS_POLY_C6;
+    sfpi::vConstFloatPrgm1 = SOFTPLUS_POLY_C7;
+    sfpi::vConstFloatPrgm2 = SOFTPLUS_POLY_C8;
+#else
+    sfpi::vConstFloatPrgm0 = SOFTPLUS_BF16_POLY_C4;
+    sfpi::vConstFloatPrgm1 = SOFTPLUS_BF16_POLY_C5;
+    sfpi::vConstFloatPrgm2 = SOFTPLUS_BF16_POLY_C6;
+#endif
+}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
@@ -114,9 +125,9 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
             SOFTPLUS_POLY_C3,
             SOFTPLUS_POLY_C4,
             SOFTPLUS_POLY_C5,
-            SOFTPLUS_POLY_C6,
-            SOFTPLUS_POLY_C7,
-            SOFTPLUS_POLY_C8);
+            sfpi::vConstFloatPrgm0,
+            sfpi::vConstFloatPrgm1,
+            sfpi::vConstFloatPrgm2);
 
         // Tail: f(a) ≈ exp(-a) for a > 5, via inline Cody-Waite exp +
         // 3-term Taylor ln(1+e) = e*(1 + e*(-1/2 + e/3))
@@ -134,9 +145,9 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
             SOFTPLUS_BF16_POLY_C1,
             SOFTPLUS_BF16_POLY_C2,
             SOFTPLUS_BF16_POLY_C3,
-            SOFTPLUS_BF16_POLY_C4,
-            SOFTPLUS_BF16_POLY_C5,
-            SOFTPLUS_BF16_POLY_C6);
+            sfpi::vConstFloatPrgm0,
+            sfpi::vConstFloatPrgm1,
+            sfpi::vConstFloatPrgm2);
 
         // Tail: the degree-6 poly diverges past its [0, 5] fit domain, while the true
         // residual < exp(-5) = 0.0067 there. Clamping to 0 keeps softplus(t>0) = t within
@@ -166,6 +177,7 @@ inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::
     const float beta = Converter::as_float(param0);
     const float beta_reciprocal = Converter::as_float(param1);
     const float threshold = Converter::as_float(param2);
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_softplus_body<APPROXIMATION_MODE, is_fp32_dest_acc_en>(beta, beta_reciprocal, threshold);
         sfpi::dst_reg++;
