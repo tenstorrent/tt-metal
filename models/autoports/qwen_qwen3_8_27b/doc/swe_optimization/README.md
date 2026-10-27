@@ -44,11 +44,18 @@ Worktree: `/home/mvasiljev/build/tt-metal-qwen38-swe`, branch
   output tokens (+56.38%). All432 HTTP responses and actual isolation pass.
   Retain medium; this single pilot does not show low is universally slower. See
   [matched low comparison](isolated-swe8-low-comparison.json).
+- Flat-prefill serving smoke: normal submission and reward1 on the same known
+  task, all16 API responses complete with tool-call endings,5325 server/saved
+  output tokens, actual isolation and stable export hashes pass. Startup logs
+  confirm64 layers, native262144 context, grouped64/masked48/flat64. Trial
+  envelope710.233s includes task setup; agent384.260s. This is integration
+  evidence, not C16 qualification or a measured SWE speedup. See
+  [audited flat smoke](flat-serving-smoke.json).
 - C16 masked SWE25 candidate is still running.
   Candidate run40585466415 attempt1 failed before model loading in fabric topology
   setup; attempt2 uses identical sources on another assigned runner. No task
   score is inferred from the infrastructure failure. Flat serving-image validation
-  and actual SWE100/500 have not completed.
+  passes; C16 qualification and actual SWE100/500 remain pending.
 
 Raw CSV/Tracy, token arrays, logs and archives remain local or in CI. Only code
 and compact documentation are published. Keep the distinct cohorts, resident
