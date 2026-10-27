@@ -54,6 +54,7 @@ from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
 from models.demos.glm53_flash.tt.matmul_configs import PREFILL_ROW_BLOCK, DecodeLinear, prefill_linear
+from models.demos.glm53_flash.tt.memory_plan import default_prefill_qblock
 from models.demos.glm53_flash.tt.mesh import TP_AXIS, GLMMesh, single_chip
 from models.demos.glm53_flash.tt.packed_inputs import sparse_host_values
 
@@ -123,14 +124,17 @@ PREFIX_INCREMENTAL = os.environ.get("GLM53_PREFIX_INCREMENTAL", "0")
 PREFIX_INCREMENTAL_BUDGET_MB = int(os.environ.get("GLM53_PREFIX_INCREMENTAL_BUDGET_MB", "1024"))
 
 
-def prefill_blocks() -> tuple[int, int]:
+def prefill_blocks(max_seq_len: int | None = None) -> tuple[int, int]:
     """(score sub-block rows, attention block rows) of the sparse prefill loop (``TtDSA._sparse_rows``).
     ``GLM53_PREFILL_QBLOCK`` (default 2048; 512 single-user / 256 at 32 users at 1 M for the score block's memory)
     bounds the scorer's [rows, pools] bf16 block; ``GLM53_PREFILL_ABLOCK`` (default = QBLOCK, the validated per-sub-block form; 2048 batches a slab) the rows of one id
     expansion + absorbed-query + sparse_sdpa pass (a whole 2048-row slab of a 16 K chunk on 8 rows), i.e. how many
     score sub-blocks are selected before their attention runs batched. ``ABLOCK <= QBLOCK`` is the per-sub-block
     form (one attention call per score sub-block, the previous loop)."""
-    qb = max(TILE, (int(os.environ.get("GLM53_PREFILL_QBLOCK", "2048")) // TILE) * TILE)
+    # unset: the capacity-aware default (tt/memory_plan.py default_prefill_qblock: 2048 up to 256 K, 512 at 1 M)
+    qb_env = os.environ.get("GLM53_PREFILL_QBLOCK")
+    qb_default = default_prefill_qblock(max_seq_len)
+    qb = max(TILE, (int(qb_env) if qb_env else qb_default) // TILE * TILE)
     ab = (
         int(os.environ.get("GLM53_PREFILL_ABLOCK", "0")) or qb
     )  # default = the validated per-sub-block form; 2048 batches a slab
@@ -1471,7 +1475,7 @@ class TtDSA(LightweightModule):
         [rows, pools] block in TILE and ROW_MAJOR (268 MB at 256 rows x 262 K pools, 536 MB at 512): at the 32-user
         1 M point (QBLOCK 256) the default ABLOCK 2048 adds ~6 MB to the chunk's peak; ABLOCK 1024 halves it."""
         idx = self.indexer
-        qb, ab = prefill_blocks()
+        qb, ab = prefill_blocks(cache.rows_per_user)
         n = r1 - r0
         T = x.shape[-2]
         whole = (r0, r1) == (0, T)

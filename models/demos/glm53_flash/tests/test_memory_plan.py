@@ -10,7 +10,7 @@ from loguru import logger
 
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
-from models.demos.glm53_flash.tt.memory_plan import GIB, MemoryPlan
+from models.demos.glm53_flash.tt.memory_plan import GIB, MemoryPlan, default_prefill_qblock, reserve_bytes
 
 
 def _cfg():
@@ -43,3 +43,12 @@ def test_memory_plan_8x4_table():
     assert rep.fits(4, 65536), "4 users per row at 64 K (one expert copy: the regions-sourced streaming decode) runs"
     # (the 2026-10-2x "both expert forms at 64 K x 4" pin is retired: GLM53_REGIONS_DECODE=stream never builds the
     # stacked copy, and the chunk working-set floor sizes the reserve for the one-copy configurations only)
+
+
+def test_default_prefill_qblock_follows_the_slot_length():
+    """The scorer's [rows, pools] bf16 block stays within 256 MB: 2048 rows up to 256 K, 512 at 1 M (the served 1 M
+    profile ran 2048 on 2026-10-27 and failed a 201 MB score-block allocation at ~196 K positions)."""
+    assert default_prefill_qblock(None) == 2048
+    assert default_prefill_qblock(131072) == 2048 and default_prefill_qblock(262144) == 2048
+    assert default_prefill_qblock(524288) == 1024 and default_prefill_qblock(1048576) == 512
+    assert reserve_bytes(1048576) == reserve_bytes(1048576, qblock=512)
