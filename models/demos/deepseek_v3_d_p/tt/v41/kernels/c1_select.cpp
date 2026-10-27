@@ -6,15 +6,19 @@
 // top-K expert ids and weights replicated on every chip, and this chip's EPC experts (``table``, global ids) ->
 // the routed expert FFN's per-expert token counts and the weight matrix of the local weighted sum:
 //
-//   counts[e] = 1 if e is one of the row's K experts and one of this chip's, else 0      (uint32 [1, E])
-//   W[0, 32 * l] = the row's weight of local expert l if the row selected it, else 0    (bf16 TILE [32, EPC * 32])
+//   counts[e] = 1 if e is one of the row's K experts and one of this chip's, else 0 (uint32 [1, E])
+//   W[0, 32 * l] = the row's weight of local expert l if the row selected it, else 0 (bf16 TILE [32, EPC * 32])
 //
 // ``idx`` is router_select's uint16 TILE [T, K] (row 0 the live row; one tile), ``weights`` its bf16 row-major
 // [T, K] (page 0 the live row), ``table`` the chip's global_expert_idx_table (uint32, EPC words). One core.
 //
-// compile_time_args = [cb_scratch, E, K, EPC, TensorAccessorArgs(idx)..., (weights)..., (table)..., (counts)...,
-//                      (w)...]
-// runtime args      = [idx_addr, weights_addr, table_addr, counts_addr, w_addr]
+// compile_time_args = [cb_scratch, E, K, EPC, PERSIST, TensorAccessorArgs(idx)..., (weights)..., (table)...,
+//                      (counts)..., (w)...]
+// runtime args = [idx_addr, weights_addr, table_addr, counts_addr, w_addr]
+//
+// PERSIST = 1: ``w`` is a persistent tensor the caller zeroed once; only the first 64 bytes
+// of each local expert's tile (row 0 and row 1, columns 0..15 of face 0, i.e. the weight at (0, 32 l) and zeros)
+// are written each call, not the whole EPC x 2 KB (zeroing 6,144 words on one RISC was ~13 of the op's 16 us).
 
 #include <cstdint>
 
@@ -32,7 +36,8 @@ void kernel_main() {
     constexpr uint32_t E = get_compile_time_arg_val(1);
     constexpr uint32_t K = get_compile_time_arg_val(2);
     constexpr uint32_t EPC = get_compile_time_arg_val(3);
-    constexpr auto idx_args = TensorAccessorArgs<4>();
+    constexpr uint32_t PERSIST = get_compile_time_arg_val(4);
+    constexpr auto idx_args = TensorAccessorArgs<5>();
     constexpr auto weights_args = TensorAccessorArgs<idx_args.next_compile_time_args_offset()>();
     constexpr auto table_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
     constexpr auto counts_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
@@ -68,7 +73,8 @@ void kernel_main() {
     for (uint32_t e = 0; e < E; ++e) {
         cnt[e] = 0;
     }
-    for (uint32_t i = 0; i < EPC * TILE_BYTES / 4; ++i) {
+    constexpr uint32_t W_STRIDE = PERSIST ? 64 : TILE_BYTES;  // bytes of each tile staged in L1
+    for (uint32_t i = 0; i < EPC * W_STRIDE / 4; ++i) {
         wtile[i] = 0;
     }
     for (uint32_t j = 0; j < K; ++j) {
@@ -80,13 +86,13 @@ void kernel_main() {
             if (mine[l] == e) {
                 cnt[e] = 1;
                 // element (0, 32 l): tile l, face 0, row 0, column 0 = the tile's first 16-bit word
-                wtile[l * (TILE_BYTES / 4)] = wt[j];
+                wtile[l * (W_STRIDE / 4)] = wt[j];
             }
         }
     }
     noc_async_write(counts_l1, counts.get_noc_addr(0, 0), COUNT_BYTES);
     for (uint32_t l = 0; l < EPC; ++l) {
-        noc_async_write(w_l1 + l * TILE_BYTES, w.get_noc_addr(l, 0), TILE_BYTES);
+        noc_async_write(w_l1 + l * W_STRIDE, w.get_noc_addr(l, 0), W_STRIDE);
     }
     noc_async_write_barrier();
 }

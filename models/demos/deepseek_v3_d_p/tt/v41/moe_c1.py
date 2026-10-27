@@ -68,6 +68,10 @@ assert _FFN in ("fused", "composite"), _FFN
 # ``split`` (C1SharedSplit)
 _SHARED = os.environ.get("V41_DECODE_C1_SHARED", "fold")
 assert _SHARED in ("fold", "split"), _SHARED
+# c1_select's weight tile: ``fresh`` (allocated and zeroed by the kernel each call) or ``persist`` (one zeroed
+# tensor a layer at construction, the kernel writes its EPC head words)
+_SELECT = os.environ.get("V41_DECODE_C1_SELECT", "fresh")
+assert _SELECT in ("fresh", "persist"), _SELECT
 _HIFI4 = ttnn.types.BlackholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False, math_approx_mode=False
 )
@@ -80,11 +84,13 @@ def _accessors(*tensors) -> list:
     return args
 
 
-def c1_select(indices, weights, table, num_experts: int):
+def c1_select(indices, weights, table, num_experts: int, w=None):
     """``indices``: uint16 TILE ``[T, K]`` (``T <= 32``; row 0 the live row), ``weights``: bf16 row-major
     ``[T, K]``, ``table``: this chip's ``global_expert_idx_table`` (uint32 row-major, ``EPC`` words). Returns
     ``(counts, w)``: uint32 row-major ``[1, E]`` (1 at the row's experts that are this chip's) and bf16 TILE
-    ``[32, 32 * EPC]`` (row 0, column ``32 l`` = the row's weight of local expert ``l``, else 0)."""
+    ``[32, 32 * EPC]`` (row 0, column ``32 l`` = the row's weight of local expert ``l``, else 0). ``w``: a
+    persistent, zeroed tensor of that shape to write the ``EPC`` head words into (only those; the kernel's
+    ``PERSIST``), instead of a fresh tensor zeroed by the kernel."""
     E = num_experts
     T, K = int(indices.shape[-2]), int(indices.shape[-1])
     assert T <= _TILE and K <= 16, (T, K)
@@ -97,9 +103,13 @@ def c1_select(indices, weights, table, num_experts: int):
     counts = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, E]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
-    w = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, _TILE, _TILE * epc]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
-    )
+    persist = w is not None
+    if persist:
+        assert tuple(w.shape) == (1, 1, _TILE, _TILE * epc) and w.dtype == ttnn.bfloat16, (tuple(w.shape), w.dtype)
+    else:
+        w = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, _TILE, _TILE * epc]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        )
     coords, cores = _cores(device, 1)
     args = ttnn.RuntimeArgs()
     cx, cy = coords[0]
@@ -113,11 +123,11 @@ def c1_select(indices, weights, table, num_experts: int):
     kernel = ttnn.KernelDescriptor(
         kernel_source=f"{_KERNELS}/c1_select.cpp",
         core_ranges=cores,
-        compile_time_args=[0, E, K, epc] + _accessors(indices, weights, table, counts, w),
+        compile_time_args=[0, E, K, epc, int(persist)] + _accessors(indices, weights, table, counts, w),
         runtime_args=args,
         config=ttnn.ReaderConfigDescriptor(),
     )
-    scratch = 64 + 2048 + 64 + (epc * 4 + 63) // 64 * 64 + (E * 4 + 63) // 64 * 64 + epc * 2048
+    scratch = 64 + 2048 + 64 + (epc * 4 + 63) // 64 * 64 + (E * 4 + 63) // 64 * 64 + epc * (64 if persist else 2048)
     fmt = ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=scratch)
     cbs = [ttnn.CBDescriptor(total_size=scratch, core_ranges=cores, format_descriptors=[fmt])]
     ttnn.generic_op(
@@ -246,6 +256,12 @@ class C1Moe:
             mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=device.shape, dims=(0, 1)),
         )
         self.sp0 = ttnn.reshape(self.sp0, (1, 1, _TILE, _TILE))
+        # c1_select's persistent weight tile (``V41_DECODE_C1_SELECT=persist``): zeroed once, before any capture
+        self.W0 = (
+            self._replicated(torch.zeros(1, 1, _TILE, _TILE * self.epc), ttnn.bfloat16)
+            if _SELECT == "persist"
+            else None
+        )
         self.shared_fold = None  # "pending" once the shared expert has parked a partial, "split" (tests read it)
         self.shared_split = None
         if _SHARED == "split":
@@ -399,12 +415,12 @@ class C1Moe:
         ttnn.deallocate(rank)
         ttnn.deallocate(score)
         # 5: the row's experts that are this chip's
-        counts, W = c1_select(indices, weights, self.table, self.E)
+        counts, W = c1_select(indices, weights, self.table, self.E, self.W0)
         if self.debug is not None:
-            self.debug.update(counts=counts, indices=indices)
+            self.debug.update(counts=counts, indices=indices, weights=weights)
         else:
             ttnn.deallocate(indices)
-        ttnn.deallocate(weights)
+            ttnn.deallocate(weights)
         # 6: the experts' input: the QDQ'd row, completed over TP
         xq = fp8_qdq(xs)
         ttnn.deallocate(xs)
@@ -446,7 +462,8 @@ class C1Moe:
         y = ttnn.reshape(y, (1, 1, self.epc * _TILE, self.hidden))
         part = ttnn.matmul(W, y, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(y)
-        ttnn.deallocate(W)
+        if self.W0 is None:
+            ttnn.deallocate(W)
         if folded:
             # the shared partial (SP rank 0 only) joins the local routed partial before the TP reduce-scatter,
             # as the 32-row tail does (moe_tail.DecodeReduce)

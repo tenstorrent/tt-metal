@@ -101,7 +101,14 @@ def test_v41_moe_c1(mesh_device, device_params):
     torch.manual_seed(7)
     shared_in_ffn = os.environ.get("V41_SHARED_IN_FFN", "0")
     shared_mode = os.environ.get("V41_DECODE_C1_SHARED", "fold")
-    result = {"layer": layer, "trials": [], "mesh": [sp, tp], "shared_in_ffn": shared_in_ffn, "c1_shared": shared_mode}
+    result = {
+        "layer": layer,
+        "trials": [],
+        "mesh": [sp, tp],
+        "shared_in_ffn": shared_in_ffn,
+        "c1_shared": shared_mode,
+        "c1_select": os.environ.get("V41_DECODE_C1_SELECT", "fresh"),
+    }
     if shared_mode == "split":
         # the split weights: every chip's piece bit for bit the host slice of its TP shard
         split = c1.shared_split
@@ -168,6 +175,20 @@ def test_v41_moe_c1(mesh_device, device_params):
             ttnn.synchronize_device(mesh_device)
             signpost("stop")
         counts = [int(ttnn.to_torch(t).sum()) for t in ttnn.get_device_tensors(c1.debug["counts"])]
+        if c1.W0 is not None:
+            # the persistent weight tile against a fresh one from the same indices and weights, every chip
+            from models.demos.deepseek_v3_d_p.tt.v41.moe_c1 import c1_select
+
+            fresh_counts, fresh_w = c1_select(c1.debug["indices"], c1.debug["weights"], c1.table, c1.E)
+            for i, (a, b) in enumerate(zip(ttnn.get_device_tensors(fresh_w), ttnn.get_device_tensors(c1.W0))):
+                assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), f"persistent W differs on chip {i}"
+            for i, (a, b) in enumerate(
+                zip(ttnn.get_device_tensors(fresh_counts), ttnn.get_device_tensors(c1.debug["counts"]))
+            ):
+                assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), f"counts differ on chip {i}"
+            ttnn.deallocate(fresh_counts)
+            ttnn.deallocate(fresh_w)
+        ttnn.deallocate(c1.debug["weights"])
         idx = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["indices"])[0])[0, :6].tolist()
         c1.debug = None
         ref_row, out_row = _row(ref, r, u, tp), _row(out, r, u, tp)
