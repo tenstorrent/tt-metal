@@ -45,7 +45,7 @@ The types at L1 addresses come from the struct layouts in `fabric_struct_layouts
 | `run` | Architecture, fabric, reliability, tensix and UDM configs, host rank, MPI rank and world size, `written_at`, and the commit the build came from (`git_sha`, `git_dirty`) |
 | `fabric_context` | Topology, packet header, payload and channel buffer sizes, the route buffer size, `multi_txq` |
 | `vocabulary` | Every field `category` and `kind`, and every chip `z_port_role` |
-| `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, go and launch messages, Ethernet firmware mailbox, base firmware link status |
+| `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, Ethernet firmware mailbox, base firmware link status |
 | `archs.<arch>.stream_registers` | Where the stream registers are and how wide their values are: `base`, `stride`, `count`, and each register's `offset` and `bits`, from the HAL |
 | `archs.<arch>.core_registers` | The soft reset and wall clock registers, in the order they are read, with each physical ERISC's reset bit |
 | `archs.<arch>.types` | Every struct a schema names, with its size and members in order |
@@ -79,16 +79,15 @@ path:
 ### Regions, stream registers and schemas
 
 - An **L1 region** is `{address, size, schema, cleared_by_host}`. An array also has `num_elements` and
-  `size_per_element`, and a packed table `num_elements` and `bits_per_entry`. `cleared_by_host` means the host zeroes
-  it before launch.
+  `size_per_element`. `cleared_by_host` means the host zeroes it before launch.
 - A **stream register** is `{stream_id, register, schema}`. `register` is `buf_space_available` (the
   increment-on-write count) or `remote_src` (a plain read-write register). Its address is
   `base + stream_id * stride + registers[register].offset`, from `archs.<arch>.stream_registers`, and `stream_id` is
   below its `count`. Its value is the word's low `registers[register].bits` bits: the bits above
   `buf_space_available`'s count can hold other state.
 - A **schema** is an integer (`u8` to `u32`, `i8` to `i32`), `struct:<Name>` (in `archs.<arch>.types`),
-  `enum:<Name>` (in `enums`), `packed:<name>`, `bytes` or `pad`. Every `struct:` and `enum:` schema resolves: the
-  writer throws otherwise.
+  `enum:<Name>` (in `enums`), `bytes` or `pad`. `bytes` marks data a reader interprets by its own rules, such as a
+  table packed below byte granularity. Every `struct:` and `enum:` schema resolves: the writer throws otherwise.
 
 ### Fields
 

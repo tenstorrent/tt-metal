@@ -83,9 +83,11 @@ inline std::string router_key(eth_chan_directions direction, routing_plane_id_t 
 // The size in bytes of one of a type's elements.
 inline uint32_t element_size(const layout::Type& type) { return type.count == 0 ? type.size : type.size / type.count; }
 
-// The prefixes of a schema that names a struct in the arch's types or an enum in enums, before the type's name.
+// The prefixes of a schema that names a struct in the arch's types, an enum in enums or a tagged union, before the
+// type's name.
 inline constexpr std::string_view k_struct_schema = "struct:";
 inline constexpr std::string_view k_enum_schema = "enum:";
+inline constexpr std::string_view k_union_schema = "union:";
 
 // The manifest's spelling of a type's element, which L1 contents and type layouts both use. An element carries no
 // width, so integers take theirs from the size of one element.
@@ -99,11 +101,11 @@ inline std::string schema_name(const layout::Type& type) {
             } else if constexpr (std::is_same_v<E, element::Int>) {
                 return fmt::format("i{}", element_size(type) * 8);
             } else if constexpr (std::is_same_v<E, element::Enum>) {
-                return fmt::format("{}{}", k_enum_schema, e.name);
+                return fmt::format("{}{}", k_enum_schema, e.type_name);
             } else if constexpr (std::is_same_v<E, element::Struct>) {
-                return fmt::format("{}{}", k_struct_schema, e.name);
-            } else if constexpr (std::is_same_v<E, element::Packed>) {
-                return fmt::format("packed:{}", e.table);
+                return fmt::format("{}{}", k_struct_schema, e.type_name);
+            } else if constexpr (std::is_same_v<E, element::TaggedUnion>) {
+                return fmt::format("{}{}", k_union_schema, e.type_name);
             } else if constexpr (std::is_same_v<E, element::Bytes>) {
                 return "bytes";
             } else if constexpr (std::is_same_v<E, element::Pad>) {

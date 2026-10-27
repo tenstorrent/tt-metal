@@ -61,9 +61,9 @@ EnumType enum_type() {
 
 // enchantum works by scanning a range of integers for enumerator names, and then matching the values to the names.
 // EDMStatus cannot be reflected by enchantum as its enumerator values lie far outside the range it scans. Thus, we
-// list the enumerators here. 
+// list the enumerators here.
 // To ensure that we don't drift from the actual EDMStatus type, the edm_status_listed() ensures that all
-// enumerators are listed. 
+// enumerators are listed.
 // The X-macro is used to list the enumerators once, so that they can be used for both edm_status_listed() and
 // enum_type<EDMStatus>().
 #define FABRIC_MANIFEST_EDM_STATUSES(X) \
