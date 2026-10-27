@@ -153,3 +153,15 @@ No E1 / E2 code file was modified. `git status` before the audio commit listed o
 the additive audio sections in `README.md` and `doc/context_contract.json`. The audio modules
 import the E1 `RMSNorm` and weight helpers unchanged. Those two shared files were touched, so the
 E1 / E2 suite was rerun after the commit (section 11).
+
+## 11. Final run on the committed code (d8eb24f59a, after pre-commit black / autoflake / isort)
+
+```bash
+EMBEDDING_GEMMA2_RESULTS=$E3/final_results.jsonl \
+python_env/bin/python -m pytest models/demos/blackhole/embedding_gemma2/tests/pcc -q -p no:cacheprovider \
+  -k 'not s32768 and not 8192'
+```
+284 passed in 303.71 s (E1 text + E2 vision + E3 audio; `$E3/logs/final_run.log`, tmux
+`tt-bringup_embeddinggemma2_e3_final`). The 237 audio PCC / cosine / trace metrics shared with
+`full_run1.jsonl` are bit-identical. Device latency: 1 x 10 s 23.673 ms, 1 x 30 s 47.790 ms,
+4 x 10 s 80.476 ms, fp32 act 27.482 / 57.267 ms (run 1: 23.672 / 47.789 / 80.482 / 27.477 / 57.268).
