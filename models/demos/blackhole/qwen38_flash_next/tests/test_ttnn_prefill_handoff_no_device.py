@@ -22,11 +22,9 @@ from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa:
     FakeTensor,
     cat_shards,
     clone_gdn_state,
-    fill_in_place,
     gdn_output_tolerance,
     gdn_ring_history,
     gdn_rows_selectors,
-    gdn_state_tolerance,
     gdn_weights,
     hidden_sharded,
     make_gdn_module,
@@ -44,6 +42,10 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROWS
 TAIL_ROWS = (0, 1, 2, 8, 9, 31)
 PREFILL_CASES = [(tail, tail + 32 * chunks) for tail in TAIL_ROWS for chunks in range(3)]
 PAD_TOKEN = 0
+
+
+def gdn_state_tolerance(reference: torch.Tensor) -> float:
+    return 3e-3 + 2.0**-7 * reference.abs().max().item()
 
 
 def _chunk_plan(count: int) -> list[int]:
@@ -184,7 +186,6 @@ QSA_CONTEXT = 128
 
 @pytest.fixture
 def fake_qsa(rows_fake, monkeypatch):
-    rows_fake.ttnn.fill = fill_in_place
     monkeypatch.setattr(qsa_module, "ttnn", rows_fake.ttnn)
     module = object.__new__(qsa_module.Qwen38TTNNQSA)
     module.mesh_device = "mesh"

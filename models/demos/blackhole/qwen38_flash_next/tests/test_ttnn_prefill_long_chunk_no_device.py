@@ -14,6 +14,10 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_prefill import (  # noqa: F401  (pytest fixture)
+    prefill_fakes,
+    prefill_next_context,
+)
 from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa: F401  (pytest fixtures)
     FP32,
     TILE,
@@ -197,68 +201,23 @@ def test_ple_long_chunk_matches_four_chunks_and_commits_the_last_nine_rows(expec
 
 
 LONG_TRACE_ID, TRACE_ID = 128, 77
-
-
-class _FakeModel:
-    allocated_context = 4096
-
-    def __init__(self) -> None:
-        self.calls: list[tuple] = []
-
-    def reset_chunk_state_inplace(self, state, chunk_state) -> None:
-        self.calls.append(("reset", chunk_state))
-
-    def write_chunk_accepted(self, chunk_state, accepted: int) -> None:
-        self.calls.append(("accepted", chunk_state, accepted))
-
-    def prepare_chunk_inputs(self, chunk_state, token_ids, *, ple_context, positions=None, features=None):
-        tokens = list(token_ids)
-        assert len(tokens) == {"chunk_state": 32, "long_state": 128}[chunk_state]
-        contexts = [ple_context]
-        for token in tokens:
-            contexts.append((2 if contexts[-1] is None else contexts[-1][1], token))
-        self.calls.append(("inputs", chunk_state, tuple(tokens), ple_context))
-        return SimpleNamespace(chunk_state=chunk_state, contexts=tuple(contexts))
-
-    def upload_chunk_inputs(self, chunk_state, prepared) -> None:
-        assert prepared.chunk_state == chunk_state  # the upload lands in the state the rows were prepared for
-
-    def finish_prefill(self, state, chunk_state, prefilled: int, *, rope_shift: int = 0) -> None:
-        self.calls.append(("finish", chunk_state, prefilled))
-
-    def forward_prefill_chunk_generic(self, chunk_state, state, *, gdn_step_anchor: bool = False) -> None:
-        self.calls.append(("eager", chunk_state, gdn_step_anchor))
+SHORT, LONG = SimpleNamespace(rows=CHUNK_ROWS), SimpleNamespace(rows=LONG_CHUNK_ROWS)  # the chunk states by rows
 
 
 @pytest.fixture
-def driver(monkeypatch):
-    model = _FakeModel()
-    log = model.calls
-    fake_ttnn = SimpleNamespace(
-        _ttnn_execute_trace=lambda mesh, trace_id, *, cq_id, blocking: log.append(("replay", trace_id, blocking)),
-        record_event=lambda mesh, cq_id: "event",
-        event_synchronize=lambda event: log.append(("event",)),
-        synchronize_device=lambda mesh: log.append(("sync",)),
-    )
-    monkeypatch.setattr(driver_module, "ttnn", fake_ttnn)
-
-    class Tracker:
-        @staticmethod
-        def verify_before_replay(mesh, trace_id) -> None:
-            log.append(("verify", trace_id))
-
-    monkeypatch.setattr(driver_module, "TraceAllocationTracker", Tracker)
-    prefill = driver_module.Qwen38ChunkPrefill(
-        model,
+def driver(prefill_fakes):
+    prefill_fakes.model.allocated_context = 4096
+    prefill_fakes.prefill = driver_module.Qwen38ChunkPrefill(
+        prefill_fakes.model,
         "mesh",
         "state",
-        "chunk_state",
+        SHORT,
         TRACE_ID,
-        forced_step=lambda token, context: (2 if context is None else context[1], token),
-        long_chunk_state="long_state",
+        forced_step=lambda token, context: prefill_next_context(context, token),
+        long_chunk_state=LONG,
         long_chunk_trace_id=LONG_TRACE_ID,
     )
-    return SimpleNamespace(model=model, log=log, prefill=prefill)
+    return prefill_fakes
 
 
 @pytest.mark.parametrize("start", (0, 5, 32))
@@ -273,36 +232,35 @@ def test_driver_runs_the_long_chunks_ahead_of_the_32_row_chunks_and_the_tail(dri
     assert result.position == start + count
     timing = result.timing
     assert (timing.long_chunks, timing.chunks, timing.tail_rows) == (long_chunks, len(accepts), remaining % 32)
-    log = [entry for entry in driver.log if entry[0] != "event"]
+    log = [entry for entry in driver.log if entry[0] not in ("record", "wait")]
     if not long_chunks and not accepts:
         assert log == []
         return
-    assert log[:2] == [("sync",), ("reset", "chunk_state")]
+    assert log[:2] == [("synchronize",), ("reset", "state", 32)]
     expected_verify = [("verify", TRACE_ID)] + ([("verify", LONG_TRACE_ID)] if long_chunks else [])
     head = 2 + (1 if long_chunks else 0)
-    assert log[2:head] == ([("reset", "long_state")] if long_chunks else [])
+    assert log[2:head] == ([("reset", "state", 128)] if long_chunks else [])
     assert log[head : head + len(expected_verify)] == expected_verify
     body = log[head + len(expected_verify) : -3]
-    rows_written = [(entry[1], entry[2]) for entry in body if entry[0] == "inputs"]
+    rows_written = [(entry[1], entry[2]) for entry in body if entry[0] == "prepare"]
     replays = [entry[1] for entry in body if entry[0] == "replay"]
     assert replays == [LONG_TRACE_ID] * long_chunks + [TRACE_ID] * len(accepts)
-    assert [state for state, _ in rows_written] == ["long_state"] * long_chunks + ["chunk_state"] * len(accepts)
+    assert [rows for rows, _ in rows_written] == [128] * long_chunks + [32] * len(accepts)
+    assert all(entry[3] is None for entry in body if entry[0] == "eager")  # no MTP rows in this driver
     written = [token for _, rows in rows_written for token in rows]
     real = tokens[aligned:]
     assert written[: len(real)] == real
     assert all(token == driver_module.CHUNK_PAD_TOKEN_ID for token in written[len(real) :])
     assert len(written) == 128 * long_chunks + 32 * len(accepts)
-    assert log[-3:] == [("sync",), ("finish", "chunk_state", start + count), ("sync",)]
+    assert log[-3:] == [("synchronize",), ("finish", 32, start + count), ("synchronize",)]
     # The accept scalar is written once, before the padded tail, on the 32-row state only.
     assert [entry for entry in log if entry[0] == "accepted"] == (
-        [("accepted", "chunk_state", remaining % 32 - 1)] if remaining % 32 else []
+        [("accepted", 32, remaining % 32 - 1)] if remaining % 32 else []
     )
 
 
 def test_driver_without_the_long_trace_runs_32_row_chunks_only_and_rejects_bad_pairs(expect_error, driver) -> None:
-    short = driver_module.Qwen38ChunkPrefill(
-        driver.model, "mesh", "state", "chunk_state", TRACE_ID, forced_step=lambda t, c: c
-    )
+    short = driver_module.Qwen38ChunkPrefill(driver.model, "mesh", "state", SHORT, TRACE_ID, forced_step=lambda t, c: c)
     result = short.run(list(range(300)), start_position=0, ple_context=None)
     assert result.timing.long_chunks == 0 and result.timing.chunks == 10 and result.timing.tail_rows == 12
     assert [e[1] for e in driver.log if e[0] == "replay"] == [TRACE_ID] * 10

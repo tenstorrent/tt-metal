@@ -49,7 +49,6 @@ from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa:
     gdn_rows_selectors,
     gdn_weights,
     hidden_sharded,
-    install_lane_admission_ops,
     make_gdn_module,
     make_mtp_lanes_ttnn,
     make_ple_module,
@@ -68,6 +67,7 @@ from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa:
     source_functions,
     source_methods,
     source_segment,
+    use_aliasing_view,
 )
 from models.demos.blackhole.qwen38_flash_next.tools.mtp_v2_verify_reference import accept_select
 from models.demos.blackhole.qwen38_flash_next.ttnn import embedding as embedding_module
@@ -411,7 +411,7 @@ def test_lane_kv_and_compressed_writes_commit_each_lanes_own_prefix(fake, positi
         "mesh", FakeContract(), lanes=lanes, rows=rows
     )
     gdn_constants = gdn_module.Qwen38TTNNGDNRowsConstants.allocate("mesh", FakeContract(), rows=rows)
-    module = make_qsa_module(fake.ttnn)
+    module = make_qsa_module()
     streams = [KVStream(seed=200 + lane) for lane in range(lanes)]
     state = module.allocate_lane_state(lanes, kv_scratch_rows=KV_SCRATCH_ROWS)
     verify_state = module.allocate_lane_verify_state(lanes)
@@ -425,12 +425,10 @@ def test_lane_kv_and_compressed_writes_commit_each_lanes_own_prefix(fake, positi
     references = {}
     for lane in range(lanes):
         if active[lane]:
-            single = make_qsa_module(fake.ttnn)
+            single = make_qsa_module()
             generic, single_verify = single.allocate_generic_state(), single.allocate_verify_state()
             seed_qsa_caches(single, fake.ttnn, streams[lane], generic, single_verify, positions[lane])
-            run_qsa_verify_pass(
-                single, fake.ttnn, streams[lane], generic, single_verify, positions[lane], rows, constants
-            )
+            run_qsa_verify_pass(single, streams[lane], generic, single_verify, positions[lane], rows, constants)
             references[lane] = (single, generic, single_verify)
     after_pass = [x.clone() for x in state.packed_kv_cache.locals]
     after_blocks = [x.clone() for x in state.compressed_index_cache.locals]
@@ -467,9 +465,7 @@ def test_lane_kv_and_compressed_writes_commit_each_lanes_own_prefix(fake, positi
             continue
         single, generic, single_verify = references[lane]
         single.commit_verify(single_verify, gdn_rows_selectors(accepted[lane], gdn_constants))
-        run_qsa_verify_pass(
-            single, fake.ttnn, streams[lane], generic, single_verify, next_positions[lane], rows, constants
-        )
+        run_qsa_verify_pass(single, streams[lane], generic, single_verify, next_positions[lane], rows, constants)
         visible = next_positions[lane] + rows
         for device in range(TP):
             region = state.packed_kv_cache.torch_shards()[device][0, 0, base : base + VERIFY_CONTEXT]
@@ -993,7 +989,7 @@ def test_kv_slab_lands_in_the_lane_in_chunks_the_cache_rows_divide(fake, lane, c
     """A 4-lane cache of ``4C + scratch`` rows takes a lane's C-row slab as scratch-sized writes (the fake refuses a
     write whose rows do not divide the cache rows, as the device op does); the other lanes and the scratch keep."""
 
-    install_lane_admission_ops(fake.ttnn)
+    use_aliasing_view(fake.ttnn)
     lanes, scratch = 4, mtp_lanes.kv_scratch_rows(context)
     cache = FakeTensor(
         [torch.full((1, 1, lanes * context + scratch, 512), 3.0, dtype=torch.bfloat16) for _ in range(TP)],
@@ -1060,7 +1056,7 @@ def test_pack_slices_of_a_one_layer_family_are_owned_not_the_pack(fake):
 
 @pytest.mark.parametrize("lane,phase", ((0, 0), (2, 1), (3, 3), (1, 2)))
 def test_gdn_lane_import_lands_the_recurrent_state_and_the_ring_history_in_one_lane(fake, gdn_weights, lane, phase):
-    install_lane_admission_ops(fake.ttnn)
+    use_aliasing_view(fake.ttnn)
     _, weights = gdn_weights
     module = make_gdn_module(weights)
     generic = seed_gdn_state(module, 70 + lane)
@@ -1097,8 +1093,8 @@ def test_gdn_lane_import_lands_the_recurrent_state_and_the_ring_history_in_one_l
 
 @pytest.mark.parametrize("lane,position", ((0, 5), (3, 31), (1, 32), (2, 100)))
 def test_qsa_lane_import_lands_the_kv_slab_the_blocks_and_the_raw_history_in_one_lane(fake, lane, position):
-    install_lane_admission_ops(fake.ttnn)
-    module = make_qsa_module(fake.ttnn)
+    use_aliasing_view(fake.ttnn)
+    module = make_qsa_module()
     stream = KVStream(seed=300 + lane)
     generic, verify_b1 = module.allocate_generic_state(), module.allocate_verify_state()
     seed_qsa_caches(module, fake.ttnn, stream, generic, verify_b1, position)
@@ -1146,7 +1142,7 @@ def test_qsa_lane_import_lands_the_kv_slab_the_blocks_and_the_raw_history_in_one
 
 @pytest.mark.parametrize("lane,context", ((0, None), (2, (11, 7)), (3, (95859, 2))))
 def test_ple_lane_import_lands_the_nine_slots_and_the_context_in_one_lane(fake, lane, context):
-    install_lane_admission_ops(fake.ttnn)
+    use_aliasing_view(fake.ttnn)
     module = make_ple_module()
     generic = _seeded_ple_state(module, 80 + lane, context)
     rows_state_b1 = module.allocate_rows_state(5)
@@ -1214,7 +1210,7 @@ def test_commit_verify_lanes_into_the_draft_state_leaves_the_alignment_windows_a
     expect_error, fake, rows
 ) -> None:
     lanes = 4
-    module = make_qsa_module(fake.ttnn)
+    module = make_qsa_module()
     alignment_state, draft_state = module.allocate_lane_verify_state(lanes), module.allocate_lane_verify_state(lanes)
     gdn_lane_constants = gdn_module.Qwen38TTNNGDNLaneRowsConstants.allocate(
         "mesh", FakeContract(), lanes=lanes, rows=rows
@@ -1287,7 +1283,7 @@ def test_forward_draft_lanes_is_the_eager_row_chain_per_lane_and_assembles_the_n
     accepted = [min(a, drafts) for a in accepted]
     world = DraftWorld()
     contract = FakeContract()
-    qsa = make_qsa_module(fake.ttnn)
+    qsa = make_qsa_module()
     (_, chunk_constants, _), lane_constants, _ = _lane_qsa_constants(rows, lanes)
     attention_state = qsa.allocate_lane_state(lanes, kv_scratch_rows=KV_SCRATCH_ROWS)
     alignment_rows = qsa.allocate_lane_verify_state(lanes)
@@ -1641,9 +1637,9 @@ def test_lane_image_round_trip_restores_every_family_bitwise_and_leaves_the_othe
 ):
     # A 4-lane MTP verify state of one QSA layer, one GDN layer with the PLE (checkpoint layer 1) and the alignment
     # layer's lane state, over the real lane modules on the fake.
-    install_lane_admission_ops(fake.ttnn)
+    use_aliasing_view(fake.ttnn)
     lanes, rows = 4, 5
-    qsa = make_qsa_module(fake.ttnn)
+    qsa = make_qsa_module()
     gdn = make_gdn_module(gdn_weights[1])
     ple = make_ple_module()
     moe = SimpleNamespace(rows=lanes * rows)

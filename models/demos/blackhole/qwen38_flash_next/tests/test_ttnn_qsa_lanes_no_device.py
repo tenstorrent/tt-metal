@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -23,7 +24,6 @@ from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (
     TILE,
     TP,
     FakeContract,
-    FakeMesh,
     FakeTensor,
     bits_equal,
     copy,
@@ -75,6 +75,14 @@ LAYER = 3
 
 
 # --------------------------------------------------------------------------- the QSA fake
+
+
+class FakeMesh:
+    def arch(self):
+        return "BLACKHOLE"
+
+    def dram_grid_size(self):
+        return SimpleNamespace(x=8, y=1)
 
 
 @pytest.fixture

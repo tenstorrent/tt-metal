@@ -29,13 +29,12 @@ from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (
     bits_equal,
     cat_shards,
     device_gdn_weights,
-    fake_row,
     function_calls,
     gdn_oracle_weights,
     hidden_sharded,
-    make_final_mixer_ttnn,
     make_gdn_lanes_ttnn,
     make_gdn_module,
+    make_gr_ttnn,
     make_ple_module,
     ordered_calls,
     patch_ttnn,
@@ -299,7 +298,7 @@ def test_ple_inject_lanes_adds_the_permuted_delta_to_the_branch_major_rows(expec
 @pytest.mark.parametrize("rows", [1, 3, 8, 32])
 def test_final_mixer_rows_equal_the_one_row_mixer_row_for_row(monkeypatch, rows: int, expect_error) -> None:
     use_tile_padding(monkeypatch)
-    fake = make_final_mixer_ttnn()
+    fake = make_gr_ttnn()
     monkeypatch.setattr(mixer_module, "ttnn", fake)
     torch.manual_seed(9)
     width, rank = FLAT_LOCAL_WIDTH, RESIDUAL_RANK
@@ -326,7 +325,10 @@ def test_final_mixer_rows_equal_the_one_row_mixer_row_for_row(monkeypatch, rows:
     residual = FakeTensor([bf16_randn(1, 4, rows, 640) for _ in range(TP)], BF16, TILE, 3)
     output = module.rows(residual)
     assert output.shape == (1, 1, rows, 640) and output.dtype is BF16
-    per_row = [module(fake_row(residual, row)) for row in range(rows)]
+    row_inputs = [
+        FakeTensor([x.narrow(2, row, 1).clone() for x in residual.torch_shards()], BF16, TILE) for row in range(rows)
+    ]
+    per_row = [module(row_input) for row_input in row_inputs]
     assert_rows_bitwise(output, per_row, dim=2, label=f"final mixer {rows} rows")
     with expect_error(ValueError, match=r"final mixer residual rows must be in \[1,32\], got 33"):
         module.rows(FakeTensor([bf16_randn(1, 4, 33, 640) for _ in range(TP)], BF16, TILE, 3))

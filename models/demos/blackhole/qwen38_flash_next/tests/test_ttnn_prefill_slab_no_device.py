@@ -737,7 +737,7 @@ def test_driver_runs_slabs_then_long_then_short_chunks(prefill_fakes, start: int
     resets = [call for call in calls if call[0] == "reset"]
     if remaining:
         assert resets[0] == ("reset", "state", 32) and (slabs == 0 or ("reset", "state", SLAB) in resets)
-        assert calls[-2:] == [("finish", start + count), ("synchronize",)]
+        assert calls[-2:] == [("finish", 32, start + count), ("synchronize",)]
 
 
 def test_driver_prepares_the_next_slab_while_the_current_one_replays(prefill_fakes) -> None:
@@ -777,7 +777,7 @@ def test_driver_prepares_the_next_slab_while_the_current_one_replays(prefill_fak
     expected = [("synchronize",), *(("reset", "state", rows) for rows in (32, 128, SLAB)), prepares[0]]
     for index, (kind, rows, padded, accepted) in enumerate(chunks):
         if accepted is not None:
-            expected.append(("accepted", accepted))
+            expected.append(("accepted", 32, accepted))
         expected += [("upload", rows, padded), ("replay", traces[kind], False)]
         if index + 1 < len(chunks):
             expected.append(prepares[index + 1])
@@ -789,7 +789,7 @@ def test_driver_prepares_the_next_slab_while_the_current_one_replays(prefill_fak
         elif (index + 1) % driver_module.CHUNK_EVENT_INTERVAL == 0:
             expected += [("record", event), ("wait", event)]
             event += 1
-    expected += [("synchronize",), ("finish", count), ("synchronize",)]
+    expected += [("synchronize",), ("finish", 32, count), ("synchronize",)]
     assert log == expected
     assert result.position == count and result.timing.slabs == 3 and len(result.timing.slab_wait_ms) == 3
     # The blocking (timed) form keeps every replay blocking and records no event.

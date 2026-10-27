@@ -91,7 +91,7 @@ def test_verify_inputs_match_the_torch_reference_at_every_position(verify_fake, 
     derived = qsa_module.derive_qsa_verify_inputs(u32_scalar(position), position_constants, verify_constants)
     expected = qsa_module.emulate_qsa_verify_inputs(position, rows=rows, allocated_compressed_blocks=VERIFY_BLOCKS)
     # The layer's own validation admits the derived inputs (the two completed block indices of a verify pass).
-    module = make_qsa_module(verify_fake)
+    module = make_qsa_module()
     module._validate_verify_inputs(derived)
     chunk = derived.chunk
     assert len(chunk.block_index_i32) == qsa_module.VERIFY_COMPLETED_BLOCKS == 2
@@ -194,11 +194,11 @@ def test_kv_and_compressed_writes_commit_the_accepted_prefix_for_every_accept(
     constants = qsa_verify_constants(rows)
     gdn_constants = gdn_module.Qwen38TTNNGDNRowsConstants.allocate("mesh", FakeContract(), rows=rows)
     for accepted in range(rows):  # a = 0 .. k (row 0 is always committed)
-        module = make_qsa_module(verify_fake)
+        module = make_qsa_module()
         stream = KVStream(seed=100 + accepted)
         state, verify_state = module.allocate_generic_state(), module.allocate_verify_state()
         seed_qsa_caches(module, verify_fake, stream, state, verify_state, position)
-        run_qsa_verify_pass(module, verify_fake, stream, state, verify_state, position, rows, constants)
+        run_qsa_verify_pass(module, stream, state, verify_state, position, rows, constants)
         # Rows past the accepted prefix and the blocks they completed are garbage from here on: scramble the
         # stream there so the check below cannot pass by accident.
         next_position = position + accepted + 1
@@ -212,7 +212,7 @@ def test_kv_and_compressed_writes_commit_the_accepted_prefix_for_every_accept(
             expected = stream.raw[next_position - back] if next_position >= back else torch.zeros(128).bfloat16()
             assert torch.equal(history[3 - back], expected), (position, rows, accepted, back)
         assert torch.count_nonzero(history[3:].float()) == 0
-        run_qsa_verify_pass(module, verify_fake, stream, state, verify_state, next_position, rows, constants)
+        run_qsa_verify_pass(module, stream, state, verify_state, next_position, rows, constants)
         # Blocks visible to the last row of pass N + 1: complete_blocks(P' + R - 1) = (P' + R) // 4.
         _assert_caches_follow_the_stream(
             module, verify_fake, stream, state, next_position + rows, (position, rows, accepted)
@@ -228,7 +228,7 @@ def test_single_row_passes_skip_the_next_block_writes_and_keep_every_visible_row
     every completed block equal the sequential stream: the skipped writes were never read."""
 
     constants = qsa_verify_constants(1)
-    module = make_qsa_module(verify_fake)
+    module = make_qsa_module()
     stream = KVStream(seed=300 + position)
     state, verify_state = module.allocate_generic_state(), module.allocate_verify_state()
     seed_qsa_caches(module, verify_fake, stream, state, verify_state, position)
@@ -236,9 +236,7 @@ def test_single_row_passes_skip_the_next_block_writes_and_keep_every_visible_row
     for step in range(3):
         if step:
             module.commit_verify(verify_state, advance)
-        run_qsa_verify_pass(
-            module, verify_fake, stream, state, verify_state, position + step, 1, constants, single_row=True
-        )
+        run_qsa_verify_pass(module, stream, state, verify_state, position + step, 1, constants, single_row=True)
     _assert_caches_follow_the_stream(module, verify_fake, stream, state, position + 3, (position,))
     history = verify_state.raw_rows.torch_shards()[0][0, 0]
     assert torch.equal(history[0], stream.raw[position + 2]) and torch.count_nonzero(history[1:].float()) == 0
@@ -247,7 +245,7 @@ def test_single_row_passes_skip_the_next_block_writes_and_keep_every_visible_row
 
 
 def test_raw_history_sync_from_the_ring_takes_the_last_three_positions(verify_fake) -> None:
-    module = make_qsa_module(verify_fake)
+    module = make_qsa_module()
     state, verify_state = module.allocate_generic_state(), module.allocate_verify_state()
     torch.manual_seed(61)
     ring = bf16_randn(4, 128)
@@ -262,7 +260,7 @@ def test_raw_history_sync_from_the_ring_takes_the_last_three_positions(verify_fa
 
 
 def test_qsa_verify_state_is_two_distinct_zero_tiles_and_validates(expect_error, verify_fake) -> None:
-    module = make_qsa_module(verify_fake)
+    module = make_qsa_module()
     verify_state = module.allocate_verify_state()
     assert verify_state.raw_history.shape == (1, 1, 32, 128) and verify_state.raw_rows.shape == (1, 1, 32, 128)
     assert verify_state.raw_history is not verify_state.raw_rows

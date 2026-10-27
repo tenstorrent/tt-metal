@@ -77,7 +77,7 @@ def fake(verify_fake, monkeypatch):
 def test_commit_verify_into_the_draft_state_leaves_the_alignment_window_and_advances_by_one(
     expect_error, fake, rows: int
 ) -> None:
-    module = make_qsa_module(fake)
+    module = make_qsa_module()
     alignment_state, draft_state = module.allocate_verify_state(), module.allocate_verify_state()
     constants = gdn_module.Qwen38TTNNGDNRowsConstants.allocate("mesh", FakeContract(), rows=rows)
     advance = gdn_rows_selectors(0, constants)
@@ -123,7 +123,7 @@ def _build(fake, monkeypatch, world: DraftWorld, *, drafts: int, position: int, 
 
     rows = drafts + 1
     contract = FakeContract()
-    qsa = make_qsa_module(fake)
+    qsa = make_qsa_module()
     generic = qsa.allocate_generic_state()
     alignment_qsa = qsa.allocate_verify_state()
     torch.manual_seed(21)

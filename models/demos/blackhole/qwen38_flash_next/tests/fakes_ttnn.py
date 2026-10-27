@@ -3,15 +3,17 @@
 
 """The torch-backed ttnn of the no-device tests: a four-device mesh of torch shards and the ttnn ops the model calls.
 
-An op has more than one form where the tests model different device arithmetic or aliasing: the fp32 row-serial
-forms of the rows paths (``make_rows_ttnn`` and its extensions), the exact-integer lane forms (``make_lanes_ttnn``),
-the fp64 forms of the QSA lanes (``make_qsa_ttnn``) and the single-tensor integer fake of the chunk inputs
-(``make_int_ttnn``).  The model stand-ins and fixtures several test files share follow the namespaces.
+Every namespace starts from one base (constants, config tags, tensor plumbing) and adds the arithmetic and aliasing
+of the device paths it stands in for: the fp32 row-serial ops of the rows paths (``make_rows_ttnn`` and its variants)
+and the exact ops of the lanes and the QSA layer (``make_qsa_ttnn``: UINT32 arithmetic wraps, float ops run in fp64
+rounded once, so no result depends on the shape a row sits in).  The model stand-ins and fixtures several test files
+share follow the namespaces.
 """
 
 from __future__ import annotations
 
 import ast
+import functools
 import inspect
 import itertools
 import math
@@ -154,18 +156,10 @@ class FakeContract:
         assert tensor.shape == tuple(expected_local_shape), (tensor.shape, expected_local_shape)
 
 
-class FakeMesh:
-    def arch(self):
-        return "BLACKHOLE"
-
-    def dram_grid_size(self):
-        return SimpleNamespace(x=8, y=1)
-
-
 def _tile_pages(x: torch.Tensor) -> torch.Tensor:
     """The TILE-layout page order of a logical tensor: batch dims, then the 32x32 tiles row by row (zero padded)."""
 
-    *batch, rows, cols = x.shape
+    rows, cols = x.shape[-2:]
     padded_rows, padded_cols = -(-rows // 32) * 32, -(-cols // 32) * 32
     padded = F.pad(x.reshape(-1, rows, cols), (0, padded_cols - cols, 0, padded_rows - rows))
     tiles = padded.reshape(-1, padded_rows // 32, 32, padded_cols // 32, 32).permute(0, 1, 3, 2, 4)
@@ -181,32 +175,49 @@ def _from_tile_pages(pages: torch.Tensor, shape: tuple[int, ...]) -> torch.Tenso
     return tiles.reshape(count, padded_rows, padded_cols)[:, :rows, :cols].reshape(shape).clone()
 
 
-# --------------------------------------------------------------------------- ops every form shares
+# --------------------------------------------------------------------------- tensor plumbing (every namespace)
 
 
 def _operand(b, index: int):
     return b.torch_shards()[index] if isinstance(b, FakeTensor) else b
 
 
+def _into(results, dtype, layout, output=None):
+    """``results`` as a new tensor, or copied into ``output`` (of their dtype and shape)."""
+
+    if output is None:
+        return FakeTensor(results, dtype, layout)
+    assert output.dtype is dtype and output.shape == tuple(results[0].shape), (output.shape, tuple(results[0].shape))
+    for target, result in zip(output.locals, results):
+        target.copy_(result)
+    return output
+
+
 def _mapped(fn):
+    """``fn`` on every shard; dtype and layout kept."""
+
     def op(tensor, *args, memory_config=None, **kwargs):
         return FakeTensor([fn(t, *args, **kwargs) for t in tensor.torch_shards()], tensor.dtype, tensor.layout)
 
     return op
 
 
-def _elementwise(torch_op):
-    """``torch_op`` on each shard and ``b``'s matching shard (or the scalar ``b``); the dtype is kept."""
+def _elementwise(torch_op, wrap=False):
+    """``torch_op`` on each shard and ``b``'s matching shard (or the scalar ``b``); ``wrap``: the result wraps to
+    UINT32."""
 
     def op(a, b, *, memory_config=None):
-        return FakeTensor([torch_op(x, _operand(b, i)) for i, x in enumerate(a.torch_shards())], a.dtype, a.layout)
+        results = [torch_op(x, _operand(b, index)) for index, x in enumerate(a.torch_shards())]
+        return FakeTensor([r & U32_MASK for r in results] if wrap else results, a.dtype, a.layout)
 
     return op
 
 
-def _from_torch_with(convert):
+def _from_torch(wrap=False):
+    """``ttnn.from_torch`` with the "replicate" tag or a ``("shard", dims)`` mapper; ``wrap``: UINT32 values wrap."""
+
     def from_torch(host, *, dtype, layout, device=None, memory_config=None, mesh_mapper):
-        host = convert(host, dtype)
+        host = host.to(torch.int64) & U32_MASK if wrap and dtype is U32 else host.to(dtype.torch)
         if mesh_mapper == "replicate":
             return FakeTensor([host.clone() for _ in range(TP)], dtype, layout)
         kind, dims = mesh_mapper
@@ -216,10 +227,16 @@ def _from_torch_with(convert):
     return from_torch
 
 
-_from_torch = _from_torch_with(lambda host, dtype: host.to(dtype.torch))
-_from_torch_wrapping = _from_torch_with(
-    lambda host, dtype: host.to(torch.int64) & U32_MASK if dtype is U32 else host.to(dtype.torch)
-)
+def _typecast(wrap=False):
+    """``ttnn.typecast``; ``wrap``: a UINT32 result wraps."""
+
+    def typecast(t, dtype, memory_config=None):
+        if dtype is I32:
+            assert all(int(x.max()) < 2**31 for x in t.torch_shards())
+        results = [x.to(dtype.torch) for x in t.torch_shards()]
+        return FakeTensor([r & U32_MASK for r in results] if wrap and dtype is U32 else results, dtype, t.layout)
+
+    return typecast
 
 
 def copy(source, target):
@@ -231,6 +248,20 @@ def copy(source, target):
 def deallocate(tensor):
     assert tensor.alive, "double deallocation"
     tensor.alive = False
+
+
+def _fill(tensor, value, *, output_tensor=None, memory_config=None):
+    assert output_tensor is tensor  # the callers fill in place
+    for local in tensor.torch_shards():
+        local.fill_(value)
+    return tensor
+
+
+def _fill_cache(cache, source, batch_idx: int):
+    for target, part in zip(cache.locals, source.torch_shards()):
+        assert part.shape[0] == 1 and tuple(part.shape[1:]) == tuple(target.shape[1:]), (part.shape, target.shape)
+        target[batch_idx] = part[0]
+    return cache
 
 
 def _get_device_tensors(tensor):
@@ -247,33 +278,9 @@ def _zeros(shape, *, dtype, layout, device, memory_config):
     return tensor
 
 
-def _to_layout(t, layout, memory_config=None):
-    return FakeTensor([x.clone() for x in t.torch_shards()], t.dtype, layout)
-
-
-def _to_memory_config(t, cfg):
-    return FakeTensor([x.clone() for x in t.torch_shards()], t.dtype, t.layout)
-
-
-def _to_torch(t, mesh_composer=None, **kwargs):
-    return t.torch_shards()[0].clone()
-
-
-def _typecast(t, dtype, memory_config=None):
-    if dtype is I32:
-        assert all(int(x.max()) < 2**31 for x in t.torch_shards())
-    return FakeTensor([x.to(dtype.torch) for x in t.torch_shards()], dtype, t.layout)
-
-
-def _slice_copy(tensor, start, end, *, memory_config=None, output_tensor=None):
+def _slice(tensor, start, end, *, memory_config=None, output_tensor=None):
     index = tuple(slice(s, e) for s, e in zip(start, end))
-    pieces = [t[index].clone() for t in tensor.torch_shards()]
-    if output_tensor is not None:
-        for target, piece in zip(output_tensor.locals, pieces):
-            assert target.shape == piece.shape, (target.shape, piece.shape)
-            target.copy_(piece)
-        return output_tensor
-    return FakeTensor(pieces, tensor.dtype, tensor.layout)
+    return _into([t[index].clone() for t in tensor.torch_shards()], tensor.dtype, tensor.layout, output_tensor)
 
 
 def _pad(tensor, padding, value=0.0, *, memory_config=None):
@@ -289,13 +296,67 @@ def _concat(tensors, dim, *, memory_config=None):
     )
 
 
+def _reshape(alias=None):
+    """``ttnn.reshape``.  A same-volume reshape is a copy, a torch view (``alias="view"``) or, to the input's own
+    shape, the input itself (``alias="same"``: releasing the input then releases the result too, as on device).  The
+    padded form ``reshape(t, logical, padded)`` reads the logical extents out of the padded tile grid (row 0 of every
+    lane's tile for [1,B,32,128] -> [1,B,1,128]) and zero rows past a shorter input (the 1-row query as its tile)."""
+
+    def reshape(t, shape, padded_shape=None, *, pad_value=None, memory_config=None):
+        shape = tuple(int(item) for item in shape)
+        if alias == "same" and shape == t.shape:
+            return t
+        shards = t.torch_shards()
+        if math.prod(shape) == math.prod(t.shape):
+            return FakeTensor(
+                [x.reshape(shape) if alias == "view" else x.reshape(shape).clone() for x in shards], t.dtype, t.layout
+            )
+        padded = tuple(map(max, shape, t.shape))
+        assert padded_shape is not None and len(shape) == len(t.shape) and tuple(padded_shape) == padded, (
+            shape,
+            padded_shape,
+            t.shape,
+        )
+        extents = tuple(slice(0, size) for size in shape)
+        pad = [amount for size, have in zip(reversed(shape), reversed(t.shape)) for amount in (0, max(size - have, 0))]
+        return FakeTensor([F.pad(x[extents].clone(), pad) for x in shards], t.dtype, t.layout)
+
+    return reshape
+
+
+def view_tile_pages(tensor, shape, *, memory_config=None):
+    """``ttnn.experimental.view``: the input's tile pages reinterpreted in the output's tile grid (a copy), so a view
+    whose logical meaning differs from a torch reshape is caught."""
+
+    return FakeTensor(
+        [_from_tile_pages(_tile_pages(x), tuple(shape)) for x in tensor.torch_shards()], tensor.dtype, tensor.layout
+    )
+
+
+def _view_aliasing(t, shape, memory_config=None):
+    """``ttnn.experimental.view`` on the same buffer: a torch view of the input where re-reading its tile pages in the
+    new grid is a plain reshape (ROW_MAJOR pages always are), else the re-read pages (a copy, so a body that relied on
+    the alias is caught)."""
+
+    shape = tuple(int(item) for item in shape)
+    shards = t.torch_shards()
+    if t.layout != ROW_MAJOR:
+        faithful = [_from_tile_pages(_tile_pages(x), shape) for x in shards]
+        if not all(torch.equal(f, x.reshape(shape)) for f, x in zip(faithful, shards)):
+            return FakeTensor(faithful, t.dtype, t.layout)
+    return FakeTensor([x.reshape(shape) for x in shards], t.dtype, t.layout)
+
+
+def use_aliasing_view(fake_ttnn) -> None:
+    """This test's ``ttnn.experimental.view`` aliases its source where the tile-page view is a plain reshape (as on
+    device; the lane import's views rely on it)."""
+
+    fake_ttnn.experimental.view = _view_aliasing
+
+
 def _all_gather(tensor, *, dim, cluster_axis, memory_config=None):
     full = torch.cat(tensor.torch_shards(), dim=dim)
     return FakeTensor([full.clone() for _ in range(TP)], tensor.dtype, tensor.layout)
-
-
-def _argmax(t, dim=-1, keepdim=False):
-    return FakeTensor([torch.argmax(x, dim=dim, keepdim=keepdim) for x in t.torch_shards()], U32, t.layout)
 
 
 def _gather(t, dim, index, memory_config=None):
@@ -304,6 +365,18 @@ def _gather(t, dim, index, memory_config=None):
         t.dtype,
         t.layout,
     )
+
+
+def _embedding(indices, table, *, layout=None, dtype=None, memory_config=None, lane_row=False):
+    """The rows of ``table`` (flattened to ``[V, W]``) at ``indices`` as ``[1, n, W]``; ``lane_row``: the indices are
+    the UINT32 ``[1, 1, 32]`` lane row."""
+
+    assert not lane_row or (indices.dtype is U32 and indices.shape == (1, 1, 32)), (indices.dtype, indices.shape)
+    results = []
+    for index, rows in zip(indices.torch_shards(), table.torch_shards()):
+        flat = rows.reshape(-1, rows.shape[-1])
+        results.append(flat[index.reshape(-1).long()].reshape(1, index.numel(), rows.shape[-1]).clone())
+    return FakeTensor(results, dtype or table.dtype, layout or table.layout)
 
 
 def _paged_update_cache(cache, row, *, update_idxs_tensor):
@@ -317,53 +390,58 @@ def _paged_update_cache(cache, row, *, update_idxs_tensor):
     return cache
 
 
-_minimum = _elementwise(lambda x, y: torch.clamp(x, max=y))
-_repeat = _mapped(lambda x, multipliers: x.repeat(*multipliers))
-_repeat_interleave = _mapped(lambda x, repeats, dim: torch.repeat_interleave(x, repeats, dim=dim))
+def _update_padded_kv_cache(cache, staging, slot, *args, valid_global=None, tp_axis=None):
+    """The staging rows into the one-layer ROW_MAJOR cache at ``start``, in both argument forms: ``(slot, start,
+    layer 0, 1 layer, axis)`` with device scalars and ``(slot 0, layer 0, 1 layer, start, axis)`` with ints."""
+
+    if isinstance(slot, int):
+        layer_idx, num_layers, start = args[:3]
+        begins = [int(start)] * TP
+    else:
+        start, layer_idx, num_layers = args[:3]
+        begins = [int(s.reshape(-1)[0]) for s in start.torch_shards()]
+    assert (layer_idx, num_layers) == (0, 1) and staging.layout == ROW_MAJOR and cache.layout == ROW_MAJOR
+    for target, source, begin in zip(cache.locals, staging.torch_shards(), begins):
+        rows = source.shape[2]
+        # The op's block-cyclic invariant: the cache rows are a multiple of the rows one call writes.
+        assert begin % 32 == 0 and begin + rows <= target.shape[2] and target.shape[2] % rows == 0, (
+            begin,
+            rows,
+            target.shape,
+        )
+        target[0, 0, begin : begin + rows] = source[0, 0]
+    return cache
 
 
-def _unsqueeze_to_4d_view(t):
-    return FakeTensor([x.reshape(1, *x.shape) for x in t.torch_shards()], t.dtype, t.layout)
+# --------------------------------------------------------------------------- arithmetic
 
 
-def fill_in_place(tensor, value, *, output_tensor=None, memory_config=None):
-    assert output_tensor is tensor
-    for local in tensor.torch_shards():
-        local.fill_(value)
-    return tensor
+def _unary(fn, acc=None):
+    """``fn`` on every last-dim row (cast to ``acc`` when given), rounded to the tensor's dtype."""
 
-
-# --------------------------------------------------------------------------- fp32 row-serial ops (the rows paths)
-
-
-def _rowwise(fn, x: torch.Tensor) -> torch.Tensor:
-    rows = x.reshape(-1, x.shape[-1])
-    return torch.stack([fn(row) for row in rows]).reshape(x.shape)
-
-
-def _unary(fn):
     def op(tensor, *args, memory_config=None, output_tensor=None, **kwargs):
-        results = [_rowwise(fn, t) for t in tensor.torch_shards()]
-        if output_tensor is not None:
-            assert output_tensor.dtype is tensor.dtype and output_tensor.shape == tuple(results[0].shape)
-            for target, result in zip(output_tensor.locals, results):
-                target.copy_(result)
-            return output_tensor
-        return FakeTensor(results, tensor.dtype, tensor.layout)
+        results = []
+        for x in tensor.torch_shards():
+            rows = x.reshape(-1, x.shape[-1])
+            rows = rows if acc is None else rows.to(acc)
+            results.append(torch.stack([fn(row) for row in rows]).reshape(x.shape).to(x.dtype))
+        return _into(results, tensor.dtype, tensor.layout, output_tensor)
 
     return op
 
 
 def _softplus(tensor, *, beta, threshold, memory_config=None):
-    """``ttnn.softplus`` as fp32 torch softplus; the device op's error is below the gate probe's 1e-3 envelope."""
+    """fp32 torch softplus; the device op's error is below the gate probe's 1e-3 envelope."""
 
     assert tensor.dtype is FP32 and (beta, threshold) == (1.0, 20.0), (tensor.dtype, beta, threshold)
-    return FakeTensor(
-        [_rowwise(lambda row: F.softplus(row, beta, threshold), t) for t in tensor.torch_shards()], FP32, tensor.layout
-    )
+    return _unary(lambda row: F.softplus(row, beta, threshold))(tensor)
 
 
-def _binary(torch_op):
+def _binary(torch_op, zero_product=False):
+    """Mixed float dtypes compute in fp32; the output keeps input_a's dtype unless ``dtype`` says otherwise.
+    ``zero_product``: binary_ng's rule that a product is +0.0 whenever an input is zero (so a lane's keep-mask reset
+    leaves +0.0, the zero source's bits, as the device does; torch alone gives -0.0 for x < 0)."""
+
     def op(
         a,
         b,
@@ -371,42 +449,62 @@ def _binary(torch_op):
         memory_config=None,
         output_tensor=None,
         dtype=None,
+        input_tensor_a_activations=None,
         input_tensor_b_activations=None,
         activations=None,
         fast_and_approximate_mode=None,
     ):
-        # Mixed float dtypes compute in fp32; the output keeps input_a's dtype unless ``dtype`` says otherwise.
+        assert not activations, activations  # no fused output activation is modeled
         out_dtype = dtype or a.dtype
-        compute = (
-            FP32 if dtype is FP32 or a.dtype is FP32 or (isinstance(b, FakeTensor) and b.dtype is FP32) else a.dtype
-        )
+        fp32 = dtype is FP32 or a.dtype is FP32 or (isinstance(b, FakeTensor) and b.dtype is FP32)
+        compute = FP32 if fp32 else a.dtype
         results = []
         for index, x in enumerate(a.torch_shards()):
             y = _operand(b, index)
+            zero = (x == 0) | (y == 0) if zero_product else None
+            if input_tensor_a_activations:
+                assert input_tensor_a_activations == [("SIGMOID", 4.0, 0.0)], input_tensor_a_activations
+                x = torch.sigmoid(x)
             if isinstance(y, torch.Tensor):
                 if input_tensor_b_activations:
-                    assert input_tensor_b_activations == ["EXP"]
+                    assert input_tensor_b_activations == ["EXP"], input_tensor_b_activations
                     y = torch.exp(y)
                 x, y = x.to(compute.torch), y.to(compute.torch)
             result = torch_op(x, y).to(out_dtype.torch)
-            # No fused output activation is modeled.
-            assert not activations, activations
+            if zero is not None and result.is_floating_point():
+                result = torch.where(zero, torch.zeros_like(result), result)
             results.append(result)
-        if output_tensor is not None:
-            assert output_tensor.dtype is out_dtype and output_tensor.shape == tuple(results[0].shape), (
-                output_tensor.shape,
-                tuple(results[0].shape),
-            )
-            for target, result in zip(output_tensor.locals, results):
-                target.copy_(result)
-            return output_tensor
-        return FakeTensor(results, out_dtype, a.layout)
+        return _into(results, out_dtype, a.layout, output_tensor)
 
     return op
 
 
-def _compare(torch_op):
+def _binary_exact(torch_op):
+    """UINT32 ops exact and wrapped; float ops in fp64 rounded once, with binary_ng's +0.0 product."""
+
+    def op(a, b, *, memory_config=None, output_tensor=None, dtype=None, fast_and_approximate_mode=None):
+        out_dtype = dtype or a.dtype
+        results = []
+        for index, x in enumerate(a.torch_shards()):
+            y = _operand(b, index)
+            if a.dtype is U32:
+                result = torch_op(x, y)
+            else:
+                x, y = x.double(), (y.double() if isinstance(y, torch.Tensor) else y)
+                result = torch_op(x, y)
+                if torch_op is torch.mul:
+                    result = torch.where((x == 0) | (y == 0), torch.zeros_like(result), result)
+            results.append(result & U32_MASK if out_dtype is U32 else result.to(out_dtype.torch))
+        return _into(results, out_dtype, a.layout, output_tensor)
+
+    return op
+
+
+def _compare(torch_op, u32=False):
+    """``torch_op`` as ``dtype`` (default input_a's); ``u32``: the callers must ask for a UINT32 result."""
+
     def op(a, b, *, memory_config=None, dtype=None):
+        assert dtype is U32 or not u32, dtype
         out_dtype = dtype or a.dtype
         return FakeTensor(
             [torch_op(x, _operand(b, index)).to(out_dtype.torch) for index, x in enumerate(a.torch_shards())],
@@ -417,15 +515,19 @@ def _compare(torch_op):
     return op
 
 
-def _linear(a, w, *, memory_config=None, program_config=None, compute_kernel_config=None, dtype=None):
-    out_dtype = dtype or a.dtype
-    results = []
-    for x, wt in zip(a.torch_shards(), w.torch_shards()):
-        weight = wt.reshape(wt.shape[-2], wt.shape[-1]).float()
-        rows = x.reshape(-1, x.shape[-1])
-        out = torch.stack([(row[None].float() @ weight)[0] for row in rows])
-        results.append(out.reshape(*x.shape[:-1], weight.shape[-1]).to(out_dtype.torch))
-    return FakeTensor(results, out_dtype, a.layout)
+def _linear(acc):
+    """Every row on its own in ``acc``, rounded once to the output dtype."""
+
+    def op(a, w, *, memory_config=None, program_config=None, compute_kernel_config=None, dtype=None):
+        out_dtype = dtype or a.dtype
+        results = []
+        for x, wt in zip(a.torch_shards(), w.torch_shards()):
+            weight = wt.reshape(wt.shape[-2], wt.shape[-1]).to(acc)
+            out = torch.stack([(row[None] @ weight)[0] for row in x.reshape(-1, x.shape[-1]).to(acc)])
+            results.append(out.reshape(*x.shape[:-1], weight.shape[-1]).to(out_dtype.torch))
+        return FakeTensor(results, out_dtype, a.layout)
+
+    return op
 
 
 def _matmul(
@@ -444,60 +546,46 @@ def _matmul(
     results = [
         torch.matmul(x.float(), y.float()).to(out_dtype.torch) for x, y in zip(a.torch_shards(), b.torch_shards())
     ]
-    if optional_output_tensor is not None:
-        assert optional_output_tensor.dtype is out_dtype and optional_output_tensor.shape == tuple(results[0].shape)
-        for target, result in zip(optional_output_tensor.locals, results):
-            target.copy_(result)
-        return optional_output_tensor
-    return FakeTensor(results, out_dtype, a.layout)
+    return _into(results, out_dtype, a.layout, optional_output_tensor)
 
 
-def view_tile_pages(tensor, shape, *, memory_config=None):
-    """``ttnn.experimental.view``: the input's tile pages reinterpreted in the output's tile grid, so a view whose
-    logical meaning differs from a torch reshape is caught."""
+def _matmul_per_tile(
+    a,
+    b,
+    *,
+    memory_config=None,
+    dtype=None,
+    program_config=None,
+    compute_kernel_config=None,
+    optional_output_tensor=None,
+):
+    """Every (batch) 2-D product on its own in fp64, rounded once: the same call for a tile in a 1-row operand and
+    for the same tile at batch index u of a lanes operand."""
 
-    return FakeTensor(
-        [_from_tile_pages(_tile_pages(x), tuple(shape)) for x in tensor.torch_shards()], tensor.dtype, tensor.layout
-    )
-
-
-def _reshape(t, shape, pad_value=None, memory_config=None):
-    return FakeTensor([x.reshape(tuple(shape)).clone() for x in t.torch_shards()], t.dtype, t.layout)
-
-
-def _padded_reshape(view_rule):
-    """``ttnn.reshape(t, logical, padded)``: ``view_rule`` reads the logical shape out of the padded tensor."""
-
-    def reshape(t, shape, padded_shape=None, *, pad_value=None, memory_config=None):
-        shape = tuple(int(item) for item in shape)
-        if padded_shape is not None and not isinstance(padded_shape, (int, float)):
-            return FakeTensor([view_rule(x, shape) for x in t.torch_shards()], t.dtype, t.layout)
-        return _reshape(t, shape)
-
-    return reshape
-
-
-_reshape_leading = _padded_reshape(lambda x, shape: x.reshape(-1)[: math.prod(shape)].reshape(shape).clone())
-# The logical extents inside the padded tile grid: row 0 of every lane's tile for [1,B,32,128] -> [1,B,1,128].
-_reshape_extents = _padded_reshape(lambda x, shape: x[tuple(slice(0, size) for size in shape)].clone())
+    out_dtype = dtype or a.dtype
+    results = []
+    for x, y in zip(a.torch_shards(), b.torch_shards()):
+        batch = torch.broadcast_shapes(x.shape[:-2], y.shape[:-2])
+        xs = x.double().expand(*batch, *x.shape[-2:]).reshape(-1, *x.shape[-2:])
+        ys = y.double().expand(*batch, *y.shape[-2:]).reshape(-1, *y.shape[-2:])
+        product = torch.stack([p @ q for p, q in zip(xs, ys)])
+        results.append(product.reshape(*batch, x.shape[-2], y.shape[-1]).to(out_dtype.torch))
+    return _into(results, out_dtype, a.layout, optional_output_tensor)
 
 
-def _rms_norm(tensor, *, epsilon, weight=None, memory_config=None, compute_kernel_config=None):
-    def per_device(x: torch.Tensor, w: torch.Tensor | None) -> torch.Tensor:
-        def norm_row(row: torch.Tensor) -> torch.Tensor:
-            row32 = row.float()
-            y = row32 * torch.rsqrt(row32.square().mean() + epsilon)
-            return y if w is None else y * w.reshape(-1).float()
+def _rms_norm(acc):
+    """Every last-dim row normalized in ``acc``, rounded once to the tensor's dtype."""
 
-        return _rowwise(norm_row, x).to(x.dtype)
+    def op(tensor, *, epsilon, weight=None, memory_config=None, compute_kernel_config=None):
+        weights = weight.torch_shards() if weight is not None else [None] * TP
+        results = []
+        for x, w in zip(tensor.torch_shards(), weights):
+            rows = x.reshape(-1, x.shape[-1]).to(acc)
+            y = torch.stack([row * torch.rsqrt(row.square().mean() + epsilon) for row in rows]).reshape(x.shape)
+            results.append((y if w is None else y * w.reshape(-1).to(acc)).to(x.dtype))
+        return FakeTensor(results, tensor.dtype, tensor.layout)
 
-    weights = weight.torch_shards() if weight is not None else [None] * TP
-    return FakeTensor([per_device(x, w) for x, w in zip(tensor.torch_shards(), weights)], tensor.dtype, tensor.layout)
-
-
-def _reduce_scatter(tensor, *, dim, cluster_axis, memory_config=None, topology=None):
-    total = sum(t.float() for t in tensor.torch_shards()).to(tensor.dtype.torch)
-    return FakeTensor([piece.clone() for piece in torch.chunk(total, TP, dim=dim)], tensor.dtype, tensor.layout, dim)
+    return op
 
 
 def _rms_norm_pre_all_gather(tensor, *, dtype, memory_config=None, compute_kernel_config=None):
@@ -511,7 +599,7 @@ def _rms_norm_pre_all_gather(tensor, *, dtype, memory_config=None, compute_kerne
 def _rms_norm_post_all_gather(
     tensor, gathered, *, epsilon, weight=None, memory_config=None, compute_kernel_config=None, dtype
 ):
-    if weight is None:  # the final mixer's unscaled unit: gamma is applied afterwards on the flat row
+    if weight is None:  # the GR's and the final mixer's unscaled unit: gamma is applied afterwards on the flat row
         weight = FakeTensor([torch.ones(1, 1, 1, tensor.shape[-1]) for _ in range(TP)], FP32, TILE)
     outputs = []
     for x, stats, w in zip(tensor.torch_shards(), gathered.torch_shards(), weight.torch_shards()):
@@ -521,293 +609,63 @@ def _rms_norm_post_all_gather(
     return FakeTensor(outputs, dtype, tensor.layout)
 
 
-def _sum(t, dim, keepdim=True, *, memory_config=None, compute_kernel_config=None, scalar=None):
-    """The last-dim sum row by row; any other dim, or a scaled sum, in fp32."""
+def _sum(acc=None):
+    """``ttnn.sum`` rounded once to the tensor's dtype: the unscaled last-dim sum row by row (in the tensor's own
+    dtype when ``acc`` is None), any other in ``acc`` (fp32 when None)."""
 
-    if dim in (3, -1) and scalar is None:
+    def op(t, dim, keepdim=True, *, memory_config=None, compute_kernel_config=None, scalar=None):
         assert keepdim
-        return FakeTensor(
-            [
-                torch.stack([row.sum() for row in x.reshape(-1, x.shape[-1])]).reshape(*x.shape[:-1], 1)
-                for x in t.torch_shards()
-            ],
-            t.dtype,
-            t.layout,
-        )
-    results = []
-    for x in t.torch_shards():
-        y = x.float().sum(dim=dim, keepdim=keepdim)
-        results.append((y if scalar is None else y * scalar).to(t.dtype.torch))
-    return FakeTensor(results, t.dtype, t.layout)
-
-
-def _moreh_full(shape, value, device, *, dtype, layout, memory_config):
-    return FakeTensor([torch.full(tuple(shape), value, dtype=dtype.torch) for _ in range(TP)], dtype, layout)
-
-
-def _embedding(indices, table, *, layout=None, dtype=None, memory_config=None):
-    results = []
-    for index, rows in zip(indices.torch_shards(), table.torch_shards()):
-        flat = rows.reshape(-1, rows.shape[-1])
-        results.append(flat[index.reshape(-1).long()].reshape(1, index.numel(), rows.shape[-1]).clone())
-    return FakeTensor(results, dtype or table.dtype, layout or table.layout)
-
-
-def _update_padded_kv_cache(cache, staging, slot, block_start, layer_idx, num_layers, axis):
-    """One 32-row ROW_MAJOR block at ``block_start``."""
-
-    assert layer_idx == 0 and num_layers == 1 and staging.layout == ROW_MAJOR and cache.layout == ROW_MAJOR
-    for target, source, start in zip(cache.locals, staging.torch_shards(), block_start.torch_shards()):
-        begin = int(start.reshape(-1)[0])
-        assert begin % 32 == 0 and begin + 32 <= target.shape[2], (begin, target.shape)
-        target[0, 0, begin : begin + 32] = source[0, 0]
-    return cache
-
-
-def _fast_reduce_nc(t, *, dims, output=None, compute_kernel_config=None, memory_config=None):
-    (dim,) = dims
-    return FakeTensor(
-        [x.float().sum(dim=dim, keepdim=True).to(t.dtype.torch) for x in t.torch_shards()], t.dtype, t.layout
-    )
-
-
-def _sequential_sum(x: torch.Tensor, dim: int) -> torch.Tensor:
-    """fp32 accumulation in index order, one bf16/fp32 rounding at the end (fast_reduce_nc's contract)."""
-
-    pieces = x.float().unbind(dim)
-    acc = pieces[0]
-    for piece in pieces[1:]:
-        acc = acc + piece
-    return acc.unsqueeze(dim).to(x.dtype)
-
-
-def _matmul_per_tile(a, b, *, memory_config=None, dtype=None, program_config=None, compute_kernel_config=None):
-    """Every (batch) matmul as its own float64 2-D product rounded once: the same call for a tile in a 1-row
-    operand and for the same tile at batch index u of a lanes operand."""
-
-    out_dtype = dtype or a.dtype
-    results = []
-    for x, y in zip(a.torch_shards(), b.torch_shards()):
-        xs, ys = x.double().reshape(-1, *x.shape[-2:]), y.double().reshape(-1, *y.shape[-2:])
-        if ys.shape[0] == 1 and xs.shape[0] > 1:
-            ys = ys.expand(xs.shape[0], -1, -1)
-        product = torch.stack([xi @ yi for xi, yi in zip(xs, ys)])
-        results.append(product.reshape(*x.shape[:-2], x.shape[-2], y.shape[-1]).to(out_dtype.torch))
-    return FakeTensor(results, out_dtype, a.layout)
-
-
-def _multiply_device_zero(base_multiply):
-    """``base_multiply`` with binary_ng's rule: the product is +0.0 whenever an input is zero (so the keep-mask reset
-    of a lane leaves +0.0, the zero source's bits, as the device does; torch alone gives -0.0 for x < 0)."""
-
-    def op(a, b, **kwargs):
-        result = base_multiply(a, b, **kwargs)
-        for index, x in enumerate(result.torch_shards()):
-            if x.dtype.is_floating_point:
-                a_shard = a.torch_shards()[index]
-                zero = a_shard == 0
-                if isinstance(b, FakeTensor):
-                    zero = zero | (b.torch_shards()[index] == 0)
-                elif b == 0:
-                    zero = torch.ones_like(zero)
-                x.copy_(torch.where(zero, torch.zeros_like(x), x))
-        return result
-
-    return op
-
-
-# --------------------------------------------------------------------------- integer and fp64 ops (the lanes)
-
-
-def _arith_u32(torch_op):
-    """UINT32 arithmetic wraps; float arithmetic runs in fp32 with binary_ng's +0.0 product."""
-
-    def op(a, b, *, memory_config=None, dtype=None):
         results = []
-        for index, x in enumerate(a.torch_shards()):
-            y = _operand(b, index)
-            if a.dtype is U32:
-                result = torch_op(x, y) & U32_MASK
+        for x in t.torch_shards():
+            if dim in (3, -1) and scalar is None:
+                rows = x.reshape(-1, x.shape[-1])
+                y = torch.stack([(row if acc is None else row.to(acc)).sum() for row in rows])
+                y = y.reshape(*x.shape[:-1], 1)
             else:
-                y = y.to(torch.float32) if isinstance(y, torch.Tensor) else y
-                result = torch_op(x.float(), y)
-                if torch_op is torch.mul:
-                    result = torch.where(x.float() == 0, torch.zeros_like(result), result)
-                result = result.to(a.dtype.torch)
-            results.append(result)
-        return FakeTensor(results, a.dtype, a.layout)
+                y = x.to(acc or torch.float32).sum(dim=dim, keepdim=True) * (1.0 if scalar is None else scalar)
+            results.append(y.to(x.dtype))
+        return FakeTensor(results, t.dtype, t.layout)
 
     return op
 
 
-def _wrap(value: torch.Tensor, dtype) -> torch.Tensor:
-    return (value & U32_MASK) if dtype is U32 else value.to(dtype.torch)
+def _device_sum(t, acc) -> torch.Tensor:
+    """The devices' partials summed in device order in ``acc``, one rounding."""
+
+    return functools.reduce(torch.add, [x.to(acc) for x in t.torch_shards()]).to(t.dtype.torch)
 
 
-def _binary_fp64(torch_op):
-    """UINT32 ops exact and wrapped; float ops in fp64 rounded once, with binary_ng's +0.0 product."""
-
-    def op(a, b, *, memory_config=None, output_tensor=None, dtype=None, fast_and_approximate_mode=None):
-        out_dtype = dtype or a.dtype
-        results = []
-        for index, x in enumerate(a.torch_shards()):
-            y = _operand(b, index)
-            if a.dtype is U32:
-                result = torch_op(x, y)
-            else:
-                y64 = y.double() if isinstance(y, torch.Tensor) else y
-                result = torch_op(x.double(), y64)
-                if torch_op is torch.mul:
-                    result = torch.where((x.double() == 0) | (y64 == 0), torch.zeros_like(result), result)
-            results.append(_wrap(result, out_dtype))
-        if output_tensor is not None:
-            assert output_tensor.dtype is out_dtype and output_tensor.shape == tuple(results[0].shape), (
-                output_tensor.shape,
-                tuple(results[0].shape),
-            )
-            for target, result in zip(output_tensor.locals, results):
-                target.copy_(result)
-            return output_tensor
-        return FakeTensor(results, out_dtype, a.layout)
+def _all_reduce(acc):
+    def op(t, *, cluster_axis, memory_config=None, topology=None):
+        total = _device_sum(t, acc)
+        return FakeTensor([total.clone() for _ in range(TP)], t.dtype, t.layout)
 
     return op
 
 
-def _compare_u32(torch_op):
-    def op(a, b, *, dtype, memory_config=None):
-        assert dtype is U32
-        return FakeTensor(
-            [torch_op(x, _operand(b, index)).to(torch.int64) for index, x in enumerate(a.torch_shards())], U32, a.layout
-        )
+def _reduce_scatter(acc):
+    def op(t, *, dim, cluster_axis, memory_config=None, topology=None):
+        total = _device_sum(t, acc)
+        return FakeTensor([piece.clone() for piece in torch.chunk(total, TP, dim=dim)], t.dtype, t.layout, dim)
 
     return op
 
 
-def _shift_u32(torch_op):
-    return lambda a, count, memory_config=None: FakeTensor(
-        [torch_op(x, count) & U32_MASK for x in a.torch_shards()], U32, a.layout
-    )
+def _fast_reduce_nc(pad_rows=False):
+    """fp32 accumulation in index order, one rounding at the end (fast_reduce_nc's contract).  ``pad_rows``: a TILE
+    result below 32 rows reports the 32-row tile (zero pad rows), as on device; the rows bodies restore the logical
+    rows with ttnn.reshape(t, logical, padded)."""
 
-
-def _typecast_wrapping(t, dtype, memory_config=None):
-    if dtype is I32:
-        assert all(int(x.max()) < 2**31 for x in t.torch_shards())
-    return FakeTensor([_wrap(x if dtype is U32 else x.double(), dtype) for x in t.torch_shards()], dtype, t.layout)
-
-
-def _embedding_u32_rows(indices, table, *, layout, dtype, memory_config=None):
-    assert indices.dtype is U32 and indices.shape == (1, 1, 32)
-    return FakeTensor(
-        [
-            row_table[0, 0][index.reshape(-1)].reshape(1, 32, -1).clone()
-            for index, row_table in zip(indices.torch_shards(), table.torch_shards())
-        ],
-        dtype,
-        layout,
-    )
-
-
-def _sum_fp64(t, dim, keepdim, *, memory_config=None, compute_kernel_config=None, scalar=1.0):
-    assert keepdim and dim in (2, 3)
-    return FakeTensor(
-        [(x.double().sum(dim=dim, keepdim=True) * scalar).to(t.dtype.torch) for x in t.torch_shards()],
-        t.dtype,
-        t.layout,
-    )
-
-
-def _rowwise_fp64(fn):
-    """``fn`` on every last-dim row in fp64, rounded once to the tensor's dtype."""
-
-    def op(tensor, *args, memory_config=None, **kwargs):
-        results = []
-        for x in tensor.torch_shards():
-            rows = x.reshape(-1, x.shape[-1]).double()
-            results.append(torch.stack([fn(row, *args, **kwargs) for row in rows]).reshape(x.shape).to(x.dtype))
-        return FakeTensor(results, tensor.dtype, tensor.layout)
+    def op(t, *, dims, output=None, compute_kernel_config=None, memory_config=None):
+        (dim,) = dims
+        shards = [
+            functools.reduce(torch.add, x.float().unbind(dim)).unsqueeze(dim).to(x.dtype) for x in t.torch_shards()
+        ]
+        if pad_rows and t.layout == TILE and dim != 2 and shards[0].shape[2] % 32:
+            shards = [F.pad(x, (0, 0, 0, 32 - x.shape[2] % 32)) for x in shards]
+        return FakeTensor(shards, t.dtype, t.layout)
 
     return op
-
-
-def _reshape_tile_rows(t, shape, padded_shape=None, memory_config=None):
-    """A same-volume reshape, or the padded tile view: a smaller logical shape reads the leading rows, a larger one
-    (the 1-row query as its 32-row tile) reads the tile's zero padding past row 0."""
-
-    shape = tuple(shape)
-    results = []
-    for x in t.torch_shards():
-        if x.numel() == torch.Size(shape).numel():
-            results.append(x.reshape(shape).clone())
-        else:
-            assert padded_shape is not None and shape[:2] == tuple(x.shape[:2]) and shape[3] == x.shape[3]
-            if shape[2] < x.shape[2]:
-                results.append(x[:, :, : shape[2]].clone())
-            else:
-                results.append(F.pad(x, (0, 0, 0, shape[2] - x.shape[2])))
-    return FakeTensor(results, t.dtype, t.layout)
-
-
-def _view_aliasing_rows(t, shape):
-    """``ttnn.experimental.view``: the same buffer under a new shape.  ROW_MAJOR pages and whole-tile-row TILE
-    regroupings keep the torch element order, so the result aliases the input (a torch view); any other TILE view
-    re-reads the tile pages in the new grid (a copy, caught by the aliasing tests if the body relied on it)."""
-
-    shape = tuple(shape)
-    aligned = t.layout == ROW_MAJOR or (
-        shape[-1] == t.shape[-1] and shape[-2] % 32 == 0 and t.shape[-2] % 32 == 0 and len(shape) == 4
-    )
-    if aligned:
-        return FakeTensor([x.reshape(shape) for x in t.torch_shards()], t.dtype, t.layout)
-    return FakeTensor([_from_tile_pages(_tile_pages(x), shape) for x in t.torch_shards()], t.dtype, t.layout)
-
-
-def _linear_fp64(a, w, *, memory_config=None, program_config=None, compute_kernel_config=None):
-    return FakeTensor(
-        [
-            (x.double() @ wt.reshape(wt.shape[-2], wt.shape[-1]).double()).to(x.dtype)
-            for x, wt in zip(a.torch_shards(), w.torch_shards())
-        ],
-        a.dtype,
-        a.layout,
-    )
-
-
-def _matmul_fp64(a, b, *, memory_config=None, compute_kernel_config=None, optional_output_tensor=None):
-    results = [torch.matmul(x.double(), y.double()).to(x.dtype) for x, y in zip(a.torch_shards(), b.torch_shards())]
-    if optional_output_tensor is not None:
-        for target, result in zip(optional_output_tensor.locals, results):
-            target.copy_(result)
-        return optional_output_tensor
-    return FakeTensor(results, a.dtype, a.layout)
-
-
-def _rms_norm_fp64(t, *, epsilon, weight, memory_config=None, compute_kernel_config=None):
-    results = []
-    for x, w in zip(t.torch_shards(), weight.torch_shards()):
-        x64 = x.double()
-        y = x64 * torch.rsqrt(x64.square().mean(dim=-1, keepdim=True) + epsilon) * w.reshape(-1).double()
-        results.append(y.to(x.dtype))
-    return FakeTensor(results, t.dtype, t.layout)
-
-
-def _rotary_embedding_hf(x, cos, sin, *, is_decode_mode, memory_config=None):
-    results = []
-    for xs, cs, ss in zip(x.torch_shards(), cos.torch_shards(), sin.torch_shards()):
-        x64, c64, s64 = xs.double(), cs.double(), ss.double()
-        half = x64.shape[-1] // 2
-        rotated = torch.cat([-x64[..., half:], x64[..., :half]], dim=-1)
-        results.append((x64 * c64 + rotated * s64).to(xs.dtype))
-    return FakeTensor(results, x.dtype, x.layout)
-
-
-def _all_reduce_fp64(t, *, cluster_axis, memory_config=None, topology=None):
-    total = sum(x.double() for x in t.torch_shards()).to(t.dtype.torch)
-    return FakeTensor([total.clone() for _ in range(TP)], t.dtype, t.layout)
-
-
-def _reduce_scatter_fp64(t, *, dim, cluster_axis, memory_config=None, topology=None):
-    total = sum(x.double() for x in t.torch_shards()).to(t.dtype.torch)
-    return FakeTensor([piece.clone() for piece in torch.chunk(total, TP, dim=dim)], t.dtype, t.layout, dim)
 
 
 def _indexer_score_dsa(
@@ -826,15 +684,14 @@ def _indexer_score_dsa(
     return FakeTensor(results, q.dtype, ROW_MAJOR)
 
 
-def _topk_large_indices(scores, *, k):
-    return FakeTensor(
-        [
-            torch.topk(x.float(), k, dim=-1, largest=True, sorted=True).indices.to(torch.int64)
-            for x in scores.torch_shards()
-        ],
-        U32,
-        ROW_MAJOR,
-    )
+def _rotary_embedding_hf(x, cos, sin, *, is_decode_mode, memory_config=None):
+    results = []
+    for xs, cs, ss in zip(x.torch_shards(), cos.torch_shards(), sin.torch_shards()):
+        x64, c64, s64 = xs.double(), cs.double(), ss.double()
+        half = x64.shape[-1] // 2
+        rotated = torch.cat([-x64[..., half:], x64[..., :half]], dim=-1)
+        results.append((x64 * c64 + rotated * s64).to(xs.dtype))
+    return FakeTensor(results, x.dtype, x.layout)
 
 
 def _sparse_sdpa(q, kv, indices, v_dim, *, kv_format, scale, k_chunk_size, compute_kernel_config):
@@ -862,21 +719,15 @@ def _sparse_sdpa(q, kv, indices, v_dim, *, kv_format, scale, k_chunk_size, compu
     return FakeTensor(results, q.dtype, ROW_MAJOR)
 
 
-def _update_padded_kv_slab(cache, slab, slot, start, layer_idx, num_layers, cluster_axis):
-    for cs, ss, st in zip(cache.locals, slab.torch_shards(), start.torch_shards()):
-        begin = int(st.reshape(-1)[0])
-        assert begin % 32 == 0 and begin + ss.shape[2] <= cs.shape[2], (begin, cs.shape)
-        cs[0, 0, begin : begin + ss.shape[2]] = ss[0, 0]
-    return cache
-
-
 # --------------------------------------------------------------------------- the ttnn namespaces
 
 
-def make_rows_ttnn(chunk: FakeChunk) -> SimpleNamespace:
-    """The fp32 row-serial ttnn of the GDN/PLE/layer rows paths; ``chunk`` models the chunk kernel."""
+def _ttnn(**ops) -> SimpleNamespace:
+    """The constants, config tags and tensor plumbing every namespace below shares, with ``ops`` on top."""
 
-    return SimpleNamespace(
+    base = dict(
+        uint32=U32,
+        int32=I32,
         bfloat16=BF16,
         float32=FP32,
         TILE_LAYOUT=TILE,
@@ -886,342 +737,25 @@ def make_rows_ttnn(chunk: FakeChunk) -> SimpleNamespace:
         L1_MEMORY_CONFIG="L1",
         L1_WIDTH_SHARDED_MEMORY_CONFIG="L1WS",
         Topology=SimpleNamespace(Linear="linear"),
-        UnaryOpType=SimpleNamespace(EXP="EXP"),
-        UnaryWithParam=lambda op, a, b: (op, a, b),
         MathFidelity=SimpleNamespace(HiFi4="HiFi4", HiFi2="HiFi2"),
-        WormholeComputeKernelConfig=lambda **fields: ("compute_kernel_config", tuple(sorted(fields.items()))),
-        experimental=SimpleNamespace(view=view_tile_pages),
+        UnaryOpType=SimpleNamespace(EXP="EXP", SIGMOID="SIGMOID"),
+        ShardStrategy=SimpleNamespace(HEIGHT="HEIGHT", WIDTH="WIDTH"),
+        ShardOrientation=SimpleNamespace(ROW_MAJOR="ROW_MAJOR"),
+        TensorMemoryLayout=SimpleNamespace(WIDTH_SHARDED="WIDTH_SHARDED", HEIGHT_SHARDED="HEIGHT_SHARDED"),
+        BufferType=SimpleNamespace(DRAM="DRAM", L1="L1"),
         TensorTopology=TensorTopology,
         PlacementReplicate=PlacementReplicate,
         PlacementShard=PlacementShard,
+        Shape=tuple,
+        MeshShape=lambda *dims: tuple(dims),
+        UnaryWithParam=lambda op, a, b: (op, a, b),
         ShardTensor2dMesh=lambda device, mesh_shape, dims: ("shard", dims),
-        from_torch=_from_torch,
-        moreh_full=_moreh_full,
-        get_device_tensors=_get_device_tensors,
-        deallocate=deallocate,
-        copy=copy,
-        all_gather=_all_gather,
-        reduce_scatter=_reduce_scatter,
-        linear=_linear,
-        matmul=_matmul,
-        to_memory_config=_to_memory_config,
-        to_layout=_to_layout,
-        slice=_slice_copy,
-        pad=_pad,
-        concat=_concat,
-        reshape=_reshape,
-        repeat_interleave=_repeat_interleave,
-        repeat=_repeat,
-        transpose=_mapped(lambda x, a, b: x.transpose(a, b).contiguous()),
-        permute=_mapped(lambda x, dims: x.permute(*dims).contiguous()),
-        typecast=_typecast,
-        multiply=_binary(torch.mul),
-        add=_binary(torch.add),
-        subtract=_binary(torch.sub),
-        mac=lambda a, b, c: _binary(torch.add)(_binary(torch.mul)(a, b), c),
-        le=_compare(torch.le),
-        eq=_compare(torch.eq),
-        sigmoid=_unary(torch.sigmoid),
-        softplus=_softplus,
-        silu=_unary(F.silu),
-        sqrt=_unary(torch.sqrt),
-        abs=_unary(torch.abs),
-        sign=_unary(torch.sign),
-        clamp=lambda t, min=None, max=None, memory_config=None: FakeTensor(
-            [x.clamp(min=min, max=max) for x in t.torch_shards()], t.dtype, t.layout
-        ),
-        sum=_sum,
-        rms_norm=_rms_norm,
-        rms_norm_pre_all_gather=_rms_norm_pre_all_gather,
-        rms_norm_post_all_gather=_rms_norm_post_all_gather,
-        transformer=chunk,
-    )
-
-
-def make_verify_ttnn(chunk: FakeChunk) -> SimpleNamespace:
-    """The rows ttnn plus the integer, embedding, cache-write and reduce ops of the MTP verify and draft bodies."""
-
-    fake = make_rows_ttnn(chunk)
-    fake.uint32, fake.int32 = U32, I32
-    fake.Shape = tuple
-    fake.MeshShape = lambda *dims: tuple(dims)
-    fake.reshape = _reshape_leading
-    fake.embedding = _embedding
-    fake.unsqueeze_to_4D = lambda t: FakeTensor(
-        [x.reshape(1, 1, *x.shape[-2:]).clone() for x in t.torch_shards()], t.dtype, t.layout
-    )
-    fake.zeros = _zeros
-    fake.lt, fake.ge, fake.ne = _compare(torch.lt), _compare(torch.ge), _compare(torch.ne)
-    fake.bitwise_and, fake.bitwise_or = _elementwise(torch.bitwise_and), _elementwise(torch.bitwise_or)
-    fake.bitwise_left_shift = _elementwise(lambda x, n: x << n)
-    fake.bitwise_right_shift = _elementwise(lambda x, n: x >> n)
-    fake.minimum = _minimum
-    fake.rsub = lambda t, value, memory_config=None: FakeTensor(
-        [(value - x).to(t.dtype.torch) for x in t.torch_shards()], t.dtype, t.layout
-    )
-    fake.argmax = _argmax
-    fake.gather = _gather
-    fake.max = lambda t, dim=-1, keepdim=False: FakeTensor(
-        [x.max(dim=dim, keepdim=keepdim).values for x in t.torch_shards()], t.dtype, t.layout
-    )
-    fake.all_reduce = lambda t, *, cluster_axis, memory_config=None, topology=None: FakeTensor(
-        [sum(x.float() for x in t.torch_shards()).to(t.dtype.torch).clone() for _ in range(TP)], t.dtype, t.layout
-    )
-    fake.mesh_partition = lambda t, *, dim, cluster_axis, memory_config=None: FakeTensor(
-        [torch.chunk(x, TP, dim=dim)[i].clone() for i, x in enumerate(t.torch_shards())], t.dtype, t.layout, dim
-    )
-    fake.fill = lambda t, value, *, output_tensor=None: ([x.fill_(value) for x in t.locals] and (output_tensor or t))
-    fake.copy_host_to_device_tensor = copy
-    fake.to_torch = _to_torch
-    fake.experimental = SimpleNamespace(
-        view=view_tile_pages,
-        paged_update_cache=_paged_update_cache,
-        deepseek_prefill=SimpleNamespace(update_padded_kv_cache=_update_padded_kv_cache),
-        fast_reduce_nc=_fast_reduce_nc,
-    )
-    return fake
-
-
-def make_mtp_lanes_ttnn(chunk: FakeChunk) -> SimpleNamespace:
-    """The verify ttnn on the lane layouts: a logical-extent padded reshape, the aliasing whole-tensor slice."""
-
-    fake = make_verify_ttnn(chunk)
-
-    def slice_(tensor, start, end, *, memory_config=None, output_tensor=None):
-        # The device op returns its input over the whole tensor (``slice.cpp``'s no-op path): the alias the owned
-        # slice guards against.  Into an output tensor it copies.
-        if output_tensor is None and all(v == 0 for v in start) and tuple(end) == tensor.shape:
-            return tensor
-        return _slice_copy(tensor, start, end, memory_config=memory_config, output_tensor=output_tensor)
-
-    fake.slice = slice_
-    fake.clone = lambda t, memory_config=None: FakeTensor([x.clone() for x in t.torch_shards()], t.dtype, t.layout)
-    fake.reshape = _reshape_extents
-    fake.num_cores_to_corerangeset = lambda count, grid, row_wise: ("cores", count)
-    fake.CoreCoord = lambda x, y: (x, y)
-    fake.create_sharded_memory_config = lambda *args, **kwargs: ("sharded", args[0])
-    fake.ShardStrategy = SimpleNamespace(HEIGHT="HEIGHT")
-    fake.ShardOrientation = SimpleNamespace(ROW_MAJOR="ROW_MAJOR")
-    return fake
-
-
-def install_lane_admission_ops(fake_ttnn) -> None:
-    """The ops the lane import adds: ``fill_cache``, both argument forms of ``update_padded_kv_cache``, and a
-    ``view`` that aliases its source when the tile-page reinterpretation is a plain reshape, as on device."""
-
-    def fill_cache(cache, source, batch_idx: int):
-        for target, part in zip(cache.locals, source.torch_shards()):
-            assert part.shape[0] == 1 and tuple(part.shape[1:]) == tuple(target.shape[1:]), (part.shape, target.shape)
-            target[batch_idx] = part[0]
-        return cache
-
-    def update_padded_kv_cache(cache, staging, slot_idx, a, b, c, axis, valid_global=None, tp_axis=None):
-        for index, (target, source) in enumerate(zip(cache.locals, staging.torch_shards())):
-            begin = int(c) if isinstance(slot_idx, int) else int(a.torch_shards()[index].reshape(-1)[0])
-            rows = source.shape[2]
-            assert begin % 32 == 0 and begin + rows <= target.shape[2], (begin, rows, target.shape)
-            # The op's block-cyclic invariant: the cache rows are a multiple of the rows one call writes.
-            assert target.shape[2] % rows == 0, (target.shape, rows)
-            target[0, 0, begin : begin + rows] = source[0, 0]
-        return cache
-
-    def view(t, shape, memory_config=None):
-        shape = tuple(int(item) for item in shape)
-        faithful = [_from_tile_pages(_tile_pages(x), shape) for x in t.torch_shards()]
-        if all(torch.equal(f, x.reshape(shape)) for f, x in zip(faithful, t.torch_shards())):
-            return FakeTensor([x.reshape(shape) for x in t.torch_shards()], t.dtype, t.layout)  # the owner's storage
-        return FakeTensor(faithful, t.dtype, t.layout)
-
-    fake_ttnn.fill_cache = fill_cache
-    fake_ttnn.experimental.deepseek_prefill.update_padded_kv_cache = update_padded_kv_cache
-    fake_ttnn.experimental.view = view
-
-
-def make_gdn_lanes_ttnn() -> SimpleNamespace:
-    """The rows ttnn whose results never depend on the batch a row sits in: per-tile fp64 matmuls, binary_ng's
-    +0.0 product, and a same-shape reshape that is a view of its input (as on device)."""
-
-    fake = make_rows_ttnn(FakeChunk())
-    fake.matmul = _matmul_per_tile
-    fake.multiply = _multiply_device_zero(fake.multiply)
-    fake.empty_like = lambda t, dtype=None, layout=None, memory_config=None: FakeTensor(
-        [torch.empty_like(x) for x in t.torch_shards()], dtype or t.dtype, layout or t.layout
-    )
-    # Releasing the input after a same-shape reshape is then a read of a deallocated tensor here too.
-    fake.reshape = lambda t, shape, **kwargs: t if tuple(shape) == t.shape else _reshape(t, shape, **kwargs)
-    return fake
-
-
-def make_gr_ttnn() -> SimpleNamespace:
-    """The rows ttnn plus the GR ops of the 1-row path; every op is per row or per element."""
-
-    fake = make_rows_ttnn(FakeChunk())
-    fake.UnaryOpType.SIGMOID = "SIGMOID"
-    base_multiply = fake.multiply
-
-    def multiply(a, b, *, memory_config=None, dtype=None, input_tensor_a_activations=None, output_tensor=None):
-        if input_tensor_a_activations:
-            assert input_tensor_a_activations == [("SIGMOID", 4.0, 0.0)]
-            a = FakeTensor([torch.sigmoid(x) for x in a.torch_shards()], a.dtype, a.layout)
-        return base_multiply(a, b, memory_config=memory_config, dtype=dtype, output_tensor=output_tensor)
-
-    def post_all_gather(
-        tensor, gathered, *, epsilon, weight=None, memory_config=None, compute_kernel_config=None, dtype
-    ):
-        outputs = []
-        for x, stats in zip(tensor.torch_shards(), gathered.torch_shards()):
-            total = stats[..., ::32].sum(dim=-1, keepdim=True)
-            mean = total / (TP * x.shape[-1])
-            outputs.append((x.float() * torch.rsqrt(mean + epsilon)).to(dtype.torch))
-        return FakeTensor(outputs, dtype, tensor.layout)
-
-    def all_gather_async(tensor, *, persistent_output_buffer, dim, **kwargs):
-        return _all_gather(tensor, dim=dim, cluster_axis=None)
-
-    def fast_reduce_nc(tensor, *, dims, output, compute_kernel_config, memory_config):
-        # The device reports the 32-row tile as the row count of a TILE result below 32 rows (zero pad rows):
-        # the rows bodies restore the logical rows with ttnn.reshape(t, logical, padded).
-        (dim,) = dims
-        shards = [_sequential_sum(x, dim) for x in tensor.torch_shards()]
-        if tensor.layout == TILE and dim != 2 and shards[0].shape[2] % 32:
-            shards = [F.pad(x, (0, 0, 0, 32 - x.shape[2] % 32)) for x in shards]
-        return FakeTensor(shards, tensor.dtype, tensor.layout)
-
-    def reshape(tensor, shape, padded_shape=None, memory_config=None):
-        shards = tensor.torch_shards()
-        if padded_shape is not None and tuple(shape) != tuple(shards[0].shape):
-            assert tuple(padded_shape) == tuple(shards[0].shape), (padded_shape, shards[0].shape)
-            shards = [x.narrow(2, 0, shape[2]) for x in shards]
-        return FakeTensor([x.reshape(tuple(shape)).clone() for x in shards], tensor.dtype, tensor.layout)
-
-    fake.multiply = multiply
-    fake.reshape = reshape
-    fake.rms_norm_post_all_gather = post_all_gather
-    # ttnn.experimental.view as the tile pages under the new shape (a torch reshape would give the 1-row shapes the
-    # same values but not the rows' flat rows, which is the claim under test); torch_view is that torch reshape.
-    fake.experimental = SimpleNamespace(
-        all_gather_async=all_gather_async,
-        fast_reduce_nc=fast_reduce_nc,
-        view=view_tile_pages,
-        torch_view=lambda tensor, shape: FakeTensor(
-            [x.reshape(tuple(shape)) for x in tensor.torch_shards()], tensor.dtype, tensor.layout
-        ),
-    )
-    return fake
-
-
-def make_final_mixer_ttnn() -> SimpleNamespace:
-    """The GR ttnn with the final mixer's all-reduce: the devices' partials summed in device order, one rounding."""
-
-    fake = make_gr_ttnn()
-
-    def all_reduce(tensor, *, cluster_axis, memory_config=None, topology=None):
-        total = _sequential_sum(torch.stack(tensor.torch_shards()), 0).squeeze(0)
-        return FakeTensor([total.clone() for _ in range(TP)], tensor.dtype, tensor.layout)
-
-    fake.all_reduce = all_reduce
-    return fake
-
-
-def make_lanes_ttnn() -> SimpleNamespace:
-    """The exact UINT32/FP32 op surface of the lane position rows, the lane derive and the lane greedy resolve."""
-
-    return SimpleNamespace(
-        uint32=U32,
-        int32=I32,
-        bfloat16=BF16,
-        float32=FP32,
-        TILE_LAYOUT=TILE,
-        ROW_MAJOR_LAYOUT=ROW_MAJOR,
-        TILE_SIZE=32,
-        DRAM_MEMORY_CONFIG="DRAM_MEMORY_CONFIG",
-        Topology=SimpleNamespace(Linear="linear"),
-        ShardTensor2dMesh=lambda device, mesh_shape, dims: ("shard", dims),
-        from_torch=_from_torch_wrapping,
-        copy_host_to_device_tensor=copy,
-        copy=copy,
-        deallocate=deallocate,
-        get_device_tensors=_get_device_tensors,
-        to_torch=_to_torch,
-        add=_arith_u32(torch.add),
-        subtract=_arith_u32(torch.sub),
-        multiply=_arith_u32(torch.mul),
-        minimum=_minimum,
-        rsub=lambda t, value, memory_config=None: FakeTensor(
-            [(value - x.float()).to(t.dtype.torch) for x in t.torch_shards()], t.dtype, t.layout
-        ),
-        bitwise_and=_arith_u32(torch.bitwise_and),
-        bitwise_or=_arith_u32(torch.bitwise_or),
-        bitwise_left_shift=_shift_u32(torch.bitwise_left_shift),
-        bitwise_right_shift=_shift_u32(torch.bitwise_right_shift),
-        eq=_compare_u32(torch.eq),
-        lt=_compare_u32(torch.lt),
-        ge=_compare_u32(torch.ge),
-        typecast=_typecast,
-        reshape=lambda t, shape, memory_config=None: FakeTensor(
-            [x.reshape(tuple(shape)) for x in t.torch_shards()], t.dtype, t.layout
-        ),
-        repeat=_repeat,
-        to_layout=_to_layout,
-        unsqueeze_to_4D=_unsqueeze_to_4d_view,
-        embedding=_embedding_u32_rows,
-        all_gather=_all_gather,
-        argmax=_argmax,
-        gather=_gather,
-        pad=_pad,
-        slice=_slice_copy,
-        sum=_sum_fp64,
-        CoreCoord=lambda x, y: ("core", x, y),
-        num_cores_to_corerangeset=lambda cores, grid, row_wise: ("cores", cores, grid),
-        ShardStrategy=SimpleNamespace(HEIGHT="HEIGHT"),
-        ShardOrientation=SimpleNamespace(ROW_MAJOR="ROW_MAJOR"),
-        create_sharded_memory_config=lambda shape, grid, strategy, orientation, use_height_and_width_as_shard_shape: (
-            "sharded",
-            tuple(shape),
-            grid,
-        ),
-    )
-
-
-def make_qsa_ttnn() -> SimpleNamespace:
-    """The QSA layer's ttnn, deterministic per row (fp64 rounded once to the op's dtype), so no result depends on
-    the tensor shape it sits in."""
-
-    experimental = SimpleNamespace(
-        view=_view_aliasing_rows,
-        rotary_embedding_hf=_rotary_embedding_hf,
-        indexer_score_dsa=_indexer_score_dsa,
-        topk_large_indices=_topk_large_indices,
-        paged_update_cache=_paged_update_cache,
-        deepseek_prefill=SimpleNamespace(update_padded_kv_cache=_update_padded_kv_slab),
-    )
-    return SimpleNamespace(
-        uint32=U32,
-        int32=I32,
-        bfloat16=BF16,
-        float32=FP32,
-        TILE_LAYOUT=TILE,
-        ROW_MAJOR_LAYOUT=ROW_MAJOR,
-        TILE_SIZE=32,
-        DRAM_MEMORY_CONFIG="DRAM_MEMORY_CONFIG",
-        L1_MEMORY_CONFIG="L1",
-        L1_WIDTH_SHARDED_MEMORY_CONFIG="L1WS",
-        Topology=SimpleNamespace(Linear="linear"),
-        MathFidelity=SimpleNamespace(HiFi4="HiFi4"),
-        ShardStrategy=SimpleNamespace(HEIGHT="HEIGHT", WIDTH="WIDTH"),
-        ShardOrientation=SimpleNamespace(ROW_MAJOR="ROW_MAJOR"),
-        Shape=lambda values: tuple(values),
-        MeshShape=lambda *values: tuple(values),
         CoreGrid=lambda *, x, y: ("grid", x, y),
         CoreCoord=lambda x, y: ("core", x, y),
         CoreRange=lambda start, end: ("range", start, end),
         CoreRangeSet=lambda ranges: ("ranges", tuple(sorted(ranges))),
         ShardSpec=lambda grid, shape, orientation: ("shard_spec", grid, tuple(shape), orientation),
         MemoryConfig=lambda layout, buffer_type, shard_spec=None: ("memory_config", layout, buffer_type, shard_spec),
-        TensorMemoryLayout=SimpleNamespace(
-            WIDTH_SHARDED="WIDTH_SHARDED", HEIGHT_SHARDED="HEIGHT_SHARDED", INTERLEAVED="INTERLEAVED"
-        ),
-        BufferType=SimpleNamespace(DRAM="DRAM", L1="L1"),
         num_cores_to_corerangeset=lambda cores, grid, row_wise: ("cores", cores, grid),
         create_sharded_memory_config=lambda shape, grid, strategy, orientation, use_height_and_width_as_shard_shape: (
             "sharded",
@@ -1229,138 +763,186 @@ def make_qsa_ttnn() -> SimpleNamespace:
             grid,
             strategy,
         ),
-        MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig=lambda **fields: ("dram_sharded", tuple(sorted(fields))),
+        WormholeComputeKernelConfig=lambda **fields: ("compute_kernel_config", tuple(sorted(fields.items()))),
         init_device_compute_kernel_config=lambda arch, **fields: ("compute", arch, tuple(sorted(fields.items()))),
-        TensorTopology=TensorTopology,
-        PlacementReplicate=PlacementReplicate,
-        PlacementShard=PlacementShard,
-        ShardTensor2dMesh=lambda device, mesh_shape, dims: ("shard", dims),
-        experimental=experimental,
-        transformer=SimpleNamespace(sparse_sdpa=_sparse_sdpa, SparseKVFormat=SimpleNamespace(BF16="BF16")),
-        from_torch=_from_torch_wrapping,
-        zeros=_zeros,
-        fill=fill_in_place,
+        MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig=lambda **fields: ("dram_sharded", tuple(sorted(fields))),
+        from_torch=_from_torch(),
+        to_torch=lambda t, mesh_composer=None, **kwargs: t.torch_shards()[0].clone(),
         copy=copy,
         copy_host_to_device_tensor=copy,
         deallocate=deallocate,
         get_device_tensors=_get_device_tensors,
-        to_torch=_to_torch,
-        to_layout=_to_layout,
-        to_memory_config=_to_memory_config,
-        reshape=_reshape_tile_rows,
-        unsqueeze_to_4D=_unsqueeze_to_4d_view,
-        slice=_slice_copy,
+        zeros=_zeros,
+        moreh_full=lambda shape, value, device, *, dtype, layout, memory_config: FakeTensor(
+            [torch.full(tuple(shape), value, dtype=dtype.torch) for _ in range(TP)], dtype, layout
+        ),
+        fill=_fill,
+        fill_cache=_fill_cache,
+        clone=_mapped(torch.clone),
+        to_layout=lambda t, layout, memory_config=None: FakeTensor(
+            [x.clone() for x in t.torch_shards()], t.dtype, layout
+        ),
+        to_memory_config=_mapped(lambda x, cfg: x.clone()),
+        typecast=_typecast(),
+        reshape=_reshape(),
+        unsqueeze_to_4D=_mapped(lambda x: x.reshape(1, *x.shape)),  # a view of the input, as on device
+        slice=_slice,
         pad=_pad,
         concat=_concat,
-        repeat=_repeat,
-        repeat_interleave=_repeat_interleave,
-        typecast=_typecast_wrapping,
-        add=_binary_fp64(torch.add),
-        subtract=_binary_fp64(torch.sub),
-        multiply=_binary_fp64(torch.mul),
-        mul=_binary_fp64(torch.mul),
-        minimum=_minimum,
-        rsub=lambda t, value, memory_config=None: FakeTensor(
-            [(value - x.double()).to(x.dtype) for x in t.torch_shards()], t.dtype, t.layout
+        repeat=_mapped(lambda x, multipliers: x.repeat(*multipliers)),
+        repeat_interleave=_mapped(lambda x, repeats, dim: torch.repeat_interleave(x, repeats, dim=dim)),
+        transpose=_mapped(lambda x, a, b: x.transpose(a, b).contiguous()),
+        permute=_mapped(lambda x, dims: x.permute(*dims).contiguous()),
+        embedding=_embedding,
+        gather=_gather,
+        argmax=lambda t, dim=-1, keepdim=False: FakeTensor(
+            [torch.argmax(x, dim=dim, keepdim=keepdim) for x in t.torch_shards()], U32, t.layout
         ),
-        bitwise_and=_binary_fp64(torch.bitwise_and),
-        bitwise_or=_binary_fp64(torch.bitwise_or),
-        bitwise_left_shift=_shift_u32(torch.bitwise_left_shift),
-        bitwise_right_shift=_shift_u32(torch.bitwise_right_shift),
-        eq=_compare_u32(torch.eq),
-        lt=_compare_u32(torch.lt),
-        ge=_compare_u32(torch.ge),
-        sum=_sum_fp64,
-        rms_norm=_rms_norm_fp64,
-        sigmoid=_rowwise_fp64(torch.sigmoid),
-        linear=_linear_fp64,
-        matmul=_matmul_fp64,
+        max=_mapped(lambda x, dim=-1, keepdim=False: x.max(dim=dim, keepdim=keepdim).values),
+        minimum=_elementwise(lambda x, y: torch.clamp(x, max=y)),
+        rsub=_mapped(lambda x, value: (value - x.double()).to(x.dtype)),
         all_gather=_all_gather,
-        all_reduce=_all_reduce_fp64,
-        reduce_scatter=_reduce_scatter_fp64,
-        embedding=_embedding_u32_rows,
+        all_reduce=_all_reduce(torch.float32),
+        mesh_partition=lambda t, *, dim, cluster_axis, memory_config=None: FakeTensor(
+            [torch.chunk(x, TP, dim=dim)[i].clone() for i, x in enumerate(t.torch_shards())], t.dtype, t.layout, dim
+        ),
+        experimental=SimpleNamespace(
+            view=view_tile_pages,
+            fast_reduce_nc=_fast_reduce_nc(),
+            paged_update_cache=_paged_update_cache,
+            deepseek_prefill=SimpleNamespace(update_padded_kv_cache=_update_padded_kv_cache),
+        ),
+    )
+    return SimpleNamespace(**(base | ops))
+
+
+def make_rows_ttnn(chunk: FakeChunk) -> SimpleNamespace:
+    """The fp32 row-serial ttnn of the GDN/PLE/layer rows paths and the MTP verify and draft bodies; ``chunk`` models
+    the chunk kernel."""
+
+    return _ttnn(
+        multiply=_binary(torch.mul),
+        add=_binary(torch.add),
+        subtract=_binary(torch.sub),
+        mac=lambda a, b, c: _binary(torch.add)(_binary(torch.mul)(a, b), c),
+        sigmoid=_unary(torch.sigmoid),
+        silu=_unary(F.silu),
+        sqrt=_unary(torch.sqrt),
+        abs=_unary(torch.abs),
+        sign=_unary(torch.sign),
+        softplus=_softplus,
+        clamp=_mapped(lambda x, min=None, max=None: x.clamp(min=min, max=max)),
+        le=_compare(torch.le),
+        lt=_compare(torch.lt),
+        ge=_compare(torch.ge),
+        eq=_compare(torch.eq),
+        bitwise_and=_elementwise(torch.bitwise_and),
+        bitwise_or=_elementwise(torch.bitwise_or),
+        bitwise_left_shift=_elementwise(torch.bitwise_left_shift),
+        bitwise_right_shift=_elementwise(torch.bitwise_right_shift),
+        unsqueeze_to_4D=_mapped(lambda x: x.reshape(1, 1, *x.shape[-2:]).clone()),
+        sum=_sum(),
+        linear=_linear(torch.float32),
+        matmul=_matmul,
+        rms_norm=_rms_norm(torch.float32),
+        rms_norm_pre_all_gather=_rms_norm_pre_all_gather,
+        rms_norm_post_all_gather=_rms_norm_post_all_gather,
+        reduce_scatter=_reduce_scatter(torch.float32),
+        transformer=chunk,
     )
 
 
-class IntTensor:
-    """One device tensor of the integer fake: int64 storage for UINT32/INT32, bf16 for the mask."""
+def make_mtp_lanes_ttnn(chunk: FakeChunk) -> SimpleNamespace:
+    """The rows ttnn with the device slice's no-op: over the whole tensor it returns its input (``slice.cpp``; the
+    alias the owned slice guards against), into an output tensor it copies."""
 
-    def __init__(self, value: torch.Tensor, dtype: FakeDType, layout: str) -> None:
-        self.value, self.dtype, self.layout = value, dtype, layout
-        self.tensor_id = next(_ids)
-        self.alive = True
+    fake = make_rows_ttnn(chunk)
 
-    @property
-    def shape(self):
-        return tuple(self.value.shape)
+    def slice_(tensor, start, end, *, memory_config=None, output_tensor=None):
+        if output_tensor is None and all(v == 0 for v in start) and tuple(end) == tensor.shape:
+            return tensor
+        return _slice(tensor, start, end, memory_config=memory_config, output_tensor=output_tensor)
 
-    def _read(self) -> torch.Tensor:
-        assert self.alive, "read of a deallocated tensor"
-        return self.value
+    fake.slice = slice_
+    return fake
 
 
-class IntContract:
-    def validate_tensor(self, tensor, *, placement, shard_dim=None, require_device=True) -> None:
-        assert tensor.alive
+def make_gdn_lanes_ttnn() -> SimpleNamespace:
+    """The rows ttnn whose results never depend on the batch a row sits in: per-tile fp64 matmuls, binary_ng's +0.0
+    product, and a same-shape reshape that is its input (releasing the input then releases the result too)."""
 
-
-def int_u32(values: torch.Tensor) -> IntTensor:
-    return IntTensor(values.to(torch.int64).clone(), U32, ROW_MAJOR)
-
-
-def _int_op(torch_op):
-    def op(a, b, *, memory_config=None, dtype=None):
-        result = torch_op(a._read(), b._read() if isinstance(b, IntTensor) else b)
-        tag = dtype or a.dtype
-        if tag is BF16:
-            result = result.to(torch.bfloat16)
-        elif result.dtype != torch.int64:
-            result = result.to(torch.int64)
-        return IntTensor(result, tag, a.layout)
-
-    return op
-
-
-def make_int_ttnn() -> SimpleNamespace:
-    """The exact integer ops of the chunk-input derivation on single-device ``IntTensor``s."""
-
-    def typecast(tensor, dtype, *, memory_config=None):
-        value = tensor._read()
-        return IntTensor(value.to(torch.bfloat16) if dtype is BF16 else value.clone(), dtype, tensor.layout)
-
-    def from_torch(host, *, dtype, layout, device=None, memory_config=None, mesh_mapper=None):
-        return IntTensor(host.to(torch.int64) if dtype is U32 else host.to(torch.bfloat16), dtype, layout)
-
-    def copy_int(source, target):
-        target._read().copy_(source._read())
-        return target
-
-    return SimpleNamespace(
-        uint32=U32,
-        int32=I32,
-        bfloat16=BF16,
-        ROW_MAJOR_LAYOUT=ROW_MAJOR,
-        TILE_LAYOUT=TILE,
-        TILE_SIZE=32,
-        DRAM_MEMORY_CONFIG="DRAM",
-        bitwise_and=_int_op(torch.bitwise_and),
-        bitwise_or=_int_op(torch.bitwise_or),
-        bitwise_right_shift=_int_op(torch.bitwise_right_shift),
-        bitwise_left_shift=_int_op(torch.bitwise_left_shift),
-        add=_int_op(torch.add),
-        subtract=_int_op(torch.sub),
-        multiply=_int_op(torch.mul),
-        minimum=_int_op(lambda a, b: torch.clamp(a, max=b)),
-        lt=_int_op(torch.lt),
-        ge=_int_op(torch.ge),
-        rsub=_int_op(lambda a, b: b - a),
-        typecast=typecast,
-        reshape=lambda t, shape, memory_config=None: IntTensor(t._read().reshape(tuple(shape)), t.dtype, t.layout),
-        from_torch=from_torch,
-        copy_host_to_device_tensor=copy_int,
-        copy=copy_int,
-        deallocate=deallocate,
+    fake = make_rows_ttnn(FakeChunk())
+    fake.matmul = _matmul_per_tile
+    fake.multiply = _binary(torch.mul, zero_product=True)
+    fake.reshape = _reshape("same")
+    fake.empty_like = lambda t, dtype=None, layout=None, memory_config=None: FakeTensor(
+        [torch.empty_like(x) for x in t.torch_shards()], dtype or t.dtype, layout or t.layout
     )
+    return fake
+
+
+def make_gr_ttnn() -> SimpleNamespace:
+    """The rows ttnn plus the GR ops of the 1-row path; every op is per row or per element."""
+
+    fake = make_rows_ttnn(FakeChunk())
+    fake.experimental.all_gather_async = lambda tensor, *, persistent_output_buffer, dim, **kwargs: _all_gather(
+        tensor, dim=dim, cluster_axis=None
+    )
+    fake.experimental.fast_reduce_nc = _fast_reduce_nc(pad_rows=True)
+    # The torch reshape the tile-page view is checked against: it gives the 1-row shapes the same values, but not the
+    # rows' flat rows, which is the claim under test.
+    fake.experimental.torch_view = lambda tensor, shape: FakeTensor(
+        [x.reshape(tuple(shape)) for x in tensor.torch_shards()], tensor.dtype, tensor.layout
+    )
+    return fake
+
+
+def make_qsa_ttnn() -> SimpleNamespace:
+    """The exact ttnn of the QSA layer: UINT32 arithmetic wraps, float ops run per row in fp64 rounded once to the
+    op's dtype, so no result depends on the tensor shape it sits in."""
+
+    fake = _ttnn(
+        from_torch=_from_torch(wrap=True),
+        typecast=_typecast(wrap=True),
+        add=_binary_exact(torch.add),
+        subtract=_binary_exact(torch.sub),
+        multiply=_binary_exact(torch.mul),
+        mul=_binary_exact(torch.mul),
+        bitwise_and=_elementwise(torch.bitwise_and, wrap=True),
+        bitwise_or=_elementwise(torch.bitwise_or, wrap=True),
+        bitwise_left_shift=_elementwise(torch.bitwise_left_shift, wrap=True),
+        bitwise_right_shift=_elementwise(torch.bitwise_right_shift, wrap=True),
+        eq=_compare(torch.eq, u32=True),
+        lt=_compare(torch.lt, u32=True),
+        ge=_compare(torch.ge, u32=True),
+        sigmoid=_unary(torch.sigmoid, torch.float64),
+        sum=_sum(torch.float64),
+        rms_norm=_rms_norm(torch.float64),
+        linear=_linear(torch.float64),
+        matmul=_matmul_per_tile,
+        all_reduce=_all_reduce(torch.float64),
+        reduce_scatter=_reduce_scatter(torch.float64),
+        embedding=functools.partial(_embedding, lane_row=True),
+        transformer=SimpleNamespace(sparse_sdpa=_sparse_sdpa, SparseKVFormat=SimpleNamespace(BF16="BF16")),
+    )
+    fake.experimental.view = _view_aliasing
+    fake.experimental.rotary_embedding_hf = _rotary_embedding_hf  # qwen36's rope_tp
+    fake.experimental.indexer_score_dsa = _indexer_score_dsa
+    fake.experimental.topk_large_indices = lambda scores, *, k: FakeTensor(
+        [torch.topk(x.float(), k, dim=-1, largest=True, sorted=True).indices for x in scores.torch_shards()],
+        U32,
+        ROW_MAJOR,
+    )
+    return fake
+
+
+def make_lanes_ttnn() -> SimpleNamespace:
+    """The exact ttnn of the lane position rows, the lane derive and the lane greedy resolve: the QSA ops with a
+    same-volume reshape that is a view of its input."""
+
+    fake = make_qsa_ttnn()
+    fake.reshape = _reshape("view")
+    return fake
 
 
 # --------------------------------------------------------------------------- host-side tensors and comparisons
@@ -1406,10 +988,6 @@ def cat_shards(tensor: FakeTensor, dim: int = 3) -> torch.Tensor:
     """The four device locals back to one host tensor along their shard dim (a copy)."""
 
     return torch.cat(tensor.torch_shards(), dim=dim)
-
-
-def fake_row(tensor: FakeTensor, row: int, dim: int = 2) -> FakeTensor:
-    return FakeTensor([x.narrow(dim, row, 1).clone() for x in tensor.torch_shards()], tensor.dtype, tensor.layout)
 
 
 def same_zero(left: torch.Tensor, right: torch.Tensor) -> bool:
@@ -1529,27 +1107,6 @@ def torch_chunk_kernel(q, k, v, g, beta, scale, state):
     return output.float(), final
 
 
-def step_chunk_kernel(q, k, v, g, beta, scale, state):
-    """Row 0 through the 1-row path's fp32 step arithmetic (the same torch calls the fake step ops make); rows
-    past 0 are zero.  Used to show that everything around the recurrence is bitwise the 1-row path."""
-
-    heads, head_dim = GDN_HEADS, GDN_HEAD_DIM
-    q_row = q[:, 0].repeat_interleave(heads // q.shape[2], dim=1).reshape(1, heads, 1, head_dim).float() * scale
-    k_row = k[:, 0].repeat_interleave(heads // k.shape[2], dim=1).reshape(1, heads, 1, head_dim).float()
-    v_row = v[:, 0].reshape(1, heads, 1, head_dim)
-    beta_row = beta[:, 0].reshape(1, heads, 1, 1)
-    g_row = g[:, 0].reshape(1, heads, 1, 1)
-    decayed = state * torch.exp(g_row)
-    v_read = torch.matmul(k_row, decayed)
-    delta = v_row.to(torch.float32) - v_read
-    outer = torch.matmul(k_row.transpose(2, 3), delta)
-    new_state = decayed + outer * beta_row
-    o_row = torch.matmul(q_row, new_state)  # [1, HEADS, 1, HEAD_DIM] fp32; the rows path casts to bf16 as 1-row does
-    output = torch.zeros(1, q.shape[1], heads, head_dim, dtype=torch.float32)
-    output[:, 0] = o_row[:, :, 0]
-    return output, new_state
-
-
 def gdn_oracle_weights() -> Qwen38GDNWeights:
     torch.manual_seed(41)
     dims = Qwen38GDNDimensions(
@@ -1653,10 +1210,6 @@ def gdn_output_tolerance(reference: torch.Tensor) -> float:
     return 2e-4 + 4 * 2.0**-8 * reference.float().abs().max().item()
 
 
-def gdn_state_tolerance(reference: torch.Tensor) -> float:
-    return 3e-3 + 2.0**-7 * reference.abs().max().item()
-
-
 def gdn_rows_selectors(accepted: int, constants):
     """The commit selects of a replicated FP32 accept count ``accepted``."""
 
@@ -1685,9 +1238,8 @@ class FakeResidentLookup:
         return self.table[(token * 7919 + c1 * 104729 + c0 * 1299709) % PLE_TABLE_ROWS]
 
     def lookup_token(self, token: int, context):
-        c0, c1 = (EOS, EOS) if context is None else context
         row = self._row(token, context).contiguous()
-        return bytearray(row.view(torch.int16).numpy().tobytes()), (c1, token)
+        return bytearray(row.view(torch.int16).numpy().tobytes()), (EOS if context is None else context[1], token)
 
     def lookup_tokens(self, tokens, context):
         payload = bytearray()
@@ -1762,7 +1314,7 @@ def seed_ple_state(module):
     return state
 
 
-# --------------------------------------------------------------------------- QSA verify, heads and GR stand-ins
+# --------------------------------------------------------------------------- QSA verify stand-ins
 
 VERIFY_CONTEXT = 2048  # the smallest admitted resident cache: 512 compressed blocks (+ the indexer's query tile)
 VERIFY_BLOCKS = VERIFY_CONTEXT // 4
@@ -1791,7 +1343,7 @@ def qsa_verify_constants(rows: int):
     return position_constants, chunk_constants, verify_constants
 
 
-def make_qsa_module(fake_ttnn) -> qsa_module.Qwen38TTNNQSA:
+def make_qsa_module() -> qsa_module.Qwen38TTNNQSA:
     module = object.__new__(qsa_module.Qwen38TTNNQSA)
     module.mesh_device = "mesh"
     module.mesh_contract = FakeContract()
@@ -1866,7 +1418,7 @@ def seed_qsa_caches(module, fake_ttnn, stream: KVStream, state, verify_state, po
 
 
 def run_qsa_verify_pass(
-    module, fake_ttnn, stream: KVStream, state, verify_state, position: int, rows: int, constants, *, single_row=False
+    module, stream: KVStream, state, verify_state, position: int, rows: int, constants, *, single_row=False
 ) -> None:
     """The two verify cache writers at ``position`` on the stream's rows P .. P + R - 1 (rows past R zero)."""
 
@@ -1903,59 +1455,6 @@ def accept_pattern_rows(pattern: tuple[int, ...], ids: tuple[int, ...]):
         drafts.append(targets[j] if match else next(value for value in ids if value != targets[j]))
     alignment = [next(cycle) for _ in range(k + 1)]
     return targets, drafts, alignment
-
-
-def make_mtp_input(fake_ttnn) -> mtp_module.Qwen38TTNNMTPInput:
-    mixer = object.__new__(mtp_module.Qwen38TTNNMTPInput)
-    mixer.mesh_device = "mesh"
-    mixer.mesh_contract = FakeContract()
-    mixer.collective_topology = "linear"
-    mixer.compute_config = "compute_config"
-    mixer.projection_compute_config = "compute_config"
-    torch.manual_seed(93)
-    mixer.weights = SimpleNamespace(
-        released=False,
-        epsilon=1e-6,
-        embedding_norm_scale=sharded(1.0 + 0.1 * torch.randn(1, 1, 1, 2560), dtype=FP32),
-        hidden_norm_scale=sharded(1.0 + 0.1 * torch.randn(1, 1, 4, 2560), dtype=FP32),
-        fc_embedding=sharded(bf16_randn(1, 1, 2560, 2560, scale=2560**-0.5)),
-        fc_hidden=sharded(bf16_randn(1, 1, 2560, 2560, scale=2560**-0.5)),
-    )
-    return mixer
-
-
-def make_gr_module(fake_ttnn) -> gr_module.Qwen38TTNNGatedResidual:
-    torch.manual_seed(7)
-    width, partial = gr_module.FLAT_LOCAL_WIDTH, gr_module.PARTIAL_WIDTH
-    weights = gr_module.Qwen38TTNNGatedResidualWeights(
-        norm_scale=FakeTensor([(torch.randn(1, 4, 1, 640) * 0.1 + 0.25) for _ in range(TP)], FP32, TILE, 3),
-        down_inject=FakeTensor(
-            [bf16_randn(1, 1, width, partial, scale=width**-0.5) for _ in range(TP)], BF16, TILE, 2
-        ),
-        up=FakeTensor([bf16_randn(1, 1, partial, width, scale=partial**-0.5) for _ in range(TP)], BF16, TILE, 3),
-        replicated_anchor=FakeTensor([torch.zeros(1, 1, 1, 1, dtype=torch.bfloat16) for _ in range(TP)], BF16, TILE),
-        epsilon=1e-6,
-        layer_index=0,
-        block="attn",
-        namespace="backbone",
-    )
-    module = object.__new__(gr_module.Qwen38TTNNGatedResidual)
-    module.mesh_device = "mesh"
-    module.mesh_contract = FakeContract()
-    module.weights = weights
-    module.tt_ccl = SimpleNamespace(
-        get_num_links=lambda axis: 1,
-        get_and_cycle_ag_semaphore_handles=lambda axis: "ag",
-        get_and_cycle_barrier_semaphore_handle=lambda axis: "barrier",
-    )
-    module.collective_topology = "linear"
-    module.compute_config = "compute"
-    module.down_inject_act_memory_config = fake_ttnn.DRAM_MEMORY_CONFIG
-    module.down_inject_program_config = "down"
-    module.up_act_memory_config = fake_ttnn.DRAM_MEMORY_CONFIG
-    module.up_program_config = "up"
-    module.norm_scale_flat = fake_ttnn.experimental.view(weights.norm_scale, (1, 1, 1, width))
-    return module
 
 
 # --------------------------------------------------------------------------- the MTP draft stand-ins
@@ -2006,8 +1505,7 @@ class DraftWorld:
         logits = cat_shards(hidden).float() @ self.vocab.float()  # [1,1,rows,VOCAB]
         return replicated(logits.argmax(dim=3).float().reshape(1, 1, 1, -1), FP32, ROW_MAJOR)
 
-    # The world is the 1-row LM head the draft rows use: logits -> candidates -> the FP32 TILE token row (column 0 =
-    # the id).
+    # The world is the 1-row LM head the draft rows use: logits -> candidates -> the FP32 TILE token row (id in col 0).
     def __call__(self, hidden: FakeTensor):
         assert hidden.shape == (1, 1, 1, DRAFT_WIDTH)
         return SimpleNamespace(tensor=replicated(cat_shards(hidden).float() @ self.vocab.float(), FP32, TILE))
@@ -2089,18 +1587,8 @@ def eager_draft_rows(world: DraftWorld, residual: FakeTensor, tokens: list[int],
     return ids
 
 
-# --------------------------------------------------------------------------- chunk-input constants and source pins
+# --------------------------------------------------------------------------- source pins
 
-RESIDENT_BLOCKS = 32768 // qsa_module.COMPRESS_RATIO
-CHUNK_UINT32_TEMPLATES = (
-    "arange32_lanes",
-    "block_start_lanes",
-    "row_index_blocks",
-    "arange_blocks_rows",
-    "row_index_slots",
-    "arange_slots_rows",
-    "all_ones_rows",
-)
 HOST_TENSOR_CALLS = (
     "ttnn.from_torch",
     "ttnn.zeros",
@@ -2184,9 +1672,9 @@ def gdn_weights():
 
 @pytest.fixture
 def verify_fake(monkeypatch):
-    """The verify ttnn on the QSA, GDN, embedding, final mixer and MTP modules, with the torch partial RoPE."""
+    """The rows ttnn on the QSA, GDN, embedding, final mixer and MTP modules, with the torch partial RoPE."""
 
-    fake_ttnn = make_verify_ttnn(FakeChunk())
+    fake_ttnn = make_rows_ttnn(FakeChunk())
     patch_ttnn(monkeypatch, fake_ttnn, qsa_module, gdn_module, embedding_module, final_mixer_module, mtp_module, mtp_v2)
     monkeypatch.setattr(qsa_module, "apply_partial_rope_prefill", partial_rope_reference)
     return fake_ttnn

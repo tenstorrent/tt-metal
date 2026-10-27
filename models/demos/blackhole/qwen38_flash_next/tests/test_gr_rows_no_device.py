@@ -11,20 +11,22 @@ calls tile for tile) bitwise.
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
 
 import pytest
 import torch
 
 from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa: F401  (pytest fixture)
     BF16,
+    FP32,
     TILE,
     TP,
+    FakeContract,
     FakeTensor,
     assert_rows_bitwise,
     bf16_randn,
     function_calls,
     gr_fake,
-    make_gr_module,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn import gr as gr_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROWS, LONG_CHUNK_ROWS
@@ -60,7 +62,36 @@ def test_gr_rows_shapes_follow_the_row_count_and_keep_the_chunk_constants(expect
 def test_read_rows_and_write_rows_equal_the_one_row_calls_row_for_row(
     expect_error, gr_fake, rows: int, flat_views: bool
 ) -> None:
-    module = make_gr_module(gr_fake)
+    torch.manual_seed(7)
+    width, partial = gr_module.FLAT_LOCAL_WIDTH, gr_module.PARTIAL_WIDTH
+    weights = gr_module.Qwen38TTNNGatedResidualWeights(
+        norm_scale=FakeTensor([(torch.randn(1, 4, 1, 640) * 0.1 + 0.25) for _ in range(TP)], FP32, TILE, 3),
+        down_inject=FakeTensor(
+            [bf16_randn(1, 1, width, partial, scale=width**-0.5) for _ in range(TP)], BF16, TILE, 2
+        ),
+        up=FakeTensor([bf16_randn(1, 1, partial, width, scale=partial**-0.5) for _ in range(TP)], BF16, TILE, 3),
+        replicated_anchor=FakeTensor([torch.zeros(1, 1, 1, 1, dtype=torch.bfloat16) for _ in range(TP)], BF16, TILE),
+        epsilon=1e-6,
+        layer_index=0,
+        block="attn",
+        namespace="backbone",
+    )
+    module = object.__new__(gr_module.Qwen38TTNNGatedResidual)
+    module.mesh_device = "mesh"
+    module.mesh_contract = FakeContract()
+    module.weights = weights
+    module.tt_ccl = SimpleNamespace(
+        get_num_links=lambda axis: 1,
+        get_and_cycle_ag_semaphore_handles=lambda axis: "ag",
+        get_and_cycle_barrier_semaphore_handle=lambda axis: "barrier",
+    )
+    module.collective_topology = "linear"
+    module.compute_config = "compute"
+    module.down_inject_act_memory_config = gr_fake.DRAM_MEMORY_CONFIG
+    module.down_inject_program_config = "down"
+    module.up_act_memory_config = gr_fake.DRAM_MEMORY_CONFIG
+    module.up_program_config = "up"
+    module.norm_scale_flat = gr_fake.experimental.view(weights.norm_scale, (1, 1, 1, width))
     torch.manual_seed(11 + rows)
     residual = FakeTensor([bf16_randn(1, 4, rows, 640) for _ in range(TP)], BF16, TILE, 3)
     block_rows = FakeTensor([bf16_randn(1, 1, rows, 640) for _ in range(TP)], BF16, TILE, 3)

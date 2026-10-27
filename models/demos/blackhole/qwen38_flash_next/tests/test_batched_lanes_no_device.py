@@ -251,7 +251,12 @@ def test_lane_derive_on_the_fake_equals_the_emulation(expect_error, lane_fake, p
     constants, chunk, lanes = _lane_constants(contract, count)
     assert lanes.lanes == count and lanes.allocated_context == LANE_CONTEXT and lanes.indexer_form == "wide"
     assert _same_everywhere(lanes.arange32_tile).tolist() == [[[[r] * 32 for r in range(32)]]]
-    assert lanes.compressed_rows_memory_config == ("sharded", (32, 128), ("cores", count, ("core", 8, -(-count // 8))))
+    assert lanes.compressed_rows_memory_config == (
+        "sharded",
+        (32, 128),
+        ("cores", count, ("core", 8, -(-count // 8))),
+        "HEIGHT",
+    )
     row = lane_fake.from_torch(
         torch.tensor(positions, dtype=torch.int64).reshape(POSITION_INDEX_ROW_SHAPE),
         dtype=U32,

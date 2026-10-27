@@ -37,7 +37,7 @@ class PrefillFakeModel:
         self.calls.append(("reset", state, chunk_state.rows))
 
     def write_chunk_accepted(self, chunk_state, accepted: int) -> None:
-        self.calls.append(("accepted", accepted))
+        self.calls.append(("accepted", chunk_state.rows, accepted))
 
     def prepare_chunk_inputs(self, chunk_state, token_ids, *, ple_context, positions=None, features=None):
         tokens = tuple(token_ids)
@@ -54,7 +54,7 @@ class PrefillFakeModel:
         self.calls.append(("upload", chunk_state.rows, prepared.tokens))
 
     def finish_prefill(self, state, chunk_state, prefilled: int, *, rope_shift: int = 0) -> None:
-        self.calls.append(("finish", prefilled))
+        self.calls.append(("finish", chunk_state.rows, prefilled))
         self.vision.append(("finish", rope_shift))
 
     def forward_prefill_chunk_generic(self, chunk_state, state, *, gdn_step_anchor: bool = False, mtp=None) -> None:

@@ -45,7 +45,6 @@ from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa:
     seed_ple_state,
     source_methods,
     source_segment,
-    step_chunk_kernel,
     view_tile_pages,
 )
 from models.demos.blackhole.qwen38_flash_next.tools.mtp_v2_verify_reference import row_serial_torch
@@ -62,6 +61,27 @@ LAYER_SOURCE = ROOT / "ttnn" / "layer.py"
 ROWS = 5
 HISTORY_PAD = [(0, 0), (0, 0), (0, 32 - 3), (0, 0)]  # the history sync pads its 3-row tile
 ROWS_PAD = [(0, 0), (0, 0), (0, 32 - ROWS), (0, 0)]
+
+
+def step_chunk_kernel(q, k, v, g, beta, scale, state):
+    """Row 0 through the 1-row path's fp32 step arithmetic (the same torch calls the fake step ops make); rows
+    past 0 are zero.  Used to show that everything around the recurrence is bitwise the 1-row path."""
+
+    heads, head_dim = GDN_HEADS, GDN_HEAD_DIM
+    q_row = q[:, 0].repeat_interleave(heads // q.shape[2], dim=1).reshape(1, heads, 1, head_dim).float() * scale
+    k_row = k[:, 0].repeat_interleave(heads // k.shape[2], dim=1).reshape(1, heads, 1, head_dim).float()
+    v_row = v[:, 0].reshape(1, heads, 1, head_dim)
+    beta_row = beta[:, 0].reshape(1, heads, 1, 1)
+    g_row = g[:, 0].reshape(1, heads, 1, 1)
+    decayed = state * torch.exp(g_row)
+    v_read = torch.matmul(k_row, decayed)
+    delta = v_row.to(torch.float32) - v_read
+    outer = torch.matmul(k_row.transpose(2, 3), delta)
+    new_state = decayed + outer * beta_row
+    o_row = torch.matmul(q_row, new_state)  # [1, HEADS, 1, HEAD_DIM] fp32; the rows path casts to bf16 as 1-row does
+    output = torch.zeros(1, q.shape[1], heads, head_dim, dtype=torch.float32)
+    output[:, 0] = o_row[:, :, 0]
+    return output, new_state
 
 
 def _rows_run(module, state, hidden: torch.Tensor, constants, **forward):

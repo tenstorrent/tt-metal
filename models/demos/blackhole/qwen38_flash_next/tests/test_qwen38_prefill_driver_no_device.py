@@ -73,14 +73,14 @@ def test_run_sequences_alignment_chunks_tail_and_handoff(harness, start: int, co
     expected = [("synchronize",), ("reset", "state", 32), ("verify", TRACE_ID), ("prepare", 32, padded[0], context)]
     for index, (chunk, accepted) in enumerate(zip(chunks, accepts, strict=True)):
         if accepted != 31:  # only before the padded tail; finish_prefill restores the full-chunk value
-            expected.append(("accepted", accepted))
+            expected.append(("accepted", CHUNK_ROWS, accepted))
         context = prefill_context_after(chunk, context)  # the pad rows never enter the committed context
         expected += [("upload", 32, padded[index]), ("replay", TRACE_ID, False)]
         if index + 1 < len(chunks):
             expected.append(("prepare", 32, padded[index + 1], context))
         if (index + 1) % 4 == 0:
             expected += [("record", index // 4), ("wait", index // 4)]
-    expected += [("synchronize",), ("finish", start + count), ("synchronize",)]
+    expected += [("synchronize",), ("finish", CHUNK_ROWS, start + count), ("synchronize",)]
     assert log[len(forced) :] == expected
     assert timing.verify_ms is not None and timing.handoff_ms >= 0.0
     assert timing.traced is True and timing.gdn_step_anchor is False

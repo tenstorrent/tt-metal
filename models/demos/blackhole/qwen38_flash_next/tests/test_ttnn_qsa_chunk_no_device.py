@@ -11,6 +11,7 @@ arithmetic model.
 
 from __future__ import annotations
 
+import itertools
 from types import SimpleNamespace
 
 import pytest
@@ -18,13 +19,12 @@ import torch
 
 from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (
     BF16,
-    CHUNK_UINT32_TEMPLATES,
     I32,
-    RESIDENT_BLOCKS,
+    ROW_MAJOR,
+    TILE,
     U32,
-    IntContract,
-    int_u32,
-    make_int_ttnn,
+    FakeDType,
+    deallocate,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn import contracts as contracts_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
@@ -45,6 +45,16 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import (
 
 CHUNK_POSITIONS = (0, 32, 64, 2016, 2048, 2080, 8160, 32736)
 CHUNK_INPUT_FIELDS = ("kv_block_start", "block_index_i32", "indexer_neg_mask", "row_keep_bits", "row_fill")
+RESIDENT_BLOCKS = 32768 // COMPRESS_RATIO
+CHUNK_UINT32_TEMPLATES = (
+    "arange32_lanes",
+    "block_start_lanes",
+    "row_index_blocks",
+    "arange_blocks_rows",
+    "row_index_slots",
+    "arange_slots_rows",
+    "all_ones_rows",
+)
 
 
 # --- emulation: row j of the chunk is the 1-row derivation at P + j --------------------
@@ -207,6 +217,90 @@ def test_device_position_advance_by_refuses_a_count_that_is_not_a_positive_int(e
 # The chain runs on a torch model of the integer ops after k in-trace ``advance_by(rows)`` calls, so every chunk start
 # the model reaches by replaying (a tile crossing at P = 128, the top-k regime at 2048, the cache's last chunk) is
 # pinned field for field; the 64k/128k/256k options at each context's top chunk and its 32k/64k/128k boundaries.
+
+_int_ids = itertools.count(1)
+
+
+class IntTensor:
+    """One device tensor of the integer fake: int64 storage for UINT32/INT32, bf16 for the mask."""
+
+    def __init__(self, value: torch.Tensor, dtype: FakeDType, layout: str) -> None:
+        self.value, self.dtype, self.layout = value, dtype, layout
+        self.tensor_id = next(_int_ids)
+        self.alive = True
+
+    @property
+    def shape(self):
+        return tuple(self.value.shape)
+
+    def _read(self) -> torch.Tensor:
+        assert self.alive, "read of a deallocated tensor"
+        return self.value
+
+
+class IntContract:
+    def validate_tensor(self, tensor, *, placement, shard_dim=None, require_device=True) -> None:
+        assert tensor.alive
+
+
+def int_u32(values: torch.Tensor) -> IntTensor:
+    return IntTensor(values.to(torch.int64).clone(), U32, ROW_MAJOR)
+
+
+def _int_op(torch_op):
+    def op(a, b, *, memory_config=None, dtype=None):
+        result = torch_op(a._read(), b._read() if isinstance(b, IntTensor) else b)
+        tag = dtype or a.dtype
+        if tag is BF16:
+            result = result.to(torch.bfloat16)
+        elif result.dtype != torch.int64:
+            result = result.to(torch.int64)
+        return IntTensor(result, tag, a.layout)
+
+    return op
+
+
+def make_int_ttnn() -> SimpleNamespace:
+    """The exact integer ops of the chunk-input derivation on single-device ``IntTensor``s."""
+
+    def typecast(tensor, dtype, *, memory_config=None):
+        value = tensor._read()
+        return IntTensor(value.to(torch.bfloat16) if dtype is BF16 else value.clone(), dtype, tensor.layout)
+
+    def from_torch(host, *, dtype, layout, device=None, memory_config=None, mesh_mapper=None):
+        return IntTensor(host.to(torch.int64) if dtype is U32 else host.to(torch.bfloat16), dtype, layout)
+
+    def copy_int(source, target):
+        target._read().copy_(source._read())
+        return target
+
+    return SimpleNamespace(
+        uint32=U32,
+        int32=I32,
+        bfloat16=BF16,
+        ROW_MAJOR_LAYOUT=ROW_MAJOR,
+        TILE_LAYOUT=TILE,
+        TILE_SIZE=32,
+        DRAM_MEMORY_CONFIG="DRAM",
+        bitwise_and=_int_op(torch.bitwise_and),
+        bitwise_or=_int_op(torch.bitwise_or),
+        bitwise_right_shift=_int_op(torch.bitwise_right_shift),
+        bitwise_left_shift=_int_op(torch.bitwise_left_shift),
+        add=_int_op(torch.add),
+        subtract=_int_op(torch.sub),
+        multiply=_int_op(torch.mul),
+        minimum=_int_op(lambda a, b: torch.clamp(a, max=b)),
+        lt=_int_op(torch.lt),
+        ge=_int_op(torch.ge),
+        rsub=_int_op(lambda a, b: b - a),
+        typecast=typecast,
+        reshape=lambda t, shape, memory_config=None: IntTensor(t._read().reshape(tuple(shape)), t.dtype, t.layout),
+        from_torch=from_torch,
+        copy_host_to_device_tensor=copy_int,
+        copy=copy_int,
+        deallocate=deallocate,
+    )
+
 
 DERIVE_CASES = [(CHUNK_ROWS, 32_768, CHUNK_ROWS * k) for k in (1, 2, 4, 63, 64, 127, 254, 255, 1023)]
 DERIVE_CASES += [(CHUNK_ROWS, 65_536, 32_768), (CHUNK_ROWS, 65_536, 65_504), (CHUNK_ROWS, 131_072, 65_536)]

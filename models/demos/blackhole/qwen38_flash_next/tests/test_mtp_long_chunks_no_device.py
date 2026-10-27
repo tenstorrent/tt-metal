@@ -14,16 +14,18 @@ import torch
 
 from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa: F401  (pytest fixture)
     BF16,
+    FP32,
+    FakeContract,
     FakeTensor,
     bf16_randn,
     cat_shards,
-    make_mtp_input,
     sharded,
     verify_fake,
 )
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_session as session_module
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_prefill_driver as driver_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import embedding as embedding_module
+from models.demos.blackhole.qwen38_flash_next.ttnn import mtp as mtp_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import mtp_v2
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROW_COUNTS, CHUNK_ROWS, LONG_CHUNK_ROWS
 
@@ -41,7 +43,21 @@ def test_mtp_input_mixer_rows_are_bitwise_the_32_row_form_per_tile_and_the_one_r
     """The 128-row form's row j is the one-row mixer's result for row j and the 32-row form's row j % 32 on its tile:
     the norms are per row and the projections run per 32-row tile. The rows forms admit the chunk row counts only."""
 
-    mixer = make_mtp_input(verify_fake)
+    mixer = object.__new__(mtp_module.Qwen38TTNNMTPInput)
+    mixer.mesh_device = "mesh"
+    mixer.mesh_contract = FakeContract()
+    mixer.collective_topology = "linear"
+    mixer.compute_config = "compute_config"
+    mixer.projection_compute_config = "compute_config"
+    torch.manual_seed(93)
+    mixer.weights = SimpleNamespace(
+        released=False,
+        epsilon=1e-6,
+        embedding_norm_scale=sharded(1.0 + 0.1 * torch.randn(1, 1, 1, 2560), dtype=FP32),
+        hidden_norm_scale=sharded(1.0 + 0.1 * torch.randn(1, 1, 4, 2560), dtype=FP32),
+        fc_embedding=sharded(bf16_randn(1, 1, 2560, 2560, scale=2560**-0.5)),
+        fc_hidden=sharded(bf16_randn(1, 1, 2560, 2560, scale=2560**-0.5)),
+    )
     torch.manual_seed(95)
     embedding, residual = bf16_randn(1, 1, LONG_CHUNK_ROWS, 2560), bf16_randn(1, 4, LONG_CHUNK_ROWS, 2560)
     rows = mixer.rows(sharded(embedding), sharded(residual))
