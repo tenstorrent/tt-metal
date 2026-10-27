@@ -80,7 +80,72 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_unpack_AB_face_compressed_mm_<CT_DIM, true /*clear_src*/, true /*finalize*/>(address_b(0), address_meta(0), KT_DIM);
     }
-#if FCMM_KERNEL_MODE >= 20
+#if FCMM_KERNEL_MODE >= 30
+    else
+    {
+        // Fully hand-rolled: call 0's entry writes copied from the LLK execute (ctx bases, Y offsets, SrcB
+        // base), then raw UNPACR streams: B, FCMM_NFACES faces in ctx 1 (bfp4), [NOPs], FCMM_NFACES faces in
+        // ctx 0 (bfp2). No semaphores, no finalize; the math side (mode 30) issues one MVMUL per face.
+        static_assert(num_calls == 2, "hand-rolled modes need exactly two calls");
+        volatile std::uint32_t* cfg       = get_cfg_pointer();
+        const std::uint32_t* pre_meta_ptr = reinterpret_cast<std::uint32_t*>(address_meta(0)) + (kt_per_call * CT_DIM + 4) / 5;
+        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
+        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
+        cfg[THCON_SEC0_REG3_Base_address_ADDR32]       = pre_meta_ptr[1] & 0x00FFFFFF;
+        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[2] & 0x00FFFFFF;
+        t6_mutex_acquire(mutex::THREAD2_ADC);
+        TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+        TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
+        TT_SETADC_THREAD_OVERRIDE(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, p_setadc::THREAD_OVRD_MATH, pre_meta_ptr[1] >> 24);
+        TT_SETADC_THREAD_OVERRIDE(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, p_setadc::THREAD_OVRD_PACK, pre_meta_ptr[2] >> 24);
+        t6_mutex_release(mutex::THREAD2_ADC);
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b(0);
+#if FCMM_KERNEL_MODE == 33
+        // both contexts bfp4 (format identical, only the context / counter set switches)
+        cfg_reg_rmw_tensix<THCON_SEC0_REG7_Unpack_data_format_cntx0_RMW>(static_cast<std::uint32_t>(DataFormat::Bfp4_b));
+        cfg_reg_rmw_tensix<THCON_SEC0_REG7_Unpack_out_data_format_cntx0_RMW>(static_cast<std::uint32_t>(DataFormat::Bfp4_b));
+        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = pre_meta_ptr[2] & 0x00FFFFFF;
+        t6_mutex_acquire(mutex::THREAD2_ADC);
+        TT_SETADC_THREAD_OVERRIDE(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, p_setadc::THREAD_OVRD_MATH, pre_meta_ptr[2] >> 24);
+        t6_mutex_release(mutex::THREAD2_ADC);
+#endif
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+        TTI_UNPACR_COMMON(SrcB, 0b00'00'10'10, 1); // B
+        for (std::uint32_t f = 0; f < FCMM_NFACES; ++f)
+        {
+#if FCMM_KERNEL_MODE == 38
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 0, 1, 1); // '0' first: the other direction
+#else
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 1, 2, 1); // '1' bfp4
+#endif
+        }
+        FCMM_NOPS(FCMM_UNP_ENTRY_NOPS);
+        if constexpr (FCMM_UNP_WAIT > 0)
+        {
+            ckernel::wait(FCMM_UNP_WAIT); // RISC-side gap; the Tensix stream is empty meanwhile
+        }
+#if FCMM_KERNEL_MODE == 31
+        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC); // the S the LLK would emit in-call
+#elif FCMM_KERNEL_MODE == 32
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK); // drain only, no clear
+#endif
+        for (std::uint32_t f = 0; f < FCMM_NFACES; ++f)
+        {
+#if FCMM_KERNEL_MODE == 35
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 0, 2, 1); // ctx0 (bfp2) with the bfp4 counter set
+#elif FCMM_KERNEL_MODE == 36
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 1, 1, 1); // ctx1 (bfp4) with the bfp2 counter set
+#elif FCMM_KERNEL_MODE == 37 || FCMM_KERNEL_MODE == 38
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 1, 2, 1); // '1': no switch (37) or the 0 -> 1 direction (38)
+#else
+            TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 0, 1, 1); // '0' bfp2
+#endif
+        }
+        // drain before the uninit's cfg / counter writes (the LLK's finalize block does this for the real op)
+        TTI_STALLWAIT(p_stall::STALL_THCON | p_stall::STALL_CFG | p_stall::STALL_UNPACK | p_stall::STALL_SYNC, p_stall::UNPACK);
+    }
+#elif FCMM_KERNEL_MODE >= 20
     else
     {
         // Hand-rolled second call: call 0 through the LLK (sets every context base / Y offset), then the raw
@@ -194,6 +259,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_face_compressed_mm_<CT_DIM, true /*finalize*/>(params.buffer_C[0], params.in0_face_r_dim, 0 /*dst_index*/, KT_DIM);
     }
+#if FCMM_KERNEL_MODE >= 30
+    else
+    {
+        // one MVMUL per face, SrcA cleared per face, SrcB held (never cleared), no finalize
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0);
+        const std::uint32_t single_row = (params.in0_face_r_dim == 1) ? 1 : 0;
+        for (std::uint32_t call = 0; call < 2; call++)
+        {
+            if constexpr (FCMM_MATH_HOLD > 0)
+            {
+                ckernel::wait(FCMM_MATH_HOLD);
+            }
+            for (std::uint32_t f = 0; f < FCMM_NFACES; ++f)
+            {
+                if (call == 1 && f + 1 == FCMM_NFACES)
+                {
+                    TT_MVMUL(p_setrwc::CLR_AB, single_row, ADDR_MOD_0, 0); // release the SrcB bank at the very end
+                }
+                else
+                {
+                    TT_MVMUL(p_setrwc::CLR_A, single_row, ADDR_MOD_0, 0);
+                }
+            }
+        }
+    }
+#else
     else
     {
         for (std::uint32_t call = 0; call < num_calls; call++)
@@ -213,6 +304,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
     }
+#endif
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

@@ -637,10 +637,12 @@ class FCMM_PERTURB(TemplateParameter):
     fcmm_kernel_mode: int = 0
     fcmm_call1_ctx: int = 0
     fcmm_nfaces: int = 4
+    fcmm_unp_wait: int = 0
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
             [
+                f"#define FCMM_UNP_WAIT {self.fcmm_unp_wait}u",
                 f"#define FCMM_NFACES {self.fcmm_nfaces}u",
                 f"#define FCMM_CALL1_CTX {self.fcmm_call1_ctx}",
                 f"#define FCMM_MATH_HOLD {self.fcmm_math_hold}u",

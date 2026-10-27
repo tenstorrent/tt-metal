@@ -63,6 +63,8 @@ def load_cases():
         c.setdefault("entry_stall", 0)
         c.setdefault("mode", 0)
         c.setdefault("c1ctx", 0)
+        c.setdefault("nfaces", 4)
+        c.setdefault("unp_wait", 0)
         out.append(c)
     return out
 
@@ -172,6 +174,8 @@ def test_fcmm_hang_min(case):
                 fcmm_entry_stall=case["entry_stall"],
                 fcmm_kernel_mode=case["mode"],
                 fcmm_call1_ctx=case["c1ctx"],
+                fcmm_nfaces=case["nfaces"],
+                fcmm_unp_wait=case["unp_wait"],
             ),
         ],
     )
