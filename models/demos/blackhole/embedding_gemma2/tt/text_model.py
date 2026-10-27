@@ -27,6 +27,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.config import (
+    SLIDING,
     RMSNormConfig,
     TextModelConfig,
     compute_kernel_config_hifi4,
@@ -84,14 +85,19 @@ class TextModel(LightweightModule):
         """
         n = config.num_layers if num_layers is None else num_layers
         rope = RotaryTables.build(config, device)
-        masks = AttentionMasks(device, config.sliding_window)
+        masks = AttentionMasks(
+            device,
+            config.sliding_window,
+            sliding_head_dim=config.head_dim_for(SLIDING),
+            num_heads=config.layers[0].attention.num_heads,
+        )
         embedding = TextEmbedding.from_state_dict(state_dict, config, device, cache_dir=cache_dir)
         ple = PerLayerInput.from_state_dict(
             substate(state_dict, "ple"), config.per_layer_input, device, cache_dir=cache_dir
         )
         layers = [
             EncoderLayer.from_state_dict(
-                substate(state_dict, f"layers.{i}"), config.layers[i], device, rope, cache_dir=cache_dir
+                substate(state_dict, f"layers.{i}"), config.layers[i], device, rope, cache_dir=cache_dir, masks=masks
             )
             for i in range(n)
         ]
@@ -115,6 +121,7 @@ class TextModel(LightweightModule):
         if seq_len % 32 != 0 or seq_len > self.config.max_seq_len:
             raise ValueError(f"physical seq_len {seq_len} must be a multiple of 32 and <= {self.config.max_seq_len}")
         self.masks.prepare(seq_len)
+        self.rope.prepare(seq_len)
 
     def forward_hidden(self, input_ids: ttnn.Tensor, keep: ttnn.Tensor) -> ttnn.Tensor:
         """Embedding + PLE + encoder stack, before the final norm. [B,1,S,hidden]."""

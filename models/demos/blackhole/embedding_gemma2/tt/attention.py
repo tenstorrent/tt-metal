@@ -28,6 +28,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.config import (
+    SLIDING,
     AttentionConfig,
     RMSNormConfig,
     act_memory_config,
@@ -96,6 +97,7 @@ class Attention(LightweightModule):
         k_norm: RMSNorm,
         v_norm: RMSNorm,
         rope: RotaryTables,
+        masks=None,
     ):
         super().__init__()
         self.config = config
@@ -105,6 +107,7 @@ class Attention(LightweightModule):
         self.k_norm = k_norm
         self.v_norm = v_norm
         self.rope = rope
+        self.masks = masks  # AttentionMasks (shared), source of the sliding-layer SDPA block map
         self.compute_kernel_config = compute_kernel_config_hifi4()
         # HiFi2 + fp32 accumulation: 2.0-2.3x faster than HiFi4 at the tuned chunks, PCC vs an fp32
         # golden 0.99990+ (E5a sdpa_sweep); fp32_dest_acc off was rejected (PCC 0.9988-0.9995).
@@ -125,6 +128,7 @@ class Attention(LightweightModule):
         *,
         cache_dir: Path | None = None,
         name: str = "self_attn",
+        masks=None,
     ) -> "Attention":
         """`state_dict` holds the HF `layers.<i>.self_attn.` sub-state."""
         H = config.hidden_size
@@ -156,7 +160,7 @@ class Attention(LightweightModule):
             substate(state_dict, "k_norm"), hd_norm, device, cache_dir=cache_dir, name=f"{name}.k_norm"
         )
         v_norm = RMSNorm(RMSNormConfig(dim=config.head_dim, eps=config.rms_norm_eps, with_scale=False), None)
-        return cls(config, wqkv, wo_t, q_norm, k_norm, v_norm, rope)
+        return cls(config, wqkv, wo_t, q_norm, k_norm, v_norm, rope, masks=masks)
 
     def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor, out_memory_config=None) -> ttnn.Tensor:
         cfg = self.config
@@ -182,6 +186,10 @@ class Attention(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
+        block_map = None
+        if self.masks is not None and cfg.layer_type == SLIDING:
+            block_map = self.masks.block_map(S, B)  # skips blocks outside the band (long buckets)
+
         q_r = self.rope(q_n, cfg.layer_type, memory_config=mem_q)
         k_r = self.rope(k_n, cfg.layer_type, memory_config=mem_kv)
         ttnn.deallocate(q_n)
@@ -193,6 +201,7 @@ class Attention(LightweightModule):
             v_n,
             is_causal=False,
             attn_mask=mask,
+            attn_mask_block_map=block_map,
             scale=cfg.scaling,
             program_config=sdpa_program_config(
                 cfg.head_dim, S, x.shape[0], cfg.num_heads, x.device().compute_with_storage_grid_size()

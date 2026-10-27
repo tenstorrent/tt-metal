@@ -14,6 +14,8 @@ Positions are 0..S-1 for every row of the batch, as in HF (`position_ids = arang
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -29,11 +31,39 @@ def rope_cos_sin(theta: float, head_dim: int, seq_len: int) -> tuple[torch.Tenso
     return emb.cos(), emb.sin()
 
 
+# Buckets up to this length also get an L1-resident copy of their cos/sin rows at prepare(S)
+# (E5a: the rotary op reads its tables from L1 instead of DRAM). All buckets <= 512 together hold
+# 3 MB (about 23 KB per L1 bank).
+ROPE_L1_MAX_SEQ = int(os.environ.get("EG2_ROPE_L1_MAX_SEQ", "512"))
+
+
 class RotaryTables(LightweightModule):
-    def __init__(self, config: TextModelConfig, tables: dict[str, tuple[ttnn.Tensor, ttnn.Tensor]]):
+    def __init__(self, config: TextModelConfig, tables: dict[str, tuple[ttnn.Tensor, ttnn.Tensor]], device=None):
         super().__init__()
         self.config = config
         self.tables = tables
+        self.device = device
+        self.l1_tables: dict[tuple[str, int], tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+
+    def prepare(self, seq_len: int) -> None:
+        """Setup-time: L1 copies of rows 0..seq_len-1 for short buckets (host upload)."""
+        if seq_len > ROPE_L1_MAX_SEQ or self.device is None:
+            return
+        for lt in (SLIDING, FULL):
+            if (lt, seq_len) in self.l1_tables:
+                continue
+            hd = self.config.head_dim_for(lt)
+            cos, sin = rope_cos_sin(self.config.rope_theta[lt], hd, seq_len)
+            self.l1_tables[(lt, seq_len)] = tuple(
+                ttnn.from_torch(
+                    t.reshape(1, 1, seq_len, hd),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                for t in (cos, sin)
+            )
 
     @classmethod
     def build(cls, config: TextModelConfig, device) -> "RotaryTables":
@@ -51,9 +81,9 @@ class RotaryTables(LightweightModule):
                 )
                 for t in (cos, sin)
             )
-        return cls(config, tables)
+        return cls(config, tables, device)
 
     def forward(self, x: ttnn.Tensor, layer_type: str, memory_config=None) -> ttnn.Tensor:
         """x [B, H, S, head_dim] -> rotated, same shape. S <= max_seq_len."""
-        cos, sin = self.tables[layer_type]
+        cos, sin = self.l1_tables.get((layer_type, x.shape[2])) or self.tables[layer_type]
         return ttnn.experimental.rotary_embedding(x, cos, sin, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG)

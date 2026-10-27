@@ -68,8 +68,9 @@ class EncoderLayer(LightweightModule):
         rope: RotaryTables,
         *,
         cache_dir: Path | None = None,
+        masks=None,
     ) -> "EncoderLayer":
-        """`state_dict` holds the HF `layers.<i>.` sub-state."""
+        """`state_dict` holds the HF `layers.<i>.` sub-state; `masks` the shared AttentionMasks."""
         i = config.layer_idx
         prefix = f"layers.{i}"
         norm_cfg = RMSNormConfig(dim=config.hidden_size, eps=config.rms_norm_eps)
@@ -86,6 +87,7 @@ class EncoderLayer(LightweightModule):
             rope,
             cache_dir=cache_dir,
             name=f"{prefix}.self_attn",
+            masks=masks,
         )
         mlp = MLP.from_state_dict(
             substate(state_dict, "mlp"), config.mlp, device, cache_dir=cache_dir, name=f"{prefix}.mlp", optimized=True
