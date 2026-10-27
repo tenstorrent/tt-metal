@@ -755,11 +755,90 @@ def test_the_flat_record_table_selects_the_drafting_rows_from_the_wire_table(mtp
     assert _names(mtp, "refresh")[-1][1][0] == [[10, 11, 0, 0], [12, 13, 0, 0], [14, 15, 0, 0]]
 
 
-def test_bounded_targets_install_the_record_tables_on_the_target_stash(adapter, monkeypatch):
+def test_bounded_targets_leave_the_target_stash_alone(adapter, monkeypatch):
+    """The decoder receives its per-layer tables explicitly; the plain decode installs the stash per call."""
     mtp = build_mtp_model(adapter, monkeypatch, ring=2048, max_seq_len=4096)
     _start_solo(mtp)
-    stash = mtp.model[0]._active_page_tables_per_layer
-    assert [t.tolist() for t in stash] == [[[10, 11, 0, 0]], [[10, 11, 0, 0]]]
+    assert not hasattr(mtp.model[0], "_active_page_tables_per_layer")
+    assert len(_names(mtp, "refresh")) == 1
+
+
+# -- the shared verify-logits buffer: read back at proposal time when a row will need it ----------
+
+
+def test_a_greedy_only_replay_performs_no_readback(mtp):
+    _start_solo(mtp)
+    assert mtp._mtp_decoder.readbacks == 0 and mtp._mtp_sessions[0].retained.logits is None
+    _verify(mtp, [_block(150, [101, 102, 103, 104, 105])], [_positions(3, 6)], [5], [10])
+    assert mtp._mtp_decoder.readbacks == 0
+
+
+def test_a_mixed_replay_reads_the_logits_back_exactly_once_at_proposal_time(mtp):
+    _prefill(mtp, rows=3)
+    mixed = _sampling(3, temperature=[0.7, 0.0, 0.0])
+    _ordinary(mtp, [3, 4, 5], [2, 2, 2], [10, 12, 14], result=_tensor([30, 31, 32]), sampling_params=mixed)
+    _propose(mtp, [[30 + r] + [-1] * 5 for r in range(3)], [[3] + [-1] * 5] * 3)
+    decoder = mtp._mtp_decoder
+    assert decoder.readbacks == 1 and decoder.results[-1].readbacks == 1
+    for slot in range(3):
+        retained = mtp._mtp_sessions[slot].retained
+        assert tuple(retained.logits.shape) == (6, VOCAB) and retained.logits.dtype == torch.bfloat16
+    drafts = [mtp._mtp_sessions[r].retained.drafts for r in range(3)]
+    out = _verify(
+        mtp, [_block(30 + r, drafts[r]) for r in range(3)], [_positions(3, 6)] * 3, [5] * 3, [10, 12, 14], mode="logits"
+    )
+    assert decoder.readbacks == 1, "the verify answers from the retained host logits"
+    assert out.logits[0].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
+    assert out.logits[2].float().argmax(dim=-1).tolist() == [170, 171, 172, 173, 174, 175]
+
+
+def test_rows_of_a_logits_verify_are_read_back_at_the_next_proposal(mtp):
+    _start_solo(mtp)
+    _verify(mtp, [_block(150, [101, 102, 103, 104, 105])], [_positions(3, 6)], [5], [10], mode="logits")
+    assert mtp._mtp_decoder.readbacks == 1, "a greedy-only replay is read back late, while its buffer is live"
+    _propose(mtp, [[150, 151, 152, 153, 154, 155]], [_positions(4, 6)], counts=[6])
+    assert mtp._mtp_decoder.readbacks == 2 and mtp._mtp_sessions[0].retained.logits is not None
+
+
+def test_a_deferred_logits_verify_answers_from_the_logits_retained_at_proposal(mtp):
+    # A (slot 0) samples, B (slot 1) is greedy: the shared replay is read back for A.
+    _prefill(mtp, rows=2)
+    _ordinary(
+        mtp, [3, 4], [2, 2], [10, 12], result=_tensor([30, 31]), sampling_params=_sampling(2, temperature=[0.7, 0.0])
+    )
+    _propose(mtp, [[30] + [-1] * 5, [31] + [-1] * 5], [[3] + [-1] * 5] * 2)
+    decoder = mtp._mtp_decoder
+    assert decoder.readbacks == 1
+    drafts_a = mtp._mtp_sessions[0].retained.drafts
+    drafts_b = mtp._mtp_sessions[1].retained.drafts
+    # The scheduler runs B alone: B's verify and B's next proposal rewrite the shared buffer.
+    _verify(mtp, [[0] + [-1] * 5, _block(31, drafts_b)], [[-1] * 6, _positions(3, 6)], [0, 5], [0, 12])
+    _propose(mtp, [[-1] * 6, [160, 161, 162, 163, 164, 165]], [[-1] * 6, _positions(4, 6)], counts=[1, 6])
+    assert decoder.replays == 2 and decoder.readbacks == 1
+    assert decoder.buffer[0, 0].argmax().item() != 150, "the buffer now holds B's replay"
+    # A's deferred verify in logits mode answers from the logits retained with A's proposal.
+    out = _verify(
+        mtp, [_block(30, drafts_a), [0] + [-1] * 5], [_positions(3, 6), [-1] * 6], [5, 0], [10, 0], mode="logits"
+    )
+    assert out.logits[0].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
+    assert decoder.readbacks == 1
+
+
+def test_a_greedy_row_whose_buffer_was_overwritten_cannot_answer_a_logits_verify(mtp, expect_error):
+    _start_solo(mtp)  # greedy A at slot 0: no readback
+    _prefill(mtp, slot=1, key=20)
+    _ordinary(mtp, [0, 9], [-1, 2], [0, 20], result=_tensor([0, 42]))
+    _propose(mtp, [[-1] * 6, [42] + [-1] * 5], [[-1] * 6, [3] + [-1] * 5])
+    assert mtp._mtp_decoder.replays == 2 and mtp._mtp_decoder.readbacks == 0
+    with expect_error(RuntimeError, "overwritten the shared verify-logits buffer"):
+        _verify(
+            mtp,
+            [_block(150, [101, 102, 103, 104, 105]), [0] + [-1] * 5],
+            [_positions(3, 6), [-1] * 6],
+            [5, 0],
+            [10, 0],
+            mode="logits",
+        )
 
 
 # -- multimodal composition ---------------------------------------------------------------------

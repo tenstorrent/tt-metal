@@ -6564,17 +6564,22 @@ class MTPRetainedRow:
     the decoder was given for it (the next replay gathers this row's seed
     hidden by that id, so a moved slot reseeds instead). ``argmax_ids``
     holds the target's argmax at the ``K_v + 1`` packed positions
-    ``[anchor, d1..dK]``; the verify logits stay on the device inside
-    ``replay`` until a logits-mode verify reads them.
+    ``[anchor, d1..dK]``. ``logits`` is this row's ``[K_v + 1, V]`` bf16
+    host copy of the verify logits when the proposal read them back
+    (``Gemma4MTPContractForCausalLM.propose_draft_tokens``), else None:
+    the decoder's verify-logits buffer is shared by every record and is
+    rewritten by its next reseed or step, which ``serial`` identifies.
     """
 
     replay: object
     shape_row: int
     row_id: int
+    serial: int
     anchor_token: int
     anchor_position: int
     drafts: list
     argmax_ids: list
+    logits: object = None
     consumed: bool = False
 
 
@@ -6748,6 +6753,12 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         self._mtp_max_rows = 0
         self._mtp_sessions = {}  # state slot -> MTPSession
         self._mtp_last_replay = None  # the latest ServingStepResult
+        # Counts the decoder calls that rewrite its shared verify-logits buffer
+        # (one bump per proposal that reseeds and/or replays).
+        self._mtp_replay_serial = 0
+        # Per decode row of the latest step: True when target argmax ids cannot
+        # answer that row (no device sampling, a sampled row, logprobs, a grammar).
+        self._mtp_row_needs_logits = {}
         self._mtp_step_tables = None  # (page_table, page_tables_per_layer, kv_cache) of the latest decode step
         self._mtp_installed_tables = None  # the per-layer record tables last handed to the decoder
         self._mtp_decline_logged = None
@@ -6960,6 +6971,16 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         rows = self._spec_rows(tokens)
         live = self._spec_live_rows(start_pos, rows)
         self._mtp_step_tables = (kwargs.get("page_table"), page_tables_per_layer, kwargs.get("kv_cache"))
+        # What this step's rows will need from their next verify: a row the
+        # runner samples on the host (no sampling_params, which is also every
+        # logits verify), a sampled or penalised row, one requesting logprobs
+        # or one under a grammar is verified in logits mode, so the proposal
+        # that follows this step must read the verify logits back for it.
+        sampling = kwargs.get("sampling_params")
+        bitmask = kwargs.get("grammar_bitmask")
+        self._mtp_row_needs_logits = {
+            r: sampling is None or not self._spec_row_can_use_argmax(sampling, r, bitmask) for r in live
+        }
         if spec_mode is None:
             return self._mtp_ordinary_step(args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live)
         if spec_mode not in ("argmax_ids", "logits"):
@@ -7120,20 +7141,27 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
         vocab = self._mtp_vocab_size()
         logits = torch.zeros((int(rows), width, vocab), dtype=torch.bfloat16)
-        host_by_replay = {}
+        late = {}
         for r, retained in answered.items():
-            host = host_by_replay.get(id(retained.replay))
+            host = retained.logits
             if host is None:
-                host = retained.replay.logits_to_host()
-                expected = (int(retained.replay.live), int(retained.replay.shape[1]) + 1, vocab)
-                if tuple(host.shape) != expected:
-                    raise ValueError(
-                        f"Gemma4MTP speculative contract: logits_to_host returned {tuple(host.shape)}, "
-                        f"expected [live, K_v + 1, V] = {expected}"
+                # The replay ran for greedy-eligible rows only, so the proposal
+                # read nothing back. The decoder's shared verify-logits buffer
+                # still holds that replay until its next reseed or step.
+                if retained.serial != self._mtp_replay_serial:
+                    raise RuntimeError(
+                        f"Gemma4MTP speculative contract: row {r} is verified in logits mode for its proposal "
+                        f"at position {retained.anchor_position} (replay {retained.serial}), but that replay was "
+                        f"not read back at proposal time and replay {self._mtp_replay_serial} has since "
+                        "overwritten the shared verify-logits buffer"
                     )
-                host_by_replay[id(retained.replay)] = host
-            cols = min(width, int(host.shape[1]))
-            logits[r, :cols] = host[retained.shape_row, :cols].to(torch.bfloat16)
+                block = late.get(id(retained.replay))
+                if block is None:
+                    block = self._mtp_read_logits(retained.replay, vocab)
+                    late[id(retained.replay)] = block
+                host = block[retained.shape_row]
+            cols = min(width, int(host.shape[0]))
+            logits[r, :cols] = host[:cols]
         if plain_rows:
             plain = self._spec_plain_logits(args, kwargs, page_tables_per_layer, rows, exclude_rows=excluded)
             if int(plain.shape[-1]) != vocab:
@@ -7147,6 +7175,17 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             self._spec_prepare_sampling_state(kwargs, start_pos, rows)
             self._spec_note_served_step()
         return VerifyOutput(spec_mode="logits", logits=logits, hidden=None)
+
+    def _mtp_read_logits(self, result, vocab):
+        """``result.logits_to_host()`` as ``[live, K_v + 1, V]`` bf16, shape-checked against the record."""
+        host = result.logits_to_host()
+        expected = (int(result.live), int(result.shape[1]) + 1, int(vocab))
+        if tuple(host.shape) != expected:
+            raise ValueError(
+                f"Gemma4MTP speculative contract: logits_to_host returned {tuple(host.shape)}, "
+                f"expected [live, K_v + 1, V] = {expected}"
+            )
+        return host.to(torch.bfloat16)
 
     # -- propose: one fused replay over every drafting row -------------------------------
     def _mtp_shape_for(self, live_rows):
@@ -7351,17 +7390,25 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         decoder = self._mtp_decoder
         flat, layers = self._mtp_shape_tables(shape, row_ids)
         if self._mtp_tables_changed(layers):
-            if self._bounded_sliding_kv_cache:
-                # The fused body reads the target's stash for the ring layers.
-                self.model[0]._active_page_tables_per_layer = layers
             decoder.serving_refresh_page_tables(layers)
             self._mtp_installed_tables = [None if table is None else table.clone() for table in layers]
+        # Both calls below rewrite the decoder's shared verify-logits buffer.
+        self._mtp_replay_serial += 1
+        serial = self._mtp_replay_serial
         if reseed:
             by_row = {r: (a, p) for r, a, p in zip(row_ids, anchors, posits)}
             decoder.serving_reseed(shape, reseed, [by_row[r][0] for r in reseed], [by_row[r][1] for r in reseed], flat)
         result = decoder.serving_step(shape, row_ids, anchors, posits, flat, seed_cols)
         self._mtp_check_result(result, shape, len(drafting))
         self._mtp_last_replay = result
+        # A row that target argmax ids cannot answer is verified in logits
+        # mode, possibly steps later (the scheduler keeps the drafts of a
+        # request it did not schedule), after other rows' replays have rewritten
+        # the shared buffer: its logits are read back now, once for the replay.
+        # A replay of greedy-eligible rows only skips the readback.
+        host_logits = None
+        if any(self._mtp_row_needs_logits.get(r, True) for r in row_ids):
+            host_logits = self._mtp_read_logits(result, self._mtp_vocab_size())
         drafts = result.drafts.to(torch.int64)
         argmax = result.argmax_ids.to(torch.int64)
         offer = min(k_v, k)
@@ -7375,10 +7422,12 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 replay=result,
                 shape_row=i,
                 row_id=r,
+                serial=serial,
                 anchor_token=int(anchor),
                 anchor_position=int(position),
                 drafts=row_drafts,
                 argmax_ids=[int(t) for t in argmax[i].tolist()],
+                logits=None if host_logits is None else host_logits[i],
             )
             out[r, :offer] = torch.tensor(row_drafts[:offer], dtype=torch.int32)
             valid[r] = offer

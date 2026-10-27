@@ -72,8 +72,10 @@ class Target:
 class StepResult:
     """Host stand-in for ``spec_decode.ServingStepResult``.
 
-    ``logits`` is the ``[B_v, K_v + 1, VOCAB]`` float block a replay leaves on the
-    device; ``logits_to_host`` returns its live rows and counts the readbacks.
+    ``logits`` is the decoder's ONE verify-logits buffer, shared by every
+    record and rewritten by every ``serving_step`` and ``serving_reseed``;
+    ``logits_to_host`` reads whatever that buffer holds NOW (its live rows),
+    as the device readback would, and counts the readbacks.
     """
 
     shape: tuple
@@ -81,12 +83,14 @@ class StepResult:
     live: int
     drafts: torch.Tensor
     argmax_ids: torch.Tensor
-    logits: torch.Tensor
+    logits: object
+    decoder: object = dataclasses.field(default=None, repr=False)
     readbacks: int = 0
 
     def logits_to_host(self):
         self.readbacks += 1
-        return self.logits[: self.live]
+        self.decoder.readbacks += 1
+        return self.decoder.buffer[: self.live]
 
 
 def _ladder(max_seq_len, k, bucket=1024):
@@ -124,6 +128,8 @@ class Decoder:
         self.script = []
         self.replays = 0
         self.results = []
+        self.buffer = None  # the one verify-logits buffer; rewritten by every step and reseed
+        self.readbacks = 0
 
     # -- warmup --------------------------------------------------------------
     def serving_prepare(self, shapes, widths_by_shape, max_rows):
@@ -159,6 +165,8 @@ class Decoder:
     def serving_reseed(self, shape, rows, anchors, positions, page_tables):
         self._check(shape)
         self.events.append(("reseed", tuple(shape), list(rows), list(anchors), list(positions)))
+        if self.buffer is not None:
+            self.buffer.fill_(-1.0)  # the seed forward writes through the shared buffer
 
     def width_for(self, shape, positions):
         need = max(positions) + int(shape[1]) + 2
@@ -195,11 +203,13 @@ class Decoder:
                 row_argmax = [base + 50 + j for j in range(p_v)]
             drafts[i] = torch.tensor(row_drafts[:k_v], dtype=torch.int64)
             argmax[i] = torch.tensor(row_argmax[:p_v], dtype=torch.int64)
-        logits = torch.full((b_v, p_v, VOCAB), -1.0)
+        self.buffer = torch.full((b_v, p_v, VOCAB), -1.0)
         for i in range(live):
             for j in range(p_v):
-                logits[i, j, int(argmax[i, j]) % VOCAB] = 1.0
-        result = StepResult(shape=shape, width=width, live=live, drafts=drafts, argmax_ids=argmax, logits=logits)
+                self.buffer[i, j, int(argmax[i, j]) % VOCAB] = 1.0
+        result = StepResult(
+            shape=shape, width=width, live=live, drafts=drafts, argmax_ids=argmax, logits=self.buffer, decoder=self
+        )
         self.results.append(result)
         return result
 
