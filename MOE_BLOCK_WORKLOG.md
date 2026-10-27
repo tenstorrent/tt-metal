@@ -2135,3 +2135,29 @@ its own row toward its own Ethernet column; reader BRISC / NOC1) matches ports u
 - Also tried: the row leads' own-x load before the router's x (SE_XFIRST): the gather starts at ~9 instead of ~50 us
   but the head does not move (452-455) - gate / up's rounds bind it. SE_PAD=n: blank lines in the engine's kernels
   (a profiler zone-hash collision workaround).
+
+### K3 head engine: 440 -> 390 us traced (2026-10-27, test_head_se3 k3 + RS fused + router + latent + routing, ring of 4)
+Why: "engine still seems really slow". Bottom-up in the head (probes, per-step waits, a NoC trace of one call):
+- With no x / W data at all (SE_PROBE=NOX,NOW, or NOXWAIT for the gather) gate / up still took 253-258 of 266 us: not
+  the payloads, not the gather. GUSTEP: every call stalled 40-60 us at step 2 waiting for x, then ran wait-free.
+- NoC trace: the gate / up W prefetch (3 of my blocks in flight a core) issued ~18 MB at once at ~52 us (after the
+  router); the block each column needed first landed 10-55 us later (col 7 / 12 at ~108 us) and x round 2 waits for
+  every column's step 0. Fix SE_WLA (default 6): a block is issued only once its round is within 6 of the rounds
+  landed on the core - the grid's in-flight W is ~6 rounds, not ~30. Head 440 -> 397 (flat over 5-8, 3: 412).
+  Gate / up 266 -> 226; the step-2 stall ~15 us.
+- KB 14 now fits with a W ring of 4 slots (sizing tries rings 4 and 3): with WLA 390 vs 413 at KB 7 (no gain without
+  WLA: the startup stall bound both).
+- Router logits on the engine (0-47 us, ~12 us of HiFi3 math): 8 rounds of ~5.8 us; the W_r^T leads (NCRISC, NOC1)
+  took ~3 us for a round's 21 reads vs ~0.6 for the x leads - all 11 sat on row 0, and NOC1 brings the DRAM responses
+  back along the lead's row. SE_RWL (default): the lead on row NoC x % GY: logits 46 -> 37, head 397 -> 389.
+- Tried, not kept: acks of a router round as soon as the compute popped it (leads read round rd + 1 while rd is in
+  flight; logits 37 -> 32, head 380) - GLM-5.3's traced replays then picked different experts (291-1216 tokens): a
+  race not found by inspection, removed. Latent tiles to the columns with fewer gate / up pairs (busiest 13 -> 12 tiles
+  a K tile): 384 vs 380 - each pass's x rounds stream a whole row, so the sum of the passes' widest column (4+4+2+3)
+  binds, not a column's total. SE_XFIRST with WLA: 405 (worse).
+- Left: gate / up ~220 us vs ~170 (148 math at 34 cycles a tile + ~20 GLU) on the 5-pair columns: ~27 us x waits,
+  ~13 W; the down / RS tail ~90-120 us, its end steps ~4.5 us a row (the RS exchange - fabric, ~20 GB/s a port).
+- Block (traced): K3 ring4 640 head 439-443 -> 388-395 us, PCC 0.99612; MOE_BITS with MOE_COMBINE_SNAP=-14: 0 of
+  186 replays differ (without the snap 4 of 34 - the combine's order, as before). GLM-5.3-Flash 2x4 5120: head 966
+  (968 before), PCC 0.98686, 0 of 34 differ.
+- SE_LOG=1: the engine logs its resolved layout (KB, W ring, router K chunk, regions).

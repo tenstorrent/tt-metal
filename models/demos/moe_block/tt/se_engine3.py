@@ -503,7 +503,16 @@ void kernel_main() {
         // down the column (here, NOC1 - same-NoC row and column multicasts stall each other); a lead reads round
         // rd + 1 while round rd's multicast goes; every core pushes a round once its words say it landed
         DeviceZoneScopedN("SE-RTRLD");
+#ifdef SE_RWL
+        // (SE_RWL: the column's W_r^T lead on row NoC x % GY, not row 0: the NOC1 read responses come back along the
+        // lead's row (-y, then -x), and 11 leads on one row shared its links - ~3 us a round's reads vs ~0.6 for the
+        // x leads, who sit on different rows)
+        const uint32_t wly = get_arg_val<uint32_t>(ys0 + cxv % GY);
+        const bool lw = etc && cy == cxv % GY;
+#else
+        const uint32_t wly = ty;
         const bool lw = etc && cy == 0;
+#endif
         const bool hw = get_arg_val<uint32_t>(R0 + 9);
         const auto wg2 = TensorAccessor(rw_args, get_arg_val<uint32_t>(R0 + 1), 2048);
         constexpr uint32_t NRD = SE_KTO / SE_KC, WS = SE_ETC * SE_KC * 2048;
@@ -515,7 +524,7 @@ void kernel_main() {
             cb_reserve_back(SE_RW, SE_ETC * SE_KC);
             if (NRD > 2 && rd >= 2) {
                 noc_semaphore_inc(get_noc_addr(xlx, xly, SE_EW + XACK_ID), 1);
-                if (hw) noc_semaphore_inc(get_noc_addr(cxv, ty, SE_EW + WACK_ID), 1);
+                if (hw) noc_semaphore_inc(get_noc_addr(cxv, wly, SE_EW + WACK_ID), 1);
             }
             if (lw) {  // (the column's first core: the chunk of its expert tiles of W_r^T down the column)
                 const uint32_t wa = rwa + (rd & 1) * WS;
@@ -627,11 +636,19 @@ void kernel_main() {
         return o;
     };
     uint32_t dn_go = 0;  // (SE_BRW_DN1: the down's NOC1 reads start once the stream passed round SE_DN1_AT)
+    uint32_t wla = 0;  // (SE_WLA: rounds landed here - the window's base)
     auto prefetch = [&](uint32_t upto) {  // (issue my blocks of rounds < upto, and the window)
 #if defined(SE_BRW) && !defined(SE_BRW_DN1)
         return;  // (the BRISC reads them on NOC0)
 #endif
+#ifdef SE_WLA
+        // (SE_WLA: the window in the column's rounds, not my blocks - a block only once its round is within SE_WLA of
+        // the stream; 3 of mine in flight on every core put ~30 rounds of the whole grid in the DRAM queues at once,
+        // and the first-needed block landed ~50 us after the burst was issued)
+        while (wi < WPN && (wi < upto || (pending < WPF && wi < wla + SE_WLA))) {
+#else
         while (wi < WPN && (wi < upto || pending < WPF)) {
+#endif
             const uint32_t b = blk(wi);
 #ifdef SE_BRW_DN1
             if (wi % NB >= NPG * NSG && !dn_go && wi >= upto) break;  // (not yet: the first x loads go first)
@@ -971,7 +988,7 @@ void kernel_main() {
         if (wr < NR && (NOWR_ || *sem(WV + wr % NWS) >= wr + 1)) {  // W round wr landed here
             cb_reserve_back(CB_WIN, WSLOT);
             cb_push_back(CB_WIN, WSLOT);
-            ++wr;
+            wla = ++wr;
         }
         if (!NOWR_ && wc < NR && wc < wr + NWS && cb_pages_reservable_at_back(CB_WIN, WSLOT * (wc - wr + 1))) {  // slot of wc free
             noc_semaphore_inc(get_noc_addr(cxv, get_arg_val<uint32_t>(ys0 + blk(wc) % GY), get_semaphore(WFREE + wc % NWS)), 1);
@@ -1443,6 +1460,14 @@ def _probes():
         "SE_WPF"
     ):  # (timing probe: the W prefetch window, blocks in flight a core; <= 13 transaction ids)
         out += f"#define SE_WPF {int(os.environ['SE_WPF'])}u\n"
+    # (the router on the engine: its W_r^T leads spread over the rows - see SE-RTRLD; K3 head traced 397 -> 389 us,
+    # the logits 46 -> 37. SE_RWL=0: all on row 0)
+    if os.environ.get("SE_RWL", "1") == "1":
+        out += "#define SE_RWL\n"
+    wla = int(os.environ.get("SE_WLA", "6"))  # (the W prefetch window in the column's rounds - see prefetch; 0: off,
+    # 3 of my blocks in flight a core: K3 head traced 440 -> 397 us at 6, flat over 5-8)
+    if wla:
+        out += f"#define SE_WLA {wla}u\n"
     # (HW: hang words - a kernel's state written into a persistent L1 tensor (fused_head sets HW_ADDR) as it waits;
     # tools: moe_block_runs' triage add-on reads them after a hang)
     if HW_ADDR and "HW" in os.environ.get("SE_PROBE", "").split(",") and not os.environ.get("HW_ALLOC_ONLY"):
@@ -1619,7 +1644,7 @@ class SeEngine3:
         self.prep = prep
         self.PFULL = self.LWMAX if latent else self.KB
         self.PBCT = max(d for d in range(1, 9) if self.PFULL % d == 0)
-        tries = [(0, 1), (5, 1)] if self.NCH == 1 else [(0, 2), (5, 2), (5, 1)]
+        tries = [(0, 1), (5, 1), (4, 1), (3, 1)] if self.NCH == 1 else [(0, 2), (5, 2), (5, 1), (4, 1), (3, 1)]
         for self.WRING, self.HSL in tries:  # (see wown_t)
             al = lambda v: (v + 63) // 64 * 64  # noqa: E731
             self.acc_pages = MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, [])))
@@ -1726,6 +1751,14 @@ class SeEngine3:
         # (each region's bytes, in arena order - overlays share their host's)
         ends = sorted(set(off.values()) | {o})
         self.sizes = {k: next(e for e in ends if e > v) - v if v < o else 0 for k, v in off.items()}
+        if os.environ.get("SE_LOG") == "1":  # (the resolved layout: KB, W ring, router K chunk, regions)
+            from loguru import logger
+
+            logger.info(
+                f"se_engine3: KB {self.KB} KBD {self.KBD} W ring {self.WRING} HSL {self.HSL} NPG {self.NPG} NPD {self.NPD}"
+                f" router KC {getattr(self, 'KC', None)} arena {o // 1024} / {self.arena_max // 1024} KB: "
+                + " ".join(f"{k} {v // 1024}@{off[k] // 1024}" for k, v in self.sizes.items())
+            )
         if o > self.arena_max:
             sizes = {
                 k: (off[k2] if i + 1 < len(off) else o) - off[k]
