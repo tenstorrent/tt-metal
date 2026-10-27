@@ -58,6 +58,41 @@ See [TTSIM.md](TTSIM.md) for running the LLK suite on
 
 ---
 
+## Row-pack performance comparison
+
+After setting up the LLK environment, run the matching pack-isolate sweeps from
+`tests/python_tests` on their respective targets:
+
+```bash
+CHIP_ARCH=quasar PERF_RUN_TAG=pack-rows-quasar pytest -q quasar/perf_pack_rows_to_addr_quasar.py
+CHIP_ARCH=blackhole PERF_RUN_TAG=pack-rows-blackhole pytest -q perf_pack_rows_to_addr.py
+```
+
+For an emulator, add `--run-simulator` with its usual simulator environment.
+Use silicon or a cycle-faithful emulator for timing; functional ttsim timing
+does not measure hardware performance.
+
+Both sweeps cover BF16, FP32, and plain E4M3 FP8 output at 1, 8, 15, 16, 17, 32,
+33, 50, and 64 rows. They use 32-bit DEST, SyncHalf, DEST tile 0, and a ring of
+16 output slots. After warming all slots, each sample measures 1024 pack calls,
+including address setup, loop overhead, and the final packer drain. Init and
+warm-up are excluded from the measured loop. Five samples provide mean and
+standard deviation. This measures pack execution; use the functional tests to
+check output data.
+
+Once both raw reports are available in the same checkout, compare them from
+`tests/python_tests`:
+
+```bash
+python ../../perf/compare_pack_rows_to_addr.py \
+  --quasar ../../perf_data/runs/pack-rows-quasar/perf_pack_rows_to_addr_quasar/perf_pack_rows_to_addr_quasar.csv \
+  --blackhole ../../perf_data/runs/pack-rows-blackhole/perf_pack_rows_to_addr/perf_pack_rows_to_addr.csv
+```
+
+The helper normalizes the raw timings to cycles per pack call and prints the
+Blackhole/Quasar ratio. Values greater than 1 favor Quasar. It rejects incomplete
+sweeps, mismatched configurations, and already-normalized `.post.csv` inputs.
+
 ## Logging
 
 Tests use [loguru](https://github.com/Delgan/loguru) for structured, leveled

@@ -707,6 +707,7 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Float16_b: 5,
     DataFormat.MxFp8R: 18,
     DataFormat.MxFp8P: 20,
+    DataFormat.Fp8_e4m3: 16,  # Quasar Fp8P: E4M3 without block exponent
     DataFormat.MxFp4: 22,
     DataFormat.MxInt8: 2,
     DataFormat.MxInt4: 3,

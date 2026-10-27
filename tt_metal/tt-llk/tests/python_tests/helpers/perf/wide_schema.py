@@ -121,6 +121,7 @@ DB_SCHEMA = [
     Column("math_transpose_faces", "string", True, "configuration"),
     Column("mathop", "string", True, "configuration"),
     Column("num_blocks", "int64", True, "configuration"),
+    Column("num_rows_to_pack", "int64", True, "configuration"),
     Column("num_faces", "int64", True, "configuration"),
     Column("num_faces_A", "int64", True, "configuration"),
     Column("num_faces_B", "int64", True, "configuration"),

@@ -10,27 +10,57 @@
 
 import pytest
 from helpers.device_io import read_from_device
-from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, DestSync
+from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
     runtime,
 )
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
+    LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_ROWS_TO_PACK,
     NUM_TILES_IN_BLOCK,
+    TILE_COUNT,
 )
 
 GUARD_BYTE = 0xA5
 ROW_NUM_DATUMS = 16
 INPUT_DIMENSIONS = [128, 128]
+
+# Use the same sweep on Quasar and Blackhole. FP8 output is encoded from BF16;
+# no unpack or math work runs in the pack-isolate benchmark.
+PACK_ROWS_PERF_SWEEP = dict(
+    formats=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Fp8_e4m3),
+    ],
+    num_rows_to_pack=runtime([1, 8, 15, 16, 17, 32, 33, 50, 64]),
+)
+
+
+def run_pack_rows_to_addr_perf(perf_report, formats, num_rows_to_pack):
+    configuration = PerfConfig(
+        "sources/pack_rows_to_addr_perf.cpp",
+        formats,
+        run_types=[PerfRunType.PACK_ISOLATE],
+        templates=[DEST_SYNC(DestSync.Half)],
+        runtimes=[
+            LOOP_FACTOR(64),
+            TILE_COUNT(16),
+            NUM_ROWS_TO_PACK(num_rows_to_pack),
+        ],
+        dest_acc=DestAccumulation.Yes,
+    )
+    configuration.run(perf_report, run_count=5)
 
 
 class GuardedResultStimuliConfig(StimuliConfig):

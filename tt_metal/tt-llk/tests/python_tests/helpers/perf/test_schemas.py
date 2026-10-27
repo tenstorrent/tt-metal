@@ -582,6 +582,27 @@ PERF_TEST_SCHEMAS = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_pack": "perf_pack"},
     },
+    "perf_pack_rows_to_addr": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "dest_sync",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "loop_factor",
+            "marker",
+            "num_rows_to_pack",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_pack_rows_to_addr": "perf_pack_rows_to_addr"},
+    },
     "perf_pack_untilize": {
         "version": 4,
         "columns": [
@@ -1363,6 +1384,29 @@ PERF_TEST_SCHEMAS_QSR = {
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_pack_quasar": "perf_pack_quasar"},
+    },
+    "perf_pack_rows_to_addr_quasar": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "dest_sync",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "loop_factor",
+            "marker",
+            "num_rows_to_pack",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_pack_rows_to_addr_quasar": "perf_pack_rows_to_addr_quasar"
+        },
     },
     "perf_pack_untilize_quasar": {
         "version": 5,
