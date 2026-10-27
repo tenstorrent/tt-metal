@@ -38,7 +38,25 @@ from models.demos.gemma4.tests.unit.dflash_contract_harness import make_expect_e
 from models.demos.gemma4.tt.attention import SPEC_RING_HEADROOM_ENV, bounded_ring_modulo
 from models.demos.gemma4.tt.dflash_drafter import DFlashFusedDecoder
 from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashForCausalLM as DF
-from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder, auto_draft_len, auto_draft_len_batched
+from models.demos.gemma4.tt.spec_decode import (
+    SPEC_K_BY_ROWS_DEFAULT,
+    SPEC_MASK_NEG,
+    ServingStepResult,
+    SpeculativeDecoder,
+    auto_draft_len,
+    auto_draft_len_batched,
+    parse_k_by_rows,
+    serving_mask_padded_bytes,
+    serving_mask_plan,
+    serving_masks_from_plan,
+    serving_masks_host,
+    serving_plan,
+    serving_seed_index,
+    serving_select_rows,
+    serving_width_for,
+    spec_capture_shapes,
+    spec_check_shape,
+)
 
 try:
     import vllm  # noqa: F401
@@ -1221,12 +1239,13 @@ except ImportError:  # vLLM absent: this section's tests skip
     pass
 
 
-def _session(widths, ladder=None, draft_len=5):
-    """A decoder carrying a captured width set and nothing else."""
+def _records(shapes_widths):
+    """A decoder carrying prepared serving widths and nothing else (no device)."""
     spec = SpeculativeDecoder.__new__(SpeculativeDecoder)
-    spec.draft_len = draft_len
-    spec._srv_widths = {int(w): {"pv_S_k": int(w)} for w in widths}
-    spec._srv_ladder = sorted(int(w) for w in (ladder if ladder is not None else widths))
+    spec._srv_records = {}
+    spec._srv_captured = False
+    spec._srv_shape_bufs = {shape: {} for shape in shapes_widths}
+    spec._srv_widths = {shape: sorted(ws) for shape, ws in shapes_widths.items()}
     return spec
 
 
@@ -1243,57 +1262,57 @@ def test_ladder_doubles_and_covers_the_whole_context():
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_every_position_in_the_context_has_a_rung():
-    ladder = mtp_pv_width_ladder(262144, draft_len=5)
-    spec = _session(ladder)
+@pytest.mark.parametrize("shape", [(1, 5), (5, 5), (8, 3), (16, 1)])
+def test_every_position_in_the_context_has_a_rung_per_shape(shape):
+    k = shape[1]
+    ladder = mtp_pv_width_ladder(262144, draft_len=k)
+    spec = _records({shape: ladder})
     for pos in (0, 1, 1000, 2048, 4096, 131072, 262143):
-        assert spec.srv_width_for(pos) is not None, pos
+        assert spec.serving_width_for(shape, pos) is not None, (shape, pos)
 
 
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
 def test_selection_is_the_narrowest_covering_width():
-    """Width is per-iteration BANDWIDTH here -- the masks are rebuilt on the
-    host and uploaded at [1, 1, P_v, S_k] every replay -- so a request must not
-    sit on a wider trace than its position needs."""
-    spec = _session([1024, 2048, 4096], draft_len=5)
-    assert spec.srv_width_for(0) == 1024
-    assert spec.srv_width_for(1024 - 7) == 1024
-    assert spec.srv_width_for(1024 - 6) == 2048
-    assert spec.srv_width_for(2048 - 6) == 4096
+    """Width is per-iteration BANDWIDTH -- the masks are rebuilt on the host
+    and uploaded at [B, 1, P, S_k] every replay -- so a step must not sit on a
+    wider rung than its highest position needs: need = pos + K + 2."""
+    assert serving_width_for([1024, 2048, 4096], 0, 5) == 1024
+    assert serving_width_for([1024, 2048, 4096], 1024 - 7, 5) == 1024
+    assert serving_width_for([1024, 2048, 4096], 1024 - 6, 5) == 2048
+    assert serving_width_for([1024, 2048, 4096], 2048 - 6, 5) == 4096
+    # a shorter draft needs less tail: (16, 1) stays on 1024 two positions longer
+    assert serving_width_for([1024, 2048], 1024 - 3, 1) == 1024
+    assert serving_width_for([1024, 2048], 1024 - 2, 1) == 2048
+    # order of the list is irrelevant
+    assert serving_width_for([4096, 1024, 2048], 0, 5) == 1024
 
 
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_position_past_the_captured_set_is_none_so_the_caller_can_capture():
-    """None is the signal to take the next rung off the ladder, which is what
-    replaces ending the request at the horizon."""
-    spec = _session([1024], ladder=[1024, 2048, 4096], draft_len=5)
-    assert spec.srv_width_for(2000) is None
-    need = 2000 + spec.draft_len + 2  # 2007
-    assert next(r for r in spec._srv_ladder if r >= need) == 2048
-    # and a position past that rung takes the one after it
-    assert next(r for r in spec._srv_ladder if r >= 3000 + spec.draft_len + 2) == 4096
+def test_position_past_the_prepared_set_is_none_so_the_adapter_declines():
+    """None is the signal to propose nothing for that step (plain decode):
+    nothing is captured during serving, so there is no next rung to take."""
+    assert serving_width_for([1024], 2000, 5) is None
+    spec = _records({(1, 5): [1024]})
+    assert spec.serving_width_for((1, 5), 2000) is None
+    assert spec.serving_width_for((1, 5), 1024 - 7) == 1024
 
 
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_no_captured_widths_means_no_width_set():
-    """A session set up the old way (single capture) must not take the width
-    path: srv_width_for reports None and serving_step leaves it alone."""
-    spec = SpeculativeDecoder.__new__(SpeculativeDecoder)
-    spec.draft_len = 5
-    spec._srv_widths = None
-    assert spec.srv_width_for(0) is None
+def test_width_query_rejects_unknown_shapes_and_unprepared_decoders():
+    spec = _records({(1, 5): [1024]})
+    with pytest.raises(ValueError, match="was not prepared"):  # allow-pytest.raises (pure value check)
+        spec.serving_width_for((5, 5), 0)
+    bare = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    bare._srv_records = None
+    with pytest.raises(RuntimeError, match="serving_prepare has not run"):  # allow-pytest.raises (pure)
+        bare.serving_width_for((1, 5), 0)
 
 
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-@pytest.mark.parametrize("draft_len", [3, 5, 7])
+@pytest.mark.parametrize("draft_len", [1, 3, 5, 7])
 def test_tail_follows_the_draft_length(draft_len):
-    """A verify block is P_v = K + 1 rows at pos..pos+K, so the width has to
+    """A verify block is P = K + 1 rows at pos..pos+K, so the width has to
     cover K + 2 past the position, not just the position."""
-    ladder = mtp_pv_width_ladder(8192, draft_len=draft_len)
-    spec = _session(ladder, draft_len=draft_len)
-    top = max(ladder)
-    assert spec.srv_width_for(top - draft_len - 2) == top
-    assert spec.srv_width_for(top - draft_len - 1) is None
+    widths = [1024, 2048, 8192]
+    top = max(widths)
+    assert serving_width_for(widths, top - draft_len - 2, draft_len) == top
+    assert serving_width_for(widths, top - draft_len - 1, draft_len) is None
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
@@ -1353,28 +1372,41 @@ def _functions(tree):
             yield node
 
 
-def test_srv_upload_iter_binds_every_name_it_reads():
-    """The method that actually regressed, named so the failure is unmistakable."""
+def test_srv_upload_binds_every_name_it_reads():
+    """The per-replay upload (the method whose B=1 ancestor regressed), named so the failure is unmistakable."""
     tree = _module()
     module_names = _bound_at_module_level(tree)
-    target = [fn for fn in _functions(tree) if fn.name == "_srv_upload_iter"]
-    assert target, "_srv_upload_iter not found in spec_decode.py"
+    target = [fn for fn in _functions(tree) if fn.name == "_srv_upload"]
+    assert target, "_srv_upload not found in spec_decode.py"
     assert _free_names(target[0], module_names) == set()
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "serving_step",
-        "serving_reseed",
-        "serving_setup",
-        "serving_warmup_widths",
-        "_srv_upload_iter",
-        "_srv_capture_width",
-        "srv_width_for",
-        "refresh_page_tables",
-    ],
-)
+_SERVING_METHODS = [
+    "serving_prepare",
+    "serving_capture",
+    "serving_width_for",
+    "serving_refresh_page_tables",
+    "serving_reseed",
+    "serving_step",
+    "serving_release",
+    "_srv_alloc_shape",
+    "_srv_alloc_width",
+    "_srv_publish_hidden",
+    "_srv_publish_logits",
+    "_srv_iota_for",
+    "_srv_mask_chunks",
+    "_srv_masks_device",
+    "_srv_seed_rows",
+    "_srv_body",
+    "_srv_upload",
+    "_srv_upload_tables",
+    "_srv_type_table",
+    "_srv_logits_to_host",
+    "refresh_page_tables",
+]
+
+
+@pytest.mark.parametrize("name", _SERVING_METHODS)
 def test_serving_path_methods_bind_every_name_they_read(name):
     tree = _module()
     module_names = _bound_at_module_level(tree)
@@ -1383,7 +1415,7 @@ def test_serving_path_methods_bind_every_name_they_read(name):
             free = _free_names(fn, module_names)
             assert free == set(), f"{name} reads unbound name(s): {sorted(free)}"
             return
-    pytest.skip(f"{name} is not defined in spec_decode.py")
+    raise AssertionError(f"{name} is not defined in spec_decode.py")
 
 
 # ===== merged from tests/unit/test_spec_draft_len.py: Host-only tests for the pure speculative draft-length policies.
@@ -1910,3 +1942,374 @@ def test_unknown_native_stays_permissive(monkeypatch):
     # A model_args without the attribute (older adaptors) must not brick boots.
     monkeypatch.delenv("GEMMA4_ALLOW_BEYOND_NATIVE", raising=False)
     _assert_within_native_context(300_000, SimpleNamespace())
+
+
+# ===== Serving records (batched fused traces): the pure parts of the SpeculativeDecoder serving API.
+# Shape table -------------------------------------------------------------------------------------
+def test_default_k_by_rows_table_parses_to_the_catalog_entries():
+    assert parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT) == ((5, 5), (8, 3), (16, 1))
+    assert parse_k_by_rows(" 5:5 , 8:3,16:1, ") == ((5, 5), (8, 3), (16, 1))
+
+
+def test_default_capture_shapes_are_one_k_max_plus_one_per_entry():
+    table = parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT)
+    assert spec_capture_shapes(table, 5) == [(1, 5), (5, 5), (8, 3), (16, 1)]
+    # a table that already names (1, k_max) does not duplicate it
+    assert spec_capture_shapes(((1, 5), (8, 3)), 5) == [(1, 5), (8, 3)]
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("5:5,4:3", "max_rows must increase"),
+        ("5-5", "is not max_rows:k"),
+        ("5:x", "is not max_rows:k"),
+        ("", "has no entries"),
+        ("16:2", "above the 32-row argmax tile"),  # 16 * 3 = 48 rows
+        ("0:5", "must be >= 1"),
+        ("5:0", "must be >= 1"),
+    ],
+)
+def test_bad_k_by_rows_tables_are_refused_with_the_reason(text, message):
+    with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure parser)
+        parse_k_by_rows(text)
+
+
+def test_the_tile_rule_is_the_only_shape_rule():
+    assert spec_check_shape((16, 1)) == (16, 1)  # 32 rows exactly
+    assert spec_check_shape([1, 31]) == (1, 31)  # any (rows, drafts) pair, returned as an int tuple
+    for shape in [(32, 1), (11, 2), (1, 32)]:
+        with pytest.raises(ValueError, match="argmax tile"):  # allow-pytest.raises (pure)
+            spec_check_shape(shape)
+    with pytest.raises(ValueError, match="is \\(rows, drafts\\)"):  # allow-pytest.raises (pure)
+        spec_check_shape(5)
+
+
+# Plan ---------------------------------------------------------------------------------------------
+def test_a_plan_sorts_shapes_and_widths_and_drops_duplicates():
+    shapes, widths = serving_plan([(8, 3), (1, 5), (8, 3)], {(1, 5): [2048, 1024, 1024], (8, 3): (4096,)}, max_rows=16)
+    assert shapes == [(1, 5), (8, 3)]
+    assert widths == {(1, 5): [1024, 2048], (8, 3): [4096]}
+
+
+@pytest.mark.parametrize(
+    ("shapes", "widths", "max_rows", "message"),
+    [
+        ([(1, 5)], {}, 16, "no verify widths for shape"),
+        ([(1, 5)], {(1, 5): [1024], (5, 5): [1024]}, 16, "not prepared"),
+        ([(1, 5)], {(1, 5): [1000]}, 16, "multiples of 64"),
+        ([(1, 5)], {(1, 5): [0]}, 16, "multiples of 64"),
+        ([(16, 1)], {(16, 1): [1024]}, 8, "more rows than max_rows"),
+        ([], {}, 16, "at least one shape"),
+        ([(1, 5)], {(1, 5): [1024]}, 0, "max_rows must be >= 1"),
+    ],
+)
+def test_bad_plans_are_refused(shapes, widths, max_rows, message):
+    with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+        serving_plan(shapes, widths, max_rows)
+
+
+# Seed index ---------------------------------------------------------------------------------------
+def test_first_step_after_a_reseed_gathers_the_reseed_pool_rows():
+    idx = serving_seed_index((5, 5), rows=[7, 3], seed_cols=[None, None], previous=None, seeded={7: 0, 3: 1})
+    assert idx == [32, 33, 0, 0, 0]  # padding rows gather row 0 (never used)
+
+
+def test_continuation_in_the_same_record_gathers_verify_row_r_times_p_plus_col():
+    prev = (5, [7, 3, 9])
+    idx = serving_seed_index((5, 5), rows=[7, 3, 9], seed_cols=[0, 5, 2], previous=prev, seeded={})
+    assert idx == [0 * 6 + 0, 1 * 6 + 5, 2 * 6 + 2, 0, 0]
+
+
+def test_continuation_across_shapes_uses_the_previous_record_geometry():
+    """(5,5) replayed rows [a, b, c]; the next step is (8,3) with rows [c, a]: the gather
+    still indexes the 6-column layout of the replay that produced the hidden."""
+    prev = (5, [10, 11, 12])
+    idx = serving_seed_index((8, 3), rows=[12, 10], seed_cols=[2, 5], previous=prev, seeded={})
+    assert idx[:2] == [2 * 6 + 2, 0 * 6 + 5]
+    assert idx[2:] == [0] * 6
+
+
+def test_a_reseeded_row_and_a_continuing_row_mix_in_one_step():
+    prev = (3, [1, 2])
+    idx = serving_seed_index((8, 3), rows=[2, 5], seed_cols=[3, None], previous=prev, seeded={5: 1})
+    assert idx[:2] == [1 * 4 + 3, 32 + 1]
+
+
+@pytest.mark.parametrize(
+    ("rows", "seed_cols", "previous", "seeded", "message"),
+    [
+        ([1], [6], (5, [1]), {}, "outside 0..5"),
+        ([1], [-1], (5, [1]), {}, "outside 0..5"),
+        ([4], [0], (5, [1, 2]), {}, "last replay served rows"),
+        ([4], [None], (5, [4]), {}, "not in the last serving_reseed"),
+        ([4], [0], None, {}, "none ran"),
+        ([4, 4], [0, 0], (5, [4]), {}, "duplicate rows"),
+        ([1, 2, 3, 4, 5, 6], [0] * 6, (5, [1, 2, 3, 4, 5, 6]), {}, "expected 1..5"),
+        ([1], [0, 0], (5, [1]), {}, "seed_cols for 1 live rows"),
+    ],
+)
+def test_seed_index_refuses_inconsistent_histories(rows, seed_cols, previous, seeded, message):
+    with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+        serving_seed_index((5, 5), rows, seed_cols, previous, seeded)
+
+
+# Masks --------------------------------------------------------------------------------------------
+_W = 1024
+
+
+def test_serving_masks_are_p_row_per_batch_and_bf16():
+    mf, ms = serving_masks_host([100, 7, 0], P=6, window=_W, S_k=2048)
+    assert mf.shape == (3, 1, 6, 2048) and ms.shape == (3, 1, 6, 2048)
+    assert mf.dtype == torch.bfloat16 and ms.dtype == torch.bfloat16
+    neg = torch.tensor(SPEC_MASK_NEG, dtype=torch.bfloat16)
+    for m in (mf, ms):
+        assert set(m.float().unique().tolist()) <= {0.0, float(neg)}
+
+
+def test_serving_masks_match_the_batched_host_builder_row_for_row():
+    """The old batched builder made [B, 1, H*P, S_k] on the host; the new one makes the
+    P-row block and the in-trace H repeat tiles it. With H=1 they must agree exactly."""
+    cs, B, P, S_k = [100, 7, 2000], 3, 6, 2048
+    ref_f, ref_s = SpeculativeDecoder._packed_mask_host(None, cs, B, P, 1, _W, S_k)
+    mf, ms = serving_masks_host(cs, P, _W, S_k)
+    assert torch.equal(mf, ref_f)
+    assert torch.equal(ms, ref_s)
+
+
+def test_the_head_repeat_reproduces_the_head_major_layout():
+    """ttnn.repeat([1, 1, H, 1]) on [B, 1, P, S_k] tiles the whole P block per head, i.e.
+    row h*P+p -- the packed SDPA layout the host builder produced directly."""
+    cs, B, P, H, S_k = [5, 300], 2, 4, 3, 1024
+    ref_f, ref_s = SpeculativeDecoder._packed_mask_host(None, cs, B, P, H, _W, S_k)
+    mf, ms = serving_masks_host(cs, P, _W, S_k)
+    assert torch.equal(mf.repeat(1, 1, H, 1), ref_f)
+    assert torch.equal(ms.repeat(1, 1, H, 1), ref_s)
+
+
+def test_the_full_mask_is_causal_per_row_and_the_sliding_mask_adds_the_window():
+    mf, ms = serving_masks_host([1500], P=3, window=_W, S_k=2048)
+    for p in range(3):
+        upper = 1500 + p
+        full_ok = (mf[0, 0, p] == 0).nonzero().reshape(-1)
+        assert full_ok.min() == 0 and full_ok.max() == upper and full_ok.numel() == upper + 1
+        slide_ok = (ms[0, 0, p] == 0).nonzero().reshape(-1)
+        assert slide_ok.min() == upper - _W + 1 and slide_ok.max() == upper and slide_ok.numel() == _W
+
+
+def test_the_ring_mask_spans_ring_slots_with_the_pv_host_inputs_rule():
+    """Bounded sliding: slot j holds position top - ((top - j) mod ring); query p may attend
+    it iff (P-1-p) <= d < (P-1-p)+W and d <= top, with d = (top - j) mod ring (_pv_host_inputs)."""
+    ring, P, W = 2048, 6, _W
+    cs = [3000, 10]
+    mf, ms = serving_masks_host(cs, P, W, S_k=4096, ring=ring)
+    assert ms.shape == (2, 1, P, ring)
+    assert mf.shape == (2, 1, P, 4096)
+    neg = torch.tensor(SPEC_MASK_NEG, dtype=torch.bfloat16)
+    jr = torch.arange(ring)
+    for b, c in enumerate(cs):
+        top = c + P - 1
+        d = torch.remainder(top - jr, ring)
+        for p in range(P):
+            lo = P - 1 - p
+            ok = (d >= lo) & (d < lo + W) & (d <= top)
+            ref = torch.where(ok, torch.tensor(0.0, dtype=torch.bfloat16), neg)
+            assert torch.equal(ms[b, 0, p], ref), (b, p)
+
+
+def test_mask_padded_bytes_count_the_32_row_tile_not_the_logical_rows():
+    """A [B, 1, P, S_k] TILE tensor pads P to 32 rows: the device footprint of one mask (or one fp32
+    intermediate of the in-trace builder) is B * 32 * S_k * elem, whatever P is."""
+    top = 263168
+    assert serving_mask_padded_bytes((1, 5), top) == 32 * top * 2
+    assert serving_mask_padded_bytes((16, 1), top) == 16 * 32 * top * 2
+    assert serving_mask_padded_bytes((16, 1), 32768, elem_bytes=4) == 16 * 32 * 32768 * 4  # one fp32 chunk, 67 MB
+    # P does not enter: (8, 1) and (8, 3) cost the same tile-padded bytes
+    assert serving_mask_padded_bytes((8, 1), top) == serving_mask_padded_bytes((8, 3), top) == 8 * 32 * top * 2
+    # the helper applies the tile rule like every other shape consumer
+    with pytest.raises(ValueError, match="argmax tile"):  # allow-pytest.raises (pure)
+        serving_mask_padded_bytes((16, 2), top)
+
+
+# In-trace mask builder: its plan + op-for-op emulation must equal the host reference --------------
+@pytest.mark.parametrize(
+    ("positions", "P", "S_k"),
+    [
+        ([100, 7, 2000], 6, 2048),
+        ([0], 6, 1024),  # anchor at position 0: only key 0 visible on row 0
+        ([1023, 1018], 6, 2048),  # rows straddle the window and the first rung
+        ([5000, 11, 300], 2, 8192),
+        ([40000], 4, 65536 + 1024),  # more than one SPEC_MASK_KEY_CHUNK of keys
+    ],
+)
+def test_device_mask_plan_equals_the_host_masks_unbounded(positions, P, S_k):
+    plan = serving_mask_plan(positions, P)
+    assert plan["q"].tolist() == [[c + p for p in range(P)] for c in positions]
+    assert "tm" not in plan and "base" not in plan
+    got_f, got_s = serving_masks_from_plan(plan, S_k, _W)
+    ref_f, ref_s = serving_masks_host(positions, P, _W, S_k)
+    assert got_f.shape == ref_f.shape and got_s.shape == ref_s.shape
+    assert got_f.dtype == torch.bfloat16 and got_s.dtype == torch.bfloat16
+    assert torch.equal(got_f, ref_f)
+    assert torch.equal(got_s, ref_s)
+
+
+@pytest.mark.parametrize(
+    ("positions", "P", "S_k", "ring"),
+    [
+        ([3000, 10], 6, 4096, 2048),
+        ([2047, 2048, 2049], 6, 4096, 2048),  # the wrap boundary
+        ([0, 1], 2, 1024, 2048),  # early context: the ring's untouched tail is masked
+        ([70000, 1500], 4, 71680, 2048),
+        ([5, 4100], 6, 8192, 4096),
+    ],
+)
+def test_device_mask_plan_equals_the_host_masks_under_a_ring(positions, P, S_k, ring):
+    plan = serving_mask_plan(positions, P, ring=ring)
+    for b, c in enumerate(positions):
+        top = c + P - 1
+        assert int(plan["tm"][b]) == top % ring
+        assert int(plan["base"][b]) == top - top % ring
+    got_f, got_s = serving_masks_from_plan(plan, S_k, _W, ring=ring)
+    ref_f, ref_s = serving_masks_host(positions, P, _W, S_k, ring=ring)
+    assert got_s.shape == (len(positions), 1, P, ring)
+    assert torch.equal(got_f, ref_f)
+    assert torch.equal(got_s, ref_s)
+
+
+def test_the_ring_slot_position_rule_matches_the_modulo_form():
+    """base + j - ring * [j > tm] is top - ((top - j) mod ring) for every slot: the device form needs no modulo."""
+    ring, P = 2048, 6
+    for c in (0, 7, 2042, 2043, 2048, 5000, 100000):
+        plan = serving_mask_plan([c], P, ring=ring)
+        top = c + P - 1
+        j = torch.arange(ring)
+        device_form = int(plan["base"][0]) + j - ring * (j > int(plan["tm"][0])).long()
+        modulo_form = top - torch.remainder(top - j, ring)
+        assert torch.equal(device_form, modulo_form), c
+
+
+# Page-table rows ----------------------------------------------------------------------------------
+def test_select_rows_picks_rows_zero_pads_padding_rows_and_narrow_sources():
+    table = torch.arange(1, 13).reshape(3, 4)  # rows 0..2, 4 blocks each
+    out = serving_select_rows(table, [2, 0], B=4, width=6, allow_clip=False)
+    assert out.dtype == torch.int64 and out.shape == (4, 6)
+    assert out[0].tolist() == [9, 10, 11, 12, 0, 0]
+    assert out[1].tolist() == [1, 2, 3, 4, 0, 0]
+    assert out[2:].abs().sum() == 0
+
+
+def test_select_rows_clips_a_wider_source_only_when_allowed():
+    table = torch.tensor([[1, 2, 3, 0], [5, 6, 7, 8]])
+    # zeros past the width are not live blocks: fine either way
+    assert serving_select_rows(table, [0], 1, 3, allow_clip=False).tolist() == [[1, 2, 3]]
+    assert serving_select_rows(table, [1], 1, 3, allow_clip=True).tolist() == [[5, 6, 7]]
+    with pytest.raises(ValueError, match="live blocks past column 3"):  # allow-pytest.raises (pure)
+        serving_select_rows(table, [1], 1, 3, allow_clip=False)
+
+
+def test_select_rows_refuses_bad_rows_and_shapes():
+    table = torch.tensor([[1, 2], [3, 4]])
+    with pytest.raises(ValueError, match="outside the 2-row page table"):  # allow-pytest.raises (pure)
+        serving_select_rows(table, [2], 1, 2, allow_clip=True)
+    with pytest.raises(ValueError, match="3 rows for a 2-row table"):  # allow-pytest.raises (pure)
+        serving_select_rows(table, [0, 1, 0], 2, 2, allow_clip=True)
+    with pytest.raises(ValueError, match="must be \\[rows, blocks\\]"):  # allow-pytest.raises (pure)
+        serving_select_rows(torch.zeros(1, 2, 2), [0], 1, 2, allow_clip=True)
+    # a 1-D row is a one-row table
+    assert serving_select_rows(torch.tensor([7, 8]), [0], 1, 2, allow_clip=True).tolist() == [[7, 8]]
+
+
+# Record bookkeeping on a device-free decoder ----------------------------------------------------
+def _bare_decoder(n_layers=3):
+    spec = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    spec._srv_records = None
+    spec._srv_captured = False
+    spec._srv_shape_bufs = {}
+    spec._srv_per_layer = None
+    spec._srv_pool_v = spec._srv_pool_s = None
+    spec._srv_uploaded = {}
+    spec._srv_last = None
+    spec._srv_seeded = {}
+    spec.target = SimpleNamespace(layers=list(range(n_layers)))
+    return spec
+
+
+def test_capture_and_step_refuse_to_run_out_of_order():
+    spec = _bare_decoder()
+    with pytest.raises(RuntimeError, match="serving_prepare has not run"):  # allow-pytest.raises (pure)
+        spec.serving_capture()
+    spec._srv_records = {}
+    spec._srv_shape_bufs = {(1, 5): {}}
+    spec._srv_widths = {(1, 5): [1024]}
+    with pytest.raises(RuntimeError, match="serving_capture has not run"):  # allow-pytest.raises (pure)
+        spec.serving_step((1, 5), [0], [1], [0], torch.zeros(1, 4, dtype=torch.int32), [None])
+    spec._srv_captured = True
+    with pytest.raises(RuntimeError, match="serving_capture already ran"):  # allow-pytest.raises (pure)
+        spec.serving_capture()
+
+
+def test_release_is_a_no_op_before_prepare():
+    spec = _bare_decoder()
+    spec.serving_release()
+    assert spec._srv_records is None
+
+
+def test_refresh_installs_one_host_table_per_layer_as_int64_rows():
+    spec = _bare_decoder(n_layers=3)
+    spec.serving_refresh_page_tables(None)  # no-op, like refresh_page_tables
+    assert spec._srv_per_layer is None
+    tables = [torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), None, torch.tensor([5, 6])]
+    spec.serving_refresh_page_tables(tables)
+    assert spec._srv_per_layer[0].dtype == torch.int64 and spec._srv_per_layer[0].shape == (2, 2)
+    assert spec._srv_per_layer[1] is None
+    assert spec._srv_per_layer[2].shape == (1, 2)  # a 1-D row is a one-row table
+
+
+@pytest.mark.parametrize(
+    ("tables", "error", "message"),
+    [
+        ([torch.zeros(1, 2)] * 2, ValueError, "one table per target layer \\(3\\)"),
+        (torch.zeros(1, 2), ValueError, "one table per target layer"),
+        ([torch.zeros(1, 2), "x", None], TypeError, "must be a host torch tensor"),
+        ([torch.zeros(1, 2, 2), None, None], ValueError, "must be \\[rows, blocks\\]"),
+    ],
+)
+def test_refresh_refuses_tables_that_do_not_match_the_target(tables, error, message):
+    spec = _bare_decoder(n_layers=3)
+    with pytest.raises(error, match=message):  # allow-pytest.raises (pure)
+        spec.serving_refresh_page_tables(tables)
+
+
+@pytest.mark.parametrize(
+    ("rows", "anchors", "positions", "message"),
+    [
+        ([], [], [], "expected 1..5"),
+        ([0, 1, 2, 3, 4, 5], [1] * 6, [0] * 6, "expected 1..5"),
+        ([0, 1], [1], [0, 0], "lengths differ"),
+        ([0, 0], [1, 1], [0, 0], "duplicate rows"),
+        ([-1], [1], [0], "negative row"),
+        ([0], [1], [-3], "negative anchor/position"),
+    ],
+)
+def test_step_inputs_are_validated_per_row(rows, anchors, positions, message):
+    with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+        SpeculativeDecoder._srv_check_rows((5, 5), rows, anchors, positions)
+
+
+def test_step_result_reads_logits_through_its_reader():
+    seen = []
+    result = ServingStepResult(
+        shape=(5, 5),
+        width=1024,
+        live=2,
+        drafts=torch.zeros(2, 5, dtype=torch.int64),
+        argmax_ids=torch.zeros(2, 6, dtype=torch.int64),
+        logits=object(),
+        _reader=lambda: seen.append(1) or torch.zeros(2, 6, 8, dtype=torch.bfloat16),
+    )
+    assert result.logits_to_host().shape == (2, 6, 8)
+    assert seen == [1]
+    bare = ServingStepResult((1, 5), 1024, 1, torch.zeros(1, 5), torch.zeros(1, 6), None)
+    with pytest.raises(RuntimeError, match="no logits reader"):  # allow-pytest.raises (pure)
+        bare.logits_to_host()

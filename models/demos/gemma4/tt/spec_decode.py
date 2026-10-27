@@ -1,7 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Speculative decoding for Gemma4 (it-assistant MTP/EAGLE drafter), batch=1.
+"""Speculative decoding for Gemma4 (it-assistant MTP/EAGLE drafter).
+
+Two entry points share the drafter and the packed verify:
+
+* ``generate`` / ``generate_batched``: the demo loops (batch=1, and the
+  batched greedy loop), each driving one request set to completion.
+* the serving API (``serving_prepare`` / ``serving_capture`` /
+  ``serving_reseed`` / ``serving_step``): one captured trace per
+  ``(rows, drafts)`` shape and verify width, replayed once per engine step
+  for whichever rows the vLLM contract adapter hands it (see the
+  "serving: batched fused records" section).
 
 Loop (one iteration produces up to ``draft_len + 1`` committed tokens):
 
@@ -27,10 +37,27 @@ and produces an equally-valid greedy trajectory thereafter.
 
 import os
 import time
+from dataclasses import dataclass, field
 
 import torch
 
 import ttnn
+
+# Device argmax tile rule: the multicore argmax is exact for one 32-row tile,
+# so a serving shape packs ``rows * (drafts + 1) <= 32`` verify rows.
+SPEC_ROW_TILE = 32
+# Seed-hidden pool: rows 0..31 hold the previous replay's verify hidden,
+# rows 32..63 the last reseed's target hidden (serving_seed_index).
+SPEC_POOL_ROWS = 2 * SPEC_ROW_TILE
+SPEC_K_BY_ROWS_ENV = "GEMMA4_SPEC_K_BY_ROWS"
+SPEC_K_BY_ROWS_DEFAULT = "5:5,8:3,16:1"
+# Additive mask value: -1e9, not -inf (flash kernels NaN on -inf).
+SPEC_MASK_NEG = -1e9
+# The in-trace mask builder works in key chunks of this width: its fp32
+# intermediates are [B, 1, P, chunk] with P tile-padded to 32 rows, so one
+# chunk costs B * 32 * chunk * 4 bytes (67 MB at B=16) instead of the full
+# S_k (539 MB at 263168). Rungs and chunks are multiples of 1024 (tile-aligned).
+SPEC_MASK_KEY_CHUNK = 32768
 
 
 def _to_probs(logits_row, temperature, top_p, top_k):
@@ -113,6 +140,274 @@ def auto_draft_len_batched(prompt_len, batch, default=3):
     if row_cap < 1:
         return 0
     return min(auto_draft_len(prompt_len, default=default), row_cap)
+
+
+# ── serving shapes and widths (pure host arithmetic) ─────────────────────────
+def spec_check_shape(shape):
+    """Validate one serving shape ``(rows, drafts)`` against the 32-row argmax tile rule; returns it as ints."""
+    try:
+        rows, k = shape
+    except (TypeError, ValueError):
+        raise ValueError(f"a serving shape is (rows, drafts), got {shape!r}") from None
+    rows, k = int(rows), int(k)
+    if rows < 1 or k < 1:
+        raise ValueError(f"serving shape {(rows, k)}: rows and drafts must be >= 1")
+    if rows * (k + 1) > SPEC_ROW_TILE:
+        raise ValueError(
+            f"serving shape {(rows, k)} packs {rows * (k + 1)} verify rows, above the {SPEC_ROW_TILE}-row argmax tile"
+        )
+    return (rows, k)
+
+
+def parse_k_by_rows(text):
+    """``"5:5,8:3,16:1"`` -> ((5, 5), (8, 3), (16, 1)): the catalog ``max_rows:k`` table, rows strictly increasing."""
+    entries = []
+    for item in str(text).split(","):
+        item = item.strip()
+        if not item:
+            continue
+        rows_s, sep, k_s = item.partition(":")
+        if not sep:
+            raise ValueError(f"{SPEC_K_BY_ROWS_ENV} entry {item!r} is not max_rows:k (table {text!r})")
+        try:
+            entry = (int(rows_s), int(k_s))
+        except ValueError:
+            raise ValueError(f"{SPEC_K_BY_ROWS_ENV} entry {item!r} is not max_rows:k (table {text!r})") from None
+        entries.append(spec_check_shape(entry))
+    if not entries:
+        raise ValueError(f"{SPEC_K_BY_ROWS_ENV} table {text!r} has no entries")
+    for prev, cur in zip(entries, entries[1:]):
+        if cur[0] <= prev[0]:
+            raise ValueError(f"{SPEC_K_BY_ROWS_ENV} max_rows must increase: {prev[0]} then {cur[0]} in {text!r}")
+    return tuple(entries)
+
+
+def spec_capture_shapes(k_by_rows, k_max):
+    """The capture shapes of a ``k_by_rows`` table: ``(1, k_max)`` plus one ``(max_rows, k)`` per entry, sorted."""
+    shapes = {spec_check_shape((1, k_max))}
+    shapes.update(spec_check_shape(s) for s in k_by_rows)
+    return sorted(shapes)
+
+
+def serving_plan(shapes, widths_by_shape, max_rows):
+    """Validate a serving plan; returns ``(sorted shapes, {shape: sorted widths})``.
+
+    Every shape fits ``max_rows`` rows and the tile rule; every shape has a
+    non-empty width list of positive multiples of 64 (the SDPA key chunk);
+    ``widths_by_shape`` names no other shape.
+    """
+    max_rows = int(max_rows)
+    if max_rows < 1:
+        raise ValueError(f"max_rows must be >= 1, got {max_rows}")
+    plan = sorted({spec_check_shape(s) for s in shapes})
+    if not plan:
+        raise ValueError("serving_prepare needs at least one shape")
+    for rows, _k in plan:
+        if rows > max_rows:
+            raise ValueError(f"shape {(rows, _k)} has more rows than max_rows={max_rows}")
+    widths = {}
+    for shape in plan:
+        got = widths_by_shape.get(shape) if hasattr(widths_by_shape, "get") else None
+        if not got:
+            raise ValueError(f"no verify widths for shape {shape} (have {sorted(widths_by_shape)})")
+        ws = sorted({int(w) for w in got})
+        bad = [w for w in ws if w < 64 or w % 64]
+        if bad:
+            raise ValueError(f"shape {shape}: verify widths must be positive multiples of 64, got {bad}")
+        widths[shape] = ws
+    extra = sorted(set(widths_by_shape) - set(plan))
+    if extra:
+        raise ValueError(f"widths_by_shape names shapes that are not prepared: {extra}")
+    return plan, widths
+
+
+def serving_width_for(widths, max_position, k):
+    """Narrowest width ``>= max_position + k + 2`` (a P = k + 1 row verify block at ``max_position``, plus one);
+    ``None`` when no width covers it."""
+    need = int(max_position) + int(k) + 2
+    fits = [int(w) for w in widths if int(w) >= need]
+    return min(fits) if fits else None
+
+
+def serving_seed_index(shape, rows, seed_cols, previous, seeded):
+    """Rows of the 64-row seed-hidden pool that each record row gathers its drafter seed from.
+
+    ``previous`` is ``None`` or ``(K_prev, rows_prev)`` of the last replay;
+    ``seeded`` maps a row id to its row in the last reseed. Live row r with
+    ``seed_cols[r] = c`` gathers verify-hidden row ``r' * (K_prev + 1) + c``
+    (r' = the row's index in the last replay); with ``None`` it gathers reseed
+    row ``32 + seeded[row]``. Padding rows gather row 0 (unused).
+    """
+    B, _K = shape
+    live = len(rows)
+    if not 1 <= live <= B:
+        raise ValueError(f"shape {shape}: {live} live rows, expected 1..{B}")
+    if len(seed_cols) != live:
+        raise ValueError(f"shape {shape}: {len(seed_cols)} seed_cols for {live} live rows")
+    if len({int(r) for r in rows}) != live:
+        raise ValueError(f"shape {shape}: duplicate rows in {list(rows)}")
+    out = [0] * B
+    for r, (slot, col) in enumerate(zip(rows, seed_cols)):
+        slot = int(slot)
+        if col is None:
+            if slot not in seeded:
+                raise ValueError(f"row {slot} has no seed: it was not in the last serving_reseed ({sorted(seeded)})")
+            out[r] = SPEC_ROW_TILE + int(seeded[slot])
+            continue
+        if previous is None:
+            raise ValueError(f"row {slot}: seed_cols[{r}]={col} refers to a previous replay, but none ran")
+        k_prev, rows_prev = previous
+        if slot not in rows_prev:
+            raise ValueError(f"row {slot}: seed_cols[{r}]={col} but the last replay served rows {list(rows_prev)}")
+        col = int(col)
+        if not 0 <= col <= int(k_prev):
+            raise ValueError(f"row {slot}: seed_cols[{r}]={col} outside 0..{int(k_prev)} (last replay K={k_prev})")
+        out[r] = list(rows_prev).index(slot) * (int(k_prev) + 1) + col
+    return out
+
+
+def serving_masks_host(positions, P, window, S_k, ring=None):
+    """Host additive masks for one packed verify of ``P`` rows per batch row.
+
+    Returns ``(full [B, 1, P, S_k], sliding [B, 1, P, S_r])`` bf16, row p of
+    batch b attending keys ``j <= c_b + p`` (full) and additionally
+    ``j > c_b + p - window`` (sliding, unbounded). With ``ring`` (a bounded
+    sliding pool) the sliding mask spans ring slots: ``S_r = ring`` and slot j
+    holds position ``top_b - ((top_b - j) mod ring)`` with ``top_b = c_b + P
+    - 1``, the ``_pv_host_inputs`` rule. The head repeat happens in-trace.
+    """
+    cs = torch.as_tensor([int(c) for c in positions], dtype=torch.int64)
+    B = int(cs.numel())
+    P, S_k, window = int(P), int(S_k), int(window)
+    if B < 1 or P < 1 or S_k < 1 or window < 1:
+        raise ValueError(f"masks need B, P, S_k, window >= 1, got {B}, {P}, {S_k}, {window}")
+    zero = torch.tensor(0.0, dtype=torch.bfloat16)
+    neg = torch.tensor(SPEC_MASK_NEG, dtype=torch.bfloat16)
+    p = torch.arange(P, dtype=torch.int64)
+    upper = (cs[:, None] + p[None, :])[:, :, None]  # [B, P, 1]
+    j = torch.arange(S_k, dtype=torch.int64)[None, None, :]
+    full = j <= upper
+    mask_full = torch.where(full, zero, neg).reshape(B, 1, P, S_k)
+    if ring:
+        ring = int(ring)
+        jr = torch.arange(ring, dtype=torch.int64)
+        top = (cs + P - 1)[:, None]  # [B, 1]
+        d = torch.remainder(top - jr[None, :], ring)[:, None, :]  # [B, 1, ring]
+        lo = (P - 1 - p)[None, :, None]  # [1, P, 1]
+        ok = (d >= lo) & (d < lo + window) & (d <= top[:, :, None])
+        mask_slide = torch.where(ok, zero, neg).reshape(B, 1, P, ring)
+    else:
+        ok = full & (j > upper - window)
+        mask_slide = torch.where(ok, zero, neg).reshape(B, 1, P, S_k)
+    return mask_full, mask_slide
+
+
+def serving_select_rows(table, rows, B, width, allow_clip):
+    """Host ``[B, width]`` int64 page table: row r = ``table[rows[r]]`` fitted to ``width``, padding rows zero.
+
+    A narrower source is zero-padded (zeros = block 0, never read past the
+    live top). A wider source is clipped only with ``allow_clip`` -- the
+    verify tables are width-matched to their mask on purpose; otherwise a
+    live block past ``width`` is a capacity error and raises.
+    """
+    t = torch.as_tensor(table)
+    if t.dim() == 1:
+        t = t.unsqueeze(0)
+    if t.dim() != 2:
+        raise ValueError(f"page table must be [rows, blocks], got shape {tuple(t.shape)}")
+    B, width = int(B), int(width)
+    if len(rows) > B:
+        raise ValueError(f"{len(rows)} rows for a {B}-row table")
+    t = t.to(torch.int64)
+    cols = int(t.shape[1])
+    n = min(width, cols)
+    out = torch.zeros(B, width, dtype=torch.int64)
+    for r, slot in enumerate(rows):
+        slot = int(slot)
+        if not 0 <= slot < int(t.shape[0]):
+            raise ValueError(f"row {slot} outside the {int(t.shape[0])}-row page table")
+        row = t[slot]
+        if cols > width and not allow_clip and bool(row[width:].any()):
+            raise ValueError(f"page-table row {slot} holds live blocks past column {width} (table width {cols})")
+        out[r, :n] = row[:n]
+    return out
+
+
+def serving_mask_plan(positions, P, ring=None):
+    """The per-row scalars the in-trace mask builder compares the key iota against.
+
+    ``q [B, P]`` = c_b + p (the verify positions, uploaded as ``v_pos``); with
+    a ``ring``: ``top_b = c_b + P - 1``, ``tm = top_b mod ring`` and
+    ``base = top_b - tm``, so that ring slot j holds position
+    ``base + j - ring * [j > tm]`` (the ``_pv_host_inputs`` rule
+    ``top - ((top - j) mod ring)`` without a device modulo).
+    """
+    cs = torch.as_tensor([int(c) for c in positions], dtype=torch.int64)
+    P = int(P)
+    plan = {"q": cs[:, None] + torch.arange(P, dtype=torch.int64)[None, :]}
+    if ring:
+        top = cs + P - 1
+        plan["tm"] = torch.remainder(top, int(ring))
+        plan["base"] = top - plan["tm"]
+    return plan
+
+
+def serving_masks_from_plan(plan, S_k, window, ring=None):
+    """Torch emulation of ``_srv_masks_device``, comparison for comparison (fp32 key - query, gtz/gez/ltz
+    indicators cast to bf16, scaled by ``SPEC_MASK_NEG``); must equal ``serving_masks_host``."""
+    q = plan["q"].to(torch.float32)[:, None, :, None]  # [B, 1, P, 1]
+    B, P = int(q.shape[0]), int(q.shape[2])
+    j = torch.arange(int(S_k), dtype=torch.float32)[None, None, None, :]
+    diff = j - q  # key - query
+    gt = (diff > 0).to(torch.bfloat16)
+    mask_full = gt * SPEC_MASK_NEG
+    if not ring:
+        far = ((diff + float(window)) * -1.0 >= 0).to(torch.bfloat16)
+        mask_slide = (gt + far) * SPEC_MASK_NEG
+    else:
+        jr = torch.arange(int(ring), dtype=torch.float32)[None, None, None, :]
+        tm = plan["tm"].to(torch.float32)[:, None, None, None]
+        base = plan["base"].to(torch.float32)[:, None, None, None]
+        pos = jr + base + (jr - tm > 0).to(torch.float32) * (-float(ring))  # [B, 1, 1, ring]
+        d = pos - q  # [B, 1, P, ring]
+        gt_r = (d > 0).to(torch.bfloat16)
+        far_r = ((d + float(window)) * -1.0 >= 0).to(torch.bfloat16)
+        neg_r = (pos < 0).to(torch.bfloat16)
+        mask_slide = (gt_r + far_r + neg_r > 0).to(torch.bfloat16) * SPEC_MASK_NEG
+    return mask_full.reshape(B, 1, P, int(S_k)), mask_slide.reshape(B, 1, P, int(ring) if ring else int(S_k))
+
+
+def serving_mask_padded_bytes(shape, width, elem_bytes=2):
+    """Device bytes of ONE ``[B, 1, P, width]`` mask tensor or intermediate: TILE pads P to 32 rows."""
+    rows, _k = spec_check_shape(shape)
+    return rows * SPEC_ROW_TILE * int(width) * int(elem_bytes)
+
+
+@dataclass
+class ServingStepResult:
+    """One ``serving_step`` replay: the drafts and target argmax of the live rows, plus the device logits.
+
+    ``logits`` is the decoder's ONE shared verify-logits buffer
+    ``[1, 1, 32, V_padded]`` (rows ``[0, B_v * P)`` are this replay's packed
+    rows, user-major), which every record's body overwrites at its end: the
+    handle and ``logits_to_host`` are valid until the next ``serving_step`` or
+    ``serving_reseed`` of this decoder, so an adapter that may need them reads
+    them to host before it drives the decoder again.
+    """
+
+    shape: tuple  # (B_v, K_v) of the record that replayed
+    width: int  # verify width (S_k rung) used
+    live: int  # live rows = the first ``live`` rows of the shape
+    drafts: torch.Tensor  # [live, K_v] int64 host: the assistant's drafts per live row
+    argmax_ids: torch.Tensor  # [live, K_v + 1] int64 host: target argmax at [anchor, d1..dK]
+    logits: object  # the decoder's shared verify-logits buffer [1, 1, 32, V_padded]; see the class docstring
+    _reader: object = field(default=None, repr=False, compare=False)
+
+    def logits_to_host(self):
+        """[live, K_v + 1, V] bf16 host readback of ``logits`` (softcap and TP gather already applied)."""
+        if self._reader is None:
+            raise RuntimeError("this ServingStepResult carries no logits reader")
+        return self._reader()
 
 
 class SpeculativeDecoder:
@@ -223,6 +518,18 @@ class SpeculativeDecoder:
         self._pv_ready = False
         self._pv_a_prev = -1  # last hot block index (-1 ⇒ staging unseeded)
         self._pv_traces = {}  # (P, S_k) -> persistent trace inputs/outputs
+        # Serving records (see the "serving: batched fused records" section).
+        self._srv_records = None  # {(shape, S_k): record} once serving_prepare ran
+        self._srv_captured = False
+        self._srv_shape_bufs = {}  # {shape: width-independent buffers}
+        self._srv_per_layer = None  # adapter-installed per-layer host page tables
+        self._srv_pool_v = None  # [1, 1, 32, backbone] last verify hidden
+        self._srv_pool_s = None  # [1, 1, 32, backbone] last reseed hidden
+        self._srv_logits = None  # [1, 1, 32, V_padded] the last replay's verify logits (shared by every record)
+        self._srv_iota = {}  # key-chunk length -> [1, 1, 1, n] fp32 iota for the in-trace masks
+        self._srv_uploaded = {}  # last uploaded small inputs, by key
+        self._srv_last = None  # {"shape", "rows", "K"} of the last replay
+        self._srv_seeded = {}  # row id -> reseed-pool row
 
     def _fused_shift_seed_row(self, accepted, K):
         if self._fused_shift_seed == "current":
@@ -1776,392 +2083,694 @@ class SpeculativeDecoder:
         self._last_fused_replay_s = time.perf_counter() - replay_t0
         return out, accepts
 
-    # ── serving (step-wise fused trace; vLLM B=1 sessions) ───────────────────
+    # ── serving: batched fused records (vLLM contract adapter) ───────────────
+    #
+    # One captured trace per (shape, width) record, shape = (B_v, K_v). Every
+    # width record of a shape binds the same width-independent buffers
+    # (anchor tokens, seed index, drafter positions/tables, verify positions,
+    # KV-write indices, ring scalars); a width record adds only the
+    # width-matched per-type verify tables. Nothing about a request is baked
+    # at capture: positions, tokens and page-table rows are uploaded before
+    # every replay, so one record serves every request.
+    #
+    # Masks. The packed verify's additive masks are built IN-TRACE from the
+    # uploaded verify positions and a persistent key iota (the dFlash
+    # ``pv_iota`` path: sub / gtz / gez / ltz / typecast / multiply in fp32,
+    # H-repeated after), in key chunks of SPEC_MASK_KEY_CHUNK so the
+    # tile-padded fp32 intermediates stay bounded; ``serving_masks_host`` is
+    # the host reference and ``serving_masks_from_plan`` the op-for-op
+    # emulation the host tests hold it to. No mask DRAM persists per rung and
+    # nothing mask-sized is uploaded per step.
+    #
+    # Logits. Every record's body ends by copying its verify logits into the
+    # decoder's ONE shared [1, 1, 32, V_padded] buffer (``ttnn.assign`` into a
+    # persistent tensor, the same precedent as the hidden pool) and freeing
+    # its own; ``ServingStepResult.logits`` is that buffer, valid until the
+    # next serving_step or serving_reseed of this decoder.
+    #
+    # Seed hidden. The fused body starts by gathering each row's drafter seed
+    # ON DEVICE from a shared 64-row hidden pool (rows 0..31 = the previous
+    # replay's verify hidden, padded; rows 32..63 = the last serving_reseed's
+    # target hidden) through the uploaded ``seed_idx`` [1, B_v] row index, and
+    # ends by publishing its own verify hidden into pool rows 0..31
+    # (``ttnn.assign`` into the persistent buffer, the dFlash ``fc_prev``
+    # pattern). ``serving_seed_index`` builds the index on the host.
 
-    # ── serving WIDTH SET: capture per width, select per step ────────────────
-    def _fused_width_inputs(self, anchor_pos, s_k):
-        """Allocate the WIDTH-DEPENDENT packed-verify inputs for one ``S_k``.
+    def _srv_require(self, captured=None):
+        if self._srv_records is None:
+            raise RuntimeError("serving_prepare has not run on this SpeculativeDecoder")
+        if captured is True and not self._srv_captured:
+            raise RuntimeError("serving_capture has not run: the records are prepared but not captured")
+        if captured is False and self._srv_captured:
+            raise RuntimeError("serving_capture already ran; serving_release before preparing again")
 
-        Everything else the fused body reads -- the anchor token, the recurrent
-        hidden, the drafter/verify position tensors and the flat + per-layer page
-        tables -- is width-independent, so a width set allocates these per width
-        and shares the rest. See serving_setup_widths.
-        """
-        P_v = self.draft_len + 1
-        h = self._pv_host_inputs(anchor_pos, P_v, s_k=s_k, h_repeat=False)
-        return {
-            "pv": True,
-            "pv_S_k": s_k,
-            "pv_pos": self._pv_from_torch(h["pos"], ttnn.uint32),
-            "pv_mask_full": self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            "pv_mask_slide": self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            "pv_embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
-            "pv_hot": {lt: self._pv_from_torch(t, ttnn.int32) for lt, t in h["hot_t"].items()},
-            "pv_ptl": self._pv_tables_per_layer(s_k),
-        }
+    def _srv_shape(self, shape):
+        shape = spec_check_shape(shape)
+        if shape not in self._srv_shape_bufs:
+            raise ValueError(f"shape {shape} was not prepared; prepared shapes: {sorted(self._srv_shape_bufs)}")
+        return shape
 
-    def srv_width_for(self, pos):
-        """Narrowest captured width that covers a verify block at ``pos``.
+    @staticmethod
+    def _srv_check_rows(shape, rows, anchors, positions):
+        """Validate one step's per-row inputs; returns the live-row count."""
+        B, _K = shape
+        live = len(rows)
+        if not 1 <= live <= B:
+            raise ValueError(f"shape {shape}: {live} live rows, expected 1..{B}")
+        if len(anchors) != live or len(positions) != live:
+            raise ValueError(
+                f"shape {shape}: rows/anchors/positions lengths differ: {live}/{len(anchors)}/{len(positions)}"
+            )
+        if len({int(r) for r in rows}) != live:
+            raise ValueError(f"shape {shape}: duplicate rows in {list(rows)}")
+        if min(int(r) for r in rows) < 0:
+            raise ValueError(f"shape {shape}: negative row in {list(rows)}")
+        if min(int(p) for p in positions) < 0 or min(int(a) for a in anchors) < 0:
+            raise ValueError(f"shape {shape}: negative anchor/position in {list(anchors)}/{list(positions)}")
+        return live
 
-        ``None`` means no captured width covers it; the caller must not replay,
-        because the packed verify would attend past the mask its trace was
-        captured with.
-        """
-        recs = getattr(self, "_srv_widths", None)
-        if not recs:
-            return None
-        need = int(pos) + self.draft_len + 2  # P_v rows at pos..pos+K, plus one
-        fits = [w for w in recs if w >= need]
-        return min(fits) if fits else None
+    def _srv_layer_types(self):
+        return list(self.target.hf_config.layer_types[: len(self.target.layers)])
 
-    def _srv_capture_width(self, s_k, at_pos):
-        """Capture one more width for the live session, sharing its buffers.
+    def serving_prepare(self, shapes, widths_by_shape, max_rows):
+        """Allocate and compile every (shape, width) record; captures nothing.
 
-        The compile pass writes the same KV positions with the same tokens the
-        next replay will, so it is idempotent mid-session -- the same property
-        that makes capture safe at session start.
-        """
-        import time as _time
-
-        from loguru import logger as _lg
-
-        t0 = _time.time()
-        tr = dict(self._srv_shared)
-        tr.update(self._fused_width_inputs(at_pos, s_k))
-        vx, vidx, vh = self._fused_body(tr)
-        ttnn.synchronize_device(self.mesh_device)
-        vx.deallocate(True)
-        vidx.deallocate(True)
-        vh.deallocate(True)
-        tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        vx, vidx, vh = self._fused_body(tr)
-        ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
-        tr["id"] = tid
-        tr["verify_x"] = vx
-        tr["vidx"] = vidx
-        tr["vhidden"] = vh
-        self._srv_widths[s_k] = tr
-        _lg.info(f"[spec-trace] captured verify width S_k={s_k} in {_time.time()-t0:.2f}s (at position {at_pos})")
-        return tr
-
-    def serving_setup_widths(self, anchor_token, anchor_pos, widths):
-        """Capture one fused trace per verify WIDTH for a serving session.
-
-        ``serving_setup`` captures a SINGLE trace whose ``S_k`` covers
-        ``anchor_pos + max_new_tokens``, which makes that horizon a hard
-        generation budget: past it the caller has to end the request, because
-        the packed verify would attend past the mask it was captured with. The
-        width set replaces the budget with a MIGRATION -- ``serving_step``
-        selects the narrowest covering width each iteration and moves to a wider
-        trace when the request outgrows the one it is on.
-
-        It is also cheaper per iteration than one wide capture would be. The
-        masks are rebuilt on the host and uploaded EVERY replay at ``[1, 1, P_v,
-        S_k]`` (~3.1 MB at 256k), so sizing one trace to the whole context would
-        pay the widest upload on every iteration of every request; selecting the
-        narrowest covering width pays only what the current position needs.
-
-        The width-independent buffers are allocated ONCE here and bound by every
-        width's trace, so a migration moves no state: the recurrent hidden, the
-        anchor and the KV all carry over untouched.
-
-        ``widths`` is the LADDER, not the set to capture now. Only the rung this
-        prompt needs is captured here, so a request pays exactly the one capture
-        it pays today; the rest are captured on first crossing. Capturing the
-        whole ladder up front would be ~2.6 s per rung on a per-request capture
-        path, which is the wrong place to spend it -- moving the whole set to
-        warmup (as the dFlash twin does) is the follow-up that removes both the
-        crossing stall and the per-request capture.
+        Runs, eagerly and in this order: ``_pv_setup`` (ring detection; its
+        one-slot staging is not consumed by the records, whose verify writes
+        per position), then per shape the shape buffers, one target seed
+        forward at B_v rows (the reseed graph) and one fused body per width
+        (the replay graph). Every graph is therefore compiled before the
+        adapter's ``serving_capture`` records the first trace. The assistant
+        must have been built for ``max_rows`` rows
+        (``create_assistant_model(max_local_batch_size=max_rows)``); its
+        declared capacity is checked here. Nothing on the device is sized by
+        ``max_rows`` itself: the per-shape buffers are B_v rows, the hidden and
+        logits buffers 32 rows.
         """
         from loguru import logger as _lg
 
-        if not self._fused_packed_enabled():
-            raise NotImplementedError("the serving width set is packed-verify only")
-        K = self.draft_len
-        self._pv_a_prev = -1
-        self._use_trace = False
-        anchor_hidden = self.seed(anchor_token, anchor_pos)
-        self._use_trace = True
-        v_pos = [anchor_pos + 1 + j for j in range(K)] if self._fused_reseed else [anchor_pos + j for j in range(K + 1)]
-        d_pu, d_pi = self._pos_tensors([anchor_pos])
-        v_pu, v_pi = self._pos_tensors(v_pos)
-        shared = {
-            "anchor_tok": self._tokens_tensor([anchor_token]),
-            "h": ttnn.clone(anchor_hidden),
-            "d_pu": d_pu,
-            "d_pi": d_pi,
-            "d_pt": self._page_table(1),
-            "v_pu": v_pu,
-            "v_pi": v_pi,
-            "v_pt": self._page_table(K if self._fused_reseed else K + 1),
-            "d_ptl": self._page_tables_per_layer(1),
-            "v_ptl": self._page_tables_per_layer(K if self._fused_reseed else K + 1),
-        }
-        anchor_hidden.deallocate(True)
+        if self._srv_records is not None:
+            raise RuntimeError("serving_prepare already ran; serving_release before preparing again")
+        shapes, widths = serving_plan(shapes, widths_by_shape, max_rows)
+        max_rows = int(max_rows)
+        cap = getattr(self.assistant, "max_local_batch_size", None)
+        if cap is None or int(cap) < max_rows:
+            raise ValueError(
+                f"the assistant declares max_local_batch_size={cap} but serving needs {max_rows} rows; "
+                "build it with create_assistant_model(..., max_local_batch_size=max_rows)"
+            )
+        if self.page_table_torch.dim() != 2:
+            raise ValueError(f"page_table_torch must be [rows, blocks], got shape {tuple(self.page_table_torch.shape)}")
+        t0 = time.perf_counter()
+        # Packed mode is the only verify the records run (the batched body is
+        # packed-only), so the ``_fused_packed_enabled`` tier rule does not
+        # apply here: unbounded targets run packed too.
         self._pv_setup()
-        self._pv_seed_staging(anchor_pos)
-        self._srv_shared = shared
-        self._srv_widths = {}
-        self._srv_ladder = sorted(int(w) for w in widths)
-        need = anchor_pos + K + 2
-        w0 = next((w for w in self._srv_ladder if w >= need), None)
-        if w0 is None:
-            raise ValueError(f"the verify width ladder {self._srv_ladder} does not cover anchor position {anchor_pos}")
-        self._fused_trace = self._srv_capture_width(w0, anchor_pos)
-        self._srv_first = True
-        _lg.info(f"[spec-trace] fused verify WIDTH SET: ladder={self._srv_ladder}, active S_k={w0}")
-        return w0
-
-    def serving_setup(self, anchor_token, anchor_pos, max_new_tokens):
-        """Capture the fused trace once for a serving session (B=1).
-
-        Mirrors ``_generate_fused_traced``'s setup block exactly; the caller
-        then drives one ``serving_step`` per engine step.
-        """
-        self._pv_a_prev = -1
-        self._use_trace = False
-        anchor_hidden = self.seed(anchor_token, anchor_pos)
-        self._use_trace = True
-        self._capture_fused_trace(anchor_token, anchor_hidden, anchor_pos, max_new_tokens=max_new_tokens)
-        anchor_hidden.deallocate(True)
-        self._srv_first = True
-
-    def serving_warmup_widths(self, widths, anchor_token=1, anchor_pos=0):
-        """Capture the whole verify-width ladder in WARMUP, before any request.
-
-        This is the MTP counterpart of the dFlash warmup width set, and it
-        exists because capturing during serving does not survive concurrency:
-        on a BH Galaxy DP=4 box at max_concurrency 128, per-request capture
-        produced 48 captures and 33.7 s of capture time INSIDE decode steps, and
-        a worker missed vLLM's RPC deadline by minutes
-        (``RPC call to sample_tokens timed out``). 31B dFlash passes the same
-        sweep because its widths are captured here instead.
-
-        The taps, the anchor and the seed hidden set the CONTENT of the first
-        iteration, never a shape, so capturing against construction values is
-        sound; every request then re-points the traces with ``serving_reseed``.
-        Returns {width: seconds}.
-        """
-        import time as _time
-
-        from loguru import logger as _lg
-
-        if not self._fused_packed_enabled():
-            raise NotImplementedError("the serving width set is packed-verify only")
-        self._use_trace = True
-        self._pv_a_prev = -1
-        # A seed the captures can bind: content, not shape. The KV holds nothing
-        # yet, so this hidden is meaningless -- and never used for a real
-        # request, because serving_reseed overwrites it from that request's own
-        # prefill before its first replay.
-        anchor_hidden = self.seed(int(anchor_token), int(anchor_pos))
-        K = self.draft_len
-        v_pos = [anchor_pos + 1 + j for j in range(K)] if self._fused_reseed else [anchor_pos + j for j in range(K + 1)]
-        d_pu, d_pi = self._pos_tensors([anchor_pos])
-        v_pu, v_pi = self._pos_tensors(v_pos)
-        shared = {
-            "anchor_tok": self._tokens_tensor([int(anchor_token)]),
-            "h": ttnn.clone(anchor_hidden),
-            "d_pu": d_pu,
-            "d_pi": d_pi,
-            "d_pt": self._page_table(1),
-            "v_pu": v_pu,
-            "v_pi": v_pi,
-            "v_pt": self._page_table(K if self._fused_reseed else K + 1),
-            "d_ptl": self._page_tables_per_layer(1),
-            "v_ptl": self._page_tables_per_layer(K if self._fused_reseed else K + 1),
-        }
-        self._pv_setup()
-        self._pv_seed_staging(anchor_pos)
-        self._srv_shared = shared
-        self._srv_widths = {}
-        self._srv_ladder = sorted(int(w) for w in widths)
-        cost = {}
-        t_all = _time.time()
-        for w in self._srv_ladder:
-            t0 = _time.time()
-            self._srv_capture_width(w, anchor_pos)
-            cost[w] = round(_time.time() - t0, 2)
-        self._fused_trace = self._srv_widths[self._srv_ladder[0]]
-        self._srv_warm = True
-        self._srv_first = False  # nothing real has run: always upload + replay
+        self._srv_blocks = int(self.page_table_torch.shape[-1])
+        self._srv_max_rows = max_rows
+        self._srv_shapes = shapes
+        self._srv_widths = widths
+        self._srv_records = {}
+        self._srv_shape_bufs = {}
+        self._srv_pool_v = None
+        self._srv_pool_s = None
+        self._srv_logits = None
+        self._srv_iota = {}
+        self._srv_backbone = None
+        self._srv_flat_type = "full_attention" if "full_attention" in self._pv_ring else next(iter(self._pv_ring))
+        self._srv_uploaded = {}
+        self._srv_last = None
+        self._srv_seeded = {}
+        self._srv_captured = False
+        for shape in shapes:
+            B = shape[0]
+            S = self._srv_alloc_shape(shape)
+            self._srv_shape_bufs[shape] = S
+            # The reseed graph at B_v rows, on padding inputs: token 0 at
+            # position 0 through zero tables, i.e. block 0 (vLLM's null block,
+            # where the decode warmup already writes). It also fixes the pool
+            # geometry (backbone width, hidden dtype) on the first shape.
+            self._srv_seed_rows(shape, [0] * B, [0] * B)
+            for w in widths[shape]:
+                rec = self._srv_alloc_width(shape, S, w)
+                outs = self._srv_body(rec)
+                ttnn.synchronize_device(self.mesh_device)
+                for t in outs:
+                    t.deallocate(True)
+                self._srv_records[(shape, w)] = rec
+                _lg.info(f"[spec-serving] prepared record shape={shape} S_k={w}")
+        self._srv_last = None
+        self._srv_seeded = {}
         _lg.info(
-            f"[spec-trace] MTP WARMUP width set: {self._srv_ladder} in " f"{_time.time()-t_all:.1f}s, per-width={cost}"
+            f"[spec-serving] prepared {len(self._srv_records)} records for shapes {shapes} "
+            f"(max_rows={max_rows}) in {time.perf_counter() - t0:.1f}s"
         )
-        return cost
 
-    def serving_reseed(self, anchor_token, anchor_pos):
-        """Re-point the WARMUP-captured traces at a new request, no capture.
+    def serving_capture(self):
+        """Capture one trace per prepared record (call once, after serving_prepare)."""
+        from loguru import logger as _lg
 
-        The per-request cost drops to one seed verify plus the iteration
-        uploads: the traces, their buffers and the drafter context all stay.
-        Counterpart of DFlashFusedDecoder.reseed.
+        self._srv_require(captured=False)
+        t_all = time.perf_counter()
+        cost = {}
+        for key, rec in self._srv_records.items():
+            t0 = time.perf_counter()
+            tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            verify_x, vidx = self._srv_body(rec)
+            ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+            rec["id"] = tid
+            rec["verify_x"] = verify_x
+            rec["vidx"] = vidx
+            cost[key] = round(time.perf_counter() - t0, 2)
+        self._srv_captured = True
+        # The capture passes replayed nothing real: no previous verify, no seed.
+        self._srv_last = None
+        self._srv_seeded = {}
+        _lg.info(f"[spec-serving] captured {len(cost)} records in {time.perf_counter() - t_all:.1f}s: {cost}")
 
-        The caller must have re-staged the page tables for this request first
-        (refresh_page_tables), because the seed below reads the target KV
-        through them.
+    def serving_width_for(self, shape, max_position):
+        """Narrowest prepared rung of ``shape`` covering a verify block at ``max_position``; None if none does."""
+        self._srv_require()
+        shape = self._srv_shape(shape)
+        return serving_width_for(self._srv_widths[shape], max_position, shape[1])
+
+    def serving_refresh_page_tables(self, page_tables_per_layer):
+        """Install the adapter's per-layer page tables (one host [rows, blocks] table per target layer, or None
+        for a layer that uses the flat table).
+
+        The records bake no table content: every replay uploads the rows it
+        serves, selected from these tables (and from the flat ``page_tables``
+        passed per step) -- so a table that grows is picked up by the next
+        upload, and this hook only has to keep the host tables current. A
+        bounded-sliding target (ring pools per layer type) needs this install
+        before its first reseed/replay; an unbounded target may never call it.
+        ``None`` is a no-op, as for ``refresh_page_tables``.
         """
-        if not getattr(self, "_srv_warm", False):
-            raise RuntimeError("serving_reseed needs serving_warmup_widths to have run")
-        self._pv_a_prev = -1
-        # This request's own seed hidden, from the KV its prefill just wrote.
-        # It replaces the meaningless one the warmup captures were bound to.
-        hidden = self.seed(int(anchor_token), int(anchor_pos))
-        ttnn.copy(hidden, self._srv_shared["h"])  # shared by every width record
-        w = self.srv_width_for(int(anchor_pos))
-        if w is None:
-            need = int(anchor_pos) + self.draft_len + 2
-            w = next((r for r in self._srv_ladder if r >= need), None)
-            if w is None:
-                raise ValueError(
-                    f"position {anchor_pos} is past the verify width ladder "
-                    f"{self._srv_ladder}; the ladder must cover max_model_len"
-                )
-            self._srv_capture_width(w, int(anchor_pos))
-        self._fused_trace = self._srv_widths[w]
-        self._pv_seed_staging(int(anchor_pos))
-        self._srv_upload_iter(int(anchor_token), int(anchor_pos))
-        self._srv_first = False
-        return w
+        if page_tables_per_layer is None:
+            return
+        n_layers = len(self.target.layers)
+        if not isinstance(page_tables_per_layer, (list, tuple)) or len(page_tables_per_layer) != n_layers:
+            got = type(page_tables_per_layer).__name__
+            if isinstance(page_tables_per_layer, (list, tuple)):
+                got = f"{got} of length {len(page_tables_per_layer)}"
+            raise ValueError(f"serving_refresh_page_tables expects one table per target layer ({n_layers}), got {got}")
+        installed = []
+        for i, pt in enumerate(page_tables_per_layer):
+            if pt is None:
+                installed.append(None)
+                continue
+            if not hasattr(pt, "dim"):
+                raise TypeError(f"per-layer page table {i} must be a host torch tensor, got {type(pt).__name__}")
+            t = pt.unsqueeze(0) if pt.dim() == 1 else pt
+            if t.dim() != 2:
+                raise ValueError(f"per-layer page table {i} must be [rows, blocks], got shape {tuple(pt.shape)}")
+            installed.append(t.to(torch.int64))
+        self._srv_per_layer = installed
 
-    def _srv_upload_iter(self, cur_token, cur_pos):
-        """Refresh the persistent inputs the captured trace reads for one
-        iteration at (cur_token, cur_pos).
+    def serving_reseed(self, shape, rows, anchors, positions, page_tables):
+        """Seed the drafter for ``rows`` by a target forward at (anchor, position).
 
-        Shared by serving_step and serving_reseed: a reseed is exactly this
-        upload plus a fresh seed hidden, which is what lets a warmup-captured
-        trace serve a new request WITHOUT capturing again.
+        One batch-dim verify at B_v rows (padding rows: token 0, position 0,
+        block 0) re-writes each live anchor's KV in place and lands the
+        post-norm hidden in reseed pool rows 32..63. The NEXT ``serving_step``
+        reads it for every row whose ``seed_cols`` entry is None. The pool
+        holds the rows of the LAST reseed only: reseed every pending row in
+        one call, then step.
         """
-        tr = self._fused_trace
-        K = self.draft_len
-        h_tok = self._host_tokens([cur_token])
-        ttnn.copy_host_to_device_tensor(h_tok, tr["anchor_tok"])
-        h_tok.deallocate(True)
-        d_hpu, d_hpi = self._host_pos([cur_pos])
-        ttnn.copy_host_to_device_tensor(d_hpu, tr["d_pu"])
-        ttnn.copy_host_to_device_tensor(d_hpi, tr["d_pi"])
-        d_hpu.deallocate(True)
-        d_hpi.deallocate(True)
-        v_pos = [cur_pos + 1 + j for j in range(K)] if self._fused_reseed else [cur_pos + j for j in range(K + 1)]
-        v_hpu, v_hpi = self._host_pos(v_pos)
-        ttnn.copy_host_to_device_tensor(v_hpu, tr["v_pu"])
-        ttnn.copy_host_to_device_tensor(v_hpi, tr["v_pi"])
-        v_hpu.deallocate(True)
-        v_hpi.deallocate(True)
-        if tr.get("pv"):
-            h2 = self._pv_host_inputs(cur_pos, K + 1, s_k=tr["pv_S_k"], h_repeat=False)
-            ttnn.copy_host_to_device_tensor(self._pv_from_torch(h2["pos"], ttnn.uint32, device=False), tr["pv_pos"])
-            ttnn.copy_host_to_device_tensor(
-                self._pv_from_torch(h2["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                tr["pv_mask_full"],
+        self._srv_require()
+        shape = self._srv_shape(shape)
+        B, _K = shape
+        live = self._srv_check_rows(shape, rows, anchors, positions)
+        self._srv_upload_tables(shape, rows, live, page_tables, None)
+        pad = B - live
+        self._srv_seed_rows(shape, [int(a) for a in anchors] + [0] * pad, [int(p) for p in positions] + [0] * pad)
+        self._srv_seeded = {int(slot): r for r, slot in enumerate(rows)}
+
+    def serving_step(self, shape, rows, anchors, positions, page_tables, seed_cols):
+        """One fused replay of ``shape`` at the narrowest rung covering max(positions) + P.
+
+        Per live row r: seed hidden = the previous replay's verify hidden row
+        ``r' * P_prev + seed_cols[r]`` (r' = the row's index in that replay) or
+        the reseed-pool row when ``seed_cols[r]`` is None; then K_v assistant
+        steps, one packed verify of [anchor, d1..dK] per row, argmax on device.
+        Returns a ServingStepResult; its ``logits`` is the decoder's shared
+        verify-logits buffer, valid until the next serving_step or
+        serving_reseed of this decoder.
+        """
+        self._srv_require(captured=True)
+        shape = self._srv_shape(shape)
+        B, K = shape
+        P = K + 1
+        live = self._srv_check_rows(shape, rows, anchors, positions)
+        if len(seed_cols) != live:
+            raise ValueError(f"shape {shape}: {len(seed_cols)} seed_cols for {live} live rows")
+        top = max(int(p) for p in positions)
+        width = serving_width_for(self._srv_widths[shape], top, K)
+        if width is None:
+            raise ValueError(
+                f"shape {shape}: position {top} needs S_k >= {top + P + 1}, past the widest prepared rung "
+                f"{max(self._srv_widths[shape])}; the adapter must decline proposals there"
             )
-            ttnn.copy_host_to_device_tensor(
-                self._pv_from_torch(h2["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                tr["pv_mask_slide"],
-            )
-            for lt, e in h2["embed"].items():
-                ttnn.copy_host_to_device_tensor(self._pv_from_torch(e, ttnn.uint32, device=False), tr["pv_embed"][lt])
-            for lt, t in h2["hot_t"].items():
-                ttnn.copy_host_to_device_tensor(self._pv_from_torch(t, ttnn.int32, device=False), tr["pv_hot"][lt])
-            self._pv_a_prev = cur_pos // self._pv_bs
-
-    def serving_step(self, cur_token, cur_pos):
-        """ONE fused draft+verify iteration. Returns (committed, accepted_m).
-
-        The first call after ``serving_setup`` consumes the capture-bound
-        inputs; later calls refresh the persistent inputs for (cur_token,
-        cur_pos) exactly as the traced generate loop does.
-        """
-        K = self.draft_len
-        # WIDTH SET: move to the narrowest captured width that covers this
-        # position before touching any buffer, so the per-replay uploads below
-        # land in the width the replay will actually use. Nothing else moves --
-        # the recurrent hidden, anchor and page tables are shared by every
-        # width (serving_setup_widths).
-        if getattr(self, "_srv_widths", None) is not None and getattr(self, "_srv_ladder", None):
-            w = self.srv_width_for(cur_pos)
-            if w is None:
-                # Outgrew every width captured so far: take the next rung off
-                # the ladder. This is the migration that replaces the horizon
-                # budget -- the old code had the CALLER end the request here.
-                need = cur_pos + K + 2
-                w = next((r for r in self._srv_ladder if r >= need), None)
-                if w is None:
-                    raise ValueError(
-                        f"position {cur_pos} is past the verify width ladder "
-                        f"{self._srv_ladder}; the ladder must cover max_model_len"
-                    )
-                self._srv_capture_width(w, cur_pos)
-            if self._fused_trace is not self._srv_widths[w]:
-                from loguru import logger as _lg
-
-                _lg.info(f"[spec-trace] verify width {self._fused_trace['pv_S_k']} -> {w} at position {cur_pos}")
-                self._fused_trace = self._srv_widths[w]
-        tr = self._fused_trace
-        if not self._srv_first:
-            self._srv_upload_iter(cur_token, cur_pos)
-        self._srv_first = False
-
-        ttnn.execute_trace(self.mesh_device, tr["id"], cq_id=0, blocking=False)
-        vx = (
-            ttnn.to_torch(ttnn.get_device_tensors(tr["verify_x"])[0]) if self._tp > 1 else ttnn.to_torch(tr["verify_x"])
+        rec = self._srv_records[(shape, width)]
+        previous = None if self._srv_last is None else (self._srv_last["K"], self._srv_last["rows"])
+        seed_idx = serving_seed_index(shape, rows, seed_cols, previous, self._srv_seeded)
+        self._srv_upload(rec, rows, live, anchors, positions, page_tables, seed_idx)
+        ttnn.execute_trace(self.mesh_device, rec["id"], cq_id=0, blocking=False)
+        vx = ttnn.get_device_tensors(rec["verify_x"])[0] if self._tp > 1 else rec["verify_x"]
+        vx = ttnn.to_torch(vx).to(torch.int64).reshape(B, P)
+        gids = torch.tensor(self._ids_to_host(rec["vidx"], B * P), dtype=torch.int64).reshape(B, P)
+        self._srv_last = {"shape": shape, "rows": [int(r) for r in rows], "K": K}
+        return ServingStepResult(
+            shape=shape,
+            width=int(width),
+            live=live,
+            drafts=vx[:live, 1:].clone(),
+            argmax_ids=gids[:live].clone(),
+            logits=self._srv_logits,
+            _reader=lambda rec=rec, live=live: self._srv_logits_to_host(rec, live),
         )
-        vx = vx.reshape(-1)
-        drafts = [int(vx[j if self._fused_reseed else 1 + j]) for j in range(K)]
-        target_ids = self._ids_to_host(tr["vidx"], K + 1)
-        m = next((i for i in range(K) if drafts[i] != target_ids[i]), K)
-        committed = drafts[:m] + [target_ids[m]]
-        if not self._fused_reseed:
-            self._hidden_row_to_device(self._fused_shift_seed_row(m, K))
-        return committed, m
 
     def serving_release(self):
-        """Release the session's fused trace(s) + persistent inputs (best effort).
+        """Release every record's trace and buffer; idempotent."""
+        recs = self._srv_records
+        if recs is None:
+            return
+        self._srv_records = None
+        self._srv_captured = False
+        for rec in recs.values():
+            if rec.get("id") is not None:
+                ttnn.release_trace(self.mesh_device, rec["id"])
+            for key in ("v_ptl", "verify_x", "vidx"):
+                self._free_tensor_tree(rec.get(key))
+        for S in self._srv_shape_bufs.values():
+            for key in (
+                "anchor_tok",
+                "seed_idx",
+                "d_pu",
+                "d_pi",
+                "d_ptl",
+                "v_pos",
+                "write_idxs",
+                "ring_base",
+                "ring_tm",
+            ):
+                self._free_tensor_tree(S.get(key))
+        self._srv_shape_bufs = {}
+        for t in (self._srv_pool_v, self._srv_pool_s, self._srv_logits, *self._srv_iota.values()):
+            self._free_tensor_tree(t)
+        self._srv_pool_v = self._srv_pool_s = self._srv_logits = None
+        self._srv_iota = {}
+        self._srv_uploaded = {}
+        self._srv_last = None
+        self._srv_seeded = {}
 
-        With a width set there are several records that SHARE their
-        width-independent buffers, so each tensor is freed exactly once: the
-        per-width entries and outputs per record, then the shared set.
+    # ── serving internals ────────────────────────────────────────────────────
+    def _srv_alloc_shape(self, shape):
+        """Width-independent persistent inputs of one shape (shared by its width records)."""
+        B, K = shape
+        P = K + 1
+        pu, pi = self._pos_tensors([0] * B)
+        d_ptl = {
+            lt: self._pv_from_torch(torch.zeros(B, self._srv_blocks, dtype=torch.int32), ttnn.int32)
+            for lt in self._pv_ring
+        }
+        ring = self._pv_ring.get("sliding_attention")
+        ring_scalars = {}
+        if ring:
+            # per-row ring geometry for the in-trace sliding mask (serving_mask_plan)
+            for key in ("ring_base", "ring_tm"):
+                ring_scalars[key] = self._pv_from_torch(
+                    torch.zeros(B, 1, 1, 1, dtype=torch.float32), ttnn.float32, layout=ttnn.TILE_LAYOUT
+                )
+        return {
+            "B": B,
+            "K": K,
+            "P": P,
+            **ring_scalars,
+            "anchor_tok": self._tokens_tensor([0] * B),  # [1, B] uint32
+            "seed_idx": self._tokens_tensor([0] * B),  # [1, B] uint32 rows of the hidden pool
+            "d_pu": pu,  # [1, 32] uint32 drafter positions (B filled)
+            "d_pi": pi,  # [B] int32
+            "d_ptl": d_ptl,  # {layer_type: [B, blocks] int32} drafter (shared-KV) tables
+            "d_ptl_list": [d_ptl[lt] for lt in self._srv_layer_types()],
+            "v_pos": self._from_b(torch.zeros(1, B * P, dtype=torch.int64), ttnn.uint32),  # row b*P+p = c_b + p
+            "write_idxs": [self._from_b(torch.zeros(B, dtype=torch.int32), ttnn.int32) for _ in range(P)],
+        }
+
+    def _srv_alloc_width(self, shape, S, s_k):
+        """Width-dependent persistent inputs of one (shape, S_k) record: the width-matched verify tables."""
+        B, K, P = S["B"], S["K"], S["P"]
+        bs = self._pv_bs
+        v_ptl = {}
+        for lt, r in self._pv_ring.items():
+            # Width-matched to the type's mask (see _pv_tables_per_layer): the
+            # packed SDPA attends the TABLE width, so a wider table is unmasked.
+            width = min((r // bs) if r else max(1, int(s_k) // bs), self._srv_blocks)
+            v_ptl[lt] = self._pv_from_torch(torch.zeros(B, width, dtype=torch.int32), ttnn.int32)
+        return {
+            "shape": shape,
+            "S_k": int(s_k),
+            "B": B,
+            "K": K,
+            "P": P,
+            "v_ptl": v_ptl,  # {layer_type: [B, width_lt] int32}
+            "v_ptl_list": [v_ptl[lt] for lt in self._srv_layer_types()],
+            "id": None,
+        }
+
+    def _srv_publish_hidden(self, hidden, pool):
+        """Copy a [1, 1, rows<=32, backbone] hidden into a 32-row pool buffer (padding rows zero)."""
+        rows = int(hidden.shape[2])
+        if rows > SPEC_ROW_TILE:
+            raise ValueError(f"hidden has {rows} rows; the pool holds {SPEC_ROW_TILE}")
+        src = ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG)
+        padded = (
+            ttnn.pad(src, [(0, 0), (0, 0), (0, SPEC_ROW_TILE - rows), (0, 0)], value=0.0)
+            if rows < SPEC_ROW_TILE
+            else src
+        )
+        ttnn.assign(padded, pool)
+        if padded is not src:
+            padded.deallocate(True)
+        if src is not hidden:
+            src.deallocate(True)
+
+    def _srv_seed_rows(self, shape, tokens, positions):
+        """Eager target forward of ``tokens`` at ``positions`` (B_v entries) through the
+        shape's drafter tables; its post-norm hidden fills the reseed pool rows."""
+        S = self._srv_shape_bufs[shape]
+        B = S["B"]
+        if len(tokens) != B or len(positions) != B:
+            raise ValueError(f"shape {shape}: seed needs {B} tokens/positions, got {len(tokens)}/{len(positions)}")
+        x = self._tokens_tensor(tokens)
+        pu, pi = self._pos_tensors(positions)
+        logits, hidden = self.target.ttnn_verify_forward(
+            x=x,
+            current_pos=pu,
+            current_pos_cache=pi,
+            page_table=S["d_ptl"][self._srv_flat_type],
+            kv_cache=self.tt_kv_cache,
+            page_tables_per_layer=S["d_ptl_list"],
+        )
+        logits.deallocate(True)
+        if self._srv_pool_v is None:
+            if hidden.dtype != ttnn.bfloat16:
+                raise TypeError(f"the verify hidden is {hidden.dtype}; the hidden pool (ttnn.assign) needs bfloat16")
+            self._srv_backbone = int(hidden.shape[-1])
+            zeros = torch.zeros(1, 1, SPEC_ROW_TILE, self._srv_backbone)
+            self._srv_pool_v = self._pv_from_torch(zeros, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            self._srv_pool_s = self._pv_from_torch(zeros, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        self._srv_publish_hidden(hidden, self._srv_pool_s)
+        hidden.deallocate(True)
+        for t in (x, pu, pi):
+            t.deallocate(True)
+
+    def _srv_body(self, rec):
+        """The fused record graph over persistent buffers (compile and capture).
+
+        Returns the persistent outputs (verify_x [1, B*P], vidx [1, 1, B*P],
+        vlogits [1, 1, B*P, V_padded], vhidden [1, 1, B*P, backbone]).
         """
-        recs = getattr(self, "_srv_widths", None)
-        if recs:
-            self._srv_widths = None
-            self._fused_trace = None
-            shared = getattr(self, "_srv_shared", None) or {}
-            self._srv_shared = None
-            shared_ids = {id(v) for v in shared.values()}
-            for rec in recs.values():
-                try:
-                    ttnn.release_trace(self.mesh_device, rec["id"])
-                except Exception:
-                    pass
-                for k, v in rec.items():
-                    if k == "id" or id(v) in shared_ids:
-                        continue
-                    self._free_tensor_tree(v)
-            for v in shared.values():
-                self._free_tensor_tree(v)
+        S = self._srv_shape_bufs[rec["shape"]]
+        B, K, P = rec["B"], rec["K"], rec["P"]
+        # 1. seed gather: [pool_v | pool_s] -> [64, backbone] -> rows seed_idx
+        # ttnn.embedding takes the table as [1, 1, num_rows, width]: the 4D
+        # concat is the table, no reshape (the dFlash ctx merge pattern).
+        table = ttnn.concat([self._srv_pool_v, self._srv_pool_s], dim=2)  # [1, 1, 64, backbone]
+        h = ttnn.unsqueeze_to_4D(ttnn.embedding(S["seed_idx"], table, layout=ttnn.TILE_LAYOUT))  # [1, 1, B, bb]
+        table.deallocate(True)
+        # 2. K batched drafter steps, argmax + re-embed on device
+        tok = S["anchor_tok"]
+        draft_cols = []
+        for _ in range(K):
+            logits, h_next = self.assistant.step(tok, h, self._shared_kv, S["d_ptl"], S["d_pu"], S["d_pi"])
+            h.deallocate(True)
+            h = h_next
+            idx = self._argmax_last(logits, rows=B)  # [1, 1, B] uint32
+            logits.deallocate(True)
+            tok = ttnn.reshape(idx, (1, B))
+            draft_cols.append(tok)
+        h.deallocate(True)
+        # 3. user-major verify input [1, B*P] (row b*P+p) from the P columns [1, B]
+        cols4d = [ttnn.reshape(S["anchor_tok"], (1, 1, 1, B))] + [ttnn.reshape(c, (1, 1, 1, B)) for c in draft_cols]
+        stacked = ttnn.concat(cols4d, dim=2)  # [1, 1, P, B]
+        um = ttnn.permute(stacked, (0, 1, 3, 2))  # [1, 1, B, P]
+        stacked.deallocate(True)
+        verify_x = ttnn.reshape(um, (1, B * P))
+        um.deallocate(True)
+        # 4. masks built in-trace at [B, 1, P, S], then ONE packed verify; the
+        # H x repeat tiles the P block per head (row h*P+p, the packed layout).
+        mask_full, mask_slide = self._srv_masks_device(S, rec)
+        vlogits, vhidden = self.target.ttnn_packed_verify_forward(
+            x=verify_x,
+            position_idx=S["v_pos"],
+            attn_mask_full=mask_full,
+            attn_mask_sliding=mask_slide,
+            packed_p=P,
+            page_table=rec["v_ptl"][self._srv_flat_type],
+            kv_cache=self.tt_kv_cache,
+            kv_write_idxs=S["write_idxs"],
+            embed_idx_full=None,
+            embed_idx_sliding=None,
+            hot_pt=None,
+            page_tables_per_layer=rec["v_ptl_list"],
+        )
+        mask_full.deallocate(True)
+        mask_slide.deallocate(True)
+        vidx = self._argmax_last(vlogits, rows=B * P)  # [1, 1, B*P] uint32
+        # 5. publish this replay's verify hidden (next replay's seed gather) and
+        # its logits (the shared readback buffer); the record keeps neither.
+        self._srv_publish_hidden(vhidden, self._srv_pool_v)
+        vhidden.deallocate(True)
+        self._srv_publish_logits(vlogits)
+        vlogits.deallocate(True)
+        return verify_x, vidx
+
+    def _srv_publish_logits(self, vlogits):
+        """Copy the [1, 1, B*P, V_padded] verify logits into the shared 32-row logits buffer (allocated on
+        the first eager body at the logits' own width and dtype)."""
+        if self._srv_logits is None:
+            if vlogits.dtype != ttnn.bfloat16:
+                raise TypeError(
+                    f"the verify logits are {vlogits.dtype}; the shared logits buffer (ttnn.assign) needs bfloat16"
+                )
+            zeros = torch.zeros(1, 1, SPEC_ROW_TILE, int(vlogits.shape[-1]))
+            self._srv_logits = self._pv_from_torch(zeros, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        self._srv_publish_hidden(vlogits, self._srv_logits)
+
+    def _srv_iota_for(self, n):
+        """Persistent [1, 1, 1, n] fp32 key iota 0..n-1 (dFlash ``pv_iota``; fp32 keeps every position exact)."""
+        t = self._srv_iota.get(int(n))
+        if t is None:
+            t = self._pv_from_torch(
+                torch.arange(int(n), dtype=torch.float32).reshape(1, 1, 1, int(n)),
+                ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            self._srv_iota[int(n)] = t
+        return t
+
+    @staticmethod
+    def _srv_mask_chunks(n_keys):
+        """[(j0, n)] key chunks of SPEC_MASK_KEY_CHUNK plus the remainder (every piece tile-aligned)."""
+        out, j0 = [], 0
+        while j0 < int(n_keys):
+            n = min(SPEC_MASK_KEY_CHUNK, int(n_keys) - j0)
+            out.append((j0, n))
+            j0 += n
+        return out
+
+    def _srv_masks_device(self, S, rec):
+        """In-trace additive masks [B, 1, H*P, S_k] (full) and [B, 1, H*P, S_r] (sliding) for the record.
+
+        Per key chunk, ``diff = iota - q`` (fp32, [B, 1, P, n] by the binary
+        broadcast of [1, 1, 1, n] against the [B, 1, P, 1] query positions);
+        full = gtz(diff); sliding (unbounded) adds gez(-(diff + W)); under a
+        ring the keys are ring slots whose position is ``base + j - ring *
+        gtz(j - tm)`` (the uploaded per-row ring scalars) and ltz(position)
+        masks the untouched tail. Indicators are cast to bf16 before the NEG
+        scale so each chunk holds at most two fp32 intermediates.
+        ``serving_masks_from_plan`` is this sequence in torch.
+        """
+        B, P = S["B"], S["P"]
+        W = float(self._pv_window)
+        ring = self._pv_ring.get("sliding_attention")
+        neg = float(SPEC_MASK_NEG)
+        # query positions [B, 1, P, 1] fp32 from the uploaded [1, B*P] verify positions
+        q = ttnn.typecast(ttnn.to_layout(ttnn.reshape(S["v_pos"], (B, 1, P, 1)), ttnn.TILE_LAYOUT), ttnn.float32)
+        full_parts, slide_parts = [], []
+        for j0, n in self._srv_mask_chunks(rec["S_k"]):
+            iota = self._srv_iota_for(n)
+            qc = ttnn.sub(q, float(j0)) if j0 else q  # chunk-relative query positions
+            diff = ttnn.sub(iota, qc)  # [B, 1, P, n] fp32: key - query
+            if qc is not q:
+                qc.deallocate(True)
+            gt = ttnn.gtz(diff)
+            gt_b = ttnn.typecast(gt, ttnn.bfloat16)
+            gt.deallocate(True)
+            full_parts.append(ttnn.multiply(gt_b, neg))
+            if not ring:
+                shifted = ttnn.add(diff, W)
+                flipped = ttnn.multiply(shifted, -1.0)
+                shifted.deallocate(True)
+                far = ttnn.gez(flipped)  # key <= query - W
+                flipped.deallocate(True)
+                far_b = ttnn.typecast(far, ttnn.bfloat16)
+                far.deallocate(True)
+                ind = ttnn.add(gt_b, far_b)  # exclusive conditions: 0/1
+                far_b.deallocate(True)
+                slide_parts.append(ttnn.multiply(ind, neg))
+                ind.deallocate(True)
+            gt_b.deallocate(True)
+            diff.deallocate(True)
+        if ring:
+            for j0, n in self._srv_mask_chunks(ring):
+                iota = self._srv_iota_for(n)
+                jr = ttnn.add(iota, float(j0)) if j0 else iota  # absolute ring slot index
+                past = ttnn.sub(jr, S["ring_tm"])  # [B, 1, 1, n]
+                wrapped = ttnn.gtz(past)
+                past.deallocate(True)
+                wrap = ttnn.multiply(wrapped, -float(ring))
+                wrapped.deallocate(True)
+                shifted = ttnn.add(jr, S["ring_base"])
+                if jr is not iota:
+                    jr.deallocate(True)
+                pos = ttnn.add(shifted, wrap)  # position held by each ring slot
+                shifted.deallocate(True)
+                wrap.deallocate(True)
+                diff = ttnn.sub(pos, q)  # [B, 1, P, n]
+                gt = ttnn.gtz(diff)
+                gt_b = ttnn.typecast(gt, ttnn.bfloat16)
+                gt.deallocate(True)
+                shifted = ttnn.add(diff, W)
+                diff.deallocate(True)
+                flipped = ttnn.multiply(shifted, -1.0)
+                shifted.deallocate(True)
+                far = ttnn.gez(flipped)
+                flipped.deallocate(True)
+                far_b = ttnn.typecast(far, ttnn.bfloat16)
+                far.deallocate(True)
+                untouched = ttnn.ltz(pos)  # slots never written (position < 0)
+                pos.deallocate(True)
+                neg_b = ttnn.typecast(untouched, ttnn.bfloat16)
+                untouched.deallocate(True)
+                acc = ttnn.add(gt_b, far_b)
+                gt_b.deallocate(True)
+                far_b.deallocate(True)
+                acc2 = ttnn.add(acc, neg_b)  # 0..2
+                acc.deallocate(True)
+                neg_b.deallocate(True)
+                ind = ttnn.gtz(acc2)  # any condition -> 1
+                acc2.deallocate(True)
+                slide_parts.append(ttnn.multiply(ind, neg))
+                ind.deallocate(True)
+        q.deallocate(True)
+        _H = self._packed_H()
+        outs = []
+        for parts in (full_parts, slide_parts):
+            mask = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=3)
+            if len(parts) > 1:
+                for part in parts:
+                    part.deallocate(True)
+            outs.append(ttnn.repeat(mask, ttnn.Shape([1, 1, _H, 1])))
+            mask.deallocate(True)
+        return outs[0], outs[1]
+
+    def _srv_copy_if_changed(self, key, host, dev, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
+        """Upload the small ``host`` tensor into the persistent ``dev`` buffer unless the last upload under
+        ``key`` was equal (tables, positions and ring scalars repeat across steps)."""
+        prev = self._srv_uploaded.get(key)
+        if prev is not None and prev.shape == host.shape and torch.equal(prev, host):
             return
-        tr = getattr(self, "_fused_trace", None)
-        self._fused_trace = None
-        if not tr:
-            return
-        try:
-            ttnn.release_trace(self.mesh_device, tr["id"])
-        except Exception:
-            pass
-        for v in tr.values():
-            if hasattr(v, "deallocate"):
-                try:
-                    v.deallocate(True)
-                except Exception:
-                    pass
-            elif isinstance(v, dict):
-                for t in v.values():
-                    if hasattr(t, "deallocate"):
-                        try:
-                            t.deallocate(True)
-                        except Exception:
-                            pass
+        h = self._pv_from_torch(host, dtype, layout=layout, device=False)
+        ttnn.copy_host_to_device_tensor(h, dev)
+        h.deallocate(True)
+        self._srv_uploaded[key] = host.clone()
+
+    def _srv_type_table(self, lt, rows, live, page_tables, which):
+        """Host [B, cols] int64 table of one layer type for the step's rows: the installed per-layer table of
+        the layer that type's consumer reads (``which`` = "drafter": the shared-KV layer; "verify": the
+        type's representative pool layer), rows selected; else the flat ``page_tables`` as given."""
+        installed = self._srv_per_layer
+        src = None
+        if installed is not None:
+            idx = self.target.last_kv_layer_by_type[lt] if which == "drafter" else self._pv_ring_rep[lt]
+            src = installed[idx] if idx < len(installed) else None
+        if src is None:
+            return page_tables
+        B = int(page_tables.shape[0])
+        return serving_select_rows(src, rows, B, int(src.shape[1]), allow_clip=False)
+
+    def _srv_upload_tables(self, shape, rows, live, page_tables, rec):
+        """Upload the drafter tables of ``shape`` (and the verify tables of ``rec`` when given)."""
+        S = self._srv_shape_bufs[shape]
+        B = S["B"]
+        if not hasattr(page_tables, "dim") or page_tables.dim() != 2 or int(page_tables.shape[0]) != B:
+            got = tuple(page_tables.shape) if hasattr(page_tables, "shape") else type(page_tables).__name__
+            raise ValueError(f"shape {shape}: page_tables must be [{B}, blocks], got {got}")
+        pt = page_tables.to(torch.int64)
+        if live < B and bool(pt[live:].any()):
+            raise ValueError(f"shape {shape}: padding rows {live}..{B - 1} of page_tables must be zero (block 0)")
+        if self._srv_per_layer is None and any(self._pv_ring.values()):
+            raise ValueError(
+                "bounded sliding target: serving_refresh_page_tables(per-layer tables) must run before the first "
+                "reseed/replay, or the sliding layers would read the flat table instead of their ring pool"
+            )
+        for lt in self._pv_ring:
+            d_host = self._srv_type_table(lt, rows, live, pt, "drafter")
+            d_host = serving_select_rows(d_host, list(range(B)), B, self._srv_blocks, allow_clip=False)
+            self._srv_copy_if_changed(("d", shape, lt), d_host.to(torch.int32), S["d_ptl"][lt], ttnn.int32)
+            if rec is None:
+                continue
+            v_host = self._srv_type_table(lt, rows, live, pt, "verify")
+            width = int(rec["v_ptl"][lt].shape[-1])
+            # Clipped, not checked: the verify table is width-matched to its
+            # mask on purpose, and columns past the mask are never attended.
+            v_host = serving_select_rows(v_host, list(range(B)), B, width, allow_clip=True)
+            self._srv_copy_if_changed(
+                ("v", shape, rec["S_k"], lt), v_host.to(torch.int32), rec["v_ptl"][lt], ttnn.int32
+            )
+
+    def _srv_upload(self, rec, rows, live, anchors, positions, page_tables, seed_idx):
+        """Refresh every persistent input the record's trace reads for one replay."""
+        shape = rec["shape"]
+        S = self._srv_shape_bufs[shape]
+        B, P = S["B"], S["P"]
+        pad = B - live
+        toks = [int(t) for t in anchors] + [0] * pad
+        pos = [int(p) for p in positions] + [0] * pad
+        for host, dev in ((self._host_tokens(toks), S["anchor_tok"]), (self._host_tokens(seed_idx), S["seed_idx"])):
+            ttnn.copy_host_to_device_tensor(host, dev)
+            host.deallocate(True)
+        hpu, hpi = self._host_pos(pos)
+        ttnn.copy_host_to_device_tensor(hpu, S["d_pu"])
+        ttnn.copy_host_to_device_tensor(hpi, S["d_pi"])
+        hpu.deallocate(True)
+        hpi.deallocate(True)
+        vpos = torch.tensor([[c + p for c in pos for p in range(P)]], dtype=torch.int64)
+        self._srv_copy_if_changed(("vpos", shape), vpos, S["v_pos"], ttnn.uint32)
+        for p in range(P):
+            wi = torch.tensor([c + p for c in pos], dtype=torch.int32)
+            self._srv_copy_if_changed(("widx", shape, p), wi, S["write_idxs"][p], ttnn.int32)
+        ring = self._pv_ring.get("sliding_attention")
+        if ring:
+            plan = serving_mask_plan(pos, P, ring=ring)
+            for key in ("ring_base", "ring_tm"):
+                host = plan[key.split("_")[1]].to(torch.float32).reshape(B, 1, 1, 1)
+                self._srv_copy_if_changed((key, shape), host, S[key], ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        self._srv_upload_tables(shape, rows, live, page_tables, rec)
+
+    def _srv_logits_to_host(self, rec, live):
+        """[live, P, V] bf16 host readback of the shared verify-logits buffer (rows [0, B*P) of its 32)."""
+        B, P = rec["B"], rec["P"]
+        t = self._logits_to_host(self._srv_logits)  # [..., :V], softcap + TP gather already applied on device
+        V = int(t.shape[-1])
+        rows = int(t.numel() // V)
+        if rows != SPEC_ROW_TILE:
+            raise ValueError(
+                f"the shared logits buffer holds {rows} rows, expected {SPEC_ROW_TILE} (shape {tuple(t.shape)})"
+            )
+        return t.reshape(rows, V)[: B * P].reshape(B, P, V)[:live].to(torch.bfloat16)
 
     # ── batched (B>1) speculative decode ─────────────────────────────────────
     def _seed_batched(self, tokens, positions):

@@ -3263,3 +3263,361 @@ def test_spec_decode_batched(mesh_device, reset_seeds):
         f"batched user-0 diverged from plain greedy at a CONFIDENT token (idx {first_div}, "
         f"top-2 gap={gap:.3f} >= {near_tie_gap}); indicates a batched accept/commit/KV-write bug"
     )
+
+
+# ── serving records: (B_v, K_v) shapes through prepare / capture / reseed / step ─────────────────
+# Written for the (1,4) mesh with a trace region; NOT run in the device-free pass that added them.
+_SERVING_SHAPES = [(1, 5), (5, 5), (8, 3), (16, 1)]
+_SERVING_MAX_ROWS = 16
+_SERVING_PROMPTS = [
+    "The capital of France is",
+    "Water boils at a temperature of",
+    "The largest planet in our solar system is",
+    "The author of Romeo and Juliet is",
+    "The chemical symbol for gold is",
+    "The speed of light is approximately",
+    "The first president of the United States was",
+    "The square root of sixty-four is",
+]
+
+
+def _serving_page_tables(rows, blocks_per_user):
+    """[rows, blocks_per_user] int32: user u owns blocks 1 + u*bpu .. ; block 0 is the null block that
+    padding rows write into (their page-table rows are all zero)."""
+    pt = torch.zeros(rows, blocks_per_user, dtype=torch.int32)
+    for u in range(rows):
+        pt[u] = torch.arange(1 + u * blocks_per_user, 1 + (u + 1) * blocks_per_user, dtype=torch.int32)
+    return pt
+
+
+def _serving_build(mesh_device, max_seq_len, draft_len):
+    """Target + assistant at 16 rows, the KV pool for 16 users of ``max_seq_len`` plus the null block, and the
+    SpeculativeDecoder over the 16-row page table."""
+    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.generator import Gemma4Generator
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        pytest.skip("set HF_MODEL (target) to run")
+    num_layers = os.environ.get("GEMMA4_NUM_LAYERS")
+    num_layers = int(num_layers) if num_layers else None
+    block_size = 64
+    bpu = math.ceil(max_seq_len / block_size)
+    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=1 + _SERVING_MAX_ROWS * bpu)
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=_SERVING_MAX_ROWS,
+        max_seq_len=max_seq_len,
+        num_layers=num_layers,
+        paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=False,
+    )
+    target = generator.model[0]
+    _, assistant = create_assistant_model(
+        mesh_device=mesh_device,
+        target_model=target,
+        mesh_config=target.mesh_config,
+        ccl_manager=target.ccl_manager,
+        assistant_path=ASSISTANT_PATH,
+        max_local_batch_size=_SERVING_MAX_ROWS,
+    )
+    page_table = _serving_page_tables(_SERVING_MAX_ROWS, bpu)
+    spec = SpeculativeDecoder(
+        target_model=target,
+        assistant_model=assistant,
+        mesh_device=mesh_device,
+        tt_kv_cache=tt_kv_cache,
+        page_table_torch=page_table,
+        stop_tokens=set(),  # the parity loops run a fixed token count
+        draft_len=draft_len,
+    )
+    return generator, tt_kv_cache, tokenizer, spec, page_table
+
+
+def _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len):
+    """Prefill each user into its own blocks; returns (anchors, positions)."""
+    from models.tt_transformers.tt.common import preprocess_inputs_prefill
+
+    anchors, positions = [], []
+    for u in users:
+        in_pt, encoded, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+            [_SERVING_PROMPTS[u % len(_SERVING_PROMPTS)]],
+            tokenizer,
+            generator.model_args,
+            True,
+            n_new,
+            max_prefill_len=max_seq_len,
+        )
+        in_pt = torch.stack(in_pt).view(1, -1)
+        generator.prefill_forward_text(
+            in_pt,
+            page_table=page_table[u : u + 1],
+            kv_cache=tt_kv_cache,
+            prompt_lens=decoding_pos,
+            warmup_prefill=False,
+        )
+        positions.append(prefill_lens[0] - 1)
+        anchors.append(int(encoded[0][prefill_lens[0] - 1]))
+    return anchors, positions
+
+
+def _plain_greedy_user(spec, page_row, anchor_token, anchor_pos, n):
+    """Reference greedy decode of ONE user through its own page-table row (``_plain_greedy`` reads row 0 of
+    ``spec.page_table_torch``). Returns (tokens, top-2 gaps per step, logits of the first step)."""
+    out, gaps = [], []
+    tok, pos = anchor_token, anchor_pos
+    first_logits = None
+    pt = ttnn.from_torch(
+        page_row.reshape(1, -1).to(torch.int32),
+        device=spec.mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+        mesh_mapper=spec._mapper,
+    )
+    for _ in range(n):
+        x = spec._tokens_tensor([tok])
+        pu, pi = spec._pos_tensors([pos])
+        logits, hidden = spec.target.ttnn_verify_forward(
+            x=x, current_pos=pu, current_pos_cache=pi, page_table=pt, kv_cache=spec.tt_kv_cache
+        )
+        lh = spec._logits_to_host(logits).reshape(-1).float()
+        for t in (logits, hidden, x, pu, pi):
+            t.deallocate(True)
+        if first_logits is None:
+            first_logits = lh.clone()
+        top2 = torch.topk(lh, 2)
+        gaps.append(float(top2.values[0] - top2.values[1]))
+        tok = int(top2.indices[0])
+        out.append(tok)
+        pos += 1
+    pt.deallocate(True)
+    return out, gaps, first_logits
+
+
+def _assert_rows_match_reference(outs, refs, gaps, near_tie_gap, context):
+    """Every row's serving output equals its plain-greedy reference up to the first target near-tie."""
+    for r, (gen, ref, gap) in enumerate(zip(outs, refs, gaps)):
+        n = min(len(gen), len(ref))
+        first_div = next((i for i in range(n) if gen[i] != ref[i]), None)
+        if first_div is None:
+            continue
+        logger.info(
+            f"[{context}] row {r} first divergence at idx {first_div}: serving={gen[first_div]} "
+            f"greedy={ref[first_div]} top-2 gap={gap[first_div]:.4f} (near-tie={near_tie_gap})"
+        )
+        assert gap[first_div] < near_tie_gap, (
+            f"[{context}] row {r} diverged from plain greedy at a CONFIDENT token (idx {first_div}, "
+            f"gap={gap[first_div]:.3f} >= {near_tie_gap}); an accept/commit/KV-write or seed-gather defect"
+        )
+
+
+def _serving_run(spec, shape, rows, anchors, positions, page_tables, n_new, reseed_at=None):
+    """Drive ``shape`` greedily for ``rows`` until every row holds ``n_new`` tokens; the seed column follows the
+    ``_fused_shift_seed_row("current")`` rule (the row of the last matched target token). Checks every result's
+    shapes and that the device argmax agrees with the host argmax of the logits readback (ties excepted).
+    Returns (outs, accepts, results, host_logits): ``host_logits[i]`` is step i's ``logits_to_host()`` read at
+    that step -- a result's ``logits`` is the decoder's ONE shared buffer, valid only until the next
+    serving_step or serving_reseed, so it is read before the loop drives the decoder again."""
+    B, K = shape
+    P = K + 1
+    V = spec.target.vocab_size
+    live = len(rows)
+    anchors, positions = list(anchors), list(positions)
+    spec.serving_reseed(shape, rows, anchors, positions, page_tables)
+    seed_cols = [None] * live
+    outs = [[] for _ in rows]
+    accepts = [[] for _ in rows]
+    results = []
+    host_logits = []
+    it = 0
+    while min(len(o) for o in outs) < n_new:
+        if reseed_at is not None and it == reseed_at:
+            # mid-stream exact reseed: the next step reads the reseed pool for every row
+            spec.serving_reseed(shape, rows, anchors, positions, page_tables)
+            seed_cols = [None] * live
+        res = spec.serving_step(shape, rows, anchors, positions, page_tables, seed_cols)
+        assert res.shape == shape and res.live == live
+        assert res.drafts.shape == (live, K) and res.argmax_ids.shape == (live, P)
+        assert res.logits is spec._srv_logits, "every record publishes into the decoder's shared logits buffer"
+        assert tuple(res.logits.shape)[:3] == (1, 1, 32), tuple(res.logits.shape)
+        lh = res.logits_to_host()  # read now: the next step or reseed overwrites the shared buffer
+        assert lh.shape == (live, P, V), lh.shape
+        assert lh.dtype == torch.bfloat16
+        host_arg = lh.float().argmax(-1)
+        differ = (host_arg != res.argmax_ids).nonzero()
+        for r, p in differ.tolist():
+            a, b = int(host_arg[r, p]), int(res.argmax_ids[r, p])
+            assert lh[r, p, a] == lh[r, p, b], f"device argmax {b} != host argmax {a} at row {r} col {p}, not a tie"
+        results.append(res)
+        host_logits.append(lh)
+        for r in range(live):
+            drafts = res.drafts[r].tolist()
+            g = res.argmax_ids[r].tolist()
+            m = next((i for i in range(K) if drafts[i] != g[i]), K)
+            committed = drafts[:m] + [g[m]]
+            outs[r].extend(committed)
+            accepts[r].append(m)
+            positions[r] += m + 1
+            anchors[r] = committed[-1]
+            seed_cols[r] = min(m, K)
+        it += 1
+        assert it <= 4 * n_new, "the serving loop did not converge"
+    return outs, accepts, results, host_logits
+
+
+@_needs_assistant
+@pytest.mark.parametrize("shape", _SERVING_SHAPES, ids=lambda s: f"B{s[0]}K{s[1]}")
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
+    indirect=True,
+)
+def test_serving_record_matches_plain_greedy(mesh_device, reset_seeds, shape):
+    """One serving record per default shape: prepare + capture (masks built in-trace from the uploaded
+    positions, no host masks), then per live row greedy parity with the plain decode (up to the first
+    target near-tie, the contract of test_spec_decode_batched), the [live, P, V] bf16 readback of the
+    shared logits buffer against the device argmax, a mid-stream exact reseed, and a second pass with one
+    PADDING row (page-table row zero = block 0, position 0, anchor 0) that must leave the live rows'
+    parity intact."""
+    near_tie_gap = float(os.environ.get("GEMMA4_SPEC_NEAR_TIE_GAP", 2.0))
+    B, K = shape
+    max_seq_len = 1024
+    n_new = int(os.environ.get("GEMMA4_SPEC_TEST_TOKENS", 16))
+    generator, tt_kv_cache, tokenizer, spec, page_table = _serving_build(mesh_device, max_seq_len, K)
+
+    spec.serving_prepare([shape], {shape: [1024]}, max_rows=_SERVING_MAX_ROWS)
+    assert set(spec._srv_records) == {(shape, 1024)}
+    spec.serving_capture()
+    assert spec._srv_records[(shape, 1024)]["id"] is not None
+
+    for live in sorted({B, max(1, B - 1)}, reverse=True):
+        users = list(range(live))
+        # padding rows: zero page-table rows (block 0), which serving_step requires
+        page_tables = torch.zeros(B, page_table.shape[1], dtype=torch.int32)
+        page_tables[:live] = page_table[:live]
+
+        anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len)
+        refs, gaps, ref_first = [], [], []
+        for r, u in enumerate(users):
+            ref, gap, first = _plain_greedy_user(spec, page_table[u], anchors[r], positions[r], n_new)
+            refs.append(ref)
+            gaps.append(gap)
+            ref_first.append(first)
+        # the reference wrote KV past the anchors: re-prefill, then serve
+        anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len)
+        outs, accepts, results, host_logits = _serving_run(
+            spec, shape, users, anchors, positions, page_tables, n_new, reseed_at=2 if live == B else None
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        # the verify is the target: column 0 of the first step is the plain next token, and its logits
+        # match the plain decode's logits for every live row
+        first = results[0]
+        for r in range(live):
+            assert _pcc(host_logits[0][r, 0], ref_first[r]) > 0.99, f"row {r} column-0 logits vs plain decode"
+            if first.argmax_ids[r, 0].item() != refs[r][0]:
+                assert gaps[r][0] < near_tie_gap, f"row {r}: first verify token differs at a confident position"
+        _assert_rows_match_reference(outs, refs, gaps, near_tie_gap, f"serving {shape} live={live}")
+        mean_acc = [sum(a) / len(a) for a in accepts]
+        logger.info(f"[serving {shape} live={live}] accepted/iter per row: {[round(a, 2) for a in mean_acc]}")
+        for r, u in enumerate(users):
+            logger.info(f"  row {r} (user {u}): {tokenizer.decode(outs[r][:n_new])!r}")
+    spec.serving_release()
+    assert spec._srv_records is None
+
+
+@_needs_assistant
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
+    indirect=True,
+)
+def test_serving_all_shapes_capture_and_switch(mesh_device, reset_seeds):
+    """All four default shapes x a two-rung ladder captured in one process (every graph eager before the
+    first capture), then consecutive steps that switch shape: the seed gather indexes the PREVIOUS record's
+    (B_prev, P_prev) hidden layout, and the verify's column 0 stays the plain next token of every row."""
+    near_tie_gap = float(os.environ.get("GEMMA4_SPEC_NEAR_TIE_GAP", 2.0))
+    max_seq_len = 2048
+    n_new = 8
+    widths = [1024, 2048]
+    generator, tt_kv_cache, tokenizer, spec, page_table = _serving_build(mesh_device, max_seq_len, 5)
+
+    spec.serving_prepare(_SERVING_SHAPES, {s: widths for s in _SERVING_SHAPES}, max_rows=_SERVING_MAX_ROWS)
+    assert len(spec._srv_records) == len(_SERVING_SHAPES) * len(widths)
+    spec.serving_capture()
+    assert all(rec["id"] is not None for rec in spec._srv_records.values())
+    assert spec.serving_width_for((5, 5), 1024 - 7) == 1024
+    assert spec.serving_width_for((5, 5), 1024 - 6) == 2048
+    assert spec.serving_width_for((16, 1), 2048 - 3) == 2048
+    assert spec.serving_width_for((16, 1), 2048 - 2) is None
+
+    users = list(range(8))
+    anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len)
+    refs = [_plain_greedy_user(spec, page_table[u], anchors[r], positions[r], 1) for r, u in enumerate(users)]
+    anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len)
+
+    def _tables(shape, rows):
+        pt = torch.zeros(shape[0], page_table.shape[1], dtype=torch.int32)
+        for r, u in enumerate(rows):
+            pt[r] = page_table[u]
+        return pt
+
+    # step 1: (5, 5) on users 0..4, fresh seeds
+    rows = [0, 1, 2, 3, 4]
+    spec.serving_reseed((5, 5), rows, [anchors[u] for u in rows], [positions[u] for u in rows], _tables((5, 5), rows))
+    res = spec.serving_step(
+        (5, 5), rows, [anchors[u] for u in rows], [positions[u] for u in rows], _tables((5, 5), rows), [None] * 5
+    )
+    assert res.width == 1024 and res.logits_to_host().shape == (5, 6, spec.target.vocab_size)
+    assert res.logits is spec._srv_logits
+    for r, u in enumerate(rows):
+        if res.argmax_ids[r, 0].item() != refs[u][0][0]:
+            assert (
+                refs[u][1][0] < near_tie_gap
+            ), f"user {u}: verify column 0 != plain next token at a confident position"
+    # commit column 0 only (no draft accepted) so every row advances by one and seeds from column 0
+    for u in rows:
+        anchors[u] = res.argmax_ids[rows.index(u), 0].item()
+        positions[u] += 1
+    # step 2: (8, 3) on users [4, 2, 0, 5, 6, 7] -- three continue from the (5, 5) hidden, three are new
+    rows2 = [4, 2, 0, 5, 6, 7]
+    new = [5, 6, 7]
+    spec.serving_reseed((8, 3), new, [anchors[u] for u in new], [positions[u] for u in new], _tables((8, 3), new))
+    seed_cols = [0, 0, 0, None, None, None]
+    res2 = spec.serving_step(
+        (8, 3), rows2, [anchors[u] for u in rows2], [positions[u] for u in rows2], _tables((8, 3), rows2), seed_cols
+    )
+    assert res2.shape == (8, 3) and res2.live == 6
+    assert res2.drafts.shape == (6, 3) and res2.argmax_ids.shape == (6, 4)
+    # the shared buffer now holds the (8, 3) replay: 6 x 4 rows, read before the next step
+    assert res2.logits is res.logits
+    assert res2.logits_to_host().shape == (6, 4, spec.target.vocab_size)
+    # the continuing rows' verify column 0 is the plain next token after the committed one
+    for r, u in enumerate([4, 2, 0]):
+        ref2, gap2, _ = _plain_greedy_user(spec, page_table[u], anchors[u], positions[u], 1)
+        if res2.argmax_ids[r, 0].item() != ref2[0]:
+            assert gap2[0] < near_tie_gap, f"user {u}: verify column 0 after the shape switch is not the plain token"
+    # step 3: (16, 1) with every user, all continuing from the (8, 3) hidden except the (5, 5)-only ones
+    for u in rows2:
+        anchors[u] = res2.argmax_ids[rows2.index(u), 0].item()
+        positions[u] += 1
+    rows3 = rows2 + [1, 3]
+    spec.serving_reseed(
+        (16, 1), [1, 3], [anchors[u] for u in [1, 3]], [positions[u] for u in [1, 3]], _tables((16, 1), [1, 3])
+    )
+    res3 = spec.serving_step(
+        (16, 1),
+        rows3,
+        [anchors[u] for u in rows3],
+        [positions[u] for u in rows3],
+        _tables((16, 1), rows3),
+        [0] * 6 + [None, None],
+    )
+    assert res3.shape == (16, 1) and res3.live == 8 and res3.argmax_ids.shape == (8, 2)
+    # a row that the last replay did not serve cannot continue from it
+    with pytest.raises(ValueError, match="last replay served rows"):  # allow-pytest.raises (contract check)
+        spec.serving_step((1, 5), [9], [anchors[0]], [positions[0]], _tables((1, 5), [0]), [0])
+    spec.serving_release()
