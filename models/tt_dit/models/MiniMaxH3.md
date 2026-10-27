@@ -354,23 +354,6 @@ say plainly:
   precision levers above tripled it. Reaching 4x end to end needs denoise at ~50 s *and* something
   done about those 31 s.
 
-### Opening the mesh
-
-Every H3 mesh opens with `worker_l1_size=minimax_h3_worker_l1_size(mesh_shape)` (from
-`pipelines/minimax_h3/pipeline_minimax_h3.py`), next to the fabric settings `resolve_mesh_preset` gives: each
-preset carries a `kernel_config_ring_bytes`, and the helper turns it into this architecture's `worker_l1_size`.
-Every preset asks for 71 KB, trading 2 KB of allocatable L1 per core against the 69 KB default ring:
-the vision tower's ring attention otherwise overflows the ring on Wormhole. `MiniMaxH3Pipeline` raises on
-a mesh opened with a smaller ring, and the test fixtures (`tests/models/minimax_h3/conftest.py`) open with
-the same value, so the Memory Test checks the deployed layout.
-
-tt-metal's static-CB placement check ignores L1_SMALL when no regular L1 buffer is live (tt-metal#62798),
-so a program's circular buffers could overwrite the audio decoder's `conv1d` indices, which live in L1_SMALL
-for the life of the process. Deployments are not guarded against this. Instead, every H3 test mesh gets a
-32-64 B-per-core fence directly under L1_SMALL (the `l1_small_fence` fixture in
-`tests/models/minimax_h3/conftest.py`), so any H3 program that would hit the bug fails its test, the Memory
-Test included. The fence goes away once #62798 is fixed.
-
 ### Running on the quad
 
 `tt-run` with `32x4_quad_bh_galaxy_rank_bindings.yaml` and the four hosts in physical ring order
