@@ -3321,3 +3321,51 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   models/demos/deepseek_v41_flash_d_p/tt/perf_experts_load.py -s`.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.4 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check` (`--rerun W.1` for the hit run).
+
+## FIX.5 (overseer, attempt 1, 2026-10-27): flat_routed_expert_with_program keys its program without addresses
+
+- Cause (confirmed): the op hashed every baked buffer address (`FlatWithProgramParams.addrs`, `counts_addr`) and its
+  `override_runtime_arguments` was empty; of those addresses only the gathered x (`xg`) moves call to call (overseer
+  keylog), so each new xg address rebuilt a 32-chip program (~0.55 s host). DS41-122.
+- Fix IN THE OP, behind a new option (rule 6; default = the op before): `patch_addresses=True` + `extra_addrs`.
+  Hash: plan key, extra_key, writers, collector, l1_args sizes, every tensor's spec (optional ones by presence), no
+  address. A hit re-applies what moved since the cached program last ran: per buffer (x, y, counts, regions, ids,
+  gate/up, down, reader-down, done, arena, words, token_index) the flat program's address args (its existing AddrPatch
+  list, grouped by buffer, RuntimeArgsData pointers cached at the miss), the flat + appended arena CBs when the arena
+  moved, the y writers' counts_addr / L1 hand-off args when they changed, and the combine's runtime args copied from
+  `extra` when `extra_addrs` (arena, words, y, out, the planner's plan / table / dord addresses) change. On a miss the
+  combine's arena CBs are bound to the call's arena by the op (the cached descriptor may name a freed arena tensor at
+  the same address; the old `seen` / `rebind` dance is not needed). `extra` is now a non-owning view (no per-call deep
+  copy). Weights: their addresses are patched like everything else (nothing is baked), so the 40 layers share one
+  program per pass (the old key also split them by weight address).
+- Model: Setting `EXPERTS_PROGRAM_KEY` patch (default) / addresses (the op before, for comparison);
+  `tt/weighted_combine.py` passes the cached descriptor on every call with `extra_addrs`; the addresses mode keeps
+  the old `seen` logic. EXPERTS_XG_PINNED (the overseer's hack, default off) is moot with patch; left in place.
+- Numbers, 8x4 (`tt/perf_flat_program_key.py`, layer 0, chunk 5120, real weights, 6 calls a phase): op host per call,
+  hit: addresses 0.41 ms; patch 0.44 ms (same buffers) / 0.46 ms (x moved every call); miss ~0.55 s. Moving x:
+  addresses +1 program every call, patch +0. All 24 outputs bit-identical to the address-keyed op's first call. A
+  first version that re-applied every patch on every hit cost 2.0 ms a hit (override 1.51 ms for 26496 arg / CB writes
+  over 32 chips): now only what moved is written.
+- F196 warm wall (`BRINGUP_PROFILE_WALL=1 test_profile.py`; the profile's rung is `last`, i.e. 40 layers, one 5120
+  chunk at position 0, whatever BRINGUP_RUNG says): patch: warm after 1 warm-up run (237 -> 237 entries), 10 timed
+  runs with misses refused all completed, chunk_wall_ms median 999.8 (755-1175). addresses (`DS41_EXPERTS_PROGRAM_KEY=
+  addresses`): warm-up +40 +36 +37 +38 +23 +34 +18 +2 +0 (316 -> 504 entries, 17-30 s a run), then the first timed
+  run missed in FlatWithProgramDeviceOperation and was refused: never warm. Logs /scratch/dnijemcevic/fix5/.
+- Fork tests: new `tests/unit/test_with_program_patch.py` (the model's wiring via tests/weighted_case.py, model shape:
+  384 experts / 12 a chip / 640 tokens a chip / top 6 on 8x4): BRINGUP_TEST_MESH=8x4 PASS (bit-identical vs the
+  address-keyed op; moved x +0 programs; moved arena, i.e. extra_addrs changed and the combine's args copied, +0
+  programs, bit-identical; arena back, bit-identical). It first hung on 8x4 in the unchanged address-keyed call: the
+  fork's weighted_case.py never got the model's DS41-118 barrier fix (ported now, DS41-123). `tests/unit/` on one
+  Galaxy chip (`--device auto`, as FIX.2): 38 passed, 4 skipped (the 2x2-mesh tests; the new one defaults to 2x2).
+  A 2x2 mesh cannot open on this Galaxy (fabric router sync timeout).
+- Gotcha: run_safe_pytest without `--no-precompile` runs the precompile collect pass; use the flag for mesh tests.
+- Left: the fork-call capture (O.1) keys sigs on argument values; `extra_addrs` holds addresses (allocator-
+  deterministic in practice) and the routed call now always carries the full descriptor, so its sig changes once;
+  `fork_capture.VOLATILE_KWARGS` (not this step's path) could list `extra_addrs` like `extra_key` (K-45).
+  The 2x2 model case in tests/cases.py still runs the address-keyed default.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.5 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`; measurement:
+  `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tt/perf_flat_program_key.py -s`; fork: `BRINGUP_TEST_MESH=8x4
+  scripts/run_safe_pytest.sh --run-all --no-precompile
+  ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_with_program_patch.py`.

@@ -50,7 +50,10 @@ ttnn::Tensor flat_routed_expert(
 // core) and y ([rows, H] bf16 ROW_MAJOR, DRAM), the other op's MeshProgramDescriptor (`extra_key` identifies it for
 // the program cache), and where the y writers report each local expert: counts[e] (cumulative, +1 per writer and
 // call) at `counts_addr` on the logical `collector` core; `writers` is the number of y writers the caller expects.
-// Returns y.
+// patch_addresses (DeepSeek-V4.1 FIX.5; default false = the address-keyed program before): no buffer address in the
+// program-cache key, every one patched on a hit (FlatWithProgramParams); `extra_addrs` lists the addresses the extra
+// program bakes into its runtime args: when they differ from the cached program's, the call must pass `extra` (its
+// runtime args are copied in). Returns y.
 ttnn::Tensor flat_routed_expert_with_program(
     const ttnn::Tensor& x,
     const ttnn::Tensor& counts,
@@ -78,7 +81,9 @@ ttnn::Tensor flat_routed_expert_with_program(
     const std::vector<std::vector<uint32_t>>& l1_args = {},
     const std::optional<ttnn::Tensor>& relay_words = std::nullopt,
     uint32_t math_fidelity = 0,
-    bool weights_nk = false);
+    bool weights_nk = false,
+    bool patch_addresses = false,
+    const std::vector<uint32_t>& extra_addrs = {});
 
 // The plan for a device / config (cached): what the weight layout and the done words need.
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(

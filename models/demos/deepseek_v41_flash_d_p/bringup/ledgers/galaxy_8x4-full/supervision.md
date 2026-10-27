@@ -360,3 +360,6 @@ check (F196 / F197); host times stay hidden until verified warm.
   It placed FIX.5 first (queued fix, gate = W.1's frozen tests: these re-run on the rebased code). A resume does not
   re-gate the other PASS tasks by itself, so at the FIX.5 boundary (pause) the overseer runs `core.verify --tasks M.1
   'L.*' --batch` (the stamps reuse nothing across the rebase: ~2-3 h, owner-expected), then resumes with K.1.
+- 16:59 tt-d-gen built by dgen-build: /scratch/dnijemcevic/tt-d-gen @ a9701ce6675 (main, 2026-10-27), tt-blaze 7393302a49a, 576 s cold; found via spec serving.server_repo (K.1 will not wait).
+- 16:59 found: dgen_engine.server_repo does not expand $USER in serving.server_repo (the template default has it too): K.1 would wait forever. Pause requested (stops after FIX.5); fix + selftest at that boundary, with the M.1 / L.* verify.
+- 17:05 OWNER: perf tasks (X.*) are off for now. Fix what is needed, prove the rebase broke nothing (M.1 + L.* verify), run K.1 (resume --until K.1). K.1's decode-via-prefill stand-in (test-side tail re-prefill on the migrated KV) is the accepted contract proof; no runner token output.
