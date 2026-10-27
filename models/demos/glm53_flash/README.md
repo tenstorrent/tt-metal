@@ -98,8 +98,9 @@ over the 42 MoE layers (confirmed: 256 K with the copy forced off replays in 148
 the default since 2026-10-27; `custom_ops/expert_stream/regions.py`): the per-expert regions tensors already sit in the bank-local
 column layout the stream kernels read, so one expert copy serves prefill and decode and the stacked copy is never built. Bit-identical
 to the stacked path (one chip, the (2,4) block, and the 45-layer chain pcc 0.861457 = the stacked value); 1 M x 4 users per row
-152 -> 75.7 ms per step (13.2 tok/s per user, 423 aggregate; TTFT 143 ms for 128 tokens, was 264); the served 1 M profile follows in
-smoke r14. bfp4 experts stay a separate lever (accuracy gate pending). The sparse-decode scorer and top-k also looped over the pool capacity (+0.94 ms per DSA layer per step); a per-step
+152 -> 75.7 ms per step (13.2 tok/s per user, 423 aggregate; TTFT 143 ms for 128 tokens, was 264), and at 256 K the default path
+matches the stacked copy it replaces (70.3 vs 70.9 ms, with the sparse-decode bound on). The served 1 M profile follows in smoke r14.
+bfp4 experts stay a separate lever (accuracy gate pending). The sparse-decode scorer and top-k also looped over the pool capacity (+0.94 ms per DSA layer per step); a per-step
 live-pool bound (`GLM53_SPARSE_DECODE_BOUND=1`) is validated bit-identical on the block and on the 8x4 (152.2 -> 148.6 ms).
 
 Open: (1) the KDA chronology scalars were allocated after the trace captures and clobbered by decode replays (the served 64 K random

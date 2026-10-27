@@ -1173,3 +1173,11 @@ and the (2,4) block S1==T1==T2 passed before it). The 4.8 ms over the 256 K stac
 capacity loops (~3.6 ms, `GLM53_SPARSE_DECODE_BOUND=1` not set in this run) + residual; `e2e_8x4_B4_cap256k_default` measures the
 stream vs stacked residual on the 8x4. Default flipped to `stream` (the path is bit-identical to the gated stacked path, so the
 stacked path's accuracy gate carries over; `GLM53_REGIONS_DECODE=off` restores the old rule).
+
+10:51 `e2e_8x4_B4_cap256k_default` (wt_frozen19 = 257eb14a907: `GLM53_REGIONS_DECODE=stream` default, no stacked copy built,
+`GLM53_SPARSE_DECODE_BOUND=1`): 256 K x 4 users/row traced step 70.33 ms = 14.2 tok/s per user, 455 aggregate (stacked copy,
+unbound: 70.85), TTFT 142 ms (146), chain pcc 0.861457 (identical). The stream source costs nothing on the 8x4 (ppb=1: the same
+packets as the stacked stream), so the short-context README rows measured with the stacked copy stand under the new default; the
+1 M residual over 256 K (75.7 unbound -> ~72 bound vs 70.3) is the attention/index capacity term. The stacked copy (9.41 GiB per
+chip) is no longer built in any configuration unless `GLM53_REGIONS_DECODE=off`. boundary65536_reuse_8x4_45L (the full-model
+reproducer of the served random-65536 decode hang) PASSED at 10:33: the hang stays unreproduced outside the served path.
