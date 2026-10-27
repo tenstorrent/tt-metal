@@ -1955,3 +1955,29 @@ its fused-head programs at its first call); the shared expert is bf8 / HiFi2 vs 
   and stream once per row chunk (planner: w 718, wnoc 1365 us). Speed of light 376 (ring) / 665 (line) us. The window
   column is not a 4x4's (this proxy has 28 experts a chip at 183 rows, a 4x4 56 at 91). Scratch patch for the RT read:
   session scratchpad zz_rt_times.patch (not committed).
+
+## Order-independent combine accumulation: offline calibration (2026-10-27)
+
+Why: the team's main worry is run-to-run non-determinism of experts + combine (fp32 packer L1 accumulation of bf16
+rows x routing weight, arrival order varies). Every deterministic option tried so far needed more accumulators or
+staging, which made the landing rings shallower and killed perf. Idea: keep add-on-arrival and the 4 B accumulators, but
+snap each term (bf16 w x bf16 y, exact in DEST fp32) to a fixed absolute grid q per layer and hidden channel before the
+packer adds it. All terms are multiples of q and every partial sum is < 2^24 q, so each fp32 add is exact and the sum is
+bit-identical in any order. The routing rows sum to 2.5 (sigmoid, norm_topk_prob), so any partial sum is bounded by
+B_c = max_t sum_k |term| with no log2 K factor. The norm in front makes the scale token-independent (a static q works).
+Int32 (q 7 bits finer) only if the packer can L1-accumulate Int32 (not confirmed).
+
+Offline on GLM-5.3-Flash (models/demos/glm53_flash_d_p_lb/tests/zz_combine_snap_offline.py, exact weights, golden
+ffn_norm + routing): calibrate B_c on s4096 (tokens 0-4095), test on s56320 chunk 10 (tokens 51200-56319). Layers 3, 4,
+12, 20, 28, 36, 40, 44:
+- B_c is set by token 0/1 (the sink) in almost every layer; channels spread 5-9 bits within a layer (per-channel q
+  matters: one q per layer flips 5-10x more outputs).
+- Test vs calibration: sum |term| never above 2x B_c (max 2^1.09 at L4, else <= 2^0.71); above 1x on 0-1.8e-4 of
+  elements. So h = 1 bit of headroom: no saturation on this test.
+- The weight-only hard bound (2.5 x L silu(L) x max_e ||Wd_e[c, :]||_1, swiglu_limit 10) is 5.4-14 bits loose (p50
+  8-14): calibration, not a bound.
+- fp32 grid, per channel, h = 1: error before the bf16 cast 0.0-1.7% of bf16 rounding; bf16 outputs differ from
+  bf16(exact sum) on 0.07-1.8% of elements (1-ulp flips), rel L2 unchanged (1.659e-3 = bf16 rounding). h = 2 doubles the
+  flips. Int32 h = 1: 1e-7 to 3e-5 flips, the same order as today's fp32 order dependence (two orders differ on ~1e-6).
+- Not checked: bfp4 experts' outputs (gain 1.01, so same magnitudes), other texts, K3 (no weights here). Device cost
+  (two SFPU adds a tile on the accumulators) not measured.
