@@ -355,7 +355,7 @@ class TtDS41Block:
             self.engram_add = build_engram_add(mesh, ck, cfg, i, rows=model.chunk // model.sp)
         # MoE
         self.router = build_router(mesh, ck, cfg, i, model.chunk)
-        self.experts = build_experts(mesh, ck, cfg, i, model.chunk)
+        self.experts = build_experts(mesh, ck, cfg, i, model.chunk, cache_dir=model.weight_cache)
         self.shared = build_shared_expert(mesh, ck, cfg, i, chunk=model.chunk)
         # P.12: the shared expert reads its x rows from the routed experts' gathered row-major q(x) (experts runs first
         # in the block graph)
@@ -585,7 +585,17 @@ class TtDS41Model:
     """The device modules of the requested layers plus the embedding and the final norm, and the load-time tables
     they share. ``layers``: sorted layer ids (a reader layer's sources must be among them)."""
 
-    def __init__(self, mesh, model_path: str, layers, max_seq: int, chunk: int, lm_head: bool = False, hasher=None):
+    def __init__(
+        self,
+        mesh,
+        model_path: str,
+        layers,
+        max_seq: int,
+        chunk: int,
+        lm_head: bool = False,
+        hasher=None,
+        weight_cache=None,
+    ):
         from models.demos.deepseek_v41_flash_d_p.reference.ds41_ref import Config
         from models.demos.deepseek_v41_flash_d_p.reference.weights import Checkpoint, EngramTable
 
@@ -593,6 +603,7 @@ class TtDS41Model:
 
         t0 = time.time()
         self.mesh, self.path = mesh, str(model_path)
+        self.weight_cache = weight_cache  # the routed experts' laid-out weight cache (tt/experts.py:expert_cache_dir)
         self.cfg = cfg = Config.from_dir(self.path)
         self.ck = ck = Checkpoint(self.path)
         self.layers = sorted(layers)

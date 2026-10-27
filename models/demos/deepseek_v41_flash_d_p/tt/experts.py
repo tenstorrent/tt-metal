@@ -39,6 +39,12 @@ No per-chunk weight work. The counts / plans / tables stay on the device (the co
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
 import torch
 from loguru import logger
 
@@ -68,7 +74,7 @@ def _bfp8_exact(t: torch.Tensor) -> bool:
     of 16 values along the last dim, every value is an integer multiple of 2^(E - 6), E = the group's largest binary
     exponent (7 magnitude bits under the shared exponent; zeros are exact)."""
     g = t.float().reshape(-1, BFP8_GROUP)
-    amax = g.abs().amax(dim=-1, keepdim=True)
+    amax = torch.maximum(g.amax(dim=-1, keepdim=True), g.amin(dim=-1, keepdim=True).neg_())  # max |v| per group
     _, e = torch.frexp(amax)  # amax = m 2^e, m in [0.5, 1): leading bit 2^(e - 1)
     q = torch.ldexp(g, BFP8_MANT - e)  # the 7-bit grid: leading bit -> 2^6
     return bool((q == q.round()).all()) and bool((q.abs() < 2**BFP8_MANT).all())
@@ -80,7 +86,9 @@ def _bfp4_round(t: torch.Tensor) -> torch.Tensor:
     exponent; each value -> round(v / 2^(E - 2)) clamped to +-7, times 2^(E - 2). Checked against ttnn's own packing
     by tt/perf_experts.py:test_bfp4_round_matches_ttnn."""
     g = t.float().reshape(-1, BFP8_GROUP)
-    _, e = torch.frexp(g.abs().amax(dim=-1, keepdim=True))  # amax = m 2^e, m in [0.5, 1): unit 2^(e - 3)
+    # max |v| of each group = max(max v, -min v) (no |g| copy of the whole tensor)
+    amax = torch.maximum(g.amax(dim=-1, keepdim=True), g.amin(dim=-1, keepdim=True).neg_())
+    _, e = torch.frexp(amax)  # amax = m 2^e, m in [0.5, 1): unit 2^(e - 3)
     s = torch.ldexp(torch.ones_like(e, dtype=torch.float64), BFP4_MANT - e)  # powers of two, exact in fp64
     up, down = s.float(), (1.0 / s).float()
     assert bool(torch.isfinite(up).all() and torch.isfinite(down).all() and (up > 0).all() and (down > 0).all())
@@ -95,6 +103,87 @@ def _bfp4_change(w: torch.Tensor) -> tuple[int, torch.Tensor]:
     d = _bfp4_round(w).sub_(wf)
     rel = torch.linalg.vector_norm(d, dim=(-2, -1)) / torch.linalg.vector_norm(wf, dim=(-2, -1)).clamp_min(1e-30)
     return int(torch.count_nonzero(d)), rel
+
+
+def _bf16_exact(t: torch.Tensor) -> bool:
+    """True when bf16 holds every value of the fp32 tensor t exactly (the low 16 bits of each value are zero) and every
+    value is finite: = torch.equal(t.to(bf16).float(), t) for finite t, one pass with no copy."""
+    assert t.dtype == torch.float32 and t.is_contiguous()
+    low = t.view(torch.int16)[..., 0::2]  # (little endian: the low half of each fp32 word)
+    lo, hi = torch.aminmax(t)  # (NaN propagates; isfinite over the whole tensor took 0.28 s per stack)
+    return int(torch.count_nonzero(low)) == 0 and bool(torch.isfinite(lo)) and bool(torch.isfinite(hi))
+
+
+READ_WORKERS = 8  # threads copying one slot's stored experts out of the checkpoint maps (_host_weights)
+_READ_POOL = None
+
+
+def _read_pool() -> ThreadPoolExecutor:
+    global _READ_POOL
+    if _READ_POOL is None:
+        _READ_POOL = ThreadPoolExecutor(READ_WORKERS, thread_name_prefix="ds41-expert-read")
+    return _READ_POOL
+
+
+def expert_cache_dir(spec) -> Path:
+    """The routed experts' weight cache of a run (EXPERTS_WEIGHT_CACHE): the spec's tt_cache (art, the mesh, -scaled,
+    the cache version) / experts-<checkpoint revision>."""
+    rev = str(spec.get("hf.revision") or "norev")[:12]
+    return Path(spec.tt_cache()) / f"experts-{rev}"
+
+
+def expert_cache_prefix(cache_dir, ck, layer: int, impl: str, mesh, n_experts: int) -> str | None:
+    """The FlatRoutedExpert cache_prefix of one layer's routed experts, or None (no cache_dir, EXPERTS_WEIGHT_CACHE=off):
+    <cache_dir>/<rows>x<cols>/L<layer>.<impl>.<fingerprint>, the fingerprint a hash of the layer's stored expert
+    tensors as the checkpoint index places them (file, dtype, shape, offset, bytes: the real and the scaled checkpoint
+    differ). The fork's file names add the block dtype and the hash of the layout plan."""
+    if cache_dir is None or settings.get("EXPERTS_WEIGHT_CACHE") != "on":
+        return None
+    rows, cols = tuple(mesh.shape)
+    h = hashlib.sha1()
+    for e in range(int(n_experts)):
+        for nm in NAMES:
+            for part in ("weight", "scale"):
+                name = f"layers.{layer}.ffn.experts.{e}.{nm}.{part}"
+                dt, shape, off, nb = ck.info(name)
+                h.update(repr((name, os.path.basename(ck.weight_map[name]), str(dt), shape, off, nb)).encode())
+    return str(Path(cache_dir) / f"{rows}x{cols}" / f"L{layer:02d}.{impl}.{h.hexdigest()[:12]}")
+
+
+class _CacheMarker:
+    """<prefix>.done.json, written after FlatRoutedExpert has dumped a layer's laid-out weights: the files (and their
+    sizes) it wrote and the layer's bfp4_stats. The fork dumps straight to the final names, so a process killed while
+    dumping leaves a truncated file: at construction every <prefix>.flat.* file the marker does not list with its size
+    is deleted (the fork then misses and repacks)."""
+
+    def __init__(self, prefix: str | None):
+        self.prefix, self.stats = prefix, None
+        if prefix is None:
+            return
+        self.path = Path(prefix + ".done.json")
+        rec = {}
+        if self.path.is_file():
+            try:
+                rec = json.loads(self.path.read_text())
+            except (OSError, ValueError):
+                rec = {}
+        files = rec.get("files", {})
+        for f in self._files():
+            if files.get(f.name) != f.stat().st_size:
+                logger.warning(f"EXPERTS_CACHE dropping {f} (not in the completion marker {self.path.name})")
+                f.unlink()
+        self.stats = rec.get("stats")
+
+    def _files(self):
+        stem = Path(self.prefix)
+        return sorted(stem.parent.glob(f"{stem.name}.flat.*")) if stem.parent.is_dir() else []
+
+    def write(self, stats):
+        rec = {"files": {f.name: f.stat().st_size for f in self._files()}, "stats": stats}
+        tmp = self.path.with_suffix(f".tmp{os.getpid()}")
+        tmp.write_text(json.dumps(rec, indent=1))
+        os.replace(tmp, self.path)
+        self.stats = stats
 
 
 class TtExperts:
@@ -112,10 +201,11 @@ class TtExperts:
         impl: str | None = None,
         combine_acc: str | None = None,
         combine_planner: str | None = None,
+        cache_dir=None,
     ):
         """ck: reference/weights.Checkpoint (experts read one at a time, packed). max_chunk: the chunk (all mesh rows
         together). impl: EXPERTS_IMPL value, combine_acc: COMBINE_ACC value, combine_planner: COMBINE_PLANNER value
-        (None: the setting)."""
+        (None: the setting). cache_dir: the laid-out weight cache (expert_cache_dir; None: no cache)."""
         rows, cols = tuple(mesh.shape)
         n = rows * cols
         E = int(num_experts)
@@ -150,6 +240,7 @@ class TtExperts:
             if self.precision == "glm"
             else getattr(ttnn.MathFidelity, settings.get("MATMUL_FIDELITY"))
         )
+        self.cache_dir = cache_dir
         self.bfp4_stats = None  # EXPERTS_IMPL=bfp4: what bfloat4_b changes in this layer's experts (_load_block)
         # local -> global expert ids per chip [cols, rows, epc] (ExpertMapping column-major: chip (r, c) holds
         # (c rows + r) epc ..): which checkpoint experts each chip's weights hold
@@ -164,7 +255,8 @@ class TtExperts:
     def _load_block(self, ck, gtab):
         """Per local slot le, every chip's W1 / W3 [I, H] and W2 [H, I] as stored ([N, K]), checked (bfp8: exact) or
         measured (bfp4: `bfp4_stats`) in the 16-value groups along K the flat op's tiles share, then laid out in the op's
-        bank layout (_load_flat). Built once.
+        bank layout (_load_flat). Built once; with a weight cache (EXPERTS_WEIGHT_CACHE, FIX.4) only on a miss: the
+        fork calls _host_weights only when its laid-out files are missing.
 
         Orientation matters (DS41-35): a block-float group shares one exponent per 16 values along the last dim. Along
         K (as stored) a group lies inside one 32-wide e8m0 block, so bfloat8_b holds its e2m1 values (0.5 .. 6, 4
@@ -172,49 +264,88 @@ class TtExperts:
 
         bfp4 (lossy, owner pick): the same orientation (a group still shares one e8m0 scale); `bfp4_stats` records
         the fraction of this layer's expert values bfloat4_b changes and the worst per-matrix relative change."""
+        import time
+
+        t0 = time.time()
+        prefix = expert_cache_prefix(self.cache_dir, ck, self.layer, self.impl, self.mesh, self.E)
+        marker = _CacheMarker(prefix)
+        self._host_s = None
+        self._load_flat(lambda: self._host_weights(ck, gtab), gtab, prefix)
+        hit = self._host_s is None
+        if prefix is not None:
+            if hit:
+                self.bfp4_stats = marker.stats
+            else:
+                marker.write(self.bfp4_stats)
+        if self.impl == "bfp4" and self.bfp4_stats is not None:
+            st = self.bfp4_stats
+            logger.info(
+                f"EXPERTS_BFP4 layer={self.layer} values_changed={st['changed']}/{st['total']} "
+                f"({100 * st['changed_frac']:.2f} %) worst_matrix_rel={st['worst_rel']:.4g} "
+                f"(expert, matrix)={st['worst_matrix']}{' (cached)' if hit else ''}"
+            )
+        logger.info(
+            f"EXPERTS_LOAD layer={self.layer} impl={self.impl} cache={'hit' if hit else 'miss' if prefix else 'off'} "
+            f"total={time.time() - t0:.1f} s host_weights={0.0 if hit else self._host_s:.1f} s"
+        )
+
+    def _host_weights(self, ck, gtab):
+        """The weights FlatRoutedExpert lays out: [device r cols + c][le] = (W1, W3, W2) as stored, bf16 (exact), each
+        slot's 32-chip stack dequantized in one go (fp4_dequant over the stacked packed bytes: the same per-element
+        arithmetic), checked once per stacked tensor: bf16-exact (the fp32 values' low 16 bits zero) and, bfp8, held
+        exactly by bfloat8_b (_bfp8_exact); bfp4: `bfp4_stats` from the fp32 stacks (no copies)."""
+        import time
+
+        t0 = time.time()
         rows, cols, layer, H, I = self.dgs, self.ngroups, self.layer, self.H, self.I
-        flat_w = [[None] * self.epc for _ in range(rows * cols)]  # [device r cols + c][le] = (W1, W3, W2) stored
+        n = rows * cols
+        flat_w = [[None] * self.epc for _ in range(n)]
         changed = total = 0
         worst = (0.0, None)
+        pool = _read_pool()
         for le in range(self.epc):
-            w13 = torch.empty(cols, rows, 2 * I, H, dtype=torch.bfloat16)
-            w2 = torch.empty(cols, rows, H, I, dtype=torch.bfloat16)
-            for c in range(cols):
-                for r in range(rows):
-                    p = ck.expert(layer, int(gtab[c, r, le]))
-                    w = {nm: fp4_dequant(*p[nm]) for nm in NAMES}  # [N, K] fp32, e2m1 x 2^e (exact in bf16)
-                    assert w["w1"].shape == (I, H) and w["w2"].shape == (H, I), (w["w1"].shape, w["w2"].shape)
-                    w13[c, r, :I] = w["w1"]
-                    w13[c, r, I:] = w["w3"]
-                    w2[c, r] = w["w2"]
-                    for t in w.values():
-                        assert bool(torch.equal(t.to(torch.bfloat16).float(), t)), "e2m1 x 2^e not bf16-exact"
-                    flat_w[r * cols + c][le] = (w13[c, r, :I], w13[c, r, I:], w2[c, r])
+            ids = [int(gtab[c, r, le]) for c in range(cols) for r in range(rows)]  # chip order (c, r)
+            parts = list(pool.map(lambda e: ck.expert(layer, e), ids))
+            w = {}
+            for nm in NAMES:
+                packed = torch.stack([p[nm][0] for p in parts])  # [n, N, K/2] uint8
+                scale = torch.stack([p[nm][1] for p in parts])  # [n, N, K/32] e8m0
+                N_ = packed.shape[1]
+                w[nm] = fp4_dequant(packed.reshape(n * N_, -1), scale.reshape(n * N_, -1)).view(n, N_, -1)
+                assert _bf16_exact(w[nm]), f"layer {layer} slot {le} {nm}: e2m1 x 2^e not bf16-exact"
+            del parts
+            assert w["w1"].shape[1:] == (I, H) and w["w2"].shape[1:] == (H, I), (w["w1"].shape, w["w2"].shape)
             if self.impl == "bfp8":
-                for t, nm in ((w13, "w1 | w3"), (w2, "w2")):
-                    assert _bfp8_exact(t), f"layer {layer} slot {le} {nm}: bfloat8_b would round a value (DS41-35)"
+                for nm in NAMES:
+                    assert _bfp8_exact(w[nm]), f"layer {layer} slot {le} {nm}: bfloat8_b would round a value (DS41-35)"
             else:
-                for mats in ((w13[:, :, :I], "w1"), (w13[:, :, I:], "w3"), (w2, "w2")):
-                    n_ch, rel = _bfp4_change(mats[0])
-                    changed, total = changed + n_ch, total + mats[0].numel()
-                    v, i = rel.flatten().max(dim=0)
+                for nm in NAMES:
+                    n_ch, rel = _bfp4_change(w[nm])
+                    changed, total = changed + n_ch, total + w[nm].numel()
+                    v, i = rel.max(dim=0)
                     if float(v) > worst[0]:
                         c, r = divmod(int(i), rows)
-                        worst = (float(v), (int(gtab[c, r, le]), mats[1]))
-        self._load_flat(flat_w, gtab)
+                        worst = (float(v), (int(gtab[c, r, le]), nm))
+            w13 = torch.empty(n, 2 * I, H, dtype=torch.bfloat16)
+            w13[:, :I] = w.pop("w1")
+            w13[:, I:] = w.pop("w3")
+            w2 = w.pop("w2").to(torch.bfloat16)
+            for k in range(n):
+                c, r = divmod(k, rows)
+                flat_w[r * cols + c][le] = (w13[k, :I], w13[k, I:], w2[k])
         if self.impl == "bfp4":
             self.bfp4_stats = {
                 "layer": layer,
+                "changed": changed,
+                "total": total,
                 "changed_frac": changed / total,
                 "worst_rel": worst[0],
-                "worst_matrix": worst[1],
+                "worst_matrix": list(worst[1]),
             }
-            logger.info(
-                f"EXPERTS_BFP4 layer={layer} values_changed={changed}/{total} ({100 * changed / total:.2f} %) "
-                f"worst_matrix_rel={worst[0]:.4g} (expert, matrix)={worst[1]}"
-            )
+        self._host_s = time.time() - t0
+        return flat_w
 
-    def _load_flat(self, flat_w, gtab):
+    def _load_flat(self, flat_w, gtab, cache_prefix=None):
         """Every local expert's (W1, W3, W2) as stored ([N, K], bf16-exact e2m1 x 2^e) in the flat op's per-core bank
         layout (FlatRoutedExpert, weights_nk: each tile the transpose of x @ W's tile, so a bfp8 tile shares its
         exponents along K: exact, the groups _load_block asserts on [N, K]; bfp4: ttnn's lossy packing of the same
@@ -230,7 +361,7 @@ class TtExperts:
         self.flat_cap = max(256, _ceil(self.max_chunk, TILE))  # (the op is built for >= 256 rows per expert)
         self.fe = FlatRoutedExpert(
             self.mesh,
-            flat_w,
+            flat_w,  # (a callable: called only when the weight cache misses)
             m=self.flat_cap,
             H=self.H,
             I=self.I,
@@ -246,6 +377,7 @@ class TtExperts:
             # (no second exactness pass: a laid-out tile row is 32 consecutive K values of one stored row, the same
             # 16-value groups _bfp8_exact asserted on the [N, K] matrices above)
             check_exact=False,
+            cache_prefix=cache_prefix,
         )
         logger.info(
             f"EXPERTS_FLAT layer={self.layer} plan nu={self.fe.plan['nu']} np={self.fe.plan['np']} "
@@ -369,8 +501,10 @@ def build_experts(
     impl: str | None = None,
     combine_acc: str | None = None,
     combine_planner: str | None = None,
+    cache_dir=None,
 ) -> TtExperts:
-    """The routed experts of one layer (reference Config: n_experts, topk_experts, dim, inter, swiglu_limit)."""
+    """The routed experts of one layer (reference Config: n_experts, topk_experts, dim, inter, swiglu_limit); cache_dir:
+    the laid-out weight cache (expert_cache_dir(spec); None: none)."""
     return TtExperts(
         mesh,
         ck,
@@ -384,4 +518,5 @@ def build_experts(
         impl=impl,
         combine_acc=combine_acc,
         combine_planner=combine_planner,
+        cache_dir=cache_dir,
     )
