@@ -125,6 +125,43 @@ def test_spec_plan_reads_the_table_and_clamps_to_the_requested_k(adapter, monkey
     assert plan.effective_k == 5 and plan.k_by_rows == ((4, 5), (8, 3))
 
 
+@pytest.mark.parametrize(
+    ("target", "repo"),
+    [
+        ("google/gemma-4-31B-it", "google/gemma-4-31B-it-assistant"),
+        ("google/gemma-4-12B-it", "google/gemma-4-12B-it-assistant"),
+        ("google/gemma-4-26B-A4B-it", "google/gemma-4-26B-A4B-it-assistant"),
+        ("/data/weights/gemma-4-26b-a4b-it/", "google/gemma-4-26B-A4B-it-assistant"),
+        ("/data/weights/GEMMA-4-12B-IT", "google/gemma-4-12B-it-assistant"),
+    ],
+)
+def test_the_assistant_follows_the_target_checkpoint_name(adapter, monkeypatch, target, repo):
+    calls = []
+    monkeypatch.setattr(
+        adapter, "_hf_resolve_repo", lambda repo_id, cache_dir: calls.append((repo_id, cache_dir)) or "/snap"
+    )
+    assert adapter.assistant_repo_for(target) == repo
+    assert adapter._assistant_default_snapshot(target) == "/snap"
+    assert calls == [(repo, "models--" + repo.replace("/", "--"))]
+
+
+def test_an_unknown_target_checkpoint_raises_instead_of_defaulting_to_31b(adapter, monkeypatch, expect_error):
+    monkeypatch.setattr(adapter, "_hf_resolve_repo", lambda repo_id, cache_dir: "/snap")
+    with expect_error(ValueError, "gemma-4-9B-it"):
+        adapter.assistant_repo_for("google/gemma-4-9B-it")
+    with expect_error(ValueError, "no assistant checkpoint is known"):
+        adapter._assistant_default_snapshot("/weights/mystery-model")
+    with expect_error(ValueError, "more than one checkpoint"):
+        adapter.assistant_repo_for("/data/31b-box/gemma-4-12B-it")
+
+
+def test_spec_plan_rejects_a_target_without_a_known_assistant(adapter, monkeypatch):
+    monkeypatch.delenv("GEMMA4_ASSISTANT_MODEL", raising=False)
+    monkeypatch.setenv("HF_MODEL", "google/gemma-4-9B-it")
+    outcome = adapter.Gemma4MTPContractForCausalLM.spec_plan(None, 8, 5)
+    assert type(outcome).__name__ == "SpecReject" and "gemma-4-9B-it" in outcome.reason
+
+
 def test_spec_plan_rejects_without_an_assistant_snapshot(adapter, monkeypatch, tmp_path):
     monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", str(tmp_path / "missing"))
     outcome = adapter.Gemma4MTPContractForCausalLM.spec_plan(None, 8, 5)
@@ -816,12 +853,14 @@ def test_a_deferred_logits_verify_answers_from_the_logits_retained_at_proposal(m
     _propose(mtp, [[-1] * 6, [160, 161, 162, 163, 164, 165]], [[-1] * 6, _positions(4, 6)], counts=[1, 6])
     assert decoder.replays == 2 and decoder.readbacks == 1
     assert decoder.buffer[0, 0].argmax().item() != 150, "the buffer now holds B's replay"
-    # A's deferred verify in logits mode answers from the logits retained with A's proposal.
+    # A's deferred verify in logits mode answers from the logits retained with A's proposal. The
+    # step itself is host-sampled, so B's greedy-only replay, still live in the buffer, is read
+    # back for B's own future verify (one more readback, none of it for A).
     out = _verify(
         mtp, [_block(30, drafts_a), [0] + [-1] * 5], [_positions(3, 6), [-1] * 6], [5, 0], [10, 0], mode="logits"
     )
     assert out.logits[0].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
-    assert decoder.readbacks == 1
+    assert decoder.readbacks == 2 and mtp._mtp_sessions[1].retained.logits is not None
 
 
 def test_a_greedy_row_whose_buffer_was_overwritten_cannot_answer_a_logits_verify(mtp, expect_error):
@@ -884,8 +923,39 @@ def test_composed_vision_classes_keep_the_contract_above_the_multimodal_prefill(
     assert factory.dummy_inputs is adapter.Gemma4DummyInputsBuilder
 
 
-def test_the_block_rail_classes_are_untouched(adapter):
-    assert adapter.Gemma4MTPForCausalLM.model_capabilities["output_tokens_per_step"] > 1
-    assert not issubclass(adapter.Gemma4MTPForCausalLM, adapter.Gemma4SpecContractBase)
-    assert issubclass(adapter.Gemma4DFlashContractForCausalLM, adapter.Gemma4SpecContractBase)
+def test_the_serving_classes_are_the_baseline_and_the_two_contract_rails(adapter):
+    """The block-output rails are gone: every speculating class serves the plugin contract."""
+    classes = sorted(name for name in dir(adapter) if name.startswith("Gemma4") and name.endswith("ForCausalLM"))
+    assert classes == ["Gemma4DFlashContractForCausalLM", "Gemma4ForCausalLM", "Gemma4MTPContractForCausalLM"]
+    for name in classes[::2]:
+        cls = getattr(adapter, name)
+        assert issubclass(cls, adapter.Gemma4SpecContractBase)
+        assert cls.model_capabilities["output_tokens_per_step"] == 1
     assert issubclass(adapter.Gemma4DFlashContractForCausalLM, adapter.Gemma4DFlashBase)
+
+
+def test_a_deferred_greedy_row_is_read_back_when_a_sampled_request_takes_its_first_step(mtp):
+    """G replays greedy-only (no readback); G's verify is deferred; S prefills and takes its narrow
+    step, which reads G's still-live replay back (exactly once); S's proposal overwrites the buffer;
+    G's logits verify answers G's own columns with no further readback."""
+    _start_solo(mtp)  # G at slot 0
+    decoder = mtp._mtp_decoder
+    assert decoder.readbacks == 0 and mtp._mtp_sessions[0].retained.logits is None
+    _prefill(mtp, slot=1, key=20)  # S
+    _ordinary(
+        mtp, [0, 9], [-1, 2], [0, 20], result=_tensor([0, 42]), sampling_params=_sampling(2, temperature=[0.0, 0.7])
+    )
+    assert decoder.readbacks == 1 and mtp._mtp_sessions[0].retained.logits is not None
+    _propose(mtp, [[-1] * 6, [42] + [-1] * 5], [[-1] * 6, [3] + [-1] * 5])
+    assert decoder.replays == 2 and decoder.readbacks == 2, "S's own proposal reads its replay back"
+    assert decoder.buffer[0, 0].argmax().item() != 150, "the buffer now holds S's replay"
+    out = _verify(
+        mtp,
+        [_block(150, [101, 102, 103, 104, 105]), [0] + [-1] * 5],
+        [_positions(3, 6), [-1] * 6],
+        [5, 0],
+        [10, 0],
+        mode="logits",
+    )
+    assert out.logits[0].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
+    assert decoder.readbacks == 2

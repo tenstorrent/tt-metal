@@ -91,8 +91,8 @@ if _HAS_VLLM:
     CLASSES = [
         gv.Gemma4ForCausalLM,
         gv.Gemma4VisionForConditionalGeneration,
-        gv.Gemma4MTPForCausalLM,
-        gv.Gemma4DFlashForCausalLM,
+        gv.Gemma4MTPContractForCausalLM,
+        gv.Gemma4DFlashContractForCausalLM,
     ]
 
 

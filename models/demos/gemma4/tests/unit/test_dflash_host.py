@@ -71,13 +71,6 @@ def test_declares_the_contract_rail(adapter):
     assert caps["supports_async_spec_decode"] is False
 
 
-def test_block_output_adapters_do_not_inherit_contract_sampling_limits(adapter):
-    for cls in (adapter.Gemma4DFlashForCausalLM, adapter.Gemma4MTPForCausalLM):
-        assert cls.model_capabilities["output_tokens_per_step"] > 1
-        assert "max_device_top_k" not in cls.model_capabilities
-        assert "supports_device_penalties" not in cls.model_capabilities
-
-
 def _plugin_sampling_router():
     """The plugin's ``SamplingInputBatch`` and ``TTModelRunner``, or a skip.
 
@@ -167,11 +160,11 @@ def test_verify_count_pins_the_inherited_width_arithmetic(adapter):
     assert cls._SPEC_V == 5 and cls._SPEC_N == 6
 
 
-def test_contract_rail_shares_the_base_and_not_the_block_rail(adapter):
+def test_contract_rail_shares_the_dflash_base_and_the_contract_base(adapter):
     cls = adapter.Gemma4DFlashContractForCausalLM
     assert issubclass(cls, adapter.Gemma4DFlashBase)
-    assert not issubclass(cls, adapter.Gemma4DFlashForCausalLM)
-    assert not hasattr(cls, "_SPEC_BLOCK")
+    assert issubclass(cls, adapter.Gemma4SpecContractBase)
+    assert cls.model_capabilities["output_tokens_per_step"] == 1
 
 
 @pytest.fixture
@@ -1322,62 +1315,14 @@ def test_contract_rail_releases_its_session_then_the_width_set_then_the_base(mod
     assert model.base_releases == [1]
 
 
-def _block_model(adapter):
-    """A block-rail model with a pending session, a carry and a recording decoder release."""
-    cls = adapter.Gemma4DFlashForCausalLM
-    model = cls.__new__(cls)
-    model.events = []
-    model._spec_pending = ([], 5)
-    model._spec_pending_owner = None
-    model._spec_carry = [1, 2]
-    model._spec_release_decoder = lambda drop_page_tables=True, teardown=False: model.events.append(
-        ("release_decoder", bool(teardown))
-    )
-    return model
+def test_contract_rail_reaches_the_base_when_its_own_release_fails(model, expect_error_dflash_capture_release):
+    _start_solo(model)
 
-
-def test_block_rail_teardown_releases_the_width_set_and_reaches_the_base(adapter):
-    model = _block_model(adapter)
-    model.release_persistent_capture()
-    assert model._spec_pending is None and model._spec_carry == []
-    assert model.events[-1] == ("release_decoder", True)
-    assert model.base_releases == [1]
-
-
-def test_block_rail_reaches_the_base_when_its_own_release_fails(adapter, expect_error_dflash_capture_release):
-    model = _block_model(adapter)
-
-    def failing(*args, **kwargs):
+    def failing(drop_page_tables=True, teardown=False):
         raise RuntimeError("trace release failed")
 
     model._spec_release_decoder = failing
     with expect_error_dflash_capture_release(RuntimeError, "trace release failed"):
-        model.release_persistent_capture()
-    assert model.base_releases == [1]
-
-
-def test_mtp_rail_reaches_the_base(adapter):
-    cls = adapter.Gemma4MTPForCausalLM
-    model = cls.__new__(cls)
-    model._spec_owner_slot = 3
-    calls = []
-    model._spec_release_session = lambda force=False: calls.append(force)
-    model.release_persistent_capture()
-    assert calls == [False]
-    assert model._spec_owner_slot is None
-    assert model.base_releases == [1]
-
-
-def test_mtp_rail_reaches_the_base_when_its_own_release_fails(adapter, expect_error_dflash_capture_release):
-    cls = adapter.Gemma4MTPForCausalLM
-    model = cls.__new__(cls)
-    model._spec_owner_slot = None
-
-    def failing(force=False):
-        raise RuntimeError("session release failed")
-
-    model._spec_release_session = failing
-    with expect_error_dflash_capture_release(RuntimeError, "session release failed"):
         model.release_persistent_capture()
     assert model.base_releases == [1]
 
@@ -1794,20 +1739,3 @@ def test_a_changed_ladder_between_preparation_and_capture_is_refused(warm_model,
     model._spec_width_ladder = [1234]
     with expect_error_dflash_width_prepare(RuntimeError, "widths changed"):
         model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
-
-
-def test_the_block_rail_passes_no_verify_count(adapter, monkeypatch):
-    _RecordingDecoder.instances = []
-    monkeypatch.setattr(
-        sys.modules["models.demos.gemma4.tt.dflash_drafter"], "DFlashFusedDecoder", _RecordingDecoder, raising=False
-    )
-    cls = adapter.Gemma4DFlashForCausalLM
-    model = cls.__new__(cls)
-    model.model = [object()]
-    model.model_args = [SimpleNamespace(max_seq_len=4096)]
-    model._spec_decoder = None
-    model._spec_width_ladder = None
-    model._spec_horizon = 256
-    model._spec_get_drafter = lambda: SimpleNamespace(target_layer_ids=[1])
-    model._spec_capture_width_set([[("k", "v")]], 64, prepare_only=True)
-    assert _RecordingDecoder.instances[0].verify_count is None

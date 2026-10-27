@@ -54,7 +54,6 @@ from models.demos.gemma4.tt.generator import (  # noqa: E402  - pure helpers the
 _ENV_CLEARED = (
     "GEMMA4_CONTRACT_ASYNC",
     "GEMMA4_DFLASH_MAX_SPEC_ISL",
-    "GEMMA4_DFLASH_SERVE_BLOCK",
     "GEMMA4_DFLASH_WIDTH_SET",
     "GEMMA4_DFLASH_PACKED",
     "GEMMA4_DFLASH_WARMUP_DECODE",
@@ -334,10 +333,8 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     model._spec_width_ladder = list(widths)
     model._spec_horizon = 256
     model._spec_active = False
-    model._spec_active_owner = None
     model._spec_owner_slot = None
     model._spec_pending = None
-    model._spec_pending_owner = None
     model._spec_first_step = True
     model._spec_decoder_bucket = None
     model._bounded_sliding_kv_cache = ring is not None
@@ -355,7 +352,6 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     def bootstrap(anchor, start, page_table, kv_cache, page_tables_per_layer=None):
         taps, n = model._spec_pending
         model._spec_pending = None
-        model._spec_pending_owner = None
         dec = model._spec_decoder
         row = page_table[:1]
         dec.refresh_page_tables(row)
@@ -368,7 +364,6 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
 
     def release_decoder(drop_page_tables=True, teardown=False):
         model._spec_active = False
-        model._spec_active_owner = None
         model.events.append(("release_decoder", bool(teardown)))
 
     monkeypatch.setattr(model, "_spec_bootstrap", bootstrap)

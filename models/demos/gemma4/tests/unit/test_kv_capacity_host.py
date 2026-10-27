@@ -513,12 +513,12 @@ def test_the_pool_is_allocated_from_the_ring_not_the_window(monkeypatch):
     from types import SimpleNamespace
 
     monkeypatch.delenv(SPEC_RING_HEADROOM_ENV, raising=False)
-    m = gv.Gemma4DFlashForCausalLM.__new__(gv.Gemma4DFlashForCausalLM)
+    m = gv.Gemma4DFlashContractForCausalLM.__new__(gv.Gemma4DFlashContractForCausalLM)
     m._bounded_sliding_kv_cache = True
     m.model_args = [SimpleNamespace(max_batch_size=32)]
     m.model = [SimpleNamespace(mesh_config=None, lane_slots=0)]  # no lane fold: the pool is per max batch
     monkeypatch.setattr(
-        gv.Gemma4DFlashForCausalLM,
+        gv.Gemma4DFlashContractForCausalLM,
         "_text_config",
         lambda self: SimpleNamespace(sliding_window=WINDOW_bounded_ring_spec_headroom),
     )

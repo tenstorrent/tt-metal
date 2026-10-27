@@ -1,20 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A dFlash block step must not DROP the tokens it produced past its width.
+"""Host tests for the Gemma 4 speculative decoder (``tt/spec_decode.py``) and the pure helpers around it.
 
-One fused iteration commits an accepted prefix plus a bonus, up to V+1 tokens,
-so the block loop can pass ``_SPEC_BLOCK`` mid-iteration. Truncating with
-``block[:K]`` desyncs the stream from the session: the dropped tokens' KV is
-already written and ``dec.start`` has advanced past them, so the model keeps
-conditioning on tokens the caller never received. In prose that is an invisible
-gap, not an error -- which is why it needs a test rather than a warning.
-
-The excess is carried to the next step instead. Review finding on
-vllm-tt-plugin#118: "The current dFlash fill/truncate behavior needs resolution
-before the combined serving path is treated as correct."
-
-Host-only: the fused decoder is a stub, no device.
+Host-only: every decoder is a stub or a pure function, no device.
 """
 
 import pytest
@@ -37,7 +26,6 @@ import ttnn
 from models.demos.gemma4.tests.unit.dflash_contract_harness import make_expect_error
 from models.demos.gemma4.tt.attention import SPEC_RING_HEADROOM_ENV, bounded_ring_modulo
 from models.demos.gemma4.tt.dflash_drafter import DFlashFusedDecoder
-from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashForCausalLM as DF
 from models.demos.gemma4.tt.spec_decode import (
     SPEC_K_BY_ROWS_DEFAULT,
     SPEC_MASK_NEG,
@@ -64,277 +52,6 @@ try:
     _HAS_VLLM = True
 except ImportError:  # the CI unit runners have no vLLM: those sections skip
     _HAS_VLLM = False
-
-
-class _Dec:
-    """Scripted fused decoder: each step() yields one iteration's commit."""
-
-    def __init__(self, script, start=100):
-        self.script = list(script)
-        self.start = start
-        self.anchor = 11
-        self.calls = 0
-
-        class _D:
-            vocab = 32000
-
-        self.drafter = _D()
-
-    def step(self, first=False):
-        self.calls += 1
-        committed = self.script.pop(0)
-        self.start += len(committed)
-        return committed[:-1], committed[-1], len(committed)
-
-    def select_width(self, pos):
-        return 4096
-
-    def refresh_page_tables(self, row):
-        pass
-
-
-def _model(monkeypatch, script, block=8, carry=None, budget=10**9):
-    from types import SimpleNamespace
-
-    from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
-
-    monkeypatch.setattr(Gemma4ForCausalLM, "decode_forward", lambda self, *a, **k: "baseline")
-    m = DF.__new__(DF)
-    m._SPEC_BLOCK = block
-    m._spec_decoder = _Dec(script)
-    m._spec_active = True
-    m._spec_active_owner = None
-    m._spec_pending = None
-    m._spec_pending_owner = None
-    m._spec_first_step = False
-    m._spec_width_set = True
-    m._spec_width_ladder = [4096]
-    m._spec_budget_end = budget
-    m._spec_carry = list(carry or [])
-    m._spec_horizon = 2048
-    m._spec_decoder_bucket = None
-    m._spec_last_pt = None
-    m._bounded_sliding_kv_cache = False
-    m.model = [SimpleNamespace(hf_config=SimpleNamespace(eos_token_id=1))]
-    return m
-
-
-def _bootstrap_via_width_set(m, anchor=11, start=100):
-    """Arm a session through the REAL _spec_bootstrap width-set branch.
-
-    That branch returns early, which is why it needs its own coverage: a reset
-    placed only on the capture path never ran for it.
-    """
-    m._spec_decoder.width_for = lambda pos: 4096
-    m._spec_decoder.prefill_ingest = lambda taps, n: None
-    m._spec_decoder.reseed = lambda a, s: None
-    m._spec_pending = (object(), int(start))
-    m._spec_pending_owner = None
-    DF._spec_bootstrap(
-        m,
-        anchor,
-        start,
-        torch.zeros((1, 8), dtype=torch.int32),
-        None,
-        page_tables_per_layer=None,
-    )
-
-
-def _run(m, pos=100):
-    return m.decode_forward(
-        tokens=torch.tensor([[11]], dtype=torch.int32),
-        start_pos=torch.tensor([pos], dtype=torch.int32),
-    )
-
-
-def test_overshoot_is_carried_not_dropped(monkeypatch):
-    """Three 3-token iterations fill a width-8 block to 9. The 9th token must
-    survive into the next step, because its KV is already written."""
-    m = _model(monkeypatch, [[21, 22, 23], [24, 25, 26], [27, 28, 29]], block=8)
-    out = _run(m)
-    assert out[0].tolist() == [21, 22, 23, 24, 25, 26, 27, 28]
-    assert m._spec_carry == [29]
-
-
-def test_carry_is_delivered_first_on_the_next_step(monkeypatch):
-    m = _model(monkeypatch, [[30, 31, 32], [33, 34, 35]], block=8, carry=[28, 29])
-    out = _run(m)
-    # carry first, then this step's iterations, in order
-    assert out[0].tolist() == [28, 29, 30, 31, 32, 33, 34, 35]
-    assert m._spec_carry == []
-
-
-def test_carry_counts_toward_the_width(monkeypatch):
-    """A carry large enough to fill the block must emit ZERO iterations: the
-    session is already that far ahead."""
-    m = _model(monkeypatch, [[99] * 3], block=4, carry=[41, 42, 43, 44])
-    out = _run(m)
-    assert out[0].tolist() == [41, 42, 43, 44]
-    assert m._spec_decoder.calls == 0
-
-
-def test_exact_fit_leaves_no_carry(monkeypatch):
-    m = _model(monkeypatch, [[21, 22, 23, 24], [25, 26, 27, 28]], block=8)
-    out = _run(m)
-    assert out[0].tolist() == [21, 22, 23, 24, 25, 26, 27, 28]
-    assert m._spec_carry == []
-
-
-def test_eos_still_stops_and_fills_the_tail(monkeypatch):
-    """EOS ends the request, so the tail is EOS-filled and any carry behind it
-    is moot -- the scheduler trims at the first stop token."""
-    m = _model(monkeypatch, [[21, 1], [99, 99]], block=8)
-    out = _run(m)
-    row = out[0].tolist()
-    assert row[:2] == [21, 1]
-    assert set(row[2:]) == {1}
-    assert m._spec_decoder.calls == 1
-
-
-def test_release_request_drops_a_carry(monkeypatch):
-    """Teardown must drop it: the retained decoder outlives the request.
-
-    The decoder is deliberately kept alive across requests for reuse, so
-    anything request-scoped has to die in release_request. A carry left behind
-    is emitted as the NEXT request's first tokens.
-    """
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
-    assert m._spec_carry == [77]
-    DF.release_request(m, 0)
-    assert m._spec_carry == []
-
-
-def test_a_carry_never_crosses_a_session(monkeypatch):
-    """Through the REAL release and bootstrap, with no manual reset.
-
-    Both paths matter: release_request ends request A, and the width-set
-    branch of _spec_bootstrap arms request B and returns early -- a reset
-    placed only on the capture path left that branch leaking A's tokens into
-    B's first block.
-    """
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
-    assert m._spec_carry == [77]
-    DF.release_request(m, 0)
-    _bootstrap_via_width_set(m)
-    out = _run(m)
-    assert m._spec_carry == [] or 77 not in m._spec_carry
-    assert 77 not in out[0].tolist()
-
-
-def test_the_width_set_bootstrap_branch_clears_the_carry(monkeypatch):
-    """The early-returning branch specifically, since it is the one that leaked."""
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
-    _bootstrap_via_width_set(m)
-    assert m._spec_carry == []
-
-
-@pytest.mark.parametrize("width", [2, 4, 16, 64])
-def test_emitted_width_is_always_the_block_width(monkeypatch, width):
-    m = _model(monkeypatch, [[21, 22, 23]] * 128, block=width)
-    out = _run(m)
-    assert out.shape == (1, width)
-
-
-def test_releasing_another_request_preserves_the_owner_session(monkeypatch):
-    """Adaptive serving admits several live requests; this adapter keeps one
-    session. Aborting A must not tear down a session B owns.
-
-    The sequence that broke: A and B prefill separately, the client aborts A,
-    the runner calls release_request(A_slot), and release_request cleared the
-    GLOBAL session -- B's. B then decoded one baseline token against the full
-    block the scheduler had reserved for it, and the scheduler rejected the
-    width.
-    """
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8)
-    m._spec_owner_slot = 3  # B owns the session, parked at state slot 3
-    m._spec_active = True
-    m._spec_pending = ("taps", 10)
-
-    DF.release_request(m, 1)  # A finishes at a different slot
-
-    assert m._spec_active is True, "B's live session must survive A's release"
-    assert m._spec_pending == ("taps", 10)
-    assert m._spec_owner_slot == 3
-
-
-def test_releasing_the_owner_still_tears_the_session_down(monkeypatch):
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
-    m._spec_owner_slot = 3
-    m._spec_active = True
-    m._spec_pending = ("taps", 10)
-
-    DF.release_request(m, 3)
-
-    assert m._spec_active is False
-    assert m._spec_pending is None
-    assert m._spec_carry == []
-    assert m._spec_owner_slot is None
-
-
-def test_the_owner_slot_follows_a_runner_gather(monkeypatch):
-    """The runner permutes per-slot state between decode steps and then releases
-    by the CURRENT slot, so the recorded owner has to move with it.
-
-    Without this the runner had to release by the slot the request was PREFILLED
-    into, and that is ambiguous: slots are reused, so one request's prefill slot
-    can be another live request's owner slot and the release clears the wrong
-    session (vllm-tt-plugin#118 review, finding 1).
-    """
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8)
-    m._spec_owner_slot = 1
-    m._spec_active = True
-    m._spec_pending = ("taps", 10)
-
-    # Row 0 reads slot 1 and row 1 reads slot 0: the whole permutation arrives at
-    # once, because applying the pairs in sequence would move the owner twice.
-    DF.note_state_slots_moved(m, {1: 0, 0: 1})
-
-    assert m._spec_owner_slot == 0, "the owner followed its state to slot 0"
-    assert m._spec_active is True, "a gather is not a release"
-
-    # Releasing the pre-move slot is now somebody else's release.
-    DF.release_request(m, 1)
-    assert m._spec_active is True, "slot 1 is no longer this session's identity"
-
-    # Releasing the current slot tears it down.
-    DF.release_request(m, 0)
-    assert m._spec_active is False
-    assert m._spec_owner_slot is None
-
-
-def test_a_gather_that_does_not_touch_the_owner_leaves_it_alone(monkeypatch):
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8)
-    m._spec_owner_slot = 3
-    m._spec_active = True
-
-    DF.note_state_slots_moved(m, {1: 0, 0: 1})
-
-    assert m._spec_owner_slot == 3
-    assert m._spec_active is True
-
-
-def test_a_gather_with_no_session_is_a_no_op(monkeypatch):
-    """Nothing armed, so there is no owner to move."""
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8)
-    m._spec_owner_slot = None
-
-    DF.note_state_slots_moved(m, {1: 0, 0: 1})
-
-    assert m._spec_owner_slot is None
-
-
-def test_an_unknown_owner_slot_keeps_the_old_unconditional_behaviour(monkeypatch):
-    """The runner may supply no empty_slots; that is the pre-existing
-    single-session case and must not start leaking sessions."""
-    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
-    m._spec_owner_slot = None
-    m._spec_active = True
-    m._spec_pending = ("taps", 10)
-
-    DF.release_request(m, 7)
-
-    assert m._spec_active is False
-    assert m._spec_carry == []
 
 
 # ===== merged from tests/unit/test_dflash_bucket_ladder.py: Tests for the enumerable packed-verify bucket ladder.
@@ -503,10 +220,10 @@ def test_disarming_clears_the_cap():
 # ===== merged from tests/unit/test_dflash_warmup_prefill_trace.py: dFlash warms prefill eagerly: it never replays a prefill trace (tt-metal#57853).
 try:
     from models.demos.gemma4.tt.generator_vllm import (
+        Gemma4DFlashBase,
         Gemma4DFlashContractForCausalLM,
-        Gemma4DFlashForCausalLM,
         Gemma4ForCausalLM,
-        Gemma4MTPForCausalLM,
+        Gemma4MTPContractForCausalLM,
     )
 except ImportError:  # vLLM absent: this section's tests skip
     pass
@@ -534,18 +251,13 @@ def _captured_enable_trace(monkeypatch, cls, *, bounded):
 if _HAS_VLLM:
 
     @pytest.mark.parametrize("bounded", [False, True], ids=["unbounded", "bounded"])
-    @pytest.mark.parametrize(
-        "cls",
-        [Gemma4DFlashForCausalLM, Gemma4DFlashContractForCausalLM],
-        ids=["block_rail", "contract_rail"],
-    )
-    def test_dflash_warmup_never_captures_a_prefill_trace(monkeypatch, cls, bounded):
-        """Both rails, both bounded settings: the capture is always off.
+    def test_dflash_warmup_never_captures_a_prefill_trace(monkeypatch, bounded):
+        """Both bounded settings: the capture is always off.
 
         The unbounded case is the regression -- that is the one the inherited
         warmup left at True while runtime forced it False.
         """
-        assert _captured_enable_trace(monkeypatch, cls, bounded=bounded) is False
+        assert _captured_enable_trace(monkeypatch, Gemma4DFlashContractForCausalLM, bounded=bounded) is False
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
@@ -557,9 +269,9 @@ def test_the_override_is_scoped_to_the_dflash_rails():
     base warmup for the same reason. Asserting the identity of the bound
     function keeps this honest without re-stubbing the base's internals.
     """
-    assert Gemma4DFlashForCausalLM.warmup_model_prefill is not Gemma4ForCausalLM.warmup_model_prefill
-    assert Gemma4DFlashContractForCausalLM.warmup_model_prefill is Gemma4DFlashForCausalLM.warmup_model_prefill
-    assert Gemma4MTPForCausalLM.warmup_model_prefill is Gemma4ForCausalLM.warmup_model_prefill
+    assert Gemma4DFlashContractForCausalLM.warmup_model_prefill is not Gemma4ForCausalLM.warmup_model_prefill
+    assert Gemma4DFlashContractForCausalLM.warmup_model_prefill is Gemma4DFlashBase.warmup_model_prefill
+    assert Gemma4MTPContractForCausalLM.warmup_model_prefill is Gemma4ForCausalLM.warmup_model_prefill
 
 
 # ===== merged from tests/unit/test_dflash_width_set.py: Tests for the dFlash packed-verify WIDTH SET selection and migration.
@@ -898,340 +610,6 @@ def test_nothing_resolvable_reports_absence(monkeypatch, tmp_path):
     assert gv._target_weights_dir() is None
 
 
-# ===== merged from tests/unit/test_mtp_block_loop.py: Tests for the Gemma4 MTP decode block loop.
-try:
-    from models.demos.gemma4.tt.generator_vllm import Gemma4MTPForCausalLM as MTP
-except ImportError:  # vLLM absent: this section's tests skip
-    pass
-
-
-class _StubSession:
-    """Returns a scripted (committed, accepted_m) per ``serving_step`` call."""
-
-    def __init__(self, scripted):
-        self.scripted = list(scripted)
-        self.calls = []
-        self.released = False
-        self.restaged = []
-
-    def serving_step(self, cur_token, cur_pos):
-        self.calls.append((cur_token, cur_pos))
-        committed = self.scripted.pop(0)
-        return committed, len(committed) - 1  # m = accepted, committed = m+1
-
-    def serving_release(self):
-        self.released = True
-
-    def refresh_page_tables(self, page_table):
-        """The decode path re-stages the captured page tables whenever vLLM's
-        block table for the request changes; record the rows it was given."""
-        self.restaged.append(page_table.clone())
-
-
-class _Harness:
-    """Minimal stand-in exposing only what ``decode_forward`` touches on the
-    solo path with a live session."""
-
-    _SPEC_N = 6
-    _spec_budget_end = 10_000
-    _spec_horizon = 2048  # only read by the horizon-exhausted log line
-
-    def __init__(self, scripted, start_pos=100):
-        self._spec = _StubSession(scripted)
-        self._spec_cur = (11, start_pos)
-        self._spec_pending = None  # no bootstrap on this path
-        self._spec_pending_owner = None
-        # No page table is passed on this path, so ownership is unknown on both
-        # sides and the live session is served -- see _spec_active_is_mine.
-        self._spec_active_owner = None
-        self._eos = 1
-
-    def _eos_fill_id(self):
-        return self._eos
-
-    # real implementations, so the tests exercise shipped logic
-    _spec_pt_identity = staticmethod(MTP._spec_pt_identity)
-    # The adaptive gate counts REAL requests, not the padded decode wire width
-    # (the runner pads positions with -1); the stub drives it with one row.
-    _spec_real_batch = staticmethod(MTP._spec_real_batch)
-    _spec_pending_is_mine = MTP._spec_pending_is_mine
-    _spec_active_is_mine = MTP._spec_active_is_mine
-    run = MTP.decode_forward
-
-
-def _row(h, tokens=None):
-    """Drive just the block loop by calling decode_forward with a B=1 input."""
-    toks = torch.tensor([[11]], dtype=torch.int32) if tokens is None else tokens
-    return h.run(tokens=toks, start_pos=torch.tensor([[100]], dtype=torch.int32))
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_short_iterations_are_concatenated_to_a_full_row():
-    """Three 2-token iterations must produce ONE 6-wide row, not a padded 2."""
-    h = _Harness([[21, 22], [23, 24], [25, 26]])
-    out = _row(h)
-    assert out.shape == (1, 6)
-    assert out[0].tolist() == [21, 22, 23, 24, 25, 26]
-    assert len(h._spec.calls) == 3  # looped rather than padding after one
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_position_advances_by_tokens_emitted():
-    """The session must resume from what was EMITTED. Iterations are driven from
-    (token, pos), so a wrong position re-drafts the wrong prefix."""
-    h = _Harness([[21, 22], [23, 24], [25, 26]], start_pos=100)
-    _row(h)
-    tok, pos = h._spec_cur
-    assert pos == 100 + 6
-    assert tok == 26
-    # each iteration was driven from the previous one's last token / next pos
-    assert h._spec.calls == [(11, 100), (22, 102), (24, 104)]
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_overshoot_truncates_and_resumes_from_emitted():
-    """A final iteration may overshoot N. The extra tokens are dropped and the
-    position reflects the row, so the next step re-drafts and overwrites them."""
-    h = _Harness([[21, 22, 23, 24], [25, 26, 27, 28]], start_pos=200)
-    out = _row(h)
-    assert out[0].tolist() == [21, 22, 23, 24, 25, 26]
-    tok, pos = h._spec_cur
-    assert pos == 200 + 6 and tok == 26
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_full_iteration_needs_no_loop():
-    """High acceptance fills the row in one call; do not spin further."""
-    h = _Harness([[21, 22, 23, 24, 25, 26]])
-    out = _row(h)
-    assert out[0].tolist() == [21, 22, 23, 24, 25, 26]
-    assert len(h._spec.calls) == 1
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_eos_stops_the_loop_and_fills_the_tail():
-    """A genuine stop is the ONLY case that may leave a short row; the tail is
-    EOS so upstream trims there."""
-    h = _Harness([[21, 1], [99, 99]])  # eos id is 1
-    out = _row(h)
-    assert out[0].tolist()[:2] == [21, 1]
-    assert out[0].tolist()[2:] == [1, 1, 1, 1]  # EOS-filled tail
-    assert len(h._spec.calls) == 1  # stopped, did not consume the next script
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_horizon_exhaustion_emits_eos_without_stepping():
-    """Past the horizon the packed verify would attend past its capture, so the
-    request ends cleanly instead of stepping again."""
-    h = _Harness([[21, 22]])
-    h._spec_budget_end = 100  # cur_pos starts at 100
-    out = _row(h)
-    assert out[0].tolist() == [1, 1, 1, 1, 1, 1]
-    assert h._spec.calls == []
-
-
-def _live_session_instance(monkeypatch, scripted, owner, baseline="baseline-out"):
-    """A real Gemma4MTPForCausalLM with a live session and no device.
-
-    ``__new__`` skips the device-bound ``__init__``; the attributes below are
-    everything ``decode_forward`` reads on the solo path. The BASE class's
-    ``decode_forward`` is the plain-baseline fallback the ownership check hands
-    off to, so it is stubbed to a sentinel -- the stub harness above cannot
-    reach it at all (zero-arg ``super()`` needs a real instance).
-    """
-    from types import SimpleNamespace
-
-    from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
-
-    monkeypatch.setattr(Gemma4ForCausalLM, "decode_forward", lambda self, *a, **k: baseline)
-    h = MTP.__new__(MTP)
-    h._spec = _StubSession(scripted)
-    h._spec_cur = (11, 100)
-    h._spec_pending = None
-    h._spec_pending_owner = None
-    h._spec_active_owner = owner
-    h._spec_budget_end = 10_000
-    h._spec_horizon = 2048
-    h._spec_first_step = False
-    h._spec_last_pt = None  # nothing staged yet -> the first step stages
-    h._bounded_sliding_kv_cache = False
-    h._spec_warm = False  # this harness drives a session directly, not via warmup
-    h.model = [SimpleNamespace(hf_config=SimpleNamespace(eos_token_id=1))]
-    return h
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_live_session_is_refused_for_a_request_that_does_not_own_it(monkeypatch):
-    """A solo decode step can be scheduled for a request that is NOT the live
-    session's owner: async scheduling skips a request that has reached
-    max_tokens (upstream guards that skip on num_output_placeholders), so the
-    owner can drop out of a step while its session is still armed. Serving the
-    block loop here emits the OWNER's speculation for this request, against the
-    single placeholder the scheduler reserved for a non-owner. The session must
-    be released and the step served as plain baseline instead.
-    """
-    pt = torch.tensor([[3, 4, 5]], dtype=torch.int32)
-    other = ("not-this-request",)
-    h = _live_session_instance(monkeypatch, [[21, 22, 23, 24, 25, 26]], other)
-    session = h._spec
-
-    out = h.decode_forward(
-        tokens=torch.tensor([[11]], dtype=torch.int32),
-        start_pos=torch.tensor([[100]], dtype=torch.int32),
-        page_table=pt,
-    )
-
-    assert out == "baseline-out"
-    assert h._spec is None  # released
-    assert session.calls == []  # never speculated for the non-owner
-    assert h._spec_active_owner is None
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_live_session_is_served_for_its_own_owner(monkeypatch):
-    """The companion: a matching identity keeps the session and blocks."""
-    pt = torch.tensor([[3, 4, 5]], dtype=torch.int32)
-    h = _live_session_instance(monkeypatch, [[21, 22, 23, 24, 25, 26]], MTP._spec_pt_identity(pt))
-
-    out = h.decode_forward(
-        tokens=torch.tensor([[11]], dtype=torch.int32),
-        start_pos=torch.tensor([[100]], dtype=torch.int32),
-        page_table=pt,
-    )
-
-    assert out[0].tolist() == [21, 22, 23, 24, 25, 26]
-    assert h._spec is not None
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_page_tables_are_restaged_when_the_block_table_changes(monkeypatch):
-    """vLLM allocates a KV block only every block_size tokens, so a session
-    captured at prefill holds the prompt's blocks and zeros past them. The
-    fused verify binds its page tables at capture, so without a re-stage it
-    reads AND writes the null block once generation crosses out of the
-    prompt's last block (tt-metal#55548 D2 on the qwen36 MTP trace; here it
-    also reaches the host map behind the per-iteration hot-block uploads).
-    """
-    pt = torch.tensor([[3, 4, 5, 0]], dtype=torch.int32)
-    h = _live_session_instance(monkeypatch, [[21, 22, 23, 24, 25, 26]] * 4, None)
-    session = h._spec
-
-    h.decode_forward(
-        tokens=torch.tensor([[11]], dtype=torch.int32),
-        start_pos=torch.tensor([[100]], dtype=torch.int32),
-        page_table=pt,
-    )
-    assert len(session.restaged) == 1  # first step stages the current table
-
-    # Same table on the next step: nothing to do.
-    h.decode_forward(
-        tokens=torch.tensor([[26]], dtype=torch.int32),
-        start_pos=torch.tensor([[106]], dtype=torch.int32),
-        page_table=pt,
-    )
-    assert len(session.restaged) == 1
-
-    # A newly allocated block appears -> re-stage.
-    grown = torch.tensor([[3, 4, 5, 9]], dtype=torch.int32)
-    h.decode_forward(
-        tokens=torch.tensor([[26]], dtype=torch.int32),
-        start_pos=torch.tensor([[112]], dtype=torch.int32),
-        page_table=grown,
-    )
-    assert len(session.restaged) == 2
-    assert session.restaged[-1].reshape(-1).tolist() == [3, 4, 5, 9]
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_a_warm_capture_with_no_active_request_serves_baseline(monkeypatch):
-    """The batch-to-solo transition with _spec_warm=True.
-
-    A warm release deliberately KEEPS the capture -- the warmup traces are a
-    process artifact, and freeing them would leave no captured widths and no
-    way to recapture -- and nulls the active request only. Gating on `_spec`
-    alone therefore fell through to `cur_token, cur_pos = self._spec_cur` and
-    raised TypeError on an ordinary two-requests-to-one transition.
-    """
-    pt = torch.tensor([[3, 4, 5]], dtype=torch.int32)
-    owner = tuple(pt.reshape(-1).tolist())
-    h = _live_session_instance(monkeypatch, [[21, 22, 23]], owner)
-    h._spec_warm = True
-
-    # Step 1: two real requests -> release the session, keep the warm capture.
-    batched = h.decode_forward(
-        tokens=torch.tensor([[11], [12]], dtype=torch.int32),
-        start_pos=torch.tensor([[100], [100]], dtype=torch.int32),
-        page_table=pt,
-    )
-    assert batched == "baseline-out"
-    assert h._spec is not None, "a warm capture must survive the release"
-    assert h._spec_cur is None, "but no request owns it any more"
-
-    # Step 2: back to one request, no new prefill -> baseline, not TypeError.
-    solo = h.decode_forward(
-        tokens=torch.tensor([[11]], dtype=torch.int32),
-        start_pos=torch.tensor([[101]], dtype=torch.int32),
-        page_table=pt,
-    )
-    assert solo == "baseline-out"
-
-
-def _warmup_stub(monkeypatch, tmp_path, assistant_env=None, cache_hit=False):
-    """An MTP instance whose warmup can be driven host-only.
-
-    ``__new__`` skips the device-bound ``__init__``. ``_spec_warmup_session`` is
-    stubbed to succeed, so anything that raises came from the pre-flight and not
-    from a capture failure.
-    """
-    monkeypatch.delenv("GEMMA4_ASSISTANT_MODEL", raising=False)
-    if assistant_env is not None:
-        monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", assistant_env)
-    # HF_MODEL drives the fallback candidate path f"{HF_MODEL}-assistant".
-    monkeypatch.setenv("HF_MODEL", str(tmp_path / "gemma-4-12B-it"))
-    # This box HAS the assistant in its real HF cache, so without pinning the
-    # resolver the "missing" case silently resolves and the test proves nothing.
-    import models.demos.gemma4.tt.generator_vllm as gv
-
-    monkeypatch.setattr(
-        gv, "_hf_resolve_repo", lambda repo, cache_dir_name: (str(tmp_path / "cached-assistant") if cache_hit else None)
-    )
-    if cache_hit:
-        (tmp_path / "cached-assistant").mkdir(exist_ok=True)
-    h = MTP.__new__(MTP)
-    h._spec = None
-    h._spec_warm = False
-    h._decode_warmup_complete = False
-    h._mtp_warmup_capture = True  # the default path, and the one CI uses
-    monkeypatch.setattr(MTP, "_spec_warmup_session", lambda self, kv, nb: None)
-    monkeypatch.setattr(MTP, "_spec_release_session", lambda self, force=False: None)
-    return h
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_a_missing_assistant_fails_warmup_instead_of_the_first_request(monkeypatch, tmp_path, expect_error):
-    """The batched benchmark never touches the drafter, so a server that boots
-    without one passes every throughput check and then dies on the first SOLO
-    request (EngineDeadError 500 at the coherence guard). Fail while starting."""
-    h = _warmup_stub(monkeypatch, tmp_path)
-    with expect_error(RuntimeError, "snapshot not found -- resolved"):
-        h.warmup_model_decode(kv_cache=[[object()]], num_blocks=8, enable_trace=True)
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_an_operator_supplied_assistant_path_is_left_alone(monkeypatch, tmp_path):
-    """An explicit GEMMA4_ASSISTANT_MODEL is the operator's business: the
-    pre-flight must not second-guess it (it may be a repo id, not a dir)."""
-    h = _warmup_stub(monkeypatch, tmp_path, assistant_env="google/gemma-4-12B-it-assistant")
-    h.warmup_model_decode(kv_cache=[[object()]], num_blocks=8, enable_trace=True)
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_an_existing_assistant_dir_passes_the_preflight(monkeypatch, tmp_path):
-    """The resolver finds a cached snapshot, so warmup proceeds to capture."""
-    h = _warmup_stub(monkeypatch, tmp_path, cache_hit=True)
-    h.warmup_model_decode(kv_cache=[[object()]], num_blocks=8, enable_trace=True)
-
-
 # ===== merged from tests/unit/test_mtp_width_ladder.py: Tests for the MTP serving verify-width ladder and its per-step selection.
 try:
     from models.demos.gemma4.tt.generator_vllm import mtp_pv_width_ladder
@@ -1493,7 +871,7 @@ def test_auto_draft_len_batched_env_auto_defers_to_policy(monkeypatch):
 try:
     from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
-    from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashForCausalLM
+    from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashContractForCausalLM
 except ImportError:  # vLLM absent: this section's tests skip
     pass
 
@@ -1521,20 +899,10 @@ def drafter_snapshot(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_rejects_concurrency_above_one(drafter_snapshot):
-    """dFlash captures its fused verify at B=1, so B>1 cannot speculate."""
-    out = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=2, requested_k=_VERIFY)
-    assert isinstance(out, SpecReject)
-    assert "single-stream" in out.reason
-    # Nothing is speculable at this concurrency, so no K is offered.
-    assert out.supported_k == ()
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
 def test_k_is_a_set_not_a_range(drafter_snapshot):
     """A narrower K would need its own packed-verify capture, so it is refused
     and the one supported width is named."""
-    out = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY - 2)
+    out = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY - 2)
     assert isinstance(out, SpecReject)
     assert out.supported_k == (_VERIFY,)
 
@@ -1544,7 +912,7 @@ def test_missing_drafter_is_refused_at_config_time(drafter_snapshot, monkeypatch
     """Without this the drafter resolves lazily and a missing checkpoint kills
     the engine at the FIRST REQUEST instead (EngineDeadError, no traceback)."""
     monkeypatch.setenv("GEMMA4_DFLASH_DRAFTER", "/nonexistent/dflash-drafter")
-    out = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
+    out = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
     assert isinstance(out, SpecReject)
     assert out.supported_k == (_VERIFY,)
     # The message has to be actionable: it is surfaced verbatim to the operator.
@@ -1553,7 +921,7 @@ def test_missing_drafter_is_refused_at_config_time(drafter_snapshot, monkeypatch
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
 def test_plan_fields(drafter_snapshot):
-    out = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
+    out = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
     assert isinstance(out, SpecPlan)
     assert out.effective_k == _VERIFY
     assert out.lanes_per_request == 1
@@ -1569,7 +937,7 @@ def test_effective_k_never_exceeds_requested(drafter_snapshot):
     """#110: ``effective_k <= requested_k``. The plugin publishes it back to
     ``speculative_config.num_speculative_tokens``, which upstream's scheduler
     reads to size its lookahead reservation."""
-    out = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY + 6)
+    out = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY + 6)
     assert isinstance(out, SpecPlan)
     assert out.effective_k <= _VERIFY + 6
 
@@ -1592,7 +960,7 @@ def test_fixed_cost_tracks_the_decoder_allocations(drafter_snapshot):
         + p_v * cfg["hidden_size"] * 2
         + p_v * 8
     )
-    out = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
+    out = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
     assert out.extra_bytes_per_seq == expected
 
 
@@ -1601,9 +969,9 @@ def test_unparseable_mesh_over_reserves_rather_than_under(drafter_snapshot, monk
     """Galaxy DP entries set no MESH_DEVICE. Falling back to tp=1 yields the
     LARGEST per-chip cache, so the plugin over-reserves; the failure the
     contract warns about is under-reserving."""
-    sharded = Gemma4DFlashForCausalLM.spec_plan(None, 1, _VERIFY).extra_bytes_per_seq
+    sharded = Gemma4DFlashContractForCausalLM.spec_plan(None, 1, _VERIFY).extra_bytes_per_seq
     monkeypatch.delenv("MESH_DEVICE", raising=False)
-    unknown_mesh = Gemma4DFlashForCausalLM.spec_plan(None, 1, _VERIFY).extra_bytes_per_seq
+    unknown_mesh = Gemma4DFlashContractForCausalLM.spec_plan(None, 1, _VERIFY).extra_bytes_per_seq
     assert unknown_mesh > sharded
 
 
@@ -1611,8 +979,8 @@ def test_unparseable_mesh_over_reserves_rather_than_under(drafter_snapshot, monk
 def test_is_pure_and_frozen(drafter_snapshot, expect_error):
     """Called several times per launch; must be side-effect free and stable."""
     env_before = dict(os.environ)
-    first = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
-    second = Gemma4DFlashForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
+    first = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
+    second = Gemma4DFlashContractForCausalLM.spec_plan(None, max_num_seqs=1, requested_k=_VERIFY)
     assert first == second
     assert dict(os.environ) == env_before
     with expect_error(AttributeError, "effective_k"):
@@ -1799,20 +1167,16 @@ def test_the_check_is_on_the_ring_not_on_the_env_var(monkeypatch, expect_error):
 @pytest.mark.usefixtures("_clean_env")
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
 def test_every_real_speculating_class_gets_sized():
-    """The three shipped speculating classes, by their real _SPEC_N.
+    """The shipped speculating classes, by their real _SPEC_N.
 
     The fakes above pin the arithmetic; this pins the wiring. A new serving
     class that forgets ``_SPEC_N``, or one whose K changes, silently falls back
     to the exact-window ring -- which is the #57701 defect, and is invisible
     until someone reads generated text past the ring.
     """
-    from models.demos.gemma4.tt.generator_vllm import (
-        Gemma4DFlashContractForCausalLM,
-        Gemma4DFlashForCausalLM,
-        Gemma4MTPForCausalLM,
-    )
+    from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashContractForCausalLM, Gemma4MTPContractForCausalLM
 
-    for cls in (Gemma4DFlashForCausalLM, Gemma4DFlashContractForCausalLM, Gemma4MTPForCausalLM):
+    for cls in (Gemma4DFlashContractForCausalLM, Gemma4MTPContractForCausalLM):
         os.environ.pop(SPEC_RING_HEADROOM_ENV, None)
         assert int(cls._SPEC_N) > 1, f"{cls.__name__} must declare a verify width"
         _auto_size_spec_ring(cls, _cfg(), bounded_sliding=True)
@@ -1820,71 +1184,6 @@ def test_every_real_speculating_class_gets_sized():
         assert ring - WINDOW >= cls._SPEC_N - 1, f"{cls.__name__}: ring {ring} cannot hold its drafts"
         # and the guard agrees, including for the rail that declines at the wrap
         _reserve_spec_ring_headroom(WINDOW, cls._SPEC_N, cls.__name__, declines_at_wrap=cls._SPEC_DECLINES_AT_RING_WRAP)
-
-
-# ===== merged from tests/unit/test_adaptive_real_batch.py: The adaptive gate must count REQUESTS, not the padded decode wire width.
-try:
-    from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashForCausalLM as DF
-except ImportError:  # vLLM absent: this section's tests skip
-    pass
-
-
-if _HAS_VLLM:
-    real_batch = DF._spec_real_batch
-
-
-def _toks(n):
-    return torch.zeros(n, 1, dtype=torch.int32)
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_solo_request_padded_to_a_bucket_is_still_solo():
-    """The Galaxy case: one request, wire width 32."""
-    start = torch.cat([torch.tensor([121004]), torch.full((31,), -1)]).to(torch.int32)
-    assert real_batch(_toks(32), start) == 1
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_unpadded_solo_is_solo():
-    assert real_batch(_toks(1), torch.tensor([512], dtype=torch.int32)) == 1
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-@pytest.mark.parametrize("live", [2, 5, 31, 32])
-def test_partially_filled_batch_counts_live_rows(live):
-    start = torch.cat([torch.arange(live), torch.full((32 - live,), -1)]).to(torch.int32)
-    assert real_batch(_toks(32), start) == live
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_full_batch_has_no_padding():
-    assert real_batch(_toks(32), torch.arange(32, dtype=torch.int32)) == 32
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_position_zero_is_a_real_row_not_padding():
-    """-1 is the pad sentinel; 0 is a legitimate position and must not be
-    mistaken for one."""
-    start = torch.cat([torch.tensor([0, 0]), torch.full((30,), -1)]).to(torch.int32)
-    assert real_batch(_toks(32), start) == 2
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_two_dimensional_positions_are_flattened():
-    start = torch.cat([torch.tensor([7]), torch.full((7,), -1)]).to(torch.int32).reshape(8, 1)
-    assert real_batch(_toks(8), start) == 1
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_missing_positions_fall_back_to_the_wire_width():
-    """Nothing to count: keep the old behaviour rather than guessing solo."""
-    assert real_batch(_toks(4), None) == 4
-
-
-@pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-def test_all_rows_padded_never_reports_zero():
-    """A zero would make the gate divide-by-zero downstream; the floor is 1."""
-    assert real_batch(_toks(8), torch.full((8,), -1, dtype=torch.int32)) == 1
 
 
 # ===== merged from tests/unit/test_native_context_guard.py: Native-context guard: the serving templates waive vLLM's max_model_len check, so gemma4 must refuse a
