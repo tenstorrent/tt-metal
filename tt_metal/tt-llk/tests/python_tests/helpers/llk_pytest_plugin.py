@@ -37,6 +37,7 @@ import os
 import re
 import signal
 import sys
+import zlib
 from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
@@ -336,6 +337,11 @@ def pytest_addoption(parser):
         help="Path to where the test order, per runner should be stored to, default path is the same folder as LLK repo",
     )
 
+    parser.addoption(
+        "--node-list",
+        default=None,
+        help="File of test node ids, one per line; only those tests run.",
+    )
     parser.addoption(
         "--perf-splits",
         type=int,
@@ -741,6 +747,20 @@ def _select_tests_by_op(config, items):
     )
 
 
+def _select_node_list(config, items):
+    path = config.getoption("--node-list")
+    if not path:
+        return
+    wanted = {
+        line.strip() for line in Path(path).read_text().splitlines() if line.strip()
+    }
+    selected = [item for item in items if _base_nodeid(item.nodeid) in wanted]
+    config.hook.pytest_deselected(
+        items=[item for item in items if _base_nodeid(item.nodeid) not in wanted]
+    )
+    items[:] = selected
+
+
 def _split_by_cost(config, items):
     """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
 
@@ -831,11 +851,32 @@ def _restore_test_order(config, items):
     )
 
 
+def _base_nodeid(nodeid):
+    """The node id without the "@group" suffix xdist appends for xdist_group."""
+    return nodeid.rsplit("@", 1)[0] if nodeid.rfind("@") > nodeid.rfind("]") else nodeid
+
+
+def _pin_tests_to_workers(config, items):
+    """With --dist loadgroup, give every worker one fixed group: crc32(node id) mod the worker count.
+
+    Each worker then runs the same tests in collection order on every run, so a measured kernel always
+    follows the same kernel on its core.
+    """
+    workers = getattr(config, "workerinput", {}).get("workercount")
+    if not workers or os.environ.get("LLK_PERF_FIXED_ORDER", "1") != "1":
+        return
+    for item in items:
+        group = zlib.crc32(_base_nodeid(item.nodeid).encode()) % workers
+        item.add_marker(pytest.mark.xdist_group(f"core{group}"))
+
+
 @pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_collection_modifyitems(config, items):
+    _pin_tests_to_workers(config, items)
     # Choose compile representatives only after other plugins apply selection filters.
     result = yield
     _select_tests_by_op(config, items)
+    _select_node_list(config, items)
     _split_by_cost(config, items)
     _restore_test_order(config, items)
 
