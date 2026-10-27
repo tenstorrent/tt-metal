@@ -1144,9 +1144,9 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         local_layers.append(layer)
 
     def read_kvpe(layer):
-        return _read_kv_slice(table, device_map, 0, layer, slot_id, read_end, HEAD_DIM, _decode_kv_chunk, start=first_pos)[
-            skip_rows : skip_rows + cmp_len
-        ]
+        return _read_kv_slice(
+            table, device_map, 0, layer, slot_id, read_end, HEAD_DIM, _decode_kv_chunk, start=first_pos
+        )[skip_rows : skip_rows + cmp_len]
 
     logger.info(f"[producer] slot {slot_id} KV check: torch threads={torch.get_num_threads()}")
     for layer, device_kv in _prefetched(local_layers, read_kvpe):
@@ -1271,7 +1271,6 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             )[skip_rows : skip_rows + cmp_len]
 
         for (layer, golden_dir), dev_ik in _prefetched(local_index_rows, read_index):
-
             is_mtp_row = layer == mtp_index_layer
             golden_ik = _load_golden_index_k(
                 golden_dir,
