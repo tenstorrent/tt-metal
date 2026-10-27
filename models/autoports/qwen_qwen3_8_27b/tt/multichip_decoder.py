@@ -689,10 +689,17 @@ class MultichipDecoder(OptimizedDecoder):
             # retaining batched projections and an explicit state for every request.
             grid = self.mesh_device.compute_with_storage_grid_size()
             kernel_batch = (grid.x * grid.y) // 12
+            recurrence = fp32_recurrence
+            if (self.policy.get("grouped_recurrence") and length == 1
+                    and not self.policy.get("_prefill_phase") and kernel_batch < batch <= 32):
+                # Independent heads share a core sequentially; arithmetic and state
+                # ownership stay unchanged while avoiding split/concat dispatches.
+                from .grouped_recurrence import fp32_recurrence as recurrence
+                kernel_batch = batch
             ys, states = [], []
             for begin in range(0, batch, kernel_batch):
                 end = min(begin + kernel_batch, batch)
-                y_part, state_part = fp32_recurrence(
+                y_part, state_part = recurrence(
                     q[begin:end], k[begin:end], v[begin:end], decay[begin:end], beta[begin:end],
                     initial_state=state.recurrent[begin:end], output_final_state=True, compute_kernel_config=self.ckc,
                     # Keep the original state available for inactive prepared

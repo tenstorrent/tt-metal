@@ -1,0 +1,212 @@
+{
+  "scope": "synthetic real-shape FP32 recurrence on four chips; not a model timing",
+  "batch": 19,
+  "heads_per_core": 3,
+  "iterations": 20,
+  "inputs": "replicated normalized Q/K, per-row FP32 state, fixed gates; advancing state",
+  "allocation_tracking": "1",
+  "program_cache_skip": "0",
+  "status": "pass",
+  "semantics": [
+    {
+      "step": 1,
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 1,
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 1,
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 1,
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 1,
+      "tensor": "state",
+      "device": 0,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 1,
+      "tensor": "state",
+      "device": 1,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 1,
+      "tensor": "state",
+      "device": 2,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 1,
+      "tensor": "state",
+      "device": 3,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 2,
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 2,
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 2,
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 2,
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 2,
+      "tensor": "state",
+      "device": 0,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 2,
+      "tensor": "state",
+      "device": 1,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 2,
+      "tensor": "state",
+      "device": 2,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 2,
+      "tensor": "state",
+      "device": 3,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 3,
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 3,
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 3,
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 3,
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 3,
+      "tensor": "state",
+      "device": 0,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 3,
+      "tensor": "state",
+      "device": 1,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 3,
+      "tensor": "state",
+      "device": 2,
+      "exact": true,
+      "max_abs_diff": 0.0
+    },
+    {
+      "step": 3,
+      "tensor": "state",
+      "device": 3,
+      "exact": true,
+      "max_abs_diff": 0.0
+    }
+  ],
+  "timing": {
+    "split": {
+      "replay_us": [
+        703.2483466900885,
+        700.4650426097214,
+        723.5600496642292,
+        699.5869451202452,
+        700.2892554737628
+      ],
+      "median_replay_us": 700.4650426097214
+    },
+    "grouped": {
+      "replay_us": [
+        334.26539739593863,
+        334.28199822083116,
+        334.1602045111358,
+        362.5948098488152,
+        333.7229019962251
+      ],
+      "median_replay_us": 334.26539739593863
+    }
+  },
+  "after_timing_exact": true,
+  "speedup": 2.0955356075340874,
+  "source_sha256": {
+    "tests/probe_grouped_recurrence.py": "da074352276164786d7a23580b0408b744bc58edd1f89a1d5fcd0682ab7583cc",
+    "tests/grouped_recurrence_candidate.py": "c8291591b033ab85bd3a4f42702feebd35639ea0a9bc8f9b35065e8fc6840334",
+    "tt/multichip_decoder.py": "86131796dd076675f915f1b6a62278c8af2c78d25f467a052f1d51d8e59e777b",
+    "tt/kernels/writer_grouped_recurrence.cpp": "e2bda80a9b309bb77d0ee4e9198f00ad315ebba89caf2d6b0bcd5e1dab124808",
+    "tt/kernels/compute_grouped_recurrence.cpp": "550d6165d1d202ecfd1ef70f63756ca137e467c80440b9fc95aa83f0e0f83204",
+    "tt/kernels/reader_grouped_recurrence.cpp": "a95c9786ef57efaf7e8e558040d24eb48a28432601810a05c09fcc3fec6211a3"
+  }
+}

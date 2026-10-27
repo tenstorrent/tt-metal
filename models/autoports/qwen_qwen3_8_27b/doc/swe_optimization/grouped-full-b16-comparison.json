@@ -1,0 +1,102 @@
+{
+  "scope": "all64-layer traced autoregressive token-out; fixed-work fixture, not SWE accuracy",
+  "batch": 16,
+  "length": 4096,
+  "outputs": 128,
+  "prefill_chunk_size": 256,
+  "native_context": 262144,
+  "allocation_tracking": false,
+  "tokens_exact": true,
+  "qualitative_tokens_exact": true,
+  "mixed_reset_repeat_tokens_exact": true,
+  "arms": {
+    "baseline": {
+      "ttft_ms": [
+        12144.064563093707,
+        12145.71852912195,
+        12144.934033975005
+      ],
+      "decode_tps_per_user": [
+        13.808695834710756,
+        13.808822432412425,
+        13.808020750602445
+      ],
+      "decode_seconds": [
+        9.19710315298289,
+        9.197018834995106,
+        9.197552805999294
+      ],
+      "tokens_sha256": [
+        "3ff113301dc3bd5bd1da80ba39a83cd0f5e63771ea6c924133e9ddd073ffe93f",
+        "3ff113301dc3bd5bd1da80ba39a83cd0f5e63771ea6c924133e9ddd073ffe93f",
+        "3ff113301dc3bd5bd1da80ba39a83cd0f5e63771ea6c924133e9ddd073ffe93f"
+      ],
+      "source_sha256": {
+        "tests/benchmark_grouped_model.py": "b6a94b07046ebc751fb70347b3ca33cd037185b4c66f91179ec8bc203b13a4a1",
+        "tests/grouped_recurrence_candidate.py": "c8291591b033ab85bd3a4f42702feebd35639ea0a9bc8f9b35065e8fc6840334",
+        "tests/probe_grouped_decoder.py": "07c7d20dd99a2febf3f04acd36dce67b0c641c52aac56c7fdadf3c866fefd9e8",
+        "tt/generator.py": "16ee1b1ed51cde3d9b8d5ffdb0c5ce2ab924ee681445e86442ff2a2cdf9f5495",
+        "tt/multichip_decoder.py": "86131796dd076675f915f1b6a62278c8af2c78d25f467a052f1d51d8e59e777b",
+        "tt/kernels/writer_grouped_recurrence.cpp": "e2bda80a9b309bb77d0ee4e9198f00ad315ebba89caf2d6b0bcd5e1dab124808",
+        "tt/kernels/compute_grouped_recurrence.cpp": "550d6165d1d202ecfd1ef70f63756ca137e467c80440b9fc95aa83f0e0f83204",
+        "tt/kernels/reader_grouped_recurrence.cpp": "a95c9786ef57efaf7e8e558040d24eb48a28432601810a05c09fcc3fec6211a3"
+      },
+      "trace_ids": [
+        "MeshTraceId(0)",
+        "MeshTraceId(1)",
+        "MeshTraceId(2)",
+        "MeshTraceId(3)"
+      ],
+      "captures": 4,
+      "raw_file": "/home/mvasiljev/build/qwen38-swe/grouped-recurrence/full-b16-baseline-p256.json"
+    },
+    "grouped": {
+      "ttft_ms": [
+        12141.162008978426,
+        12145.788789959624,
+        12146.652427036315
+      ],
+      "decode_tps_per_user": [
+        17.511468630758742,
+        17.510976388861934,
+        17.51075515670074
+      ],
+      "decode_seconds": [
+        7.2523900009691715,
+        7.252593869110569,
+        7.252685498911887
+      ],
+      "tokens_sha256": [
+        "3ff113301dc3bd5bd1da80ba39a83cd0f5e63771ea6c924133e9ddd073ffe93f",
+        "3ff113301dc3bd5bd1da80ba39a83cd0f5e63771ea6c924133e9ddd073ffe93f",
+        "3ff113301dc3bd5bd1da80ba39a83cd0f5e63771ea6c924133e9ddd073ffe93f"
+      ],
+      "source_sha256": {
+        "tests/benchmark_grouped_model.py": "842e5a507cd0093802220df3b1176a203280640aa4187c5fd0ecb9c8f41cecad",
+        "tt/grouped_recurrence.py": "d31c90018156d033317c644fa299d2b3e889654e214068b3654893ee615ade17",
+        "tt/precision.py": "5ea0a67ef2eca483bb80870c0eb06506554f2fd6a8262ff15446e1d9a3915b37",
+        "tt/generator.py": "16ee1b1ed51cde3d9b8d5ffdb0c5ce2ab924ee681445e86442ff2a2cdf9f5495",
+        "tt/multichip_decoder.py": "a496b91fc8f0ddafde75eda5080a89660554fccd183a4db030b3d6aaab98a186",
+        "tt/kernels/writer_grouped_recurrence.cpp": "e2bda80a9b309bb77d0ee4e9198f00ad315ebba89caf2d6b0bcd5e1dab124808",
+        "tt/kernels/compute_grouped_recurrence.cpp": "550d6165d1d202ecfd1ef70f63756ca137e467c80440b9fc95aa83f0e0f83204",
+        "tt/kernels/reader_grouped_recurrence.cpp": "a95c9786ef57efaf7e8e558040d24eb48a28432601810a05c09fcc3fec6211a3"
+      },
+      "trace_ids": [
+        "MeshTraceId(0)",
+        "MeshTraceId(1)",
+        "MeshTraceId(2)",
+        "MeshTraceId(3)"
+      ],
+      "captures": 4,
+      "raw_file": "/home/mvasiljev/build/qwen38-swe/grouped-recurrence/full-b16-grouped-p256.json"
+    }
+  },
+  "decode_speedup": 1.2681122532111107,
+  "limitations": [
+    "Fixed-work generator timing, not vLLM or SWE throughput/accuracy",
+    "Full64 state receipt and strict-tracked larger-batch check pending",
+    "Qualitative code example truncated at256-token cap",
+    "Local compiled runtime differs from CI immutable base",
+    "Grouped shell returned127 after successful Python/device teardown: launcher edited during execution; final shell read old byte offset in replaced text. Python JSON status pass and complete logs retained. Launcher will remain immutable during all subsequent jobs."
+  ]
+}

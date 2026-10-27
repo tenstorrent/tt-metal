@@ -58,7 +58,9 @@ class Qwen38ForCausalLM:
         obj.decode_slots = set()
         obj.tt_supported_decode_batch_sizes = [max_batch_size]
         print(f"AUTOPORT_ADAPTER {__file__}:{cls.__name__} layers={obj.model.layer_indices} "
-              f"precision={obj.model.precision_config}", flush=True)
+              f"precision={obj.model.precision_config} "
+              f"grouped_recurrence_layers={sum(bool(layer.policy.get('grouped_recurrence')) for layer in obj.model.layers)} "
+              f"resident_batch={max_batch_size}", flush=True)
         if os.environ.get('QWEN38_BENCHMARK_PHASES'):
             from .benchmark_phases import install
             install(obj)

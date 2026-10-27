@@ -1,0 +1,117 @@
+{
+  "scope": "source-based shared-snapshot cache arithmetic; not measured serving peaks, residency or quality",
+  "budget_bytes_per_device": 23661297664,
+  "snapshot_bytes_per_layer": 801792,
+  "unique_snapshot_pools": 16,
+  "attention_bytes_per_token_per_device": 8704,
+  "rows": [
+    {
+      "resident_slots": 8,
+      "block_size": 256,
+      "bytes_per_block": 15056896,
+      "blocks": 1571,
+      "worker_reserved_blocks": 57,
+      "token_budget_hook": 387584,
+      "physical_bytes": 23654383616,
+      "physical_attention_token_slots_including_null": 402176,
+      "non_null_global_ids": 1570,
+      "sizing_hook_is_not_guaranteed_live_conversation_capacity": true
+    },
+    {
+      "resident_slots": 8,
+      "block_size": 512,
+      "bytes_per_block": 17285120,
+      "blocks": 1368,
+      "worker_reserved_blocks": 57,
+      "token_budget_hook": 671232,
+      "physical_bytes": 23646044160,
+      "physical_attention_token_slots_including_null": 700416,
+      "non_null_global_ids": 1367,
+      "sizing_hook_is_not_guaranteed_live_conversation_capacity": true
+    },
+    {
+      "resident_slots": 8,
+      "block_size": 1024,
+      "bytes_per_block": 21741568,
+      "blocks": 1088,
+      "worker_reserved_blocks": 57,
+      "token_budget_hook": 1055744,
+      "physical_bytes": 23654825984,
+      "physical_attention_token_slots_including_null": 1114112,
+      "non_null_global_ids": 1087,
+      "sizing_hook_is_not_guaranteed_live_conversation_capacity": true
+    },
+    {
+      "resident_slots": 16,
+      "block_size": 256,
+      "bytes_per_block": 15056896,
+      "blocks": 1571,
+      "worker_reserved_blocks": 113,
+      "token_budget_hook": 373248,
+      "physical_bytes": 23654383616,
+      "physical_attention_token_slots_including_null": 402176,
+      "non_null_global_ids": 1570,
+      "sizing_hook_is_not_guaranteed_live_conversation_capacity": true
+    },
+    {
+      "resident_slots": 16,
+      "block_size": 512,
+      "bytes_per_block": 17285120,
+      "blocks": 1368,
+      "worker_reserved_blocks": 113,
+      "token_budget_hook": 642560,
+      "physical_bytes": 23646044160,
+      "physical_attention_token_slots_including_null": 700416,
+      "non_null_global_ids": 1367,
+      "sizing_hook_is_not_guaranteed_live_conversation_capacity": true
+    },
+    {
+      "resident_slots": 16,
+      "block_size": 1024,
+      "bytes_per_block": 21741568,
+      "blocks": 1088,
+      "worker_reserved_blocks": 113,
+      "token_budget_hook": 998400,
+      "physical_bytes": 23654825984,
+      "physical_attention_token_slots_including_null": 1114112,
+      "non_null_global_ids": 1087,
+      "sizing_hook_is_not_guaranteed_live_conversation_capacity": true
+    },
+    {
+      "resident_slots": 32,
+      "block_size": 256,
+      "bytes_per_block": 15056896,
+      "blocks": 1571,
+      "worker_reserved_blocks": 225,
+      "token_budget_hook": 344576,
+      "physical_bytes": 23654383616,
+      "physical_attention_token_slots_including_null": 402176,
+      "non_null_global_ids": 1570,
+      "sizing_hook_is_not_guaranteed_live_conversation_capacity": true
+    },
+    {
+      "resident_slots": 32,
+      "block_size": 512,
+      "bytes_per_block": 17285120,
+      "blocks": 1368,
+      "worker_reserved_blocks": 225,
+      "token_budget_hook": 585216,
+      "physical_bytes": 23646044160,
+      "physical_attention_token_slots_including_null": 700416,
+      "non_null_global_ids": 1367,
+      "sizing_hook_is_not_guaranteed_live_conversation_capacity": true
+    },
+    {
+      "resident_slots": 32,
+      "block_size": 1024,
+      "bytes_per_block": 21741568,
+      "blocks": 1088,
+      "worker_reserved_blocks": 225,
+      "token_budget_hook": 883712,
+      "physical_bytes": 23654825984,
+      "physical_attention_token_slots_including_null": 1114112,
+      "non_null_global_ids": 1087,
+      "sizing_hook_is_not_guaranteed_live_conversation_capacity": true
+    }
+  ]
+}

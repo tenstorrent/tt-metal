@@ -8,7 +8,7 @@
   "iterations": 200,
   "compact_ttsampling": true,
   "source_sha256": {
-    "models/autoports/qwen_qwen3_8_27b/tests/compare_samplers.py": "1ca471890ccce7ec9b40aee411f9c6f7f446596e812f7e063f1240983ae8d467",
+    "models/autoports/qwen_qwen3_8_27b/tests/compare_samplers.py": "660315372c9512ce8aea42410fec801059a22c47d20a89407040356611a12919",
     "models/common/modules/sampling/sampling_1d.py": "451cb3381fb81a7564b43c5a7bf3fbe1b31299404d7e0a473047cf60b53c3c57",
     "models/common/sampling/tt_sampling.py": "fa48c2d253b20a8b14d2be1d8597d30395a03070e33522f16550e95d36fd374a",
     "models/autoports/qwen_qwen3_8_27b/tt/sampling_ccl.py": "1c652512bb91cec3692d95211c49808fbe1553173155365bf3c73d4414421694"
@@ -17,13 +17,13 @@
   "sampler_physical_batch": 8,
   "input_sha256": "8b3e0a79953c333bb3b5e2e8fda5039145c56fa49633b3f2a2e623d65c0a4ce9",
   "replay_us": [
-    521.5058755129576,
-    521.3823344092816,
-    521.6685344930738,
-    521.5058254543692,
-    521.5861299075186
+    521.3933996856213,
+    521.3889910373837,
+    521.6449755243957,
+    521.5670296456665,
+    521.5914244763553
   ],
-  "median_replay_us": 521.5058755129576,
+  "median_replay_us": 521.5670296456665,
   "draws": [
     [
       57216,

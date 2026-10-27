@@ -1,0 +1,835 @@
+{
+  "scope": "one real-weight linear-attention decoder, TP4; not full-model/SWE performance",
+  "checkpoint": "/data/mvasiljev/weights/Qwen3.8-27B",
+  "batch": 32,
+  "masked": false,
+  "all_inactive": false,
+  "varying_mask": true,
+  "generated_delta_source": null,
+  "allocation_tracking": "1",
+  "program_cache_skip": "0",
+  "status": "pass",
+  "semantic_masks": [
+    [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    [
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0
+    ],
+    [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  ],
+  "checks": [
+    {
+      "step": 1,
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "conv",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "conv",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "conv",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "conv",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "recurrent",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "recurrent",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "recurrent",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "recurrent",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 2,
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 2,
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 2,
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 2,
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 2,
+      "tensor": "conv",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122877
+    },
+    {
+      "step": 2,
+      "tensor": "conv",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 2,
+      "tensor": "conv",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 2,
+      "tensor": "conv",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 2,
+      "tensor": "recurrent",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 2,
+      "tensor": "recurrent",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 2,
+      "tensor": "recurrent",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 2,
+      "tensor": "recurrent",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 3,
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 3,
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 3,
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 3,
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 3,
+      "tensor": "conv",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 245757
+    },
+    {
+      "step": 3,
+      "tensor": "conv",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 245760
+    },
+    {
+      "step": 3,
+      "tensor": "conv",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 245760
+    },
+    {
+      "step": 3,
+      "tensor": "conv",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 245760
+    },
+    {
+      "step": 3,
+      "tensor": "recurrent",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 6291456
+    },
+    {
+      "step": 3,
+      "tensor": "recurrent",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 6291456
+    },
+    {
+      "step": 3,
+      "tensor": "recurrent",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 6291456
+    },
+    {
+      "step": 3,
+      "tensor": "recurrent",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 6291456
+    },
+    {
+      "step": 4,
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 4,
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 4,
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 4,
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 4,
+      "tensor": "conv",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 4,
+      "tensor": "conv",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 4,
+      "tensor": "conv",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 4,
+      "tensor": "conv",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 4,
+      "tensor": "recurrent",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 4,
+      "tensor": "recurrent",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 4,
+      "tensor": "recurrent",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 4,
+      "tensor": "recurrent",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 5,
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "conv",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "conv",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "conv",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "conv",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "recurrent",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "recurrent",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "recurrent",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "recurrent",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "conv",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "conv",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "conv",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "conv",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "recurrent",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "recurrent",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "recurrent",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "recurrent",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    }
+  ],
+  "timing": {
+    "baseline": {
+      "replay_us": [
+        18357.352598104626,
+        18357.516347896308,
+        18358.809244818985,
+        18360.552098602057,
+        18358.43154694885
+      ],
+      "median_replay_us": 18358.43154694885
+    },
+    "grouped": {
+      "replay_us": [
+        12846.055498812348,
+        12848.038750234991,
+        12846.767355222255,
+        12847.559293732047,
+        12848.152499645948
+      ],
+      "median_replay_us": 12847.559293732047
+    }
+  },
+  "precision": {
+    "schema_version": 1,
+    "config_id": "head_bfp8_hifi2",
+    "weight_groups": {
+      "attention": "bfloat4_b",
+      "mlp": "bfloat4_b",
+      "down": "bfloat4_b",
+      "embedding": "bfloat16",
+      "head": "bfloat8_b",
+      "norm": "bfloat16"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "projection": "LoFi",
+      "fused_prefill": "LoFi",
+      "fused_decode": "LoFi",
+      "sdpa": "LoFi",
+      "head": "HiFi2",
+      "norm": "HiFi4"
+    },
+    "activation_dtype": {
+      "prefill_column": "bfloat8_b",
+      "ordinary_attention": "bfloat16",
+      "ordinary_mlp": "bfloat16",
+      "fused_row": "bfloat16"
+    },
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "decode_b1": "bfloat8_b",
+      "prefill": "bfloat8_b",
+      "native_batched": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_sampling": {
+      "logits": "bfloat16",
+      "sampling": "bfloat16",
+      "token_ids": "uint32"
+    },
+    "recurrent_state_dtype": "float32",
+    "max_context": 262144
+  },
+  "speedup": 1.4289431266454944,
+  "source_sha256": {
+    "tests/probe_grouped_decoder.py": "b98d2f5a4c3458c2b12c3fb2954845602690f06ef76e33a7c635539112a6142f",
+    "tt/grouped_recurrence.py": "d31c90018156d033317c644fa299d2b3e889654e214068b3654893ee615ade17",
+    "tt/precision.py": "a458586d0d6649b1766df257b180438733115462e7bed9093ae168d87a58c03e",
+    "tt/multichip_decoder.py": "5f8a86c59f82450a3f7793ae7a65d8b31f819a22d892da80e1db37e5b62987fa",
+    "tt/kernels/writer_grouped_recurrence.cpp": "1f96ea801c20e0a607e6d403e434ac99c97a58abeba1b7ee6acbd29d322b6fe5",
+    "tt/kernels/compute_grouped_recurrence.cpp": "f5f9d0174d712b690f837b884283f9c2878021df49feb2fc809f77183b175abd",
+    "tt/kernels/reader_grouped_recurrence.cpp": "33cb2561427ef9935bb2795c3e089f8c10943846e0147ddf7d46a9d71a4eeb38"
+  }
+}

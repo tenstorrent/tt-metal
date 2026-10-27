@@ -76,4 +76,9 @@ def decoder_policy(config, index):
                   mlp_activation=config['activation_dtype']['ordinary_mlp'],
                   precision_prefill_activation=config['activation_dtype']['prefill_column'])
     policy.update(config['layer_exceptions'].get(str(index), {}))
+    grouped = os.environ.get('QWEN38_GROUPED_RECURRENCE', '0')
+    if grouped not in ('0', '1'):
+        raise ValueError('QWEN38_GROUPED_RECURRENCE must be 0 or 1')
+    if grouped == '1':
+        policy['grouped_recurrence'] = True
     return policy

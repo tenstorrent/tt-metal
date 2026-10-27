@@ -99,9 +99,9 @@ Final common-source repeats (five 200-replay windows per row):
 
 | Logical batch / collective | Sampling1D µs | TTSampling µs | Result |
 |---|---:|---:|---|
-| 8 / existing gather | 474.435 | 557.730 | TTSampling 17.56% slower; pads to32 |
-| 8 / existing gather, compact TT offsets/masks | 474.435 | 521.506 | TTSampling 9.92% slower; actual8 rows |
-| 32 / async gather | 463.940 | 533.531 | TTSampling 15.00% slower |
+| 8 / existing gather | 474.379 | 557.621 | TTSampling 17.55% slower; pads to32 |
+| 8 / existing gather, compact TT offsets/masks | 474.379 | 521.567 | TTSampling 9.95% slower; actual8 rows |
+| 32 / async gather | 463.956 | 533.586 | TTSampling 15.01% slower |
 
 All three comparisons have matching source and input hashes. The256/256 active
 draws for each B8 candidate and1024/1024 B32 draws exactly match Sampling1D.

@@ -1,0 +1,834 @@
+{
+  "scope": "one real-weight linear-attention decoder, TP4; not full-model/SWE performance",
+  "checkpoint": "/data/mvasiljev/weights/Qwen3.8-27B",
+  "batch": 32,
+  "masked": false,
+  "all_inactive": false,
+  "varying_mask": true,
+  "generated_delta_source": "def _delta(self, x, state, *, prepared_metadata=None, active_mask=None):\n    batch, length, _ = x.shape\n    if active_mask is not None and (length != 1 or prepared_metadata is not None):\n        raise ValueError(\"Decode active_mask requires a one-token non-prefill call\")\n    projected = self._linear(x, self.mix)\n    if prepared_metadata is None and self.policy.get('packed_decode_conv') and batch>=8 and length==1 and not self.policy.get('_prefill_phase'):\n        qflat,kflat,vflat,next_conv=self._packed_decode_convolution(projected,state)\n    else:\n        physical_conv = ((length + 31) // 32) * 32\n        padded_projected = ttnn.pad(projected, [(0, 0), (0, physical_conv-length), (0, 0)], value=0) if physical_conv != length else projected\n        qs, ks, vs = [], [], []\n        for bidx in range(batch):\n            hist = ttnn.to_layout(state.conv[bidx:bidx+1], ttnn.ROW_MAJOR_LAYOUT)\n            cq, ck, cv = ttnn.experimental.kda.qkv_causal_conv1d_silu(\n                padded_projected[bidx:bidx+1], hist, *self.taps, 512, 512, 1536,\n                actual_start=self.conv_start, predecessor_carry=hist,\n                program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=128),\n                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4,\n                    math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False))\n            qs.append(cq[:, :length]); ks.append(ck[:, :length]); vs.append(cv[:, :length])\n        qflat, kflat, vflat = [parts[0] if batch == 1 else ttnn.concat(parts, dim=0) for parts in (qs, ks, vs)]\n        if prepared_metadata is not None:\n            # Select the last three *logical* projected inputs, including\n            # incoming history for n=0/1/2. Indices vary as device data;\n            # shapes depend only on the physical prepared bucket.\n            projected_qkv = ttnn.to_layout(projected[..., :2560], ttnn.ROW_MAJOR_LAYOUT)\n            history_table = ttnn.reshape(ttnn.concat([state.conv, projected_qkv], dim=1),\n                                         [batch * (length + 3), 2560])\n            next_conv = ttnn.embedding(prepared_metadata[\"history_indices\"], history_table,\n                                       layout=ttnn.ROW_MAJOR_LAYOUT)\n        elif self.policy.get(\"history_tile_tail\") and length >= 32 and length % 32 == 0:\n            # Slice a complete tile before untilize, then select logical rows.\n            # Direct nonaligned tiled slicing would add an implicit retile.\n            tail = projected[:, length-32:length, :2560]\n            next_conv = ttnn.to_layout(tail, ttnn.ROW_MAJOR_LAYOUT)[:, -3:, :]\n        else:\n            next_conv = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)[:, length-3:length, :2560] if length >= 3 else ttnn.concat(\n                [state.conv[:, length:, :], ttnn.to_layout(projected[..., :2560], ttnn.ROW_MAJOR_LAYOUT)], dim=1)\n    if active_mask is not None:\n        # Row-major convolution carry is preserved for inactive decode slots.\n        # where uses tiled operands; round-trip only in this masked variant.\n        conv_active = ttnn.to_layout(active_mask, ttnn.TILE_LAYOUT)\n        next_conv = ttnn.to_layout(ttnn.where(conv_active,\n            ttnn.to_layout(next_conv, ttnn.TILE_LAYOUT),\n            ttnn.to_layout(state.conv, ttnn.TILE_LAYOUT)), ttnn.ROW_MAJOR_LAYOUT)\n    ttnn.copy(next_conv, state.conv)\n\n    def l2(t):\n        t = ttnn.typecast(t, ttnn.float32)\n        return ttnn.rms_norm(t, weight=self.l2_weight, epsilon=1e-6/128, compute_kernel_config=self.ckc)\n\n    a = ttnn.typecast(projected[..., 4096:4108], ttnn.float32)\n    decay = ttnn.multiply(self.neg_A, ttnn.softplus(ttnn.add(a, self.dt)))\n    beta = ttnn.sigmoid(ttnn.typecast(projected[..., 4128:4140], ttnn.float32))\n    if prepared_metadata is not None or active_mask is not None:\n        # Mask after convolution and nonlinear gates: zero hidden padding\n        # alone leaves convolution carry and nonzero decay/beta behind.\n        valid = prepared_metadata[\"valid_mask\"] if prepared_metadata is not None else ttnn.to_layout(active_mask, ttnn.TILE_LAYOUT)\n        qflat, kflat, vflat = (ttnn.multiply(t, ttnn.typecast(valid, t.dtype))\n                              for t in (qflat, kflat, vflat))\n        valid_fp32 = ttnn.typecast(valid, ttnn.float32)\n        decay = ttnn.multiply(decay, valid_fp32)\n        beta = ttnn.multiply(beta, valid_fp32)\n    if length > 1:\n        physical = ((length + 31) // 32) * 32\n        def padded(t):\n            return ttnn.pad(t, [(0, 0), (0, physical-length), (0, 0)], value=0) if physical != length else t\n        chunk_outputs, chunk_states = [], []\n        kernel_batch = (self.mesh_device.compute_with_storage_grid_size().x * self.mesh_device.compute_with_storage_grid_size().y) // 12\n        pq, pk, pv, pg, pb = map(padded, (qflat, kflat, vflat, decay, beta))\n        for begin in range(0, batch, kernel_batch):\n            end = min(begin + kernel_batch, batch)\n            out, final = ttnn.transformer.chunk_gated_delta_rule(\n                pq[begin:end], pk[begin:end], pv[begin:end], pg[begin:end], pb[begin:end],\n                initial_state=state.recurrent[begin:end], output_final_state=True,\n                chunk_size=32, output_head_major=True, compute_kernel_config=self.ckc, **self.gdn_constants)\n            chunk_outputs.append(out); chunk_states.append(final)\n        y = chunk_outputs[0] if len(chunk_outputs) == 1 else ttnn.concat(chunk_outputs, dim=0)\n        new_state = chunk_states[0] if len(chunk_states) == 1 else ttnn.concat(chunk_states, dim=0)\n        norm_gate = ttnn.experimental.kda.sigmoid_gated_rms_norm(\n            ttnn.typecast(y, ttnn.bfloat16), padded_projected, self.out_norm, 12,\n            gate_column_offset=2560, epsilon=self.config.rms_norm_eps, output_dtype=ttnn.bfloat16,\n            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4,\n                math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False))\n        if prepared_metadata is not None:\n            # An entirely inactive row must preserve even the low FP32 bits\n            # that an all-zero GDN chunk's identity matmul could round.\n            active = ttnn.reshape(prepared_metadata[\"valid_mask\"][:, :1, :], [batch, 1, 1, 1])\n            new_state = ttnn.where(active, new_state, state.recurrent)\n        ttnn.copy(new_state, state.recurrent)\n        return self._linear(ttnn.multiply(norm_gate[:, :length], projected[..., 2560:4096]), self.out)\n    else:\n        q = l2(reshape(qflat, [batch, length, 4, 128]))\n        k = l2(reshape(kflat, [batch, length, 4, 128]))\n        v = ttnn.typecast(reshape(vflat, [batch, length, 12, 128]), ttnn.float32)\n        # This kernel assigns one value head to each core. Split its batch axis,\n        # retaining batched projections and an explicit state for every request.\n        grid = self.mesh_device.compute_with_storage_grid_size()\n        kernel_batch = batch\n        ys, states = [], []\n        for begin in range(0, batch, kernel_batch):\n            end = min(begin + kernel_batch, batch)\n            y_part, state_part = fp32_recurrence(\n                q[begin:end], k[begin:end], v[begin:end], decay[begin:end], beta[begin:end],\n                initial_state=state.recurrent[begin:end], output_final_state=True, compute_kernel_config=self.ckc,\n                # Keep the original state available for inactive prepared\n                # slots. The FP32 recurrence math is unchanged; only its\n                # destination differs from the default in-place decode.\n                inplace_state=(self.policy.get(\"inplace_recurrence\", False)\n                               and prepared_metadata is None and active_mask is None),\n            )\n            ys.append(y_part)\n            states.append(state_part)\n        y = ttnn.concat(ys, dim=0) if len(ys) > 1 else ys[0]\n        new_state = ttnn.concat(states, dim=0) if len(states) > 1 else states[0]\n    if prepared_metadata is not None or active_mask is not None:\n        row_active = (prepared_metadata[\"valid_mask\"][:, :1, :] if prepared_metadata is not None\n                      else ttnn.to_layout(active_mask, ttnn.TILE_LAYOUT))\n        active = ttnn.reshape(row_active, [batch, 1, 1, 1])\n        new_state = ttnn.where(active, new_state, state.recurrent)\n    if new_state.buffer_address() != state.recurrent.buffer_address():\n        ttnn.copy(new_state, state.recurrent)\n    y = self._norm(ttnn.typecast(y, ttnn.bfloat16), self.out_norm)\n    z = reshape(projected[..., 2560:4096], [batch, length, 12, 128])\n    return self._linear(reshape(ttnn.multiply(z, y, input_tensor_a_activations=[ttnn.UnaryOpType.SILU]), [batch, length, 1536]), self.out)\n",
+  "allocation_tracking": "1",
+  "program_cache_skip": "0",
+  "status": "pass",
+  "semantic_masks": [
+    [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    [
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0,
+      0.0,
+      1.0
+    ],
+    [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  ],
+  "checks": [
+    {
+      "step": 1,
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "conv",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "conv",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "conv",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "conv",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "recurrent",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "recurrent",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "recurrent",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 1,
+      "tensor": "recurrent",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 2,
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 2,
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 2,
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 2,
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 2,
+      "tensor": "conv",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122877
+    },
+    {
+      "step": 2,
+      "tensor": "conv",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 2,
+      "tensor": "conv",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 2,
+      "tensor": "conv",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 2,
+      "tensor": "recurrent",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 2,
+      "tensor": "recurrent",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 2,
+      "tensor": "recurrent",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 2,
+      "tensor": "recurrent",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 3,
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 3,
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 3,
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 3,
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 3,
+      "tensor": "conv",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 245757
+    },
+    {
+      "step": 3,
+      "tensor": "conv",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 245760
+    },
+    {
+      "step": 3,
+      "tensor": "conv",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 245760
+    },
+    {
+      "step": 3,
+      "tensor": "conv",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 245760
+    },
+    {
+      "step": 3,
+      "tensor": "recurrent",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 6291456
+    },
+    {
+      "step": 3,
+      "tensor": "recurrent",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 6291456
+    },
+    {
+      "step": 3,
+      "tensor": "recurrent",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 6291456
+    },
+    {
+      "step": 3,
+      "tensor": "recurrent",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 6291456
+    },
+    {
+      "step": 4,
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 4,
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 4,
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 4,
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 4,
+      "tensor": "conv",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 4,
+      "tensor": "conv",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 4,
+      "tensor": "conv",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 4,
+      "tensor": "conv",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 122880
+    },
+    {
+      "step": 4,
+      "tensor": "recurrent",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 4,
+      "tensor": "recurrent",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 4,
+      "tensor": "recurrent",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 4,
+      "tensor": "recurrent",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": true,
+      "inactive_nonzero_elements": 3145728
+    },
+    {
+      "step": 5,
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "conv",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "conv",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "conv",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "conv",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "recurrent",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "recurrent",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "recurrent",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": 5,
+      "tensor": "recurrent",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "output",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "output",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "output",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "output",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "conv",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "conv",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "conv",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "conv",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "recurrent",
+      "device": 0,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "recurrent",
+      "device": 1,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "recurrent",
+      "device": 2,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    },
+    {
+      "step": "after_timing",
+      "tensor": "recurrent",
+      "device": 3,
+      "exact": true,
+      "inactive_preserved": null,
+      "inactive_nonzero_elements": null
+    }
+  ],
+  "timing": {
+    "baseline": {
+      "replay_us": [
+        2483.3753472194076,
+        2482.658450026065,
+        2483.116358052939,
+        2483.075251802802,
+        2482.234640046954
+      ],
+      "median_replay_us": 2483.075251802802
+    },
+    "grouped": {
+      "replay_us": [
+        1901.2833596207201,
+        1903.6152982152998,
+        1902.6804948225617,
+        1902.5918445549905,
+        1902.0769046619534
+      ],
+      "median_replay_us": 1902.5918445549905
+    }
+  },
+  "precision": {
+    "schema_version": 1,
+    "config_id": "head_bfp8_hifi2",
+    "weight_groups": {
+      "attention": "bfloat4_b",
+      "mlp": "bfloat4_b",
+      "down": "bfloat4_b",
+      "embedding": "bfloat16",
+      "head": "bfloat8_b",
+      "norm": "bfloat16"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "projection": "LoFi",
+      "fused_prefill": "LoFi",
+      "fused_decode": "LoFi",
+      "sdpa": "LoFi",
+      "head": "HiFi2",
+      "norm": "HiFi4"
+    },
+    "activation_dtype": {
+      "prefill_column": "bfloat8_b",
+      "ordinary_attention": "bfloat16",
+      "ordinary_mlp": "bfloat16",
+      "fused_row": "bfloat16"
+    },
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "decode_b1": "bfloat8_b",
+      "prefill": "bfloat8_b",
+      "native_batched": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_sampling": {
+      "logits": "bfloat16",
+      "sampling": "bfloat16",
+      "token_ids": "uint32"
+    },
+    "recurrent_state_dtype": "float32",
+    "max_context": 262144
+  },
+  "speedup": 1.3051013852020292,
+  "source_sha256": {
+    "tests/probe_grouped_decoder.py": "07c7d20dd99a2febf3f04acd36dce67b0c641c52aac56c7fdadf3c866fefd9e8",
+    "tests/grouped_recurrence_candidate.py": "c8291591b033ab85bd3a4f42702feebd35639ea0a9bc8f9b35065e8fc6840334",
+    "tt/multichip_decoder.py": "86131796dd076675f915f1b6a62278c8af2c78d25f467a052f1d51d8e59e777b",
+    "tt/kernels/writer_grouped_recurrence.cpp": "e2bda80a9b309bb77d0ee4e9198f00ad315ebba89caf2d6b0bcd5e1dab124808",
+    "tt/kernels/compute_grouped_recurrence.cpp": "550d6165d1d202ecfd1ef70f63756ca137e467c80440b9fc95aa83f0e0f83204",
+    "tt/kernels/reader_grouped_recurrence.cpp": "a95c9786ef57efaf7e8e558040d24eb48a28432601810a05c09fcc3fec6211a3"
+  }
+}
