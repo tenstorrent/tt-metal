@@ -22,6 +22,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_chip_pass.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_catalog.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 
@@ -208,7 +209,7 @@ json core_registers_json(const manifest::CoreRegisters& registers) {
 }
 
 // Each struct by name, with its members in order.
-json types_json(const std::vector<layout::StructType>& types) {
+json types_json(const std::vector<manifest::StructType>& types) {
     json out = json::object();
     for (const auto& type : types) {
         const std::string name(type.name);
@@ -256,7 +257,7 @@ json make_archs_json(const manifest::Arch& arch) {
 // Each enum by name, with its values by their lower_name.
 json make_enums_json() {
     json out = json::object();
-    const auto add = [&](const layout::EnumType& type) {
+    for (const manifest::EnumType& type : manifest::described_enum_types()) {
         const std::string name(type.name);
         TT_FATAL(!out.contains(name), "Fabric manifest: two enums are named {}, so its schema is ambiguous", name);
         json values = json::object();
@@ -264,10 +265,7 @@ json make_enums_json() {
             values[manifest::lower_name(enumerator.name)] = enumerator.value;
         }
         out[name]["values"] = std::move(values);
-    };
-    [&]<typename... Enums>(std::type_identity<std::tuple<Enums...>>) {
-        (add(layout::enum_type<Enums>()), ...);
-    }(std::type_identity<layout::DescribedEnums>{});
+    }
     return out;
 }
 
@@ -297,7 +295,8 @@ void check_schemas_resolve(const json& node, const json& types, const json& enum
         TT_FATAL(
             !unresolved,
             "Fabric manifest: the schema {} names a type the manifest does not describe; add it to "
-            "layout::DescribedStructs or layout::DescribedEnums (fabric_struct_layouts.hpp)",
+            "layout::DescribedStructs (fabric_struct_layouts.hpp) or manifest::DescribedEnums "
+            "(fabric_manifest_type_catalog.hpp)",
             schema);
     }
 }
