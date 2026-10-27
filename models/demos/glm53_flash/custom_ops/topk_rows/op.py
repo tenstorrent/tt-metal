@@ -15,6 +15,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.glm53_flash.custom_ops.sparse_bound import phantom_code, phantom_mode
 
 TILE = 32
 TILE_HW = 1024
@@ -79,13 +80,25 @@ class TopkRows:
         return best
 
     def _program(
-        self, scores, valid_rows, out, *, values=None, ids1=None, seg_rows_per_user=0, translate=False, seg_len=0
+        self,
+        scores,
+        valid_rows,
+        out,
+        *,
+        values=None,
+        ids1=None,
+        seg_rows_per_user=0,
+        translate=False,
+        seg_len=0,
+        phantom: str | None = None,
     ):
         """The top-k program on ``scores`` [rows,1,1,W] bf16 RM: per-row bounds from ``valid_rows`` [rows,1] uint32 when
         given (else the full width); ``out`` the ranked ids. Segmented (two-stage) extras: ``seg_rows_per_user`` rows
         per user write user-major pages (row r -> page r // seg, column (r % seg) * K); ``values`` [B,1,1,seg*K] fp32
         receives the ranked values; ``translate`` with ``ids1`` [B,1,1,seg*K] uint32 and ``seg_len`` maps candidate
-        slot v -> seg_len * (v // K) + ids1[b][v] (stage 2)."""
+        slot v -> seg_len * (v // K) + ids1[b][v] (stage 2). ``phantom`` (segment mode with ``valid_rows``): how a
+        partial segment row replays the unbounded row's trailing all--inf chunks (``sparse_bound.PHANTOM_MODES``;
+        None = the ``GLM53_TOPK_PHANTOM`` knob; fused rows need none)."""
         B, W = scores.shape[0], scores.shape[-1]
         k, llk_k = self.k, self.llk_k
         cb_in, cb_indices, cb_indices_scratch, cb_meta, cb_values, cb_ids1 = 0, 1, 2, 3, 4, 5
@@ -104,7 +117,9 @@ class TopkRows:
         assert input_row_bytes == W * elem, (input_row_bytes, W)
         has_meta = valid_rows is not None
         seg = seg_rows_per_user > 0 or translate
+        phantom_mode_code = 0
         if has_meta and seg_rows_per_user > 0:
+            phantom_mode_code = phantom_code(W, phantom_mode() if phantom is None else phantom)
             # segment mode: the per-USER bounds [B/seg, 1] bound every segment row of the user (the reader clamps
             # them into the segments; an empty segment is one synthesized -inf chunk): the live-bound stage 1
             assert list(valid_rows.shape) == [B // seg_rows_per_user, 1] and valid_rows.dtype == ttnn.uint32, (
@@ -159,7 +174,12 @@ class TopkRows:
         reader_ct += [1 if has_meta else 0, cb_meta if has_meta else 0, 0] + acc(valid_rows if has_meta else scores)
         reader_ct += acc(scores)  # valid_end accessor placeholder (unused: address 0)
         reader_ct += [1 if has_meta else 0]  # per-row metadata
-        reader_ct += [seg_rows_per_user if has_meta else 0, W if has_meta and seg_rows_per_user else 0]  # segment mode
+        # segment mode: [rows per user, segment width, phantom code]
+        reader_ct += [
+            seg_rows_per_user if has_meta else 0,
+            W if has_meta and seg_rows_per_user else 0,
+            phantom_mode_code,
+        ]
         compute_ct = [
             cb_in,
             cb_indices,
@@ -170,7 +190,7 @@ class TopkRows:
             1 if has_meta else 0,
         ]
         if values is not None:
-            compute_ct += [cb_values]
+            compute_ct += [cb_values, phantom_mode_code]
         writer_ct = [
             cb_indices,
             cb_indices_scratch,
@@ -259,6 +279,7 @@ class TopkRows:
         vals1: ttnn.Tensor,
         out: ttnn.Tensor,
         valid_rows: ttnn.Tensor | None = None,
+        phantom: str | None = None,
     ) -> ttnn.Tensor:
         """Two-stage top-512 of B users whose score rows are split into S segments: ``scores_seg`` [B*S,1,1,W/S] bf16 RM
         (columns beyond a user's bound already -inf: the scorer's masked writer); stage 1 ranks every segment row on its
@@ -267,8 +288,11 @@ class TopkRows:
         [B,1,1,512]. -inf candidates rank last (sentinels only when fewer than 512 finite pools). ``valid_rows``
         [B, 1] uint32 (the per-user bounds; the live-bound path, ``custom_ops/sparse_bound.py``): stage 1 ranks every
         segment row over the user's live columns in it only (an empty segment = one synthesized -inf chunk), reading
-        nothing beyond ``valid[u]``; the ranked candidates are those of the full rows (the dropped chunks are all -inf,
-        below every finite survivor), so stage 2 and ``out`` are unchanged."""
+        nothing beyond ``valid[u]``. A partial classic row (> 32 chunks) replays the unbounded row's trailing all--inf
+        chunks as phantoms (``phantom``: "cheap" = merge + rebuild only, "full" = synthesized pages through the whole
+        path; None = ``GLM53_TOPK_PHANTOM``), because the classic merge / rebuild permute equal finite scores on every
+        chunk; a fused row's ranking is a function of its unique keys, so its trailing chunks are dropped. The stage-1
+        tables and ``out`` are then the unbounded call's bit for bit."""
         BS, Wseg = scores_seg.shape[0], scores_seg.shape[-1]
         B = BS // S
         assert BS == B * S and Wseg >= self.k, (scores_seg.shape, S)
@@ -276,7 +300,7 @@ class TopkRows:
             ids1.shape,
             vals1.shape,
         )
-        self._program(scores_seg, valid_rows, ids1, values=vals1, seg_rows_per_user=S)
+        self._program(scores_seg, valid_rows, ids1, values=vals1, seg_rows_per_user=S, phantom=phantom)
         cand = ttnn.typecast(vals1, ttnn.bfloat16)  # [B,1,1,S*K] bf16 RM candidate scores
         self._program(cand, None, out, ids1=ids1, translate=True, seg_len=Wseg)
         ttnn.deallocate(cand)
@@ -332,7 +356,7 @@ class TopkRows:
         reader_ct += [1, cb_meta, 0] + acc(valid_rows)  # metadata mode, meta CB, valid_length_offset 0
         reader_ct += acc(scores)  # valid_end accessor placeholder (unused: address 0)
         reader_ct += [1]  # per-row metadata
-        reader_ct += [0, 0]  # no segment mode (plain per-row bounds)
+        reader_ct += [0, 0, 0]  # no segment mode (plain per-row bounds)
         compute_ct = [cb_in, cb_indices, llk_k, body_mode, 1, cb_meta, 1]
         writer_ct = [
             cb_indices,

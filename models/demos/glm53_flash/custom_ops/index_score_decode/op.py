@@ -203,7 +203,8 @@ class IndexScoreDecode:
             ),
         ]
         program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        io = [q, w, pools, out] + ([valid_rows] if valid_rows is not None else []) + ([bound] if bounded else [])
+        # ``out`` last: ttnn.generic_op returns the last io tensor as the op's output
+        io = [q, w, pools] + ([valid_rows] if valid_rows is not None else []) + ([bound] if bounded else []) + [out]
         return ttnn.generic_op(io, program)
 
     @staticmethod

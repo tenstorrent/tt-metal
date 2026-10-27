@@ -10,6 +10,9 @@
   unbounded split is the capacity's static one; a Python port of the kernels' derivation agrees with the planner;
 * the segmented top-k's per-segment-row bounds (the live columns of every user sum to its width, empty segments are
   one synthesized -inf chunk, partial ones the LLK's chunk / tail) and ``check_bound_covers``;
+* the phantom plan of a partial classic row (``GLM53_TOPK_PHANTOM``: cheap = the mailbox's merge + rebuild replays,
+  full = synthesized pages; a fused row drops its trailing chunks): the compute always sees the unbounded row's chunk
+  count, the DRAM reads never pass the live tail;
 * a torch reference of the two-stage top-k under the bound against the unbounded one (distinct scores: identical
   candidate values and ids per segment, identical final top-512 per user; the K + tail invariant: >= 512 finite
   candidates for every user whose width is >= 512);
@@ -31,18 +34,26 @@ from loguru import logger
 
 from models.demos.glm53_flash.custom_ops.sparse_bound import (
     DEFAULT_KC,
+    FUSED_MAX_CHUNKS,
     GRANULE,
+    PHANTOM_CHEAP,
+    PHANTOM_ENV,
+    PHANTOM_FULL,
+    PHANTOM_NONE,
     TOPK_CHUNK,
     bound_granule,
     check_bound_covers,
     live_bound_pools,
     live_chunks,
+    phantom_code,
+    phantom_mode,
     scorer_bands,
     scorer_chunk_cols,
     scorer_item_ranges,
     segment_row_bounds,
     topk_row_chunks,
     topk_row_chunks_unbounded,
+    topk_row_plan,
 )
 
 OPS = Path(__file__).resolve().parents[2] / "custom_ops"
@@ -83,16 +94,42 @@ def _kernel_item_range(band: int, n_bands: int, live: int) -> tuple[int, int]:
     return c0, (c0 + per) if c0 + per < live else live
 
 
-def _topk_reader_row_len(valid_u: int, row: int, seg: int, seg_cols: int) -> tuple[int, bool]:
-    """reader_topk_rows.cpp segment mode: (row_len, synthesized)."""
+def _topk_reader_row_len(valid_u: int, row: int, seg: int, seg_cols: int) -> int:
+    """reader_topk_rows.cpp segment mode: the row's live columns (the user's bound clamped into the segment)."""
     user_width = seg * seg_cols
     user_len = valid_u if valid_u < user_width else user_width
     seg_start = (row % seg) * seg_cols
     row_len = user_len - seg_start if user_len > seg_start else 0
-    row_len = min(row_len, seg_cols)
+    return min(row_len, seg_cols)
+
+
+def _reader_row_plan(row_len: int, seg_cols: int, code: int) -> dict:
+    """reader_topk_rows.cpp segment mode after the row's bound: the mailbox (num_chunks, tail, phantom), the DRAM
+    reads (live chunks / tail) and the synthesized pages, as the kernel derives them."""
+    total_n = (seg_cols + K - 1) // K
+    total_tail = seg_cols - (total_n - 1) * K
+    NO = None
     if row_len == 0:
-        return K, True
-    return row_len, False
+        bounds, synth = (1, K, 0), 0
+    else:
+        n = (row_len + K - 1) // K
+        bounds, synth = (n, row_len - (n - 1) * K, 0), NO
+        trailing = total_n - n
+        if code == 1:
+            bounds = (n, bounds[1], trailing)
+        elif code == 2 and trailing:
+            synth = n
+            bounds = (total_n, total_tail, 0)
+    live_chunks = 0 if synth == 0 else (bounds[0] if synth is NO else synth)
+    live_tail = bounds[1] if synth is NO else (0 if synth == 0 else row_len - (synth - 1) * K)
+    return dict(
+        num_chunks=bounds[0],
+        tail_elements=bounds[1],
+        phantom_chunks=bounds[2],
+        live_chunks=live_chunks,
+        live_tail=live_tail,
+        synth=synth,
+    )
 
 
 def _ct_indices(src: str) -> list[int]:
@@ -207,13 +244,50 @@ def test_segment_row_bounds():
             if r < Wseg:
                 seen_partial = True
         for s in range(S):
-            row_len, synth = _topk_reader_row_len(v, u * S + s, S, Wseg)
-            assert (row_len, synth) == ((K, True) if mine[s] == 0 else (mine[s], False))
+            assert _topk_reader_row_len(v, u * S + s, S, Wseg) == mine[s]
     assert topk_row_chunks(0) == (1, K, True)
     assert topk_row_chunks(88) == (1, 88, False)
     assert topk_row_chunks(600) == (2, 88, False)
     assert topk_row_chunks(512) == (1, 512, False)
     assert topk_row_chunks(Wseg)[:2] == topk_row_chunks_unbounded(Wseg) == (103, 256)
+
+
+def test_phantom_mode_env():
+    assert phantom_mode({}) == "cheap" and phantom_mode({PHANTOM_ENV: "full"}) == "full"
+    with expect_error(ValueError, "expected one of"):
+        phantom_mode({PHANTOM_ENV: "none"})
+    # a fused row (<= 32 chunks) never needs phantoms; a classic row takes the mode's code
+    assert phantom_code(8192, "cheap") == PHANTOM_NONE and phantom_code(16384, "full") == PHANTOM_NONE
+    assert phantom_code(16385, "cheap") == PHANTOM_CHEAP and phantom_code(52480, "full") == PHANTOM_FULL
+    assert FUSED_MAX_CHUNKS * K == 16384
+
+
+@pytest.mark.parametrize("seg_cols", [52480, 43776, 33024, 8192])
+@pytest.mark.parametrize("code", [PHANTOM_NONE, PHANTOM_CHEAP, PHANTOM_FULL])
+def test_topk_row_plan(seg_cols, code):
+    """The partial-row plan: under codes 1 / 2 the compute processes the unbounded row's chunk count, the DRAM reads
+    never pass the live tail, the empty row is one synthesized chunk; the kernel port agrees with the planner."""
+    total, total_tail = topk_row_chunks_unbounded(seg_cols)
+    for row_len in (0, 1, 88, 512, 513, 600, 1024, 1025, 5000, seg_cols - 1, seg_cols):
+        plan = topk_row_plan(row_len, seg_cols, code)
+        assert plan == _reader_row_plan(row_len, seg_cols, code), (seg_cols, code, row_len, plan)
+        if row_len == 0:
+            assert plan == dict(num_chunks=1, tail_elements=K, phantom_chunks=0, live_chunks=0, live_tail=0, synth=0)
+            continue
+        n, tail = topk_row_chunks(row_len)[:2]
+        assert plan["live_chunks"] == n and plan["live_tail"] == tail  # the reads: the live columns only
+        assert (plan["live_chunks"] - 1) * K + plan["live_tail"] == row_len
+        if code == PHANTOM_NONE:
+            assert plan["num_chunks"] == n and plan["phantom_chunks"] == 0 and plan["synth"] is None
+        elif code == PHANTOM_CHEAP:
+            assert plan["num_chunks"] + plan["phantom_chunks"] == total and plan["synth"] is None
+            assert plan["num_chunks"] == n and plan["tail_elements"] == tail
+        else:
+            assert plan["num_chunks"] == total and plan["phantom_chunks"] == 0
+            if n < total:
+                assert plan["tail_elements"] == total_tail and plan["synth"] == n
+            else:
+                assert plan["synth"] is None and plan["tail_elements"] == tail
 
 
 def _two_stage(scores: torch.Tensor, valid: list[int], S: int, bounded: bool):
@@ -317,14 +391,33 @@ def test_topk_reader_segment_mode_abi():
     op = (OPS / "topk_rows" / "op.py").read_text()
     assert "seg_rows_per_user = get_compile_time_arg_val(per_row_base + 1)" in reader
     assert "seg_cols = get_compile_time_arg_val(per_row_base + 2)" in reader
-    # both call sites append the two segment-mode args after the per-row flag
-    assert "reader_ct += [seg_rows_per_user if has_meta else 0, W if has_meta and seg_rows_per_user else 0]" in op
-    assert "reader_ct += [0, 0]  # no segment mode" in op
-    assert "self._program(scores_seg, valid_rows, ids1, values=vals1, seg_rows_per_user=S)" in op
-    # the empty segment is synthesized in L1 (no DRAM read), the reader exits on a full barrier
-    assert "fill[w] = 0xFF80FF80u" in reader and "synthesized = true" in reader
+    assert "phantom_mode = get_compile_time_arg_val(per_row_base + 3)" in reader
+    # both call sites append the three segment-mode args after the per-row flag
+    flat = re.sub(r"\s+", " ", op)  # black wraps the list: compare whitespace-normalized
+    assert "W if has_meta and seg_rows_per_user else 0, phantom_mode_code, ]" in flat
+    assert "reader_ct += [0, 0, 0]  # no segment mode" in op
+    assert "self._program(scores_seg, valid_rows, ids1, values=vals1, seg_rows_per_user=S, phantom=phantom)" in op
+    # the empty segment / the full-mode trailing chunks are synthesized in L1 (no DRAM read), the full-mode partial
+    # page is -inf past its tail (disjoint from the read), the reader exits on a full barrier
+    assert "fill[w] = NEG_INF_PAIR" in reader and "fill[e] = 0xFF80u" in reader
+    assert "bounds.phantom_chunks = trailing;" in reader and "synth_from = bounds.num_chunks;" in reader
     assert "meta_page = seg_rows_per_user ? row / seg_div : row" in reader
     assert reader.rstrip().endswith("noc.async_full_barrier();\n}")
+    # the mailbox carries the phantom count (3 words); the seg compute replays it in the classic body only
+    meta = (TOPK_KERNELS / "topk_large_indices_metadata.hpp").read_text()
+    assert "uint32_t phantom_chunks;" in meta and "sizeof(TopkMetadataBounds) == 3 * sizeof(uint32_t)" in meta
+    seg = (TOPK_KERNELS / "compute_topk_rows_seg.cpp").read_text()
+    assert "phantom_mode = get_compile_time_arg_val(8)" in seg and "compute_ct += [cb_values, phantom_mode_code]" in op
+    assert "read_tile_value(meta_cb, 0, topk_metadata_phantom_chunks_word)" in seg
+    assert "reduce_classic_row<K>(input, num_chunks, tail_elements, phantom_chunks)" in seg
+    assert "if (num_chunks == 1 && phantom_chunks == 0)" in seg
+    assert "topk_xl_copy_tile<K>(input_cb, incoming_slot, 0, 0);" in seg
+    phantom = seg[seg.index("FORCE_INLINE void phantom_classic_chunk") :]
+    phantom = phantom[: phantom.index("}\n")]
+    for call in ("topk_xl_init<K, false>();", "topk_xl_merge<K, false>(survivor_slot);", "topk_xl_rebuild<K, false>"):
+        assert call in phantom
+    for skipped in ("add_lsb_indices", "local_sort", "separate_indices", "wait_front"):
+        assert skipped not in phantom
     # the compute kernels pop the per-row bounds unchanged (the mailbox contract)
     for name in ("compute_topk_rows.cpp", "compute_topk_rows_seg.cpp"):
         src = (TOPK_KERNELS / name).read_text()
@@ -339,6 +432,11 @@ def test_dsa_wiring():
     assert "bound = meta.live_bound if self.sparse_bound else None" in dsa
     assert "live_bound=_meta_upload(device, cls.live_bound_values(valid, R, C, B), ttnn.uint32, mesh, partition)" in dsa
     assert "put(self.live_bound_values(valid, R, C, B), ttnn.uint32, self.live_bound)" in dsa
+    # the single-stage form writes the persistent rows in place (generic_op returns its LAST io tensor: the scorer
+    # now lists ``out`` last, and dsa.py uses the buffer, not the return value)
+    assert "rows = self._score_buffers(B, W, 1)" in dsa
+    scorer = (OPS / "index_score_decode" / "op.py").read_text()
+    assert "+ ([bound] if bounded else []) + [out]" in scorer
     # the two scorer forms and the segmented top-k take the bound; the single-stage top-k is per-row bounded already
     assert dsa.count("bound=bound,") == 2
     assert "valid_rows=meta.valid_len_rows if bound is not None else None" in dsa

@@ -31,10 +31,18 @@ every segment row `[B*S, 1, 1, W/S]` on its own core into user-major candidate t
 With `valid_rows` `[B, 1]` (the live bound, `GLM53_SPARSE_DECODE_BOUND`; `custom_ops/sparse_bound.py`) the reader's
 segment mode (compile-time `[seg_rows_per_user, seg_cols]` after the per-row flag) bounds segment row `r` of user
 `r / S` to `clamp(valid[u] - (r % S) * seg_cols, 0, seg_cols)` live columns; an empty segment is ONE chunk of -inf
-synthesized in L1 (never a DRAM read of columns the scorer did not write). The live chunks are processed in the same
-order with the same contents as in the unbounded call and the dropped chunks are entirely -inf (below every finite
-survivor), so the tables and `out` are bit-identical (`test_topk_rows_segmented_live_bound`); the served 1 M build
-(S = 5 x 52 480 columns = 103 classic chunks per row) at position 1024 ranks 1 chunk per segment instead of 103.
+synthesized in L1 (never a DRAM read of columns the scorer did not write). The live chunks are read and sorted exactly
+as in the unbounded call. The trailing all--inf chunks of the PARTIAL segment are not free to drop on a classic row
+(> 32 chunks: values and ids travel as two tiles and the merge / rebuild permute EQUAL finite scores on every chunk,
+so the ranked ids depend on the chunk count; measured on chip 0, 2026-10-27): they are replayed as PHANTOM chunks,
+`GLM53_TOPK_PHANTOM` = "cheap" (default; the mailbox's third word: no page, the compute clears the incoming DEST slot
+to -inf with the zero-element copy and runs the unfused merge + rebuild only, no stamp / sort / split) or "full" (one
+synthesized -inf page per trailing chunk through the unchanged path; the partial live page -inf past its tail). A
+fused row (<= 32 chunks) ranks unique `[bf16 | index]` keys, a function of the key set alone, so its trailing chunks
+are dropped (phantom code 0). The tables and `out` are then the unbounded call's bit for bit
+(`test_topk_rows_segmented_live_bound`, both modes); the served 1 M build (S = 5 x 52 480 columns = 103 classic
+chunks per row) at position 1024 sorts 1 chunk per segment and replays 102 cheap merge + rebuilds on the partial one
+(the merge + rebuild are ~10 of the ~55 compare-exchange passes of a full chunk).
 
 Under trace all three
 tensors are persistent (`TtDSA` keeps the output per batch size; the concatenated score rows are allocated inside
