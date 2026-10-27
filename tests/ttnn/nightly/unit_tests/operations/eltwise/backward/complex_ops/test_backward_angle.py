@@ -92,7 +92,6 @@ def test_angle_bw_extreme_exponent_range(dtype, z_pair, device):
 
     assert not torch.isnan(tt_dev[0]).any()
     assert not torch.isinf(tt_dev[0]).any()
-    passing_r, out_r = comp_allclose(golden_tensor[0].real, tt_dev[0].real, rtol=2e-2, atol=1e-25)
-    passing_i, out_i = comp_allclose(golden_tensor[0].imag, tt_dev[0].imag, rtol=2e-2, atol=1e-25)
-    logger.info(f"{out_r} | {out_i}")
-    assert passing_r and passing_i
+    passing, output = comp_allclose(golden_tensor[0], tt_dev[0], rtol=2e-2, atol=1e-25)
+    logger.info(output)
+    assert passing

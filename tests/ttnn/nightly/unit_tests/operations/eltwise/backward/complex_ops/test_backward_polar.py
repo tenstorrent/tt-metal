@@ -90,6 +90,8 @@ def test_polar_bw_extreme_exponent_range(dtype, r_scale, device):
     tt_dev = convert_to_torch_tensor(ttnn.polar_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
     golden_tensor = ttnn.get_golden_function(ttnn.polar_bw)(grad_data, in_data)
 
-    passing, output = comp_allclose(golden_tensor[0].real, tt_dev[0].real, rtol=1e-2, atol=1e-2)
+    assert not torch.isnan(tt_dev[0]).any()
+    assert not torch.isinf(tt_dev[0]).any()
+    passing, output = comp_allclose(golden_tensor[0], tt_dev[0], rtol=1e-2, atol=1e-2)
     logger.info(output)
     assert passing
