@@ -9,7 +9,7 @@
 #include "x280/device/x280_deadline.hpp"
 #include "x280/device/x280_state.hpp"
 
-#include <umd/device/types/telemetry.hpp>
+#include <tt-umd/types/telemetry.hpp>
 
 #include <sstream>
 #include <unordered_set>

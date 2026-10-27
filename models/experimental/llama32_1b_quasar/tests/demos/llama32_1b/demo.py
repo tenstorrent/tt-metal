@@ -264,8 +264,8 @@ def _ttnn_mesh_device_param_from_env() -> dict:
         "num_command_queues": 1,
     }
     # TTTv2 multi-device executor dispatch (and the on-device sampling all-gather) stalls without
-    # an explicit 1D fabric; the root conftest does not auto-enable it. Mirror the sibling
-    # models/common/models/llama32_1b/demo.py wiring: FABRIC_1D on any >1-device mesh.
+    # an explicit 1D fabric; the root conftest does not auto-enable it, so use FABRIC_1D on any
+    # >1-device mesh.
     if shape != (1, 1):
         param["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
     return param

@@ -244,22 +244,35 @@ def write_pcc_summary(report, root):
     (directory / f"{name}.md").write_text("\n".join(text) + "\n")
 
 
+def _positive_env_int(name, default):
+    raw = os.environ.get(name, default)
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}") from None
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}")
+    return value
+
+
 def prefill_runner_scenario():
-    """Resolve the common runner's deterministic two-slot acceptance workload from the model manifest."""
+    """Resolve the common runner's deterministic acceptance workload from the model manifest.
+
+    ``PREFILL_NUM_USERS`` overrides the manifest's slot count, and ``PREFILL_PRODUCER_NUM_USERS``
+    chooses how many of those slots the producer fills.
+    """
     manifest = Path(__file__).resolve().parents[1] / "tt/runners/manifests/llama_3p1_8b.json"
     env = json.loads(manifest.read_text())["env"]
     capacity = int(os.environ.get("PREFILL_MAX_SEQ_LEN", env["PREFILL_MAX_SEQ_LEN"]))
     if capacity not in (2048, 4096, 8192, 16384, 32768, 65536):
         raise ValueError("runner acceptance capacity must be 2K, 4K, 8K, 16K, 32K or 64K")
-    users, layers, chunk_size = (
-        int(env[key]) for key in ("PREFILL_NUM_USERS", "PREFILL_NUM_LAYERS", "PREFILL_CHUNK_SIZE")
-    )
-    if int(os.environ.get("PREFILL_NUM_USERS", users)) != users:
-        raise ValueError(f"runner acceptance requires the model's {users} slots")
-    active_users = int(os.environ.get("PREFILL_PRODUCER_NUM_USERS", "1"))
-    if not 1 <= active_users <= users:
-        raise ValueError(f"producer must use between 1 and {users} slots")
+    layers, chunk_size = (int(env[key]) for key in ("PREFILL_NUM_LAYERS", "PREFILL_CHUNK_SIZE"))
+    users = _positive_env_int("PREFILL_NUM_USERS", env["PREFILL_NUM_USERS"])
+    active_users = _positive_env_int("PREFILL_PRODUCER_NUM_USERS", "1")
+    if active_users > users:
+        raise ValueError(f"PREFILL_PRODUCER_NUM_USERS={active_users} exceeds PREFILL_NUM_USERS={users}")
     env.update(
+        PREFILL_NUM_USERS=str(users),
         PREFILL_MAX_SEQ_LEN=str(capacity),
         PREFILL_LAYER_ACK_D2H="0",
         PREFILL_USE_TRACE="0",

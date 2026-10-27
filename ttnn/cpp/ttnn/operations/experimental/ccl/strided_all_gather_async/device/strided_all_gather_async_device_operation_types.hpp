@@ -18,7 +18,6 @@ namespace ttnn::experimental::prim {
 enum class MMSignalAggregatorMode : uint8_t { Auto, On, Off };
 
 struct StridedAllGatherAsyncParams {
-    const std::vector<tt::tt_metal::IDevice*> devices;
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;

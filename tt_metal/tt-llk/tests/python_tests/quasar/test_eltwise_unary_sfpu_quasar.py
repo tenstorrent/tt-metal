@@ -10,6 +10,7 @@ import torch
 from helpers.constraints import is_valid_quasar_fpu_path
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
+    ReshuffleRowsGolden,
     TilizeGolden,
     UnarySFPUGolden,
     UntilizeGolden,
@@ -30,17 +31,22 @@ from helpers.param_config import (
     generate_quasar_sfpu_format_variants,
     input_output_formats,
     parametrize,
+    quasar_sfpu_dest_acc_modes,
+    resolve_quasar_sfpu_variant,
     runtime,
-    select_perf_input_dimensions,
+    unique_quasar_sfpu_formats,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.sfpu_dispatch_constants import (
+    DROPOUT_PROBABILITY_MAX,
+    DROPOUT_SCALE,
+    DROPOUT_SEED,
     INT_MAXMIN_SCALAR,
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
     UNARY_MAX_MIN_VALUE,
 )
-from helpers.sfpu_domains import op_edge_points
+from helpers.sfpu_domains import op_edge_points, sfpu_unary_ops
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -57,6 +63,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
+    SFPU_DROPOUT_PARAMS,
     SFPU_UNARY_MAX_MIN_SCALAR,
     SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE,
     TEST_FACE_DIMS,
@@ -424,8 +431,8 @@ def prepare_inputs_for_operation(
         max_val = 2.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
-    elif mathop == MathOperation.Neg:
-        # Negation is exact for any representable value; span both signs (mirrors sfpu_domains' Neg spec).
+    elif mathop in (MathOperation.Neg, MathOperation.Dropout):
+        # Neg and dropout's p = 0 path (x * 2.0) are exact; span both signs.
         min_val = -10.0
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
@@ -518,7 +525,6 @@ def prepare_ema_inputs(
 # which is why the suite has always written the latter.
 LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum, MathOperation.Ema)
 
-
 _INT32_SMAG_MAX = 2**31 - 1
 # Must exceed every |scalar| so negative inputs straddle a negative scalar.
 UNARY_MAX_MIN_INT32_SPAN = 5000
@@ -528,9 +534,7 @@ UNARY_MAX_MIN_INT32_EXTREME_BAND = 63
 
 
 def unary_max_min_stimuli_spec(mathop: MathOperation, scalar) -> StimuliSpec:
-    """Both-sign stimuli straddling *scalar*, plus exact ties (float) or both int32 extremes.
-    Edge values at the default scalar live in the sfpu_unary_max_min_*.yaml fuser tests.
-    """
+    """Both-sign stimuli straddling *scalar*, plus exact ties or both int32 extremes."""
     if mathop in UNARY_MAX_MIN_INT32_OPS:
         span = UNARY_MAX_MIN_INT32_SPAN
         assert span > abs(
@@ -901,8 +905,35 @@ class OpConfig:
     uniform_spec: bool = False
 
 
+# Dest Half + FP32 dest holds 4 tiles of 32x32. BH unary perf uses [128, 64]
+# (8 tiles), which overflows that dest cap, so Quasar keeps [64, 64] (4 tiles).
 TENSOR_DIMS = ([32, 32], [64, 64])
+PERF_INPUT_DIMENSIONS_UNARY = [[64, 64]]
 DEST_SYNC_MODES = (DestSync.Half, DestSync.Full)
+_APPROX_MATHOPS = (
+    MathOperation.Exp,
+    MathOperation.Gelu,
+    MathOperation.Reciprocal,
+    MathOperation.Rsqrt,
+)
+_QSR_EXTRA_MATHOPS = (
+    MathOperation.Relu,
+    MathOperation.Cumsum,
+    MathOperation.Ema,
+    MathOperation.Dropout,
+)
+_BH_UNARY_OPS = sfpu_unary_ops()
+
+_TTSIM_DROPOUT_CFG_REASON = (
+    "Quasar ttsim does not implement the tensix_cfg_wr32 register 82 write used "
+    "by dropout_init; Dropout remains covered on silicon"
+)
+
+
+def _skip_ttsim_dropout(request, mathop):
+    if mathop == MathOperation.Dropout and request.config.getoption("--run-simulator"):
+        pytest.skip(_TTSIM_DROPOUT_CFG_REASON)
+
 
 OP_CONFIGS = [
     OpConfig(MathOperation.Abs, TENSOR_DIMS, DEST_SYNC_MODES),
@@ -923,6 +954,8 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # p = 0 only (golden x * 2.0); seeding is test_dropout_reseed_quasar, p = 1 the fuser YAMLs.
+    OpConfig(MathOperation.Dropout, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_OPS],
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
@@ -933,7 +966,6 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Cumsum, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Whole-tile like cumsum: in place, carry zeroed per tile.
     OpConfig(MathOperation.Ema, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
     # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,
     # fed a uniform [0, 1] stimulus that prepare_trig_inputs maps into each op's domain.
     *[
@@ -947,6 +979,41 @@ OP_CONFIGS = [
 ] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_FORMAT_OPS]
 
 OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}
+
+COMP_MATHOPS = list(COMP_FORMAT_OPS)
+INT32_MATHOPS = list(UNARY_MAX_MIN_INT32_OPS)
+QSR_EXTRA_MATHOPS = [
+    cfg.mathop for cfg in OP_CONFIGS if cfg.mathop in _QSR_EXTRA_MATHOPS
+]
+_NON_MAIN_MATHOPS = set(INT32_MATHOPS + QSR_EXTRA_MATHOPS)
+MAIN_MATHOPS = [
+    cfg.mathop
+    for cfg in OP_CONFIGS
+    if cfg.mathop in _BH_UNARY_OPS and cfg.mathop not in _NON_MAIN_MATHOPS
+]
+
+
+def _assert_op_format_pairs_partition_configs():
+    """Keep every configured (op, format) pair in exactly one primary family."""
+    families = (
+        (MAIN_MATHOPS, SFPU_UNARY_FORMATS),
+        (COMP_MATHOPS, SFPU_COMP_EXTRA_FORMATS),
+        (INT32_MATHOPS, SFPU_INT32_FORMATS),
+        (QSR_EXTRA_MATHOPS, SFPU_UNARY_FORMATS),
+    )
+    invalid = {}
+    for cfg in OP_CONFIGS:
+        for formats in formats_for_op(cfg):
+            memberships = sum(
+                cfg.mathop in family_ops and formats in family_formats
+                for family_ops, family_formats in families
+            )
+            if memberships != 1:
+                invalid[f"{cfg.mathop.name}:{formats}"] = memberships
+    assert (
+        not invalid
+    ), f"OP_CONFIGS (op, format) membership must be exactly one: {invalid}"
+
 
 # Float formats whose 16-bit Dest route gets an explicit MOVA2D (FPU datacopy) signbit variant.
 SIGNBIT_MOVA2D_FORMATS = (DataFormat.Float16, DataFormat.Float16_b)
@@ -989,8 +1056,6 @@ def signbit_fpu_route_variants() -> List[QuasarSfpuVariant]:
 
 def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
     """Float formats for every op, plus the integer/UInt16 formats only COMP_FORMAT_OPS sweep."""
-    if cfg.mathop == MathOperation.Typecast:
-        return [InputOutputFormat(case.src, case.dst) for case in TYPECAST_CASES]
     if cfg.mathop in COMP_FORMAT_OPS:
         return SFPU_UNARY_FORMATS + SFPU_COMP_EXTRA_FORMATS
     if cfg.mathop in UNARY_MAX_MIN_INT32_OPS:
@@ -998,76 +1063,64 @@ def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
     return SFPU_UNARY_FORMATS
 
 
-def generate_sfpu_unary_combinations(*, is_perf=False):
-    """
-    Build the unary-SFPU sweep across all operations and their format matrices.
-
-    Functional mode sweeps dest-sync and both [32, 32]/[64, 64]
-    dimensions. Performance mode intentionally keeps the complete op, format,
-    dest_acc, and approximation coverage while pinning those two axes to
-    DestSync.Half and the largest functional matrix
-    because none of the preferred perf matrices are supported.
-
-    Returns: list of (mathop, resolved format variant, dest_sync,
-    approx_mode, input_dimensions) tuples.
-    """
-    combinations = []
-    for cfg in OP_CONFIGS:
-        # Ops that expose both a non-approximate and an approximate kernel are swept over both
-        # ApproximationMode values; every other op has a single implementation (ApproximationMode.No).
-        approx_modes = (
-            (ApproximationMode.No, ApproximationMode.Yes)
-            if cfg.mathop
-            in (
-                MathOperation.Exp,
-                MathOperation.Gelu,
-                MathOperation.Reciprocal,
-                MathOperation.Rsqrt,
-            )
-            else (ApproximationMode.No,)
-        )
-        format_variants = [
-            (variant, False)
-            for variant in generate_quasar_sfpu_format_variants(
-                cfg.mathop, formats_for_op(cfg)
-            )
-        ]
-        if cfg.mathop == MathOperation.Signbit and not is_perf:
-            # The extra FPU routes only check the datacopy keeps the sign bit, so they run at one
-            # dest-sync / size point instead of the full matrix.
-            format_variants += [(v, True) for v in signbit_fpu_route_variants()]
-        for variant, route_only in format_variants:
-            dest_sync_modes = (
-                (DestSync.Half,) if (is_perf or route_only) else cfg.dest_sync_modes
-            )
-            if is_perf:
-                input_dims = select_perf_input_dimensions(cfg.input_dims)
-            elif route_only:
-                input_dims = cfg.input_dims[:1]
-            else:
-                input_dims = cfg.input_dims
-            for dest_sync in dest_sync_modes:
-                for approx_mode in approx_modes:
-                    for input_dimensions in input_dims:
-                        combinations.append(
-                            (
-                                cfg.mathop,
-                                variant,
-                                dest_sync,
-                                approx_mode,
-                                runtime(input_dimensions),
-                            )
-                        )
-
-    return combinations
+_assert_op_format_pairs_partition_configs()
 
 
-@pytest.mark.quasar
-@parametrize(
-    mathop_formats_dest_acc_sync_input_dims=generate_sfpu_unary_combinations(),
-)
-def test_eltwise_unary_sfpu_quasar(
-    mathop_formats_dest_acc_sync_input_dims,
+def _approx_modes_for_mathop(mathop):
+    if mathop in _APPROX_MATHOPS:
+        return [ApproximationMode.No, ApproximationMode.Yes]
+    return [ApproximationMode.No]
+
+
+def _float_formats_for_mathop(mathop):
+    return unique_quasar_sfpu_formats(
+        generate_quasar_sfpu_format_variants(mathop, SFPU_UNARY_FORMATS)
+    )
+
+
+def _comp_formats_for_mathop(mathop):
+    return unique_quasar_sfpu_formats(
+        generate_quasar_sfpu_format_variants(mathop, SFPU_COMP_EXTRA_FORMATS)
+    )
+
+
+def _int32_formats_for_mathop(mathop):
+    return unique_quasar_sfpu_formats(
+        generate_quasar_sfpu_format_variants(mathop, SFPU_INT32_FORMATS)
+    )
+
+
+def _dest_acc_for_mathop_formats(mathop, formats):
+    return quasar_sfpu_dest_acc_modes(
+        generate_quasar_sfpu_format_variants(
+            mathop, formats_for_op(OP_CONFIG_BY_MATHOP[mathop])
+        ),
+        formats,
+    )
+
+
+def _typecast_variants():
+    return generate_quasar_sfpu_format_variants(
+        MathOperation.Typecast,
+        [InputOutputFormat(case.src, case.dst) for case in TYPECAST_CASES],
+    )
+
+
+def typecast_formats():
+    return unique_quasar_sfpu_formats(_typecast_variants())
+
+
+def _dest_acc_for_typecast_formats(formats):
+    return quasar_sfpu_dest_acc_modes(_typecast_variants(), formats)
+
+
+def run_eltwise_unary_sfpu_quasar(
+    formats,
+    dest_acc,
+    mathop,
+    approx_mode,
+    input_dimensions,
+    dest_sync=DestSync.Half,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -1075,33 +1128,26 @@ def test_eltwise_unary_sfpu_quasar(
     perf_report=None,
     max_min_scalar=None,
     max_min_sign_magnitude=False,
+    format_variant=None,
 ):
-    """
-    Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
-    variant (abs, exp, gelu, relu, lrelu, relu_min, relu_max, reciprocal, sqrt,
-    tanh, sigmoid, silu, rsqrt, square, cumsum, ema, typecast,
-    floor/ceil/trunc/frac/round, unary max/min (float and Int32), the six
-    compare-to-zero modes, and signbit), validated against the UnarySFPUGolden reference.
-    Typecast sweeps explicit (src, dst) format pairs; every other op sweeps the
-    shared format matrix.
-    """
-    (
-        mathop,
-        format_variant,
-        dest_sync,
-        approx_mode,
-        input_dimensions,
-    ) = mathop_formats_dest_acc_sync_input_dims[0]
+    """Shared unary SFPU runner for the functional and perf tests.
 
+    *format_variant* overrides the resolved route, for routes the resolver never picks.
+    """
+    if format_variant is None:
+        format_variant = resolve_quasar_sfpu_variant(mathop, formats, dest_acc)
+    assert (
+        format_variant is not None
+    ), f"no Quasar SFPU variant for {mathop} {formats} dest_acc={dest_acc}"
     assert isinstance(format_variant, QuasarSfpuVariant)
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
     is_typecast = mathop == MathOperation.Typecast
 
-    cfg = OP_CONFIG_BY_MATHOP[mathop]
+    cfg = OP_CONFIG_BY_MATHOP.get(mathop)
     spec = (
         StimuliSpec.uniform(low=0.0, high=1.0)
-        if (cfg.uniform_spec and not is_typecast)
+        if (cfg is not None and cfg.uniform_spec and not is_typecast)
         else None
     )
     is_max_min = mathop in UNARY_MAX_MIN_OPS
@@ -1122,7 +1168,6 @@ def test_eltwise_unary_sfpu_quasar(
         spec_B=spec,
     )
 
-    # Prepare inputs with operation-specific ranges
     if is_typecast:
         src_A = _prepare_typecast_input(
             src_A, src_B, formats.input_format, formats.output_format
@@ -1177,10 +1222,6 @@ def test_eltwise_unary_sfpu_quasar(
                     op_res, dtype=format_dict[formats.output_format]
                 )
 
-    # A layout-sensitive op reads the tile's face structure, so it gets the tilized buffer tt-metal
-    # would feed it, and its result is read back through the matching untilize. UnarySFPUGolden
-    # already models the logical -> Dest -> logical round trip, so the golden above stays on the
-    # logical tensor and only what crosses to L1 and back is converted.
     is_layout_sensitive = mathop in LAYOUT_SENSITIVE_OPS
     device_src_A = (
         get_golden_generator(TilizeGolden)(
@@ -1205,10 +1246,6 @@ def test_eltwise_unary_sfpu_quasar(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(dest_sync),
-            # Typecast bakes the (input, output) pair so the compile-time functor can pick
-            # the right conversion; every other op defaults it. The typecast dispatcher branch
-            # in the shared C++ source references TYPECAST_IN_FORMAT/TYPECAST_OUT_FORMAT, so
-            # every build must define them.
             (
                 TYPECAST_FORMATS(
                     input_format=format_variant.sfpu_src,
@@ -1251,7 +1288,6 @@ def test_eltwise_unary_sfpu_quasar(
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
-            # Int32 max/min stages two's complement unless the sign-magnitude Dest variant is selected.
             twos_complement=(
                 mathop in UNARY_MAX_MIN_INT32_OPS and not max_min_sign_magnitude
             ),
@@ -1274,7 +1310,6 @@ def test_eltwise_unary_sfpu_quasar(
 
     res_from_L1 = configuration.run().result
 
-    # Verify results match golden
     assert len(res_from_L1) == len(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
@@ -1294,66 +1329,196 @@ def test_eltwise_unary_sfpu_quasar(
     ), "Assert against golden failed"
 
 
+@pytest.mark.quasar
+@parametrize(
+    mathop=MAIN_MATHOPS,
+    formats=_float_formats_for_mathop,
+    dest_acc=_dest_acc_for_mathop_formats,
+    approx_mode=_approx_modes_for_mathop,
+    dest_sync=list(DEST_SYNC_MODES),
+    input_dimensions=runtime(list(TENSOR_DIMS)),
+)
+def test_eltwise_unary_sfpu_quasar(
+    mathop,
+    formats,
+    dest_acc,
+    approx_mode,
+    dest_sync,
+    input_dimensions,
+):
+    """Main unary SFPU family: BH-intersection ops on float formats."""
+    run_eltwise_unary_sfpu_quasar(
+        formats,
+        dest_acc,
+        mathop,
+        approx_mode,
+        input_dimensions,
+        dest_sync,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=COMP_MATHOPS,
+    formats=_comp_formats_for_mathop,
+    dest_acc=_dest_acc_for_mathop_formats,
+    approx_mode=_approx_modes_for_mathop,
+    dest_sync=list(DEST_SYNC_MODES),
+    input_dimensions=runtime(list(TENSOR_DIMS)),
+)
+def test_eltwise_unary_sfpu_comp_quasar(
+    mathop,
+    formats,
+    dest_acc,
+    approx_mode,
+    dest_sync,
+    input_dimensions,
+):
+    """Integer-format compare-to-zero ops (QSR-only vs BH)."""
+    run_eltwise_unary_sfpu_quasar(
+        formats,
+        dest_acc,
+        mathop,
+        approx_mode,
+        input_dimensions,
+        dest_sync,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=INT32_MATHOPS,
+    formats=_int32_formats_for_mathop,
+    dest_acc=_dest_acc_for_mathop_formats,
+    approx_mode=_approx_modes_for_mathop,
+    dest_sync=list(DEST_SYNC_MODES),
+    input_dimensions=runtime(list(TENSOR_DIMS)),
+)
+def test_eltwise_unary_sfpu_int32_quasar(
+    mathop,
+    formats,
+    dest_acc,
+    approx_mode,
+    dest_sync,
+    input_dimensions,
+):
+    """Int32 unary max/min operations, which have no float-format route."""
+    run_eltwise_unary_sfpu_quasar(
+        formats,
+        dest_acc,
+        mathop,
+        approx_mode,
+        input_dimensions,
+        dest_sync,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=QSR_EXTRA_MATHOPS,
+    formats=_float_formats_for_mathop,
+    dest_acc=_dest_acc_for_mathop_formats,
+    approx_mode=_approx_modes_for_mathop,
+    dest_sync=list(DEST_SYNC_MODES),
+    input_dimensions=runtime(list(TENSOR_DIMS)),
+)
+def test_eltwise_unary_sfpu_qsr_extra_quasar(
+    request,
+    mathop,
+    formats,
+    dest_acc,
+    approx_mode,
+    dest_sync,
+    input_dimensions,
+):
+    """Quasar-only ops that are in OP_CONFIGS but not in BH sfpu_unary_ops()."""
+    _skip_ttsim_dropout(request, mathop)
+    run_eltwise_unary_sfpu_quasar(
+        formats,
+        dest_acc,
+        mathop,
+        approx_mode,
+        input_dimensions,
+        dest_sync,
+    )
+
+
 # Unary max/min with negative scalars (the main sweep's 0.0 / 1000 never compare two negatives).
 # Dest sync is pinned: the main sweep already crosses it.
 UNARY_MAX_MIN_FLOAT_SCALARS = (-0.5, 1.5)
 UNARY_MAX_MIN_INT32_SCALARS = (-1000, -1)
 
 
-def generate_unary_max_min_scalar_combinations():
-    combinations = []
-    for mathop in UNARY_MAX_MIN_OPS:
-        scalars = (
-            UNARY_MAX_MIN_INT32_SCALARS
-            if mathop in UNARY_MAX_MIN_INT32_OPS
-            else UNARY_MAX_MIN_FLOAT_SCALARS
-        )
-        cfg = OP_CONFIG_BY_MATHOP[mathop]
-        sign_magnitude_modes = (
-            (False, True) if mathop in UNARY_MAX_MIN_INT32_OPS else (False,)
-        )
-        for variant in generate_quasar_sfpu_format_variants(
-            mathop, formats_for_op(cfg)
-        ):
-            for scalar in scalars:
-                for sign_magnitude in sign_magnitude_modes:
-                    combinations.append(
-                        (
-                            mathop,
-                            variant,
-                            scalar,
-                            sign_magnitude,
-                            runtime([64, 64]),
-                        )
-                    )
-    return combinations
+def _max_min_variants_for_mathop(mathop):
+    return generate_quasar_sfpu_format_variants(
+        mathop, formats_for_op(OP_CONFIG_BY_MATHOP[mathop])
+    )
+
+
+def _max_min_scalars_for_mathop(mathop):
+    return list(
+        UNARY_MAX_MIN_INT32_SCALARS
+        if mathop in UNARY_MAX_MIN_INT32_OPS
+        else UNARY_MAX_MIN_FLOAT_SCALARS
+    )
+
+
+def _max_min_sign_magnitude_modes(mathop):
+    return [False, True] if mathop in UNARY_MAX_MIN_INT32_OPS else [False]
 
 
 @pytest.mark.quasar
 @parametrize(
-    unary_max_min_scalar_combination=generate_unary_max_min_scalar_combinations(),
+    mathop=UNARY_MAX_MIN_OPS,
+    format_variant=_max_min_variants_for_mathop,
+    max_min_scalar=_max_min_scalars_for_mathop,
+    max_min_sign_magnitude=_max_min_sign_magnitude_modes,
+    input_dimensions=runtime([[64, 64]]),
 )
-def test_unary_max_min_scalar_quasar(unary_max_min_scalar_combination):
+def test_unary_max_min_scalar_quasar(
+    mathop,
+    format_variant,
+    max_min_scalar,
+    max_min_sign_magnitude,
+    input_dimensions,
+):
     """Unary max/min against a test-selected scalar, including negative scalars."""
-    (
+    run_eltwise_unary_sfpu_quasar(
+        format_variant.formats,
+        format_variant.dest_acc,
         mathop,
-        format_variant,
-        scalar,
-        sign_magnitude,
+        ApproximationMode.No,
         input_dimensions,
-    ) = unary_max_min_scalar_combination[0]
-    test_eltwise_unary_sfpu_quasar(
-        [
-            (
-                mathop,
-                format_variant,
-                DestSync.Half,
-                ApproximationMode.No,
-                input_dimensions,
-            )
-        ],
-        max_min_scalar=scalar,
-        max_min_sign_magnitude=sign_magnitude,
+        DestSync.Half,
+        max_min_scalar=max_min_scalar,
+        max_min_sign_magnitude=max_min_sign_magnitude,
+        format_variant=format_variant,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=[MathOperation.Signbit],
+    format_variant=signbit_fpu_route_variants(),
+    input_dimensions=runtime(list(TENSOR_DIMS[:1])),
+)
+def test_eltwise_unary_sfpu_signbit_fpu_route_quasar(
+    mathop,
+    format_variant,
+    input_dimensions,
+):
+    """Signbit through the FPU datacopy routes the resolver never picks.
+
+    They only check the datacopy keeps the sign bit, so they run at one dest-sync / size
+    point instead of the full matrix. See signbit_fpu_route_variants."""
+    run_eltwise_unary_sfpu_quasar(
+        format_variant.formats,
+        format_variant.dest_acc,
+        mathop,
+        ApproximationMode.No,
+        input_dimensions,
+        DestSync.Half,
+        format_variant=format_variant,
     )
 
 
@@ -1511,6 +1676,152 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
     assert torch.allclose(
         result, expected, rtol=0, atol=1e-3
     ), f"cumsum mismatch:\ngot\n{result}\nexpected\n{expected}"
+
+
+# reshuffle_rows: needs an L1 row mask (written to buffer_B) and (input, accumulator) tile pairs,
+# so it has its own stimulus and oracle instead of joining the random sweep.
+RESHUFFLE_NO_DESTINATION = ReshuffleRowsGolden.NO_DESTINATION
+
+
+def _reshuffle_mixed_mask() -> List[int]:
+    """Seeded mix of repeated targets and skipped rows."""
+    gen = torch.Generator().manual_seed(1234)
+    targets = torch.randint(0, DEFAULT_TILE_R_DIM, (DEFAULT_TILE_R_DIM,), generator=gen)
+    skipped = torch.rand(DEFAULT_TILE_R_DIM, generator=gen) < 0.25  # skip rate
+    return [
+        RESHUFFLE_NO_DESTINATION if skip else int(target)
+        for target, skip in zip(targets.tolist(), skipped.tolist())
+    ]
+
+
+# Many-to-one masks hit the Dest store -> reload hazard; reverse crosses the face-pair boundary.
+RESHUFFLE_MASKS = {
+    "identity": list(range(DEFAULT_TILE_R_DIM)),
+    "reverse": [DEFAULT_TILE_R_DIM - 1 - i for i in range(DEFAULT_TILE_R_DIM)],
+    "all_skip": [RESHUFFLE_NO_DESTINATION] * DEFAULT_TILE_R_DIM,
+    "halves_to_boundary": [
+        MAX_FACE_R_DIM if i < MAX_FACE_R_DIM else MAX_FACE_R_DIM - 1
+        for i in range(DEFAULT_TILE_R_DIM)
+    ],
+    "all_to_last": [DEFAULT_TILE_R_DIM - 1] * DEFAULT_TILE_R_DIM,
+    "mixed": _reshuffle_mixed_mask(),
+    # Every target >= 32 must be skipped, not just 255 (32 would alias row 16, 48+ the next tile).
+    "out_of_range": [
+        [32, 47, 48, 254, 64, 100, 128, 200][(i // 2) % 8] if i % 2 else i
+        for i in range(DEFAULT_TILE_R_DIM)
+    ],
+}
+
+# Two pairs, so the second runs at a non-zero Dest index.
+RESHUFFLE_DIMS = [64, 64]
+
+
+def _reshuffle_stimulus(dimensions) -> torch.Tensor:
+    """Half-integers in [-2, 2]: every partial sum is exact in all formats, so the check is bit-exact."""
+    return torch.randint(-4, 5, tuple(dimensions)).to(torch.float32) / 2
+
+
+def _reshuffle_mask_buffer(mask: List[int]) -> torch.Tensor:
+    """One UInt8 tile whose first 32 bytes are the mask; the rest is the skip sentinel."""
+    buffer = torch.full(
+        (DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM,),
+        RESHUFFLE_NO_DESTINATION,
+        dtype=torch.int32,
+    )
+    buffer[: len(mask)] = torch.tensor(mask, dtype=torch.int32)
+    return buffer
+
+
+@pytest.mark.quasar
+@parametrize(
+    reshuffle_variant_mask=[
+        (variant, runtime(mask_name))
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.ReshuffleRows, SFPU_UNARY_FORMATS
+        )
+        for mask_name in RESHUFFLE_MASKS
+    ],
+)
+def test_reshuffle_rows_quasar(reshuffle_variant_mask):
+    """Accumulators must match exactly and input tiles must come back unchanged."""
+    (format_variant, mask_name) = reshuffle_variant_mask[0]
+    formats = format_variant.formats
+    dest_acc = format_variant.dest_acc
+    mask = RESHUFFLE_MASKS[mask_name]
+    input_dimensions = RESHUFFLE_DIMS
+
+    src_A = _reshuffle_stimulus(input_dimensions).to(format_dict[formats.input_format])
+    tile_cnt = (input_dimensions[0] // DEFAULT_TILE_R_DIM) * (
+        input_dimensions[1] // DEFAULT_TILE_C_DIM
+    )
+
+    expected = get_golden_generator(ReshuffleRowsGolden)(
+        src_A, mask, input_dimensions, formats.output_format
+    )
+
+    device_src_A = get_golden_generator(TilizeGolden)(
+        src_A, input_dimensions, formats.input_format
+    )
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=MathOperation.ReshuffleRows),
+                APPROX_MODE(ApproximationMode.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest
+                    if format_variant.unpack_to_dest
+                    else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(DestSync.Half),
+                TYPECAST_FORMATS(),
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_cnt),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                device_src_A,
+                formats.input_format,
+                _reshuffle_mask_buffer(mask),
+                DataFormat.UInt8,
+                formats.output_format,
+                tile_count_A=tile_cnt,
+                tile_count_B=1,
+                tile_count_res=tile_cnt,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": format_variant.unpack_to_dest,
+            "dest_acc": dest_acc,
+        },
+    )
+
+    format_variant.apply_formats(configuration.formats_config)
+
+    res_from_L1 = configuration.run().result
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = get_golden_generator(UntilizeGolden)(
+        res_tensor, formats.output_format, input_dimensions
+    )
+
+    result = res_tensor.to(torch.float32).reshape(input_dimensions)
+    expected = expected.to(torch.float32).reshape(input_dimensions)
+    mismatched_rows = sorted(
+        {int(r) for r in (result != expected).nonzero()[:, 0].tolist()}
+    )
+    assert torch.equal(result, expected), (
+        f"reshuffle_rows mismatch for mask {mask_name} {mask}: logical rows "
+        f"{mismatched_rows} differ\ngot\n{result}\nexpected\n{expected}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1688,4 +1999,181 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
         "Float32 -> UInt16 mismatch:\n"
         f"got      {result[:32].tolist()}\n"
         f"expected {expected_flat[:32].tolist()}"
+    )
+
+
+# Dropout seeding: the PRNG mask is unpredictable, so check 0-or-x*scale, the dropped fraction,
+# varying row-pair masks, and same-seed repeatability. The deterministic endpoints (p = 0 with a
+# real scale, p = 1) are fuser YAMLs: sfpu_dropout_real_scale / sfpu_dropout_drop_all.
+DROPOUT_DETECTOR_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Float32], same=True
+)
+
+# Nonzero inputs, so a zero output can only mean a drop.
+DROPOUT_STIMULI_SPEC = StimuliSpec.uniform(low=0.5, high=10.0)
+
+DROPOUT_HALF_PROBABILITY = DROPOUT_PROBABILITY_MAX // 2
+DROPOUT_HALF_FRACTION_BAND = (0.4, 0.6)
+
+DROPOUT_ROW_PAIR_DATUMS = 32
+# A mask repeating per row pair gives one distinct mask; independent lanes give ~all distinct.
+DROPOUT_MIN_DISTINCT_MASK_FRACTION = 0.9
+
+DROPOUT_SEED_ALT = 0x1234ABCD
+
+
+def _dropout_config(variant, src_A, src_B, tile_cnt, dropout_params):
+    formats = variant.formats
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=MathOperation.Dropout),
+                APPROX_MODE(ApproximationMode.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest
+                    if variant.unpack_to_dest
+                    else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(DestSync.Half),
+                TYPECAST_FORMATS(),
+                dropout_params,
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_cnt),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt,
+                tile_count_B=tile_cnt,
+                tile_count_res=tile_cnt,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": variant.unpack_to_dest,
+            "dest_acc": variant.dest_acc,
+        },
+    )
+    variant.apply_formats(configuration.formats_config)
+    return configuration
+
+
+def _dropout_result(configuration, variant, src_A):
+    formats = variant.formats
+    res_from_L1 = configuration.run().result
+    result = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format]).to(
+        torch.float32
+    )
+    assert (
+        result.numel() == src_A.numel()
+    ), f"result has {result.numel()} elements, expected {src_A.numel()}"
+    return result
+
+
+def _check_dropout_values(name, src_A, result, scale, output_format):
+    """Every output is 0 or x * scale; returns the drop mask."""
+    kept = (
+        (src_A.to(torch.float32).flatten() * torch.tensor(scale, dtype=torch.float32))
+        .to(format_dict[output_format])
+        .to(torch.float32)
+    )
+    dropped = result == 0.0
+    stray = ~dropped & (result != kept)
+    assert not stray.any(), (
+        f"{name}: {int(stray.sum())} of {result.numel()} outputs are neither 0 nor "
+        f"x * {scale}; first got {result[stray][:8].tolist()}, "
+        f"expected {kept[stray][:8].tolist()}"
+    )
+    return dropped
+
+
+def _check_row_pair_masks_vary(name, dropped):
+    masks = dropped.reshape(-1, DROPOUT_ROW_PAIR_DATUMS)
+    distinct = torch.unique(masks, dim=0).shape[0]
+    assert distinct >= DROPOUT_MIN_DISTINCT_MASK_FRACTION * masks.shape[0], (
+        f"{name}: only {distinct} distinct masks among {masks.shape[0]} row pairs; "
+        "the PRNG is not stepping per lane / per row pair"
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    dropout_variant=[
+        (MathOperation.Dropout, variant)
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.Dropout, DROPOUT_DETECTOR_FORMATS
+        )
+    ],
+)
+def test_dropout_reseed_quasar(request, dropout_variant):
+    """Seeds A, A, B at p = 1/2: masks look random, the same seed repeats the mask, a different one changes it."""
+    _skip_ttsim_dropout(request, MathOperation.Dropout)
+    _, variant = dropout_variant[0]
+    formats = variant.formats
+
+    src_A, tile_cnt, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=TENSOR_DIMS[0],
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=TENSOR_DIMS[0],
+        spec_A=DROPOUT_STIMULI_SPEC,
+        spec_B=DROPOUT_STIMULI_SPEC,
+    )
+    seeds = (DROPOUT_SEED, DROPOUT_SEED, DROPOUT_SEED_ALT)
+    configurations = [
+        _dropout_config(
+            variant,
+            src_A,
+            src_B,
+            tile_cnt,
+            SFPU_DROPOUT_PARAMS(
+                dropout_probability=DROPOUT_HALF_PROBABILITY, dropout_seed=seed
+            ),
+        )
+        for seed in seeds
+    ]
+    # Build every ELF first: in the split flow, run() ends the compile step after one config.
+    for configuration in configurations:
+        configuration.prepare()
+
+    masks = [
+        _check_dropout_values(
+            f"seed {seed:#x}",
+            src_A,
+            _dropout_result(configuration, variant, src_A),
+            DROPOUT_SCALE,
+            formats.output_format,
+        )
+        for seed, configuration in zip(seeds, configurations)
+    ]
+
+    min_frac, max_frac = DROPOUT_HALF_FRACTION_BAND
+    for seed, mask in zip(seeds, masks):
+        dropped_frac = mask.float().mean().item()
+        assert min_frac <= dropped_frac <= max_frac, (
+            f"seed {seed:#x}: dropped fraction {dropped_frac:.4f} outside "
+            f"[{min_frac}, {max_frac}] at p = 1/2"
+        )
+        _check_row_pair_masks_vary(f"seed {seed:#x}", mask)
+
+    same_seed_diff = int((masks[0] != masks[1]).sum())
+    assert same_seed_diff == 0, (
+        f"seed {DROPOUT_SEED:#x} run twice gave masks differing in {same_seed_diff} of "
+        f"{masks[0].numel()} datums; dropout_init does not reseed deterministically"
+    )
+    alt_seed_diff = int((masks[0] != masks[2]).sum())
+    assert alt_seed_diff > 0, (
+        f"seeds {DROPOUT_SEED:#x} and {DROPOUT_SEED_ALT:#x} gave identical masks; "
+        "dropout_init does not reach the PRNG"
     )

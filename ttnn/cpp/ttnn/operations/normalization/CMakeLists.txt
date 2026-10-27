@@ -26,6 +26,7 @@ file(
     layernorm_distributed/device/kernels/*.hpp
     rmsnorm_distributed/device/kernels/*.cpp
     softmax/device/kernels/*.cpp
+    softmax/device/kernels/*.hpp
     kernel_util/compute/*.h
     kernel_util/generic/*.h
 )

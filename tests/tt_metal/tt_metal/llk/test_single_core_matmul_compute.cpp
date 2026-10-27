@@ -1287,8 +1287,8 @@ TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmul) {
 // We can still verify the correctness of the optimization with single block matmul.
 // L1 acc doesn't work in this case since it also relies on datacopy from SRC to DST for the accumulation.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreSingleBlockComputeMatmulMxFp4X2) {
-    if (MetalContext::instance().rtoptions().get_quasar_arch_variant() == "quasar_4row") {
-        GTEST_SKIP() << "MxFp4_2x register formats do not exist on the 4-row Quasar variant";
+    if (MetalContext::instance().get_cluster().get_quasar_ip_variant() == tt::IpVariant::TRINITY) {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
     }
     unit_tests::compute::matmul::BlockedMatmulConfig config{
         .M = 2,

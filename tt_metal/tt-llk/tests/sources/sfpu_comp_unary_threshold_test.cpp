@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Threshold decoding of the tt-llk scalar compares (tt-llk#1701 item 16).
+// Threshold decoding of the scalar compares (tt-llk#1701 item 16).
 //
 // Drives the uint32 entry point _calculate_comp_unary_<APPROX, unary_*>(value) over one tile. Like the other
-// float-scalar kernels (metal calculate_unary_*, tt-llk relu/threshold), `value` carries the fp32 bit pattern
+// float-scalar kernels (metal calculate_unary_*, relu/threshold), `value` carries the fp32 bit pattern
 // of the threshold (SFPU_UNARY_SCALAR), e.g. 0x3F000000 for 0.5f.
 
 #include <cstdint>
@@ -22,6 +22,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 // The tile the datacopy writes and the SFPU then reads; both calls must use the same index.
 static constexpr std::uint32_t DST_INDEX = 0;
 
+// _llk_unpack_A_init_ and _llk_unpack_A_ must be given the same template arguments.
+static constexpr bool ACC_TO_DEST = false;
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
@@ -35,10 +38,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
 
-    _llk_unpack_A_init_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+    _llk_unpack_A_init_<BroadcastType::NONE, ACC_TO_DEST, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
 
-    _llk_unpack_A_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+    _llk_unpack_A_<BroadcastType::NONE, ACC_TO_DEST, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, formats.unpack_A_dst);
 }
 
@@ -50,7 +53,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
-#include "sfpu/ckernel_sfpu_comp.h"
+#include "llk_sfpu/ckernel_sfpu_comp.h"
 
 using namespace ckernel;
 

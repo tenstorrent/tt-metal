@@ -22,7 +22,10 @@
     # every tt_transformers e2e leg depends on. See #45400.
     pytest --timeout 120 models/tt_transformers/tests/test_warm_cache_marker.py
     pytest --timeout 60 models/tt_transformers/tests/test_decode_output_rows.py
+    pytest --timeout 60 models/tt_transformers/tests/test_generator_logprobs_single_device.py
     pytest --timeout 60 models/tt_transformers/tests/test_batched_prefill_slots.py
+    pytest --timeout 300 models/tt_transformers/tests/test_batched_prefill_extract.py
+    pytest --timeout 60 models/tt_transformers/tests/test_accuracy_precision_family.py
     pytest --timeout 300 models/tt_transformers/tests/test_load_state_dict_layers.py
     pytest --timeout 300 models/tt_transformers/tests/test_traced_prefill_rope_slice.py
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
@@ -739,6 +742,7 @@
     pytest --timeout 60 models/tt_transformers/tests/test_distributed_norm_utils.py
     pytest --timeout 60 models/tt_transformers/tests/test_model_config_utils.py
     pytest --timeout 60 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_model_config.py
+    pytest --timeout 60 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_ccl_prefill_reduce_scatter.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
@@ -777,7 +781,7 @@
     bh_galaxy:
       timeout: 5
       tier: 1
-  owner_id: U089NPHL0GN # Diego Gomez
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: unit
 
@@ -787,7 +791,8 @@
 # Deploy mesh is SP=8 x TP=4 -> (8, 4) on BH Galaxy
 - name: MiniMax-M3 unit tests (1-card)
   cmd: |
-    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "1x1 and not msa_layer"
+    # Host-only layout tests (rotated / packed chunk layout) have no mesh id; run them here.
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout"
   model: minimax-m3
   skus:
     bh_p150:
@@ -806,10 +811,9 @@
   model: minimax-m3
   skus:
     bh_galaxy:
-      # 15 -> 30 (2026-10-07): #58594 added four test_ep_moe_vs_ref cases (shared_schedule x3,
-      # overlap_release_recreate) at ~140-280 s each (host-side random-weight build + bf8 convert);
-      # the leg went from 700 s (last green, c187c31050b) to ~1410 s projected.
-      timeout: 30
+      # ~1750 s measured: the test_ep_moe_vs_ref cases take ~140-280 s each (host-side random-weight
+      # build + bf8 convert) and test_attention_packed_vs_alone ~85 s.
+      timeout: 38
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
@@ -978,6 +982,7 @@
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_kv_cache_guard.py
   model: qwen3-tts-1.7b
   model_family: Qwen3-TTS
   skus:
@@ -1214,7 +1219,9 @@
   model: dit-encoders
   skus:
     wh_llmbox:
-      timeout: 45 # 35m02s measured on run 33021627869, +~28% margin
+      # 37m26s of pytest on run 39317745110 (10-19), plus ~11.5 min of tests added by #57208 (FIBO-vlm,
+      # smollm3, vision injection; timed on job 118869109132), so ~49 min. +~22% margin.
+      timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1750,7 +1757,7 @@
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    for d in /mnt/models/vbench /mnt/MLPerf/vbench; do
+    for d in /mnt/weka/model-weights/video/vbench /mnt/models/vbench /mnt/MLPerf/vbench; do
       if [ -d "$d" ]; then export VBENCH_CACHE_DIR="$d" TORCH_HOME="$d/torch_hub"; break; fi
     done
     [ -n "${VBENCH_CACHE_DIR:-}" ] || echo "WARNING: no vbench cache found; quality checks may download"
@@ -1973,7 +1980,7 @@
   cmd: |
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
-    pytest --tb=short --ignore=models/common/tests/modules models/common/tests
+    pytest --tb=short --ignore=models/common/tests/moe models/common/tests
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -1990,13 +1997,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d \
-    pytest models/common/tests/modules/mlp/test_mlp_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/mlp/test_mlp_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.mlp.mlp_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2013,13 +2017,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rmsnorm_1d \
-    pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/rmsnorm/test_rmsnorm_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.rmsnorm.rmsnorm_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2036,13 +2037,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rope_1d \
-    pytest models/common/tests/modules/rope/test_rope_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/rope/test_rope_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.rope.rope_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2059,13 +2057,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d \
-    pytest models/common/tests/modules/lm_head/test_lm_head_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/lm_head/test_lm_head_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.lm_head.lm_head_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2081,13 +2076,10 @@
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
-    pytest models/common/tests/modules/attention/test_attention_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/attention/test_attention_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.attention.attention_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2104,13 +2096,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d \
-    pytest models/common/tests/modules/embedding/test_embedding_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/embedding/test_embedding_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.embedding.embedding_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2126,25 +2115,18 @@
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     # Stop at the first failed command: the devices are not reset between commands (#57706).
-    pytest models/common/tests/modules/sampling/test_penalties_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/sampling/test_penalties_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.sampling.penalties_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg || exit $?
-    pytest models/common/tests/modules/sampling/test_params.py \
+      --durations=10 || exit $?
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/sampling/test_params.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --deselect "models/common/tests/modules/sampling/test_params.py::test_legacy_device_sampling_capabilities_declare_the_exact_limit[models/tt_transformers/tt/generator_vllm.py]" || exit $?
-    pytest models/common/tests/modules/sampling/test_sampling_1d.py \
+      --durations=10 || exit $?
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/sampling/test_sampling_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.sampling.sampling_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg || exit $?
+      --durations=10 || exit $?
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2160,13 +2142,10 @@
     export TT_METAL_WATCHER=15
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    pytest models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/rmsnorm/test_rmsnorm_2d.py \
       -m "not slow" \
       --tb=short \
-      --durations-min=3.0 \
-      --cov=models.common.modules.rmsnorm.rmsnorm_2d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations-min=3.0
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2182,13 +2161,10 @@
     export TT_METAL_WATCHER=15
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    pytest models/common/tests/modules/mlp/test_mlp_2d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/mlp/test_mlp_2d.py \
       -m "not slow" \
       --tb=short \
-      --durations-min=3.0 \
-      --cov=models.common.modules.mlp.mlp_2d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations-min=3.0
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2371,6 +2347,29 @@
     bh_p150:
       timeout: 5
       tier: 3
-  owner_id: U09B1UE301K # Abror Shopulatov
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by murodbecks)
+  team: models
+  budget_type: unit
+
+# VoxCPM2 component qualification only; integrated TT speech synthesis remains pending.
+# The 16 device replay cases need the two pinned CUDA captures and the checkpoint under
+# /mnt/MLPerf/tt_dnn-models/openbmb/VoxCPM2 (see models/experimental/voxcpm2/validation/cases.py).
+# Until those are provisioned the device cases skip and this leg runs the host tests only
+# (seconds on bh_p150, run 38267491428). Once the assets are staged, add
+# `export VOXCPM2_REQUIRE_DEVICE_TESTS=1` so missing assets fail instead of skip, and raise
+# the timeout (with the models unit_tier3 bh_p150 budget) to cover the device replays.
+- name: VoxCPM2 component accuracy tests
+  cmd: |
+    set -e
+    export TT_METAL_WATCHER=30
+    uv pip install -r models/experimental/voxcpm2/requirements.txt
+    pytest models/experimental/voxcpm2/tests --timeout=120
+  model: voxcpm2
+  model_family: VoxCPM
+  skus:
+    bh_p150:
+      timeout: 2
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by erertertet)
   team: models
   budget_type: unit

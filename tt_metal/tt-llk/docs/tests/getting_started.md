@@ -478,6 +478,12 @@ There are few custom `pytest` command line arguments exposed that enable alterin
 | `--detailed-artefacts` | Adds `-save-temps=obj -fdump-tree-all -fdump-rtl-all -v` compilation flags when compiling kernel elfs, allowing generation of compiler level debug information, used when debugging compiler bugs |
 | `--op=OP` | Run only tests for the given op(s), matched by `MathOperation` name (case-insensitive, exact). Repeatable: `--op=exp --op=log` |
 
+## Host-only tests
+
+Tests that exercise the harness, perf tooling, or kernel sources and never open a card live under `tests/hardware_free/`, grouped as `harness/`, `perf/`, `accuracy/`, and `kernels/`. Card smoke collects `tests/python_tests/`, so a host-only test added there runs on every SKU.
+
+Run them with `tests/run_hardware_free.sh` from `tests/`. It sets `LLK_HARDWARE_FREE=1` and makes two passes: `CHIP_ARCH=wormhole` for the tree, then `CHIP_ARCH=blackhole` for gathering and the out-of-tree contract. The PR gate runs that script. Do not point a card job at this directory.
+
 ## Usage examples
 
 ### Basic run workflow
@@ -549,7 +555,7 @@ External suites import from **`tt_llk_harness`** and from nowhere else. Everythi
 
 `tt_llk_harness.require_version(major, minor)` fails fast and legibly instead of surfacing as an `AttributeError` mid-run. Compatible means *same major, minor no older than requested* — a newer major is a rejection, not an upgrade, since a major bump only happens for a breaking change that has completed its deprecation period. `HARNESS_API_VERSION` is kept honest mechanically: `tests/out_of_tree/` pins the exported surface *per version*, so a surface that grows has nowhere to be recorded except under a version that does not exist yet — additions need a new minor entry, a removal that has completed its deprecation needs a new major one. Editing an existing entry in place is still possible, and is the thing to look for in review.
 
-This is enforced, not just documented: `tests/out_of_tree/` is a consumer that uses only the facade, and it runs in the PR pipeline via `tests/python_tests/test_out_of_tree_contract.py`. A change that breaks external suites fails there, in the PR that makes it, rather than during a later tt-metal uplift. If a real consumer needs something the facade lacks, add it to `__all__` — do not reach into `helpers`. The fixture's driver uses the letter-named Wormhole/Blackhole LLK headers, so what CI exercises is the contract on those two architectures; Quasar uses semantic header names and would need its own driver, as the in-tree suite already does.
+This is enforced, not just documented: `tests/out_of_tree/` is a consumer that uses only the facade, and it runs in the PR pipeline via `tests/hardware_free/harness/test_out_of_tree_contract.py`. A change that breaks external suites fails there, in the PR that makes it, rather than during a later tt-metal uplift. If a real consumer needs something the facade lacks, add it to `__all__` — do not reach into `helpers`. The fixture's driver uses the letter-named Wormhole/Blackhole LLK headers, so what CI exercises is the contract on those two architectures; Quasar uses semantic header names and would need its own driver, as the in-tree suite already does.
 
 An external pytest suite should:
 

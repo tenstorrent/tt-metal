@@ -17,6 +17,7 @@ from .llk_params import (
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     BroadcastType,
+    CustomMmDestLayout,
     DataCopyType,
     DestSync,
     DstRoundingMode,
@@ -33,7 +34,7 @@ from .llk_params import (
     ReducePool,
     SdpaFwOp,
     SdpaOp,
-    SfpuSrcsImpl,
+    SfpuImpl,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -46,7 +47,12 @@ from .llk_params import (
     VectorMode,
 )
 from .matmul_sweep import validate_tile_dimensions
-from .sfpu_dispatch_constants import RELU_MAX_THRESHOLD
+from .sfpu_dispatch_constants import (
+    DROPOUT_PROBABILITY_MAX,
+    DROPOUT_SCALE,
+    DROPOUT_SEED,
+    RELU_MAX_THRESHOLD,
+)
 
 
 def _fp32_bits(value: float) -> int:
@@ -477,6 +483,36 @@ class SFPU_POLYGAMMA_ORDER(TemplateParameter):
 
 
 @dataclass
+class SFPU_DROPOUT_PARAMS(TemplateParameter):
+    """Dropout probability (p * INT_MAX), seed and scale, as macros (the header selects on ``#ifdef``).
+
+    Fields are ``dropout_``-prefixed because every param field name is a perf-CSV column.
+    """
+
+    dropout_probability: int = 0
+    dropout_seed: int = DROPOUT_SEED
+    dropout_scale: float = DROPOUT_SCALE
+
+    def __post_init__(self):
+        assert (
+            0 <= self.dropout_probability <= DROPOUT_PROBABILITY_MAX
+        ), f"dropout probability {self.dropout_probability:#x} outside 0 .. {DROPOUT_PROBABILITY_MAX:#x}"
+        assert (
+            0 <= self.dropout_seed <= 0xFFFFFFFF
+        ), f"dropout seed {self.dropout_seed:#x} is not 32-bit"
+
+    def convert_to_cpp(self) -> str:
+        scale_bits = struct.unpack("<I", struct.pack("<f", self.dropout_scale))[0]
+        return "\n".join(
+            (
+                f"#define SFPU_DROPOUT_PROBABILITY {self.dropout_probability:#010x}u",
+                f"#define SFPU_DROPOUT_SEED {self.dropout_seed:#010x}u",
+                f"#define SFPU_DROPOUT_SCALE_BITS {scale_bits:#010x}u",
+            )
+        )
+
+
+@dataclass
 class DISABLE_SRC_ZERO_FLAG(TemplateParameter):
     disable_src_zero_flag: bool
 
@@ -501,11 +537,15 @@ class APPROX_MODE(TemplateParameter):
 
 
 @dataclass
-class SFPU_SRCS_IMPL(TemplateParameter):
-    sfpu_srcs_impl: SfpuSrcsImpl
+class SFPU_IMPL(TemplateParameter):
+    """Emitted as a bool: ckernel::sfpu::SfpuImpl exists only in the Quasar tree, while this
+    header is generated for every architecture. The kernel maps it back to SfpuImpl."""
+
+    sfpu_impl: SfpuImpl
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool SFPU_SRCS_LOADMACRO = {self.sfpu_srcs_impl.cpp_enum_value};"
+        load_macro = str(self.sfpu_impl == SfpuImpl.LoadMacro).lower()
+        return f"constexpr bool SFPU_IMPL_LOADMACRO = {load_macro};"
 
 
 @dataclass
@@ -555,6 +595,9 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
                                the run-0 init (W-stride -> 32 rows) and the uninit
                                (W-stride -> 64 rows). The two must agree: a block packed
                                dense and torn down non-dense is not a supported call.
+    ``UNINIT_COMPACT_PACKING`` the ``compact_packing`` template argument, likewise applied
+                               to both: Z-stride -> 8 rows and W-stride -> 16 rows, then
+                               back to 16 and 64. Excludes ``dense_packing``.
     ``UNINIT_RESTORE_MOP``     the ``restore_tile_pack_mop`` template argument, i.e.
                                whether the uninit reinstalls the Default tile-pack MOP.
     ``UNINIT_SKIP``            negative control -- drop the uninit entirely. Not a
@@ -570,6 +613,7 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
     """
 
     dense_packing: bool = False
+    compact_packing: bool = False
     restore_mop: bool = False
     skip: bool = False
     block_mop_num_faces: int = 2
@@ -578,10 +622,24 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
         return "\n".join(
             [
                 f"constexpr bool UNINIT_DENSE_PACKING = {str(self.dense_packing).lower()};",
+                f"constexpr bool UNINIT_COMPACT_PACKING = {str(self.compact_packing).lower()};",
                 f"constexpr bool UNINIT_RESTORE_MOP = {str(self.restore_mop).lower()};",
                 f"constexpr bool UNINIT_SKIP = {str(self.skip).lower()};",
                 f"constexpr std::uint32_t BLOCK_MOP_NUM_FACES = {self.block_mop_num_faces}u;",
             ]
+        )
+
+
+@dataclass
+class CUSTOM_MM_LAYOUT(TemplateParameter):
+    """``CUSTOM_MM_LAYOUT``: the ckernel::CustomMmDestLayout a custom_mm test kernel runs, as its underlying value."""
+
+    dest_layout: CustomMmDestLayout = CustomMmDestLayout.Dense
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint8_t CUSTOM_MM_LAYOUT = {self.dest_layout.value}u; "
+            f"// CustomMmDestLayout::{self.dest_layout.name}"
         )
 
 
@@ -695,8 +753,9 @@ class PACK_NUM_TILES(TemplateParameter):
 class RMSNORM_DEST_REUSE(TemplateParameter):
     """Compile-time knobs for ``rmsnorm_bcast_scalar_dest_reuse_test.cpp``.
 
-    All four are template arguments (or a template-fixed runtime argument) on the LLK
-    pair, so none of them can be a runtime parameter:
+    The first four are template arguments (or a template-fixed runtime argument) on the
+    LLK pair, so none of them can be a runtime parameter; the last two are driver hooks
+    that perturb the state the inits must re-establish:
 
     ``rmsnorm_num_tiles``
         Outer-loop count of the math MOP *and* the unpack MOP -- one
@@ -712,18 +771,27 @@ class RMSNORM_DEST_REUSE(TemplateParameter):
         unpack init. This axis exists only because blaze's version of the header won the
         reconciliation, so it is new reachable surface. Its replay-buffer path is
         restricted to one tile and four faces by ``LLK_ASSERT``.
+    ``rmsnorm_clobber_unpa_x_end``
+        Before the rmsnorm unpack init, the unpack thread leaves unpacker A's X span at one
+        row (as ``_llk_unpack_A_top32_rm_init_`` does). The init must re-program it: its
+        MOP issues every real UNPACR on SrcA.
+    ``rmsnorm_preserve_src_zero_flag``
+        Math sets the Src zero flag to keep before the seed datacopy, as ``copy_init``
+        does. The rmsnorm math init must restore the operand-driven value.
 
-    The two count fields carry the ``rmsnorm_`` prefix so they match the constants they
-    emit and stay globally unique: ``test_perf_header_gate.py`` requires that no two
-    parameter classes declare the same field name, because a test passing both would
-    produce two perf-CSV columns with the same header. Bare ``num_tiles`` belongs to
-    ``PACK_NUM_TILES`` and bare ``num_faces`` to ``NUM_FACES``.
+    The ``rmsnorm_`` prefixed fields match the constants they emit and stay globally
+    unique: ``test_perf_header_gate.py`` requires that no two parameter classes declare the
+    same field name, because a test passing both would produce two perf-CSV columns with
+    the same header. Bare ``num_tiles`` belongs to ``PACK_NUM_TILES`` and bare
+    ``num_faces`` to ``NUM_FACES``.
     """
 
     rmsnorm_num_tiles: int = 1
     rmsnorm_num_faces: int = 4
     clear_dest: bool = False
     unpack_full_transpose: bool = False
+    rmsnorm_clobber_unpa_x_end: bool = False
+    rmsnorm_preserve_src_zero_flag: bool = False
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
@@ -733,6 +801,10 @@ class RMSNORM_DEST_REUSE(TemplateParameter):
                 f"constexpr bool RMSNORM_CLEAR_DEST = {str(self.clear_dest).lower()};",
                 "constexpr bool RMSNORM_UNPACK_FULL_TRANSPOSE = "
                 f"{str(self.unpack_full_transpose).lower()};",
+                "constexpr bool RMSNORM_CLOBBER_UNPA_X_END = "
+                f"{str(self.rmsnorm_clobber_unpa_x_end).lower()};",
+                "constexpr bool RMSNORM_PRESERVE_SRC_ZERO_FLAG = "
+                f"{str(self.rmsnorm_preserve_src_zero_flag).lower()};",
             ]
         )
 
@@ -2193,7 +2265,7 @@ class CUSTOM_MM_REUSE_CFG(TemplateParameter):
     """Compile-time chain geometry for the custom_mm_reuse_dest_srcb test.
 
     The reuse LLK is the second matmul of a fused chain: its in0 operand is moved
-    out of DEST (where a preceding custom_mm<dense_packing> left its output) into
+    out of DEST (where a preceding Dense-layout custom_mm left its output) into
     SrcB via MOVD2B; only the weights are unpacked into SrcA. The C++ driver runs
     the whole chain, so these four constants size both the producer custom_mm and
     the reuse consumer:

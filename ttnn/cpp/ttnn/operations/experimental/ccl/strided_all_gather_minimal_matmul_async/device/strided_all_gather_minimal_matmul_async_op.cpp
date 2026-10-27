@@ -2,12 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
 
 /* All Gather Matmul fusion includes */
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
+#include "ttnn/device_operation_detail.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 using matmul_device_operation_t = ttnn::experimental::prim::MinimalMatmulDeviceOperation;
 
@@ -126,6 +130,39 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
     return outputs;
 }
 
+std::vector<tt::tt_metal::TensorTopology> StridedAllGatherMinimalMatmulAsync::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    using tt::tt_metal::TensorTopology;
+    // [0] the all_gather output, StridedAllGatherAsync's label over the attributes and inputs it is created from (the
+    // input's own label when there is no honest gather label); then the minimal matmul's `chunks` outputs, as
+    // compute_output_specs adds them. Every chunk is a column slice of the same matmul of the gathered activation by
+    // the weight, so each takes the union label of {gathered activation, weight, bias, the fused addcmul's two ternary
+    // operands when present}, as launch() would give a plain matmul: the addcmul, fused_ternary_input_a + scalar *
+    // matmul * fused_ternary_input_b, is elementwise on the result, so a ternary operand sharded on an axis the result
+    // replicates makes the chunk Shard there.
+    const auto gathered = StridedAllGatherAsync::compute_output_topologies(
+        attributes.strided_all_gather_async_struct,
+        StridedAllGatherAsyncInputs{tensor_args.input_tensor, tensor_args.persistent_output_buffer});
+    std::vector<std::reference_wrapper<const TensorTopology>> operands{
+        std::cref(gathered.front()), std::cref(tensor_args.weight_tensor.tensor_topology())};
+    if (tensor_args.bias.has_value()) {
+        operands.emplace_back(tensor_args.bias->tensor_topology());
+    }
+    if (tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value()) {
+        operands.emplace_back(tensor_args.fused_ternary_input_a->tensor_topology());
+        operands.emplace_back(tensor_args.fused_ternary_input_b->tensor_topology());
+    }
+    const TensorTopology matmul_topology = ttnn::operations::ccl::common::union_topology(
+        operands, tensor_args.input_tensor.tensor_topology().mesh_coords());
+
+    const auto num_chunks = static_cast<size_t>(std::max(attributes.matmul_struct.chunks, 0));
+    std::vector<TensorTopology> topologies;
+    topologies.reserve(1 + num_chunks);
+    topologies.push_back(gathered.front());
+    topologies.insert(topologies.end(), num_chunks, matmul_topology);
+    return topologies;
+}
+
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
@@ -163,7 +200,6 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     }
 
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias);
     } else {
@@ -174,7 +210,6 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     ttnn::experimental::prim::StridedAllGatherAsyncParams strided_all_gather_async_struct =
         ttnn::experimental::prim::StridedAllGatherAsyncParams(
-            devices,
             dim,
             num_links,
             num_devices,
@@ -206,7 +241,6 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
         matmul_struct,
         strided_all_gather_core_grid_offset,
         read_local_from_input,
-        devices,
         ag_op,
         mm_signal_aggregator_mode};
     auto tensor_args = OperationType::tensor_args_t{
