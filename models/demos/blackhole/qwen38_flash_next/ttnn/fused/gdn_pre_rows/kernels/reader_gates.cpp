@@ -16,7 +16,8 @@
 
 namespace {
 constexpr uint32_t CB_AB = 20, CB_Z = 21, CB_CONST = 22;
-constexpr uint32_t HEAD_TILES = 4, PROJECTION_TILES = 130, Z_TILE0 = 80, A_TILE = 128, B_TILE = 129;
+constexpr uint32_t HEAD_TILES = 4, PROJECTION_TILES = GDN_PROJECTION_TILES, Z_TILE0 = GDN_Z_TILE0, A_TILE = GDN_A_TILE,
+                   B_TILE = GDN_B_TILE;
 constexpr uint32_t CONST_TILES = 2, BF16_TILE = 2048, FP32_TILE = 4096;
 }  // namespace
 

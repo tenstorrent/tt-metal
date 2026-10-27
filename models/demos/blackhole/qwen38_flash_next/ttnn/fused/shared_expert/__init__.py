@@ -21,13 +21,14 @@ import ttnn
 
 from .. import program as fp
 from ..registry import BITWISE, FusedKernel, GateSpec, register
+from ...contracts import TP_SIZE
 from ...decode_matmul import dram_sharded_matmul_configs, dram_sharded_weight_memory_config
 
 NAME = "shared_expert"
 HIDDEN = 2560
-INTERMEDIATE = 640
-DEVICES = 4
-LOCAL_INTERMEDIATE = INTERMEDIATE // DEVICES  # 160: five tiles, one per storage core
+LOCAL_INTERMEDIATE = 160  # per device at every TP: five tiles, one per storage core
+DEVICES = TP_SIZE
+INTERMEDIATE = LOCAL_INTERMEDIATE * DEVICES  # the checkpoint's 640, zero-padded to 1280 at TP=8
 GATE_TILES = LOCAL_INTERMEDIATE // fp.TILE
 SCALAR_COLUMN = 2 * LOCAL_INTERMEDIATE  # column 320 of the concatenated output
 CAT_WIDTH = SCALAR_COLUMN + fp.TILE  # 352: gate | up | scalar padded to a tile

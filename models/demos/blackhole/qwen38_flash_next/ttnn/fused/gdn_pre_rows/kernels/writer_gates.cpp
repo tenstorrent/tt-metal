@@ -25,7 +25,7 @@
 
 namespace {
 constexpr uint32_t CB_BETA = 23, CB_G = 24, CB_SIG = 25, CB_COL = 26;
-constexpr uint32_t HEAD_TILES = 4, HEADS = 12, VALUE_TILES = 48;
+constexpr uint32_t HEAD_TILES = 4, HEADS = GDN_HEADS, VALUE_TILES = GDN_VALUE_TILES;
 constexpr uint32_t TILE_ROWS = 32, FACE_ELEMS = 256, FACE_COLS = 16, BF16_TILE = 2048, FP32_TILE = 4096;
 
 constexpr uint32_t face_element(uint32_t row, uint32_t col) {

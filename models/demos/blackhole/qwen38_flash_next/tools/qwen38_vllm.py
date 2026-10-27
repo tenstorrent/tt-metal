@@ -66,7 +66,7 @@ from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_TRACKING
 
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, VOCAB_SIZE
-from models.demos.blackhole.qwen38_flash_next.checkpoint import PINNED_CHECKPOINT_REVISION
+from models.demos.blackhole.qwen38_flash_next.checkpoint import PINNED_CHECKPOINT_REVISION, checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic import (
     MODE,
     construct_live_decode_diagnostic,
@@ -799,8 +799,9 @@ class Qwen38ForCausalLM:
         The cache identity is the extension digest and a 40-hex sha: ``QWEN38_TT_METAL_SHA``, else the imported ttnn's
         checkout head, else the digest's prefix (an image without ``.git`` or ``git``); the chat server's runtime
         admission (a ttnn built from this checkout) is not applied, vLLM's python environment is trusted as given.
-        The checkpoint is ``MODEL_WEIGHTS_DIR``, else the ``--model`` path, else the pinned revision of the repo id
-        (``QWEN38_HF_REPO``, else ``--model``, else ``Qwen/Qwen3.8-Flash-Next``) in the local Hugging Face hub cache.
+        The checkpoint is the ``--model`` directory, else ``HF_MODEL`` (a directory or a repo id), else ``--model`` as a
+        repo id, else ``Qwen/Qwen3.8-Flash-Next``; a repo id resolves to the pinned revision in the local Hugging Face
+        hub cache.
         The prefill form is ``prefill_form()``'s (the slab rows and the 128-row chunks); the slab's DRAM admission
         refusal is re-raised naming ``QWEN38_PREFILL_SLAB``.  ``max_batch_size`` 1: the chain is open on return.
         ``max_batch_size`` 2..32 (batch mode): the construction is done and the chain is NOT open; ``allocate_kv_cache``
@@ -827,37 +828,23 @@ class Qwen38ForCausalLM:
             raise ValueError(f"Qwen3.8 needs a Blackhole mesh, got {mesh_device.arch()}")
         allocated_context = resident_allocated_context(max_seq_len)
         physical_ids = tuple(int(device_id) for device_id in mesh_device.get_device_ids())
-        weights_dir = os.environ.get("MODEL_WEIGHTS_DIR")
+        # The checkpoint: --model when vLLM was given a directory, else HF_MODEL (a directory or a repo id), else
+        # --model as a repo id, else the default repo; a repo id resolves to the pinned revision in the hub cache.
         name_or_path = getattr(hf_config, "_name_or_path", None)
-        if weights_dir:
-            if not Path(weights_dir).is_dir():
-                raise ValueError(f"MODEL_WEIGHTS_DIR must name the checkpoint directory, got {weights_dir!r}")
-            checkpoint_root = Path(weights_dir)
-        elif name_or_path and Path(name_or_path).is_dir():
-            checkpoint_root = Path(name_or_path)
-        else:
-            # A repo id: the pinned revision from the hub cache under HF_HOME, no network (the launcher prefetched it).
-            repo_id = os.environ.get("QWEN38_HF_REPO") or name_or_path or HF_REPO_ID
-            from huggingface_hub import snapshot_download
-
-            try:
-                checkpoint_root = Path(
-                    snapshot_download(repo_id, revision=PINNED_CHECKPOINT_REVISION, local_files_only=True)
-                )
-            except Exception as error:
-                raise ValueError(
-                    f"{repo_id} at revision {PINNED_CHECKPOINT_REVISION} is not in the local Hugging Face hub cache: "
-                    f"set MODEL_WEIGHTS_DIR to the checkpoint directory, or HF_HOME to a cache holding that snapshot "
-                    f"(QWEN38_HF_REPO overrides the repo id)"
-                ) from error
-        cache_root = os.environ.get("QWEN38_CACHE_ROOT")
+        if not (name_or_path and Path(name_or_path).is_dir()):
+            name_or_path = os.environ.get("HF_MODEL") or name_or_path or HF_REPO_ID
+        try:
+            checkpoint_root = checkpoint_directory({"HF_MODEL": name_or_path}, revision=PINNED_CHECKPOINT_REVISION)
+        except FileNotFoundError as error:
+            raise ValueError(f"{error} (vLLM's --model directory, else HF_MODEL, names the checkpoint)") from error
+        cache_root = os.environ.get("TT_CACHE_PATH")
         if not cache_root:
             raise ValueError(
-                "QWEN38_CACHE_ROOT must name the cache root: <root>/caches/<label>/{components,model-io} and "
+                "TT_CACHE_PATH must name the cache root: <root>/caches/<label>/{components,model-io} and "
                 "<root>/caches/bf4-experts, the chat server launcher's layout"
             )
         caches = Path(cache_root) / "caches"
-        label = os.environ.get("QWEN38_CACHE_LABEL") or f"c{allocated_context}-vllm"
+        label = f"c{allocated_context}-vllm"
         corpus_root = os.environ.get("QWEN38_BF4_CORPUS")
         corpus_verification = os.environ.get("QWEN38_BF4_CORPUS_VERIFICATION")
         extension = Path(ttnn._ttnn.__file__).resolve()

@@ -5,10 +5,10 @@
 
 The GR read of ``ttnn/fused/gr_read`` is three generic_op programs around two collectives per read.  Here the
 collectives move into the program: one transport core per fabric link sends this device's tiles to the other devices
-of the TP4 line over the 1D fabric (``ttnn.setup_fabric_connection`` hands a generic_op kernel a fabric connection;
+of the TP_SIZE line over the 1D fabric (``ttnn.setup_fabric_connection`` hands a generic_op kernel a fabric connection;
 the kernel is a line multicast by hop count on the 1D linear API), the tiles land in the DRAM pages the chain's
 all-gather writes, behind a per-call barrier, and the compute kernels stay the proven ones.  An all-gather is data
-movement, so the fold is bitwise by construction: the slot order (page ``4b + d`` for the stats, ``12d + t`` for the
+movement, so the fold is bitwise by construction: the slot order (page ``TP_SIZE * b + d`` for the stats, ``12d + t`` for the
 partials) and every consumer's loop order are the chain's.  The design note (the fold design note, a development document that is not shipped) walks the
 semaphore protocol; the three facts it stands on are pinned in the kernel and in tests/test_fused_gr_fold_static.py.
 
@@ -31,12 +31,12 @@ from typing import Any
 
 import ttnn
 
+from ...contracts import TP_SIZE
 from .. import gr_read
 from .. import program as fp
 from ..registry import BITWISE, FusedKernel, register
 
 NAME = "gr_fold"
-TP_SIZE = 4
 TP_AXIS = 1
 TRANSPORT_KERNEL = fp.kernel_source(NAME, "transport.cpp")
 SEM_PROBE = fp.kernel_source(NAME, "sem_probe.cpp")
@@ -110,9 +110,9 @@ def line_semaphores(mesh) -> LineSemaphores:
 
 class Line:
     """The TP line as the fabric sees it: rank r -> (mesh coordinate, fabric node id), checked once per mesh: the
-    mesh is the model's ``(1, 4)`` with the line along axis 1, every neighbour pair is one hop in a direction
-    consistent along the line (forward one way, backward the other), the degree histogram is {1: 2, 2: 2}, and the
-    link indices usable towards each neighbour are recorded (``links`` = the count every pair offers)."""
+    mesh is the model's ``(1, TP_SIZE)`` with the line along axis 1, every neighbour pair is one hop in a direction
+    consistent along the line (forward one way, backward the other), the degree histogram is {1: 2, 2: TP_SIZE - 2},
+    and the link indices usable towards each neighbour are recorded (``links`` = the count every pair offers)."""
 
     def __init__(self, mesh) -> None:
         shape = tuple(int(v) for v in mesh.shape)
@@ -137,11 +137,12 @@ class Line:
                     degree[rank] += 1
         # every rank can forward to every other on a line; the immediate-neighbour count is what the transport uses
         neighbours = {rank: (rank > 0) + (rank + 1 < TP_SIZE) for rank in range(TP_SIZE)}
-        if Counter(neighbours.values()) != Counter({1: 2, 2: 2}) or any(
+        if Counter(neighbours.values()) != Counter({1: 2, 2: TP_SIZE - 2}) or any(
             degree[r] != TP_SIZE - 1 for r in range(TP_SIZE)
         ):
             raise RuntimeError(
-                f"line degree histogram is not {{1: 2, 2: 2}}: neighbours {neighbours} reachable {dict(degree)}"
+                f"line degree histogram is not {{1: 2, 2: {TP_SIZE - 2}}}: "
+                f"neighbours {neighbours} reachable {dict(degree)}"
             )
         link_counts = {
             len(ttnn.get_forwarding_link_indices(self.nodes[a], self.nodes[b]))
@@ -299,8 +300,8 @@ def transport_mesh_program(
 def gather_line(local, *, links: int = 1, delays=None, dim: int = 3):
     """The chain's all-gather of a one-row-block TILE tensor as one generic_op program per device, moved by the
     transport cores over the fabric.  ``dim=3``: ``ttnn.all_gather(local, dim=3, cluster_axis=1)`` of a one-tile-wide
-    ``[1, B, rows, 32]`` -> ``[1, B, rows, 128]``, page ``t * 4 + rank`` (the stats phase); ``dim=0``:
-    ``all_gather_async(local, dim=0)`` of ``[1, 1, rows, W]`` -> ``[4, 1, rows, W]``, page ``rank * T + t`` (the
+    ``[1, B, rows, 32]`` -> ``[1, B, rows, 32 * TP_SIZE]``, page ``t * TP_SIZE + rank`` (the stats phase); ``dim=0``:
+    ``all_gather_async(local, dim=0)`` of ``[1, 1, rows, W]`` -> ``[TP_SIZE, 1, rows, W]``, page ``rank * T + t`` (the
     partials phase)."""
 
     shape = tuple(local.shape)
@@ -382,7 +383,7 @@ def read_semaphores(mesh):
 
 def stats_gather(residual, *, links: int | None = None):
     """The read's first program with the stats all-gather inside it: stats core b (the chain's rmsnorm_pre_allgather
-    arithmetic, ``gr_read.stats``) writes its bf16 tile into page ``4b + rank`` of the gathered ``[1, 4, rows, 128]``
+    arithmetic, ``gr_read.stats``) writes its bf16 tile into page ``TP_SIZE * b + rank`` of the gathered ``[1, 4, rows, 32 * TP_SIZE]``
     and into transport core ``b % links``'s scratch slot ``b // links``, raising that core's scratch semaphore; the
     transport cores (one per link the line offers, by default) send the tiles to the other devices' pages.
     Replaces ``gr_read.stats`` + ``ttnn.all_gather``: the same tiles in the same pages."""
@@ -415,7 +416,11 @@ def stats_gather(residual, *, links: int | None = None):
             (
                 w.core,
                 (
-                    [gr_read._stream(residual, 1, gr_read.HIDDEN_TILES, w.start * gr_read.HIDDEN_TILES, 1, 0, 4)],
+                    [
+                        gr_read._stream(
+                            residual, 1, gr_read.HIDDEN_TILES, w.start * gr_read.HIDDEN_TILES, 1, 0, gr_read.ROW_BATCH
+                        )
+                    ],
                     [gr_read._bits(1.0)],
                 ),
             )
@@ -426,7 +431,7 @@ def stats_gather(residual, *, links: int | None = None):
 
     def kernels(rank):
         # the stats writer of device `rank`: the tile into transport core (b % links)'s scratch slot b // links (a 1x1
-        # multicast + that core's scratch semaphore) and into the device's own page 4b + rank
+        # multicast + that core's scratch semaphore) and into the device's own page TP_SIZE * b + rank
         runtime = []
         for w in work:
             x, y = noc[(transports[w.start % links].x, transports[w.start % links].y)]
@@ -460,8 +465,8 @@ def stats_gather(residual, *, links: int | None = None):
 
 def normalize_down_gather(residual, gathered_stats, norm_scale, down_inject, *, links: int | None = None):
     """``gr_read.normalize_down`` with the partial all-gather inside it (stage c): the same four norm cores, in0
-    multicast and twelve down workers, but worker w writes its fp32 partial tile into page ``12 * rank + w`` of the
-    gathered ``[4, 1, rows, 384]`` (the page order of the chain's ``all_gather_async(dim=0)``) and into transport core
+    multicast and twelve down workers, but worker w writes its fp32 partial tile into page ``PT * rank + w`` of the
+    gathered ``[TP_SIZE, 1, rows, 384]`` (the page order of the chain's ``all_gather_async(dim=0)``) and into transport core
     ``w % links``'s scratch slot ``w // links``; the transport cores send the twelve tiles to the other devices' pages.
     Returns ``(normalized, gathered_partials)``; ``low_rank_gate`` reads the gathered tensor exactly as today."""
 
@@ -488,13 +493,14 @@ def normalize_down_gather(residual, gathered_stats, norm_scale, down_inject, *, 
     w_set, p_set = gr_read._core_set(workers), gr_read._core_set(producers)
     all_set = gr_read._core_set(workers + producers)
     wt_set = gr_read._core_set(workers + list(transports))
-    T_BF16, T_FP32, HT, ST, FT, PT = (
+    T_BF16, T_FP32, HT, ST, FT, PT, ROW_BATCH = (
         gr_read.TILE_BF16,
         gr_read.TILE_FP32,
         gr_read.HIDDEN_TILES,
         gr_read.STATS_TILES,
         gr_read.FLAT_TILES,
         gr_read.PARTIAL_TILES,
+        gr_read.ROW_BATCH,
     )
     cbs = [
         fp.cb_descriptor(0, gr_read.BF16, T_BF16, HT, p_set),
@@ -522,8 +528,8 @@ def normalize_down_gather(residual, gathered_stats, norm_scale, down_inject, *, 
                 (
                     [
                         gr_read._stream(gathered_stats, 1, ST, b * ST, 1, 0, ST),
-                        gr_read._stream(residual, 1, HT, b * HT, 1, 0, 4),
-                        gr_read._stream(norm_scale, 1, HT, b * HT, 1, 0, 4),
+                        gr_read._stream(residual, 1, HT, b * HT, 1, 0, ROW_BATCH),
+                        gr_read._stream(norm_scale, 1, HT, b * HT, 1, 0, ROW_BATCH),
                     ],
                     [scaler_bits, gr_read._bits(gr_read.EPS)],
                 ),
@@ -531,7 +537,7 @@ def normalize_down_gather(residual, gathered_stats, norm_scale, down_inject, *, 
             for b, core in enumerate(producers)
         ],
     )
-    norm = fp.compute_kernel(gr_read.NORM, p_set, [HT, ST, 4, 16], fp32_dest=True, unpack_to_dest_fp32=(4, 7))
+    norm = fp.compute_kernel(gr_read.NORM, p_set, [HT, ST, ROW_BATCH, 16], fp32_dest=True, unpack_to_dest_fp32=(4, 7))
     sender = gr_read._mcast_writer(
         p_set,
         [(core, (b * HT, rect, (b * HT, 1), (0, 0, 1, 1))) for b, core in enumerate(producers)],
@@ -553,7 +559,7 @@ def normalize_down_gather(residual, gathered_stats, norm_scale, down_inject, *, 
 
     def kernels(rank):
         # worker w of device `rank`: its partial tile into transport core (w % links)'s scratch slot w // links (a 1x1
-        # multicast + that core's scratch semaphore) and into the device's own page 12 * rank + w
+        # multicast + that core's scratch semaphore) and into the device's own page PARTIAL_TILES * rank + w
         runtime = []
         for w, core in enumerate(workers):
             x, y = noc[(transports[w % links].x, transports[w % links].y)]
@@ -633,13 +639,14 @@ def stats_normalize_down_gather(residual, norm_scale, down_inject, *, links: int
     pw_set = gr_read._core_set(workers + producers)
     ps_set = gr_read._core_set(producers + list(transports))
     wt_set = gr_read._core_set(workers + list(transports))
-    T_BF16, T_FP32, HT, ST, FT, PT = (
+    T_BF16, T_FP32, HT, ST, FT, PT, ROW_BATCH = (
         gr_read.TILE_BF16,
         gr_read.TILE_FP32,
         gr_read.HIDDEN_TILES,
         gr_read.STATS_TILES,
         gr_read.FLAT_TILES,
         gr_read.PARTIAL_TILES,
+        gr_read.ROW_BATCH,
     )
     c_sscaler, c_x2, c_sout, c_sscratch = FRONT_STATS_CBS
     cbs = [
@@ -673,9 +680,9 @@ def stats_normalize_down_gather(residual, norm_scale, down_inject, *, links: int
                 core,
                 (
                     [
-                        gr_read._stream(residual, 1, HT, b * HT, 1, 0, 4),
-                        gr_read._stream(norm_scale, 1, HT, b * HT, 1, 0, 4),
-                        gr_read._stream(residual, 1, HT, b * HT, 1, 0, 4),
+                        gr_read._stream(residual, 1, HT, b * HT, 1, 0, ROW_BATCH),
+                        gr_read._stream(norm_scale, 1, HT, b * HT, 1, 0, ROW_BATCH),
+                        gr_read._stream(residual, 1, HT, b * HT, 1, 0, ROW_BATCH),
                         gr_read._stream(gathered_stats, 1, ST, b * ST, 1, 0, ST),
                     ],
                     [gr_read._bits(1.0), scaler_bits, gr_read._bits(gr_read.EPS)],
@@ -686,7 +693,7 @@ def stats_normalize_down_gather(residual, norm_scale, down_inject, *, links: int
         gate=(3, FRONT_STATS_READY, links + 1),
     )
     compute = fp.compute_kernel(
-        STATS_NORM, p_set, [HT, ST, 4, 16, c_sscaler, c_x2, c_sout], fp32_dest=True, unpack_to_dest_fp32=(4, 7)
+        STATS_NORM, p_set, [HT, ST, ROW_BATCH, 16, c_sscaler, c_x2, c_sout], fp32_dest=True, unpack_to_dest_fp32=(4, 7)
     )
     receiver = gr_read._mcast_reader(
         w_set,
@@ -708,7 +715,7 @@ def stats_normalize_down_gather(residual, norm_scale, down_inject, *, links: int
 
     def kernels(rank):
         # the norm cores' two-phase writer: A = the stats tile into transport core (b % links)'s stats scratch slot
-        # b // links and the device's own page 4b + rank, then the core's own gate signal; B = the normalized row into
+        # b // links and the device's own page TP_SIZE * b + rank, then the core's own gate signal; B = the normalized row into
         # the workers' CB 8 and the normalized tensor
         runtime = []
         for b, core in enumerate(producers):
@@ -724,7 +731,7 @@ def stats_normalize_down_gather(residual, norm_scale, down_inject, *, links: int
             runtime,
         )
         # the workers' writer: the partial tile into transport core (w % links)'s partials scratch slot w // links and
-        # the device's own page 12 * rank + w
+        # the device's own page PARTIAL_TILES * rank + w
         runtime = []
         for w, core in enumerate(workers):
             x, y = noc[(transports[w % links].x, transports[w % links].y)]
@@ -812,6 +819,6 @@ register(
         tolerance=BITWISE,
         fused=gr_read_fold,
         composed=gr_read.gr_read_fused,
-        gate=None,  # the collective needs the TP4 line: the component gate is the mesh replica (dev tools)
+        gate=None,  # the collective needs the TP_SIZE line: the component gate is the mesh replica (dev tools)
     )
 )

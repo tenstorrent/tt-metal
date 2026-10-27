@@ -8,13 +8,13 @@ padded MLP width, the budget's byte model) against ``vision_reference.py``.  No 
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 import torch
 import torch.nn.functional as F
 
+from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.tests.fixtures import vision_fixture
 from models.demos.blackhole.qwen38_flash_next.tools.checkpoint_budget import vision_resident_layout
 from models.demos.blackhole.qwen38_flash_next.ttnn import vision_layout
@@ -34,7 +34,7 @@ from models.demos.blackhole.qwen38_flash_next.vision_reference import (
     vision_tensor_shapes,
 )
 
-CHECKPOINT = Path(os.environ.get("QWEN38_CHECKPOINT", "/nonexistent/Qwen3.8-Flash-Next"))
+CHECKPOINT = checkpoint_directory(missing=Path("/nonexistent/Qwen3.8-Flash-Next"))
 CONFIG = VisionTowerConfig()
 
 
@@ -54,7 +54,7 @@ def test_pinned_configuration_and_inventory():
     assert sum(2 * torch.Size(shape).numel() for shape in shapes.values()) == VISION_TENSOR_BYTES
 
 
-@pytest.mark.skipif(not CHECKPOINT.is_dir(), reason="set QWEN38_CHECKPOINT to the pinned checkpoint directory")
+@pytest.mark.skipif(not CHECKPOINT.is_dir(), reason="set HF_MODEL to the pinned checkpoint directory")
 def test_checkpoint_vision_domain_reads_the_tower_from_shard_one():
     from models.demos.blackhole.qwen38_flash_next.checkpoint import VISION_SHARD, Qwen38Checkpoint
 

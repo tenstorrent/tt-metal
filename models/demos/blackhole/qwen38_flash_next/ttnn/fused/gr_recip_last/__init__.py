@@ -27,12 +27,12 @@ from __future__ import annotations
 
 import ttnn
 
+from ...contracts import TP_SIZE
 from .. import gr_fold, gr_read
 from .. import program as fp
 from ..registry import COMPONENT, FusedKernel, register
 
 NAME = "gr_recip_last"
-TP_SIZE = gr_fold.TP_SIZE
 STATS_U_RECIP = fp.kernel_source(NAME, "stats_u_recip_compute.cpp")
 DOWN_STREAMS = fp.kernel_source(NAME, "down_streams_compute.cpp")
 MCAST_READER2 = fp.kernel_source(NAME, "mcast_reader2.cpp")
@@ -56,7 +56,7 @@ CB_RECIP_W = 12  # the four recip tiles landing (fp32)
 CB_PROD = 13  # the four scaled partials (fp32)
 CB_ZERO = 14  # the fold's zero tile (fp32)
 WEIGHT_BATCH = 8  # weight tiles per push, as gr_read.normalize_down
-U_BLOCK = 4  # tiles per fp32 dest block on the norm cores
+U_BLOCK = gr_read.ROW_BATCH  # tiles per fp32 dest block on the norm cores
 
 
 def _mcast_reader2(cores, streams, runtime, *, recv, recv2, zero_cb=gr_read.NONE_CB):
@@ -146,8 +146,8 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
                 core,
                 (
                     [
-                        gr_read._stream(residual, 1, HT, b * HT, 1, 0, 4),
-                        gr_read._stream(norm_scale, 1, HT, b * HT, 1, 0, 4),
+                        gr_read._stream(residual, 1, HT, b * HT, 1, 0, gr_read.ROW_BATCH),
+                        gr_read._stream(norm_scale, 1, HT, b * HT, 1, 0, gr_read.ROW_BATCH),
                         gr_read._stream(gathered_stats, 1, ST, b * ST, 1, 0, ST),
                     ],
                     [gr_read._bits(1.0), scaler_bits, gr_read._bits(gr_read.EPS)],
@@ -190,7 +190,7 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
 
     def kernels(rank):
         # the norm cores' three-phase writer: A = the stats tile into transport core (b % links)'s scratch slot
-        # b // links and the device's own page 4b + rank, then the core's own gate signal; B = the u row into the
+        # b // links and the device's own page TP_SIZE * b + rank, then the core's own gate signal; B = the u row into the
         # workers' CB at tile offset b * HT; C = the recip tile into the workers' recip CB at offset b, and the
         # normalized' row written to the normalized tensor (pages b * HT ..) as the phase's extra stream
         runtime = []
@@ -198,7 +198,7 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
             x, y = noc[(transports[b % links].x, transports[b % links].y)]
             phase_a = [b // links, x, y, x, y, gathered_stats.buffer_address(), b * TP_SIZE + rank, 1, 0, 0, 0, 1, 1]
             phase_b = [b * HT, *rect, 0, 0, 0, 0, 0, 0, 1, 1]
-            phase_c = [b, *rect, 0, 0, 0, normalized.buffer_address(), HT, b * HT, 1, 4]
+            phase_c = [b, *rect, 0, 0, 0, normalized.buffer_address(), HT, b * HT, 1, gr_read.ROW_BATCH]
             runtime.append((core, phase_a + phase_b + phase_c + list(noc[(core.x, core.y)])))
         writer3 = fp.writer_kernel(
             MCAST_WRITER3,
@@ -211,7 +211,7 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
             runtime,
         )
         # the workers' writer: the partial tile into transport core (w % links)'s partials scratch slot w // links and
-        # the device's own page 12 * rank + w (gr_fold's)
+        # the device's own page PARTIAL_TILES * rank + w (gr_fold's)
         runtime = []
         for w, core in enumerate(workers):
             x, y = noc[(transports[w % links].x, transports[w % links].y)]
@@ -311,7 +311,7 @@ register(
         tolerance=COMPONENT,
         fused=gr_read_recip_last,
         composed=gr_fold.gr_read_fold,
-        gate=None,  # the collectives need the TP4 line: the component gate is the mesh replica with the oracle (dev tools)
+        gate=None,  # the collectives need the TP_SIZE line: the component gate is the mesh replica with the oracle (dev tools)
         component_proof="the 1x4 replica against the CPU oracle on captured residual rows (layers 2/12/47 x rows 1/5/32, the checkpoint's attention-block weights), 2026-09-27: block-input rms_rel 0.0036-0.0045 where the composed fold reads 0.0038-0.0045 (inside 1.10x + 1e-3 on every row), |bias| <= 1.9e-4, ULP p99 8-16 against the fold's 8-16; the paired 43-prompt EOS-honoured served sample +2.99 % tok/s (95 % interval +1.15..+4.84), the pass 1.2-1.7 ms shorter",
     )
 )

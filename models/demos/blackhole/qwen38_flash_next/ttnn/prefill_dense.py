@@ -51,6 +51,7 @@ import ttnn
 from models.demos.blackhole.qwen38_flash_next.ttnn import decode_matmul
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     MESH_SHAPE,
+    TP_SIZE,
     is_slab_rows,
     replicate_tensor_2d_mesh_mapper,
 )
@@ -128,9 +129,10 @@ def slab_working_set_bytes(rows: int) -> int:
 # fused sibling.  Layer counts: 36 GDN, 12 QSA, 48 gated residuals per block (attn, mlp), 48 MoE.
 HIDDEN = 2560
 GR_PARTIAL_WIDTH = 384
-GDN_PROJECTION_WIDTH = 4160
-GDN_VALUE_WIDTH = 1536
-QSA_LOCAL_QUERY_WIDTH = 1536
+GR_FLAT_LOCAL_WIDTH = 4 * HIDDEN // TP_SIZE
+GDN_VALUE_WIDTH = 48 * 128 // TP_SIZE
+GDN_PROJECTION_WIDTH = 2 * 16 * 128 // TP_SIZE + 2 * GDN_VALUE_WIDTH + 2 * ttnn.TILE_SIZE
+QSA_LOCAL_QUERY_WIDTH = 24 * 256 // TP_SIZE
 QSA_HEAD_DIM = 256
 MOE_LOCAL_INTERMEDIATE = 160
 KV_COLUMNS = (("k", 0, QSA_HEAD_DIM), ("v", QSA_HEAD_DIM, QSA_HEAD_DIM))
@@ -265,8 +267,8 @@ class Qwen38PrefillDensePolicy:
         sibling_dtype = "bf8" if bf8 else weight_dtype
         specs: list[ResidentSpec] = []
         if module == "gr" and bf8:
-            specs.append(ResidentSpec("down_inject", HIDDEN, GR_PARTIAL_WIDTH, 2, self.dtype))
-            specs.append(ResidentSpec("up", GR_PARTIAL_WIDTH, HIDDEN, 3, self.dtype))
+            specs.append(ResidentSpec("down_inject", GR_FLAT_LOCAL_WIDTH, GR_PARTIAL_WIDTH, 2, self.dtype))
+            specs.append(ResidentSpec("up", GR_PARTIAL_WIDTH, GR_FLAT_LOCAL_WIDTH, 3, self.dtype))
         elif module == "gdn" and bf8:
             specs.append(ResidentSpec("qkvzab", HIDDEN, GDN_PROJECTION_WIDTH, 3, self.dtype))
             specs.append(ResidentSpec("out", GDN_VALUE_WIDTH, HIDDEN, 2, self.dtype))
@@ -643,8 +645,8 @@ def _host_blocks(module: str, checkpoint, placement, *, layer_index: int, block:
         from models.demos.blackhole.qwen38_flash_next.ttnn import moe
 
         source = Qwen38MoEWeights(checkpoint, placement, layer_index=layer_index)
-        gate = source.shared_gate_proj.transpose(0, 1)
-        up = source.shared_up_proj.transpose(0, 1)
+        gate = moe.pad_shared_intermediate(source.shared_gate_proj.transpose(0, 1), 1)
+        up = moe.pad_shared_intermediate(source.shared_up_proj.transpose(0, 1), 1)
         local = MOE_LOCAL_INTERMEDIATE
         gate_up = torch.cat(
             [
@@ -654,10 +656,12 @@ def _host_blocks(module: str, checkpoint, placement, *, layer_index: int, block:
             dim=1,
         )
         return {
-            "shared_gate": gate.reshape(1, 1, HIDDEN, moe.INTERMEDIATE_SIZE),
-            "shared_up": up.reshape(1, 1, HIDDEN, moe.INTERMEDIATE_SIZE),
+            "shared_gate": gate.reshape(1, 1, HIDDEN, moe.SHARED_PADDED_INTERMEDIATE),
+            "shared_up": up.reshape(1, 1, HIDDEN, moe.SHARED_PADDED_INTERMEDIATE),
             "shared_gate_up": gate_up.reshape(1, 1, HIDDEN, MESH_SHAPE[1] * 2 * local),
-            "shared_down": source.shared_down_proj.transpose(0, 1).reshape(1, 1, moe.INTERMEDIATE_SIZE, HIDDEN),
+            "shared_down": moe.pad_shared_intermediate(source.shared_down_proj.transpose(0, 1), 0).reshape(
+                1, 1, moe.SHARED_PADDED_INTERMEDIATE, HIDDEN
+            ),
             "shared_scalar_gate": source.shared_scalar_gate.transpose(0, 1).reshape(1, 1, HIDDEN, 1),
         }
     raise ValueError(f"prefill dense module must be one of {MODULES}, got {module!r}")

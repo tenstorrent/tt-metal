@@ -369,7 +369,7 @@ def test_two_phases_on_one_connection_reuse_go_and_done_in_order():
 def test_line_checks_neighbours_degree_and_links():
     source = inspect.getsource(gr_fold.Line.__init__)
     assert "ttnn.get_eth_forwarding_direction(self.nodes[r], self.nodes[r + 1])" in source
-    assert "Counter(neighbours.values()) != Counter({1: 2, 2: 2})" in source
+    assert "Counter(neighbours.values()) != Counter({1: 2, 2: TP_SIZE - 2})" in source
     assert "ttnn.get_forwarding_link_indices(self.nodes[a], self.nodes[b])" in source
     assert "links must be 1..{min(len(t.cores), geometry.links, t.tiles)}" in inspect.getsource(
         gr_fold.transport_mesh_program
@@ -386,10 +386,10 @@ def test_normalize_down_gather_mirrors_normalize_down():
 
     for text in (
         "_stream(gathered_stats,1,ST,b*ST,1,0,ST)",
-        "_stream(residual,1,HT,b*HT,1,0,4)",
-        "_stream(norm_scale,1,HT,b*HT,1,0,4)",
+        "_stream(residual,1,HT,b*HT,1,0,ROW_BATCH)",
+        "_stream(norm_scale,1,HT,b*HT,1,0,ROW_BATCH)",
         "[scaler_bits,gr_read._bits(gr_read.EPS)]",
-        "gr_read.NORM,p_set,[HT,ST,4,16],fp32_dest=True,unpack_to_dest_fp32=(4,7)",
+        "gr_read.NORM,p_set,[HT,ST,ROW_BATCH,16],fp32_dest=True,unpack_to_dest_fp32=(4,7)",
         "gr_read.DOWN,w_set,[FT,8,8,9,17,gr_read.DOWN_SPILL,10],fp32_dest=True",
         "src_cb=16,dst_cb=8,tiles=HT,tiles_tensor=normalized",
         "recv_cb=8,recv_tiles=FT,senders=gr_read.BRANCHES",
@@ -398,8 +398,8 @@ def test_normalize_down_gather_mirrors_normalize_down():
         assert text in PARTIALS, text
     for text in (
         "_stream(gathered_stats,1,STATS_TILES,b*STATS_TILES,1,0,STATS_TILES)",
-        "_stream(residual,1,HIDDEN_TILES,b*HIDDEN_TILES,1,0,4)",
-        "NORM,p_set,[HIDDEN_TILES,STATS_TILES,4,16],fp32_dest=True,unpack_to_dest_fp32=(4,7)",
+        "_stream(residual,1,HIDDEN_TILES,b*HIDDEN_TILES,1,0,ROW_BATCH)",
+        "NORM,p_set,[HIDDEN_TILES,STATS_TILES,ROW_BATCH,16],fp32_dest=True,unpack_to_dest_fp32=(4,7)",
         'DOWN,w_set,[FLAT_TILES,8,8,9,17,DOWN_SPILLifmatmul=="chain"else0,10],fp32_dest=True',
         "src_cb=16,dst_cb=8,tiles=HIDDEN_TILES,tiles_tensor=normalized",
         "recv_cb=8,recv_tiles=FLAT_TILES,senders=BRANCHES",
@@ -419,10 +419,10 @@ def test_front_keeps_normalize_downs_kernels_and_streams():
         "[(residual,0),(norm_scale,4),(residual,0),(gathered_stats,1)]",
         "[(gr_read.CONST_SCALER,c_sscaler),(gr_read.CONST_SCALER,2),(gr_read.CONST_COL_SCALAR,3)]",
         "[gr_read._bits(1.0),scaler_bits,gr_read._bits(gr_read.EPS)]",
-        "_stream(norm_scale,1,HT,b*HT,1,0,4)",
+        "_stream(norm_scale,1,HT,b*HT,1,0,ROW_BATCH)",
         "_stream(gathered_stats,1,ST,b*ST,1,0,ST)",
         "gate=(3,FRONT_STATS_READY,links+1)",
-        "fp.compute_kernel(STATS_NORM,p_set,[HT,ST,4,16,c_sscaler,c_x2,c_sout],fp32_dest=True,unpack_to_dest_fp32=(4,7))",
+        "fp.compute_kernel(STATS_NORM,p_set,[HT,ST,ROW_BATCH,16,c_sscaler,c_x2,c_sout],fp32_dest=True,unpack_to_dest_fp32=(4,7))",
         "gr_read.DOWN,w_set,[FT,8,8,9,17,gr_read.DOWN_SPILL,10],fp32_dest=True",
         "recv_cb=8,recv_tiles=FT,senders=gr_read.BRANCHES",
         'gr_read.avg_scaler("chain")',
@@ -439,7 +439,7 @@ def test_front_keeps_normalize_downs_kernels_and_streams():
         "[reader,compute,writer2,receiver,down,writer]",
     ):
         assert text in FRONT, text
-    assert FRONT.count("_stream(residual,1,HT,b*HT,1,0,4)") == 2
+    assert FRONT.count("_stream(residual,1,HT,b*HT,1,0,ROW_BATCH)") == 2
     # stats' CBs 1 (fp32 scaler, 1 tile) and 2 (fp32 x^2, Wt tiles) and normalize's 2 (scaler, mode dtype): the
     # front's stats scaler is fp32 like stats', the norm scaler stays the chain-mode CB 2
     assert "fp.cb_descriptor(1,gr_read.FP32,gr_read.TILE_FP32,1,stats_cores)" in STATS

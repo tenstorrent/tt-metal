@@ -20,8 +20,7 @@ import torch.nn.functional as F
 
 from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
 from models.demos.blackhole.qwen38_flash_next.reference import causal_depthwise_conv1d, gated_delta_recurrent
-
-TP_SIZE = 4
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZE
 
 
 @dataclass(frozen=True)
@@ -191,7 +190,7 @@ class Qwen38GDNWeights:
 
     def device_shard(self, device_index: int) -> Qwen38GDNDeviceShard:
         if not 0 <= device_index < self.dimensions.tp_size:
-            raise ValueError(f"device_index must be in [0, 4), got {device_index}")
+            raise ValueError(f"device_index must be in [0, {self.dimensions.tp_size}), got {device_index}")
         dims = self.dimensions
         q0 = device_index * dims.key_width_per_device
         q1 = q0 + dims.key_width_per_device

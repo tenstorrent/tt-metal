@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Fail-closed checkpoint accounting and four-P150 placement budget.
+"""Fail-closed checkpoint accounting and per-device placement budget (TP=4 on four P150s, or TP=8).
 
 This module accounts for checkpoint payloads only. Runtime allocator, trace,
 collective, and activation reservations belong in the bring-up admission
@@ -17,6 +17,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZE
+
 TILE_ELEMENTS = 32 * 32
 BF4_TILE_BYTES = 576
 BF8_TILE_BYTES = 1088
@@ -32,13 +34,22 @@ TARGET_QSA_HEAD_DIM = 256
 TARGET_INDEX_QUERY_HEADS = 4
 TARGET_INDEX_KV_HEADS = 1
 TARGET_INDEX_HEAD_DIM = 128
+# Mirrors ttnn/moe.py (importing it here is circular): shared-expert columns per device, and experts per device.
+SHARED_LOCAL_INTERMEDIATE = 160
+EXPERTS_PER_DEVICE = TARGET_EXPERT_COUNT // TP_SIZE
 
 # Exact output of moe_compute_utils' ring-aware packer for one device and one
-# Qwen4Exp layer (128 resident experts).  Raw BF4 tile accounting is not a
-# valid device admission bound for this kernel layout.
-PACKED_ROUTED_BYTES_PER_LAYER = {
+# layer with 128 resident experts (the TP=4 count).  Raw BF4 tile accounting is
+# not a valid device admission bound for this kernel layout.
+_PACKED_REFERENCE_EXPERTS = 128
+_PACKED_REFERENCE_BYTES_PER_LAYER = {
     7: {"routed_gate_up": 346_816_512, "routed_down": 130_056_192},
     8: {"routed_gate_up": 396_361_728, "routed_down": 148_635_648},
+}
+# Per device and layer at EXPERTS_PER_DEVICE resident experts (packed bytes are linear in the expert count).
+PACKED_ROUTED_BYTES_PER_LAYER = {
+    ring: {category: size // _PACKED_REFERENCE_EXPERTS * EXPERTS_PER_DEVICE for category, size in sizes.items()}
+    for ring, sizes in _PACKED_REFERENCE_BYTES_PER_LAYER.items()
 }
 
 
@@ -151,11 +162,11 @@ def _tile_matrix_bytes(rows: int, columns: int) -> int:
     return (-(-rows // 32) * 32) * (-(-columns // 32) * 32) * BF16_BYTES
 
 
-def vision_resident_layout(*, mesh_size: int = 4) -> dict[str, int]:
+def vision_resident_layout(*, mesh_size: int = TP_SIZE) -> dict[str, int]:
     """Per-device BF16 bytes of the device tower's resident weights (``ttnn/vision.py``'s layout, MODELED from shapes).
 
     Everything is replicated on every device except the merger's second linear, whose output columns are sharded
-    over the mesh (each device produces its 640 hidden columns).  Head dim 72 is zero-padded to 96 in the fused
+    over the mesh (each device produces its 2560 // mesh_size hidden columns).  Head dim 72 is zero-padded to 96 in the fused
     q/k/v projection (its output columns) and the attention output projection (its input rows); the MLP width 4304
     is padded to 4320.  The position table stays on the host (its per-grid resampling is host work).
     """
@@ -205,7 +216,7 @@ def _is_qsa_index_projection(name: str) -> bool:
 
 
 def plan_a_per_device_weight_bytes(
-    records: list[TensorRecord], *, mesh_size: int = 4, ring_size: int, vision_resident: bool = False
+    records: list[TensorRecord], *, mesh_size: int = TP_SIZE, ring_size: int, vision_resident: bool = False
 ) -> dict[str, int]:
     """Account for the conservative baseline weight placement on each device.
 
@@ -219,8 +230,8 @@ def plan_a_per_device_weight_bytes(
     device total, with its position table under ``host_only``.
     """
 
-    if mesh_size != 4:
-        raise ValueError(f"the required placement is TP4, not mesh_size={mesh_size}")
+    if mesh_size != TP_SIZE:
+        raise ValueError(f"the required placement is TP{TP_SIZE}, not mesh_size={mesh_size}")
     if ring_size not in PACKED_ROUTED_BYTES_PER_LAYER:
         raise ValueError(f"Blackhole ring_size must be 7 or 8, got {ring_size}")
     totals = {
@@ -251,7 +262,7 @@ def plan_a_per_device_weight_bytes(
             if len(record.shape) != 3 or record.shape[0] != TARGET_EXPERT_COUNT:
                 raise ValueError(f"{record.name}: expected expert axis {TARGET_EXPERT_COUNT}, got {record.shape}")
             if record.shape[0] % mesh_size:
-                raise ValueError(f"{record.name}: expert axis is not divisible by TP4")
+                raise ValueError(f"{record.name}: expert axis is not divisible by TP{mesh_size}")
             packed_bytes = PACKED_ROUTED_BYTES_PER_LAYER[ring_size][category]
             totals["routed_expert_bf4_ep"] += packed_bytes
             layer_key = record.name.rsplit(".mlp.experts.", 1)[0]
@@ -269,15 +280,25 @@ def plan_a_per_device_weight_bytes(
             key_rows = TARGET_INDEX_KV_HEADS * TARGET_INDEX_HEAD_DIM
             if record.shape != (query_rows + key_rows, 2560):
                 raise ValueError(f"{record.name}: unexpected QSA index projection shape {record.shape}")
-            local_query_rows = query_rows // mesh_size
-            # The single key head is present on every device.
+            # Each device holds one full index query head (odd devices hold a zero block at TP=8) and the single
+            # key head.
+            local_query_rows = TARGET_INDEX_HEAD_DIM
             totals["qsa_indexer_split_bf16"] += (local_query_rows + key_rows) * record.shape[1] * BF16_BYTES
+            continue
+        if ".mlp.shared_expert." in record.name and record.name.endswith(
+            (".gate_proj.weight", ".up_proj.weight", ".down_proj.weight")
+        ):
+            if len(record.shape) != 2:
+                raise ValueError(f"{record.name}: unexpected shared-expert shape {record.shape}")
+            # The intermediate dim is zero-padded to SHARED_LOCAL_INTERMEDIATE columns per device at every TP.
+            hidden_dim = record.shape[0] if record.name.endswith(".down_proj.weight") else record.shape[1]
+            totals["tp4_bf16"] += SHARED_LOCAL_INTERMEDIATE * hidden_dim * BF16_BYTES
             continue
         if len(record.shape) == 1:
             totals["replicated_bf16"] += record.data_bytes
             continue
         if record.data_bytes % mesh_size:
-            raise ValueError(f"{record.name}: BF16 payload is not evenly TP4-shardable")
+            raise ValueError(f"{record.name}: BF16 payload is not evenly TP{mesh_size}-shardable")
         totals["tp4_bf16"] += record.data_bytes // mesh_size
 
     if vision_resident and vision_bytes:
@@ -302,9 +323,9 @@ def plan_a_per_device_weight_bytes(
     return totals
 
 
-def routed_precision_variants(records: list[TensorRecord], *, mesh_size: int = 4) -> dict[str, int]:
-    if mesh_size != 4:
-        raise ValueError(f"the required placement is TP4, not mesh_size={mesh_size}")
+def routed_precision_variants(records: list[TensorRecord], *, mesh_size: int = TP_SIZE) -> dict[str, int]:
+    if mesh_size != TP_SIZE:
+        raise ValueError(f"the required placement is TP{TP_SIZE}, not mesh_size={mesh_size}")
     gate_up = [record for record in records if checkpoint_category(record.name) == "routed_gate_up"]
     down = [record for record in records if checkpoint_category(record.name) == "routed_down"]
     gate_up_bf4 = sum(bfp_tile_storage_bytes(record, BF4_TILE_BYTES) for record in gate_up)

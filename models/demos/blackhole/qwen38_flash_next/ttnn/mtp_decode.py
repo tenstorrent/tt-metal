@@ -29,10 +29,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, NoReturn
 
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZE, TP_SIZES
+
 DRAFT_STEPS = 4
 DRAFT_EXTENSION_CALLS = DRAFT_STEPS - 1
 VERIFY_POSITIONS = DRAFT_STEPS + 1
-TP_SIZE = 4
 VOCAB_SIZE = 248_320
 MAX_CONTEXT = 262_144
 QSA_COMPRESS_RATIO = 4
@@ -1038,11 +1039,11 @@ class Qwen38SpeculativeDecodeController:
 
 
 def validate_mtp_decode_static_contract() -> None:
-    if (DRAFT_STEPS, DRAFT_EXTENSION_CALLS, VERIFY_POSITIONS, TP_SIZE, VOCAB_SIZE, MTP_LAYER_INDEX) != (
+    if (DRAFT_STEPS, DRAFT_EXTENSION_CALLS, VERIFY_POSITIONS, TP_SIZE in TP_SIZES, VOCAB_SIZE, MTP_LAYER_INDEX) != (
         4,
         3,
         5,
-        4,
+        True,
         248_320,
         0,
     ):

@@ -2,16 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import os
 from pathlib import Path
 
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
+from models.demos.blackhole.qwen38_flash_next.checkpoint import (
+    HF_MODEL_ID,
+    PINNED_CHECKPOINT_REVISION,
+    Qwen38Checkpoint,
+    checkpoint_directory,
+)
 from models.demos.blackhole.qwen38_flash_next.config import Qwen38Config, Qwen38Placement
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE, TP_SIZE
 
-CHECKPOINT = Path(os.environ.get("QWEN38_CHECKPOINT", "/nonexistent/Qwen3.8-Flash-Next"))
+CHECKPOINT = checkpoint_directory(missing=Path("/nonexistent/Qwen3.8-Flash-Next"))
 
 
 def test_exact_release_config_and_layer_schedule():
@@ -43,25 +48,45 @@ def test_config_fails_closed_on_shape_only_substitution(tmp_path, expect_error):
         Qwen38Config.from_checkpoint(tmp_path)
 
 
-def test_exact_tp4_placement_contract():
-    config = Qwen38Config.from_checkpoint(CHECKPOINT)
-    placement = Qwen38Placement(config, mesh_shape=(1, 4), physical_ids=(0, 1, 2, 3))
+def _tp_ranges(total: int) -> tuple[tuple[int, int], ...]:
+    width = total // TP_SIZE
+    return tuple((index * width, (index + 1) * width) for index in range(TP_SIZE))
 
-    assert placement.hidden_ranges == ((0, 640), (640, 1280), (1280, 1920), (1920, 2560))
-    assert placement.vocab_ranges[-1] == (186240, 248320)
-    assert placement.expert_ranges == ((0, 128), (128, 256), (256, 384), (384, 512))
-    assert placement.gdn_qk_head_ranges[-1] == (12, 16)
-    assert placement.gdn_value_head_ranges[-1] == (36, 48)
-    assert placement.qsa_query_head_ranges == ((0, 6), (6, 12), (12, 18), (18, 24))
-    assert placement.qsa_kv_device_groups == ((0, 1), (2, 3))
-    assert placement.index_query_head_ranges == ((0, 1), (1, 2), (2, 3), (3, 4))
-    assert placement.index_key_replicas == (0, 1, 2, 3)
+
+def test_exact_tp_placement_contract():
+    config = Qwen38Config.from_checkpoint(CHECKPOINT)
+    placement = Qwen38Placement(config, mesh_shape=MESH_SHAPE, physical_ids=tuple(range(TP_SIZE)))
+    half = TP_SIZE // 2
+
+    assert placement.hidden_ranges == _tp_ranges(2560)
+    assert placement.vocab_ranges[-1] == (248320 - 248320 // TP_SIZE, 248320)
+    assert placement.expert_ranges == _tp_ranges(512)
+    assert placement.gdn_qk_head_ranges[-1] == (16 - 16 // TP_SIZE, 16)
+    assert placement.gdn_value_head_ranges[-1] == (48 - 48 // TP_SIZE, 48)
+    assert placement.qsa_query_head_ranges == _tp_ranges(24)
+    assert placement.qsa_kv_device_groups == (tuple(range(half)), tuple(range(half, TP_SIZE)))
+    stride = TP_SIZE // 4
+    assert placement.index_query_head_ranges == tuple(
+        (device // stride, device // stride + (device % stride == 0)) for device in range(TP_SIZE)
+    )
+    assert placement.index_key_replicas == tuple(range(TP_SIZE))
     assert placement.ple_result_ranges == placement.hidden_ranges
+    if TP_SIZE == 4:
+        assert placement.hidden_ranges == ((0, 640), (640, 1280), (1280, 1920), (1920, 2560))
+        assert placement.vocab_ranges[-1] == (186240, 248320)
+        assert placement.expert_ranges == ((0, 128), (128, 256), (256, 384), (384, 512))
+        assert placement.qsa_query_head_ranges == ((0, 6), (6, 12), (12, 18), (18, 24))
+        assert placement.qsa_kv_device_groups == ((0, 1), (2, 3))
+        assert placement.index_query_head_ranges == ((0, 1), (1, 2), (2, 3), (3, 4))
 
 
 @pytest.mark.parametrize(
     ("shape", "physical_ids", "message"),
-    [((1, 2), (0, 1), "exactly four"), ((2, 2), (0, 1, 2, 3), "1x4"), ((1, 4), (0, 1, 1, 3), "distinct")],
+    [
+        ((1, TP_SIZE // 2), tuple(range(TP_SIZE // 2)), f"exactly {TP_SIZE}"),
+        ((2, TP_SIZE // 2), tuple(range(TP_SIZE)), f"1x{TP_SIZE}"),
+        (MESH_SHAPE, (0, 1, 1) + tuple(range(3, TP_SIZE)), "distinct"),
+    ],
 )
 def test_placement_rejects_wrong_or_ambiguous_mesh(shape, physical_ids, message, expect_error):
     config = Qwen38Config.from_checkpoint(CHECKPOINT)
@@ -103,3 +128,72 @@ def test_ple_table_is_identified_as_host_resident():
 
     assert len(ple_names) == 128
     assert all(placement.classify_tensor(name) == "host_ple" for name in ple_names)
+
+
+def test_checkpoint_directory_uses_an_existing_directory_as_is(tmp_path, monkeypatch):
+    import huggingface_hub
+
+    def fail(*args, **kwargs):
+        raise AssertionError("snapshot_download must not be called for a directory")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fail)
+
+    assert checkpoint_directory({"HF_MODEL": str(tmp_path)}) == tmp_path
+
+
+def test_checkpoint_directory_resolves_a_repo_id_in_the_local_hub_cache(tmp_path, monkeypatch):
+    import huggingface_hub
+
+    calls = []
+
+    def fake(*args, **kwargs):
+        calls.append((args, kwargs))
+        return str(tmp_path / "snapshot")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake)
+
+    assert checkpoint_directory({"HF_MODEL": "org/model"}, revision="abc") == tmp_path / "snapshot"
+    assert calls == [(("org/model",), {"revision": "abc", "local_files_only": True})]
+
+
+def test_checkpoint_directory_defaults_to_the_release_repo_id(tmp_path, monkeypatch):
+    import huggingface_hub
+
+    calls = []
+
+    def fake(*args, **kwargs):
+        calls.append((args, kwargs))
+        return str(tmp_path)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake)
+
+    assert checkpoint_directory({}) == tmp_path
+    assert calls == [((HF_MODEL_ID,), {"revision": PINNED_CHECKPOINT_REVISION, "local_files_only": True})]
+
+
+def test_checkpoint_directory_passes_no_revision_through(tmp_path, monkeypatch):
+    import huggingface_hub
+
+    calls = []
+
+    def fake(*args, **kwargs):
+        calls.append((args, kwargs))
+        return str(tmp_path)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake)
+
+    assert checkpoint_directory({}, revision=None) == tmp_path
+    assert calls == [((HF_MODEL_ID,), {"revision": None, "local_files_only": True})]
+
+
+def test_checkpoint_directory_raises_when_nothing_resolves(monkeypatch, expect_error):
+    import huggingface_hub
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("not cached")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fail)
+
+    with expect_error(FileNotFoundError, "HF_MODEL"):
+        checkpoint_directory({"HF_MODEL": "org/model"})
+    assert checkpoint_directory({"HF_MODEL": "org/model"}, missing=Path("/x")) == Path("/x")

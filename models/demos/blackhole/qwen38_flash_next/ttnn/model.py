@@ -51,6 +51,7 @@ from ttnn.tools.trace_allocation_tracker import corruptible_allocation_scope
 import ttnn
 from models.demos.blackhole.qwen38_flash_next import mrope, vision_splice
 from models.demos.blackhole.qwen38_flash_next.config import CONFIG_SHA256, LAYER_PATTERN, Qwen38Config
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZES
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import moe as moe_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import pack as pack_module
@@ -61,6 +62,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     LONG_CHUNK_ROWS,
     MESH_SHAPE,
     PADDED_PASS_MIN_ROWS,
+    TP_SIZE,
     Qwen38MeshContract,
     Qwen38TTNNDevicePosition,
     Qwen38TTNNDevicePositionRow,
@@ -102,7 +104,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.ple import (
     Qwen38TTNNPLERowsPreparedInput,
 )
 
-TP_SIZE = 4
 HIDDEN_SIZE = 2560
 LOCAL_HIDDEN_SIZE = HIDDEN_SIZE // TP_SIZE
 RESIDUAL_BRANCHES = 4
@@ -1125,7 +1126,7 @@ class Qwen38TTNNTextModel:
         if model_io.embedding.weights is not model_io.lm_head.weights:
             raise ValueError("embedding and LM head must share one provenance-bound model-I/O weight owner")
         if tuple(model_io.embedding.weights.vocab_ranges) != EXPECTED_VOCAB_RANGES:
-            raise ValueError("model-I/O vocabulary ranges are not the exact contiguous TP4 placement")
+            raise ValueError("model-I/O vocabulary ranges are not the exact contiguous TP_SIZE placement")
         if final_mixer.mesh_contract != mesh_contract or final_mixer.mesh_device is not mesh_device:
             raise ValueError("backbone final mixer belongs to a different live physical mesh")
         if final_mixer.weights.namespace != Qwen38TTNNLayerNamespace.BACKBONE.value:
@@ -4260,7 +4261,7 @@ def validate_model_static_contract() -> None:
     """No-device guard for model geometry, order, and RoPE block routing."""
 
     if (
-        TP_SIZE,
+        TP_SIZE in TP_SIZES,
         BACKBONE_LAYERS,
         HIDDEN_SIZE,
         LOCAL_HIDDEN_SIZE,
@@ -4271,9 +4272,9 @@ def validate_model_static_contract() -> None:
         QSA_COMPRESS_RATIO,
         ROPE_THETA,
         MAX_CONTEXT,
-    ) != (4, 48, 2560, 640, 4, 248320, 62080, 64, 4, 10_000_000, 262144):
+    ) != (True, 48, 2560, 2560 // TP_SIZE, 4, 248320, 248320 // TP_SIZE, 64, 4, 10_000_000, 262144):
         raise RuntimeError("Qwen3.8 TTNN text-model geometry drifted")
-    if RESIDUAL_LOCAL_SHAPE != (1, 4, 1, 640) or BLOCK_LOCAL_SHAPE != (1, 1, 1, 640):
+    if RESIDUAL_LOCAL_SHAPE != (1, 4, 1, 2560 // TP_SIZE) or BLOCK_LOCAL_SHAPE != (1, 1, 1, 2560 // TP_SIZE):
         raise RuntimeError("Qwen3.8 TTNN text-model local shapes drifted")
     if EXPECTED_LAYER_PATTERN != tuple(LAYER_PATTERN) or len(EXPECTED_LAYER_PATTERN) != BACKBONE_LAYERS:
         raise RuntimeError("Qwen3.8 TTNN text-model layer order drifted")
@@ -4281,7 +4282,9 @@ def validate_model_static_contract() -> None:
         range(3, BACKBONE_LAYERS, QSA_COMPRESS_RATIO)
     ):
         raise RuntimeError("Qwen3.8 TTNN QSA layer locations drifted")
-    if EXPECTED_VOCAB_RANGES != ((0, 62080), (62080, 124160), (124160, 186240), (186240, 248320)):
+    if EXPECTED_VOCAB_RANGES != tuple(
+        (index * (248320 // TP_SIZE), (index + 1) * (248320 // TP_SIZE)) for index in range(TP_SIZE)
+    ):
         raise RuntimeError("Qwen3.8 TTNN vocabulary placement drifted")
     # The split: HEAD is GDN-only (reads no position), the first TAIL layer is the PLE consumer.
     if GENERIC_HEAD_LAYERS != 1 or GENERIC_HEAD_LAYERS != PLE_CHECKPOINT_LAYER:
@@ -4289,7 +4292,7 @@ def validate_model_static_contract() -> None:
     if set(EXPECTED_LAYER_PATTERN[:GENERIC_HEAD_LAYERS]) != {"linear_attention"}:
         raise RuntimeError("Qwen3.8 TTNN HEAD layers must all be GDN layers")
     if [(handoff.name, handoff.shape, handoff.padded_shape) for handoff in GENERIC_HEAD_HANDOFF] != [
-        ("layer_0_output_residual", (1, 4, 1, 640), (1, 4, 32, 640))
+        ("layer_0_output_residual", (1, 4, 1, 2560 // TP_SIZE), (1, 4, 32, 2560 // TP_SIZE))
     ]:
         raise RuntimeError("Qwen3.8 TTNN HEAD/TAIL handoff drifted")
 

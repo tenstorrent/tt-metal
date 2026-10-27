@@ -584,8 +584,8 @@ def main():
     ap.add_argument("--url", default="http://127.0.0.1:8000", help="server base URL (server default port 8000)")
     ap.add_argument(
         "--tokenizer-dir",
-        default=os.environ.get("QWEN38_CHECKPOINT"),
-        help="flat checkpoint dir holding the tokenizer files (default: $QWEN38_CHECKPOINT)",
+        default=os.environ.get("HF_MODEL"),
+        help="flat checkpoint dir holding the tokenizer files (default: $HF_MODEL)",
     )
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--suite", choices=["decode", "sampled", "prefill", "concurrency", "all"], default="all")
@@ -611,7 +611,7 @@ def main():
     ap.add_argument("--timeout", type=float, default=900.0, help="per-request HTTP timeout, seconds")
     args = ap.parse_args()
     if not args.tokenizer_dir:
-        ap.error("--tokenizer-dir or QWEN38_CHECKPOINT is required")
+        ap.error("--tokenizer-dir or HF_MODEL is required")
     asyncio.run(main_async(args))
 
 

@@ -10,7 +10,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
+from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint, checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
 from models.demos.blackhole.qwen38_flash_next.tt.moe import (
     Qwen38MoE,
@@ -19,7 +19,7 @@ from models.demos.blackhole.qwen38_flash_next.tt.moe import (
     weighted_routed_reduce,
 )
 
-CHECKPOINT = Path(os.environ.get("QWEN38_CHECKPOINT", "/nonexistent/Qwen3.8-Flash-Next"))
+CHECKPOINT = checkpoint_directory(missing=Path("/nonexistent/Qwen3.8-Flash-Next"))
 TRANSFORMERS_SRC = os.environ.get("QWEN38_TRANSFORMERS_SRC")
 
 

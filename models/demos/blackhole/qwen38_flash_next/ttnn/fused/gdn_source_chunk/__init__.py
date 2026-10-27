@@ -9,11 +9,12 @@ chunk_gdn_phased_program_factory.cpp. No shared operation default is changed.
 from pathlib import Path
 import struct
 import ttnn
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZE
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fp
 
 KERNELS = Path(__file__).parent / "kernels"
 NAME = "gdn_source_chunk"
-HEADS, DIM, CHUNK = 12, 128, 32
+HEADS, DIM, CHUNK = 48 // TP_SIZE, 128, 32  # value heads per device
 
 
 def allocate(shape, mesh):

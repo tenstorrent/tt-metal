@@ -2,7 +2,7 @@
 # Reproduce the Qwen3.8-Flash-Next QB2 perf numbers.   run_repro.sh STEP...
 #   STEP: prewarm | prepare | acceptance | P1 | P2 | P3 | P4a | P4b | all
 #   P1 plain | P2 --prefill-slab 2048 | P3 --mtp 4 --prefill-slab 2048 | P4a lanes 4 mtp 4 | P4b lanes 8 mtp 3 (wrapper)
-# Env: QWEN38_CHECKPOINT, QWEN38_CACHE_ROOT (required); QWEN38_PY; QWEN38_OUT (default ./qb2_repro_results/<utc stamp>);
+# Env: HF_MODEL, TT_CACHE_PATH (required); QWEN38_PY; QWEN38_OUT (default ./qb2_repro_results/<utc stamp>);
 #      QWEN38_PORT (8000); TT_METAL_HOME; QWEN38_DEVICE_LOCK (optional lock file, held with flock -n per server).
 # No device lock, no other tt process may run during these steps. Never kills by name.
 set -euo pipefail
@@ -10,8 +10,8 @@ set -euo pipefail
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 TT_METAL_HOME="${TT_METAL_HOME:-$(cd -- "$HERE/../../../../.." && pwd -P)}"
 export TT_METAL_HOME
-CKPT="${QWEN38_CHECKPOINT:?set QWEN38_CHECKPOINT (flat checkpoint dir)}"
-CACHE="${QWEN38_CACHE_ROOT:?set QWEN38_CACHE_ROOT}"
+CKPT="${HF_MODEL:?set HF_MODEL to the flat checkpoint directory}"
+CACHE="${TT_CACHE_PATH:?set TT_CACHE_PATH}"
 PY="${QWEN38_PY:-$TT_METAL_HOME/python_env_q38fn/bin/python}"
 PORT="${QWEN38_PORT:-8000}"
 OUT="${QWEN38_OUT:-$PWD/qb2_repro_results/$(date -u +%Y%m%dT%H%M%SZ)}"
@@ -28,7 +28,7 @@ log() { printf '[repro %s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 die() { printf '[repro] ERROR: %s\n' "$*" >&2; exit 2; }
 
 [[ $# -gt 0 ]] || { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
-[[ -d "$CKPT" ]] || die "QWEN38_CHECKPOINT=$CKPT is not a directory"
+[[ -d "$CKPT" ]] || die "HF_MODEL=$CKPT is not a directory"
 [[ -x "$PY" ]] || die "no python at $PY (run setup_venv.sh or set QWEN38_PY)"
 [[ -x "$LAUNCHER" ]] || die "launcher not found: $LAUNCHER (is this file inside the tt-metal tree? set TT_METAL_HOME)"
 mkdir -p "$OUT"

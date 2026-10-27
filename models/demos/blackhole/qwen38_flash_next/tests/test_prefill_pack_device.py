@@ -14,8 +14,8 @@ patterns on all four devices.  The other users' own outputs must change (sensiti
 ``timing``: replay wall time per bucket against a 2048-row slab replay, host input prep per pack, DRAM before / after.
 
 Run:  pytest .../test_prefill_pack_device.py -v -s -k leak_s128   (one id per process)
-Env:  as ``test_prefill_padded_pass_device`` (QWEN38_HARDWARE_PROFILE, TT_METAL_TRACE_ALLOC_TRACKING=1, MODEL_WEIGHTS_DIR,
-      QWEN38_CACHE_ROOT, TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0).  ``P3D2_OUT`` names a directory for the JSON results.
+Env:  as ``test_prefill_padded_pass_device`` (MESH_DEVICE, TT_METAL_TRACE_ALLOC_TRACKING=1, HF_MODEL,
+      TT_CACHE_PATH, TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0).  ``P3D2_OUT`` names a directory for the JSON results.
 """
 
 import contextlib
@@ -36,6 +36,7 @@ from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, Qwen38OfficialChatTemplate
+from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import load_context_text
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F401  (device_params is a fixture)
     DEVICE_PARAMS,
@@ -81,7 +82,7 @@ class Prompts:
     def __init__(self, checkpoint: Path) -> None:
         self.template = Qwen38OfficialChatTemplate(checkpoint)
         config = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
-        text = load_context_text(config, Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context")
+        text = load_context_text(config, Path(os.environ["TT_CACHE_PATH"]) / "demo-context")
         self.tokenizer = self.template.tokenizer
         self.book = self.tokenizer(text, add_special_tokens=False)["input_ids"]
         self.cursor = 5000
@@ -271,7 +272,7 @@ def bits_equal(a: torch.Tensor, b: torch.Tensor) -> bool:
 
 @pytest.fixture
 def harness_factory(mesh_device):
-    checkpoint = Path(os.environ["MODEL_WEIGHTS_DIR"])
+    checkpoint = checkpoint_directory()
     built = []
 
     def make(buckets):

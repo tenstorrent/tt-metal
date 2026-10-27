@@ -3,7 +3,7 @@
 
 """Full-checkpoint trace reuse and fresh-request state at prefill bucket boundaries.
 
-Run with the same held 1x4 mesh/cache environment as test_moe_tp.py. This measures
+Run with the same held 1xTP_SIZE mesh/cache environment as test_moe_tp.py. This measures
 fixed-length greedy decoding with EOS ignored, separately from task accuracy.
 """
 
@@ -24,7 +24,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("QWEN38_FUSED_DEVICE_TEST") != "1",
-    reason="requires a held four-die Blackhole line and the complete checkpoint/cache",
+    reason="requires a held TP_SIZE-die Blackhole line and the complete checkpoint/cache",
 )
 
 

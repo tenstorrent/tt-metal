@@ -8,7 +8,7 @@ split, the decay and write gates, both l2 norms, the fp32 delta-rule state updat
 and the sigmoid gate: 49 programs, 119 us kernel / 213 us occupancy per layer in the 2026-09-12 census).  One core
 per (lane, value head) item; the state stays fp32 and is updated in place; the newest ring slot is written from the
 projection.  The 1-row body runs it at rows = 1 and the batched-lanes body at rows = B (``_forward_decode_lanes_fused``
-in ttnn/gdn.py: lane u = state slot u and ring row u, so B independent users are 12 B items of one program).
+in ttnn/gdn.py: lane u = state slot u and ring row u, so B independent users are HEADS * B items of one program).
 Rounding follows tt/gdn.py (the oracle), not today's chain, so the tolerance class is COMPONENT (note
 work/FUSE-GDN-STEP-20260913.md section 1).  ``reference_step`` is the kernel's arithmetic in torch for the tests.
 """
@@ -22,6 +22,7 @@ import torch.nn.functional as F
 
 import ttnn
 
+from ...contracts import TP_SIZE
 from .. import program as fp
 from ..registry import COMPONENT, FusedKernel, register
 
@@ -30,8 +31,10 @@ READER = fp.kernel_source(NAME, "reader.cpp")
 WRITER = fp.kernel_source(NAME, "writer.cpp")
 COMPUTE = fp.kernel_source(NAME, "compute.cpp")
 
-HEADS = 12
-QK_HEADS = 4
+VALUE_HEADS, QK_HEADS_TOTAL = 48, 16
+HEADS = VALUE_HEADS // TP_SIZE
+QK_HEADS = QK_HEADS_TOTAL // TP_SIZE
+QK_REPEAT = HEADS // QK_HEADS
 HEAD_DIM = 128
 QK_WIDTH = QK_HEADS * HEAD_DIM
 VALUE_WIDTH = HEADS * HEAD_DIM
@@ -39,8 +42,14 @@ QKV_WIDTH = 2 * QK_WIDTH + VALUE_WIDTH
 A_COLUMN = QKV_WIDTH + VALUE_WIDTH
 B_COLUMN = A_COLUMN + fp.TILE
 PROJECTION_WIDTH = B_COLUMN + fp.TILE
+# tile ids of one head's inputs in the [q|k|v|z|a|b] projection tile row, and of the head's tile run per section
+K_TILE0 = QK_WIDTH // fp.TILE
+V_TILE0 = 2 * QK_WIDTH // fp.TILE
+Z_TILE0 = QKV_WIDTH // fp.TILE
+A_TILE = A_COLUMN // fp.TILE
+B_TILE = B_COLUMN // fp.TILE
 STATE_TILES = 16
-# debug taps in program order (one fp32 tile each); the writer stores them per item as [rows*12, DEBUG_TILES, 32, 32]
+# debug taps in program order (one fp32 tile each); the writer stores them per item as [rows*HEADS, DEBUG_TILES, 32, 32]
 DEBUG_TAPS = (
     "conv_sum0",
     *(f"conv{t}" for t in range(12)),
@@ -99,7 +108,8 @@ FP32_COPY_CBS = (5, 7, 18, 19, 21, 22)
 
 
 def constant_tiles(mesh, dt_bias, neg_exp_A):
-    """Per device ``[1, 24, 32, 32]`` fp32: tiles 0..11 = dt_bias[h], 12..23 = neg_exp_A[h], each filling a tile.
+    """Per device ``[1, 2*HEADS, 32, 32]`` fp32: tiles 0..HEADS-1 = dt_bias[h], HEADS..2*HEADS-1 = neg_exp_A[h], each
+    filling a tile.
 
     Full tiles keep the fp32 constants exact on the SFPU path (a broadcast through the source registers would
     truncate them to 19 bits)."""
@@ -129,11 +139,11 @@ def constant_tiles(mesh, dt_bias, neg_exp_A):
 
 
 def run(projected, older, newest, taps, constants, norm, recurrent, out, *, debug=None):
-    """The program on explicit tensors (local shapes, one tile row): ``projected`` [1,1,rows,4160] bf16;
-    ``older`` the three older ring slots and ``newest`` the slot this token lands in, [1,1,rows,2560] bf16;
-    ``taps`` 4 x [1,1,1,2560] bf16; ``constants`` from ``constant_tiles``; ``norm`` [1,1,1,128] bf16;
-    ``recurrent`` [rows,12,128,128] fp32 (updated in place); ``out`` [1,1,rows,1536] bf16 (any memory layout the
-    TensorAccessor addresses); ``debug`` an optional [rows*12*18, 32, 32] fp32 tap tensor."""
+    """The program on explicit tensors (local shapes, one tile row): ``projected`` [1,1,rows,PROJECTION_WIDTH] bf16;
+    ``older`` the three older ring slots and ``newest`` the slot this token lands in, [1,1,rows,QKV_WIDTH] bf16;
+    ``taps`` 4 x [1,1,1,QKV_WIDTH] bf16; ``constants`` from ``constant_tiles``; ``norm`` [1,1,1,128] bf16;
+    ``recurrent`` [rows,HEADS,128,128] fp32 (updated in place); ``out`` [1,1,rows,VALUE_WIDTH] bf16 (any memory layout the
+    TensorAccessor addresses); ``debug`` an optional [rows*HEADS*DEBUG_TILES, 32, 32] fp32 tap tensor."""
 
     rows = fp.rows_of(projected)
     if fp.tile_width_of(projected) != PROJECTION_WIDTH:
@@ -152,7 +162,7 @@ def run(projected, older, newest, taps, constants, norm, recurrent, out, *, debu
     def pairs(w):
         return [value for item in items[w.start : w.start + w.count] for value in item]
 
-    reader_cta = [rows]
+    reader_cta = [rows, HEADS, K_TILE0, V_TILE0, Z_TILE0, A_TILE, B_TILE]
     for tensor in (projected, *older, *taps, constants, norm, recurrent, newest):
         reader_cta.extend(fp.accessor_args(tensor))
     reader_addrs = [
@@ -164,7 +174,7 @@ def run(projected, older, newest, taps, constants, norm, recurrent, out, *, debu
         recurrent.buffer_address(),
         newest.buffer_address(),
     ]
-    writer_cta = [rows, *fp.accessor_args(recurrent), *fp.accessor_args(out)]
+    writer_cta = [rows, HEADS, *fp.accessor_args(recurrent), *fp.accessor_args(out)]
     writer_addrs = [recurrent.buffer_address(), out.buffer_address()]
     defines = [("INP_FLOAT32", "1")]
     cbs = [fp.cb_descriptor(index, dtype, fp.TILE_BYTES[dtype], pages, cores) for index, dtype, pages in CBS]
@@ -204,7 +214,7 @@ def run(projected, older, newest, taps, constants, norm, recurrent, out, *, debu
         io.append(debug)
     # the projection, the ring slots and the taps once (each core its head's columns), the fp32 state read and
     # written in place, the newest slot and the output written, the constant tiles once per core; per lane: the
-    # 4-tap conv, the two l2 norms, the fp32 delta-rule update (outer products, decay, delta) and read-out on 12
+    # 4-tap conv, the two l2 norms, the fp32 delta-rule update (outer products, decay, delta) and read-out on HEADS
     # heads of 128 x 128, the gated norm
     meta = fp.program_meta(
         NAME,
@@ -276,10 +286,10 @@ def gdn_step_composed(gdn, projected, window, state):
 
 
 def reference_step(projected, older, taps, dt_bias, neg_exp_A, norm, state):
-    """tt/gdn.py's arithmetic per lane on host tensors: ``projected`` [rows, 4160] bf16, ``older`` 3 x [rows, 2560]
-    bf16 (oldest first), ``taps`` 4 x [2560] bf16, ``dt_bias`` / ``neg_exp_A`` [12] fp32, ``norm`` [128] bf16,
-    ``state`` [rows, 12, 128, 128] fp32.  Returns (new_state fp32, gated [rows, 1536] bf16, conv [rows, 2560] bf16,
-    o [rows, 12, 128] bf16, beta [rows, 12] bf16, decay [rows, 12] fp32)."""
+    """tt/gdn.py's arithmetic per lane on host tensors: ``projected`` [rows, PROJECTION_WIDTH] bf16, ``older`` 3 x
+    [rows, QKV_WIDTH] bf16 (oldest first), ``taps`` 4 x [QKV_WIDTH] bf16, ``dt_bias`` / ``neg_exp_A`` [HEADS] fp32,
+    ``norm`` [128] bf16, ``state`` [rows, HEADS, 128, 128] fp32.  Returns (new_state fp32, gated [rows, VALUE_WIDTH]
+    bf16, conv [rows, QKV_WIDTH] bf16, o [rows, HEADS, 128] bf16, beta [rows, HEADS] bf16, decay [rows, HEADS] fp32)."""
 
     from models.demos.blackhole.qwen38_flash_next.reference import gated_delta_recurrent
 
@@ -287,12 +297,8 @@ def reference_step(projected, older, taps, dt_bias, neg_exp_A, norm, state):
     window = [*older, projected[:, :QKV_WIDTH]]
     conv = sum(w.float() * t.float() for w, t in zip(window, taps)).to(torch.bfloat16)
     conv = F.silu(conv)
-    q = conv[:, :QK_WIDTH].reshape(rows, 1, QK_HEADS, HEAD_DIM).repeat_interleave(HEADS // QK_HEADS, dim=2)
-    k = (
-        conv[:, QK_WIDTH : 2 * QK_WIDTH]
-        .reshape(rows, 1, QK_HEADS, HEAD_DIM)
-        .repeat_interleave(HEADS // QK_HEADS, dim=2)
-    )
+    q = conv[:, :QK_WIDTH].reshape(rows, 1, QK_HEADS, HEAD_DIM).repeat_interleave(QK_REPEAT, dim=2)
+    k = conv[:, QK_WIDTH : 2 * QK_WIDTH].reshape(rows, 1, QK_HEADS, HEAD_DIM).repeat_interleave(QK_REPEAT, dim=2)
     v = conv[:, 2 * QK_WIDTH :].reshape(rows, 1, HEADS, HEAD_DIM)
     z = projected[:, QKV_WIDTH:A_COLUMN].reshape(rows, 1, HEADS, HEAD_DIM)
     a = projected[:, A_COLUMN : A_COLUMN + HEADS].reshape(rows, 1, HEADS)

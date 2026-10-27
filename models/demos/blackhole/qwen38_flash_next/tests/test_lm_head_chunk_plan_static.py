@@ -23,25 +23,27 @@ import inspect
 import math
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.ttnn import embedding as embedding_module
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TP_SIZE
 from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
     dram_sharded_matmul_configs,
     dram_sharded_weight_memory_config,
 )
 
 HIDDEN_SIZE = 2560
-LOCAL_VOCAB_SIZE = 62_080
-TP_SIZE = 4
+LOCAL_VOCAB_SIZE = 248_320 // TP_SIZE
 TILE_SIZE = 32
 DRAM_BANKS = 8
 STORAGE_CORES = 40
 BF16_TILE_BYTES = TILE_SIZE * TILE_SIZE * 2
 NOC_BURST_BYTES = 16_384  # Blackhole NOC_MAX_BURST_SIZE
 PLAN = embedding_module.LM_HEAD_CHUNK_COLUMNS
-FORMER_PLAN = (8192,) * 7 + (4736,)
+FORMER_PLAN = (8192,) * (LOCAL_VOCAB_SIZE // 8192) + (LOCAL_VOCAB_SIZE % 8192,)
+BANK_TILES = {4: {(8192, 32), (7040, 28)}, 8: {(8000, 32), (7040, 28)}}
 CACHE_NAME_CHARACTERS = set("abcdefghijklmnopqrstuvwxyz-0123456789")
 
 
@@ -78,7 +80,7 @@ def _sequential_logits(hidden: torch.Tensor, weight: torch.Tensor) -> torch.Tens
 
 
 def test_chunk_plan_tiles_the_local_vocabulary_exactly() -> None:
-    assert PLAN == (8192,) * 5 + (7040,) * 3
+    assert PLAN == {4: (8192,) * 5 + (7040,) * 3, 8: (8000,) * 3 + (7040,)}[TP_SIZE]
     assert sum(PLAN) == LOCAL_VOCAB_SIZE == embedding_module.LOCAL_VOCAB_SIZE
     assert all(width % TILE_SIZE == 0 and width <= 8192 for width in PLAN)
     ranges = _chunk_ranges(PLAN)
@@ -108,13 +110,16 @@ def test_every_chunk_streams_whole_noc_bursts_from_all_eight_banks() -> None:
         assert page == NOC_BURST_BYTES
         assert block_tiles * BF16_TILE_BYTES == page * (tiles_per_bank // 4)
         total_padding += padding
-    assert {(width, _bank_stream(width)[0]) for width in PLAN} == {(8192, 32), (7040, 28)}
+    assert {(width, _bank_stream(width)[0]) for width in PLAN} == BANK_TILES[TP_SIZE]
     # Bank widths that are multiples of four tiles sum to a multiple of 32
-    # tiles per K row; 62080 columns are 1940 tiles, so any such plan pads at
+    # tiles per K row; at TP=4 62080 columns are 1940 tiles, so any such plan pads at
     # least (-1940) % 32 = 12 tiles, and this one pads exactly that.
-    assert total_padding == (-(LOCAL_VOCAB_SIZE // TILE_SIZE)) % 32 == 12
+    assert total_padding == (-(LOCAL_VOCAB_SIZE // TILE_SIZE)) % 32
+    if TP_SIZE == 4:
+        assert total_padding == 12
 
 
+@pytest.mark.skipif(TP_SIZE != 4, reason="the former plan's 4736-column tail is the TP=4 vocabulary shard")
 def test_former_tail_chunk_paged_below_the_noc_burst() -> None:
     assert sum(FORMER_PLAN) == LOCAL_VOCAB_SIZE
     tiles_per_bank, padding, block_tiles, page, _ = _bank_stream(FORMER_PLAN[-1])
@@ -124,7 +129,7 @@ def test_former_tail_chunk_paged_below_the_noc_burst() -> None:
 
 
 def test_column_chunking_leaves_every_logit_and_greedy_candidate_bit_identical() -> None:
-    generator = torch.Generator().manual_seed(62_080)
+    generator = torch.Generator().manual_seed(LOCAL_VOCAB_SIZE)
     rows = 3
     hidden = torch.randn((rows, HIDDEN_SIZE), generator=generator).to(torch.bfloat16)
     weight = torch.randn((HIDDEN_SIZE, LOCAL_VOCAB_SIZE), generator=generator, dtype=torch.bfloat16)
@@ -159,12 +164,16 @@ def test_lm_head_modules_bind_the_chunk_plan_and_cache_names() -> None:
         f"lm-head-chunk-dram-sharded-{index:02d}-cols-{start}-{end}"
         for index, (start, end) in enumerate(_chunk_ranges(PLAN))
     ]
-    assert names[0] == "lm-head-chunk-dram-sharded-00-cols-0-8192"
-    assert names[5] == "lm-head-chunk-dram-sharded-05-cols-40960-48000"
-    assert names[-1] == "lm-head-chunk-dram-sharded-07-cols-55040-62080"
+    assert names[0] == f"lm-head-chunk-dram-sharded-00-cols-0-{PLAN[0]}"
+    assert names[-1] == (
+        f"lm-head-chunk-dram-sharded-{len(PLAN) - 1:02d}-cols-{LOCAL_VOCAB_SIZE - PLAN[-1]}-{LOCAL_VOCAB_SIZE}"
+    )
+    if TP_SIZE == 4:
+        assert names[5] == "lm-head-chunk-dram-sharded-05-cols-40960-48000"
+        assert names[-1] == "lm-head-chunk-dram-sharded-07-cols-55040-62080"
     assert all(set(name) <= CACHE_NAME_CHARACTERS for name in names)
     # Former-plan artifacts were named by index alone and cannot load under the new names.
-    assert not {f"lm-head-chunk-dram-sharded-{index:02d}" for index in range(8)} & set(names)
+    assert not {f"lm-head-chunk-dram-sharded-{index:02d}" for index in range(len(PLAN))} & set(names)
 
     head_init = inspect.getsource(embedding_module.Qwen38TTNNLMHead.__init__)
     assert "mesh_device, HIDDEN_SIZE, width, num_cores=40, num_workers_per_dram_bank=workers" in head_init

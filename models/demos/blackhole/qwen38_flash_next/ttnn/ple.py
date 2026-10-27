@@ -30,10 +30,12 @@ from models.demos.blackhole.qwen38_flash_next.checkpoint import (
     Qwen38CheckpointRowReader,
 )
 from models.demos.blackhole.qwen38_flash_next.reference import ngram_token_ids
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZES
 from models.demos.blackhole.qwen38_flash_next.tt.ple import Qwen38HostPLEEmbedding, Qwen38PLEWeights
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     LONG_CHUNK_ROWS,
     MESH_SHAPE,
+    TP_SIZE,
     Qwen38MeshContract,
     TensorPlacement,
     is_slab_rows,
@@ -43,7 +45,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
 from models.demos.blackhole.qwen38_flash_next.ttnn.gdn import Qwen38TTNNRowsSelectors, Qwen38TTNNRowsSelectorsLanes
 
 TP_AXIS = 1
-TP_SIZE = 4
 HIDDEN_SIZE = 2560
 LOCAL_HIDDEN_SIZE = HIDDEN_SIZE // TP_SIZE
 RESIDUAL_BRANCHES = 4
@@ -108,7 +109,7 @@ def _cache_directory(
         / f"index-{INDEX_SHA256}"
         / f"config-{checkpoint.config.config_sha256}"
         / f"tt-metal-{tt_metal_sha}"
-        / f"mesh-1x4-physical-{physical}"
+        / f"mesh-1x{TP_SIZE}-physical-{physical}"
         / "layer-01"
     )
     path.mkdir(parents=True, exist_ok=True)
@@ -2032,7 +2033,7 @@ class Qwen38TTNNPLE:
 
 def validate_ple_static_contract() -> None:
     actual = {
-        "tp": TP_SIZE,
+        "tp": TP_SIZE in TP_SIZES,
         "hidden": HIDDEN_SIZE,
         "local_hidden": LOCAL_HIDDEN_SIZE,
         "branches": RESIDUAL_BRANCHES,
@@ -2044,9 +2045,9 @@ def validate_ple_static_contract() -> None:
         "state": CONV_STATE_LENGTH,
     }
     expected = {
-        "tp": 4,
+        "tp": True,
         "hidden": 2560,
-        "local_hidden": 640,
+        "local_hidden": 2560 // TP_SIZE,
         "branches": 4,
         "residual": 10240,
         "embedding": 2560,

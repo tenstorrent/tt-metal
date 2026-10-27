@@ -16,7 +16,7 @@ contract's history, and the reduced sampler's draws against vLLM's sampler algor
 20k draws, every reduced / full-row path).
 Two tests need the serving venv and skip elsewhere: the real plugin runner's prefill and decode call shape over a
 namespace runner (host steps and device-sampled steps), and vLLM's config resolution against the pinned checkpoint
-(``QWEN38_CHECKPOINT``).
+(``HF_MODEL``).
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, VOCAB_SIZE
-from models.demos.blackhole.qwen38_flash_next.checkpoint import PINNED_CHECKPOINT_REVISION
+from models.demos.blackhole.qwen38_flash_next.checkpoint import PINNED_CHECKPOINT_REVISION, checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.tests import test_qwen38_prefill_driver_no_device as driver_tests
 from models.demos.blackhole.qwen38_flash_next.tests import test_qwen38_sampling_step_no_device as sampling_tests
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_prefill_driver as driver_module
@@ -62,7 +62,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROWS, 
 
 HF_ARCHITECTURE = "Qwen4ExpForConditionalGeneration"
 TT_ARCHITECTURE = "TT" + HF_ARCHITECTURE
-CHECKPOINT = Path(os.environ.get("QWEN38_CHECKPOINT", "/nonexistent/Qwen3.8-Flash-Next"))
+CHECKPOINT = checkpoint_directory(missing=Path("/nonexistent/Qwen3.8-Flash-Next"))
 BUNDLE = Path(vllm_module.__file__).parent / "vllm_bundle" / "qwen38"
 ALLOCATED_CONTEXT = 32_768
 MAX_MODEL_LEN = ALLOCATED_CONTEXT - RESIDENT_CONTEXT_HEADROOM
@@ -873,10 +873,9 @@ def construction(monkeypatch, tmp_path) -> SimpleNamespace:
     monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()
-    monkeypatch.setenv("MODEL_WEIGHTS_DIR", str(checkpoint))
-    monkeypatch.setenv("QWEN38_CACHE_ROOT", str(tmp_path / "cache"))
+    monkeypatch.setenv("HF_MODEL", str(checkpoint))
+    monkeypatch.setenv("TT_CACHE_PATH", str(tmp_path / "cache"))
     for name in (
-        "QWEN38_CACHE_LABEL",
         "QWEN38_BF4_CORPUS",
         "QWEN38_BF4_CORPUS_VERIFICATION",
         "QWEN38_VLLM_ALLOW_BF4_CONVERSION",
@@ -885,7 +884,6 @@ def construction(monkeypatch, tmp_path) -> SimpleNamespace:
         "QWEN38_PREFILL_PLAN",
         "QWEN38_HARDWARE_MODE",
         "QWEN38_TT_METAL_SHA",
-        "QWEN38_HF_REPO",
     ):
         monkeypatch.delenv(name, raising=False)
     return SimpleNamespace(
@@ -998,18 +996,17 @@ def test_construction_order_and_forwarded_arguments(construction, monkeypatch) -
 
 
 @pytest.mark.parametrize("switch, expected", ((None, False), ("0", False), ("1", True)))
-def test_construction_honours_the_label_and_the_conversion_and_long_chunk_switches(
+def test_construction_uses_the_default_label_and_honours_the_conversion_and_long_chunk_switches(
     construction, monkeypatch, switch: str | None, expected: bool
 ) -> None:
-    monkeypatch.setenv("QWEN38_CACHE_LABEL", "c32768-custom")
     monkeypatch.setenv("QWEN38_PREFILL_SLAB", "0")  # no slab: the long-chunk switch alone decides the 128-row chunks
     for name in ("QWEN38_VLLM_ALLOW_BF4_CONVERSION", "QWEN38_LONG_CHUNKS"):
         if switch is not None:
             monkeypatch.setenv(name, switch)
     _initialize(construction, optimizations="accuracy")
     prepared, constructed, opened = _recorded(construction)
-    assert prepared["component_cache_root"] == construction.caches / "c32768-custom" / "components"
-    assert prepared["model_io_cache_root"] == construction.caches / "c32768-custom" / "model-io"
+    assert prepared["component_cache_root"] == construction.caches / f"c{ALLOCATED_CONTEXT}-vllm" / "components"
+    assert prepared["model_io_cache_root"] == construction.caches / f"c{ALLOCATED_CONTEXT}-vllm" / "model-io"
     assert prepared["routed_bf4_scratch_root"] == construction.caches / "bf4-experts"
     assert prepared["bf4_corpus_root"] is None and prepared["bf4_corpus_verification"] is None
     assert constructed["stage_missing_bf4"] is expected and opened["long_chunks"] is expected
@@ -1059,23 +1056,24 @@ def test_construction_refuses_a_malformed_pinned_sha(construction, monkeypatch, 
 
 def test_construction_resolves_the_checkpoint_in_order(construction, monkeypatch, tmp_path) -> None:
     repo = SimpleNamespace(_name_or_path=HF_REPO_ID)
-    _initialize(construction, hf_config=repo)  # MODEL_WEIGHTS_DIR wins over the repo id
+    _initialize(construction, hf_config=repo)  # HF_MODEL (a directory) wins over a --model repo id
     assert _recorded(construction)[0]["checkpoint_root"] == construction.checkpoint and construction.hub == []
-    monkeypatch.delenv("MODEL_WEIGHTS_DIR")
     directory = tmp_path / "snapshot"
     directory.mkdir()
     construction.calls.clear()
-    _initialize(construction, hf_config=SimpleNamespace(_name_or_path=str(directory)))  # a --model directory
+    _initialize(construction, hf_config=SimpleNamespace(_name_or_path=str(directory)))  # a --model directory wins
     assert _recorded(construction)[0]["checkpoint_root"] == directory and construction.hub == []
+    monkeypatch.delenv("HF_MODEL")
     construction.snapshot.mkdir(parents=True)
     pinned = {"revision": PINNED_CHECKPOINT_REVISION, "local_files_only": True}
     for hf_config, env, repo_id in (
         (repo, None, HF_REPO_ID),
         (None, None, HF_REPO_ID),
-        (repo, "org/mirror", "org/mirror"),
+        (SimpleNamespace(_name_or_path="org/model"), None, "org/model"),
+        (repo, "org/mirror", "org/mirror"),  # HF_MODEL as a repo id beats --model as a repo id
     ):
         if env is not None:
-            monkeypatch.setenv("QWEN38_HF_REPO", env)
+            monkeypatch.setenv("HF_MODEL", env)
         construction.calls.clear()
         construction.hub.clear()
         _initialize(construction, hf_config=hf_config)  # a repo id: the pinned revision from the local hub cache
@@ -1084,28 +1082,20 @@ def test_construction_resolves_the_checkpoint_in_order(construction, monkeypatch
 
 
 def test_construction_refuses_a_checkpoint_the_hub_cache_does_not_hold(construction, monkeypatch, expect_error) -> None:
-    monkeypatch.delenv("MODEL_WEIGHTS_DIR")
+    monkeypatch.delenv("HF_MODEL")
     with pytest.raises(ValueError) as refusal:  # allow-pytest.raises: the test reads the exception object
         _initialize(construction, hf_config=SimpleNamespace(_name_or_path=HF_REPO_ID))
     message = str(refusal.value)
-    assert all(part in message for part in (HF_REPO_ID, PINNED_CHECKPOINT_REVISION, "MODEL_WEIGHTS_DIR", "HF_HOME"))
+    assert all(part in message for part in (HF_REPO_ID, PINNED_CHECKPOINT_REVISION, "HF_MODEL"))
     assert isinstance(refusal.value.__cause__, FileNotFoundError) and len(construction.hub) == 1
-    monkeypatch.setenv("MODEL_WEIGHTS_DIR", str(construction.checkpoint / "missing"))
-    with expect_error(ValueError, "MODEL_WEIGHTS_DIR must name the checkpoint directory"):
-        _initialize(construction, hf_config=SimpleNamespace(_name_or_path=HF_REPO_ID))  # no fall-through to the hub
-    assert len(construction.hub) == 1 and construction.calls == []
+    assert construction.calls == []
 
 
-def test_construction_requires_the_cache_root_and_disjoint_cache_roots(construction, monkeypatch, expect_error) -> None:
-    monkeypatch.delenv("QWEN38_CACHE_ROOT")
-    with expect_error(ValueError, "QWEN38_CACHE_ROOT"):
+def test_construction_requires_the_cache_root(construction, monkeypatch, expect_error) -> None:
+    monkeypatch.delenv("TT_CACHE_PATH")
+    with expect_error(ValueError, "TT_CACHE_PATH must name the cache root"):
         _initialize(construction)
     assert construction.calls == []
-    monkeypatch.setenv("QWEN38_CACHE_ROOT", str(construction.caches.parent))
-    monkeypatch.setenv("QWEN38_CACHE_LABEL", "bf4-experts")  # puts the component root under the BF4 root
-    with expect_error(ValueError, "disjoint"):
-        _initialize(construction)
-    assert [call[0] for call in construction.calls if call[0] in ("prepare", "construct", "open")] == []
 
 
 @pytest.mark.parametrize(
@@ -1564,7 +1554,7 @@ def test_plugin_runner_prefill_and_decode_call_shape(monkeypatch) -> None:
 def test_vllm_config_resolution_in_the_serving_venv() -> None:
     pytest.importorskip("vllm")
     if not (CHECKPOINT / "config.json").is_file():
-        pytest.skip("QWEN38_CHECKPOINT must name the pinned checkpoint directory")
+        pytest.skip("HF_MODEL must name the pinned checkpoint directory")
     from vllm.config import ModelConfig
     from vllm.engine.arg_utils import EngineArgs
     from vllm.model_executor.model_loader.utils import get_model_architecture

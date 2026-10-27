@@ -54,6 +54,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     CHUNK_ROW_COUNTS,
     CHUNK_ROWS,
     MESH_SHAPE,
+    TP_SIZE,
     Qwen38MeshContract,
     TensorPlacement,
     is_slab_rows,
@@ -70,7 +71,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
 from models.demos.blackhole.qwen38_flash_next.ttnn.prefill_dense import Qwen38TTNNPrefillDense, prefill_linear
 
 TP_AXIS = 1
-TP_SIZE = 4
 HIDDEN_SIZE = 2560
 LOCAL_HIDDEN_SIZE = HIDDEN_SIZE // TP_SIZE
 RESIDUAL_BRANCHES = 4
@@ -198,7 +198,7 @@ def _cache_dir(
         / f"index-{INDEX_SHA256}"
         / f"config-{checkpoint.config.config_sha256}"
         / f"tt-metal-{tt_metal_sha}"
-        / f"mesh-1x4-physical-{physical}"
+        / f"mesh-1x{TP_SIZE}-physical-{physical}"
         / namespace
         / f"layer-{layer_index:02d}"
         / f"{block}-gr"

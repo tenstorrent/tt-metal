@@ -21,7 +21,7 @@ when that directory is set.
 
 Run (a held die or line; the no-device sets are masked):
   QWEN38_FUSED_DEVICE_TEST=1 QWEN38_VISION_MESH=1x1 pytest tests/test_vision_tower.py -s
-Env: QWEN38_CHECKPOINT (or MODEL_WEIGHTS_DIR); QWEN38_VISION_MESH 1x1 (one die) or 1x4 (the line); QWEN38_VISION_GRIDS
+Env: HF_MODEL; QWEN38_VISION_MESH 1x1 (one die) or 1x4 (the line); QWEN38_VISION_GRIDS
 restricts the fixtures (comma separated; default: every pinned fixture).
 """
 

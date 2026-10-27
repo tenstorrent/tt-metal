@@ -17,7 +17,7 @@
 
 constexpr uint32_t T = get_compile_time_arg_val(0);
 constexpr uint32_t INJECT = get_compile_time_arg_val(1);
-constexpr uint32_t BF16_TILE = 2048, BF16_FACE = 512, BF16_ROW = 32, BLOCK_TILES = 20;
+constexpr uint32_t BF16_TILE = 2048, BF16_FACE = 512, BF16_ROW = 32, BLOCK_TILES = PLE_BLOCK_TILES;
 constexpr uint32_t c_out = 16, c_rows = 18, c_inj = 20;
 
 void kernel_main() {

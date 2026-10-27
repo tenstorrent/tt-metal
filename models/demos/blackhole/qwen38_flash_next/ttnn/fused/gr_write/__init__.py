@@ -21,15 +21,16 @@ import os
 
 import ttnn
 
+from ...contracts import MESH_SHAPE, TP_SIZE
 from .. import program as fp
 from ..registry import BITWISE, FusedKernel, GateSpec, register
 
 NAME = "gr_write"
 BRANCHES = 4
 HIDDEN = 2560
-LOCAL_HIDDEN = HIDDEN // 4
-HIDDEN_TILES = LOCAL_HIDDEN // fp.TILE  # 20
-UNITS = BRANCHES * HIDDEN_TILES  # 80 output tiles
+LOCAL_HIDDEN = HIDDEN // TP_SIZE
+HIDDEN_TILES = LOCAL_HIDDEN // fp.TILE  # per device: 20 at TP=4
+UNITS = BRANCHES * HIDDEN_TILES  # 80 output tiles at TP=4
 CORES_ENV = "QWEN38_FUSED_GR_WRITE_CORES"
 KERNELS = {name: fp.kernel_source(NAME, f"{name}.cpp") for name in ("reader", "compute", "writer")}
 CBS = (("cb_block", 0), ("cb_res", 1), ("cb_coef", 2), ("cb_upd", 3), ("cb_out", 16))
@@ -177,17 +178,18 @@ def write_rows_fused(module, block_rows, state):
 
 @functools.lru_cache(maxsize=None)
 def _oracle(layer: int):
-    """The CPU GR oracle of layer ``layer``'s attention block from the checkpoint at ``QWEN38_CHECKPOINT``."""
+    """The CPU GR oracle of layer ``layer``'s attention block from the checkpoint ``HF_MODEL`` names."""
 
-    root = os.environ.get("QWEN38_CHECKPOINT")
-    if not root:
-        raise RuntimeError("the gr_write gate computes the injection with the CPU oracle: set QWEN38_CHECKPOINT")
-    from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
+    from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint, checkpoint_directory
     from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
     from models.demos.blackhole.qwen38_flash_next.tt.gr import Qwen38GatedResidual, Qwen38GatedResidualWeights
 
+    try:
+        root = checkpoint_directory()
+    except FileNotFoundError as error:
+        raise RuntimeError(f"the gr_write gate computes the injection with the CPU oracle: {error}") from error
     checkpoint = Qwen38Checkpoint(root)
-    placement = Qwen38Placement(checkpoint.config, mesh_shape=(1, 4), physical_ids=(0, 1, 2, 3))
+    placement = Qwen38Placement(checkpoint.config, mesh_shape=MESH_SHAPE, physical_ids=tuple(range(TP_SIZE)))
     weights = Qwen38GatedResidualWeights.from_checkpoint(checkpoint, placement, layer_index=layer, block="attn")
     return Qwen38GatedResidual(weights)
 

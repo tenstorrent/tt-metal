@@ -36,6 +36,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn import fused, prefill_glue
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     LONG_CHUNK_ROWS,
     MESH_SHAPE,
+    TP_SIZE,
     Qwen38MeshContract,
     TensorPlacement,
     is_slab_rows,
@@ -57,7 +58,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.prefill_dense import Qwen38TTNNPrefillDense, prefill_linear
 
-TP_SIZE = 4
 TP_AXIS = 1
 HIDDEN_SIZE = 2560
 HIDDEN_SIZE_PER_DEVICE = HIDDEN_SIZE // TP_SIZE
@@ -392,7 +392,7 @@ def _cache_directory(
         / f"index-{INDEX_SHA256}"
         / checkpoint.config.config_sha256
         / f"tt-metal-{tt_metal_sha}"
-        / f"mesh-1x4-physical-{physical}"
+        / f"mesh-1x{TP_SIZE}-physical-{physical}"
         / f"layer-{layer_index:02d}"
     )
     path.mkdir(parents=True, exist_ok=True)
@@ -1856,7 +1856,11 @@ class Qwen38TTNNGDN:
             mesh_device, HIDDEN_SIZE, PROJECTION_WIDTH_PER_DEVICE, num_cores=8, num_workers_per_dram_bank=workers
         )
         self.out_proj_act_memory_config, self.out_proj_program_config = dram_sharded_matmul_configs(
-            mesh_device, VALUE_WIDTH_PER_DEVICE, HIDDEN_SIZE, num_cores=16, num_workers_per_dram_bank=workers
+            mesh_device,
+            VALUE_WIDTH_PER_DEVICE,
+            HIDDEN_SIZE,
+            num_cores=64 // TP_SIZE,
+            num_workers_per_dram_bank=workers,
         )
         # Recurrent step kernels: the qualified configuration of the shared FLA
         # decode step for K = V = 128 (HiFi2, FP32 accumulation).  Changing any
@@ -4010,22 +4014,26 @@ def validate_gdn_static_contract() -> None:
         "CONV_KERNEL_SIZE": CONV_KERNEL_SIZE,
         "QK_REPEAT_FACTOR": QK_REPEAT_FACTOR,
     }
+    qk_heads = 16 // TP_SIZE
+    value_heads = 48 // TP_SIZE
+    qkv_width = 2 * qk_heads * 128 + value_heads * 128
+    a_column = qkv_width + value_heads * 128
     expected = {
-        "TP_SIZE": 4,
+        "TP_SIZE": TP_SIZE,
         "HIDDEN_SIZE": 2560,
-        "HIDDEN_SIZE_PER_DEVICE": 640,
+        "HIDDEN_SIZE_PER_DEVICE": 2560 // TP_SIZE,
         "QK_HEADS": 16,
-        "QK_HEADS_PER_DEVICE": 4,
+        "QK_HEADS_PER_DEVICE": qk_heads,
         "VALUE_HEADS": 48,
-        "VALUE_HEADS_PER_DEVICE": 12,
+        "VALUE_HEADS_PER_DEVICE": value_heads,
         "HEAD_DIM": 128,
         "QKV_WIDTH": 10240,
-        "QKV_WIDTH_PER_DEVICE": 2560,
-        "VALUE_WIDTH_PER_DEVICE": 1536,
-        "QKVZAB_WIDTH_PER_DEVICE": 4120,
-        "A_COLUMN": 4096,
-        "B_COLUMN": 4128,
-        "PROJECTION_WIDTH_PER_DEVICE": 4160,
+        "QKV_WIDTH_PER_DEVICE": qkv_width,
+        "VALUE_WIDTH_PER_DEVICE": value_heads * 128,
+        "QKVZAB_WIDTH_PER_DEVICE": a_column + 2 * value_heads,
+        "A_COLUMN": a_column,
+        "B_COLUMN": a_column + 32,
+        "PROJECTION_WIDTH_PER_DEVICE": a_column + 64,
         "CONV_KERNEL_SIZE": 4,
         "QK_REPEAT_FACTOR": 3,
     }

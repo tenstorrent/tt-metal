@@ -8,9 +8,10 @@ QSA geometry from the pinned ``Qwen4Exp`` checkpoint while keeping every
 placement-changing operation explicit:
 
 * 24 query heads are sharded six per device;
-* the two K/V heads are expanded as ``[kv0, kv0, kv1, kv1]`` and then sharded,
-  which is pair-grouping rather than four-way replication;
-* the four 128-wide index queries are sharded one per device, scored with
+* the two K/V heads are expanded as ``KV_GROUP`` consecutive copies each and then sharded,
+  which is group-wise replication (pairs at TP=4);
+* the four 128-wide index queries are sharded one per device (every ``INDEX_HEAD_STRIDE``-th device, zero on the
+  others), scored with
   :func:`ttnn.experimental.indexer_score_dsa`, and genuinely summed over TP;
 * four-token compressed blocks are expanded back to token indices and the
   incomplete causal tail is appended without being scored;
@@ -54,6 +55,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     MAX_LANES,
     MESH_SHAPE,
     POSITION_INDEX_ROW_SHAPE,
+    TP_SIZE,
     Qwen38MeshContract,
     TensorPlacement,
     chunk_row_tiles,
@@ -80,7 +82,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.prefill_dense import (
     slab_working_set_bytes,
 )
 
-TP_SIZE = 4
 # The slab scores and selects its blocks in row blocks of this many query rows: the score all-reduce's [4, rows,
 # blocks] transient stays at 32 MB per block at 32k (256 MB at 256k) instead of four times that.
 SLAB_SCORE_BLOCK_ROWS = 512
@@ -92,6 +93,7 @@ QUERY_HEADS = 24
 QUERY_HEADS_PER_DEVICE = QUERY_HEADS // TP_SIZE
 KV_HEADS = 2
 EXPANDED_KV_HEADS = TP_SIZE
+KV_GROUP = TP_SIZE // KV_HEADS
 HEAD_DIM = 256
 ROPE_DIM = 64
 QUERY_WIDTH = QUERY_HEADS * HEAD_DIM
@@ -99,6 +101,7 @@ LOCAL_QUERY_WIDTH = QUERY_WIDTH // TP_SIZE
 
 INDEX_QUERY_HEADS = 4
 INDEX_QUERY_HEADS_PER_DEVICE = 1
+INDEX_HEAD_STRIDE = TP_SIZE // INDEX_QUERY_HEADS
 INDEX_KV_HEADS = 1
 INDEX_HEAD_DIM = 128
 COMPRESS_RATIO = 4
@@ -331,7 +334,7 @@ def _cache_dir(
         / f"index-{INDEX_SHA256}"
         / f"config-{checkpoint.config.config_sha256}"
         / f"tt-metal-{tt_metal_sha}"
-        / f"mesh-1x4-physical-{physical}"
+        / f"mesh-1x{TP_SIZE}-physical-{physical}"
         / source_kind
         / f"layer-{layer_index:02d}"
     )
@@ -392,7 +395,7 @@ def _canonicalize_flat_replicated_topology(tensor, mesh_contract: Qwen38MeshCont
     expected_coordinates = tuple((0, column) for column in range(TP_SIZE))
     if distribution != (TP_SIZE,) or coordinates != expected_coordinates or placements != ("PlacementReplicate",):
         raise RuntimeError(
-            "device zero allocation topology is not the exact flat replicated TP4 form: "
+            f"device zero allocation topology is not the exact flat replicated TP{TP_SIZE} form: "
             f"distribution={distribution} coordinates={coordinates} placements={placements}"
         )
     tensor.update_tensor_topology(
@@ -406,19 +409,32 @@ def _canonicalize_flat_replicated_topology(tensor, mesh_contract: Qwen38MeshCont
 
 
 def _expanded_pair_kv(weight: torch.Tensor) -> torch.Tensor:
-    """Return checkpoint rows as ``[kv0, kv0, kv1, kv1]``.
+    """Return checkpoint rows as ``KV_GROUP`` consecutive copies of each KV head (``[kv0, kv0, kv1, kv1]`` at TP=4).
 
-    The resulting four-head tensor can be sharded over TP.  Devices 0/1 then
-    own independent copies of KV head 0 while devices 2/3 own head 1.  This is
-    intentional pair grouping and is represented as a sharded topology.
+    The resulting ``TP_SIZE``-head tensor can be sharded over TP.  Device d then
+    owns an independent copy of KV head ``d // KV_GROUP``.  This is
+    intentional group replication and is represented as a sharded topology.
     """
 
     if tuple(weight.shape) != (KV_HEADS * HEAD_DIM, HIDDEN_SIZE):
         raise ValueError(f"QSA K/V checkpoint weight has unexpected shape {tuple(weight.shape)}")
     heads = weight.reshape(KV_HEADS, HEAD_DIM, HIDDEN_SIZE)
-    return torch.stack((heads[0], heads[0], heads[1], heads[1]), dim=0).reshape(
-        EXPANDED_KV_HEADS * HEAD_DIM, HIDDEN_SIZE
-    )
+    return heads.repeat_interleave(KV_GROUP, dim=0).reshape(EXPANDED_KV_HEADS * HEAD_DIM, HIDDEN_SIZE)
+
+
+def _index_q_per_device(index_q: torch.Tensor) -> torch.Tensor:
+    """Checkpoint index-q rows as ``TP_SIZE`` device blocks: device d holds index head ``d // INDEX_HEAD_STRIDE`` when
+    ``d % INDEX_HEAD_STRIDE == 0`` and zeros otherwise (a zero query scores exactly 0 after the norm, so the TP sum is
+    unchanged)."""
+
+    heads = index_q.reshape(INDEX_QUERY_HEADS, INDEX_HEAD_DIM, HIDDEN_SIZE)
+    blocks = [
+        heads[device // INDEX_HEAD_STRIDE]
+        if device % INDEX_HEAD_STRIDE == 0
+        else torch.zeros_like(heads[device // INDEX_HEAD_STRIDE])
+        for device in range(TP_SIZE)
+    ]
+    return torch.stack(blocks, dim=0).reshape(TP_SIZE * INDEX_HEAD_DIM, HIDDEN_SIZE)
 
 
 def _merged_projections(
@@ -431,7 +447,7 @@ def _merged_projections(
     five separate linears' columns side by side."""
 
     per_device = {
-        "index_q": index_q.transpose(0, 1).reshape(HIDDEN_SIZE, TP_SIZE, -1),
+        "index_q": _index_q_per_device(index_q).transpose(0, 1).reshape(HIDDEN_SIZE, TP_SIZE, -1),
         "qg": qg.transpose(0, 1).reshape(HIDDEN_SIZE, TP_SIZE, -1),
         "k": _expanded_pair_kv(k).transpose(0, 1).reshape(HIDDEN_SIZE, TP_SIZE, HEAD_DIM),
         "v": _expanded_pair_kv(v).transpose(0, 1).reshape(HIDDEN_SIZE, TP_SIZE, HEAD_DIM),
@@ -649,7 +665,7 @@ class Qwen38TTNNQSAWeights:
         index_q = index_qk[: INDEX_QUERY_HEADS * INDEX_HEAD_DIM]
         index_k = index_qk[INDEX_QUERY_HEADS * INDEX_HEAD_DIM :]
         index_q_tt = upload(
-            index_q.transpose(0, 1).reshape(1, 1, HIDDEN_SIZE, INDEX_QUERY_HEADS * INDEX_HEAD_DIM),
+            _index_q_per_device(index_q).transpose(0, 1).reshape(1, 1, HIDDEN_SIZE, TP_SIZE * INDEX_HEAD_DIM),
             "index_q_dram_sharded",
             output_mapper,
             dram_sharded_weight_memory_config(mesh_device, HIDDEN_SIZE, INDEX_QUERY_HEADS_PER_DEVICE * INDEX_HEAD_DIM),
@@ -3437,7 +3453,11 @@ class Qwen38TTNNQSA:
             mesh_device, HIDDEN_SIZE, PROJECTIONS_WIDTH, num_cores=8
         )
         self.out_act_memory_config, self.out_program_config = dram_sharded_matmul_configs(
-            mesh_device, LOCAL_QUERY_WIDTH, HIDDEN_SIZE, num_cores=16, num_workers_per_dram_bank=workers
+            mesh_device,
+            LOCAL_QUERY_WIDTH,
+            HIDDEN_SIZE,
+            num_cores=16 if TP_SIZE == 4 else 8,
+            num_workers_per_dram_bank=workers,
         )
 
         self.index_gate = ttnn.from_torch(
@@ -6161,7 +6181,7 @@ class Qwen38TTNNQSA:
 
         grid = state.packed_kv_cache.device().compute_with_storage_grid_size()
         base = self._slab_attention_base_config or sparse_sdpa_tiled.DEFAULT
-        return sparse_sdpa_tiled.config_for_grid(rows, grid.x * grid.y, base)
+        return sparse_sdpa_tiled.config_for_grid(rows, grid.x * grid.y, base, QUERY_HEADS_PER_DEVICE)
 
     def _slab_attention_admits(self, rows: int, state) -> bool:
         """Whether the block-shared kernel serves this slab (its geometry contract on the shapes; the chain otherwise)."""
@@ -8130,7 +8150,10 @@ class Qwen38TTNNQSA:
                 compute_kernel_config=self.indexer_compute_config,
                 seq_shard_axes=[STAGING_AXIS],
             )
-            lane_rows.append(self._lane_score_rows_fused(local_scores, count, rows, blocks))
+            if self._lane_score_rows_fused is not None:
+                lane_rows.append(self._lane_score_rows_fused(local_scores, count, rows, blocks))
+            else:
+                lane_rows.append(self._lane_score_rows_of(local_scores, tuple(range(count)), count, rows, blocks))
             _deallocate(local_scores)
         else:
             for lane in range(count):

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""QSA decode on the 1x4 mesh against the torch reference: one checkpoint layer, positions 0..5 with the KV and index
+"""QSA decode on the 1xTP_SIZE mesh against the torch reference: one checkpoint layer, positions 0..5 with the KV and index
 caches carried on both sides, the checkpoint's RoPE at each position, PCC per position.  Position 3 closes the first
 four-token index block (the device needs the block's first-token RoPE for that) and positions 4 and 5 attend across
 the block boundary.  At this length the 2,048-token budget covers every causal token, so the device's sparse selection
@@ -10,7 +10,7 @@ and the reference's dense attention see the same keys.
 test_qsa_component.py proves ``Qwen38QSA`` against the pinned Transformers module on the CPU; this is the device side.
 
 Run:  pytest models/demos/blackhole/qwen38_flash_next/tests/test_qsa_tp.py -v -s
-Env:  MODEL_WEIGHTS_DIR, MESH_DEVICE="(1, 4)"; QWEN38_CACHE_ROOT optional (component cache reuse)
+Env:  HF_MODEL, MESH_DEVICE (P150x4 default, P150x8); TT_CACHE_PATH optional (component cache reuse)
 """
 
 import os
@@ -30,7 +30,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import COMPRESS_RATIO, Qw
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("QWEN38_FUSED_DEVICE_TEST") != "1",
-    reason="a device test: set QWEN38_FUSED_DEVICE_TEST=1 on a held four-die line (the no-device sets are masked)",
+    reason="a device test: set QWEN38_FUSED_DEVICE_TEST=1 on a held TP_SIZE-die line (the no-device sets are masked)",
 )
 
 POSITIONS = 6

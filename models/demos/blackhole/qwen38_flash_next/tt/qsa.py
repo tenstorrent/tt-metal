@@ -19,8 +19,7 @@ import torch.nn.functional as F
 
 from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
 from models.demos.blackhole.qwen38_flash_next.reference import qsa_selected_token_mask, zero_centered_rms_norm
-
-TP_SIZE = 4
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZE
 
 
 def _rotate_half(tensor: torch.Tensor) -> torch.Tensor:
@@ -54,8 +53,8 @@ class Qwen38QSADimensions:
     def __post_init__(self) -> None:
         if self.tp_size != TP_SIZE:
             raise ValueError(f"Qwen3.8-Flash-Next QSA requires TP={TP_SIZE}, got {self.tp_size}")
-        if self.query_heads % self.tp_size or self.index_query_heads % self.tp_size:
-            raise ValueError("QSA query/index-query heads must divide exactly over four devices")
+        if self.query_heads % self.tp_size or self.tp_size % self.index_query_heads:
+            raise ValueError("QSA query heads must divide over the devices and the devices over the index-query heads")
         if self.query_heads % self.kv_heads:
             raise ValueError("QSA query heads must group exactly over KV heads")
         if self.kv_heads != 2 or self.index_kv_heads != 1:
@@ -67,7 +66,15 @@ class Qwen38QSADimensions:
 
     @property
     def index_query_heads_per_device(self) -> int:
-        return self.index_query_heads // self.tp_size
+        return 1
+
+    @property
+    def index_head_stride(self) -> int:
+        return self.tp_size // self.index_query_heads
+
+    @property
+    def kv_group(self) -> int:
+        return self.tp_size // self.kv_heads
 
     @property
     def query_width(self) -> int:
@@ -186,18 +193,18 @@ class Qwen38QSAWeights:
 
     def device_shard(self, device_index: int) -> Qwen38QSADeviceShard:
         if not 0 <= device_index < self.dimensions.tp_size:
-            raise ValueError(f"device_index must be in [0, 4), got {device_index}")
+            raise ValueError(f"device_index must be in [0, {self.dimensions.tp_size}), got {device_index}")
         dims = self.dimensions
         qg_rows = 2 * dims.query_width_per_device
         qg_start = device_index * qg_rows
         query_start = device_index * dims.query_width_per_device
         query_end = query_start + dims.query_width_per_device
-        # KV head 0 serves query devices 0/1; KV head 1 serves 2/3.  This is
-        # deliberate pair-local replication, never a four-way KV replica.
-        kv_head_index = device_index // 2
+        # KV head h serves query devices h * kv_group .. (h + 1) * kv_group - 1.  This is
+        # deliberate group-local replication.
+        kv_head_index = device_index // dims.kv_group
         kv_start = kv_head_index * dims.head_dim
         kv_end = kv_start + dims.head_dim
-        index_q_start = device_index * dims.index_head_dim
+        index_q_start = (device_index // dims.index_head_stride) * dims.index_head_dim
         index_q_end = index_q_start + dims.index_head_dim
         index_k_start = dims.index_query_heads * dims.index_head_dim
         return Qwen38QSADeviceShard(
@@ -210,7 +217,11 @@ class Qwen38QSAWeights:
             out=self.out[:, query_start:query_end].contiguous(),
             q_norm=self.q_norm,
             k_norm=self.k_norm,
-            index_q=self.index_qk[index_q_start:index_q_end].contiguous(),
+            index_q=(
+                self.index_qk[index_q_start:index_q_end].contiguous()
+                if device_index % dims.index_head_stride == 0
+                else torch.zeros_like(self.index_qk[index_q_start:index_q_end])
+            ),
             index_k=self.index_qk[index_k_start:].contiguous(),
             index_q_norm=self.index_q_norm,
             index_k_norm=self.index_k_norm,

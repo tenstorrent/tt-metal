@@ -8,7 +8,7 @@ tables.  Both tables are sharded by contiguous vocabulary rows over mesh axis
 1; no coordinate stores a replicated table.
 
 The token embedding uses the sentinel construction from MiniMax's parallel
-embedding.  Each coordinate owns ``62080`` real vocabulary rows, padded with
+embedding.  Each coordinate owns ``248320 // TP_SIZE`` (62080 at TP=4) real vocabulary rows, padded with
 one zero row on either side.  Range-checked host token IDs are converted into
 the four exact local UINT32 indices and shard-uploaded; non-owning coordinates
 select a sentinel.  A single-token decode is host-padded to one 32-index tile,
@@ -21,7 +21,7 @@ partitions hidden dimension 3 back across the line.  Multi-token embedding
 retains the existing TT_CCL reduction.  Both paths return hidden-sharded
 logical ``[1, 1, S, 640]`` while preserving their TILE backing allocations.
 
-The LM head gathers that hidden shard, computes only its local ``62080``
+The LM head gathers that hidden shard, computes only its local ``248320 // TP_SIZE``
 vocabulary columns, and returns an object whose vocabulary range and TTNN
 topology are explicit.  Greedy decode reduces each local shard to one
 ``(value, index)`` candidate and reads back only those eight scalars; it never
@@ -65,6 +65,7 @@ from models.demos.blackhole.qwen38_flash_next.config import CONFIG_SHA256, Qwen3
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     CHUNK_ROWS,
     MESH_SHAPE,
+    TP_SIZE,
     Qwen38MeshContract,
     TensorPlacement,
     chunk_row_tiles,
@@ -82,7 +83,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 TP_AXIS = 1
-TP_SIZE = 4
 HIDDEN_SIZE = 2560
 LOCAL_HIDDEN_SIZE = HIDDEN_SIZE // TP_SIZE
 VOCAB_SIZE = 248_320
@@ -91,10 +91,11 @@ RMS_NORM_EPS = 1e-6
 # Owner tie-break step of resolve_greedy_on_device: owner d's bf16 maximum is lowered
 # by d * GREEDY_TIE_BREAK_EPS in FP32 before the device argmax, so equal maxima leave
 # a unique maximum at the lowest owner (the torch.argmax rule of resolve_greedy).
-# 2**-16 is the FP32 ulp of |v| in [128, 256): for every |v| < 256 the four shifts
-# d * 2**-16 (d <= 3) are exact and strictly ordered, and the largest shift
-# 3 * 2**-16 < 2**-14 is below the spacing of two distinct bf16 values whose larger
-# magnitude is >= 2**-6, so distinct candidates keep their order.
+# 2**-16 is the FP32 ulp of |v| in [128, 256): for every |v| < 256 the TP_SIZE shifts
+# d * 2**-16 (d < TP_SIZE) are exact and strictly ordered, and the largest shift
+# (TP_SIZE - 1) * 2**-16 is below the spacing of two distinct bf16 values whose larger
+# magnitude is >= 2**-6 (TP_SIZE = 4: 3 * 2**-16 < 2**-14) or >= 2**-5 (TP_SIZE = 8:
+# 7 * 2**-16 < 2**-13), so distinct candidates keep their order.
 GREEDY_TIE_BREAK_EPS = 2.0**-16
 
 EMBEDDING_NAME = "model.language_model.embed_tokens.weight"
@@ -126,9 +127,10 @@ IO_CACHE_LOCK_TIMEOUT_SECONDS = 60.0
 # existing Blackhole Qwen path and spans a multiple of four tiles per DRAM
 # bank, so the DRAM-sharded reader's two-tile K blocks page at the 16 KB NOC
 # burst (must match dram_sharded_matmul_configs over 40 storage cores).
-# 5 * 8192 + 3 * 7040 = 62080 pads twelve tiles per K row, the least of any
-# such split.
-LM_HEAD_CHUNK_COLUMNS = (8192,) * 5 + (7040,) * 3
+# TP=4: 5 * 8192 + 3 * 7040 = 62080 pads twelve tiles per K row, the least of any
+# such split.  TP=8: 3 * 8000 + 7040 = 31040.
+LM_HEAD_CHUNK_COLUMNS = {4: (8192,) * 5 + (7040,) * 3, 8: (8000,) * 3 + (7040,)}[TP_SIZE]
+assert sum(LM_HEAD_CHUNK_COLUMNS) == LOCAL_VOCAB_SIZE
 TILE_SIZE = 32
 
 # A "token row" is a replicated FP32 TILE [1,1,1,32] holding one global token id
@@ -533,7 +535,7 @@ def _localize_token_ids_on_host(input_ids: torch.Tensor) -> torch.Tensor:
     if int(global_ids.min()) < 0 or int(global_ids.max()) >= VOCAB_SIZE:
         raise IndexError(f"token ID is outside the exact vocabulary [0, {VOCAB_SIZE})")
 
-    # Padded local embedding row 0 is the below-range sentinel, rows 1..62080
+    # Padded local embedding row 0 is the below-range sentinel, rows 1..LOCAL_VOCAB_SIZE
     # are real vocabulary rows, and row 62081 is the above-range sentinel.
     starts_minus_one = torch.arange(TP_SIZE, dtype=torch.int64).reshape(1, TP_SIZE, 1) * LOCAL_VOCAB_SIZE - 1
     localized = torch.clamp(global_ids - starts_minus_one, min=0, max=LOCAL_VOCAB_SIZE + 1)
@@ -595,8 +597,8 @@ class Qwen38TTNNTokenRowConstants:
     # subtracts so clamp([0, LOCAL_VOCAB_SIZE + 1]) selects the sentinel-padded row.
     vocab_localize_row: Any
     vocab_localize_lanes: Any  # the same offset in all 32 columns: localizes a 32-lane token row (prefill chunk)
-    owner_tie_break: Any  # replicated [1,1,1,4] ROW_MAJOR: d * GREEDY_TIE_BREAK_EPS, subtracted before the argmax
-    lm_head_vocab_starts: Any  # replicated [1,1,1,4] ROW_MAJOR: shard d's first global vocab id, d * LOCAL_VOCAB_SIZE
+    owner_tie_break: Any  # replicated [1,1,1,TP_SIZE] ROW_MAJOR: d * GREEDY_TIE_BREAK_EPS, subtracted before the argmax
+    lm_head_vocab_starts: Any  # replicated [1,1,1,TP_SIZE] ROW_MAJOR: shard d's first vocab id, d * LOCAL_VOCAB_SIZE
     unit_column: Any  # replicated [1,1,1,32] ROW_MAJOR: 1.0 at column 0, splats the resolved id into a token row
 
     @classmethod
@@ -720,7 +722,7 @@ def resolve_greedy_lanes_on_device(
 ):
     """``Qwen38TTNNLMHead.resolve_greedy_on_device`` for ``rows`` = 1..32 candidate rows (the batched lanes).
 
-    The same gather, tie-break, argmax, rebase and 32-bit select per row.  The two ``[1,1,1,4]`` constants are
+    The same gather, tie-break, argmax, rebase and 32-bit select per row.  The two ``[1,1,1,TP_SIZE]`` constants are
     applied as TILE row broadcasts (exact SFPU fp32 elementwise ops on a tilized copy: no reduction touches the
     tile padding; ``ttnn.repeat`` of a 16-byte ROW_MAJOR row crashes the pinned runtime's repeat codegen); the
     argmax and the select stay ROW_MAJOR on the exact width-four rows.  The ``[1,1,rows,1]`` id column is padded
@@ -856,7 +858,7 @@ class Qwen38IOCacheIdentity:
     tt_metal_revision: str
     ttnn_runtime_sha256: str
     mesh_shape: tuple[int, int]
-    physical_ids: tuple[int, int, int, int]
+    physical_ids: tuple[int, ...]
     dtype: str = "BFLOAT16"
     format_version: int = IO_CACHE_FORMAT_VERSION
 
@@ -882,7 +884,7 @@ class Qwen38IOCacheIdentity:
             or len(set(self.physical_ids)) != TP_SIZE
             or any(not isinstance(device_id, int) or device_id < 0 for device_id in self.physical_ids)
         ):
-            raise ValueError(f"model I/O cache requires four distinct physical IDs, got {self.physical_ids}")
+            raise ValueError(f"model I/O cache requires {TP_SIZE} distinct physical IDs, got {self.physical_ids}")
         if self.dtype != "BFLOAT16" or self.format_version != IO_CACHE_FORMAT_VERSION:
             raise ValueError("model I/O cache dtype or format version is unsupported")
 
@@ -2093,12 +2095,12 @@ class Qwen38TTNNLMHead:
         constants = self.weights.token_row
         anchor = self.weights.replicated_anchor
 
-        # Gather the four local maxima and pick the owner (lowest index on ties).
+        # Gather the TP_SIZE local maxima and pick the owner (lowest index on ties).
         # The bf16 maxima are widened to FP32 and owner d's is lowered by
         # d * GREEDY_TIE_BREAK_EPS: exact for |v| < 256 and below the spacing of
         # distinct bf16 values, so ties become a unique maximum at the lowest
         # owner and the argmax result no longer depends on the kernel's tie rule.
-        # ROW_MAJOR argmax reduces the exact width-four logical row.
+        # ROW_MAJOR argmax reduces the exact width-TP_SIZE logical row.
         gathered_values = ttnn.all_gather(
             candidates.local_values, dim=3, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -2124,7 +2126,7 @@ class Qwen38TTNNLMHead:
         if _shape(owner) != (1, 1, 1, 1) or owner.dtype != ttnn.uint32:
             raise RuntimeError(f"greedy owner argmax must be UINT32 [1,1,1,1], got {_metadata(owner)}")
 
-        # Gather the four local indices and rebase each to its global vocabulary id.
+        # Gather the TP_SIZE local indices and rebase each to its global vocabulary id.
         index_scalar = ttnn.reshape(candidates.local_indices, (1, 1, 1, 1))
         gathered_indices = ttnn.all_gather(
             index_scalar, dim=3, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG

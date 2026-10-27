@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Lanes-capable wrapper. Reproduces tools/run_qwen38_chat_server.sh --profile qb2 --allocated-context 32768 (no --sampling:
 # greedy-only server), which has no --lanes flag. Extra args go to the server: e.g. --host 127.0.0.1 --port 8000 --mtp 4 --lanes 4
-# Env: QWEN38_CHECKPOINT, QWEN38_CACHE_ROOT (required); QWEN38_PY; TT_METAL_HOME.
+# Env: HF_MODEL, TT_CACHE_PATH (required); QWEN38_PY; TT_METAL_HOME.
 set -euo pipefail
 SELF="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="${TT_METAL_HOME:-$(cd -- "$SELF/../../../../.." && pwd -P)}"
 HERE="$REPO_ROOT/models/demos/blackhole/qwen38_flash_next/tools"
 PY="${QWEN38_PY:-$REPO_ROOT/python_env_q38fn/bin/python}"
-CKPT="${QWEN38_CHECKPOINT:?set QWEN38_CHECKPOINT (flat checkpoint dir)}"
-cache_root="${QWEN38_CACHE_ROOT:?set QWEN38_CACHE_ROOT}"
+CKPT="${HF_MODEL:?set HF_MODEL to the flat checkpoint directory}"
+cache_root="${TT_CACHE_PATH:?set TT_CACHE_PATH}"
 hp=tt-quietbox-2; ctx=32768
 caches="$cache_root/caches/c$ctx-$hp"
 run_dir="$cache_root/runs/q38-chat-server-$hp-$(date -u +%Y%m%dT%H%M%SZ)-$$"

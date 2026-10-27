@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""GDN decode on the 1x4 mesh against the torch reference: one checkpoint layer, positions 0..3 (one FIR ring of the
+"""GDN decode on the 1xTP_SIZE mesh against the torch reference: one checkpoint layer, positions 0..3 (one FIR ring of the
 kernel-4 causal conv), the recurrent and conv state carried on both sides, PCC per position.
 
 test_gdn_component.py proves ``Qwen38GDN`` against the pinned Transformers module on the CPU; this is the device side.
 
 Run:  pytest models/demos/blackhole/qwen38_flash_next/tests/test_gdn_tp.py -v -s
-Env:  MODEL_WEIGHTS_DIR, MESH_DEVICE="(1, 4)"; QWEN38_CACHE_ROOT optional (component cache reuse)
+Env:  HF_MODEL, MESH_DEVICE (P150x4 default, P150x8); TT_CACHE_PATH optional (component cache reuse)
 """
 
 import os
@@ -25,7 +25,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.gdn import Qwen38TTNNGDN, Qwe
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("QWEN38_FUSED_DEVICE_TEST") != "1",
-    reason="a device test: set QWEN38_FUSED_DEVICE_TEST=1 on a held four-die line (the no-device sets are masked)",
+    reason="a device test: set QWEN38_FUSED_DEVICE_TEST=1 on a held TP_SIZE-die line (the no-device sets are masked)",
 )
 
 POSITIONS = 4

@@ -75,6 +75,10 @@ def test_the_two_reader_table_names_the_screened_projections(expect_error) -> No
         (2560, 3072): 8,
         (2560, 8192): 40,
         (2560, 7040): 40,
+        (2560, 2112): 8,
+        (768, 2560): 8,
+        (2560, 1536): 8,
+        (2560, 8000): 40,
     }
     assert GDN_IN == (2560, 4160) and (gdn_module.VALUE_WIDTH_PER_DEVICE, gdn_module.HIDDEN_SIZE) == (1536, 2560)
     assert (qsa_module.HIDDEN_SIZE, 2 * qsa_module.LOCAL_QUERY_WIDTH) == (2560, 3072)

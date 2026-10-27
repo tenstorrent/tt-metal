@@ -37,7 +37,7 @@ HEAD_DIM, HEAD_TILES, LOCAL_HEADS, SPARSE_HEADS = (
 )
 OUT_WIDTH, QG_WIDTH = qsa_block.OUT_WIDTH, qsa_block.QG_WIDTH
 TILE_BF16 = fp.TILE_BYTES[BF16]
-ITEMS = [(head, column) for head in range(LOCAL_HEADS) for column in range(HEAD_TILES)]  # 48 output tiles
+ITEMS = [(head, column) for head in range(LOCAL_HEADS) for column in range(HEAD_TILES)]  # LOCAL_HEADS * 8 output tiles
 PA_READER = fp.kernel_source(NAME, "pa_rows_reader.cpp")
 PA_COMPUTE = fp.kernel_source(NAME, "pa_rows_compute.cpp")
 PA_WRITER = fp.kernel_source(NAME, "pa_rows_writer.cpp")

@@ -18,6 +18,7 @@ from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
 from models.demos.blackhole.qwen38_flash_next.tt.model import Qwen38FinalMixerWeights
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     MESH_SHAPE,
+    TP_SIZE,
     Qwen38MeshContract,
     TensorPlacement,
     replicate_tensor_2d_mesh_mapper,
@@ -32,7 +33,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
 )
 
 TP_AXIS = 1
-TP_SIZE = 4
 HIDDEN_SIZE = 2560
 LOCAL_HIDDEN_SIZE = HIDDEN_SIZE // TP_SIZE
 RESIDUAL_BRANCHES = 4
@@ -102,7 +102,7 @@ def _cache_directory(
         / f"index-{INDEX_SHA256}"
         / f"config-{checkpoint.config.config_sha256}"
         / f"tt-metal-{tt_metal_sha}"
-        / f"mesh-1x4-physical-{physical}"
+        / f"mesh-1x{TP_SIZE}-physical-{physical}"
     )
     path.mkdir(parents=True, exist_ok=True)
     return path

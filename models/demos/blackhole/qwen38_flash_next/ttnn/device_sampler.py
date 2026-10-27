@@ -9,7 +9,7 @@ epilogue so the sampled loop is the greedy loop plus one small host write per st
 reference :func:`device_sampler_reference` computes the same token from the same row bit for bit, so a run can be
 re-derived on the host from the read rows and the ledger of draws.
 
-The op sequence (:func:`sample_on_device`, 57 ttnn calls = 76 device programs on the replicated 128-lane row):
+The op sequence (:func:`sample_on_device`, 57 ttnn calls = 76 device programs on the replicated LANES-lane row (TP_SIZE * 32; 128 at TP=4)):
 
 1. Split: the row ``[v_d | g_d]`` per shard becomes the value lanes ``s`` and the global-id lanes ``g``
    (``ttnn.gather`` with constant index rows: 32-bit copies).
@@ -20,8 +20,8 @@ The op sequence (:func:`sample_on_device`, 57 ttnn calls = 76 device programs on
 3. Weights: the temperature is a host-written table ``W(i) = round(2**18 * exp(-i / (1024 T)))`` indexed by
    ``floor(1024 * (s_max - s_j))`` (clamped to the table), so nothing transcendental runs on the device and the
    host reference needs no model of the SFPU exp.  Lanes at or beyond ``top_k`` are masked to weight 0.
-4. Exact prefix sums: the weights split into an 11-bit high and an 8-bit low half through two ``[1,128] x
-   [128,128]`` fp32 matmuls against a constant upper-triangular 0/1 matrix (the TF32 input truncation of the FPU
+4. Exact prefix sums: the weights split into an 11-bit high and an 8-bit low half through two ``[1,LANES] x
+   [LANES,LANES]`` fp32 matmuls against a constant upper-triangular 0/1 matrix (the TF32 input truncation of the FPU
    is lossless on 11-bit integers, the fp32 accumulation exact); recombined on the SFPU.
 5. Filters as prefix lengths: ``K = min(#(C_ex <= tau), #(W >= max(m, 1)))`` with ``tau = top_p * S_k`` (the
    total weight of the top-k lanes) and ``m = min_p * 2**18``: the top-k mask zeroes the lanes beyond ``top_k``,
@@ -80,7 +80,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import (
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.sampling import UNIFORM_BITS, Qwen38SamplingParameters, UniformStream
 
-LANES = TP_SIZE * SAMPLING_CANDIDATES_PER_DEVICE  # 128 candidates per row
+LANES = TP_SIZE * SAMPLING_CANDIDATES_PER_DEVICE  # 128 candidates per row at TP=4
 LANE_SHAPE = (1, 1, 1, LANES)
 SCALAR_SHAPE = (1, 1, 1, 1)
 MATRIX_SHAPE = (1, 1, LANES, LANES)

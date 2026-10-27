@@ -20,7 +20,10 @@ constexpr uint32_t CB_STG = 19, CB_ONES = 20, CB_STGC = 21, CB_STGW = 22, CB_RM 
                    CB_PT = 29;  // CB_PT: the paged writer's page-table window
 constexpr uint32_t SEM_ROPE = 0, SEM_KROT = 1, SEM_KNORM = 2;
 constexpr uint32_t HEAD_TILES = 8, ROPE_TILES = 2, PACK_TILES = 16, QUERY_ROW_BYTES = 1024, HEAD_ROW_BYTES = 512;
-constexpr uint32_t QUERY_HEADS = 32, LOCAL_HEADS = 6;
+constexpr uint32_t QUERY_HEADS = 32;
+#ifdef MAIN_TAIL_LOCAL_HEADS
+constexpr uint32_t LOCAL_HEADS = MAIN_TAIL_LOCAL_HEADS;  // per-device query heads (qsa_block/__init__.py LOCAL_HEADS)
+#endif
 using tile_rows::chunk_offset;
 using tile_rows::copy_tile_row;
 using tile_rows::ROW_BYTES;

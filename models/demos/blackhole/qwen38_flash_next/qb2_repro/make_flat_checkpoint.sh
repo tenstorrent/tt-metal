@@ -33,4 +33,4 @@ if [[ "$links" != 0 ]]; then
     exit 1
 fi
 echo "OK: $n files hard-linked into $dest, no symlinks. Total size: $(du -shL -- "$dest" | cut -f1)"
-echo "Use:  export QWEN38_CHECKPOINT=$dest"
+echo "Use:  export HF_MODEL=$dest"

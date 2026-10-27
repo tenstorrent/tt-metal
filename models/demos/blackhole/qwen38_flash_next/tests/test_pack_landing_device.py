@@ -23,7 +23,7 @@ the landing programs are allocated and compiled in the chain's warm hook, the pa
 ``pack_bucket_256_against_128`` (P3d-4) 8 users with P <= 128 in an S = 256 pack against an S = 128 pack: phase costs and logits.
 
 Run:  pytest .../test_pack_landing_device.py -v -s -k land_s128   (one id per process)
-Env:  as ``test_prefill_pack_device`` (QWEN38_HARDWARE_PROFILE, TT_METAL_TRACE_ALLOC_TRACKING=1, MODEL_WEIGHTS_DIR, QWEN38_CACHE_ROOT,
+Env:  as ``test_prefill_pack_device`` (MESH_DEVICE, TT_METAL_TRACE_ALLOC_TRACKING=1, HF_MODEL, TT_CACHE_PATH,
       TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0).  ``P3D3_OUT`` names a directory for the JSON results.
 """
 
@@ -43,6 +43,7 @@ from ttnn.tools.trace_allocation_tracker import corruptible_allocation_scope
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, Qwen38OfficialChatTemplate
+from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import build_prompt_ids, load_context_text
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F401  (device_params is a fixture)
     DEVICE_PARAMS,
@@ -113,7 +114,7 @@ class Landing:
 
     def __init__(self, mesh_device, *, lanes: int = LANES, pack: bool = True, buckets=pack_module.PACK_BUCKETS) -> None:
         self.mesh = mesh_device
-        self.checkpoint = Path(os.environ["MODEL_WEIGHTS_DIR"])
+        self.checkpoint = checkpoint_directory()
         self.lanes = lanes
         if pack:
             os.environ["QWEN38_PREFILL_PACK"] = "1"
@@ -164,7 +165,7 @@ class Landing:
 
         template = Qwen38OfficialChatTemplate(self.checkpoint)
         config = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
-        text = load_context_text(config, Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context")
+        text = load_context_text(config, Path(os.environ["TT_CACHE_PATH"]) / "demo-context")
         out = []
         for n in lengths:
             ids = build_prompt_ids(

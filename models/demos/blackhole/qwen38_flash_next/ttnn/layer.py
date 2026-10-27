@@ -46,6 +46,7 @@ from typing import Any
 import torch
 
 import ttnn
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZES
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.bf4 import Qwen38BF4Streamer
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
@@ -53,6 +54,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     CHUNK_ROWS,
     LONG_CHUNK_ROWS,
     MESH_SHAPE,
+    TP_SIZE,
     Qwen38MeshContract,
     TensorPlacement,
     is_slab_rows,
@@ -91,7 +93,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38TTNNQSA, Qwe
 BACKBONE_LAYERS = 48
 MTP_LAYERS = 1
 HIDDEN_SIZE = 2560
-TP_SIZE = 4
 LOCAL_HIDDEN_SIZE = HIDDEN_SIZE // TP_SIZE
 RESIDUAL_BRANCHES = 4
 RESIDUAL_LOCAL_SHAPE = (1, RESIDUAL_BRANCHES, 1, LOCAL_HIDDEN_SIZE)
@@ -1925,9 +1926,9 @@ class Qwen38TTNNDecoderLayer:
 def validate_layer_static_contract() -> None:
     """No-device guard for exact layer order and local shapes."""
 
-    if (BACKBONE_LAYERS, MTP_LAYERS, HIDDEN_SIZE, TP_SIZE, RESIDUAL_BRANCHES) != (48, 1, 2560, 4, 4):
+    if (BACKBONE_LAYERS, MTP_LAYERS, HIDDEN_SIZE, TP_SIZE in TP_SIZES, RESIDUAL_BRANCHES) != (48, 1, 2560, True, 4):
         raise RuntimeError("Qwen3.8 decoder-layer geometry drifted")
-    if RESIDUAL_LOCAL_SHAPE != (1, 4, 1, 640) or BLOCK_LOCAL_SHAPE != (1, 1, 1, 640):
+    if RESIDUAL_LOCAL_SHAPE != (1, 4, 1, 2560 // TP_SIZE) or BLOCK_LOCAL_SHAPE != (1, 1, 1, 2560 // TP_SIZE):
         raise RuntimeError("Qwen3.8 decoder-layer local shapes drifted")
     if tuple(_expected_layer_type(Qwen38TTNNLayerNamespace.BACKBONE, index).value for index in range(8)) != (
         "linear_attention",

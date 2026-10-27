@@ -265,7 +265,7 @@ register(
 # importable as ttnn.fused.qsa_rows.main_tail_rows through sys.modules)
 from .main_tail_rows import kv_stage, main_tail_rows, main_tail_rows_composed  # noqa: E402
 
-# program 5: the post-attention glue on the tile as one 48-core program (default, qsa_rows_post_attention); the
+# program 5: the post-attention glue on the tile as one program (LOCAL_HEADS * 8 cores) (default, qsa_rows_post_attention); the
 # kernels, the input contract and the composed chain live in post_attention_rows.py, the launch here
 from .post_attention_rows import (  # noqa: E402
     ITEMS as PA_ITEMS,
@@ -279,9 +279,9 @@ from .post_attention_rows import (  # noqa: E402
 
 
 def post_attention_rows_admits(attention, qg_ws, qg_first: int = 0) -> bool:
-    """Program 5's input contract as a predicate: the qg projection as one row tile ``[1, 1, 1..32, 3072]`` (the verify
+    """Program 5's input contract as a predicate: the qg projection as one row tile ``[1, 1, 1..32, QG_WIDTH]`` (the verify
     tile; the one-row draft) and sparse_sdpa's ROW_MAJOR ``[1, 32, rows, 256]``; the chunk body's six-branch gate
-    ``[1, 6, rows, 256]``, the 128-row chunk and the slab keep the chain."""
+    ``[1, LOCAL_HEADS, rows, 256]``, the 128-row chunk and the slab keep the chain."""
 
     if not (fp.is_row_tile(qg_ws) and fp.is_tile_width(qg_ws) and qg_ws.layout == ttnn.TILE_LAYOUT):
         return False  # the linear's tile shard, one row tile wide enough for the qg window
@@ -295,7 +295,7 @@ def post_attention_rows_admits(attention, qg_ws, qg_first: int = 0) -> bool:
 
 
 def post_attention_rows(attention, qg_ws, *, memory_config=None, qg_first: int = 0):
-    """sigmoid(gate) x attention for the six local heads over the tile's rows -> the head-major ``[1, 1, rows, 1536]``
+    """sigmoid(gate) x attention for the local heads over the tile's rows -> the head-major ``[1, 1, rows, OUT_WIDTH]``
     bf16 TILE row in ``memory_config`` (the out-projection's activation shard).  ``attention`` is sparse_sdpa's
     ROW_MAJOR ``[1, 32, rows, 256]``; the gates are the second 256 columns of each head's 512 in ``qg_ws`` from tile
     ``qg_first``.  One core per (head, tile column)."""
@@ -335,7 +335,7 @@ def post_attention_rows(attention, qg_ws, *, memory_config=None, qg_first: int =
             for w in work
         ],
     )
-    # the six local heads' attention rows and gate tiles in, the head-major row out (head-sharded on dim 3)
+    # the local heads' attention rows and gate tiles in, the head-major row out (head-sharded on dim 3)
     meta = fp.program_meta(
         NAME,
         "post_attention_rows",
@@ -358,7 +358,7 @@ register(
         replaces=(
             "the QSA verify tile's post-attention glue (12 programs per attention layer: the gate's copy, slices and "
             "concat; the local heads' slice, tilize, sigmoid, multiply, slices, concat and the move into the "
-            "out-projection shard) as one 48-core program, one core per (head, tile column)"
+            "out-projection shard) as one program, one core per (head, tile column)"
         ),
         tolerance=BITWISE,
         fused=post_attention_rows,

@@ -12,28 +12,33 @@ in the chain's order (docs in kernels/gate_compute.cpp).  Chain: 12 programs -> 
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 import ttnn
 
+from ...contracts import TP_SIZE
 from .. import program as fp
 from ..registry import BITWISE, FusedKernel, register
 
 NAME = "ple"
-TP_SIZE, TP_AXIS = 4, 1
+TP_AXIS = 1
 HIDDEN = 2560
-LOCAL_HIDDEN = HIDDEN // TP_SIZE  # 640
+LOCAL_HIDDEN = HIDDEN // TP_SIZE  # per device
 BRANCHES = 4
 GLOBAL_TILES = HIDDEN // fp.TILE  # 80
-LOCAL_TILES = LOCAL_HIDDEN // fp.TILE  # 20
+LOCAL_TILES = LOCAL_HIDDEN // fp.TILE  # per device
 GATE_SCALE = HIDDEN**-0.5
 BF16, FP32 = ttnn.bfloat16, ttnn.float32
 TILE_BF16, TILE_FP32 = fp.TILE_BYTES[BF16], fp.TILE_BYTES[FP32]
 NORM_COMPUTE = fp.kernel_source(NAME, "norm_gamma_rows_compute.cpp")
+NORM_BLOCK = math.gcd(LOCAL_TILES, 4)  # tiles per norm / stream batch (divides LOCAL_TILES)
 STATS_TILES = TP_SIZE  # gathered stats tiles per row-block
 EPS = 1e-6
 CONV_COMPUTE = fp.kernel_source(NAME, "conv_compute.cpp")
 CONV_READER = fp.kernel_source(NAME, "conv_reader.cpp")
+CONV_DEFINES = [("PLE_BLOCK_TILES", str(LOCAL_TILES))]
 CONV_WRITER = fp.kernel_source(NAME, "conv_writer.cpp")
 CONV_STATE_LENGTH = 9
 CONV_TAPS = 4
@@ -91,7 +96,10 @@ def stats(x):
         fp.cb_descriptor(16, BF16, TILE_BF16, 1, one),
     ]
     reader = gr._reader(
-        one, [(x, 0)], [(gr.CONST_SCALER, 1)], [(core, ([gr._stream(x, 1, LOCAL_TILES, 0, 1, 0, 4)], [gr._bits(1.0)]))]
+        one,
+        [(x, 0)],
+        [(gr.CONST_SCALER, 1)],
+        [(core, ([gr._stream(x, 1, LOCAL_TILES, 0, 1, 0, NORM_BLOCK)], [gr._bits(1.0)]))],
     )
     compute = fp.compute_kernel(gr.STATS, one, [LOCAL_TILES], fp32_dest=True)
     writer = gr._writer(one, [(out, 16)], [(core, [(1, 0, 1, 1)])])
@@ -135,16 +143,16 @@ def normalize(x, gathered_stats, weight):
                 (
                     [
                         gr._stream(gathered_stats, 1, STATS_TILES, 0, 1, 0, STATS_TILES),
-                        gr._stream(x, 1, LOCAL_TILES, 0, 1, 0, 4),
-                        gr._stream(weight, 1, LOCAL_TILES, 0, 1, 0, 4),
+                        gr._stream(x, 1, LOCAL_TILES, 0, 1, 0, NORM_BLOCK),
+                        gr._stream(weight, 1, LOCAL_TILES, 0, 1, 0, NORM_BLOCK),
                     ],
                     [scaler_bits, gr._bits(EPS)],
                 ),
             )
         ],
     )
-    compute = fp.compute_kernel(NORM_COMPUTE, one, [LOCAL_TILES, STATS_TILES, 4, 16], fp32_dest=True)
-    writer = gr._writer(one, [(out, 16)], [(core, [(LOCAL_TILES, 0, 1, 4)])])
+    compute = fp.compute_kernel(NORM_COMPUTE, one, [LOCAL_TILES, STATS_TILES, NORM_BLOCK, 16], fp32_dest=True)
+    writer = gr._writer(one, [(out, 16)], [(core, [(LOCAL_TILES, 0, 1, NORM_BLOCK)])])
     meta = fp.program_meta(  # the row-block, the gathered stats and the weight in, the normalized block out
         NAME,
         "normalize",
@@ -332,6 +340,7 @@ def conv(
         cores,
         [per_core, int(shift), int(inject)] + sum((fp.accessor_args(t) for t in reader_tensors), []),
         [(w.core, [t.buffer_address() for t in reader_tensors] + [w.start, w.start]) for w in work],
+        defines=CONV_DEFINES,
     )
     compute = fp.compute_kernel(
         CONV_COMPUTE, cores, [per_core, int(mac_form), int(debug_stage), int(inject)], fp32_dest=False
@@ -341,6 +350,7 @@ def conv(
         cores,
         [per_core, int(inject)] + fp.accessor_args(out) + fp.accessor_args(injected),
         [(w.core, [out.buffer_address(), w.start, injected.buffer_address()]) for w in work],
+        defines=CONV_DEFINES,
     )
     io = list(inputs) + others + ([inject_residual, out, injected] if inject else [out])  # each buffer once
     # the four conv rows, the gate output (and the layer residual) in, the taps once (each core its column tile of
@@ -547,7 +557,7 @@ def stats_lanes(x, lanes: int):
         [(x, 0)],
         [(gr.CONST_SCALER, 1)],
         [
-            (c, ([gr._stream(x, 1, LOCAL_TILES, u * LOCAL_TILES, 1, 0, 4)], [gr._bits(1.0)]))
+            (c, ([gr._stream(x, 1, LOCAL_TILES, u * LOCAL_TILES, 1, 0, NORM_BLOCK)], [gr._bits(1.0)]))
             for u, c in enumerate(cores)
         ],
     )
@@ -593,8 +603,8 @@ def normalize_lanes(x, gathered_stats, weight, lanes: int):
                 (
                     [
                         gr._stream(gathered_stats, 1, STATS_TILES, u * STATS_TILES, 1, 0, STATS_TILES),
-                        gr._stream(x, 1, LOCAL_TILES, u * LOCAL_TILES, 1, 0, 4),
-                        gr._stream(weight, 1, LOCAL_TILES, 0, 1, 0, 4),
+                        gr._stream(x, 1, LOCAL_TILES, u * LOCAL_TILES, 1, 0, NORM_BLOCK),
+                        gr._stream(weight, 1, LOCAL_TILES, 0, 1, 0, NORM_BLOCK),
                     ],
                     [scaler_bits, gr._bits(EPS)],
                 ),
@@ -602,9 +612,9 @@ def normalize_lanes(x, gathered_stats, weight, lanes: int):
             for u, c in enumerate(cores)
         ],
     )
-    compute = fp.compute_kernel(NORM_COMPUTE, core_set, [LOCAL_TILES, STATS_TILES, 4, 16], fp32_dest=True)
+    compute = fp.compute_kernel(NORM_COMPUTE, core_set, [LOCAL_TILES, STATS_TILES, NORM_BLOCK, 16], fp32_dest=True)
     writer = gr._writer(
-        core_set, [(out, 16)], [(c, [(LOCAL_TILES, u * LOCAL_TILES, 1, 4)]) for u, c in enumerate(cores)]
+        core_set, [(out, 16)], [(c, [(LOCAL_TILES, u * LOCAL_TILES, 1, NORM_BLOCK)]) for u, c in enumerate(cores)]
     )
     meta = fp.program_meta(  # the weight once per lane core
         NAME,
@@ -701,7 +711,7 @@ def conv_lanes(state_rows, normalized, taps, gated, lanes: int, *, mac_form: int
     out = fp.allocate((1, lanes, BRANCHES, LOCAL_HIDDEN), BF16, ttnn.TILE_LAYOUT, mesh)
     grid = mesh.compute_with_storage_grid_size()
     tiles = lanes * LOCAL_TILES
-    per_core = next(T for T in (1, 2, 4, 5, 10, 20) if tiles // T <= grid.x * grid.y)
+    per_core = next(T for T in (1, 2, 4, 5, 10, 20) if LOCAL_TILES % T == 0 and tiles // T <= grid.x * grid.y)
     work = fp.split_work(tiles // per_core, mesh)  # one block of per_core consecutive tiles per core
     cores = fp.core_rectangle(work, mesh)
     inputs = [state_rows[0], state_rows[3], state_rows[6], normalized, *taps, gated]
@@ -724,6 +734,7 @@ def conv_lanes(state_rows, normalized, taps, gated, lanes: int, *, mac_form: int
             )
             for w in work
         ],
+        defines=CONV_DEFINES,
     )
     compute = fp.compute_kernel(CONV_COMPUTE, cores, [per_core, int(mac_form), 0, 0], fp32_dest=False)
     writer = fp.writer_kernel(
@@ -731,6 +742,7 @@ def conv_lanes(state_rows, normalized, taps, gated, lanes: int, *, mac_form: int
         cores,
         [per_core, 0] + fp.accessor_args(out) + fp.accessor_args(out),
         [(w.core, [out.buffer_address(), w.start * per_core, out.buffer_address()]) for w in work],
+        defines=CONV_DEFINES,
     )
     io = list(inputs) + others + [out]  # each buffer once
     meta = fp.program_meta(  # as ``conv`` on the B row-blocks; the taps once per lane block

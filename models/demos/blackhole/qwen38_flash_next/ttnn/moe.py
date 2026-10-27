@@ -40,6 +40,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     LONG_CHUNK_ROWS,
     MAX_LANES,
     MESH_SHAPE,
+    TP_SIZE,
     Qwen38MeshContract,
     TensorPlacement,
     is_slab_rows,
@@ -94,8 +95,24 @@ def _resolve_moe_allreduce_links(tt_ccl) -> int:
 
 HIDDEN_SIZE = 2560
 INTERMEDIATE_SIZE = 640
+SHARED_LOCAL_INTERMEDIATE = 160
+SHARED_PADDED_INTERMEDIATE = SHARED_LOCAL_INTERMEDIATE * TP_SIZE
+assert SHARED_PADDED_INTERMEDIATE >= INTERMEDIATE_SIZE
 ROUTED_EXPERTS = 512
-EXPERTS_PER_DEVICE = 128
+EXPERTS_PER_DEVICE = ROUTED_EXPERTS // TP_SIZE
+
+
+def pad_shared_intermediate(weight: torch.Tensor, dim: int) -> torch.Tensor:
+    """Zero-pad a full shared-expert weight along its intermediate dim to SHARED_PADDED_INTERMEDIATE (identity at TP=4)."""
+
+    pad = SHARED_PADDED_INTERMEDIATE - weight.shape[dim]
+    if pad == 0:
+        return weight
+    shape = list(weight.shape)
+    shape[dim] = pad
+    return torch.cat([weight, torch.zeros(shape, dtype=weight.dtype)], dim=dim)
+
+
 TOP_K = 10
 LOCAL_COMBINE_AXIS = 0
 MOE_SLAB_ONE_CALL_ENV = "QWEN38_MOE_SLAB_ONE_CALL"
@@ -263,7 +280,7 @@ class Qwen38TTNNMoERowContract:
 
     @property
     def hidden_sharded(self) -> tuple[int, int, int, int]:
-        return (1, 1, self.rows, HIDDEN_SIZE // 4)
+        return (1, 1, self.rows, HIDDEN_SIZE // TP_SIZE)
 
     @property
     def full_hidden(self) -> tuple[int, int, int, int]:
@@ -333,12 +350,12 @@ def allocate_local_combine_output(mesh_device, mesh_contract: Qwen38MeshContract
 
 
 def _expert_owner_mapping() -> torch.Tensor:
-    """Return replicated routing metadata for four disjoint 128-expert shards."""
+    """Return replicated routing metadata for TP_SIZE disjoint EXPERTS_PER_DEVICE-expert shards."""
 
     owners = torch.arange(ROUTED_EXPERTS, dtype=torch.int32) // EXPERTS_PER_DEVICE
-    if tuple(torch.bincount(owners, minlength=4).tolist()) != (128, 128, 128, 128):
-        raise AssertionError("routed expert ownership must be exactly 128 experts per device")
-    return owners.unsqueeze(0).repeat(4, 1).contiguous()
+    if tuple(torch.bincount(owners, minlength=TP_SIZE).tolist()) != (EXPERTS_PER_DEVICE,) * TP_SIZE:
+        raise AssertionError(f"routed expert ownership must be exactly {EXPERTS_PER_DEVICE} experts per device")
+    return owners.unsqueeze(0).repeat(TP_SIZE, 1).contiguous()
 
 
 def _layer_cache_dir(
@@ -362,7 +379,7 @@ def _layer_cache_dir(
         / f"index-{INDEX_SHA256}"
         / f"config-{checkpoint.config.config_sha256}"
         / f"tt-metal-{tt_metal_sha}"
-        / f"mesh-1x4-physical-{physical}"
+        / f"mesh-1x{TP_SIZE}-physical-{physical}"
         / namespace
         / f"layer-{layer_index:02d}"
     )
@@ -438,7 +455,7 @@ class Qwen38TTNNMoEWeights:
         # renamed tensorbins deliberately orphan interleaved caches.  The
         # 2.6 MB router is replicated so every device computes all 512 logits
         # locally; no logits all-gather.
-        local_intermediate = INTERMEDIATE_SIZE // MESH_SHAPE[1]
+        local_intermediate = SHARED_LOCAL_INTERMEDIATE
         router = upload(
             source.router_weight.transpose(0, 1).reshape(1, 1, HIDDEN_SIZE, ROUTED_EXPERTS),
             "router_replicated_dram_sharded",
@@ -446,21 +463,27 @@ class Qwen38TTNNMoEWeights:
             dram_sharded_weight_memory_config(mesh_device, HIDDEN_SIZE, ROUTED_EXPERTS),
         )
         shared_gate = upload(
-            source.shared_gate_proj.transpose(0, 1).reshape(1, 1, HIDDEN_SIZE, INTERMEDIATE_SIZE),
+            pad_shared_intermediate(source.shared_gate_proj.transpose(0, 1), 1).reshape(
+                1, 1, HIDDEN_SIZE, SHARED_PADDED_INTERMEDIATE
+            ),
             "shared_gate_dram_sharded",
             output_mapper,
             dram_sharded_weight_memory_config(mesh_device, HIDDEN_SIZE, local_intermediate),
             dtype=shared_dtype,
         )
         shared_up = upload(
-            source.shared_up_proj.transpose(0, 1).reshape(1, 1, HIDDEN_SIZE, INTERMEDIATE_SIZE),
+            pad_shared_intermediate(source.shared_up_proj.transpose(0, 1), 1).reshape(
+                1, 1, HIDDEN_SIZE, SHARED_PADDED_INTERMEDIATE
+            ),
             "shared_up_dram_sharded",
             output_mapper,
             dram_sharded_weight_memory_config(mesh_device, HIDDEN_SIZE, local_intermediate),
             dtype=shared_dtype,
         )
         shared_down = upload(
-            source.shared_down_proj.transpose(0, 1).reshape(1, 1, INTERMEDIATE_SIZE, HIDDEN_SIZE),
+            pad_shared_intermediate(source.shared_down_proj.transpose(0, 1), 0).reshape(
+                1, 1, SHARED_PADDED_INTERMEDIATE, HIDDEN_SIZE
+            ),
             "shared_down_dram_sharded",
             input_mapper,
             dram_sharded_weight_memory_config(mesh_device, local_intermediate, HIDDEN_SIZE),
@@ -484,8 +507,8 @@ class Qwen38TTNNMoEWeights:
             # the fused shared expert's one linear (ttnn/fused/shared_expert): device d's [gate | up | scalar | 0]
             shared_gate_up_scalar = upload(
                 fused.shared_expert.concat_shared_weights(
-                    source.shared_gate_proj.transpose(0, 1),
-                    source.shared_up_proj.transpose(0, 1),
+                    pad_shared_intermediate(source.shared_gate_proj.transpose(0, 1), 1),
+                    pad_shared_intermediate(source.shared_up_proj.transpose(0, 1), 1),
                     source.shared_scalar_gate.transpose(0, 1),
                 ).reshape(1, 1, HIDDEN_SIZE, MESH_SHAPE[1] * fused.shared_expert.CAT_WIDTH),
                 "shared_gate_up_scalar_dram_sharded",
@@ -688,7 +711,7 @@ class Qwen38TTNNMoE:
         # four of the five.  The shared chain stays on that grid: gate/up
         # outputs feed silu/mul/down without resharding, and the down input
         # splits its 160-column K into exactly one tile per core.
-        local_intermediate = INTERMEDIATE_SIZE // MESH_SHAPE[1]
+        local_intermediate = SHARED_LOCAL_INTERMEDIATE
         self.hidden_act_memory_config, self.router_program_config = dram_sharded_matmul_configs(
             mesh_device, HIDDEN_SIZE, ROUTED_EXPERTS, num_cores=5
         )
@@ -1009,12 +1032,13 @@ class Qwen38TTNNMoE:
         for name, tensor in (("packed_w0_w1", packed_w0_w1), ("packed_w2", packed_w2)):
             shape = _shape(tensor)
             # A TTNN mesh tensor exposes its coordinate-local logical shape;
-            # topology supplies the four-way global composition.  Requiring
-            # 128 here plus PlacementShard(dim=2) proves 512/4 ownership and
+            # topology supplies the TP_SIZE-way global composition.  Requiring
+            # EXPERTS_PER_DEVICE here plus PlacementShard(dim=2) proves 512/TP_SIZE ownership and
             # rejects a replicated 512-expert cache.
             if len(shape) < 3 or shape[2] != EXPERTS_PER_DEVICE:
                 raise RuntimeError(
-                    f"{name} must expose exactly 128 local experts with dimension 2 sharded across EP4, got {shape}"
+                    f"{name} must expose exactly {EXPERTS_PER_DEVICE} local experts with dimension 2 "
+                    f"sharded across EP{TP_SIZE}, got {shape}"
                 )
         if packed_w0_w1.dtype != ttnn.bfloat4_b or packed_w2.dtype != ttnn.bfloat4_b:
             raise RuntimeError("routed expert tensors must be BFLOAT4_B")
@@ -1289,7 +1313,8 @@ class Qwen38TTNNMoE:
             shape = _shape(tensor)
             if len(shape) < 3 or shape[2] != EXPERTS_PER_DEVICE:
                 raise RuntimeError(
-                    f"{name} must expose exactly 128 local experts with dimension 2 sharded across EP4, got {shape}"
+                    f"{name} must expose exactly {EXPERTS_PER_DEVICE} local experts with dimension 2 "
+                    f"sharded across EP{TP_SIZE}, got {shape}"
                 )
         if packed_w0_w1.dtype != ttnn.bfloat4_b or packed_w2.dtype != ttnn.bfloat4_b:
             raise RuntimeError("routed expert tensors must be BFLOAT4_B")
@@ -1694,7 +1719,7 @@ class Qwen38TTNNMoE:
         gate and up run as one [gate | up] linear cut into two whole-tile slices (the prefill dense design note)."""
 
         dram = ttnn.DRAM_MEMORY_CONFIG
-        local_intermediate = INTERMEDIATE_SIZE // MESH_SHAPE[1]
+        local_intermediate = SHARED_LOCAL_INTERMEDIATE
         dense = self.prefill_dense
         if dense.resident("shared_gate_up") is not None:
             # QWEN38_PREFILL_DENSE_GRID=wide: gate and up as one [gate | up] linear on the resident prefill weight, cut

@@ -13,7 +13,7 @@ import struct
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import torch
 from safetensors import safe_open
@@ -21,6 +21,8 @@ from safetensors import safe_open
 from models.demos.blackhole.qwen38_flash_next.config import Qwen38Config
 
 PINNED_CHECKPOINT_REVISION = "f5d08274bafd880402bd16f5e3e6c514136ec06c"
+
+HF_MODEL_ID = "Qwen/Qwen3.8-Flash-Next"
 INDEX_SHA256 = "99e815241ef03325536b0aaa4441deea45174c17fae31e10f0bb456410c590de"
 CHECKPOINT_FILE_MANIFEST_SHA256 = "13c88f393ffbe4f5e9733d8e48a59f21c77e69a5f02b76bb073835d9a1ca0ea9"
 CHECKPOINT_TENSOR_MANIFEST_SHA256 = "ebf4de2015233c20e21ff1e7e388e871208158ed350fea42964dbd52ca69359b"
@@ -52,6 +54,34 @@ _DTYPE_BYTES = {
     "U64": 8,
     "F64": 8,
 }
+
+
+def checkpoint_directory(
+    environ: Mapping[str, str] = os.environ,
+    *,
+    revision: str | None = PINNED_CHECKPOINT_REVISION,
+    missing: Path | None = None,
+) -> Path:
+    """The checkpoint ``HF_MODEL`` names (default ``HF_MODEL_ID``): a directory as is, else a Hugging Face repo id
+    resolved to its snapshot (``revision``, default the pinned one; None takes the hub's default) in the local hub
+    cache, nothing downloaded.  An ``HF_MODEL`` that resolves to neither raises ``FileNotFoundError``, or returns
+    ``missing`` when given."""
+
+    name = environ.get("HF_MODEL") or HF_MODEL_ID
+    if Path(name).expanduser().is_dir():
+        return Path(name).expanduser()
+    from huggingface_hub import snapshot_download  # the hub cache layout is the library's
+
+    try:
+        return Path(snapshot_download(name, revision=revision, local_files_only=True))
+    except Exception as error:  # noqa: BLE001  the library's own error classes vary by version
+        if missing is not None:
+            return missing
+        at = "" if revision is None else f" at revision {revision}"
+        raise FileNotFoundError(
+            f"HF_MODEL {name!r} is not a checkpoint directory, nor a repo id{at} in the local Hugging Face hub cache "
+            f"({type(error).__name__}: {error}); set HF_MODEL to the checkpoint directory"
+        ) from error
 
 
 def _file_identity(status: os.stat_result) -> tuple[int, ...]:

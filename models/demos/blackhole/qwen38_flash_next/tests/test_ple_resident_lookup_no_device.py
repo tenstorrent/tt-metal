@@ -19,7 +19,11 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint, Qwen38CheckpointRowReader
+from models.demos.blackhole.qwen38_flash_next.checkpoint import (
+    Qwen38Checkpoint,
+    Qwen38CheckpointRowReader,
+    checkpoint_directory,
+)
 from models.demos.blackhole.qwen38_flash_next.reference import build_ngram_hash_spec, ngram_token_ids
 from models.demos.blackhole.qwen38_flash_next.tt.ple import Qwen38HostPLEEmbedding
 from models.demos.blackhole.qwen38_flash_next.ttnn.ple import (
@@ -28,7 +32,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.ple import (
     ngram_token_ids_decode_step,
 )
 
-CHECKPOINT = Path(os.environ.get("QWEN38_CHECKPOINT", "/nonexistent/Qwen3.8-Flash-Next"))
+CHECKPOINT = checkpoint_directory(missing=Path("/nonexistent/Qwen3.8-Flash-Next"))
 PARTS = 4
 ROWS_PER_PART = 1024
 HEAD_DIM = 8

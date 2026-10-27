@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZE
+
 ENV = "QWEN38_FUSED"
 OFF_ENV = "QWEN38_FUSED_OFF"
 ALL = "all"
@@ -62,6 +64,35 @@ DEFAULT_ON: frozenset[str] = frozenset(
         "candidate_row",
         "shared_expert",
         "moe_dense",
+        "sparse_sdpa_tiled",
+    }
+)
+# The kernels proven at TP=8 (their programs were written for the TP=4 per-device shapes).  Off TP=4 every other
+# registered kernel is treated as listed in QWEN38_FUSED_OFF and its caller takes the composed chain.
+TP8_READY: frozenset[str] = frozenset(
+    {
+        "router_tail",
+        "position_derive",
+        "untilize_rows",
+        "moe_post",
+        "moe_combine",
+        "gr_write",
+        "greedy_tail",
+        "shared_expert",
+        "moe_dense",
+        "gdn_step",
+        "qsa_index_tail",
+        "qsa_main_tail",
+        "qsa_post_attention",
+        "qsa_widen_partial",
+        "qsa_selection_row",
+        "qsa_score_merge",
+        "qsa_rows",
+        "gr_read",
+        "ple",
+        "gr_fold",
+        "gr_recip_last",
+        "gdn_prefill_rows",
         "sparse_sdpa_tiled",
     }
 )
@@ -163,9 +194,10 @@ def default_names() -> frozenset[str]:
 
 def enabled_names(environ: Mapping[str, str] = os.environ) -> frozenset[str]:
     """The kernels that run: ``DEFAULT_ON`` plus ``QWEN38_FUSED``, less ``QWEN38_FUSED_OFF``; every name in either
-    variable must be registered."""
+    variable must be registered.  Off TP=4 only the kernels in ``TP8_READY`` can run."""
 
-    return (default_names() | _names(environ, ENV)) - _names(environ, OFF_ENV)
+    names = (default_names() | _names(environ, ENV)) - _names(environ, OFF_ENV)
+    return names if TP_SIZE == 4 else names & TP8_READY
 
 
 def enabled(name: str, environ: Mapping[str, str] = os.environ) -> bool:

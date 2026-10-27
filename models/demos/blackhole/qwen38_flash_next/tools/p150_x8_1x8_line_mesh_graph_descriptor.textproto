@@ -1,0 +1,14 @@
+# p150 x8 host: eight p150b chips as one 1x8 LINE mesh, the straight fabric line the fused line kernels
+# (gr_fold, gr_recip_last) need at TP=8.  Exported as TT_MESH_GRAPH_DESC_PATH by hardware_profiles.export_mesh_graph_descriptor.
+# BH single Loudbox exposed as a 1x8 LINE.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 8 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

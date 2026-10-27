@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen3.8-Flash-Next end-to-end text generation on a 1x4 Blackhole mesh at batch 1, parametrized by input length.
+"""Qwen3.8-Flash-Next end-to-end text generation on a 1xTP_SIZE Blackhole mesh (1x4 by default, 1x8 with MESH_DEVICE=P150x8) at batch 1, parametrized by input length.
 
 The model is the vLLM adapter's ``Qwen38ForCausalLM`` on the shared ``mesh_device`` fixture.  The prompt is a chat turn
 (thinking disabled) holding a War and Peace excerpt with a pass key hidden in the middle, built to exactly ``seqlen``
@@ -11,9 +11,11 @@ vocabulary logits; 128 decode steps.  Each run asserts the token count and that 
 ``determinism_128`` generates twice and asserts identical tokens.  Under ``CI=true`` the benchmark JSON is written.
 
 Run:  pytest models/demos/blackhole/qwen38_flash_next/demo/text_demo.py -v -s -k "traced_128 and not traced_128k"
-Env:  QWEN38_DEMO_HOST_ARGMAX=1 (the A/B route: full logits, host argmax), MODEL_WEIGHTS_DIR (or HF_MODEL, resolved
-      through the local Hugging Face cache), QWEN38_CACHE_ROOT (also holds the downloaded book under demo-context), TT_METAL_TRACE_ALLOC_TRACKING=1 before ttnn is imported; QWEN38_BF4_CORPUS and
-      QWEN38_BF4_CORPUS_VERIFICATION when the BF4 expert cache under QWEN38_CACHE_ROOT is not populated yet.
+Env:  QWEN38_DEMO_HOST_ARGMAX=1 (the A/B route: full logits, host argmax), HF_MODEL (a checkpoint directory, or a
+      Hugging Face repo id in the local hub cache; default Qwen/Qwen3.8-Flash-Next), MESH_DEVICE (P150x4 or P150x8;
+      it selects the hardware profile), TT_CACHE_PATH (also holds the downloaded book under demo-context),
+      TT_METAL_TRACE_ALLOC_TRACKING=1 before ttnn is imported; QWEN38_BF4_CORPUS and
+      QWEN38_BF4_CORPUS_VERIFICATION when the BF4 expert cache under TT_CACHE_PATH is not populated yet.
 """
 
 import json
@@ -28,6 +30,7 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, Qwen38OfficialChatTemplate
+from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import (
     build_prompt_ids,
     build_user_prompt_ids,
@@ -67,15 +70,16 @@ DEVICE_PARAMS = {
 def device_params(request):
     """The shared fixture's mesh parameters plus the physical line order the fused line kernels need."""
     params = dict(request.param)
-    profile = hardware_profiles.resolve_hardware_profile(os.environ.get("QWEN38_HARDWARE_PROFILE"))
-    descriptor = hardware_profiles.mesh_graph_descriptor_path(profile)
-    if descriptor is not None and "TT_MESH_GRAPH_DESC_PATH" not in os.environ:
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = str(descriptor.resolve())
+    profile = hardware_profiles.resolve_hardware_profile(hardware_profiles.mesh_device_profile_name("p150-x8"))
+    hardware_profiles.export_mesh_graph_descriptor(profile)
     if tuple(profile.system_mesh_local_shape) != tuple(MESH_SHAPE):
         pytest.fail(
             f"hardware profile {profile.lane} has the physical mesh shape {tuple(profile.system_mesh_local_shape)}, "
             f"not {tuple(MESH_SHAPE)}; it needs the server's reshape path, which the demo does not support yet"
         )
+    if not profile.derive_route:
+        logger.info(f"hardware profile {profile.lane} opens the default system mesh without physical device ids")
+        return params
     resolved, _derivation = resolve_route(profile)
     params["physical_device_ids"] = list(resolved.route)
     logger.info(f"hardware profile {profile.lane} route {resolved.route}")
@@ -176,32 +180,22 @@ def generate(model: Qwen38ForCausalLM, prompt_ids: list[int], max_generated_toke
     ],
 )
 def test_demo_text(mesh_device, seqlen, max_generated_tokens, repeat_runs, tmp_path, record_property):
-    if os.environ.get("MODEL_WEIGHTS_DIR"):
-        checkpoint = Path(os.environ["MODEL_WEIGHTS_DIR"])
-    elif os.environ.get("HF_MODEL"):  # the snapshot in the local Hugging Face cache, offline
-        from huggingface_hub import snapshot_download
-
-        checkpoint = Path(snapshot_download(os.environ["HF_MODEL"], local_files_only=True))
-    else:
-        pytest.fail("set MODEL_WEIGHTS_DIR to the checkpoint directory or HF_MODEL to its Hugging Face id")
-    if not os.environ.get("QWEN38_CACHE_ROOT"):
-        pytest.fail("set QWEN38_CACHE_ROOT to the cache root (the book download goes to <root>/demo-context)")
+    try:
+        checkpoint = checkpoint_directory()
+    except FileNotFoundError as error:
+        pytest.fail(str(error))
+    if not os.environ.get("TT_CACHE_PATH"):
+        pytest.fail("set TT_CACHE_PATH to the cache root (the book download goes to <root>/demo-context)")
 
     allocated_context = min(context for context in CONTEXTS if context >= seqlen)
     max_seq_len = allocated_context - RESIDENT_CONTEXT_HEADROOM
     prompt_len = min(seqlen, max_seq_len - max_generated_tokens)
-    cache_label = os.environ.get("QWEN38_CACHE_LABEL")
-    if cache_label and not cache_label.startswith(f"c{allocated_context}-"):
-        pytest.fail(
-            f"QWEN38_CACHE_LABEL={cache_label!r} must start with 'c{allocated_context}-' for seqlen {seqlen}; "
-            "leave it unset to use the adapter default"
-        )
 
     # Build the prompt first so a bad download or tokenizer problem fails before the model loads.
     template = Qwen38OfficialChatTemplate(checkpoint)
     tokenizer = template.tokenizer
     config = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
-    context_text = load_context_text(config, Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context")
+    context_text = load_context_text(config, Path(os.environ["TT_CACHE_PATH"]) / "demo-context")
     prompt_ids, prompt_info = build_prompt_ids(
         tokenizer,
         lambda content: template.render([{"role": "user", "content": content}], enable_thinking=False).text,
@@ -331,28 +325,21 @@ def test_demo_text_batched(mesh_device, seqlen, batch_size, tmp_path, record_pro
     body with paged KV: all users are admitted, then 128 tokens per user (t0 from the prefill + 127 batched steps)."""
 
     max_generated_tokens = 128
-    if os.environ.get("MODEL_WEIGHTS_DIR"):
-        checkpoint = Path(os.environ["MODEL_WEIGHTS_DIR"])
-    elif os.environ.get("HF_MODEL"):
-        from huggingface_hub import snapshot_download
-
-        checkpoint = Path(snapshot_download(os.environ["HF_MODEL"], local_files_only=True))
-    else:
-        pytest.fail("set MODEL_WEIGHTS_DIR to the checkpoint directory or HF_MODEL to its Hugging Face id")
-    if not os.environ.get("QWEN38_CACHE_ROOT"):
-        pytest.fail("set QWEN38_CACHE_ROOT to the cache root (the book download goes to <root>/demo-context)")
+    try:
+        checkpoint = checkpoint_directory()
+    except FileNotFoundError as error:
+        pytest.fail(str(error))
+    if not os.environ.get("TT_CACHE_PATH"):
+        pytest.fail("set TT_CACHE_PATH to the cache root (the book download goes to <root>/demo-context)")
 
     allocated_context = min(context for context in CONTEXTS if context >= seqlen)
     max_seq_len = allocated_context - RESIDENT_CONTEXT_HEADROOM
     prompt_len = min(seqlen, max_seq_len - max_generated_tokens)
-    cache_label = os.environ.get("QWEN38_CACHE_LABEL")
-    if cache_label and not cache_label.startswith(f"c{allocated_context}-"):
-        pytest.fail(f"QWEN38_CACHE_LABEL={cache_label!r} must start with 'c{allocated_context}-'")
 
     template = Qwen38OfficialChatTemplate(checkpoint)
     tokenizer = template.tokenizer
     config = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
-    context_text = load_context_text(config, Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context")
+    context_text = load_context_text(config, Path(os.environ["TT_CACHE_PATH"]) / "demo-context")
     built = [
         build_user_prompt_ids(
             tokenizer,

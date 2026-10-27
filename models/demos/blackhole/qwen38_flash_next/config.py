@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZE
+
 CONFIG_SHA256 = "889658f2508e8c61d409b02e70e0d78d8d4452ec65aaafbe129805d213d2e74b"
 LAYER_PATTERN = ("linear_attention", "linear_attention", "linear_attention", "full_attention") * 12
 
@@ -224,57 +226,64 @@ def _ranges(total: int, parts: int) -> tuple[tuple[int, int], ...]:
 
 @dataclass(frozen=True)
 class Qwen38Placement:
-    """Numerical TP4/EP4 placement; runtime topology assertions bind it to hardware."""
+    """Numerical TP/EP placement over the (1, TP_SIZE) mesh; runtime topology assertions bind it to hardware."""
 
     config: Qwen38Config
     mesh_shape: tuple[int, int]
     physical_ids: tuple[int, ...]
 
     def __post_init__(self) -> None:
-        if len(self.physical_ids) != 4:
-            raise ValueError(f"Qwen3.8-Flash-Next requires exactly four physical devices, got {len(self.physical_ids)}")
-        if tuple(self.mesh_shape) != (1, 4):
-            raise ValueError(f"Qwen3.8-Flash-Next requires a 1x4 mesh, got {self.mesh_shape}")
-        if len(set(self.physical_ids)) != 4:
-            raise ValueError(f"physical IDs must be four distinct devices, got {self.physical_ids}")
+        if len(self.physical_ids) != TP_SIZE:
+            raise ValueError(
+                f"Qwen3.8-Flash-Next requires exactly {TP_SIZE} physical devices, got {len(self.physical_ids)}"
+            )
+        if tuple(self.mesh_shape) != (1, TP_SIZE):
+            raise ValueError(f"Qwen3.8-Flash-Next requires a 1x{TP_SIZE} mesh, got {self.mesh_shape}")
+        if len(set(self.physical_ids)) != TP_SIZE:
+            raise ValueError(f"physical IDs must be {TP_SIZE} distinct devices, got {self.physical_ids}")
 
     @property
     def hidden_ranges(self) -> tuple[tuple[int, int], ...]:
-        return _ranges(self.config.hidden_size, 4)
+        return _ranges(self.config.hidden_size, TP_SIZE)
 
     @property
     def vocab_ranges(self) -> tuple[tuple[int, int], ...]:
-        return _ranges(self.config.vocab_size, 4)
+        return _ranges(self.config.vocab_size, TP_SIZE)
 
     @property
     def expert_ranges(self) -> tuple[tuple[int, int], ...]:
-        return _ranges(self.config.num_experts, 4)
+        return _ranges(self.config.num_experts, TP_SIZE)
 
     @property
     def gdn_qk_head_ranges(self) -> tuple[tuple[int, int], ...]:
-        return _ranges(self.config.gdn_qk_heads, 4)
+        return _ranges(self.config.gdn_qk_heads, TP_SIZE)
 
     @property
     def gdn_value_head_ranges(self) -> tuple[tuple[int, int], ...]:
-        return _ranges(self.config.gdn_value_heads, 4)
+        return _ranges(self.config.gdn_value_heads, TP_SIZE)
 
     @property
     def qsa_query_head_ranges(self) -> tuple[tuple[int, int], ...]:
-        return _ranges(self.config.qsa_query_heads, 4)
+        return _ranges(self.config.qsa_query_heads, TP_SIZE)
 
     @property
     def qsa_kv_device_groups(self) -> tuple[tuple[int, int], ...]:
-        # KV head 0 serves Q heads 0..11 on devices 0/1; KV head 1 serves
-        # Q heads 12..23 on devices 2/3.
-        return ((0, 1), (2, 3))
+        # KV head 0 serves Q heads 0..11 on the first half of the devices; KV head 1 serves
+        # Q heads 12..23 on the second half.
+        half = TP_SIZE // 2
+        return (tuple(range(half)), tuple(range(half, TP_SIZE)))
 
     @property
     def index_query_head_ranges(self) -> tuple[tuple[int, int], ...]:
-        return _ranges(self.config.index_query_heads, 4)
+        heads = self.config.index_query_heads
+        if TP_SIZE % heads:
+            raise ValueError(f"{TP_SIZE} devices do not divide over {heads} index query heads")
+        stride = TP_SIZE // heads
+        return tuple((device // stride, device // stride + (device % stride == 0)) for device in range(TP_SIZE))
 
     @property
     def index_key_replicas(self) -> tuple[int, ...]:
-        return (0, 1, 2, 3)
+        return tuple(range(TP_SIZE))
 
     @property
     def ple_result_ranges(self) -> tuple[tuple[int, int], ...]:

@@ -11,11 +11,11 @@ The no-device tests, the acceptance gate, the reference corpus and the regressio
 
 Run from the repository root:
 
-    QWEN38_CHECKPOINT=/data/Qwen3.8-Flash-Next python_env/bin/python -m pytest models/demos/blackhole/qwen38_flash_next/tests
+    HF_MODEL=/data/Qwen3.8-Flash-Next python_env/bin/python -m pytest models/demos/blackhole/qwen38_flash_next/tests
 
 `tests/` holds the no-device tests: component tests against the `tt/` torch reference (the CPU oracle every test
 compares against), static contract tests over the `ttnn/` device model, the protocol, sampling, prefill-driver,
-reference-corpus and harness tests.  Set `QWEN38_CHECKPOINT` for the checkpoint-reading ones (the config, chat
+reference-corpus and harness tests.  Set `HF_MODEL` for the checkpoint-reading ones (the config, chat
 format and component tests).
 
 ## The acceptance gate

@@ -90,17 +90,21 @@ Use plugin commit `1d87a00e7d91ec246582d07865ec4f8b0a8fb25c` with vLLM 0.26.0's 
 registration change is needed: point `EXTRA_MODELS_DIR` at `tools/vllm_bundle`. The adapter declares its required
 fabric configuration before mesh creation; explicit launch overrides retain the plugin's normal precedence.
 
-Set `MODEL_WEIGHTS_DIR`, `QWEN38_CACHE_ROOT`, `QWEN38_CACHE_LABEL=c32768-tt-quietbox`,
-`TT_METAL_TRACE_ALLOC_TRACKING=1`, `TT_VISIBLE_DEVICES=0,1,2,3`, and `MESH_DEVICE='(1, 4)'`.
+Set `HF_MODEL` (a checkpoint directory, or the repo id `Qwen/Qwen3.8-Flash-Next`, which resolves in the local Hugging
+Face hub cache and is not downloaded), `TT_CACHE_PATH`,
+`TT_METAL_TRACE_ALLOC_TRACKING=1`, `TT_VISIBLE_DEVICES=0,1,2,3`, and `MESH_DEVICE=P150x4`.
 On QuietBox also set `TT_MESH_GRAPH_DESC_PATH` to `tools/qb_p150_x4_1x4_line_mesh_graph_descriptor.textproto`.
+The vLLM path is tested on a 1x4 mesh only. On an 8x p150 host, a 1x8 mesh needs `MESH_DEVICE=P150x8`,
+`TT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7` and `TT_MESH_GRAPH_DESC_PATH` set to
+`tools/p150_x8_1x8_line_mesh_graph_descriptor.textproto`; a 1x4 mesh on that host needs `TT_VISIBLE_DEVICES=0,1,2,3`.
 Launch with `max_num_seqs=1`, `max_model_len=32704`, architecture override
 `TTQwen4ExpForConditionalGeneration`, and TT configuration
 `{"l1_small_size":24576,"trace_region_size":0,"sample_on_device_mode":"decode_only"}`.
 
 ```bash
-export MODEL_WEIGHTS_DIR="$CHECKPOINT" QWEN38_CACHE_ROOT="$CACHE_ROOT"
-export QWEN38_CACHE_LABEL=c32768-tt-quietbox TT_METAL_TRACE_ALLOC_TRACKING=1
-export TT_VISIBLE_DEVICES=0,1,2,3 MESH_DEVICE='(1, 4)'
+export HF_MODEL="$CHECKPOINT" TT_CACHE_PATH="$CACHE_ROOT"
+export TT_METAL_TRACE_ALLOC_TRACKING=1
+export TT_VISIBLE_DEVICES=0,1,2,3 MESH_DEVICE=P150x4
 export EXTRA_MODELS_DIR="$PWD/$MODEL/tools/vllm_bundle"
 export TT_MESH_GRAPH_DESC_PATH="$PWD/$MODEL/tools/qb_p150_x4_1x4_line_mesh_graph_descriptor.textproto"
 python "$PLUGIN_ROOT/examples/server_example_tt.py" \

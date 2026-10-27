@@ -22,14 +22,15 @@ request is answered HTTP 503 in the server's error shape.
 
 The environment (a tt-model serve profile sets it; every value is checked before the server starts):
 
-    QWEN38_HARDWARE_PROFILE   the server's hardware profile (default ``p150-line``; ``tt-quietbox``, ``tt-quietbox-2``)
+    MESH_DEVICE               the mesh (unset: 1x4); it selects the hardware profile: ``P300x2`` the QuietBox 2, a 1x4
+                              this host's profile when the table knows the host, else ``p150-line``
     QWEN38_ALLOCATED_CONTEXT  the resident context, 32768 (default), 65536, 131072 or 262144
     QWEN38_SERVER_ARGS        further server flags, shell-split (default ``--mtp 4 --sampling --stall-seconds 300
                               --require-json-96``); a flag the server does not know is refused by its parser
-    QWEN38_CACHE_ROOT         the cache root (default ``/tensor-cache``): the launcher's layout, ``caches/<label>/
+    TT_CACHE_PATH             the cache root (default ``/tensor-cache``): the launcher's layout, ``caches/<label>/
                               {components,model-io}``, ``caches/bf4-experts`` shared by every context, ``runs/``
-    QWEN38_CHECKPOINT         the checkpoint directory; unset, the pinned revision of ``HF_MODEL`` (default
-                              ``Qwen/Qwen3.8-Flash-Next``) already in the local Hugging Face hub cache
+    HF_MODEL                  a checkpoint directory, or a repo id (default ``Qwen/Qwen3.8-Flash-Next``) whose pinned
+                              revision is in the local hub cache
     QWEN38_INNER_PORT         the loopback port the server listens on behind uvicorn (default 18000)
     QWEN38_STOP_SECONDS       how long the shutdown waits for the server's exit after SIGTERM (default 300)
     QWEN38_TT_METAL_SHA       the runtime identity of a tree without git history (``tools/runtime_admission.py``)
@@ -58,6 +59,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from models.demos.blackhole.qwen38_flash_next.checkpoint import PINNED_CHECKPOINT_REVISION
+from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_directory as resolve_checkpoint
 from models.demos.blackhole.qwen38_flash_next.tools import hardware_profiles
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_QSA_CACHE_CAPACITIES
 
@@ -111,22 +113,15 @@ def device_nodes(device_root: Path = DEVICE_ROOT) -> tuple[int, ...]:
 
 
 def checkpoint_directory(environ: Mapping[str, str]) -> Path:
-    """``QWEN38_CHECKPOINT`` when set; else the pinned revision of ``HF_MODEL`` in the local hub cache, which the
-    container's host prefetched (nothing is downloaded here)."""
-
-    explicit = environ.get("QWEN38_CHECKPOINT")
-    if explicit:
-        return Path(explicit)
-    repo_id = environ.get("HF_MODEL") or DEFAULT_HF_MODEL
-    from huggingface_hub import snapshot_download  # the hub cache layout is the library's
+    """``HF_MODEL`` (default ``DEFAULT_HF_MODEL``): a checkpoint directory, else the pinned revision of that repo id in
+    the local hub cache, which the container's host prefetched (nothing is downloaded here)."""
 
     try:
-        return Path(snapshot_download(repo_id, revision=PINNED_CHECKPOINT_REVISION, local_files_only=True))
-    except Exception as error:  # noqa: BLE001  the library's own error classes vary by version
-        raise Qwen38ContainerError(
-            f"the checkpoint {repo_id} at {PINNED_CHECKPOINT_REVISION} is not in the local Hugging Face hub cache "
-            f"({type(error).__name__}: {error}); set QWEN38_CHECKPOINT to the checkpoint directory instead"
-        ) from error
+        return resolve_checkpoint(
+            {"HF_MODEL": environ.get("HF_MODEL") or DEFAULT_HF_MODEL}, revision=PINNED_CHECKPOINT_REVISION
+        )
+    except FileNotFoundError as error:
+        raise Qwen38ContainerError(str(error)) from error
 
 
 @dataclass(frozen=True)
@@ -156,9 +151,10 @@ class Qwen38ContainerServer:
     ) -> "Qwen38ContainerServer":
         environ = dict(os.environ if environ is None else environ)
         table = hardware_profiles.hardware_profile_table()
-        name = environ.get("QWEN38_HARDWARE_PROFILE") or DEFAULT_PROFILE
-        if name not in table:
-            raise Qwen38ContainerError(f"QWEN38_HARDWARE_PROFILE {name!r} is not one of {sorted(table)}")
+        try:
+            name = hardware_profiles.mesh_device_profile_name(DEFAULT_PROFILE, environ)
+        except (ValueError, hardware_profiles.HardwareProfileError) as error:
+            raise Qwen38ContainerError(str(error)) from error
         profile = table[name]
         nodes = device_nodes(device_root)
         if len(nodes) != 4:
@@ -192,7 +188,7 @@ class Qwen38ContainerServer:
             extra = shlex.split(environ.get("QWEN38_SERVER_ARGS", DEFAULT_SERVER_ARGS))
         except ValueError as error:
             raise Qwen38ContainerError(f"QWEN38_SERVER_ARGS does not shell-split: {error}") from error
-        cache_root = Path(environ.get("QWEN38_CACHE_ROOT") or DEFAULT_CACHE_ROOT)
+        cache_root = Path(environ.get("TT_CACHE_PATH") or DEFAULT_CACHE_ROOT)
         label = f"c{context}-{profile.host}"
         caches = cache_root / "caches" / label
         stamp = now or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())

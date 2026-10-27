@@ -4,11 +4,12 @@
 // Per (lane, head) item: the projection's q/k/v/z/a/b tiles, the three older conv ring slots' q/k/v tiles, the four
 // taps' q/k/v tiles (tile-major: CB_S holds tile t's three slots at 3t.., CB_T its four taps at 4t.., pushed per
 // tile), the head's dt_bias / neg_exp_A tiles, the lane's state tiles, and the lane's row mask; writes
-// the projection's q/k/v tiles into the newest ring slot.  Tile ids: q 4(h/3)+c, k 16+4(h/3)+c, v 32+4h+c,
-// z 80+4h+c, a 128, b 129 (one tile row of the [1,1,rows,4160] projection); state ((lane*12+h)*16 + t).
-// Compile-time args: 0 rows; then TensorAccessorArgs of projected, slot0, slot1, slot2, tap0..tap3, dtna, norm,
-// state, newest.  Runtime args: 0 projected, 1-3 slots, 4-7 taps, 8 dtna, 9 norm, 10 state, 11 newest addresses,
-// 12 items, then (lane, head) pairs.
+// the projection's q/k/v tiles into the newest ring slot.  Tile ids: q 4(h/3)+c, k K_TILE0+4(h/3)+c, v V_TILE0+4h+c,
+// z Z_TILE0+4h+c, A_TILE, B_TILE (one tile row of the [1,1,rows,PROJECTION_WIDTH] projection); state
+// ((lane*HEADS+h)*16 + t).
+// Compile-time args: 0 rows, 1 HEADS, 2 K_TILE0, 3 V_TILE0, 4 Z_TILE0, 5 A_TILE, 6 B_TILE; then TensorAccessorArgs of
+// projected, slot0, slot1, slot2, tap0..tap3, dtna, norm, state, newest.  Runtime args: 0 projected, 1-3 slots, 4-7
+// taps, 8 dtna, 9 norm, 10 state, 11 newest addresses, 12 items, then (lane, head) pairs.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/noc_traits.h"
@@ -17,8 +18,11 @@
 namespace {
 constexpr uint32_t CB_P = 0, CB_S = 1, CB_T = 2, CB_Z = 3, CB_AB = 4, CB_DTNA = 5, CB_W = 6, CB_STATE = 7;
 constexpr uint32_t CB_MASK = 8, CB_SCALER = 9;
-constexpr uint32_t HEADS = 12, HT = 4, QKV_TILES = 12, STATE_TILES = 16;
-constexpr uint32_t K_TILE0 = 16, V_TILE0 = 32, Z_TILE0 = 80, A_TILE = 128, B_TILE = 129;
+constexpr uint32_t HT = 4, QKV_TILES = 12, STATE_TILES = 16;
+constexpr uint32_t HEADS = get_compile_time_arg_val(1);
+constexpr uint32_t K_TILE0 = get_compile_time_arg_val(2), V_TILE0 = get_compile_time_arg_val(3);
+constexpr uint32_t Z_TILE0 = get_compile_time_arg_val(4), A_TILE = get_compile_time_arg_val(5);
+constexpr uint32_t B_TILE = get_compile_time_arg_val(6);
 constexpr uint32_t BF16_TILE = 2048, FP32_TILE = 4096, FACE_ELEMS = 256;
 
 constexpr uint32_t face_element(uint32_t row, uint32_t col) {
@@ -64,7 +68,7 @@ void kernel_main() {
     const uint32_t newest_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t items = get_arg_val<uint32_t>(arg++);
 
-    constexpr auto p_args = TensorAccessorArgs<1>();
+    constexpr auto p_args = TensorAccessorArgs<7>();
     constexpr auto s0_args = TensorAccessorArgs<p_args.next_compile_time_args_offset()>();
     constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto s2_args = TensorAccessorArgs<s1_args.next_compile_time_args_offset()>();

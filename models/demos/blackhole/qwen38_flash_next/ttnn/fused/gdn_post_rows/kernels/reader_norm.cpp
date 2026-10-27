@@ -19,9 +19,9 @@
 namespace {
 constexpr uint32_t CB_X = 0, CB_SIG = 1, CB_SCALER = 2, CB_EPS = 3, CB_GAMMA = 4, CB_PROJ = 5;
 constexpr uint32_t HEAD_TILES = 4;          // 128 / 32
-constexpr uint32_t VALUE_TILES = 48;        // 1536 / 32
-constexpr uint32_t PROJECTION_TILES = 130;  // 4160 / 32
-constexpr uint32_t HISTORY_HEADS = 10;      // 80 q|k|v column tiles over 8 tiles per head
+constexpr uint32_t VALUE_TILES = GDN_VALUE_TILES;
+constexpr uint32_t PROJECTION_TILES = GDN_PROJECTION_TILES;
+constexpr uint32_t HISTORY_HEADS = GDN_HISTORY_HEADS;  // q|k|v column tiles over 8 tiles per head
 constexpr uint32_t HISTORY_COLUMNS = 8;
 constexpr uint32_t BF16_TILE = 2048;
 }  // namespace

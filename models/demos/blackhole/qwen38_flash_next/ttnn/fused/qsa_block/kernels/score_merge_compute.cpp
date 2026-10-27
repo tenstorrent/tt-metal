@@ -18,7 +18,7 @@
 void kernel_main() {
     const uint32_t rows = get_arg_val<uint32_t>(0);
     const uint32_t chunks = get_arg_val<uint32_t>(1);
-    constexpr uint32_t CB_IN = 0, CB_ZERO = 1, CB_MASK = 2, CB_SUM = 3, CB_OUT = 16, DEVICES = 4;
+    constexpr uint32_t CB_IN = 0, CB_ZERO = 1, CB_MASK = 2, CB_SUM = 3, CB_OUT = 16, DEVICES = SCORE_MERGE_DEVICES;
     compute_kernel_hw_startup(CB_IN, CB_ZERO, CB_SUM);
     cb_wait_front(CB_ZERO, 1);
     for (uint32_t r = 0; r < rows * chunks;

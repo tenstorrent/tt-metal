@@ -59,14 +59,16 @@ from dataclasses import dataclass
 
 import torch
 
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZE
+
 PACK_ROWS = 2048
 PACK_BUCKETS = (128, 256, 512, 1024)
 PACK_MAX_USERS = PACK_ROWS // PACK_BUCKETS[0]  # 16
-GDN_LAUNCH_USERS = 8  # 12 * 9 = 108 <= the 110-core cap of the scan; 8 keeps the nv = 1 form
+GDN_LAUNCH_USERS = 8  # VALUE_HEADS * 9 = 108 at TP=4 <= the 110-core cap of the scan; 8 keeps the nv = 1 form
 BLOCK_ROWS = 4  # tokens per compressed block (QSA COMPRESS_RATIO)
 BLOCK_TOPK = 512  # ids per row of the block-shared attention kernel
 BLOCK_SENTINEL = 0xFFFFFFFF
-VALUE_HEADS = 12
+VALUE_HEADS = 48 // TP_SIZE  # value heads per device
 CHUNK = 32
 PLE_BLOCK_ROWS = 128
 PLE_HISTORY_ROWS = 9

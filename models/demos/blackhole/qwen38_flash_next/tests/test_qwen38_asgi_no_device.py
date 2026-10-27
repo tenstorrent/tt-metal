@@ -40,10 +40,17 @@ def _devices(tmp_path: Path, nodes) -> Path:
     return root
 
 
+@pytest.fixture(autouse=True)
+def _unnamed_host(monkeypatch):
+    monkeypatch.setattr(hardware_profiles.socket, "gethostname", lambda: "unnamed-host")
+    monkeypatch.delenv("TT_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("QWEN38_HARDWARE_PROFILE_TABLE", raising=False)
+
+
 def _settings(tmp_path: Path, nodes=(4, 5, 6, 7), **environ: str) -> asgi.Qwen38ContainerServer:
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir(exist_ok=True)
-    environment = {"QWEN38_CACHE_ROOT": str(tmp_path / "tensor-cache"), **environ}
+    environment = {"TT_CACHE_PATH": str(tmp_path / "tensor-cache"), **environ}
     return asgi.Qwen38ContainerServer.from_environment(
         environment, device_root=_devices(tmp_path, nodes), checkpoint=checkpoint, now="20260926T000000Z"
     )
@@ -82,13 +89,21 @@ def test_settings_on_four_other_nodes_move_the_line_profile_and_parse_with_the_s
     assert asgi.ACCEPTANCE_PROMPTS.is_dir() and (asgi.ACCEPTANCE_PROMPTS / "SHA256SUMS").is_file()
 
 
-def test_settings_on_the_profile_nodes_pass_no_device_nodes_and_a_ring_profile_exports_its_descriptor(tmp_path) -> None:
-    server = _settings(tmp_path, nodes=(0, 1, 2, 3), QWEN38_HARDWARE_PROFILE="tt-quietbox")
+def test_settings_on_the_profile_nodes_pass_no_device_nodes_and_a_ring_profile_exports_its_descriptor(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(hardware_profiles.socket, "gethostname", lambda: "tt-quietbox")
+    server = _settings(tmp_path, nodes=(0, 1, 2, 3))
     assert "--device-nodes" not in server.argv
     assert server.environment["TT_VISIBLE_DEVICES"] == "0,1,2,3"
     descriptor = Path(server.environment["TT_MESH_GRAPH_DESC_PATH"])
     assert descriptor.is_file() and descriptor.name == hardware_profiles.QUIETBOX.mesh_graph_descriptor
     assert server.argv[server.argv.index("--hardware-profile") + 1] == "tt-quietbox"
+
+
+def test_settings_select_the_quietbox_2_profile_from_the_p300x2_mesh(tmp_path) -> None:
+    server = _settings(tmp_path, nodes=(0, 1, 2, 3), MESH_DEVICE="P300x2")
+    assert server.argv[server.argv.index("--hardware-profile") + 1] == "tt-quietbox-2"
 
 
 @pytest.mark.parametrize(
@@ -97,7 +112,7 @@ def test_settings_on_the_profile_nodes_pass_no_device_nodes_and_a_ring_profile_e
         ((4, 5, 6), {}, "exactly four chips"),
         ((4, 5, 6, 7, 8), {}, "exactly four chips"),
         ((4, 5, 6, 7), {"QWEN38_ALLOCATED_CONTEXT": "40000"}, "QWEN38_ALLOCATED_CONTEXT must be one of"),
-        ((4, 5, 6, 7), {"QWEN38_HARDWARE_PROFILE": "nowhere"}, "QWEN38_HARDWARE_PROFILE 'nowhere' is not one of"),
+        ((4, 5, 6, 7), {"MESH_DEVICE": "nowhere"}, "MESH_DEVICE must be one of"),
         ((4, 5, 6, 7), {"QWEN38_INNER_PORT": "80"}, "QWEN38_INNER_PORT must be a port"),
         ((4, 5, 6, 7), {"QWEN38_STOP_SECONDS": "0"}, "QWEN38_STOP_SECONDS must be positive"),
         ((4, 5, 6, 7), {"QWEN38_SERVER_ARGS": "--mtp '4"}, "QWEN38_SERVER_ARGS does not shell-split"),
@@ -126,7 +141,8 @@ def test_a_flag_the_server_does_not_know_is_refused_by_its_parser_not_dropped(tm
 
 def test_the_checkpoint_comes_from_the_hub_cache_or_the_explicit_directory(tmp_path, monkeypatch) -> None:
     explicit = tmp_path / "ckpt"
-    assert asgi.checkpoint_directory({"QWEN38_CHECKPOINT": str(explicit)}) == explicit
+    explicit.mkdir()
+    assert asgi.checkpoint_directory({"HF_MODEL": str(explicit)}) == explicit
     seen = {}
 
     def fake_snapshot_download(repo_id, *, revision, local_files_only):

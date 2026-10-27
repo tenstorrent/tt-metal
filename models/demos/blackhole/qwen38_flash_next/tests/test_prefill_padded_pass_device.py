@@ -16,8 +16,8 @@ plan against the legacy plan on the same prompt: first-token logits, decode toke
 tolerance-class comparison, not a bitwise one: the forms differ in numerics).
 
 Run:  pytest .../test_prefill_padded_pass_device.py -v -s -k pad_long
-Env:  as ``test_vllm_batch_contract_device`` (QWEN38_HARDWARE_PROFILE, TT_METAL_TRACE_ALLOC_TRACKING=1, MODEL_WEIGHTS_DIR,
-      QWEN38_CACHE_ROOT, TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0).  One id per process.
+Env:  as ``test_vllm_batch_contract_device`` (MESH_DEVICE, TT_METAL_TRACE_ALLOC_TRACKING=1, HF_MODEL,
+      TT_CACHE_PATH, TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0).  One id per process.
 """
 
 import json
@@ -32,6 +32,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, Qwen38OfficialChatTemplate
+from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import build_prompt_ids, load_context_text
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F401  (device_params is a fixture)
     DEVICE_PARAMS,
@@ -57,7 +58,7 @@ def save(name: str, text: str) -> None:
 def build_prompt(checkpoint: Path, length: int) -> list[int]:
     template = Qwen38OfficialChatTemplate(checkpoint)
     config = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
-    text = load_context_text(config, Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context")
+    text = load_context_text(config, Path(os.environ["TT_CACHE_PATH"]) / "demo-context")
     render = lambda content: template.render([{"role": "user", "content": content}], enable_thinking=False).text
     ids = build_prompt_ids(template.tokenizer, render, config, text, max(length, 256))[
         0
@@ -193,7 +194,7 @@ FORMS = {
 
 @pytest.fixture
 def harness(mesh_device):
-    checkpoint = Path(os.environ["MODEL_WEIGHTS_DIR"])
+    checkpoint = checkpoint_directory()
     mesh_device.enable_program_cache()
     built = Harness(mesh_device, checkpoint)
     try:

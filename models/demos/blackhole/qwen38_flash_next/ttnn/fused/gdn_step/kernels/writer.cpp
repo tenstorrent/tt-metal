@@ -3,7 +3,7 @@
 //
 // Per (lane, head) item: the 16 new state tiles to the lane's state, the head's 4 gated tiles to the output (whole
 // tiles when rows == 1, else only the lane's row of each tile), and with DEBUG_TAPS the item's 18 tap tiles.
-// Compile-time args: 0 rows; then TensorAccessorArgs of state, out [, debug].  Runtime args: 0 state, 1 out
+// Compile-time args: 0 rows, 1 HEADS; then TensorAccessorArgs of state, out [, debug].  Runtime args: 0 state, 1 out
 // [, 2 debug] addresses, then items, then (lane, head) pairs.
 
 #include "api/dataflow/dataflow_api.h"
@@ -12,13 +12,14 @@
 
 namespace {
 constexpr uint32_t CB_OUTS = 25, CB_OUTG = 26, CB_DBG = 28;
-constexpr uint32_t HEADS = 12, HT = 4, STATE_TILES = 16, DBG_TILES = 28;
+constexpr uint32_t HEADS = get_compile_time_arg_val(1);
+constexpr uint32_t HT = 4, STATE_TILES = 16, DBG_TILES = 28;
 constexpr uint32_t BF16_TILE = 2048, FP32_TILE = 4096, FACE_BYTES = 512, HALF_ROW_BYTES = 32;
 }  // namespace
 
 void kernel_main() {
     constexpr uint32_t ROWS = get_compile_time_arg_val(0);
-    constexpr auto state_args = TensorAccessorArgs<1>();
+    constexpr auto state_args = TensorAccessorArgs<2>();
     constexpr auto out_args = TensorAccessorArgs<state_args.next_compile_time_args_offset()>();
 #ifdef DEBUG_TAPS
     constexpr auto dbg_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();

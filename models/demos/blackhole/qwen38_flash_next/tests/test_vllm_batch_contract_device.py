@@ -33,9 +33,9 @@ follows ``model.decoder.pack_enabled``); ``m1_*`` counts the pack's DRAM in ``la
 in the report; run them with ``QWEN38_PREFILL_PACK=0`` to measure the lane states alone).
 
 Run:  pytest models/demos/blackhole/qwen38_flash_next/tests/test_vllm_batch_contract_device.py -v -s -k ref_b1
-Env:  QWEN38_HARDWARE_PROFILE=tt-quietbox-2, TT_METAL_TRACE_ALLOC_TRACKING=1, MODEL_WEIGHTS_DIR, QWEN38_CACHE_ROOT,
+Env:  MESH_DEVICE=P300x2, TT_METAL_TRACE_ALLOC_TRACKING=1, HF_MODEL, TT_CACHE_PATH,
       TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; ``QWEN38_VLLM_BATCH_REFS`` names the reference fixture (default
-      ``<QWEN38_CACHE_ROOT>/demo-context/p2a-vllm-batch-refs.json``).
+      ``<TT_CACHE_PATH>/demo-context/p2a-vllm-batch-refs.json``).
 """
 
 import hashlib
@@ -54,6 +54,7 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, Qwen38OfficialChatTemplate
+from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import build_prompt_ids, load_context_text
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F401  (device_params is a fixture)
     DEVICE_PARAMS,
@@ -113,7 +114,7 @@ def build_requests(checkpoint: Path):
     template = Qwen38OfficialChatTemplate(checkpoint)
     tokenizer = template.tokenizer
     config = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
-    context_text = load_context_text(config, Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context")
+    context_text = load_context_text(config, Path(os.environ["TT_CACHE_PATH"]) / "demo-context")
     prompts = [
         build_prompt_ids(
             tokenizer,
@@ -133,14 +134,14 @@ def refs_path() -> Path:
     override = os.environ.get("QWEN38_VLLM_BATCH_REFS")
     if override:
         return Path(override)
-    return Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context" / "p2a-vllm-batch-refs.json"
+    return Path(os.environ["TT_CACHE_PATH"]) / "demo-context" / "p2a-vllm-batch-refs.json"
 
 
 def pack32_refs_path() -> Path:
     override = os.environ.get("QWEN38_PACK32_REFS")
     if override:
         return Path(override)
-    return Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context" / "p3d4-pack32-refs.json"
+    return Path(os.environ["TT_CACHE_PATH"]) / "demo-context" / "p3d4-pack32-refs.json"
 
 
 def build_pack32_requests(checkpoint: Path):
@@ -148,7 +149,7 @@ def build_pack32_requests(checkpoint: Path):
 
     template = Qwen38OfficialChatTemplate(checkpoint)
     config = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
-    context_text = load_context_text(config, Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context")
+    context_text = load_context_text(config, Path(os.environ["TT_CACHE_PATH"]) / "demo-context")
     render = lambda content: template.render(
         [{"role": "user", "content": content}], enable_thinking=False
     ).text  # noqa: E731
@@ -454,11 +455,12 @@ def single_slot_reference(model, prompt: list[int], max_new: int) -> list[int]:
     ],
 )
 def test_vllm_batch_contract(mesh_device, kind, lanes, block_size, tmp_path, record_property):
-    if not os.environ.get("MODEL_WEIGHTS_DIR"):
-        pytest.fail("set MODEL_WEIGHTS_DIR to the checkpoint directory")
-    checkpoint = Path(os.environ["MODEL_WEIGHTS_DIR"])
-    if not os.environ.get("QWEN38_CACHE_ROOT"):
-        pytest.fail("set QWEN38_CACHE_ROOT to the cache root (the book download goes to <root>/demo-context)")
+    try:
+        checkpoint = checkpoint_directory()
+    except FileNotFoundError as error:
+        pytest.fail(str(error))
+    if not os.environ.get("TT_CACHE_PATH"):
+        pytest.fail("set TT_CACHE_PATH to the cache root (the book download goes to <root>/demo-context)")
     mesh_device.enable_program_cache()
 
     if kind == "m1":
@@ -680,7 +682,7 @@ def serve_at_the_cap(mesh_device, checkpoint: Path, lanes: int, block_size: int,
 
     template = Qwen38OfficialChatTemplate(checkpoint)
     config = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
-    context_text = load_context_text(config, Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context")
+    context_text = load_context_text(config, Path(os.environ["TT_CACHE_PATH"]) / "demo-context")
     lengths, news = [30000, 8000, 130], [8, 8, 8]
     prompts = [
         build_prompt_ids(

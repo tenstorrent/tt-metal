@@ -19,8 +19,8 @@ from typing import Any, Iterable
 import torch
 
 import ttnn
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZE
 
-TP_SIZE = 4
 MESH_SHAPE = (1, TP_SIZE)
 # The fused kernels use all compute cores; fabric must not reserve Tensix cores.
 # Serving workers apply these model defaults before opening the mesh.
@@ -183,7 +183,7 @@ class Qwen38TensorBackingIdentity:
     identifies only one wrapper.  Neither is an allocation identity.  Device
     lifetime ledgers instead bind every local backing buffer to its exact mesh
     coordinate and physical device.  This permits two wrappers over the same
-    four buffers to share one release while rejecting ambiguous topology.
+    TP_SIZE buffers to share one release while rejecting ambiguous topology.
     """
 
     distribution_shape: tuple[int, int]
@@ -191,7 +191,7 @@ class Qwen38TensorBackingIdentity:
 
 
 def qwen38_tensor_backing_identity(tensor: Any) -> Qwen38TensorBackingIdentity:
-    """Return the exact ordered 1x4 physical backing identity of ``tensor``.
+    """Return the exact ordered 1xTP_SIZE physical backing identity of ``tensor``.
 
     The function is deliberately fail closed.  A device object without the
     full tensor-topology and per-device buffer-address APIs cannot be safely
@@ -229,7 +229,7 @@ def qwen38_tensor_backing_identity(tensor: Any) -> Qwen38TensorBackingIdentity:
         or len(local_tensors) != TP_SIZE
     ):
         raise RuntimeError(
-            "distributed tensor backing topology differs from exact 1x4: "
+            f"distributed tensor backing topology differs from exact 1x{TP_SIZE}: "
             f"distribution={distribution_shape} device={mesh_shape} coordinates={coordinates} "
             f"physical_ids={physical_ids} local_count={len(local_tensors)}"
         )
@@ -270,7 +270,7 @@ def qwen38_tensor_backing_identity(tensor: Any) -> Qwen38TensorBackingIdentity:
 
 
 def replicate_tensor_2d_mesh_mapper(mesh_device):
-    """Replicate over both axes of the model's explicit ``(1, 4)`` topology."""
+    """Replicate over both axes of the model's explicit ``MESH_SHAPE`` topology."""
 
     return ttnn.create_mesh_mapper(
         mesh_device,
@@ -283,14 +283,14 @@ def replicate_tensor_2d_mesh_mapper(mesh_device):
 
 @dataclass(frozen=True)
 class Qwen38MeshContract:
-    """The physical and logical mesh admitted by the four-P150 model.
+    """The physical and logical mesh admitted by the TP_SIZE-P150 model.
 
     ``physical_ids`` are the TTNN IDs returned by ``MeshDevice.get_device_ids``
     in mesh-coordinate order.  The caller must derive and record their node,
     BDF, board-id, and fabric mapping before opening the mesh.
     """
 
-    physical_ids: tuple[int, int, int, int]
+    physical_ids: tuple[int, ...]
     mesh_shape: tuple[int, int] = MESH_SHAPE
 
     def __post_init__(self) -> None:
@@ -298,7 +298,7 @@ class Qwen38MeshContract:
         if canonical_mesh_shape != MESH_SHAPE:
             raise ValueError(f"Qwen3.8-Flash-Next requires mesh {MESH_SHAPE}, got {self.mesh_shape}")
         if not isinstance(self.physical_ids, tuple):
-            raise ValueError(f"expected four distinct physical IDs, got {self.physical_ids}")
+            raise ValueError(f"expected {TP_SIZE} distinct physical IDs, got {self.physical_ids}")
         try:
             canonical_physical_ids = _shape_tuple(
                 self.physical_ids,
@@ -306,13 +306,13 @@ class Qwen38MeshContract:
                 error_type=ValueError,
             )
         except ValueError as error:
-            raise ValueError(f"expected four distinct physical IDs, got {self.physical_ids}") from error
+            raise ValueError(f"expected {TP_SIZE} distinct physical IDs, got {self.physical_ids}") from error
         if (
             len(canonical_physical_ids) != TP_SIZE
             or len(set(canonical_physical_ids)) != TP_SIZE
             or any(device_id < 0 for device_id in canonical_physical_ids)
         ):
-            raise ValueError(f"expected four distinct physical IDs, got {self.physical_ids}")
+            raise ValueError(f"expected {TP_SIZE} distinct physical IDs, got {self.physical_ids}")
         object.__setattr__(self, "mesh_shape", canonical_mesh_shape)
         object.__setattr__(self, "physical_ids", canonical_physical_ids)
 
@@ -378,8 +378,8 @@ class Qwen38MeshContract:
     ) -> None:
         """Validate the actual ``tensor_topology()``, not only its values.
 
-        All model tensors use a 2-D distribution shape ``(1, 4)``.  A sharded
-        tensor must replicate over the size-one row and shard over the four-way
+        All model tensors use a 2-D distribution shape ``MESH_SHAPE``.  A sharded
+        tensor must replicate over the size-one row and shard over the TP_SIZE-way
         column; an intentionally replicated tensor must replicate on both axes.
         Pair-grouped KV is represented by an expanded two-head tensor sharded on
         the head dimension, not by a replicated topology.

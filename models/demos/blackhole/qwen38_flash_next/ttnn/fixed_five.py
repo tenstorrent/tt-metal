@@ -38,10 +38,12 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import Qwen38TTNNBuiltTarget, Qwen38TTNNTargetComponents
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TensorPlacement
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TP_SIZE, TensorPlacement
 from models.demos.blackhole.qwen38_flash_next.ttnn.layer import (
     BACKBONE_LAYERS,
     BLOCK_LOCAL_SHAPE,
+    HIDDEN_SIZE,
+    RESIDUAL_BRANCHES,
     RESIDUAL_LOCAL_SHAPE,
     Qwen38TTNNDecoderLayerState,
     Qwen38TTNNLayerType,
@@ -777,8 +779,8 @@ def validate_fixed_five_static_contract() -> None:
         5,
         5,
         48,
-        (1, 1, 1, 640),
-        (1, 4, 1, 640),
+        (1, 1, 1, HIDDEN_SIZE // TP_SIZE),
+        (1, RESIDUAL_BRANCHES, 1, HIDDEN_SIZE // TP_SIZE),
     ):
         raise RuntimeError("Qwen3.8 fixed-five geometry drifted")
     if not issubclass(Qwen38TTNNFixedFiveTarget, Qwen38FixedFiveTarget):

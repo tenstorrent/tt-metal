@@ -9,7 +9,7 @@ to_memory_config, all_gather_async, fast_reduce_nc, typecast, slice, silu, linea
 multiply (gate), fast_reduce_nc, multiply (2 sigmoid).  Here the same arithmetic runs as ``stats`` -> all_gather ->
 ``normalize`` -> ``down_project`` -> all_gather_async -> ``low_rank`` -> ``gate``; every phase is the chain kernel's
 LLK sequence on the same tiles (see work/FUSE-GR-READ-20260913.md section 1), so the output is bitwise against the
-chain.  Rows 1..32: the residual ``[1, 4, rows, 640]`` is four branch row-blocks of one row tile each; every program
+chain.  Rows 1..32: the residual ``[1, 4, rows, LOCAL_HIDDEN]`` is four branch row-blocks of one row tile each; every program
 works on whole tiles.
 
 The five program builders take device tensors only (no module), so a single chip can run the four device slices in
@@ -29,20 +29,24 @@ import struct
 
 import ttnn
 
+from ...contracts import TP_SIZE
 from .. import program as fp
 from ..registry import BITWISE, FusedKernel, register
 
 NAME = "gr_read"
-TP_SIZE = 4
 TP_AXIS = 1
 BRANCHES = 4
-LOCAL_HIDDEN = 640
-FLAT_WIDTH = BRANCHES * LOCAL_HIDDEN  # 2560
+HIDDEN = 2560
+LOCAL_HIDDEN = HIDDEN // TP_SIZE  # per device
+FLAT_WIDTH = BRANCHES * LOCAL_HIDDEN  # per device
 RANK = 320
 PARTIAL_WIDTH = 384
 TILE = fp.TILE
-HIDDEN_TILES = LOCAL_HIDDEN // TILE  # 20
-FLAT_TILES = FLAT_WIDTH // TILE  # 80
+HIDDEN_TILES = LOCAL_HIDDEN // TILE  # per device
+FLAT_TILES = FLAT_WIDTH // TILE  # per device
+ROW_BATCH = 4 if HIDDEN_TILES % 4 == 0 else 2  # tiles per reader/writer/multiply batch of a hidden row
+GATE_WIDTH = 5  # gate cores per row of the merged gate rectangle
+GATE_HEIGHT = HIDDEN_TILES // GATE_WIDTH
 PARTIAL_TILES = PARTIAL_WIDTH // TILE  # 12
 INJECT_TILE = RANK // TILE  # 10: the inject columns 320-323 sit in this partial tile
 STATS_TILES = TP_SIZE  # gathered stats tiles per branch row-block
@@ -94,11 +98,11 @@ def avg_scaler(mode: str) -> tuple[int, object]:
     """(bits handed to the reader's reduce-scaler generator, scaler CB dtype) for 1/2560 in the given mode."""
 
     if mode == "chain":  # the generator truncates the fp32 bits to bf16: 0x39CCCCCD -> 0x39CC
-        return _bits(1.0 / FLAT_WIDTH), BF16
+        return _bits(1.0 / HIDDEN), BF16
     if mode == "rne":  # a float whose truncation is the round-to-nearest bf16 of 1/2560
         return 0x39CD0000, BF16
     if mode == "fp32":
-        return _bits(1.0 / FLAT_WIDTH), FP32
+        return _bits(1.0 / HIDDEN), FP32
     raise ValueError(f"scaler_mode must be one of {SCALER_MODES}, got {mode!r}")
 
 
@@ -175,7 +179,7 @@ def _writer(cores, streams, runtime):
 
 
 def stats(residual):
-    """Stage 1: the per-branch sum of squares over the local 640 -> ``[1, 4, rows, 32]`` bf16 (4 tiles)."""
+    """Stage 1: the per-branch sum of squares over the local hidden -> ``[1, 4, rows, 32]`` bf16 (one tile per branch)."""
 
     rows = residual_rows(residual)
     mesh = residual.device()
@@ -192,7 +196,10 @@ def stats(residual):
         cores,
         [(residual, 0)],
         [(CONST_SCALER, 1)],
-        [(w.core, ([_stream(residual, 1, HIDDEN_TILES, w.start * HIDDEN_TILES, 1, 0, 4)], [_bits(1.0)])) for w in work],
+        [
+            (w.core, ([_stream(residual, 1, HIDDEN_TILES, w.start * HIDDEN_TILES, 1, 0, ROW_BATCH)], [_bits(1.0)]))
+            for w in work
+        ],
     )
     compute = fp.compute_kernel(STATS, cores, [HIDDEN_TILES], fp32_dest=True)
     writer = _writer(cores, [(out, 16)], [(w.core, [(1, w.start, 1, 1)]) for w in work])
@@ -210,7 +217,7 @@ def stats(residual):
 
 
 def normalize(residual, gathered_stats, norm_scale, *, scaler_mode: str = "chain"):
-    """Stage 2a: x * rsqrt(mean of the gathered sums + eps) * gamma/4 -> the flat ``[1, 1, rows, 2560]`` bf16 row.
+    """Stage 2a: x * rsqrt(mean of the gathered sums + eps) * gamma/4 -> the flat ``[1, 1, rows, FLAT_WIDTH]`` bf16 row.
     ``norm_scale`` is the module's ``norm_scale_rows`` (gamma/4 repeated over the 32 tile rows) so the reader streams
     it as it is; the chain row-broadcasts a one-row tensor in its multiply, the values are the same."""
 
@@ -243,8 +250,8 @@ def normalize(residual, gathered_stats, norm_scale, *, scaler_mode: str = "chain
                 (
                     [
                         _stream(gathered_stats, 1, STATS_TILES, w.start * STATS_TILES, 1, 0, STATS_TILES),
-                        _stream(residual, 1, HIDDEN_TILES, w.start * HIDDEN_TILES, 1, 0, 4),
-                        _stream(norm_scale, 1, HIDDEN_TILES, w.start * HIDDEN_TILES, 1, 0, 4),
+                        _stream(residual, 1, HIDDEN_TILES, w.start * HIDDEN_TILES, 1, 0, ROW_BATCH),
+                        _stream(norm_scale, 1, HIDDEN_TILES, w.start * HIDDEN_TILES, 1, 0, ROW_BATCH),
                     ],
                     [scaler_bits, _bits(EPS)],
                 ),
@@ -253,9 +260,11 @@ def normalize(residual, gathered_stats, norm_scale, *, scaler_mode: str = "chain
         ],
     )
     compute = fp.compute_kernel(
-        NORM, cores, [HIDDEN_TILES, STATS_TILES, 4, 16], fp32_dest=True, unpack_to_dest_fp32=(4, 7)
+        NORM, cores, [HIDDEN_TILES, STATS_TILES, ROW_BATCH, 16], fp32_dest=True, unpack_to_dest_fp32=(4, 7)
     )
-    writer = _writer(cores, [(out, 16)], [(w.core, [(HIDDEN_TILES, w.start * HIDDEN_TILES, 1, 4)]) for w in work])
+    writer = _writer(
+        cores, [(out, 16)], [(w.core, [(HIDDEN_TILES, w.start * HIDDEN_TILES, 1, ROW_BATCH)]) for w in work]
+    )
     meta = fp.program_meta(  # the residual, the gathered stats and gamma in, the flat row out; four passes per element
         NAME,
         "normalize",
@@ -334,7 +343,7 @@ def low_rank(gathered_partials):
 
     shape = tuple(gathered_partials.shape)
     if len(shape) != 4 or shape[:2] != (TP_SIZE, 1) or shape[3] != PARTIAL_WIDTH or gathered_partials.dtype != FP32:
-        raise ValueError(f"GR gathered partials must be fp32 [4, 1, rows, {PARTIAL_WIDTH}], got {shape}")
+        raise ValueError(f"GR gathered partials must be fp32 [{TP_SIZE}, 1, rows, {PARTIAL_WIDTH}], got {shape}")
     rows = shape[2]
     mesh = gathered_partials.device()
     out = fp.allocate((1, 1, rows, PARTIAL_WIDTH), BF16, ttnn.TILE_LAYOUT, mesh)
@@ -390,8 +399,8 @@ def low_rank(gathered_partials):
 
 
 def gate(low_rank_row, normalized, up, *, matmul: str = "chain", debug: bool = False):
-    """Stage 3b: sigmoid(low rank x up) times the normalized row, the four branches summed -> ``[1, 1, rows, 640]``.
-    ``debug`` also returns the packed up tiles and the gated products as ``[1, 4, rows, 640]`` (dev only)."""
+    """Stage 3b: sigmoid(low rank x up) times the normalized row, the four branches summed -> ``[1, 1, rows, LOCAL_HIDDEN]``.
+    ``debug`` also returns the packed up tiles and the gated products as ``[1, 4, rows, LOCAL_HIDDEN]`` (dev only)."""
 
     rows = fp.rows_of(low_rank_row)
     _expect(low_rank_row, (1, 1, rows, PARTIAL_WIDTH), BF16, "GR low-rank row")
@@ -642,8 +651,8 @@ def normalize_down(
                 (
                     [
                         _stream(gathered_stats, 1, STATS_TILES, b * STATS_TILES, 1, 0, STATS_TILES),
-                        _stream(residual, 1, HIDDEN_TILES, b * HIDDEN_TILES, 1, 0, 4),
-                        _stream(norm_scale, 1, HIDDEN_TILES, b * HIDDEN_TILES, 1, 0, 4),
+                        _stream(residual, 1, HIDDEN_TILES, b * HIDDEN_TILES, 1, 0, ROW_BATCH),
+                        _stream(norm_scale, 1, HIDDEN_TILES, b * HIDDEN_TILES, 1, 0, ROW_BATCH),
                     ],
                     [scaler_bits, _bits(EPS)],
                 ),
@@ -652,7 +661,7 @@ def normalize_down(
         ],
     )
     norm = fp.compute_kernel(
-        NORM, p_set, [HIDDEN_TILES, STATS_TILES, 4, 16], fp32_dest=True, unpack_to_dest_fp32=(4, 7)
+        NORM, p_set, [HIDDEN_TILES, STATS_TILES, ROW_BATCH, 16], fp32_dest=True, unpack_to_dest_fp32=(4, 7)
     )
     sender = _mcast_writer(
         p_set,
@@ -698,12 +707,12 @@ def normalize_down(
 
 
 def low_rank_gate(gathered_partials, normalized, up, *, matmul: str = "chain"):
-    """Stages 3a+3b as one program: the four row cores multicast the low-rank row into the twenty gate cores' CB
+    """Stages 3a+3b as one program: the four row cores multicast the low-rank row into the gate cores' CB
     while those cores prefetch their weight columns and normalized tiles; the injection tile comes from row core 3."""
 
     shape = tuple(gathered_partials.shape)
     if len(shape) != 4 or shape[:2] != (TP_SIZE, 1) or shape[3] != PARTIAL_WIDTH or gathered_partials.dtype != FP32:
-        raise ValueError(f"GR gathered partials must be fp32 [4, 1, rows, {PARTIAL_WIDTH}], got {shape}")
+        raise ValueError(f"GR gathered partials must be fp32 [{TP_SIZE}, 1, rows, {PARTIAL_WIDTH}], got {shape}")
     rows = shape[2]
     _expect(normalized, (1, 1, rows, FLAT_WIDTH), BF16, "GR normalized row")
     _expect(up, (1, 1, PARTIAL_WIDTH, FLAT_WIDTH), BF16, "GR up")
@@ -713,9 +722,9 @@ def low_rank_gate(gathered_partials, normalized, up, *, matmul: str = "chain"):
     t = LOW_RANK_TILES_PER_CORE
     inject_core, inject_local = divmod(INJECT_TILE, t)
     n_tiles = _tiles_wide(up)
-    # 5 x 4, not 10 x 2: the harvested p150's contiguous virtual column span is 7 wide (x 0..6 -> 1..7, then a gap),
+    # 5 wide (5 x 4 at TP4, 5 x 2 at TP8), not 10 wide: the harvested p150's contiguous virtual column span is 7 wide (x 0..6 -> 1..7, then a gap),
     # and a multicast needs one NoC rectangle; the consumers' order (x-major) is all the runtime args depend on.
-    workers, producers, rect = _rectangle(mesh, 5, 4, rows_above=LOW_RANK_CORES)
+    workers, producers, rect = _rectangle(mesh, GATE_WIDTH, GATE_HEIGHT, rows_above=LOW_RANK_CORES)
     plain = [c for i, c in enumerate(producers) if i != inject_core]
     inject = [producers[inject_core]]
     w_set, p_set, all_set = _core_set(workers), _core_set(producers), _core_set(workers + producers)
@@ -794,7 +803,7 @@ def low_rank_gate(gathered_partials, normalized, up, *, matmul: str = "chain"):
     )
     writer = _writer(w_set, [(block, 18)], [(core, [(1, j, 1, 1)]) for j, core in enumerate(workers)])
     # the partials, the flat row and the up weight once, the block and the injection out; the low-rank row multicast
-    # into the twenty gate cores' CB (L1); the fold, typecast, silu and 2 sigmoid, the up matmul, sigmoid, gate
+    # into the gate cores' CB (L1); the fold, typecast, silu and 2 sigmoid, the up matmul, sigmoid, gate
     # multiply and branch sum
     meta = fp.program_meta(
         NAME,
@@ -858,10 +867,10 @@ def gr_read_fused(
     """The model-level read: the fused programs around the chain's two collectives; returns (block input, state).
     ``merged`` (default: on, unless the QWEN38_FUSED_GR_READ_MERGED=0 switch) runs normalize+down and low_rank+gate
     as one program each.  ``stats_gather(residual)`` replaces ``stats`` + ``ttnn.all_gather`` with a program that
-    gathers inside itself (ttnn/fused/gr_fold); it returns the same ``[1, 4, rows, 128]`` bf16 tiles.
+    gathers inside itself (ttnn/fused/gr_fold); it returns the same ``[1, 4, rows, 32 * TP_SIZE]`` bf16 tiles.
     ``partial_gather(residual, gathered_stats, gamma_rows, down_inject)`` likewise replaces ``normalize_down`` +
     ``all_gather_async`` (merged forms only); it returns ``(normalized, gathered_partials)`` with the same
-    ``[4, 1, rows, 384]`` fp32 tiles.  ``read_front(residual, gamma_rows, down_inject)`` replaces all four (stats,
+    ``[TP_SIZE, 1, rows, 384]`` fp32 tiles.  ``read_front(residual, gamma_rows, down_inject)`` replaces all four (stats,
     all_gather, normalize_down, all_gather_async) with one program and returns ``(normalized, gathered_partials)``."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TensorPlacement

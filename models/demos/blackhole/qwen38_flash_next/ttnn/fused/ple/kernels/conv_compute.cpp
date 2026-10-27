@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// PLE stage 5 (`_convolve` + the delta add), one core per column block of T tiles (20 cores x 1 tile), 16-bit dest
-// (every op's output is bf16, so the chain's programs run without fp32_dest_acc): per column tile t of the [1,1,4,640]
-// row-block
+// PLE stage 5 (`_convolve` + the delta add), one core per column block of T tiles (local tiles cores x 1 tile: 20 cores
+// at TP=4, 10 at TP=8), 16-bit dest (every op's output is bf16, so the chain's programs run without fp32_dest_acc): per
+// column tile t of the [1,1,4,640] row-block
 //   acc = multiply(conv[0], tap0)            binary_ng bf16 x bf16 -> the SFPU mul_binary_tile, packed bf16
 //   acc = mac(row_k, tap_k, acc), k = 1..3   ttnn.mac on bf16 is the SFPU ternary kernel (ternary_addc_ops_sfpu.cpp
 //   with

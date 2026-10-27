@@ -22,6 +22,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TP_SIZE
+
 TESTS = Path(__file__).resolve().parent
 GDN_SOURCE = TESTS.parents[0] / "ttnn" / "gdn.py"
 DEVICE_OPS = {
@@ -126,7 +128,7 @@ def _method_source(name: str) -> str:
 def _module_constants(module: ast.Module) -> dict[str, int]:
     """Evaluate the module's integer constants in order; ``ttnn.TILE_SIZE`` is the 32x32 tile."""
 
-    namespace: dict[str, object] = {"ttnn": SimpleNamespace(TILE_SIZE=32)}
+    namespace: dict[str, object] = {"ttnn": SimpleNamespace(TILE_SIZE=32), "TP_SIZE": TP_SIZE}
     for node in module.body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             try:
@@ -340,12 +342,15 @@ def test_static_contract_pins_the_tile_aligned_projection_columns() -> None:
         for node in module.body
         if isinstance(node, ast.FunctionDef) and node.name == "validate_gdn_static_contract"
     )
-    expected = next(
-        node.value
+    local_names = {"qk_heads", "value_heads", "qkv_width", "a_column", "expected"}
+    assigns = [
+        node
         for node in contract.body
-        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "expected"
-    )
-    pinned = {key.value: value.value for key, value in zip(expected.keys, expected.values)}
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id in local_names
+    ]
+    scope: dict[str, object] = {"TP_SIZE": TP_SIZE}
+    exec(compile(ast.Module(body=assigns, type_ignores=[]), str(GDN_SOURCE), "exec"), {}, scope)
+    pinned = scope["expected"]
     assert pinned["QKVZAB_WIDTH_PER_DEVICE"] == 4120
     assert pinned["A_COLUMN"] == 4096
     assert pinned["B_COLUMN"] == 4128

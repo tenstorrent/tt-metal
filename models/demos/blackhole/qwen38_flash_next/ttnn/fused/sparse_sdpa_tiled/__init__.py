@@ -241,12 +241,15 @@ def model_config(environ: Mapping[str, str] | None = None) -> Config:
     return HIFI2 if raw == "hifi2" else DEFAULT
 
 
-def config_for_grid(S: int, cores: int, base: Config = DEFAULT) -> Config:
+def config_for_grid(S: int, cores: int, base: Config = DEFAULT, heads: int | None = None) -> Config:
     """``base`` when its 16-query tiles fit the grid one per core (128 tiles on the 130-core p150 grid), else 32-query
     tiles with 32-block chunks (the L1 table's config B): a smaller grid would carry two 16-query tiles on some cores
-    and set the layer time by them (measured 5.5 vs 4.8 ms per layer at 28k on a 110-core die)."""
+    and set the layer time by them (measured 5.5 vs 4.8 ms per layer at 28k on a 110-core die).  With ``heads`` (the
+    heads per device) the 16-query tiles also need ``16 x heads`` to be whole tile rows (3 heads: 48 rows is not), else
+    the 32-query config."""
 
-    if S % base.tile_queries == 0 and S // base.tile_queries <= cores:
+    fits_rows = heads is None or base.tile_queries * heads % TILE == 0
+    if S % base.tile_queries == 0 and S // base.tile_queries <= cores and fits_rows:
         return base
     return replace(base, tile_queries=32, chunk_blocks=min(base.chunk_blocks, 32))
 

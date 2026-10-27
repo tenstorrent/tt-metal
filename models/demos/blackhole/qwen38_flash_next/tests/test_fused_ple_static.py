@@ -194,7 +194,10 @@ def test_lane_hook_and_lane_forms_are_pinned():
     assert "const uint32_t tap_first = get_arg_val<uint32_t>(17);" in conv_reader
     assert conv_reader.count(", tap_first);") == 4  # the four taps
     source = inspect.getsource(ple.conv_lanes)
-    assert "per_core = next(T for T in (1, 2, 4, 5, 10, 20) if tiles // T <= grid.x * grid.y)" in source
+    assert (
+        "per_core = next(T for T in (1, 2, 4, 5, 10, 20) if LOCAL_TILES % T == 0 and tiles // T <= grid.x * grid.y)"
+        in source
+    )
     assert "(w.start * per_core) % LOCAL_TILES" in source
     assert "[0, 0])]" in inspect.getsource(ple.gate)  # the 1-row gate reads pages 0..
     lanes_body = inspect.getsource(ple.ple_lanes_fused)

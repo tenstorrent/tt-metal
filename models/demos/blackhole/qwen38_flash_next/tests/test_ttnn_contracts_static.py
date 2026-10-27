@@ -17,6 +17,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     BLOCK_START_LANE_MASK,
     POSITION_INDEX_ROW_SHAPE,
     POSITION_SCALAR_SHAPE,
+    TP_SIZE,
     Qwen38MeshContract,
     Qwen38TTNNDevicePosition,
     TensorPlacement,
@@ -94,7 +95,7 @@ def test_contract_mesh_shape_rejects_bool_string_and_float_aliases(alias, expect
 
 @pytest.mark.parametrize("alias", (False, "0", 0.0))
 def test_contract_physical_order_rejects_bool_string_and_float_aliases(alias, expect_error) -> None:
-    with expect_error(ValueError, "four distinct physical IDs"):
+    with expect_error(ValueError, f"{TP_SIZE} distinct physical IDs"):
         Qwen38MeshContract((alias, 1, 2, 3))
 
 

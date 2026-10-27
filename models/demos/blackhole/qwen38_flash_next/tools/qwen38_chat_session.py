@@ -575,8 +575,9 @@ def lanes_mtp_extra_bytes_per_device(allocated_context: int, rows: int) -> int:
     )
     gdn_rows = gdn_layers * gdn_rows_per_layer
     gdn_lane_constants = 2 * chunk_rows * chunk_rows * 2 + 4 * chunk_rows * 4
-    ple_rows = (9 + rows) * 4 * 640 * 2
-    misc = 4 * 640 * 2 + rows * 640 * 2 + 2 * 32 * 128 * 2
+    hidden_per_device = gdn_module.HIDDEN_SIZE_PER_DEVICE
+    ple_rows = (9 + rows) * 4 * hidden_per_device * 2
+    misc = 4 * hidden_per_device * 2 + rows * hidden_per_device * 2 + 2 * 32 * 128 * 2
     return mtp_layer_qsa + backbone_qsa_verify + gdn_rows + gdn_lane_constants + ple_rows + misc
 
 
@@ -592,7 +593,7 @@ def lanes_pager_bytes_per_device(allocated_context: int) -> int:
         + 12 * 32 * 512 * 2
         + 12 * 32 * 128 * 2
         + 144 * gdn_module.QKV_WIDTH_PER_DEVICE * 2
-        + 9 * 4 * 640 * 2
+        + 9 * 4 * gdn_module.HIDDEN_SIZE_PER_DEVICE * 2
     )
     alignment = compressed_rows * 128 * 2 + 32 * 512 * 2 + 32 * 128 * 2
     stagings = 2 * LANE_KV_STAGINGS * context * 512 * 2
@@ -2026,7 +2027,7 @@ def resolve_route(hardware_profile: ResidentHardwareProfile) -> tuple[ResidentHa
 
     lane = f"{hardware_profile.host} partition-{hardware_profile.partition.upper()}"
     if hardware_profile.ethernet_graph != "line":
-        unique_ids = fabric_node_probe.query_chip_unique_ids(0, range(4))
+        unique_ids = fabric_node_probe.query_chip_unique_ids(0, range(TP_SIZE))
     descriptor_path = Path(ttnn.cluster.serialize_cluster_descriptor()).resolve(strict=True)
     document = yaml.safe_load(descriptor_path.read_bytes())
     chips_with_mmio = physical_route.parse_chips_with_mmio(
@@ -2080,8 +2081,9 @@ def open_partition_b_mesh(
         raise Qwen38ChatChainError(f"the mesh opens with 1 or 2 command queues, got {command_queues!r}")
     lane = f"{hardware_profile.host} partition-{hardware_profile.partition.upper()}"
     discovered = (int(ttnn.GetNumAvailableDevices()), int(ttnn.get_num_pcie_devices()), int(ttnn.get_num_devices()))
-    if discovered != (4, 4, 4):
-        raise Qwen38ChatChainError(f"{lane} visibility actual={discovered} expected=(4, 4, 4)")
+    expected_discovered = (TP_SIZE, TP_SIZE, TP_SIZE)
+    if discovered != expected_discovered:
+        raise Qwen38ChatChainError(f"{lane} visibility actual={discovered} expected={expected_discovered}")
     descriptor = ttnn._ttnn.multi_device.SystemMeshDescriptor()
     physical_shape = tuple(int(value) for value in descriptor.local_shape())
     if physical_shape != hardware_profile.system_mesh_local_shape or not bool(descriptor.all_local()):

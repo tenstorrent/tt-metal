@@ -9,7 +9,6 @@ prefix a follow-up turn's reference render shares with the served turn."""
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,6 +16,7 @@ import jinja2
 import pytest
 
 from models.demos.blackhole.qwen38_flash_next.chat import IM_END_ID, IM_START_ID, Qwen38OfficialChatTemplate
+from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_protocol as protocol
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import (
     THINK_END_ID,
@@ -27,7 +27,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import 
     Qwen38ReplyAssembler,
 )
 
-CHECKPOINT = Path(os.environ.get("QWEN38_CHECKPOINT", "/nonexistent/Qwen3.8-Flash-Next"))
+CHECKPOINT = checkpoint_directory(missing=Path("/nonexistent/Qwen3.8-Flash-Next"))
 SPECIAL_TOKENS = {
     "<|im_start|>": IM_START_ID,
     "<|im_end|>": IM_END_ID,

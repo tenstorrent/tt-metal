@@ -22,8 +22,8 @@ namespace {
 constexpr uint32_t CB_PROJ = 5, CB_OUT = 16, CB_HIST = 17;
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t HEAD_TILES = 4;    // 128 / 32
-constexpr uint32_t VALUE_TILES = 48;  // 1536 / 32
-constexpr uint32_t HISTORY_HEADS = 10;
+constexpr uint32_t VALUE_TILES = GDN_VALUE_TILES;
+constexpr uint32_t HISTORY_HEADS = GDN_HISTORY_HEADS;
 constexpr uint32_t HISTORY_COLUMNS = 8;
 constexpr uint32_t HISTORY_ROWS = 3;
 constexpr uint32_t BF16_TILE = 2048;

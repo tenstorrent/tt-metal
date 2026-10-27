@@ -66,7 +66,7 @@ constexpr uint32_t CB_UNIT = 13, CB_OUT = 14, CB_MASK = 15, CB_MASKFULL = 16;
 constexpr uint32_t HEAD_TILES = 4;  // 128 / 32: Wt of the q/k norm
 constexpr uint32_t CONV_KERNEL = 4;
 constexpr uint32_t HISTORY_ROWS = 3;  // the three shifted taps
-constexpr uint32_t QK_HEADS = 4, QK_GROUPS = 8;
+constexpr uint32_t QK_HEADS = GDN_QK_HEADS, QK_GROUPS = GDN_QK_GROUPS;
 constexpr uint32_t TAP_TILES = CONV_KERNEL * HEAD_TILES;
 constexpr uint32_t WINDOW = 2 * HEAD_TILES;  // CB_IN: the previous tile row at 0..3, this one at 4..7
 constexpr uint32_t SELECT_CUR = 0, SELECT_PREV = 1, SELECT_HIST = 2, SELECT_KINDS = 3;

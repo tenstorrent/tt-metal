@@ -30,6 +30,7 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen38_flash_next.chat import Qwen38OfficialChatTemplate
+from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import build_prompt_ids, load_context_text
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F401  (device_params is a fixture)
     DEVICE_PARAMS,
@@ -122,17 +123,18 @@ def reference_tokens(vm, prompt_ids: list[int], max_new: int) -> tuple[list[int]
 def test_continuous_batch_matches_single_user(
     mesh_device, lanes, page_size, context, kind, count, reserve_largest, tmp_path, record_property
 ):
-    if not os.environ.get("MODEL_WEIGHTS_DIR"):
-        pytest.fail("set MODEL_WEIGHTS_DIR to the checkpoint directory")
-    checkpoint = Path(os.environ["MODEL_WEIGHTS_DIR"])
-    if not os.environ.get("QWEN38_CACHE_ROOT"):
-        pytest.fail("set QWEN38_CACHE_ROOT to the cache root (the book download goes to <root>/demo-context)")
+    try:
+        checkpoint = checkpoint_directory()
+    except FileNotFoundError as error:
+        pytest.fail(str(error))
+    if not os.environ.get("TT_CACHE_PATH"):
+        pytest.fail("set TT_CACHE_PATH to the cache root (the book download goes to <root>/demo-context)")
     max_seq_len = context - RESIDENT_CONTEXT_HEADROOM
 
     template = Qwen38OfficialChatTemplate(checkpoint)
     tokenizer = template.tokenizer
     config = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
-    context_text = load_context_text(config, Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context")
+    context_text = load_context_text(config, Path(os.environ["TT_CACHE_PATH"]) / "demo-context")
     specs = request_specs(kind, count, seed=20261024)
     prompts = [
         build_prompt_ids(

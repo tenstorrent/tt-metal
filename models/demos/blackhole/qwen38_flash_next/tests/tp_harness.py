@@ -6,10 +6,10 @@ the ``tt/`` torch references beside them, and the transfers between the two.  Th
 (``test_*_component.py``) prove those references against the pinned Transformers modules on the CPU; the ``*_tp``
 tests are the same layers on the mesh.
 
-Env: MODEL_WEIGHTS_DIR (or QWEN38_CHECKPOINT, or HF_MODEL resolved through the local Hugging Face cache) names the
-checkpoint.  QWEN38_CACHE_ROOT is needed only for the routed experts: the BF4 cache under ``<root>/caches/bf4-experts``,
-or the CPU-staged corpus QWEN38_BF4_CORPUS with QWEN38_BF4_CORPUS_VERIFICATION.  GDN and QSA weights are converted
-into ``<root>/caches/<label>/components`` when the root is set and into the test's temporary directory otherwise.
+Env: HF_MODEL (a checkpoint directory, or a Hugging Face repo id in the local hub cache) names the checkpoint.
+TT_CACHE_PATH is needed only for the routed experts: the BF4 cache under ``<root>/caches/bf4-experts``, or the
+CPU-staged corpus QWEN38_BF4_CORPUS with QWEN38_BF4_CORPUS_VERIFICATION.  GDN and QSA weights are converted into
+``<root>/caches/<label>/components`` when the root is set and into the test's temporary directory otherwise.
 """
 
 from __future__ import annotations
@@ -21,8 +21,9 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
+from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint, checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
+from models.demos.blackhole.qwen38_flash_next.tools import hardware_profiles
 from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic import (
     Qwen38DiagnosticBF4Cache,
     prepare_live_decode_diagnostic,
@@ -39,6 +40,11 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.model import Qwen38TTNNRoPE
 
+# before the ``mesh_device`` fixture opens the cluster
+hardware_profiles.export_mesh_graph_descriptor(
+    hardware_profiles.resolve_hardware_profile(hardware_profiles.mesh_device_profile_name("p150-x8"))
+)
+
 HIDDEN_SIZE = 2560
 RESIDUAL_BRANCHES = 4
 # The demo's mesh parameters (demo/text_demo.py DEVICE_PARAMS: the vLLM launch's tt config).
@@ -53,14 +59,10 @@ DEVICE_PARAMS = {
 
 
 def checkpoint_root() -> Path:
-    for name in ("MODEL_WEIGHTS_DIR", "QWEN38_CHECKPOINT"):
-        if os.environ.get(name):
-            return Path(os.environ[name])
-    if os.environ.get("HF_MODEL"):  # the snapshot in the local Hugging Face cache, offline
-        from huggingface_hub import snapshot_download
-
-        return Path(snapshot_download(os.environ["HF_MODEL"], local_files_only=True))
-    pytest.fail("set MODEL_WEIGHTS_DIR (or QWEN38_CHECKPOINT) to the checkpoint directory or HF_MODEL to its id")
+    try:
+        return checkpoint_directory()
+    except FileNotFoundError as error:
+        pytest.fail(str(error))
 
 
 def pcc(actual: torch.Tensor, expected: torch.Tensor) -> float:
@@ -89,14 +91,14 @@ class Qwen38TPHarness:
         # The model's per-position RoPE uploader (ttnn/model.py Qwen38TTNNRoPE): cos/sin for the position, and at
         # positions 3 mod 4 the block-start pair QSA needs to close the four-token index block.
         self.rope = Qwen38TTNNRoPE(mesh_device, self.contract, self.config)
-        cache_root = os.environ.get("QWEN38_CACHE_ROOT")
+        cache_root = os.environ.get("TT_CACHE_PATH")
         self.caches = None if not cache_root else Path(cache_root) / "caches"
         # The adapter's default label: the demo and these tests share one component namespace.
-        self.cache_label = os.environ.get("QWEN38_CACHE_LABEL") or f"c{RESIDENT_DEFAULT_QSA_CACHE_CAPACITY}-vllm"
+        self.cache_label = f"c{RESIDENT_DEFAULT_QSA_CACHE_CAPACITY}-vllm"
         self.component_cache_root = tmp_path if self.caches is None else self.caches / self.cache_label / "components"
 
     def upload_sharded(self, host: torch.Tensor):
-        """``[1,B,R,2560]`` to the HIDDEN_SHARDED placement: each device its 640-column slice, BF16 DRAM tiles.
+        """``[1,B,R,2560]`` to the HIDDEN_SHARDED placement: each device its 2560 // TP_SIZE-column slice, BF16 DRAM tiles.
         Block activations are ``[1,1,R,2560]``; the layer's branch-major residual is ``[1,4,1,2560]``."""
 
         assert host.ndim == 4 and host.shape[0] == 1 and host.shape[3] == HIDDEN_SIZE, tuple(host.shape)
@@ -124,7 +126,7 @@ class Qwen38TPHarness:
         return tensor
 
     def download_sharded(self, tensor) -> torch.Tensor:
-        """The four device shards concatenated on the hidden axis, FP32."""
+        """The TP_SIZE device shards concatenated on the hidden axis, FP32."""
 
         return torch.cat([ttnn.to_torch(shard).to(torch.float32) for shard in ttnn.get_device_tensors(tensor)], dim=3)
 
@@ -136,15 +138,13 @@ class Qwen38TPHarness:
     def build_layer(self, layer_index: int):
         """The provenance-bound builder and one built backbone layer.
 
-        Skips when QWEN38_CACHE_ROOT is unset or the layer's BF4 record is not in the cache.  The builder is
+        Skips when TT_CACHE_PATH is unset or the layer's BF4 record is not in the cache.  The builder is
         ``construct_live_decode_diagnostic``'s, streamed instead of resident: the layer's experts are loaded for
         the call and released after it (the device component gate's configuration), so no preload of all 48 layers.
         """
 
         if self.caches is None:
-            pytest.skip(
-                "QWEN38_CACHE_ROOT unset: the routed experts need the BF4 expert cache under caches/bf4-experts"
-            )
+            pytest.skip("TT_CACHE_PATH unset: the routed experts need the BF4 expert cache under caches/bf4-experts")
         corpus_root = os.environ.get("QWEN38_BF4_CORPUS")
         corpus_verification = os.environ.get("QWEN38_BF4_CORPUS_VERIFICATION")
         extension = Path(ttnn._ttnn.__file__).resolve()

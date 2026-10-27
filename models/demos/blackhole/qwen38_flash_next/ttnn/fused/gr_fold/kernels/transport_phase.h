@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The line transport of the fused GR read: a transport core per fabric link moves this device's tiles to the other
-// devices of the TP4 line over the 1D fabric from inside the program, so the chain's collective is not a program of
+// devices of the TP_SIZE line over the 1D fabric from inside the program, so the chain's collective is not a program of
 // its own.  A phase is the all-gather of TILES local tiles (the stats: one per branch; the partials: one per down
 // worker) into the gathered tensor at page t * PAGE_TILE_STRIDE + rank * PAGE_RANK_STRIDE, exactly the pages the
 // chain's all-gather writes; this core carries the tiles t = TILE_FIRST + i * TILE_STEP (one core per link, the tiles

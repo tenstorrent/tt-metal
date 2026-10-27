@@ -20,8 +20,7 @@ from models.demos.blackhole.qwen38_flash_next.reference import (
     ngram_token_ids,
     zero_centered_rms_norm,
 )
-
-TP_SIZE = 4
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZE
 
 
 class Qwen38HostPLEEmbedding:

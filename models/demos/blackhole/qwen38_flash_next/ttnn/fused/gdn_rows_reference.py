@@ -32,16 +32,18 @@ from typing import Callable
 import torch
 import torch.nn.functional as F
 
+from ..contracts import TP_SIZE
+
 TILE = 32
-HEADS = 12  # value heads per device
-QK_HEADS = 4  # key heads per device
+HEADS = 48 // TP_SIZE  # value heads per device
+QK_HEADS = 16 // TP_SIZE  # key heads per device
 HEAD_DIM = 128
-QK_WIDTH = QK_HEADS * HEAD_DIM  # 512
-VALUE_WIDTH = HEADS * HEAD_DIM  # 1536
-QKV_WIDTH = 2 * QK_WIDTH + VALUE_WIDTH  # 2560
-A_COLUMN = QKV_WIDTH + VALUE_WIDTH  # 4096
-B_COLUMN = A_COLUMN + TILE  # 4128
-PROJECTION_WIDTH = B_COLUMN + TILE  # 4160
+QK_WIDTH = QK_HEADS * HEAD_DIM
+VALUE_WIDTH = HEADS * HEAD_DIM
+QKV_WIDTH = 2 * QK_WIDTH + VALUE_WIDTH
+A_COLUMN = QKV_WIDTH + VALUE_WIDTH
+B_COLUMN = A_COLUMN + TILE
+PROJECTION_WIDTH = B_COLUMN + TILE
 CONV_KERNEL = 4
 HISTORY_ROWS = CONV_KERNEL - 1
 QK_L2_NORM_EPS = 1.0e-6  # gdn.py QK_L2_NORM_EPS; the op gets eps / HEAD_DIM

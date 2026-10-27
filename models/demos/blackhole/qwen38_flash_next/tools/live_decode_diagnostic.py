@@ -5,7 +5,7 @@
 
 The CPU preparation binds the checkpoint, the cache roots and the runtime identity (the tt-metal commit of the
 checkout that built the loaded ``ttnn`` and the extension's digest) into the builder provenance; the live
-construction creates the exact :class:`Qwen38TTNNBuilder` on the caller's ``(1, 4)`` mesh and requires all 48
+construction creates the exact :class:`Qwen38TTNNBuilder` on the caller's ``(1, TP_SIZE)`` mesh and requires all 48
 backbone BF4 records plus MTP layer 0.  Without a corpus the builder's production ``Qwen38BF4Cache`` converts the
 routed experts from the checkpoint on the first start and reads its own cache afterwards; with a CPU-staged corpus
 (``bf4_corpus_root`` + its verification record, ``diagnostic_bf4``) a read-only adapter serves the corpus's records
@@ -38,6 +38,7 @@ from models.demos.blackhole.qwen38_flash_next.diagnostic_bf4 import (
     bind_diagnostic_bf4_corpus,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.bf4 import (
+    EXPERTS_PER_DEVICE,
     BF4Artifact,
     BF4LayerRecord,
     Qwen38BF4Cache,
@@ -52,7 +53,12 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.builder import (
     Qwen38CacheRoots,
     Qwen38TTNNBuilder,
 )
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import Qwen38MeshContract, TensorPlacement
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
+    MESH_SHAPE,
+    TP_SIZE,
+    Qwen38MeshContract,
+    TensorPlacement,
+)
 from models.demos.blackhole.qwen38_flash_next.ttnn.decode import (
     Qwen38OrdinaryDecodeSession,
     Qwen38OrdinarySessionStatus,
@@ -67,7 +73,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import (
 from models.demos.blackhole.qwen38_flash_next.ttnn.model import LayerObserver
 
 MODE = "diagnostic_non_promoting"
-EXPECTED_MESH_SHAPE = (1, 4)
+EXPECTED_MESH_SHAPE = MESH_SHAPE
 EXPECTED_RING_SIZE = 8
 EXPECTED_RECORD_COUNT = 49
 EXPECTED_TENSORBIN_COUNT = 98
@@ -91,14 +97,14 @@ Marker = Callable[[str], None]
 FileSignature = tuple[int, int, int, int, int]
 
 
-def _canonical_physical_ids(physical_ids: Any) -> tuple[int, int, int, int]:
+def _canonical_physical_ids(physical_ids: Any) -> tuple[int, ...]:
     if (
         not isinstance(physical_ids, tuple)
-        or len(physical_ids) != 4
+        or len(physical_ids) != TP_SIZE
         or any(isinstance(value, bool) or type(value) is not int or value < 0 for value in physical_ids)
-        or len(set(physical_ids)) != 4
+        or len(set(physical_ids)) != TP_SIZE
     ):
-        raise ValueError(f"physical_ids must be four distinct non-negative ints, got {physical_ids!r}")
+        raise ValueError(f"physical_ids must be {TP_SIZE} distinct non-negative ints, got {physical_ids!r}")
     return physical_ids
 
 
@@ -337,12 +343,12 @@ class Qwen38BF4ConsumerCompatibility:
     producer_source_head: str
     producer_runtime: Mapping[str, Any]
     producer_checkpoint: Mapping[str, Any]
-    producer_physical_ids: tuple[int, int, int, int]
+    producer_physical_ids: tuple[int, ...]
     consumer_provenance_key: str
     consumer_tt_metal_sha: str
     consumer_runtime_extension: Path
     consumer_runtime_sha256: str
-    consumer_physical_ids: tuple[int, int, int, int]
+    consumer_physical_ids: tuple[int, ...]
     expert_residency: str
     qsa_cache_capacity: int
     schema: str = BF4_CONSUMER_COMPATIBILITY_SCHEMA
@@ -398,7 +404,8 @@ class Qwen38BF4ConsumerCompatibility:
         if (
             identity.mesh_shape != self.mesh_shape
             or identity.ring_size != self.ring_size
-            or identity.expert_ranges != ((0, 128), (128, 256), (256, 384), (384, 512))
+            or identity.expert_ranges
+            != tuple((device * EXPERTS_PER_DEVICE, (device + 1) * EXPERTS_PER_DEVICE) for device in range(TP_SIZE))
         ):
             raise LiveDecodeDiagnosticError(f"BF4 corpus topology differs: {identity.as_dict()}")
         expected_checkpoint = {
@@ -504,7 +511,7 @@ def prepare_live_decode_diagnostic(
     runtime_extension: Path,
     runtime_sha256: str,
     allocated_context: int = RESIDENT_MAX_QSA_CACHE_CAPACITY,
-    physical_ids: tuple[int, int, int, int],
+    physical_ids: tuple[int, ...],
     bf4_corpus_root: Path | None = None,
     bf4_corpus_verification: Path | None = None,
     bf4_producer: Mapping[str, Any] | None = None,
@@ -704,7 +711,7 @@ class Qwen38DiagnosticBF4Cache:
                     f"actual={physical_ids} expected={expected_physical_ids} "
                     f"(corpus producer {self.corpus.identity.physical_ids})"
                 )
-            if len(locals_in_order) != 4 or any(
+            if len(locals_in_order) != TP_SIZE or any(
                 tuple(int(value) for value in local.shape) != artifact.local_shape
                 or local.dtype != ttnn.bfloat4_b
                 or local.layout != ttnn.TILE_LAYOUT
@@ -730,7 +737,7 @@ class Qwen38DiagnosticBF4Cache:
         memory_configs = ttnn.experimental.get_weight_mem_configs(
             mesh_device,
             num_layers=1,
-            experts_per_device=128,
+            experts_per_device=EXPERTS_PER_DEVICE,
             hidden_size=2560,
             intermediate_size=640,
             has_bias=False,

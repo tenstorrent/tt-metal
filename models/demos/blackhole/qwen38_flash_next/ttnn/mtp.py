@@ -36,9 +36,11 @@ from models.demos.blackhole.qwen38_flash_next.checkpoint import (
     Qwen38Checkpoint,
 )
 from models.demos.blackhole.qwen38_flash_next.config import CONFIG_SHA256, Qwen38Placement
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZES
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     CHUNK_ROW_COUNTS,
     MESH_SHAPE,
+    TP_SIZE,
     Qwen38MeshContract,
     TensorPlacement,
     same_buffer,
@@ -46,7 +48,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
 from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import dense_dtype_tag, dense_math_fidelity_name
 
 TP_AXIS = 1
-TP_SIZE = 4
 HIDDEN_SIZE = 2560
 LOCAL_HIDDEN_SIZE = HIDDEN_SIZE // TP_SIZE
 RESIDUAL_BRANCHES = 4
@@ -168,7 +169,7 @@ def _cache_directory(
         / f"config-{checkpoint.config.config_sha256}"
         / f"tt-metal-{tt_metal_sha}"
         / f"ttnn-runtime-{ttnn_runtime_sha256}"
-        / f"mesh-1x4-physical-{physical}"
+        / f"mesh-1x{TP_SIZE}-physical-{physical}"
     )
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -277,7 +278,7 @@ def validate_mtp_input_static_contract() -> None:
     if dict(MTP_INPUT_TENSOR_SPECS) != expected_specs:
         raise RuntimeError("MTP input checkpoint tensor contract drifted")
     if (
-        TP_SIZE,
+        TP_SIZE in TP_SIZES,
         HIDDEN_SIZE,
         LOCAL_HIDDEN_SIZE,
         RESIDUAL_BRANCHES,
@@ -288,16 +289,16 @@ def validate_mtp_input_static_contract() -> None:
         HIDDEN_NORM_SCALE_LOCAL_SHAPE,
         PROJECTION_LOCAL_SHAPE,
     ) != (
-        4,
+        True,
         2560,
-        640,
+        2560 // TP_SIZE,
         4,
         10240,
         1.0e-6,
-        (1, 1, 1, 640),
-        (1, 4, 1, 640),
-        (1, 1, 4, 640),
-        (1, 1, 2560, 640),
+        (1, 1, 1, 2560 // TP_SIZE),
+        (1, 4, 1, 2560 // TP_SIZE),
+        (1, 1, 4, 2560 // TP_SIZE),
+        (1, 1, 2560, 2560 // TP_SIZE),
     ):
         raise RuntimeError("MTP input TP4 geometry drifted from the pinned target")
 

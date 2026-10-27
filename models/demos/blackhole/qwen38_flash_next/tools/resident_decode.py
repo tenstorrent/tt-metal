@@ -52,7 +52,7 @@ GDN_TRACE_FORBIDDEN_BODY_CALLS = (
 REPLAY_LOOP_HOST_IO_CALLS = ("copy_host_to_device_tensor", "from_device", "from_torch", "to_torch")
 
 
-# One token per TP4 vocabulary owner: the warm pass checks the device-token
+# One token per vocabulary owner (one per device): the warm pass checks the device-token
 # embedding against the host-token path on every coordinate's real and
 # sentinel rows.
 SEQUENTIAL_TRACE_WARM_EMBEDDING_TOKEN_IDS = tuple(
@@ -195,16 +195,16 @@ def b5b_runtime_surface() -> dict[str, Any]:
 
 def download_trace_tensor(tensor: Any, *, label: str) -> tuple[torch.Tensor, ...]:
     locals_in_order = tuple(ttnn.get_device_tensors(tensor))
-    if len(locals_in_order) != 4:
-        raise ResidentDecodeError(f"{label} has {len(locals_in_order)} device tensors, expected four")
+    if len(locals_in_order) != TP_SIZE:
+        raise ResidentDecodeError(f"{label} has {len(locals_in_order)} device tensors, expected {TP_SIZE}")
     return tuple(ttnn.to_torch(local).contiguous() for local in locals_in_order)
 
 
 def ple_host_row(row_mapper: Any, payload: bytearray) -> tuple[Any, torch.Tensor]:
-    """The 5,120 B of one PLE row as a ROW_MAJOR bf16 host mesh tensor, width-sharded four ways.
+    """The 5,120 B of one PLE row as a ROW_MAJOR bf16 host mesh tensor, width-sharded over the TP_SIZE devices.
 
-    The persistent PLE input is interleaved DRAM ROW_MAJOR bf16 [1,1,1,640] per
-    device; copy_host_to_device_tensor writes these four 1,280 B shards straight
+    The persistent PLE input is interleaved DRAM ROW_MAJOR bf16 [1,1,1,2560 // TP_SIZE]
+    per device; copy_host_to_device_tensor writes these TP_SIZE (2560 // TP_SIZE) * 2 B shards straight
     into it (same shape, dtype and layout, so the captured address is kept and
     no device allocation, eager copy or host tilize happens per token) and the
     captured body tilizes the row.  Returns the host tensor and its torch view.
@@ -244,7 +244,7 @@ def token_row_host_value(host: torch.Tensor) -> int:
 
 
 def require_token_row_holds(token_row: Any, expected: torch.Tensor, *, label: str) -> None:
-    """Require all four replicas of ``token_row`` to equal the host row ``expected``."""
+    """Require all TP_SIZE replicas of ``token_row`` to equal the host row ``expected``."""
 
     for coordinate, actual in enumerate(download_trace_tensor(token_row, label=label)):
         if actual.dtype != torch.float32 or tuple(actual.shape) != TOKEN_ROW_SHAPE:

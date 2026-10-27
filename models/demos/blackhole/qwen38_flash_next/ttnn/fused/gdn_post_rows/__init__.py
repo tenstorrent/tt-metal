@@ -77,11 +77,11 @@ TILE_BF16, TILE_FP32 = fp.TILE_BYTES[BF16], fp.TILE_BYTES[FP32]
 FACE = fp.FACE
 
 HEAD_TILES = HEAD_DIM // TILE  # 4: the Wt of the norm
-VALUE_TILES = VALUE_WIDTH // TILE  # 48
-QKV_TILES = QKV_WIDTH // TILE  # 80
-PROJECTION_TILES = PROJECTION_WIDTH // TILE  # 130
+VALUE_TILES = VALUE_WIDTH // TILE
+QKV_TILES = QKV_WIDTH // TILE
+PROJECTION_TILES = PROJECTION_WIDTH // TILE
 HISTORY_COLUMNS = 8  # projection column tiles per history unit
-HISTORY_HEADS = QKV_TILES // HISTORY_COLUMNS  # 10 of the 12 heads carry the history
+HISTORY_HEADS = QKV_TILES // HISTORY_COLUMNS  # the first HISTORY_HEADS value heads carry the history
 SCALAR_TILES = 2  # the reduce scaler tile and the eps tile, side by side
 RECIP_HEAD_DIM_BITS = 0x3C000000  # bit_cast<uint32_t>(1.0f / 128), numeric.h's row_wise_mean epilogue
 
@@ -346,18 +346,25 @@ def post_norm(o16, sig, norm, scalars, projected, gated, history_next=None, *, r
     writer_cta = [*fp.accessor_args(gated), *fp.accessor_args(hist_out)]
     writer_addrs = [gated.buffer_address(), hist_out.buffer_address()]
     flag = 1 if history else 0
+    norm_defines = [
+        ("GDN_VALUE_TILES", str(VALUE_TILES)),
+        ("GDN_PROJECTION_TILES", str(PROJECTION_TILES)),
+        ("GDN_HISTORY_HEADS", str(HISTORY_HEADS)),
+    ]
 
     reader = fp.reader_kernel(
         READER_NORM,
         cores,
         reader_cta,
         [(w.core, [*reader_addrs, chunks, flag, w.count, w.start]) for w in work],
+        defines=norm_defines,
     )
     writer = fp.writer_kernel(
         WRITER_NORM,
         cores,
         writer_cta,
         [(w.core, [*writer_addrs, chunks, rows, flag, w.count, w.start]) for w in work],
+        defines=norm_defines,
     )
     compute = fp.compute_kernel(
         COMPUTE_NORM,

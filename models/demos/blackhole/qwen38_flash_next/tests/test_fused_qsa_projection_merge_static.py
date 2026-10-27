@@ -100,7 +100,7 @@ def test_the_merged_host_weight_is_the_five_device_blocks_side_by_side(expect_er
     merged = qsa._merged_projections(qg, k, v, index_q, index_k)
     assert tuple(merged.shape) == (1, 1, qsa.HIDDEN_SIZE, qsa.TP_SIZE * qsa.PROJECTIONS_WIDTH)
     assert merged.dtype == torch.bfloat16
-    # the separate weights' host tensors as from_checkpoint uploads them (dim 3 sharded over the four devices)
+    # the separate weights' host tensors as from_checkpoint uploads them (dim 3 sharded over the devices)
     separate = {
         "index_q": index_q.transpose(0, 1),
         "index_k": index_k.transpose(0, 1),
@@ -119,13 +119,15 @@ def test_the_merged_host_weight_is_the_five_device_blocks_side_by_side(expect_er
             else:
                 expected = separate[name][:, d * columns : (d + 1) * columns]
             assert torch.equal(window, expected), (d, name)
-    # the K/V pair grouping survives the merge: devices 0/1 hold KV head 0, devices 2/3 head 1
+    # the K/V pair grouping survives the merge: the first half of the devices hold KV head 0, the second half head 1
+    half = qsa.TP_SIZE // 2
     for name in ("k", "v"):
         start = qsa.PROJECTION_FIRST_TILE[name] * TILE
         stop = start + qsa.HEAD_DIM
-        assert torch.equal(blocks[0][:, start:stop], blocks[1][:, start:stop])
-        assert torch.equal(blocks[2][:, start:stop], blocks[3][:, start:stop])
-        assert not torch.equal(blocks[0][:, start:stop], blocks[2][:, start:stop])
+        for d in range(1, half):
+            assert torch.equal(blocks[0][:, start:stop], blocks[d][:, start:stop])
+            assert torch.equal(blocks[half][:, start:stop], blocks[half + d][:, start:stop])
+        assert not torch.equal(blocks[0][:, start:stop], blocks[half][:, start:stop])
     with expect_error(ValueError, match="merged projection block index_k"):
         qsa._merged_projections(qg, k, v, index_q, index_k[: qsa.INDEX_HEAD_DIM // 2])
 

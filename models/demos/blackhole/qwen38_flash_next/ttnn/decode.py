@@ -49,6 +49,7 @@ from typing import Any, Literal, NoReturn
 import torch
 
 import ttnn
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZES
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import (
     Qwen38BuildProvenance,
     Qwen38LiveBuildIdentity,
@@ -179,14 +180,14 @@ def _require_identity_key(value: str) -> str:
     return value
 
 
-def _normalize_physical_ids(values: Sequence[int]) -> tuple[int, int, int, int]:
+def _normalize_physical_ids(values: Sequence[int]) -> tuple[int, ...]:
     result = tuple(values)
     if (
         len(result) != TP_SIZE
         or len(set(result)) != TP_SIZE
         or any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in result)
     ):
-        raise ValueError(f"ordinary decode requires four distinct nonnegative physical IDs, got {result}")
+        raise ValueError(f"ordinary decode requires {TP_SIZE} distinct nonnegative physical IDs, got {result}")
     return result  # type: ignore[return-value]
 
 
@@ -818,9 +819,9 @@ class Qwen38OrdinaryDecodeSession:
 def validate_decode_static_contract() -> None:
     """No-device guard for ordinary decode scope and termination semantics."""
 
-    if (TP_SIZE, MESH_SHAPE, BACKBONE_LAYERS, VOCAB_SIZE, MAX_CONTEXT) != (
-        4,
-        (1, 4),
+    if (TP_SIZE in TP_SIZES, MESH_SHAPE, BACKBONE_LAYERS, VOCAB_SIZE, MAX_CONTEXT) != (
+        True,
+        (1, TP_SIZE),
         48,
         248320,
         262144,

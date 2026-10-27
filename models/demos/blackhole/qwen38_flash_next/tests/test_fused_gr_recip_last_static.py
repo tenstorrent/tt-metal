@@ -243,7 +243,7 @@ def test_three_phase_writer_orders_stats_gate_u_recip_and_the_python_side_matche
     )
     assert "phase_a=[b//links,x,y,x,y,gathered_stats.buffer_address(),b*TP_SIZE+rank,1,0,0,0,1,1]" in FRONT
     assert "phase_b=[b*HT,*rect,0,0,0,0,0,0,1,1]" in FRONT
-    assert "phase_c=[b,*rect,0,0,0,normalized.buffer_address(),HT,b*HT,1,4]" in FRONT
+    assert "phase_c=[b,*rect,0,0,0,normalized.buffer_address(),HT,b*HT,1,gr_read.ROW_BATCH]" in FRONT
     assert "runtime.append((core,phase_a+phase_b+phase_c+list(noc[(core.x,core.y)])))" in FRONT
     assert FRONT.count("fp.accessor_args(normalized)") == 4 and FRONT.count("fp.accessor_args(gathered_stats)") == 2
 

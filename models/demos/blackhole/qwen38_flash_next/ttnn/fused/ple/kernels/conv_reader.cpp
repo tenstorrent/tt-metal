@@ -24,7 +24,7 @@
 constexpr uint32_t T = get_compile_time_arg_val(0);
 constexpr uint32_t SHIFT = get_compile_time_arg_val(1);
 constexpr uint32_t INJECT = get_compile_time_arg_val(2);
-constexpr uint32_t BLOCK_TILES = 20;  // tiles per residual branch block
+constexpr uint32_t BLOCK_TILES = PLE_BLOCK_TILES;  // tiles per residual branch block (per device)
 constexpr uint32_t BF16_TILE = 2048;
 constexpr uint32_t c_stage = 17;
 

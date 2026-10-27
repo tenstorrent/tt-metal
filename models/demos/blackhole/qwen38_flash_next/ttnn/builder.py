@@ -43,6 +43,7 @@ from models.demos.blackhole.qwen38_flash_next.checkpoint import (
     Qwen38Checkpoint,
 )
 from models.demos.blackhole.qwen38_flash_next.config import CONFIG_SHA256, LAYER_PATTERN, Qwen38Placement
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZES
 from models.demos.blackhole.qwen38_flash_next.tt.ple import Qwen38HostPLEEmbedding
 from models.demos.blackhole.qwen38_flash_next.ttnn.bf4 import (
     BF4CacheIdentity,
@@ -54,7 +55,12 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.bf4 import (
     bf4_converter_source_identity,
     qualify_live_bf4_ring,
 )
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE, Qwen38MeshContract, is_slab_rows
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
+    MESH_SHAPE,
+    TP_SIZE,
+    Qwen38MeshContract,
+    is_slab_rows,
+)
 from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (  # noqa: E402  (the placement source, READY)
     TWO_READER_QUALIFIED_DTYPES,
     DenseWeightPlan,
@@ -109,14 +115,13 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import (
 from models.demos.blackhole.qwen38_flash_next.ttnn.vision_residency import VISION_ROW_BUCKETS, Qwen38VisionResidency
 from models.tt_transformers.tt.ccl import TT_CCL
 
-TP_SIZE = 4
 BACKBONE_LAYERS = 48
 MTP_LAYERS = 1
 PLE_LAYER = 1
 HIDDEN_SIZE = 2560
 VOCAB_SIZE = 248_320
 ROUTED_EXPERTS = 512
-EXPERTS_PER_DEVICE = 128
+EXPERTS_PER_DEVICE = ROUTED_EXPERTS // TP_SIZE
 TOP_K = 10
 BUILDER_FORMAT_VERSION = 1
 # The resident build allocates one of four contexts: 32,768 (the default; every timing and bitwise pin is at this
@@ -461,7 +466,7 @@ class Qwen38LiveBuildIdentity:
                 for device_id in self.physical_ids
             )
         ):
-            raise ValueError(f"live builder identity requires four distinct physical IDs, got {self.physical_ids}")
+            raise ValueError(f"live builder identity requires {TP_SIZE} distinct physical IDs, got {self.physical_ids}")
         if self.ring_size not in (7, 8):
             raise ValueError(f"live Blackhole DRAM ring must contain seven or eight workers, got {self.ring_size}")
         if any(isinstance(bank, bool) or not isinstance(bank, int) for bank in self.dram_bank_ring_order) or sorted(
@@ -583,15 +588,15 @@ def validate_builder_static_contract() -> None:
             raise RuntimeError(f"builder layer {spec.layer_index} object graph drifted: {actual} != {expected}")
     if graph.model_io != "vocab-row-sharded-untied" or graph.final_mixer_namespace != "backbone":
         raise RuntimeError("builder model-I/O or terminal-mixer graph drifted")
-    if (TP_SIZE, HIDDEN_SIZE, VOCAB_SIZE, ROUTED_EXPERTS, EXPERTS_PER_DEVICE, TOP_K) != (
-        4,
+    if (TP_SIZE in TP_SIZES, HIDDEN_SIZE, VOCAB_SIZE, ROUTED_EXPERTS, EXPERTS_PER_DEVICE, TOP_K) != (
+        True,
         2560,
         248_320,
         512,
-        128,
+        512 // TP_SIZE,
         10,
     ):
-        raise RuntimeError("builder TP4/model/MoE geometry drifted from the pinned target")
+        raise RuntimeError("builder TP/model/MoE geometry drifted from the pinned target")
 
 
 def validate_builder_constructor_contract() -> None:
@@ -733,9 +738,13 @@ def validate_checkpoint_and_placement(checkpoint: Qwen38Checkpoint, placement: Q
             raise ValueError(f"pinned builder requires config {name}={expected!r}, got {actual!r}")
     if tuple(placement.mesh_shape) != MESH_SHAPE:
         raise ValueError(f"numerical placement must be {MESH_SHAPE}, got {placement.mesh_shape}")
-    expected_expert_ranges = tuple((index * EXPERTS_PER_DEVICE, (index + 1) * EXPERTS_PER_DEVICE) for index in range(4))
+    expected_expert_ranges = tuple(
+        (index * EXPERTS_PER_DEVICE, (index + 1) * EXPERTS_PER_DEVICE) for index in range(TP_SIZE)
+    )
     if tuple(placement.expert_ranges) != expected_expert_ranges:
-        raise ValueError(f"routed experts must be sharded as 128/card, got {tuple(placement.expert_ranges)}")
+        raise ValueError(
+            f"routed experts must be sharded as {EXPERTS_PER_DEVICE}/card, got {tuple(placement.expert_ranges)}"
+        )
     validate_terminal_architecture(checkpoint)
 
 

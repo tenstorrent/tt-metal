@@ -19,13 +19,13 @@ import torch.nn.functional as F
 from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint, TensorMetadata
 from models.demos.blackhole.qwen38_flash_next.config import Qwen38Config, Qwen38Placement
 from models.demos.blackhole.qwen38_flash_next.reference import gated_residual_read
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZE
 from models.demos.blackhole.qwen38_flash_next.tt.layer import (
     Qwen38DecoderLayer,
     Qwen38DecoderLayerAux,
     Qwen38DecoderLayerState,
 )
 
-TP_SIZE = 4
 EMBEDDING_NAME = "model.language_model.embed_tokens.weight"
 LM_HEAD_NAME = "lm_head.weight"
 

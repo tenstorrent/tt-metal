@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""One decoder layer (gated residual read, attention, gated residual write, MoE) on the 1x4 mesh against the torch
+"""One decoder layer (gated residual read, attention, gated residual write, MoE) on the 1xTP_SIZE mesh against the torch
 reference: layer 0 (GDN) and layer 3 (QSA), positions 0..2 with a fresh random residual at each and the layer state
 carried on both sides.  Two PCCs per position: the output residual, and the injection (output minus input residual),
 which is the layer's own contribution.  Layer 1 (the PLE layer) needs token ids and is not covered here.
@@ -9,7 +9,7 @@ which is the layer's own contribution.  Layer 1 (the PLE layer) needs token ids 
 test_layer_component.py runs ``Qwen38DecoderLayer`` on the CPU; this is the device side.
 
 Run:  pytest models/demos/blackhole/qwen38_flash_next/tests/test_layer_tp.py -v -s
-Env:  MODEL_WEIGHTS_DIR, MESH_DEVICE="(1, 4)", QWEN38_CACHE_ROOT (skipped without it); QWEN38_BF4_CORPUS with
+Env:  HF_MODEL, MESH_DEVICE (P150x4 default, P150x8), TT_CACHE_PATH (skipped without it); QWEN38_BF4_CORPUS with
       QWEN38_BF4_CORPUS_VERIFICATION when the experts come from the CPU-staged corpus
 """
 
@@ -29,7 +29,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.layer import Qwen38TTNNLayerT
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("QWEN38_FUSED_DEVICE_TEST") != "1",
-    reason="a device test: set QWEN38_FUSED_DEVICE_TEST=1 on a held four-die line (the no-device sets are masked)",
+    reason="a device test: set QWEN38_FUSED_DEVICE_TEST=1 on a held TP_SIZE-die line (the no-device sets are masked)",
 )
 
 POSITIONS = 3
@@ -55,9 +55,9 @@ def test_layer_tp(tp_harness, layer_index, pcc_thresholds):
     try:
         for position in range(POSITIONS):
             residual = residuals[:, position : position + 1]
-            # [1,1,10240] is branch-major.  The layer's residual is [1,4,1,640] per device (ttnn/layer.py
-            # RESIDUAL_LOCAL_SHAPE: dim 1 the four branches, the hidden axis sharded, as ttnn/model.py _embed_residual
-            # lays it out), so shard [1,4,1,2560] on its last axis.
+            # [1,1,10240] is branch-major.  The layer's residual is [1,4,1,2560 // TP_SIZE] per device (ttnn/layer.py
+            # RESIDUAL_LOCAL_SHAPE: dim 1 the four branches, the hidden axis sharded over TP_SIZE devices, as
+            # ttnn/model.py _embed_residual lays it out), so shard [1,4,1,2560] on its last axis.
             device_residual = harness.upload_sharded(residual.reshape(1, RESIDUAL_BRANCHES, 1, HIDDEN_SIZE))
             keyword = {"return_routing": True}
             rope = None

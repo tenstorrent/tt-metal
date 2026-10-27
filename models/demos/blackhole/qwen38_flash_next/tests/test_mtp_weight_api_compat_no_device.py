@@ -6,20 +6,19 @@
 from __future__ import annotations
 
 import inspect
-import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
+from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint, checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
 from models.demos.blackhole.qwen38_flash_next.tt.gr import Qwen38GatedResidualWeights
 from models.demos.blackhole.qwen38_flash_next.tt.model import Qwen38FinalMixerWeights
 from models.demos.blackhole.qwen38_flash_next.ttnn import final_mixer as ttnn_final_mixer
 from models.demos.blackhole.qwen38_flash_next.ttnn import gr as ttnn_gr
 
-CHECKPOINT = Path(os.environ.get("QWEN38_CHECKPOINT", "/nonexistent/Qwen3.8-Flash-Next"))
+CHECKPOINT = checkpoint_directory(missing=Path("/nonexistent/Qwen3.8-Flash-Next"))
 
 
 class _ShapeTensor:

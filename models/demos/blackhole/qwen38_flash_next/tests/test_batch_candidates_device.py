@@ -21,7 +21,6 @@ import json
 import math
 import os
 import random
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -30,6 +29,7 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, VOCAB_SIZE
+from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F401  (device_params is a fixture)
     DEVICE_PARAMS,
     device_params,
@@ -48,9 +48,12 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import (
     position_generator,
     sample_from_row,
 )
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE, TP_SIZE
+from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import LOCAL_VOCAB_SIZE, SAMPLING_CANDIDATES_PER_DEVICE
 from models.demos.blackhole.qwen38_flash_next.ttnn.sampling import Qwen38CandidateRow
 
+# A candidate row: [TP_SIZE, 2, k] flattened, each shard's k values, then its k ids.
+CANDIDATE_ROW = 2 * TP_SIZE * SAMPLING_CANDIDATES_PER_DEVICE
 BLOCK = 64
 STEPS = 12
 PROMPT_LEN = 100  # two 64-row blocks per request
@@ -155,14 +158,18 @@ def open_model(mesh_device, lanes: int, monkeypatch, normalizer: bool = False):
     """The batch adapter on the real chain.  The P3g-1 ids run with the P3g-2 normalizer off (their counters are P3g-1's: a
     top-k-off row is a ``top_k`` fallback); the P3g-2 ids turn it on."""
 
-    if not os.environ.get("MODEL_WEIGHTS_DIR") or not os.environ.get("QWEN38_CACHE_ROOT"):
-        pytest.fail("set MODEL_WEIGHTS_DIR and QWEN38_CACHE_ROOT")
+    try:
+        checkpoint = checkpoint_directory()
+    except FileNotFoundError as error:
+        pytest.fail(str(error))
+    if not os.environ.get("TT_CACHE_PATH"):
+        pytest.fail("set TT_CACHE_PATH")
     monkeypatch.setenv("QWEN38_PREFILL_PACK", "0")
     monkeypatch.delenv("QWEN38_BATCH_CANDIDATES", raising=False)  # unset = on
     monkeypatch.setenv("QWEN38_BATCH_NORMALIZER", "1" if normalizer else "0")
     mesh_device.enable_program_cache()
     num_blocks = 1 + 2 * lanes + 4
-    model = initialize(mesh_device, Path(os.environ["MODEL_WEIGHTS_DIR"]), lanes)
+    model = initialize(mesh_device, checkpoint, lanes)
     model.allocate_kv_cache((num_blocks, 1, BLOCK, 128), ttnn_bf16(), 12)
     plugin_warmups(model, lanes, BLOCK, num_blocks)
     assert model.batch_candidates and model.decoder.has_candidates
@@ -187,11 +194,11 @@ def candidate_rows_equal_the_topk_of_the_full_logits(mesh_device, lanes: int, mo
         for step in range(4):
             driver.step(params)  # a sampled step: the lane replay, then the candidate trace
             rows = decoder.read_candidates()  # replays the candidate trace again over the same logits
-            assert tuple(rows.shape) == (lanes, 256)
+            assert tuple(rows.shape) == (lanes, CANDIDATE_ROW)
             full = decoder.read_full_logits()
             assert tuple(full.shape) == (lanes, VOCAB_SIZE)
             for lane in range(lanes):
-                actual = Qwen38CandidateRow.from_host_row(rows[lane].reshape(1, 1, 1, 256))
+                actual = Qwen38CandidateRow.from_host_row(rows[lane].reshape(1, 1, 1, CANDIDATE_ROW))
                 agreement = actual.agreement(Qwen38CandidateRow.emulate(full[lane].to(torch.bfloat16)))
                 reports.append(agreement)
                 assert all(agreement["values_bitwise"]), (step, lane, agreement)
@@ -376,7 +383,7 @@ def normalizer_equals_the_host_logsumexp(mesh_device, lanes: int, monkeypatch) -
             driver.step(params)  # a top-k-off step: the lane replay, then the candidate + normalizer trace
             assert model.candidate_counters["normalizer_steps"] == step + 1
             rows, shard = decoder.read_candidates_normalized(inverse)  # replay again over the same logits
-            assert tuple(shard.shape) == (lanes, 4) and bool(torch.isfinite(shard).all())
+            assert tuple(shard.shape) == (lanes, TP_SIZE) and bool(torch.isfinite(shard).all())
             full = decoder.read_full_logits().double()
             padding_over_real.append(
                 float((full[:, TOKENIZER_SIZE:].max(dim=1).values - full[:, :TOKENIZER_SIZE].max(dim=1).values).max())
@@ -385,14 +392,19 @@ def normalizer_equals_the_host_logsumexp(mesh_device, lanes: int, monkeypatch) -
             for lane in range(lanes):
                 scaled = torch.full((VOCAB_SIZE,), float("-inf"), dtype=torch.float64)
                 scaled[:TOKENIZER_SIZE] = real[lane] / temperatures[lane]
-                per_shard = torch.stack([torch.logsumexp(scaled[d * 62080 : (d + 1) * 62080], 0) for d in range(4)])
+                per_shard = torch.stack(
+                    [
+                        torch.logsumexp(scaled[d * LOCAL_VOCAB_SIZE : (d + 1) * LOCAL_VOCAB_SIZE], 0)
+                        for d in range(TP_SIZE)
+                    ]
+                )
                 err = (torch.exp(shard[lane].double() - per_shard) - 1).abs().max()
                 worst_shard = max(worst_shard, float(err))
                 combined = float(torch.logsumexp(shard[lane].double(), 0))
                 worst_combined = max(worst_combined, abs(math.exp(combined - float(torch.logsumexp(per_shard, 0))) - 1))
             candidates = Qwen38CandidateRow
             for lane in range(lanes):  # the variant's candidate rows are the plain trace's
-                agreement = candidates.from_host_row(rows[lane].reshape(1, 1, 1, 256)).agreement(
+                agreement = candidates.from_host_row(rows[lane].reshape(1, 1, 1, CANDIDATE_ROW)).agreement(
                     candidates.emulate(full[lane].float().to(torch.bfloat16))
                 )
                 assert all(agreement["values_bitwise"]), (step, lane)

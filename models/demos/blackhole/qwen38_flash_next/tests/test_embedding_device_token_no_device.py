@@ -173,7 +173,7 @@ def test_prepared_inputs_and_forward_decode_route_the_device_token() -> None:
     assert "ttnn.repeat_interleave(" in embed
     assert "dim=1" in embed and "dim=2" not in embed
     assert "dim=1" in host_embed and "dim=2" not in host_embed
-    assert "RESIDUAL_LOCAL_SHAPE != (1, 4, 1, 640)" in inspect.getsource(model_module)
+    assert "RESIDUAL_LOCAL_SHAPE != (1, 4, 1, 2560 // TP_SIZE)" in inspect.getsource(model_module)
 
 
 # --- Fail-closed contracts ------------------------------------------------------

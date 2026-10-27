@@ -20,24 +20,23 @@ The prompt is one chat turn with thinking off. It holds an excerpt of War and Pe
 "The secret pass key is 58213." placed in the middle. The question asks for the pass key and a summary.
 The test fails if `58213` is not in the decoded output. The perf line and the JSON report are written before this check.
 
-The book downloads once into `$QWEN38_CACHE_ROOT/demo-context`. The prompt is built before the model loads.
+The book downloads once into `$TT_CACHE_PATH/demo-context`. The prompt is built before the model loads.
 
 ## Environment
 
-    export TT_METAL_TRACE_ALLOC_TRACKING=1 MESH_DEVICE="(1, 4)"
-    export QWEN38_HARDWARE_PROFILE=tt-quietbox-2              # box type, see below
-    export MODEL_WEIGHTS_DIR=<checkpoint directory>          # or HF_MODEL=Qwen/Qwen3.8-Flash-Next with HF_HOME populated
-    export QWEN38_CACHE_ROOT=<cache root>                    # caches/<label>/{components,model-io}, caches/bf4-experts, demo-context
-    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0        # only on hosts that need it
+    export TT_METAL_TRACE_ALLOC_TRACKING=1 MESH_DEVICE=P150x4           # mesh and box type, see below
+    export HF_MODEL=<checkpoint directory or Qwen/Qwen3.8-Flash-Next>   # a repo id resolves in the local Hugging Face hub cache; nothing is downloaded
+    export TT_CACHE_PATH=<cache root>                                   # caches/<label>/{components,model-io}, caches/bf4-experts, demo-context
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0                   # only on hosts that need it
     export QWEN38_BF4_CORPUS=<corpus> QWEN38_BF4_CORPUS_VERIFICATION=<verification.json>   # only until bf4-experts exists
-    unset QWEN38_CACHE_LABEL                                 # the adapter default is c<context>-vllm
 
-If you set `QWEN38_CACHE_LABEL`, it must start with `c<context>-`. Each new context builds its own component cache
-on first use (`c<context>-vllm`, about 10 to 23 GB). That first run is slow.
+Each new context builds its own component cache on first use (`c<context>-vllm`, about 10 to 23 GB). That first run is
+slow.
 
-The demo derives the chip order like the server does. Set `QWEN38_HARDWARE_PROFILE` to the box type: `tt-quietbox-2`
-(QuietBox 2, 2x P300c), `tt-quietbox` or `p150-line`. Only a host listed in `tools/hardware_profiles.py` can leave it
-unset. If `TT_MESH_GRAPH_DESC_PATH` is not set, the demo sets it from the profile.
+The demo derives the chip order like the server does. `MESH_DEVICE` selects the box type: `P300x2` is the QuietBox 2
+(2x P300c); `P150x4` or `P150x8` is a p150 host. A 1x4 mesh uses the host's own profile when
+`tools/hardware_profiles.py` lists the host, else `p150-x8` (the first four chips). If `TT_MESH_GRAPH_DESC_PATH` is
+not set, the demo sets it from the profile.
 
 ## Commands
 

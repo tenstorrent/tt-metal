@@ -22,6 +22,8 @@ import struct
 
 import ttnn
 
+from ...contracts import TP_SIZE
+from ...qsa import QUERY_HEADS_PER_DEVICE
 from .. import program as fp
 from ..gr_read import CONST_COL_SCALAR, CONST_SCALER, NOC_PROBE, _reader, _stream, _writer
 from ..registry import BITWISE, FusedKernel, register
@@ -661,9 +663,10 @@ register(
 
 HEAD_DIM = 256
 HEAD_TILES = HEAD_DIM // fp.TILE
-LOCAL_HEADS = 6
+LOCAL_HEADS = QUERY_HEADS_PER_DEVICE
 SPARSE_HEADS = 32
 QG_WIDTH = 2 * LOCAL_HEADS * HEAD_DIM
+LOCAL_HEADS_DEFINE = ("MAIN_TAIL_LOCAL_HEADS", str(LOCAL_HEADS))
 KV_WIDTH = 2 * HEAD_DIM
 KV_TILES = KV_WIDTH // fp.TILE
 _MAIN_TAIL_CBS = (
@@ -797,11 +800,12 @@ def main_tail(
     # one staging core per lane on the core rows below the head and key cores; the key cores hand their tiles to each
     staging_cores = _lane_cores(rows, 2) if kv_stage is None else kv_stage.cores
     staging_rows = -(-rows // LANE_COLUMNS) if kv_stage is None else max(c.y for c in staging_cores) - 1
-    _require_grid(mesh, LOCAL_HEADS + 2, 2 + staging_rows, "main_tail lanes")
+    columns = max(LOCAL_HEADS + 2, LANE_COLUMNS)  # the head and key columns, or the lane columns when wider
+    _require_grid(mesh, columns, 2 + staging_rows, "main_tail lanes")
     every = [*q_norm_cores, *q_rope_cores, k_norm_core, k_rope_core, *staging_cores]
     coords = noc_coords(mesh, every)
     xy = lambda c: coords[(c.x, c.y)]
-    all_set = _rect(0, 0, LOCAL_HEADS + 1, 1 + staging_rows)  # the bounding rectangle (idle corners run no kernel)
+    all_set = _rect(0, 0, columns - 1, 1 + staging_rows)  # the bounding rectangle (idle corners run no kernel)
     staging_xy = [len(staging_cores)] + [v for c in staging_cores for v in xy(c)]
     cbs = [
         fp.cb_descriptor(index, dtype, fp.TILE_BYTES[dtype], pages, all_set) for index, dtype, pages in _MAIN_TAIL_CBS
@@ -852,12 +856,14 @@ def main_tail(
             q_norm_set,
             [0, *acc(query)],
             [(c, [query.buffer_address(), rows, h, *xy(q_rope_cores[h]), 0]) for h, c in enumerate(q_norm_cores)],
+            defines=[LOCAL_HEADS_DEFINE],
         ),
         fp.writer_kernel(
             MAIN_TAIL["writer_norm"],
             k_norm_set,
             [1, *acc(query)],
             [(k_norm_core, [query.buffer_address(), rows, 0, *xy(k_rope_core), *staging_xy])],
+            defines=[LOCAL_HEADS_DEFINE],
         ),
         fp.reader_kernel(
             MAIN_TAIL["reader_rope"],
@@ -1101,7 +1107,7 @@ register(
 # reduce_scatter): 16 cores, 5 tiles each.  B2 replaces 537-544 (shift, repeat_interleave, offsets add, sentinel
 # concat, keep-mask and, fill or): 8 cores of 256 columns, integer work on the data-movement RISC.
 
-OUT_WIDTH = LOCAL_HEADS * HEAD_DIM  # 1536
+OUT_WIDTH = LOCAL_HEADS * HEAD_DIM  # per device
 PARTIAL_WIDTH = 2560
 PARTIAL_TILES = PARTIAL_WIDTH // fp.TILE  # 80
 WIDEN_CORES = 16
@@ -1112,7 +1118,7 @@ SELECTION_ROW_GROUPS = 8  # the lanes' rows spread over up to 8 core rows (row r
 
 
 def post_attention(attention, qg_ws, *, memory_config=None, qg_first: int = 0):
-    """sigmoid(gate) x attention for the 6 local heads -> the head-major [1, 1, rows, 1536] bf16 TILE row in
+    """sigmoid(gate) x attention for the local heads (per device) -> the head-major [1, 1, rows, LOCAL_HEADS * 256] bf16 TILE row in
     ``memory_config`` (the out-projection's activation shard in the model).  ``attention`` is sparse_sdpa's
     ROW_MAJOR [1, 32, rows, 256]; the gates are the second 256 columns of each head's 512 in ``qg_ws`` from tile
     ``qg_first`` (0 for the separate qg shard, the qg window's first tile for the merged projection shard)."""
@@ -1583,11 +1589,12 @@ def lane_score_rows_of_composed(local_scores, lanes_of_rows, lanes: int, cache_r
 # processed as tiles.  The collective stays a runtime op: the model gathers the rows with ttnn.all_gather (dim 2).
 
 SCORE_CHUNK = 1024
-DEVICES = 4
+DEVICES = TP_SIZE
+DEVICES_DEFINE = ("SCORE_MERGE_DEVICES", str(DEVICES))
 
 
 def score_merge(gathered, mask):
-    """The gathered score rows as 2 KB pages, ``[1, 1, 4 * rows * chunks, 1024]`` bf16 ROW_MAJOR (device d's row r,
+    """The gathered score rows as 2 KB pages, ``[1, 1, DEVICES * rows * chunks, 1024]`` bf16 ROW_MAJOR (device d's row r,
     chunk c at page ``(d * rows + r) * chunks + c``: the all_gather of the rows reshaped to ``[1, 1, rows * chunks, 1024]``,
     the page form ttnn.all_gather takes at every context), + mask ``[1, 1, >= rows, W]`` (rows 0 .. rows-1 read: the
     one-row chain passes its row, the lanes pass their 32-row mask) -> the masked block scores ``[1, 1, rows, W]``
@@ -1633,9 +1640,15 @@ def score_merge(gathered, mask):
         cores,
         [*fp.accessor_args(gathered), *fp.accessor_args(mask)],
         [(w.core, [gathered.buffer_address(), mask.buffer_address(), rows, w.start, w.count, chunks]) for w in work],
+        defines=[DEVICES_DEFINE],
     )
     compute = fp.compute_kernel(
-        SCORE_MERGE["compute"], cores, [], [(w.core, [rows, w.count]) for w in work], fp32_dest=False
+        SCORE_MERGE["compute"],
+        cores,
+        [],
+        [(w.core, [rows, w.count]) for w in work],
+        defines=[DEVICES_DEFINE],
+        fp32_dest=False,
     )
     writer = fp.writer_kernel(
         SCORE_MERGE["writer"],

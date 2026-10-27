@@ -19,8 +19,8 @@
 
 namespace {
 constexpr uint32_t CB_OUT = 14;
-constexpr uint32_t HEAD_TILES = 4, QK_HEADS = 4, QK_GROUPS = 8, GQA = 3;
-constexpr uint32_t VALUE_TILES = 48, TILE_ROWS = 32, FACE_ELEMS = 256, FACE_COLS = 16, BF16_TILE = 2048;
+constexpr uint32_t HEAD_TILES = 4, QK_HEADS = GDN_QK_HEADS, QK_GROUPS = GDN_QK_GROUPS, GQA = 3;
+constexpr uint32_t VALUE_TILES = GDN_VALUE_TILES, TILE_ROWS = 32, FACE_ELEMS = 256, FACE_COLS = 16, BF16_TILE = 2048;
 
 constexpr uint32_t face_element(uint32_t row, uint32_t col) {
     return ((row >> 4) * 2 + (col >> 4)) * FACE_ELEMS + (row & 15) * FACE_COLS + (col & 15);

@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
+from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint, checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
 from models.demos.blackhole.qwen38_flash_next.tt.gr import Qwen38GatedResidual, Qwen38GatedResidualWeights
 
-CHECKPOINT = Path(os.environ.get("QWEN38_CHECKPOINT", "/nonexistent/Qwen3.8-Flash-Next"))
+CHECKPOINT = checkpoint_directory(missing=Path("/nonexistent/Qwen3.8-Flash-Next"))
 TRANSFORMERS_SRC = os.environ.get("QWEN38_TRANSFORMERS_SRC")
 
 

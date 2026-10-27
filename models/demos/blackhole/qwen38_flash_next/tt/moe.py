@@ -6,8 +6,8 @@
 The CPU implementation is the numerical oracle for both candidate device
 paths.  ``moe_compute`` produces unweighted expert outputs; its scores become
 arithmetic only in ``deepseek_moe_fast_reduce_nc_fused``.  The alternative
-decode design keeps 128 routed experts per P150, localizes the global top-10 on
-each device, and reduce-scatters the four partial outputs.  It never stores all
+decode design keeps 512 // TP routed experts per P150, localizes the global top-10 on
+each device, and reduce-scatters the TP partial outputs.  It never stores all
 512 experts on a device.
 
 The current all-to-all dispatch operation defines global batch as
@@ -27,8 +27,8 @@ import torch.nn.functional as F
 
 from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
 from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZE
 
-TP_SIZE = 4
 BF4_TILE_BYTES = 576
 TILE_ELEMENTS = 32 * 32
 
@@ -250,7 +250,7 @@ class Qwen38MoEWeights:
         return cached
 
     def routed_device_shard(self, device_index: int) -> Qwen38RoutedDeviceShard:
-        """Load one 128-expert host shard in ``sparse_matmul`` orientation.
+        """Load one 512 // TP-expert host shard in ``sparse_matmul`` orientation.
 
         This allocates roughly 1.17 GiB of BF16 staging memory and is intended for
         sequential conversion into BF4_B cache tensors, not unit-test setup.

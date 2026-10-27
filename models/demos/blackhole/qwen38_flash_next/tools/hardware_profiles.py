@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import ttnn
+from models.demos.blackhole.qwen38_flash_next.tp import TP_SIZE, mesh_device_shape
 
 PROFILE_TABLE_VARIABLE = "QWEN38_HARDWARE_PROFILE_TABLE"
 SYMMETRIC_ALLOCATOR_SOURCE = "ttnn_mesh_allocator_symmetric_per_device"
@@ -44,11 +45,11 @@ class ResidentHardwareProfile:
     host: str
     partition: str
     visible_devices: str
-    device_nodes: tuple[int, int, int, int]
+    device_nodes: tuple[int, ...]
     numa_node: int | None
     ethernet_graph: str
-    route: tuple[int, int, int, int] | None
-    route_nodes: tuple[int, int, int, int] | None
+    route: tuple[int, ...] | None
+    route_nodes: tuple[int, ...] | None
     system_mesh_local_shape: tuple[int, int]
     boards: Mapping[int, str] = field(default_factory=dict)
     bdfs: Mapping[int, str] = field(default_factory=dict)
@@ -56,18 +57,22 @@ class ResidentHardwareProfile:
     lan_serving: bool = False
     mesh_graph_descriptor: str | None = None
     tested: bool = True
+    derive_route: bool = True
 
     @property
     def lane(self) -> str:
         return f"{self.host} partition-{self.partition.upper()}"
 
     def with_device_nodes(
-        self, nodes: tuple[int, int, int, int], *, present: Sequence[int] | None = None
+        self, nodes: tuple[int, ...], *, present: Sequence[int] | None = None
     ) -> "ResidentHardwareProfile":
-        """The same profile on other KMD nodes (four chips of a larger host)."""
+        """The same profile on other KMD nodes (the same number of chips, of a larger host)."""
 
-        if len(nodes) != 4 or len(set(nodes)) != 4 or any(type(node) is not int or node < 0 for node in nodes):
-            raise HardwareProfileError(f"device nodes must be four distinct non-negative ints, got {nodes!r}")
+        count = len(self.device_nodes)
+        if len(nodes) != count or len(set(nodes)) != count or any(type(node) is not int or node < 0 for node in nodes):
+            raise HardwareProfileError(
+                f"device nodes must be {_COUNT_WORDS.get(count, count)} distinct non-negative ints, got {nodes!r}"
+            )
         # ``TT_VISIBLE_DEVICES`` takes UMD's device indices, 0..N-1 over the nodes present under /dev/tenstorrent (the cluster
         # descriptor keeps naming the chips by their node numbers).  Four nodes that are all the host presents (a container
         # holding four nodes of a larger host) are the indices 0, 1, 2, 3 whatever their names; on a host that presents more,
@@ -83,6 +88,7 @@ class ResidentHardwareProfile:
         return self.partition in ("qb", "b", "0")
 
 
+_COUNT_WORDS = {4: "four", 8: "eight"}
 DEVICE_ROOT = Path("/dev/tenstorrent")
 
 
@@ -130,6 +136,25 @@ P150_LINE = ResidentHardwareProfile(
 )
 
 
+# p150 x8: 8x p150b in one host (a 2x4 ethernet grid), the first TP_SIZE KMD nodes, opened as MeshShape(1, TP_SIZE); at TP=8 through
+# a 1x8 LINE mesh graph descriptor (ttnn's default system mesh descriptor is not a straight line), at TP=4 on the default one;
+# the route is not derived and no physical device ids are passed.
+P150_X8 = ResidentHardwareProfile(
+    host="p150-x8",
+    partition="x8",
+    visible_devices=",".join(str(node) for node in range(TP_SIZE)),
+    device_nodes=tuple(range(TP_SIZE)),
+    numa_node=None,
+    ethernet_graph="line",
+    route=None,
+    route_nodes=None,
+    system_mesh_local_shape=(1, TP_SIZE),
+    lan_serving=True,
+    mesh_graph_descriptor="p150_x8_1x8_line_mesh_graph_descriptor.textproto" if TP_SIZE == 8 else None,
+    derive_route=False,
+)
+
+
 def _quietbox_2_instance(instance: int) -> ResidentHardwareProfile:
     """UNTESTED: a p300-based box.  Each p300 card is two Blackhole dies (two KMD nodes) joined on the card; the
     QuietBox 2 (2x p300c = nodes 0-3) has one ring over the on-card links and the two Warp400 links, so it is one
@@ -160,6 +185,7 @@ def _quietbox_2_instance(instance: int) -> ResidentHardwareProfile:
 HARDWARE_PROFILES: dict[str, ResidentHardwareProfile] = {
     "tt-quietbox": QUIETBOX,
     "p150-line": P150_LINE,
+    "p150-x8": P150_X8,
     "tt-quietbox-2": _quietbox_2_instance(0),
     "tt-quietbox-2-instance-1": _quietbox_2_instance(1),
 }
@@ -217,8 +243,37 @@ def resolve_hardware_profile(
     return matching[0]
 
 
+def mesh_device_profile_name(fallback: str, environ: Mapping[str, str] = os.environ) -> str:
+    """The profile ``MESH_DEVICE`` selects: ``P300x2`` is the QuietBox 2 instance whose visible devices are
+    ``TT_VISIBLE_DEVICES`` (instance 0 otherwise); a 1x8 mesh is ``p150-x8``; a 1x4 mesh is this host's profile when
+    the table knows the host (``resolve_hardware_profile(None)``), else ``fallback``."""
+
+    table = hardware_profile_table()
+    value = environ.get("MESH_DEVICE")
+    if value == "P300x2":
+        instance = "tt-quietbox-2-instance-1"
+        return instance if environ.get("TT_VISIBLE_DEVICES") == table[instance].visible_devices else "tt-quietbox-2"
+    if mesh_device_shape(value) == (1, 8):
+        return "p150-x8"
+    host = socket.gethostname().split(".", 1)[0]
+    if any(profile.host == host for profile in table.values()):
+        profile = resolve_hardware_profile(None, table=table)
+        return next(name for name, entry in table.items() if entry is profile)
+    if fallback not in table:
+        raise HardwareProfileError(f"unknown hardware profile {fallback!r}, expected one of {sorted(table)}")
+    return fallback
+
+
 def mesh_graph_descriptor_path(profile: ResidentHardwareProfile) -> Path | None:
     return None if profile.mesh_graph_descriptor is None else Path(__file__).with_name(profile.mesh_graph_descriptor)
+
+
+def export_mesh_graph_descriptor(profile: ResidentHardwareProfile) -> None:
+    """Set ``TT_MESH_GRAPH_DESC_PATH`` to the profile's descriptor unless the caller already set it (call before ttnn opens the cluster)."""
+
+    descriptor = mesh_graph_descriptor_path(profile)
+    if descriptor is not None and "TT_MESH_GRAPH_DESC_PATH" not in os.environ:
+        os.environ["TT_MESH_GRAPH_DESC_PATH"] = str(descriptor.resolve())
 
 
 def verify_inherited_locks(profile: ResidentHardwareProfile) -> list[dict[str, Any]]:
@@ -284,7 +339,7 @@ def live_mapping(
     return mapping
 
 
-def symmetric_mesh_dram_memory(mesh: Any, route: tuple[int, int, int, int]) -> dict[str, Any]:
+def symmetric_mesh_dram_memory(mesh: Any, route: tuple[int, ...]) -> dict[str, Any]:
     """One MeshDevice allocator observation that applies to every card.
 
     MeshDevice owns one virtual allocator cloned from the reference physical device; mesh buffers reserve the same
@@ -293,7 +348,7 @@ def symmetric_mesh_dram_memory(mesh: Any, route: tuple[int, int, int, int]) -> d
     """
 
     device_ids = tuple(int(value) for value in mesh.get_device_ids())
-    if len(device_ids) != 4 or set(device_ids) != set(route):
+    if len(device_ids) != TP_SIZE or set(device_ids) != set(route):
         raise HardwareProfileError(f"mesh allocator does not cover the canonical physical IDs: {device_ids}")
     for column, physical_id in enumerate(route):
         if int(mesh.get_device_id(ttnn.MeshCoordinate(0, column))) != physical_id:

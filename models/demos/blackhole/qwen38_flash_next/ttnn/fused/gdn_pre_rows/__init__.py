@@ -67,33 +67,33 @@ KERNELS = {
 
 BF16, FP32 = ttnn.bfloat16, ttnn.float32
 TILE = ref.TILE
-HEADS = ref.HEADS  # 12 value heads per device
-QK_HEADS = ref.QK_HEADS  # 4 key heads per device
+HEADS = ref.HEADS  # 48 // TP_SIZE value heads per device
+QK_HEADS = ref.QK_HEADS  # 16 // TP_SIZE key heads per device
 HEAD_DIM = ref.HEAD_DIM  # 128
-QK_WIDTH = ref.QK_WIDTH  # 512
-VALUE_WIDTH = ref.VALUE_WIDTH  # 1536
-QKV_WIDTH = ref.QKV_WIDTH  # 2560
-A_COLUMN = ref.A_COLUMN  # 4096
-B_COLUMN = ref.B_COLUMN  # 4128
-PROJECTION_WIDTH = ref.PROJECTION_WIDTH  # 4160
+QK_WIDTH = ref.QK_WIDTH  # QK_HEADS * 128
+VALUE_WIDTH = ref.VALUE_WIDTH  # HEADS * 128
+QKV_WIDTH = ref.QKV_WIDTH  # 2 * QK_WIDTH + VALUE_WIDTH
+A_COLUMN = ref.A_COLUMN  # QKV_WIDTH + VALUE_WIDTH
+B_COLUMN = ref.B_COLUMN  # A_COLUMN + 32
+PROJECTION_WIDTH = ref.PROJECTION_WIDTH  # B_COLUMN + 32
 CONV_KERNEL = ref.CONV_KERNEL  # 4
 HISTORY_ROWS = ref.HISTORY_ROWS  # 3
 QK_SCALE = ref.QK_SCALE  # 128 ** -0.5
 NORM_EPS = ref.QK_L2_NORM_EPS / HEAD_DIM  # the epsilon ttnn.rms_norm is given
 
 HEAD_TILES = HEAD_DIM // TILE  # 4 column tiles per head
-PROJECTION_TILES = PROJECTION_WIDTH // TILE  # 130 column tiles per tile row
-QKV_TILES = QKV_WIDTH // TILE  # 80
-VALUE_TILES = VALUE_WIDTH // TILE  # 48
-K_TILE0 = QK_WIDTH // TILE  # 16
-V_TILE0 = 2 * K_TILE0  # 32
-Z_TILE0 = QKV_TILES  # 80
-A_TILE = A_COLUMN // TILE  # 128
-B_TILE = B_COLUMN // TILE  # 129
+PROJECTION_TILES = PROJECTION_WIDTH // TILE  # column tiles per tile row
+QKV_TILES = QKV_WIDTH // TILE
+VALUE_TILES = VALUE_WIDTH // TILE
+K_TILE0 = QK_WIDTH // TILE
+V_TILE0 = 2 * K_TILE0
+Z_TILE0 = QKV_TILES
+A_TILE = A_COLUMN // TILE
+B_TILE = B_COLUMN // TILE
 
 QK_GROUPS = 2 * QK_HEADS  # column groups 0..3 = q key heads, 4..7 = k key heads
-GROUPS = QK_GROUPS + HEADS  # 20 column groups of four tiles
-GATE_UNITS = 1 + HEADS  # per tile row: the a/b unit, then the 12 z units
+GROUPS = QK_GROUPS + HEADS  # column groups of four tiles
+GATE_UNITS = 1 + HEADS  # per tile row: the a/b unit, then one z unit per value head
 
 # The nine 0/1 selection tiles, in the order ``selection_tiles`` stacks them (and the pages of ``selects``).
 SELECT_CUR, SELECT_PREV, SELECT_HIST = 0, 1, 2
@@ -688,20 +688,36 @@ def run(
     ):
         raise ValueError(f"segment tile rows must divide the {chunks} tile rows, got {seg_chunks!r}")
     segment_defines = [("SEG_CHUNKS", str(seg_chunks))] if seg_chunks else []
+    qk_defines = [
+        ("GDN_QK_HEADS", str(QK_HEADS)),
+        ("GDN_QK_GROUPS", str(QK_GROUPS)),
+        ("GDN_K_TILE0", str(K_TILE0)),
+        ("GDN_V_TILE0", str(V_TILE0)),
+        ("GDN_VALUE_TILES", str(VALUE_TILES)),
+        ("GDN_PROJECTION_TILES", str(PROJECTION_TILES)),
+    ]
+    gate_defines = [
+        ("GDN_HEADS", str(HEADS)),
+        ("GDN_VALUE_TILES", str(VALUE_TILES)),
+        ("GDN_PROJECTION_TILES", str(PROJECTION_TILES)),
+        ("GDN_Z_TILE0", str(Z_TILE0)),
+        ("GDN_A_TILE", str(A_TILE)),
+        ("GDN_B_TILE", str(B_TILE)),
+    ]
     kernels = [
         fp.reader_kernel(
             KERNELS["reader_qkv"],
             split.a_cores,
             reader_a_cta,
             [(w.core, [*reader_a_addrs, w.count, *pairs(split.a_units, w)]) for w in split.a_work],
-            defines=segment_defines,
+            defines=[*segment_defines, *qk_defines],
         ),
         fp.compute_kernel(
             KERNELS["compute_qkv"],
             split.a_cores,
             [],
             [(w.core, [w.count, *pairs(split.a_units, w)]) for w in split.a_work],
-            defines=segment_defines,
+            defines=[*segment_defines, *qk_defines],
             fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest=False,
             approx=False,
@@ -711,12 +727,14 @@ def run(
             split.a_cores,
             writer_a_cta,
             [(w.core, [*writer_a_addrs, w.count, *pairs(split.a_units, w)]) for w in split.a_work],
+            defines=qk_defines,
         ),
         fp.reader_kernel(
             KERNELS["reader_gates"],
             split.b_cores,
             reader_b_cta,
             [(w.core, [*reader_b_addrs, w.count, *pairs(split.b_units, w)]) for w in split.b_work],
+            defines=gate_defines,
         ),
         fp.compute_kernel(
             KERNELS["compute_gates"],
@@ -734,6 +752,7 @@ def run(
             split.b_cores,
             writer_b_cta,
             [(w.core, [*writer_b_addrs, w.count, *pairs(split.b_units, w)]) for w in split.b_work],
+            defines=gate_defines,
         ),
     ]
     io = [projected, history, *taps, constants, selects, scalars, q_c, k_c, v, beta_c, g_c, sig]

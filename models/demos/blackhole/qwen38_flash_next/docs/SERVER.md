@@ -422,15 +422,17 @@ SIGTERM (a gate of the package).  Requests are forwarded byte for byte over the 
 (`QWEN38_INNER_PORT`, 18000): nothing of a request or a reply is parsed there, so the rules above apply unchanged (what
 the server cannot honour it refuses with HTTP 400; nothing is dropped), a streamed reply reaches the client as the
 server writes it, and a client's hang-up closes the server's connection too.  Before `READY` and after the stop every
-request gets HTTP 503 in the server's error shape.  The environment: `QWEN38_HARDWARE_PROFILE` (`p150-line` default;
-`tt-quietbox`, `tt-quietbox-2`), `QWEN38_ALLOCATED_CONTEXT` (32768 default, 65536, 131072, 262144),
+request gets HTTP 503 in the server's error shape.  The environment: `MESH_DEVICE` (selects the hardware profile:
+`P300x2` is the QuietBox 2, `P150x8` (or `(1, 8)`) is the 8x p150 host's 1x8 line, and a 1x4 mesh is the host's own
+profile when the profile table knows the host, else `p150-line` for the server and `p150-x8` (the first four chips,
+default mesh) for the demo and tests), `QWEN38_ALLOCATED_CONTEXT` (32768 default, 65536, 131072, 262144),
 `QWEN38_SERVER_ARGS` (further server flags, shell-split; default `--mtp 4 --sampling --stall-seconds 300
---require-json-96`; a flag the server does not know is refused by its parser), `QWEN38_CACHE_ROOT` (`/tensor-cache`
-default; the launcher's layout under it), `QWEN38_CHECKPOINT` (unset: the pinned revision of `HF_MODEL` in the local
-Hugging Face hub cache), `QWEN38_STOP_SECONDS` (300).  The device nodes are the four `/dev/tenstorrent` entries the
-container was given (`--device-nodes` when they are not the profile's own); `TT_VISIBLE_DEVICES`, the mesh graph
-descriptor, `QWEN38_HARDWARE_MODE` and `TT_METAL_TRACE_ALLOC_TRACKING` are set before the server starts, as the shell
-launcher sets them.  A tree without git history (an image ships none) is admitted by `tools/runtime_admission.py` only
+--require-json-96`; a flag the server does not know is refused by its parser), `TT_CACHE_PATH` (`/tensor-cache`
+default; the launcher's layout under it), `HF_MODEL` (a checkpoint directory, or a repo id whose pinned revision is in
+the local Hugging Face hub cache), `QWEN38_STOP_SECONDS` (300).  The device nodes are the four `/dev/tenstorrent`
+entries the container was given (`--device-nodes` when they are not the profile's own); `TT_VISIBLE_DEVICES`, the mesh
+graph descriptor, `QWEN38_HARDWARE_MODE` and `TT_METAL_TRACE_ALLOC_TRACKING` are set before the server starts, as the
+shell launcher sets them.  A tree without git history (an image ships none) is admitted by `tools/runtime_admission.py` only
 with `QWEN38_TT_METAL_SHA` naming the commit it was built from (`source` `declared` in the identity); a checkout with
 history refuses a declared sha that differs from its head.
 
@@ -451,8 +453,8 @@ plugin's device-sampling contract, below, a sampled decode step returns the toke
 plugin editable), then `transformers==5.16.1` (the `qwen4_exp` config class).  From a built checkout `$REPO`:
 
     export TT_METAL_HOME=$REPO PYTHONPATH=$REPO:$REPO/ttnn:$REPO/tools PYTHONNOUSERSITE=1 HF_HUB_OFFLINE=1
-    export TT_VISIBLE_DEVICES=0,1,2,3 MESH_DEVICE="(1, 4)" TT_METAL_TRACE_ALLOC_TRACKING=1
-    export MODEL_WEIGHTS_DIR=$CKPT QWEN38_CACHE_ROOT=<cache-root> TT_METAL_CACHE=<cache-root>/jit-cache
+    export TT_VISIBLE_DEVICES=0,1,2,3 MESH_DEVICE=P150x4 TT_METAL_TRACE_ALLOC_TRACKING=1
+    export HF_MODEL=$CKPT TT_CACHE_PATH=<cache-root> TT_METAL_CACHE=<cache-root>/jit-cache
     export EXTRA_MODELS_DIR=$REPO/models/demos/blackhole/qwen38_flash_next/tools/vllm_bundle
     python -m models.demos.blackhole.qwen38_flash_next.tools.prewarm_ple_table --checkpoint $CKPT
     python <plugin>/examples/server_example_tt.py --model $CKPT --served-model-name Qwen/Qwen3.8-Flash-Next \
@@ -472,9 +474,8 @@ the environment, every one checked before the device is touched:
 
 | variable | default | meaning |
 |---|---|---|
-| `MODEL_WEIGHTS_DIR` | unset | the checkpoint directory; unset, `--model` is taken as a directory, else as a repo id (default `Qwen/Qwen3.8-Flash-Next`, `QWEN38_HF_REPO` overrides it) whose pinned revision must already be in the Hugging Face hub cache under `HF_HOME`: no download happens at start |
-| `QWEN38_CACHE_ROOT` | required | this server's cache layout: `caches/<label>/{components,model-io}` and `caches/bf4-experts` |
-| `QWEN38_CACHE_LABEL` | `c<context>-vllm` | the component / model-io cache label, one per resident context |
+| `HF_MODEL` | unset | the checkpoint: the `--model` directory, else `HF_MODEL` (a directory or a repo id), else `--model` as a repo id, else `Qwen/Qwen3.8-Flash-Next`; a repo id resolves to the pinned revision in the local Hugging Face hub cache under `HF_HOME`: no download happens at start |
+| `TT_CACHE_PATH` | required | this server's cache layout: `caches/<label>/{components,model-io}` and `caches/bf4-experts` |
 | `QWEN38_BF4_CORPUS`, `QWEN38_BF4_CORPUS_VERIFICATION` | unset | a CPU-staged BF4 expert corpus in place of the cache under `caches/bf4-experts`, which must otherwise exist: its first-start conversion runs inside vLLM start-up only with `QWEN38_VLLM_ALLOW_BF4_CONVERSION=1` |
 | `QWEN38_PREFILL_SLAB` | `2048` | the prefill slab's rows, a multiple of 128 in 256..4096: a prompt runs as `N // rows` slabs, then 128-row chunks, then 32-row chunks (`docs/PREFILL.md`); `0` or `off` serves without the slab; any other value is refused by name |
 | `QWEN38_LONG_CHUNKS` | unset | with the slab off, `1` keeps the 128-row chunks ahead of the 32-row ones (a slab implies them) |

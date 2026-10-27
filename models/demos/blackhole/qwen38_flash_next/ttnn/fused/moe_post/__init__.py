@@ -21,6 +21,7 @@ import torch
 
 import ttnn
 
+from ...contracts import TP_SIZE
 from .. import program as fp
 from ..registry import BITWISE, FusedKernel, GateSpec, register
 
@@ -29,7 +30,7 @@ TOP_K = 10
 HIDDEN = 2560
 HIDDEN_TILES = HIDDEN // fp.TILE
 EXPERTS = 512
-EXPERTS_PER_DEVICE = EXPERTS // 4
+EXPERTS_PER_DEVICE = EXPERTS // TP_SIZE
 OWNER_BYTES = EXPERTS * 2
 ROUTE_PAGE_BYTES = 32 * 64  # 32 staged routing rows at a 64-byte pitch (a DRAM page's own alignment phase)
 FRAGMENT_BYTES = 64
@@ -54,8 +55,8 @@ WRITER_ARGS = ("out", "tile_col")
 DEVICE_ENV = "QWEN38_FUSED_MOE_POST_DEVICE"  # the gate's device index (owner row) on one chip
 
 
-def owner_rows(devices: int = 4) -> torch.Tensor:
-    """``[devices, 512]`` uint16: row ``d`` marks the experts device ``d`` owns (the 128-expert EP4 shards)."""
+def owner_rows(devices: int = TP_SIZE) -> torch.Tensor:
+    """``[devices, 512]`` uint16: row ``d`` marks the experts device ``d`` owns (the EXPERTS // TP_SIZE-expert shards)."""
 
     experts = torch.arange(EXPERTS) // EXPERTS_PER_DEVICE
     return (experts.unsqueeze(0) == torch.arange(devices).unsqueeze(1)).to(torch.int16)

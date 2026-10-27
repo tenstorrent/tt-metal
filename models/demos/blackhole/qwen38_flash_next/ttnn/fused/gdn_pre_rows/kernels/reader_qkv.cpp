@@ -35,9 +35,9 @@ namespace {
 constexpr uint32_t SEGMENT_CHUNKS = SEG_CHUNKS;
 constexpr bool segment_start(uint32_t chunk) { return SEGMENT_CHUNKS == 0 ? chunk == 0 : chunk % SEGMENT_CHUNKS == 0; }
 constexpr uint32_t CB_IN = 0, CB_SEL = 1, CB_TAP = 2, CB_SCALER = 8, CB_EPS = 9, CB_SCALE = 10, CB_MASK = 15;
-constexpr uint32_t HEAD_TILES = 4, CONV_KERNEL = 4, QK_HEADS = 4, QK_GROUPS = 8;
+constexpr uint32_t HEAD_TILES = 4, CONV_KERNEL = 4, QK_HEADS = GDN_QK_HEADS, QK_GROUPS = GDN_QK_GROUPS;
 constexpr uint32_t WINDOW = 2 * HEAD_TILES;  // the previous tile row's four column tiles, then this one's
-constexpr uint32_t K_TILE0 = 16, V_TILE0 = 32, PROJECTION_TILES = 130;
+constexpr uint32_t K_TILE0 = GDN_K_TILE0, V_TILE0 = GDN_V_TILE0, PROJECTION_TILES = GDN_PROJECTION_TILES;
 constexpr uint32_t SELECT_TILES = 9, BF16_TILE = 2048;
 constexpr uint32_t TILE_ROWS = 32, FACE_ELEMS = 256, FACE_COLS = 16;
 constexpr uint16_t BF16_ONE = 0x3F80;

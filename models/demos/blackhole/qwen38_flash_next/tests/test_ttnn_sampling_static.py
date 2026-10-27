@@ -14,7 +14,7 @@ import ttnn
 from models.demos.blackhole.qwen38_flash_next.checkpoint import CHECKPOINT_FILE_MANIFEST_SHA256, INDEX_SHA256
 from models.demos.blackhole.qwen38_flash_next.config import CONFIG_SHA256
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import Qwen38BuildProvenance, Qwen38LiveBuildIdentity
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import Qwen38MeshContract, TensorPlacement
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TP_SIZE, Qwen38MeshContract, TensorPlacement
 from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import (
     PINNED_CHECKPOINT_REVISION,
     PINNED_TENSOR_MANIFEST_SHA256,
@@ -114,7 +114,7 @@ def test_mesh_contract_rejects_permuted_coordinate_order(expect_error) -> None:
 
 @pytest.mark.parametrize("bad_ids", ([10, 11, 12, 13], (True, 11, 12, 13), (10, 11, 12, -1)))
 def test_mesh_contract_rejects_noncanonical_physical_ids(bad_ids, expect_error) -> None:
-    with expect_error(ValueError, "four distinct physical IDs"):
+    with expect_error(ValueError, f"{TP_SIZE} distinct physical IDs"):
         Qwen38MeshContract(bad_ids)
 
 

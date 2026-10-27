@@ -8,10 +8,11 @@ from pathlib import Path
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
+from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint, checkpoint_directory
 from models.demos.blackhole.qwen38_flash_next.tt.qsa import Qwen38QSA, Qwen38QSAState, Qwen38QSAWeights
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TP_SIZE
 
-CHECKPOINT = Path(os.environ.get("QWEN38_CHECKPOINT", "/nonexistent/Qwen3.8-Flash-Next"))
+CHECKPOINT = checkpoint_directory(missing=Path("/nonexistent/Qwen3.8-Flash-Next"))
 TRANSFORMERS_SRC = os.environ.get("QWEN38_TRANSFORMERS_SRC")
 
 
@@ -36,18 +37,19 @@ def _causal_additive_mask(sequence: int) -> torch.Tensor:
     )
 
 
-def test_exact_qsa_tp4_shards_and_two_kv_groups(weights):
+def test_exact_qsa_tp_shards_and_two_kv_groups(weights):
     assert weights.dimensions.query_heads == 24
     assert weights.dimensions.kv_heads == 2
-    assert weights.dimensions.query_heads_per_device == 6
+    assert weights.dimensions.query_heads_per_device == 24 // TP_SIZE
     assert weights.dimensions.index_query_heads_per_device == 1
 
-    shards = [weights.device_shard(index) for index in range(4)]
-    assert [shard.kv_head_index for shard in shards] == [0, 0, 1, 1]
-    assert all(shard.qg.shape == (3072, 2560) for shard in shards)
+    shards = [weights.device_shard(index) for index in range(TP_SIZE)]
+    kv_group = TP_SIZE // 2
+    assert [shard.kv_head_index for shard in shards] == [index // kv_group for index in range(TP_SIZE)]
+    assert all(shard.qg.shape == (2 * 256 * 24 // TP_SIZE, 2560) for shard in shards)
     assert all(shard.k.shape == (256, 2560) for shard in shards)
     assert all(shard.v.shape == (256, 2560) for shard in shards)
-    assert all(shard.out.shape == (2560, 1536) for shard in shards)
+    assert all(shard.out.shape == (2560, 256 * 24 // TP_SIZE) for shard in shards)
     assert all(shard.index_q.shape == (128, 2560) for shard in shards)
     assert all(shard.index_k.shape == (128, 2560) for shard in shards)
 
@@ -56,11 +58,15 @@ def test_exact_qsa_tp4_shards_and_two_kv_groups(weights):
     torch.testing.assert_close(torch.cat(query), full_query, rtol=0, atol=0)
     torch.testing.assert_close(torch.cat(gate), full_gate, rtol=0, atol=0)
     torch.testing.assert_close(torch.cat([shard.out for shard in shards], dim=1), weights.out, rtol=0, atol=0)
-    torch.testing.assert_close(shards[0].k, shards[1].k, rtol=0, atol=0)
-    torch.testing.assert_close(shards[2].k, shards[3].k, rtol=0, atol=0)
-    assert not torch.equal(shards[0].k, shards[2].k)
-    torch.testing.assert_close(shards[0].index_k, shards[3].index_k, rtol=0, atol=0)
-    torch.testing.assert_close(torch.cat([shard.index_q for shard in shards]), weights.index_qk[:512], rtol=0, atol=0)
+    for group_start in range(0, TP_SIZE, kv_group):
+        for index in range(group_start + 1, group_start + kv_group):
+            torch.testing.assert_close(shards[group_start].k, shards[index].k, rtol=0, atol=0)
+    assert not torch.equal(shards[0].k, shards[kv_group].k)
+    torch.testing.assert_close(shards[0].index_k, shards[TP_SIZE - 1].index_k, rtol=0, atol=0)
+    index_stride = TP_SIZE // 4  # the devices past the first of each stride hold zero index query rows
+    torch.testing.assert_close(
+        torch.cat([shard.index_q for shard in shards[::index_stride]]), weights.index_qk[:512], rtol=0, atol=0
+    )
 
 
 @pytest.mark.skipif(not TRANSFORMERS_SRC, reason="set QWEN38_TRANSFORMERS_SRC to pinned Transformers source")

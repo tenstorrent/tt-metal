@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -22,8 +21,9 @@ from models.demos.blackhole.qwen38_flash_next.chat import (
     Qwen38ToolExecutionError,
     parse_assistant_completion,
 )
+from models.demos.blackhole.qwen38_flash_next.checkpoint import checkpoint_directory
 
-CHECKPOINT = Path(os.environ.get("QWEN38_CHECKPOINT", "/nonexistent/Qwen3.8-Flash-Next"))
+CHECKPOINT = checkpoint_directory(missing=Path("/nonexistent/Qwen3.8-Flash-Next"))
 
 
 @pytest.fixture(scope="module")
