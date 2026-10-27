@@ -12,6 +12,7 @@
 #include <map>
 #include <optional>
 #include <thread>
+#include <tt-metalium/math.hpp>
 #include <tuple>
 #include <vector>
 
@@ -25,6 +26,8 @@
 #include "ttnn/global_semaphore.hpp"
 
 namespace {
+using ttnn::experimental::prim::MinimalMatmulConfig;
+
 constexpr uint32_t kClusterAxis = 1;
 constexpr uint32_t kCalls = 4;
 
@@ -50,6 +53,14 @@ struct Shape {
     uint32_t M;
     uint32_t K;
     uint32_t N;
+};
+
+struct Block {
+    uint32_t M_block;
+    uint32_t K_block;
+    uint32_t N_block;
+    uint32_t subblock_h;
+    uint32_t subblock_w;
 };
 
 std::vector<float> reference_matmul(
@@ -142,10 +153,26 @@ const Problem& problem(const Shape& s) {
 }
 
 void run_fabric_gather(
-    const Shape& s, uint32_t num_links, uint32_t num_workers_per_link, bool transpose_b, ttnn::ccl::Topology topology) {
+    const Shape& s,
+    uint32_t num_links,
+    uint32_t num_workers_per_link,
+    bool transpose_b,
+    ttnn::ccl::Topology topology,
+    const std::optional<Block>& block) {
     auto* device = &ttml::autograd::ctx().get_device();
     const uint32_t ring_size = device->shape()[kClusterAxis];
     const auto grid = device->compute_with_storage_grid_size();
+    std::optional<MinimalMatmulConfig> config;
+    if (block.has_value()) {
+        const uint32_t comm_rows = tt::div_up(2 * num_links * (1 + num_workers_per_link), grid.x);
+        config = MinimalMatmulConfig{
+            .M_block_size = block->M_block,
+            .K_block_size = block->K_block,
+            .N_block_size = block->N_block,
+            .subblock_h = block->subblock_h,
+            .subblock_w = block->subblock_w,
+            .compute_with_storage_grid_size = {grid.x, grid.y - comm_rows}};
+    }
 
     const Problem& p = problem(s);
     const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
@@ -172,7 +199,7 @@ void run_fabric_gather(
             ring_size,
             0,
             topology,
-            std::nullopt,
+            config,
             std::nullopt,
             std::nullopt,
             std::nullopt,
@@ -194,13 +221,21 @@ void run_fabric_gather(
 
 void sweep(const Shape& s) {
     const std::array<std::pair<uint32_t, uint32_t>, 4> links_workers = {{{1, 1}, {2, 1}, {1, 2}, {2, 3}}};
+    const std::array<std::optional<Block>, 3> blocks = {std::nullopt, Block{8, 8, 12, 2, 2}, Block{8, 8, 6, 1, 3}};
     for (const auto& [num_links, num_workers] : links_workers) {
         for (const bool transpose_b : {true, false}) {
             for (const auto topology : {ttnn::ccl::Topology::Ring, ttnn::ccl::Topology::Linear}) {
-                SCOPED_TRACE(
-                    testing::Message() << "links=" << num_links << " workers=" << num_workers << " transpose_b="
-                                       << transpose_b << " ring=" << (topology == ttnn::ccl::Topology::Ring));
-                run_fabric_gather(s, num_links, num_workers, transpose_b, topology);
+                for (const auto& block : blocks) {
+                    SCOPED_TRACE(
+                        testing::Message()
+                        << "links=" << num_links << " workers=" << num_workers << " transpose_b=" << transpose_b
+                        << " ring=" << (topology == ttnn::ccl::Topology::Ring) << " block="
+                        << (block.has_value()
+                                ? std::to_string(block->N_block) + "/" + std::to_string(block->subblock_h) + "x" +
+                                      std::to_string(block->subblock_w)
+                                : std::string("default")));
+                    run_fabric_gather(s, num_links, num_workers, transpose_b, topology, block);
+                }
             }
         }
     }

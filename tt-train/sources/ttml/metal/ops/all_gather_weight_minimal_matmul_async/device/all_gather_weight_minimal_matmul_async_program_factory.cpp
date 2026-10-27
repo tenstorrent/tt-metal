@@ -158,12 +158,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     uint32_t M_block_tiles = 8;
     uint32_t K_block_tiles = 8;
     uint32_t N_block_tiles = 8;
-    uint32_t subblock_h = 2;
-    uint32_t subblock_w = 2;
-    if (!fp32_dest_acc_en) {
-        subblock_h = N >= M ? 2 : 4;
-        subblock_w = N >= M ? 4 : 2;
-    }
+    uint32_t subblock_h = 4;
+    uint32_t subblock_w = 1;
     if (config.has_value()) {
         M_block_tiles = config.value().M_block_size;
         K_block_tiles = config.value().K_block_size;
