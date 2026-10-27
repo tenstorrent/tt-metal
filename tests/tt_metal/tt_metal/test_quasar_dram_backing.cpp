@@ -15,7 +15,8 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 // The 1x3, 2x3 and 2x3_DISPATCH emulator models back 64 MiB of DRAM per channel although their soc
-// descriptor declares 1 GiB.
+// descriptor declares 1 GiB. With TT_METAL_SIMULATOR_DRAM_UNCAPPED=1 the clamp is off and the channel
+// reports the descriptor's size.
 TEST_F(QuasarMeshDeviceSingleCardFixture, DramStaysInsideTheEmulatorBacking) {
     if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
@@ -27,6 +28,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DramStaysInsideTheEmulatorBacking) {
     }
 
     auto mesh_device = devices_[0];
+    if (MetalContext::instance().rtoptions().get_simulator_dram_uncapped()) {
+        EXPECT_GT(mesh_device->dram_size_per_channel(), model->dram_size_per_channel);
+        return;
+    }
     EXPECT_EQ(mesh_device->dram_size_per_channel(), model->dram_size_per_channel);
 
     constexpr uint32_t page_size = 4096;

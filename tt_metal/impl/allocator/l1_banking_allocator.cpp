@@ -229,7 +229,16 @@ AllocatorConfig L1BankingAllocator::generate_config(
         if (const auto att_map = env.get_rtoptions().get_noc_att_map(); att_map.has_value()) {
             const quasar_att::MapInfo* map_info = quasar_att::find_map(*att_map);
             TT_ASSERT(map_info != nullptr, "Unknown TT_METAL_NOC_ATT map '{}'", *att_map);
-            dram_bank_size = std::min<uint64_t>(dram_bank_size, quasar_att::dram_window_local_address_limit(*map_info));
+            const uint64_t window_limit = quasar_att::dram_window_local_address_limit(*map_info);
+            if (env.get_rtoptions().get_simulator_dram_uncapped() && window_limit < dram_bank_size) {
+                log_warning(
+                    tt::LogMetal,
+                    "TT_METAL_NOC_ATT map '{}': its DRAM window caps each DRAM bank at {} MiB although "
+                    "TT_METAL_SIMULATOR_DRAM_UNCAPPED is set",
+                    *att_map,
+                    window_limit >> 20);
+            }
+            dram_bank_size = std::min<uint64_t>(dram_bank_size, window_limit);
         }
     }
     AllocatorConfig config(
