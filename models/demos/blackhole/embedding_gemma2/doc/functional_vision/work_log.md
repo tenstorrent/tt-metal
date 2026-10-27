@@ -97,6 +97,16 @@ python_env/bin/python -m pytest models/demos/blackhole/embedding_gemma2/tests/pc
 `error|assert|exception|overflow|sanitiz|fault` (`grep -ciE`). Deselected: the perf tests
 (timing under watcher is meaningless) and the CPU-only reference-vs-full-model checks.
 
-## 9. Final run on the committed code
+## 9. Final run on the committed code (18cd32291c, after pre-commit black)
 
-See the "Final run" section appended below.
+```bash
+EMBEDDING_GEMMA2_RESULTS=$E2/final_results.jsonl \
+python_env/bin/python -m pytest models/demos/blackhole/embedding_gemma2/tests/pcc/vision -q -p no:cacheprovider
+```
+80 passed in 150.76 s (`$E2/logs/final_run.log`, tmux `tt-bringup_embeddinggemma2_e2_final`).
+All 199 PCC metric values shared with run 1 are bit-identical. Latency b1 55.597 ms, b4 294.414 ms,
+b8 x 1280 199.614 ms (run 1: 55.604 / 294.470 / 199.609).
+
+No E1 file was modified (`git diff 634d9b6f11 --stat` lists only new vision files, README.md and
+context_contract.json), so the E1 suite was not rerun. The vision code imports the E1 `MLP`,
+`RMSNorm` and weight helpers unchanged.
