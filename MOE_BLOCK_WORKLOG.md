@@ -2097,3 +2097,20 @@ SE_BRW=1 SE_BRW_BAR=0 SE_WPD=2 SE_BRW_DN1=1 SE_DN1_AT=0 SE_XPIPE=1 SE_XL=2 SE_HX
   stream; the other switches are not tried in the head yet (PASSREV / DN1 apply there; XPIPE / HXINC are no-ops).
 - Left in the engine alone (GUSTEP): pass 0 bound by the x load + its W (NOC0 reads), a ~20 us step-0 bubble, the
   non-overlapped GLU (~20 us), the h gather's 11 latency-bound rounds (~22 us), 5-vs-4 pair imbalance.
+
+### K3 head on the ring of 4: where the time goes, ports vs engine (2026-10-27)
+Traced head replay (test_head_se3 k3 + RS fused + router + latent + routing, E 896 fold 8; 450-468 us), zones, chip 3:
+router logits matmul on the engine 0-52 (~10 us of HiFi3 math: data movement / rounds) | gate / up + latent 52-316
+(264 us: KB 7 -> 4 passes x 32 steps = 128 x rounds + 176 W rounds, ~2.06 us a step vs 1.42 of math) | down + RS
+315-421 (max core 455), hand-offs 326-391 | routing chain ends ~362 (not critical).
+Ports (NoC trace, hand analysis): the 4 port BRISCs write 8 KB packets (+96 B header) into the EDMs on NOC1 - north one
+hop, then west along the Ethernet row (y 1), not through the engine. Per port while active: 18-21 GB/s (ports at
+(15,2) / (15,3) -> eth (11,1) / (10,1), 5 / 7 hops) and 13-16 GB/s ((15,4) -> (12,1) 6 hops, (15,5) -> (4,1) 15 hops):
+hop count does not set the rate. Phases: x gather 40-200 us, RS 360-500 (eager). The gather ends long before gate /
+up does; the RS tail is paced by the engine's down / reduce chain (earlier RSSTAT probe: ports waiting, not
+sending). DRAM reads ~40 MB a call (~90 GB/s average). The mover column is not what binds the head here.
+- Engine-alone switches in the traced block (k3_ring4 640): SE_PASSREV 457-460, SE_BRW + SE_BRW_DN1 463-464, all three
+  464 vs 456-458 base - no gain: the head's gate / up is bound by its 128 + 176 rounds at KB 7, not the W stream.
+- KB 14 in the head: arena 1388 KB > 1344 (xown 224, wown 297 (ring), win 178, hall 220, acc 164, xin 112, ...).
+Next candidates: the router matmul (52 us for ~10 us of math), fewer / lighter rounds in the head's gate / up (L1 for
+KB 14: ~44 KB to find), the down tail (106-140 us for ~49 of math).
