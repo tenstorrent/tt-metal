@@ -46,6 +46,7 @@ RealOp::operation_attributes_t to_real_attributes(const MatmulDecodeParams& p) {
         p.rms_norm_gamma,
         p.rms_norm_epsilon,
         p.rms_norm_group_size,
+        p.dram_weight_grid,
     };
 }
 

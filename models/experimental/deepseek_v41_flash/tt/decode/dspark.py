@@ -30,7 +30,8 @@ Under ``use_prefetcher`` ``wq_a``, ``wq_b``, ``wkv``, ``wo_b`` and the shared ex
 stream through the drafter's own rings (:func:`dspark_prefetch_rings`): it runs on a pipeline stage
 of its own, so its rings are sized for its dtypes and share no FIFO with a decode step. Each matmul
 queues its own request as it runs, so a ring's requests are sent in the order its matmuls are queued.
-The shared expert's ``w1`` / ``w3`` copy DRAM -> L1 per call, as the decode layers' do. ``wo_a``
+The shared expert's ``w1`` / ``w3`` are not on a ring, so their matmuls read the DRAM ND-sharded
+weight themselves. ``wo_a``
 (the decode ``o_a_proj`` is single-row only), ``main_proj`` (whose slab fits no ring), the router
 gate and the head keep plain matmuls.
 
@@ -265,6 +266,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             **ring_prefetch(rings, "q_a_proj", prefetch_buffers, device, weight_dtype),
             rectangle_b_grid=True,
             use_rm_hs=True,
+            dram_sharded_weight=True,
         )
         self.q_norm = gamma("attn.q_norm")
         self.wq_b = LinearDecode(
@@ -277,6 +279,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             **ring_prefetch(rings, "q_b_proj", prefetch_buffers, device, weight_dtype),
             rectangle_b_grid=True,
             use_rm_hs=True,
+            dram_sharded_weight=True,
         )
         self.wkv = LinearDecode(
             weights["attn.wkv.weight"],
@@ -287,6 +290,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             **ATTENTION_LAYOUTS["kv_proj"],
             **ring_prefetch(rings, "kv_proj", prefetch_buffers, device, weight_dtype),
             use_rm_hs=True,
+            dram_sharded_weight=True,
         )
         self.kv_norm = gamma("attn.kv_norm")
         wo_a = _memo(weights["attn.wo_a.weight"])  # [groups * o_lora, heads * head_dim / groups]
@@ -317,6 +321,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             **ring_prefetch(rings, "o_b_proj", prefetch_buffers, device, weight_dtype),
             rectangle_b_grid=True,
             use_rm_hs=True,
+            dram_sharded_weight=True,
         )
         # Row r = t * local_heads + h of the folded scores: the sink of head h at the sink's key column.
         sink = _memo(weights["attn.attn_sink"])
@@ -380,6 +385,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             **tp_gate_up_layout(tp, hidden, local_inter, layouts=MOE_LAYOUTS),
             rectangle_b_grid=True,
             use_rm_hs=True,
+            dram_sharded_weight=True,
         )
         self.shared_w3 = LinearDecode(
             weights["ffn.shared_experts.w3.weight"],
@@ -390,6 +396,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             **tp_gate_up_layout(tp, hidden, local_inter, layouts=MOE_LAYOUTS),
             rectangle_b_grid=True,
             use_rm_hs=True,
+            dram_sharded_weight=True,
         )
         self.shared_w2 = LinearDecode(
             weights["ffn.shared_experts.w2.weight"],
@@ -403,6 +410,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             **ring_prefetch(rings, "shared_down_proj", prefetch_buffers, device, shared_dtype),
             rectangle_b_grid=True,
             use_rm_hs=False,
+            dram_sharded_weight=True,
         )
 
     def _all_reduce(self, x: ttnn.Tensor) -> ttnn.Tensor:

@@ -43,6 +43,11 @@ using PackedWeightSpec = ttnn::operations::experimental::matmul_decode::PackedWe
 // `ring_gather`: when true, gather in0 over a pipelined closed ring on S ∪ C instead of the
 // two-hub gather. Full- and partial-width L1-resident paths only (plain or packed_weight);
 // mutually exclusive with `global_cb` and the batched factory. Defaults to false.
+// A DRAM-resident `input_tensor_b` without `global_cb` must be ND-sharded exactly as for
+// `global_cb` (one slab per weight core); each weight core then reads its own slab from DRAM into
+// L1 inside the op, overlapped with the in0 gather. `weight_core_grid` names those cores (slab p
+// on the p-th core, row-major) and defaults to the first num_shards cores of the compute grid,
+// row-wise. Not supported with `ring_gather` or `all_gather`.
 Tensor matmul_decode(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -60,7 +65,8 @@ Tensor matmul_decode(
     bool rms_norm = false,
     const std::optional<std::variant<float, Tensor>>& rms_norm_gamma = std::nullopt,
     float rms_norm_epsilon = 1.0e-6F,
-    uint32_t rms_norm_group_size = 0);
+    uint32_t rms_norm_group_size = 0,
+    const std::optional<tt::tt_metal::CoreRangeSet>& weight_core_grid = std::nullopt);
 
 // Decode matmul C = A @ B for large K and small N, with no activation gather and no global
 // synchronization. A is ROW_MAJOR WIDTH_SHARDED [M, K] (shard [M, Kc], M <= 32); B is TILE
