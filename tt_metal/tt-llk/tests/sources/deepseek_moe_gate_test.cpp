@@ -273,6 +273,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    const auto tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
@@ -285,7 +286,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             false /* is_int_fpu_en */,
-            PackMode::Default>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces), ID_FORMAT);
+            PackMode::Default>(tensor_shape, ID_FORMAT);
 
         const auto copy_to_dest_tile = [](const std::uint32_t tile, const std::uint32_t format = ID_FORMAT)
         {
@@ -322,7 +323,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 is_fp32_dest_acc_en,
                 BroadcastType::NONE,
                 false /* is_int_fpu_en */,
-                PackMode::Default>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces), formats.math);
+                PackMode::Default>(tensor_shape, formats.math);
             copy_to_dest_tile(SCORES_TILE, formats.math);
 
             SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (false /* fast_and_approx */));

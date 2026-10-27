@@ -63,6 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    const auto tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
 
     // Int8/UInt8 both unpack into the Int8 register format and need the integer FPU datapath
     // (is_int_fpu_en => ELWADD move) to reconstruct the integer value in DEST under FP32 dest mode.
@@ -74,7 +75,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             true /* is_int_fpu_en */,
-            PackMode::Default>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces), formats.math);
+            PackMode::Default>(tensor_shape, formats.math);
     }
     else
     {
@@ -83,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             false /* is_int_fpu_en */,
-            PackMode::Default>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces), formats.math);
+            PackMode::Default>(tensor_shape, formats.math);
     }
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

@@ -35,13 +35,11 @@ from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
     DISABLE_SRC_ZERO_FLAG,
-    INPUT_DIMENSIONS,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
-    PARTIAL_FACE,
     REUSE_DEST_TYPE,
     STOCHASTIC_ROUNDING,
     TEST_FACE_DIMS,
@@ -87,11 +85,11 @@ def test_eltwise_unary_datacopy_tensor_shape(
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
-    # The shapes below do not work on main, so the LLK asserts on them.
-    # Column broadcast runs 4 SrcB faces; anything but 32x32 hangs on Wormhole.
+    # The shapes below hang or give wrong output, so the LLK asserts on them.
+    # TODO(#47328): Column broadcast runs 4 SrcB faces; anything but 32x32 hangs on Wormhole.
     if broadcast_type == BroadcastType.Column and tile_dimensions != [32, 32]:
         pytest.skip(
-            "Asserted: column broadcast is 32x32 only "
+            "TODO(#47328): asserted, column broadcast is 32x32 only "
             "(_llk_unpack_A_init_ and _llk_math_eltwise_unary_datacopy_init_)"
         )
     # Row broadcast of a 32x16 tile through dest takes the bottom face's row for the bottom half.
@@ -187,12 +185,6 @@ def test_eltwise_unary_datacopy_tensor_shape(
             BROADCAST_TYPE(broadcast_type),
             ACC_TO_DEST(False),
             REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
-            PARTIAL_FACE(
-                partial_a=False,
-                partial_face_pack=False,
-                partial_b=False,
-                partial_face_math=False,
-            ),
             DISABLE_SRC_ZERO_FLAG(False),
         ],
         runtimes=[
@@ -205,10 +197,6 @@ def test_eltwise_unary_datacopy_tensor_shape(
             TEST_FACE_DIMS(face_r_dim=face_r_dim),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             NUM_BLOCKS(num_blocks),
-            INPUT_DIMENSIONS(
-                buffer_dimensions[0] // TILE_DIMENSIONS[0],
-                buffer_dimensions[1] // TILE_DIMENSIONS[1],
-            ),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
