@@ -10,7 +10,7 @@
 #include "api/compile_time_args.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/cb_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
@@ -32,9 +32,9 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_block, cb_coef, cb_out);
     mul_binary_tile_init();
     for (uint32_t u = 0; u < units; ++u) {
-        cb_wait_front(cb_block, 1);
-        cb_wait_front(cb_coef, 1);
-        cb_reserve_back(cb_upd, 1);
+        CircularBuffer(cb_block).wait_front(1);
+        CircularBuffer(cb_coef).wait_front(1);
+        CircularBuffer(cb_upd).reserve_back(1);
         tile_regs_acquire();
         reconfig_data_format_srca(cb_block);
         copy_init(cb_block);
@@ -47,13 +47,13 @@ void kernel_main() {
         tile_regs_wait();
         pack_tile(dst_upd, cb_upd);
         tile_regs_release();
-        cb_push_back(cb_upd, 1);
-        cb_pop_front(cb_block, 1);
-        cb_pop_front(cb_coef, 1);
+        CircularBuffer(cb_upd).push_back(1);
+        CircularBuffer(cb_block).pop_front(1);
+        CircularBuffer(cb_coef).pop_front(1);
 
-        cb_wait_front(cb_res, 1);
-        cb_wait_front(cb_upd, 1);
-        cb_reserve_back(cb_out, 1);
+        CircularBuffer(cb_res).wait_front(1);
+        CircularBuffer(cb_upd).wait_front(1);
+        CircularBuffer(cb_out).reserve_back(1);
         binary_tiles_init<true, EltwiseBinaryType::ELWADD>(cb_res, cb_upd);
         tile_regs_acquire();
         add_tiles(cb_res, cb_upd, 0, 0, 0);
@@ -61,8 +61,8 @@ void kernel_main() {
         tile_regs_wait();
         pack_tile(0, cb_out);
         tile_regs_release();
-        cb_push_back(cb_out, 1);
-        cb_pop_front(cb_res, 1);
-        cb_pop_front(cb_upd, 1);
+        CircularBuffer(cb_out).push_back(1);
+        CircularBuffer(cb_res).pop_front(1);
+        CircularBuffer(cb_upd).pop_front(1);
     }
 }

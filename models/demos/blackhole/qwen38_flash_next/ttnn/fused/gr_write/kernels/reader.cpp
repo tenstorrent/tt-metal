@@ -14,6 +14,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -53,8 +54,7 @@ void kernel_main() {
         noc.async_read(injection, injection_tile, tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
         // bf16 tile element (r, c) is 16-bit word (r >> 4) * 512 + (c >> 4) * 256 + (r & 15) * 16 + (c & 15)
-        volatile tt_l1_ptr uint16_t* injection_words =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(injection_tile.get_write_ptr());
+        const CoreLocalMem<volatile uint16_t> injection_words(injection_tile.get_write_ptr());
         for (uint32_t r = 0; r < 32; ++r) {
             const uint32_t row_start = (r >> 4) * 512 + (r & 15) * 16;
             injection_words[row_start] = injection_words[row_start + branch];
