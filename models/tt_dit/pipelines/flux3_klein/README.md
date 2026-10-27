@@ -10,7 +10,7 @@ the joint sequence `[image | image_cond | text]`. The text encoder is Qwen3-VL-4
 layer taps concatenated into a 20480-wide token, caption length rounded up to a multiple of 80 (at most 4096 tokens).
 The FLUX.2 KL autoencoder (8x VAE plus 2x2 patchify = 16x, 128-channel latent tokens) decodes the result and encodes
 the references. The prompt upsampler (a Qwen3.5-9B fine-tune) expands a raw prompt into the long caption the DiT was
-trained on and runs on one chip in its own process. Two DiT checkpoints share the architecture: `distilled` (a flow
+trained on and runs in its own process, tensor-parallel on a (1, 8) submesh of the Galaxy (one chip elsewhere). Two DiT checkpoints share the architecture: `distilled` (a flow
 map, 16 Euler steps, no guidance; the schedule `t = 6.93 u / (1 + 5.93 u)` over `u = linspace(1, 0, steps + 1)`) and
 `base` (50 steps, classifier-free guidance 3.5, two forwards per step).
 
@@ -46,8 +46,8 @@ export TT_DIT_CACHE_DIR=/path/to/tt_dit_cache
 
 The in-tree demo opens the 4x8 ring (`demo_flux3_klein.open_mesh`: `FABRIC_1D_RING`, 8 KB packets, L1_SMALL 64 KB,
 a 256 MB trace region), makes one DiT variant resident and renders. The prompt is upsampled by default: the
-upsampler runs first in a subprocess (`upsampler.Flux3KleinUpsamplerSubprocess`, its own fabric-less 1x1 mesh),
-then the ring opens for the DiT. A prompt that is already a finished caption passes through; `--no-pup` skips the
+upsampler runs first in a subprocess (`upsampler.Flux3KleinUpsamplerSubprocess`: its own (1, 8) TP submesh of the
+4x8 parent on a 1D ring, or a fabric-less 1x1 mesh off-Galaxy / with `PUP_TP=1`), then the ring opens for the DiT. A prompt that is already a finished caption passes through; `--no-pup` skips the
 upsampler. Without `--seed` the seed is `sha256(caption) % 2**32`, as upstream's CLI.
 
 ```bash
@@ -229,6 +229,46 @@ Host-side values are the reference's own: bf16 timestep rounding (`scheduler.py`
 `to_pil` truncation. In the Euler chain no binary op mixes dtypes and `dt` / `guidance` are fp32 `[1, 1]` slot
 tensors, never Python scalars (`denoise_flux3_klein.py` lists the forms that were measured wrong).
 
+## Upsampler
+
+The prompt upsampler ("pup", BFL's Qwen3.5-9B fine-tune: 24 Gated DeltaNet layers + 8 full-attention layers, vocab
+248320) runs on the qwen36 package (`models/demos/blackhole/qwen36`) through `upsampler.Flux3KleinUpsampler`:
+prefill (with the vision tower for references), then greedy decoding with vLLM's presence penalty (1.5 for t2i, 0 for
+i2i) until a stop id. The metric is the caption it writes: bf16 weights, fp32 accumulation, and every decode path
+below emits the same token ids as the plain decode (checked against host sampling and a CPU oracle).
+
+**Default decode (no flags needed).** On a Galaxy the upsampler opens a (1, 8) TP submesh (`PUP_TP`, `pup_tp()`) and
+`configure_pup_env` sets `PUP_FAST_DECODE_ENV` as process defaults (any value already in the environment wins):
+
+- `QWEN36_GDN_FUSED_STEP=1`, `QWEN36_GDN_FUSED_STEP_V2=1`: everything between a GDN layer's in-projection and its
+  out-projection (conv shift register, SiLU, q/k L2 norms, gates, the delta-rule state update, gated RMSNorm) is one
+  program on 16 cores per chip (`qwen36/tt/gdn/fused_step/`).
+- `QWEN36_DECODE_RS_LINKS=2`, `QWEN36_DECODE_RS_WORKERS=4`, `QWEN36_DECODE_AG_BROADCAST=1`: decode CCL settings
+  (`tt_transformers/tt/ccl.decode_ccl_overrides`).
+- `PUP_DEVICE_SAMPLING=1` (presence penalty + argmax inside the decode trace; the host reads one id per step) and
+  `PUP_PIPELINED_DECODE=1` (the sampled id is fed back on device; `PUP_PIPELINE_DEPTH`, default 2, steps in flight).
+
+**Speculative decode (`PUP_SPEC=1`, opt-in).** The decode runs as verify blocks of K+1 rows
+(`qwen36/tt/spec_pup.PupSpecEngine` over the qwen36 `MTPSpecEngine`); the host accepts each draft only when it equals
+`presence_greedy` of its verify row (`pup_spec_accept`), so the caption is unchanged by construction. With the
+defaults above it also runs `QWEN36_GDN_FUSED_VERIFY=1` (the verify's GDN layers are the fused v2 step looped over
+the rows, each row bit-identical to a decode step) and `QWEN36_SPEC_EXACT=1` (verify rows take the decode SDPA and
+final norm), which makes the spec ids identical to the plain decode's, not only equal up to bf16 ties.
+
+- Drafter `PUP_SPEC_DRAFTER=mtp` (default): the pup ships no `mtp.*` tensors, so the 15 MTP tensors of the base
+  `Qwen/Qwen3.5-9B` are attached (`PUP_SPEC_MTP_SNAPSHOT`, default the HF cache). `ngram` (prompt lookup) and `none`
+  exist for measurement. `PUP_SPEC_K` (default 3; exact mode is validated at K=3), `PUP_SPEC_TOPN` (32 or 64).
+  `PUP_SPEC_DRAFT_PENALTY=1` applies the presence penalty to the drafts too (no acceptance gain measured; off).
+- The draft head is the base model's, not trained on pup captions: about 1.1 accepted drafts per verify on a fresh
+  prompt, 2.2 when the caption reuses the prompt's wording. A drafter distilled on pup's own captions is the open item.
+
+Measured 2026-10-27, TP8 on one Galaxy, warm, traced (ms per generated token; captions of about 300 tokens):
+
+| decode | `speed300` (300-token prompt) | `man_dog` (one-line prompt) |
+|---|---|---|
+| default (fused GDN v2, CCL settings, device sampling, pipelined) | 15.3 | 15.3 |
+| `PUP_SPEC=1` (MTP K=3, fused verify, exact) | 7.7 | 11.3 |
+
 ## Knobs
 
 | name | where | effect |
@@ -244,7 +284,10 @@ tensors, never Python scalars (`denoise_flux3_klein.py` lists the forms that wer
 | `FLUX3_KLEIN_VAE_GN` | `vae_flux3_klein._exact_group_norm_mode` | decoder GroupNorm: `fused` (default) or `exact` fp32 statistics |
 | `FLUX3_KLEIN_OUT` | `upsampler.py`, tests | upsampler scratch dir and test renders |
 | `QWEN36_EXACT_PROFILE`, `QWEN36_MTP`, `HF_MODEL` | `upsampler.configure_pup_env` | set by the upsampler for the qwen36 package (bf16 profile, no drafter, the snapshot) |
-| `PUP_DEVICE_SAMPLING=1`, `PUP_DIAG_SYNC=1` | `upsampler.py` | on-device argmax with presence penalty; per-step sync diagnostics |
+| `PUP_DEVICE_SAMPLING`, `PUP_PIPELINED_DECODE`, `PUP_PIPELINE_DEPTH`, `PUP_DIAG_SYNC=1` | `upsampler.py` | on-device sampling and pipelined decode (both default `1`), steps in flight (2); per-step sync diagnostics |
+| `PUP_TP` | `upsampler.pup_tp` | the upsampler's own mesh: 8 = (1, 8) TP submesh (default on a 32-chip Galaxy), 1 = one chip |
+| `PUP_FAST_DECODE_ENV` (`QWEN36_GDN_FUSED_STEP[_V2]`, `QWEN36_DECODE_RS_LINKS`, `QWEN36_DECODE_RS_WORKERS`, `QWEN36_DECODE_AG_BROADCAST`, `QWEN36_GDN_FUSED_VERIFY`, `QWEN36_SPEC_EXACT`) | `upsampler.configure_pup_env` | the upsampler's decode defaults (section "Upsampler"); set one to `0` to opt out |
+| `PUP_SPEC`, `PUP_SPEC_DRAFTER`, `PUP_SPEC_K`, `PUP_SPEC_TOPN`, `PUP_SPEC_MTP_SNAPSHOT`, `PUP_SPEC_DRAFT_PENALTY`, `PUP_SPEC_NGRAM_*`, `PUP_SPEC_TIMING` | `upsampler.spec_config_from_env` | speculative decode (off by default; section "Upsampler") |
 | `FLUX3_KLEIN_GOLDENS`, `FLUX3_KLEIN_REFERENCE` | `tests/models/flux3_klein/common.py` | golden cases root; the BFL clone holding the example PNGs |
 | `FLUX3_KLEIN_GOLDEN_PCC`, `FLUX3_KLEIN_REFERENCE_DEPTH`, `FLUX3_KLEIN_GOLDEN_FREE_RUN`, `FLUX3_KLEIN_GOLDEN_STEPS` | `tests/models/flux3_klein/common.py`, `test_reference_flux3_klein.py` | CPU golden test floor, smoke depth, free-run mode, step cap |
 | `FLUX3_KLEIN_VAE_ORACLE_CACHE`, `FLUX3_KLEIN_SAMPLING_ORACLE_CACHE`, `FLUX3_KLEIN_PUP_ORACLE_CACHE`, `FLUX3_KLEIN_BASE_PROPER_REFERENCE=1` | tests | CPU oracle caches; opt-in base-model proper reference |

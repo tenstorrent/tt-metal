@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""FLUX 3 Image Klein prompt upsampler ("pup") on one Blackhole chip (design record ``docs/M9_DESIGN.md``).
+"""FLUX 3 Image Klein prompt upsampler ("pup"): one Blackhole chip, or TP on a submesh (see README.md, "Upsampler").
 
 The upsampler is BFL's Apache-2.0 fine-tune of Qwen3.5-9B (``flux-3-image-klein-pup``): a RAW user prompt, with
 up to ten reference images and optional layout boxes, becomes the long caption the DiT was trained on. The
@@ -26,9 +26,11 @@ reproduces that call step by step on the ``models/demos/blackhole/qwen36`` singl
   3. :func:`finish_caption`: decode without the stop id, strip, ``RuntimeError("empty generation")`` when empty,
      ``bbox.reconcile`` with the locked rows (layout mode).
 
-Process model (design decision 1): the pup runs STANDALONE on a ``(1, 1)`` mesh opened WITHOUT fabric (a 1-device
-mesh of a multi-chip box must not initialise fabric; no CCL is issued on one chip), owned by the object when
-``mesh_device`` is not given. The Klein pipeline holds the whole 4x8 ring and ``set_fabric_config`` is
+Process model (design decision 1): the pup runs STANDALONE, on a mesh the object opens and owns when ``mesh_device``
+is not given. On a 32-chip Galaxy that is a ``(1, 8)`` tensor-parallel submesh of the 4x8 parent on a 1D ring fabric
+(``PUP_TP``, :func:`pup_tp`; the fast decode configuration of :data:`PUP_FAST_DECODE_ENV` applies there); elsewhere,
+or with ``PUP_TP=1``, a ``(1, 1)`` mesh opened WITHOUT fabric (a 1-device mesh of a multi-chip box must not initialise
+fabric; no CCL is issued on one chip). The Klein pipeline holds the whole 4x8 ring and ``set_fabric_config`` is
 process-global, so the demo runs the pup first in a subprocess (:class:`Flux3KleinUpsamplerSubprocess`, this
 module's CLI) and opens the ring afterwards; co-residency on a submesh of the fabric-enabled parent is the M10 item.
 
@@ -47,7 +49,7 @@ import sys
 import tempfile
 import time
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Sequence
 
@@ -97,9 +99,24 @@ PUP_MESH_SHAPE = (1, 1)
 PUP_L1_SMALL_SIZE = 24576  # qwen36 GDN_CONV1D_L1_SMALL_SIZE: the prefill depthwise conv needs it
 PUP_TRACE_REGION_SIZE = 256 * 1024 * 1024  # vision_demo.py: prefill chunk trace + decode trace
 _DIAG_SYNC = os.environ.get("PUP_DIAG_SYNC") == "1"
-_DEVICE_SAMPLING = os.environ.get("PUP_DEVICE_SAMPLING") == "1"  # greedy + presence penalty on device (the common
+_DEVICE_SAMPLING = os.environ.get("PUP_DEVICE_SAMPLING", "1") == "1"  # greedy + presence penalty on device (the common
 # sampler's in-trace argmax with its output-token counts); the host reads ONE token per step instead of the 248K-wide
 # logit row (the row readback was 20 ms of the 30 ms step, PUP_DIAG_SYNC job 143697). Audited vs the CPU oracle.  # _decode_step: split 'wait' into device + readback (diagnostic)
+# PUP_PIPELINED_DECODE=1 (default; needs device sampling + the traced decode; 0 = the one-step-at-a-time loop):
+# the sampled token is fed back on device into the decode trace's token input (a 3-op feedback trace), the host
+# writes only the next position / rope (pure functions of the step index, ordered on CQ0 behind the running
+# step) and keeps PUP_PIPELINE_DEPTH steps in flight, reading each token asynchronously (event per step); the
+# stop token is seen late and the overrun steps are discarded (their KV / GDN state is overwritten by the next
+# request's prefill; the device presence counts saw every generated token, overrun ones only after the stop).
+_PIPELINED_DECODE = os.environ.get("PUP_PIPELINED_DECODE", "1") == "1"
+_PIPELINE_DEPTH = max(1, int(os.environ.get("PUP_PIPELINE_DEPTH", "2")))  # steps in flight before the host blocks
+# PUP_SPEC=1 (default off): greedy speculative decode (README.md, "Upsampler: speculative decode"). The decode runs
+# as verify blocks of K+1 tokens through ``qwen36/tt/spec_pup.PupSpecEngine`` (traced verify, + the MTP drafter trace)
+# and the host accepts exactly (``pup_spec_accept``: presence_greedy on every committed row). Read per upsampler
+# instance by :func:`spec_config_from_env`; PUP_DEVICE_SAMPLING / PUP_PIPELINED_DECODE do not apply to that path.
+PUP_SPEC_ENV = "PUP_SPEC"
+PUP_SPEC_MTP_REPO = "Qwen/Qwen3.5-9B"
+"""The base checkpoint whose 15 ``mtp.*`` tensors are the MTP drafter (the pup ships none)."""
 PUP_DEVICE_PARAMS = {
     "l1_small_size": PUP_L1_SMALL_SIZE,
     "num_command_queues": 2,
@@ -107,6 +124,19 @@ PUP_DEVICE_PARAMS = {
 }
 """The single-device parameters of the qwen36 demos: NO ``fabric_config`` (see ``open_pup_mesh``)."""
 EXACT_PROFILE_ENV = "QWEN36_EXACT_PROFILE"
+PUP_TP_ENV = "PUP_TP"
+PUP_PARENT_MESH_SHAPE = (4, 8)
+"""The Galaxy mesh a TP pup's submesh is cut from (:func:`open_pup_tp_mesh`)."""
+PUP_FAST_DECODE_ENV = {
+    "QWEN36_GDN_FUSED_STEP": "1",  # one fused program per GDN layer per decode step (gdn/fused_step)
+    "QWEN36_GDN_FUSED_STEP_V2": "1",  # its 16-core-per-chip v2 kernel
+    "QWEN36_DECODE_RS_LINKS": "2",  # decode reduce-scatter / all-gather CCL tuning (tt_transformers ccl.py)
+    "QWEN36_DECODE_RS_WORKERS": "4",
+    "QWEN36_DECODE_AG_BROADCAST": "1",
+    "QWEN36_GDN_FUSED_VERIFY": "1",  # PUP_SPEC only: the verify runs the fused v2 GDN step row by row
+    "QWEN36_SPEC_EXACT": "1",  # PUP_SPEC only: verify rows take the decode SDPA + final norm (ids == plain decode)
+}
+"""Defaults :func:`configure_pup_env` sets under the exact profile (each overridable from the environment)."""
 PUP_CACHE_SUBDIR = "flux3_klein_pup"
 """``$TT_DIT_CACHE_DIR/<this>`` becomes ``TT_CACHE_PATH`` when the caller has not set one: the qwen36 tensor cache
 (18.8 GB bf16 + 0.9 GB vision, written once) lands under ``<it>/P150/tensor_cache_bf16/`` instead of a
@@ -114,6 +144,58 @@ PUP_CACHE_SUBDIR = "flux3_klein_pup"
 SUBPROCESS_PASS_THROUGH_EXIT = 4
 """The CLI's exit code for a ``ValueError`` (too many references, an aspect over 200:1, a prompt over the cap): the
 caller uses the prompt as typed, as ``generate.py:59-61``."""
+
+
+def pup_tp() -> int:
+    """The pup's tensor-parallel width when the upsampler opens its own mesh: ``$PUP_TP`` when set (1, 2, 4 or 8),
+    else 8 on a 32-chip Galaxy and 1 on anything smaller."""
+    value = os.environ.get(PUP_TP_ENV, "").strip()
+    if value:
+        tp = int(value)
+        if tp not in (1, 2, 4, 8):
+            raise ValueError(f"{PUP_TP_ENV}={value}: expected 1, 2, 4 or 8")
+        return tp
+    import ttnn
+
+    return 8 if ttnn.get_num_devices() >= PUP_PARENT_MESH_SHAPE[0] * PUP_PARENT_MESH_SHAPE[1] else 1
+
+
+def open_pup_tp_mesh(tp: int):
+    """``(submesh, parent)``: the 4x8 parent on a 1D ring fabric (8 KB packets, the DiT ring's settings) and its
+    ``(1, tp)`` submesh, which the pup's TP modules run on. Close with :func:`close_pup_tp_mesh`."""
+    import ttnn
+
+    router = ttnn.FabricRouterConfig()
+    router.max_packet_payload_size_bytes = 8192
+    ttnn.set_fabric_config(
+        ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricReliabilityMode.STRICT_INIT, router_config=router
+    )
+    parent = None
+    try:
+        parent = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*PUP_PARENT_MESH_SHAPE),
+            dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.device.DispatchCoreType.WORKER),
+            **PUP_DEVICE_PARAMS,
+        )
+        return parent.create_submesh(ttnn.MeshShape(1, int(tp))), parent
+    except BaseException:
+        if parent is not None:
+            ttnn.close_mesh_device(parent)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        raise
+
+
+def close_pup_tp_mesh(submesh, parent) -> None:
+    """Close what :func:`open_pup_tp_mesh` opened: the submesh, the parent, then the fabric."""
+    import ttnn
+
+    try:
+        ttnn.close_mesh_device(submesh)
+    finally:
+        try:
+            ttnn.close_mesh_device(parent)
+        finally:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 def open_pup_mesh():
@@ -414,6 +496,120 @@ class PupTimings:
     vision_compiled: bool = False
     """Whether this request compiled the vision tower (its first use, or a new padded patch count)."""
     dram: str = ""
+    pipelined: bool = False
+    """``PUP_PIPELINED_DECODE`` loop (:meth:`Flux3KleinUpsampler._decode_pipelined`)."""
+    pipeline_depth: int = 0
+    overrun_steps: int = 0
+    """Pipelined: steps launched after the stop step (discarded)."""
+    drain_ms: float = 0.0
+    """Pipelined: host wait for the overrun steps after the stop token was read (inside ``decode_s``)."""
+    step_enqueue_ms: float = 0.0
+    """Pipelined: steady host time per step spent enqueueing (pos/rope H2D, decode + sampling + feedback
+    traces, async token read)."""
+    step_block_ms: float = 0.0
+    """Pipelined: steady host time per step blocked on the oldest in-flight token (device-bound time)."""
+
+
+@dataclass(frozen=True)
+class PupSpecConfig:
+    """``PUP_SPEC=1`` knobs (:func:`spec_config_from_env`)."""
+
+    drafter: str = "mtp"
+    """``PUP_SPEC_DRAFTER``: ``mtp`` (base Qwen3.5-9B MTP head on device) | ``ngram`` (host prompt lookup) | ``none``."""
+    k: int = 3
+    """``PUP_SPEC_K``: drafts per verify block (T = K + 1 rows; T in {4, 8, 12} takes the fused spec SDPA)."""
+    top_n: int = 32
+    """``PUP_SPEC_TOPN``: per-device candidates per verify row, 32 or 64 (the host certifies the argmax from them)."""
+    mtp_snapshot: str | None = None
+    """``PUP_SPEC_MTP_SNAPSHOT``: the base checkpoint dir (default: the HF cache's ``Qwen/Qwen3.5-9B``)."""
+    ngram_n_max: int = 4
+    """``PUP_SPEC_NGRAM_NMAX`` / ``PUP_SPEC_NGRAM_NMIN``: n-gram lengths tried longest first (the offline study's best
+    general variant: 4..2, no unigram fallback)."""
+    ngram_n_min: int = 2
+    ngram_source: str = "all"
+    draft_penalty: bool = False
+    """``PUP_SPEC_DRAFT_PENALTY=1`` (mtp drafter): the drafter picks under the request's presence penalty too (t2i 1.5;
+    i2i requests have none), so it stops drafting the repeats the sampler suppresses. Acceptance only."""
+    """``PUP_SPEC_NGRAM_SOURCE``: ``all`` (prompt + generated) | ``prompt`` (prompt only: best on copy-regime prompts)."""
+
+
+def spec_config_from_env(environ=None) -> PupSpecConfig | None:
+    """``None`` unless ``PUP_SPEC=1`` (the default path is untouched); otherwise the validated knobs."""
+    env = os.environ if environ is None else environ
+    if env.get(PUP_SPEC_ENV, "0") != "1":
+        return None
+    from .pup_spec_drafters import DRAFTERS
+
+    cfg = PupSpecConfig(
+        drafter=env.get("PUP_SPEC_DRAFTER", "mtp").strip().lower(),
+        k=int(env.get("PUP_SPEC_K", "3")),
+        top_n=int(env.get("PUP_SPEC_TOPN", "32")),
+        mtp_snapshot=env.get("PUP_SPEC_MTP_SNAPSHOT") or None,
+        ngram_n_max=int(env.get("PUP_SPEC_NGRAM_NMAX", "4")),
+        ngram_n_min=int(env.get("PUP_SPEC_NGRAM_NMIN", "2")),
+        ngram_source=env.get("PUP_SPEC_NGRAM_SOURCE", "all").strip().lower(),
+        draft_penalty=env.get("PUP_SPEC_DRAFT_PENALTY", "0") == "1",
+    )
+    if cfg.drafter not in DRAFTERS:
+        raise ValueError(f"PUP_SPEC_DRAFTER={cfg.drafter!r}; expected one of {DRAFTERS}")
+    if not 1 <= cfg.k <= 31:
+        raise ValueError(f"PUP_SPEC_K={cfg.k}: need 1 <= K <= 31 (B * (K + 1) <= 32 rows at B = 1)")
+    if cfg.top_n not in (32, 64):
+        raise ValueError(f"PUP_SPEC_TOPN={cfg.top_n}: the engine takes 32 or 64 (whole 32-wide tiles per device)")
+    if not 1 <= cfg.ngram_n_min <= cfg.ngram_n_max:
+        raise ValueError(f"PUP_SPEC_NGRAM_NMIN/NMAX {cfg.ngram_n_min}/{cfg.ngram_n_max}: need 1 <= NMIN <= NMAX")
+    if cfg.ngram_source not in ("all", "prompt"):
+        raise ValueError(f"PUP_SPEC_NGRAM_SOURCE={cfg.ngram_source!r}; expected 'all' or 'prompt'")
+    return cfg
+
+
+def resolve_mtp_snapshot(cfg: PupSpecConfig) -> Path:
+    """The base checkpoint holding the ``mtp.*`` tensors: ``PUP_SPEC_MTP_SNAPSHOT`` or the HF cache (offline)."""
+    if cfg.mtp_snapshot:
+        path = Path(cfg.mtp_snapshot)
+    else:
+        from huggingface_hub import snapshot_download
+
+        path = Path(snapshot_download(PUP_SPEC_MTP_REPO, local_files_only=True))
+    if not path.is_dir():
+        raise FileNotFoundError(f"MTP base snapshot {path} not found (set PUP_SPEC_MTP_SNAPSHOT)")
+    return path
+
+
+@dataclass
+class PupSpecTimings(PupTimings):
+    """:class:`PupTimings` plus the speculative-decode counters (returned only by the ``PUP_SPEC=1`` path, so the
+    default path's record is unchanged). Per-iteration means unless named otherwise; ms are host wall times."""
+
+    spec_drafter: str = ""
+    spec_k: int = 0
+    spec_top_n: int = 0
+    spec_iterations: int = 0
+    """Verify calls."""
+    spec_tokens_per_iter: float = 0.0
+    """Committed tokens per verify (accepted drafts + 1 bonus; the stop id and budget cut excluded)."""
+    spec_accepted_per_step: float = 0.0
+    spec_draft_precision: float = 0.0
+    """Accepted / proposed drafts."""
+    spec_empty_draft_steps: int = 0
+    spec_accept_hist: dict = field(default_factory=dict)
+    """{accepted drafts m: verify calls}."""
+    spec_rows_evaluated: int = 0
+    spec_fallback_rows: int = 0
+    """Verify rows the top-N candidates could not certify (read in full)."""
+    spec_seed_ms: float = 0.0
+    spec_verify_ms: float = 0.0
+    """Mean host time in ``engine.verify`` (device verify + candidate readback)."""
+    spec_draft_ms: float = 0.0
+    """Mean drafter time (``engine.propose`` for MTP)."""
+    spec_accept_ms: float = 0.0
+    spec_iter_ms: float = 0.0
+    spec_ms_per_token: float = 0.0
+    """Verify-loop wall time / tokens committed by verifies (the steady decode cost per token)."""
+    spec_capture_s: float = 0.0
+    """Engine compile + trace capture paid by this request (0 when already captured)."""
+    spec_engine_timing: dict = field(default_factory=dict)
+    """Means of the engine's own ``last_timing`` (``PUP_SPEC_TIMING=1``)."""
 
 
 def configure_pup_env(snapshot: Path | str, *, exact_profile: bool = True) -> None:
@@ -427,6 +623,11 @@ def configure_pup_env(snapshot: Path | str, *, exact_profile: bool = True) -> No
         if os.environ.get("QWEN_SDPA_BF8", "0") == "1":
             raise ValueError("QWEN_SDPA_BF8=1 (bf8 KV cache) is not the exact profile; unset it")
         os.environ[EXACT_PROFILE_ENV] = "1"
+        # The pup's fast decode configuration (README.md, "Upsampler"), as process defaults: an explicit value in the
+        # environment wins. They only take effect on a TP mesh (the qwen36 TP modules read them at build time) and
+        # leave the qwen36 package's own defaults untouched for every other user.
+        for key, value in PUP_FAST_DECODE_ENV.items():
+            os.environ.setdefault(key, value)
     elif os.environ.get(EXACT_PROFILE_ENV) == "1":
         del os.environ[EXACT_PROFILE_ENV]
     if not os.environ.get("TT_CACHE_PATH") and os.environ.get("TT_DIT_CACHE_DIR"):
@@ -470,8 +671,9 @@ def _dram_per_bank(device) -> str:
 
 
 class Flux3KleinUpsampler:
-    """The pup on one chip (module docstring). ``mesh_device`` ``None`` opens :func:`open_pup_mesh` and owns it
-    (closed by :meth:`close`); a given 1-device mesh is used as is and left open. Never used by the Klein
+    """The pup (module docstring). ``mesh_device`` ``None`` opens its own mesh (the (1, 8) TP submesh on a Galaxy,
+    else :func:`open_pup_mesh`; :func:`pup_tp`) and owns it (closed by :meth:`close`); a given mesh (one chip, or a
+    (1, tp) submesh of a fabric-enabled parent) is used as is and left open. Never used by the Klein
     pipeline's recorded-caption gates (they pass finished captions through ``bbox.is_finished``)."""
 
     def __init__(
@@ -491,7 +693,15 @@ class Flux3KleinUpsampler:
         self.use_trace = bool(use_trace)
         self.exact_profile = bool(exact_profile)
         self._owns_device = mesh_device is None
-        self._device = open_pup_mesh() if mesh_device is None else mesh_device
+        self._parent_device = None  # the 4x8 parent of an owned TP submesh (closed after it)
+        if mesh_device is not None:
+            self._device = mesh_device
+        else:
+            tp = pup_tp()
+            if tp > 1:
+                self._device, self._parent_device = open_pup_tp_mesh(tp)
+            else:
+                self._device = open_pup_mesh()
         try:
             self._load(ttnn)
         except BaseException:
@@ -499,7 +709,7 @@ class Flux3KleinUpsampler:
             # the error re-raised; a caller's mesh is left as it was.
             if self._owns_device:
                 self._owns_device = False
-                ttnn.close_mesh_device(self._device)
+                self._close_owned_mesh()
             raise
         self.last_inputs: PupInputs | None = None
         self.last_ids: list[int] | None = None
@@ -519,6 +729,11 @@ class Flux3KleinUpsampler:
             # text model's 16 heads / 4 KV heads, the GDN's 16 / 32 heads and the vision tower's 16 heads all divide).
             raise ValueError(f"the upsampler runs on a (1,1), (1,4) or (1,8) mesh, got {shape}")
         self.tp = shape[1]
+        self._spec = None
+        self.last_spec_stats = None
+        self._spec_cfg = spec_config_from_env()
+        if self._spec_cfg is not None and (self.tp == 1 or not self.use_trace):
+            raise ValueError("PUP_SPEC=1 needs a (1,4) / (1,8) mesh and the traced path (the spec engine is TP code)")
         try:
             self._device.enable_program_cache()
         except Exception:  # already enabled by the owner
@@ -532,20 +747,198 @@ class Flux3KleinUpsampler:
             raise RuntimeError(f"stop ids {stop_ids} differ from {FLUX3_KLEIN_PUP_STOP_IDS}")
         self.stop_ids = stop_ids
         # 128 blocks of 64 = the whole 8192 context: the KV cache of the longest admitted prompt plus its tail.
-        self.num_blocks = blocks_for(PUP_MAX_PROMPT, FLUX3_KLEIN_PUP_MAX_NEW_TOKENS, self.max_seq_len)
+        # PUP_SPEC: the engine's plan instead (block 0 = the null block the padded verify columns write, never in the
+        # page table; + the K-token lookahead), and the MTP head attached BEFORE the allocation (it then allocates
+        # the MTP KV cache too).
+        spec_plan = self._spec_prepare_load() if self._spec_cfg is not None else None
+        if spec_plan is not None:
+            self.num_blocks = int(spec_plan.num_blocks)
+        else:
+            self.num_blocks = blocks_for(PUP_MAX_PROMPT, FLUX3_KLEIN_PUP_MAX_NEW_TOKENS, self.max_seq_len)
         # Per-device KV heads: the 4 KV heads on one chip; under TP each device holds its GQA-assigned head(s)
         # (``n_local_kv_heads``, 1 at TP=8 with KV replication), and the TP allocator replicates whatever shape it is
         # handed, so the full count here would silently allocate 4x the cache and the wrong per-device head count.
-        local_kv_heads = int(getattr(self.args, "n_local_kv_heads", self.args.n_kv_heads)) if self.tp > 1 else int(self.args.n_kv_heads)
+        local_kv_heads = (
+            int(getattr(self.args, "n_local_kv_heads", self.args.n_kv_heads))
+            if self.tp > 1
+            else int(self.args.n_kv_heads)
+        )
         if self.tp > 1:
-            assert local_kv_heads == max(1, int(self.args.n_kv_heads) // self.tp), (local_kv_heads, self.args.n_kv_heads, self.tp)
+            assert local_kv_heads == max(1, int(self.args.n_kv_heads) // self.tp), (
+                local_kv_heads,
+                self.args.n_kv_heads,
+                self.tp,
+            )
         self._kv_shape = [self.num_blocks, local_kv_heads, PUP_BLOCK_SIZE, int(self.args.head_dim)]
-        self.page_table = torch.arange(self.num_blocks, dtype=torch.int32).unsqueeze(0)
+        if spec_plan is not None:
+            self.page_table = spec_plan.page_table.to(torch.int32).reshape(1, -1).clone()
+        else:
+            self.page_table = torch.arange(self.num_blocks, dtype=torch.int32).unsqueeze(0)
         self.model.allocate_kv_caches(self._kv_shape, ttnn.bfloat16, batch_size=1)
         self._generator = None
         self._prefill_trace_captured = False
         self._sampling_params = None
         self._vision_patch_rows: set[int] = set()
+        if spec_plan is not None:
+            self._spec_finish_load(spec_plan)
+
+    # --- speculative decode (PUP_SPEC=1) -------------------------------------------------------------------------------
+
+    def _spec_prepare_load(self):
+        """The engine's KV plan, and the MTP head attached (drafter ``mtp``) while no KV cache exists yet."""
+        from models.demos.blackhole.qwen36.tt.spec_pup import attach_mtp_head, spec_kv_plan
+
+        cfg = self._spec_cfg
+        plan = spec_kv_plan(self.max_seq_len, cfg.k, PUP_BLOCK_SIZE)
+        if int(plan.block_size) != PUP_BLOCK_SIZE or int(plan.page_table.reshape(-1)[0]) == 0:
+            raise RuntimeError(
+                f"spec KV plan {plan.block_size} / {plan.page_table.reshape(-1)[:2].tolist()}: the page "
+                f"table must use {PUP_BLOCK_SIZE}-token blocks and never name the null block 0"
+            )
+        if int(plan.capacity) < self.max_seq_len + cfg.k:
+            raise RuntimeError(f"spec KV plan capacity {plan.capacity} < max_seq_len {self.max_seq_len} + K {cfg.k}")
+        if cfg.drafter == "mtp":
+            base = resolve_mtp_snapshot(cfg)
+            t0 = time.time()
+            attach_mtp_head(self.model, base)
+            logger.info(f"RECORD pup spec: MTP head from {base} attached in {time.time() - t0:.1f}s")
+        return plan
+
+    def _spec_finish_load(self, plan) -> None:
+        from models.demos.blackhole.qwen36.tt.spec_pup import PupSpecEngine
+
+        cfg = self._spec_cfg
+        pen = max(float(v) for v in PRESENCE_PENALTY.values()) if cfg.draft_penalty and cfg.drafter == "mtp" else 0.0
+        self._spec = PupSpecEngine(
+            self.model, plan, draft_len=cfg.k, use_mtp=cfg.drafter == "mtp", top_n=cfg.top_n, draft_penalty=pen
+        )
+        if int(self._spec.K) != cfg.k:
+            raise RuntimeError(f"spec engine K {self._spec.K} != PUP_SPEC_K {cfg.k}")
+        info = self._spec.prepare_and_capture()
+        if os.environ.get("PUP_DEVICE_SAMPLING") == "1" or os.environ.get("PUP_PIPELINED_DECODE") == "1":
+            logger.info(
+                "PUP_SPEC=1: PUP_DEVICE_SAMPLING / PUP_PIPELINED_DECODE are ignored (the spec path samples on the host)"
+            )
+        logger.info(
+            f"RECORD pup spec engine ready: drafter {cfg.drafter} K {cfg.k} top_n {cfg.top_n} blocks {plan.num_blocks} "
+            f"capacity {plan.capacity}; capture {info}; {_dram_per_bank(self._device)}"
+        )
+
+    def _spec_drafter(self):
+        from .pup_spec_drafters import make_drafter
+
+        cfg = self._spec_cfg
+        exclude = [
+            int(t)
+            for t in (getattr(self.args, "image_token_id", None), getattr(self.args, "video_token_id", None))
+            if t is not None
+        ]
+        return make_drafter(
+            cfg.drafter,
+            k=cfg.k,
+            engine=self._spec,
+            exclude_ids=exclude,
+            n_max=cfg.ngram_n_max,
+            n_min=cfg.ngram_n_min,
+            source=cfg.ngram_source,
+        )
+
+    def _dram(self) -> str:
+        return _dram_per_bank(self._device)
+
+    def _generate_spec(self, inputs: PupInputs, max_new_tokens: int) -> tuple[list[int], PupTimings]:
+        """``generate_ids`` under ``PUP_SPEC=1``: vision -> (re)capture if the engine was released -> the engine's
+        prefill (the same TP prefill as :meth:`_prefill`, + the MTP prompt KV) -> ``presence_greedy`` first token ->
+        :func:`pup_spec_accept.run_spec_greedy`. Same ids, finish and budget semantics as the non-spec loop."""
+        from .pup_spec_accept import run_spec_greedy
+
+        cfg = self._spec_cfg
+        timings = PupSpecTimings(
+            load_s=self.load_s,
+            prompt_tokens=inputs.prompt_tokens,
+            image_tokens=inputs.num_image_tokens,
+            spec_drafter=cfg.drafter,
+            spec_k=cfg.k,
+            spec_top_n=cfg.top_n,
+        )
+        t_total = time.time()
+        if self._generator is not None or self._prefill_trace_captured:
+            # a plain decode trace (teacher_forced) is parked: drop it before the engine compiles / captures
+            self._release_traces()
+        vision_tokens = self._vision_tokens(inputs, timings)
+        try:
+            if not self._spec.ready:
+                t0 = time.time()
+                self._spec.prepare_and_capture()
+                timings.spec_capture_s = time.time() - t0
+                timings.trace_captured = True
+                logger.info(f"RECORD pup spec engine (re)captured in {timings.spec_capture_s:.1f}s")
+            T = int(inputs.prompt_tokens)
+            pad_id = int(self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0)
+            t0 = time.time()
+            self._spec.set_request_penalty(inputs.presence_penalty)
+            row = self._spec.prefill(inputs.input_ids[:, :T], vision_tokens, pad_id=pad_id)
+            timings.prefill_s = time.time() - t0
+            row = row.reshape(-1).float()
+            if torch.isnan(row).any():
+                raise RuntimeError("NaN in the prefill logits")
+            penalty = inputs.presence_penalty
+            first = presence_greedy(row, [], penalty)
+            timings.ttft_s = timings.vision_s + timings.prefill_s
+            drafter = self._spec_drafter()
+            t_decode = time.time()
+            try:
+                generated, finish, stats = run_spec_greedy(
+                    self._spec,
+                    drafter,
+                    prompt_ids=inputs.input_ids[0, :T].tolist(),
+                    first_token=first,
+                    prompt_len=T,
+                    penalty=penalty,
+                    stop_ids=self.stop_ids,
+                    max_new_tokens=max_new_tokens,
+                )
+            finally:
+                self._spec.end_request()
+            timings.decode_s = time.time() - t_decode
+        finally:
+            if vision_tokens is not None:
+                import ttnn
+
+                ttnn.deallocate(vision_tokens)
+        timings.finish = finish
+        timings.generated_tokens = len(generated)
+        summary = stats.summary()
+        self.last_spec_stats = summary
+        timings.spec_iterations = summary["iterations"]
+        timings.spec_tokens_per_iter = summary["tokens_per_iter"]
+        timings.spec_accepted_per_step = summary["accepted_per_step"]
+        timings.spec_draft_precision = summary["draft_precision"]
+        timings.spec_empty_draft_steps = summary["empty_draft_steps"]
+        timings.spec_accept_hist = {str(k): v for k, v in summary["accept_hist"].items()}
+        timings.spec_rows_evaluated = summary["rows_evaluated"]
+        timings.spec_fallback_rows = summary["fallback_rows"]
+        timings.spec_seed_ms = summary["seed_ms"]
+        timings.spec_verify_ms = summary["verify_ms"]
+        timings.spec_draft_ms = summary["draft_ms"]
+        timings.spec_accept_ms = summary["accept_ms"]
+        timings.spec_iter_ms = summary["iter_ms"]
+        timings.spec_ms_per_token = summary["ms_per_token"]
+        timings.spec_engine_timing = summary["engine_timing_mean"]
+        # steady state = after the seed (the non-spec loop drops its first decode step the same way)
+        timings.decode_tok_s = (stats.verify_tokens / stats.loop_s) if stats.loop_s > 0 else 0.0
+        timings.total_s = time.time() - t_total
+        timings.dram = self._dram()
+        logger.info(
+            f"RECORD pup spec decode [{cfg.drafter} K={cfg.k}]: {timings.generated_tokens} tokens in "
+            f"{summary['iterations']} verifies, {summary['tokens_per_iter']:.2f} tokens/verify, accepted "
+            f"{summary['accepted_per_step']:.2f}/step (precision {summary['draft_precision']:.2f}), hist "
+            f"{summary['accept_hist']}, verify {summary['verify_ms']:.2f} ms, draft {summary['draft_ms']:.2f} ms, accept "
+            f"{summary['accept_ms']:.2f} ms, iter {summary['iter_ms']:.2f} ms, {summary['ms_per_token']:.2f} ms/token, "
+            f"fallback rows {summary['fallback_rows']}/{summary['rows_evaluated']}, seed {summary['seed_ms']:.1f} ms; "
+            f"engine {summary['engine_timing_mean']}"
+        )
+        return generated, timings
 
     # --- accessors ---------------------------------------------------------------------------------------------------------
 
@@ -569,9 +962,12 @@ class Flux3KleinUpsampler:
         new vision patch count) while a trace is parked, which would otherwise clobber it."""
         import ttnn
 
+        self._release_feedback_trace()
         if self._generator is not None:
             self._generator.release_persistent_capture()
             self._generator = None
+        # PUP_SPEC: free_kv_caches also shuts the spec engine down (its traces bake these caches); the next request
+        # recaptures it (``_generate_spec``)
         self.model.free_kv_caches()
         self._prefill_trace_captured = False
         self.model.allocate_kv_caches(self._kv_shape, ttnn.bfloat16, batch_size=1)
@@ -626,7 +1022,8 @@ class Flux3KleinUpsampler:
             return None
         padded = sorted({vision_padded_rows(int(grid.prod().item())) for grid in inputs.image_grid_thw})
         compile_needed = self.model.vision_model is None or any(p not in self._vision_patch_rows for p in padded)
-        if compile_needed and (self._prefill_trace_captured or self._generator is not None):
+        spec_ready = getattr(self, "_spec", None) is not None and self._spec.ready
+        if compile_needed and (self._prefill_trace_captured or self._generator is not None or spec_ready):
             logger.info(f"releasing the traces before the vision compile of {padded} padded patch rows")
             self._release_traces()
         if self.model.vision_model is None:
@@ -698,7 +1095,14 @@ class Flux3KleinUpsampler:
             raise RuntimeError("NaN in the prefill logits")
         return row
 
-    def _decode_step(self, token: int, position: int, phases: dict[str, float] | None = None, first: bool = False, sample: bool = False):
+    def _decode_step(
+        self,
+        token: int,
+        position: int,
+        phases: dict[str, float] | None = None,
+        first: bool = False,
+        sample: bool = False,
+    ):
         """One decode step in three timed phases (R1 of docs/UPSAMPLER_PERF_RESEARCH.md): ``submit`` = host input
         build + H2D copies + the (non-blocking) trace enqueue, ``wait`` = the device step as seen by the blocking
         logit readback (device time + D2H of the 248K-wide row), ``convert`` = the host reshape / fp32 / NaN check.
@@ -810,6 +1214,164 @@ class Flux3KleinUpsampler:
             )
             self.model._restore_deltanet_states(saved, self.model.mesh_device)
 
+    def _release_feedback_trace(self) -> None:
+        fb = getattr(self, "_fb", None)
+        self._fb = None
+        if fb is not None:
+            import ttnn
+
+            try:
+                ttnn.release_trace(self._device, fb["id"])
+            except Exception as err:  # noqa: BLE001
+                logger.warning(f"pup feedback trace release: {err}")
+
+    @staticmethod
+    def _feedback_ops(tt_tok, tok_in):
+        """Row 0 of the sampler's uint32 token output ([1,1,32] row-major) copied into the decode trace's token
+        input ([1,1] uint32 row-major): the same value the host would write. Returns the intermediates (kept alive
+        for the trace)."""
+        import ttnn
+
+        n = 1
+        for d in tt_tok.shape:
+            n *= int(d)
+        col = ttnn.reshape(tt_tok, [n, 1])
+        one = ttnn.slice(col, [0, 0], [1, 1])
+        if tuple(int(d) for d in one.shape) != tuple(int(d) for d in tok_in.shape):
+            one = ttnn.reshape(one, list(tok_in.shape))
+        ttnn.copy(one, tok_in)
+        return [col, one]
+
+    def _feedback_trace(self, tt_tok, tok_in) -> int:
+        """The feedback trace for this (sampler output, decode token input) pair: compiled eagerly once (which also
+        performs this step's copy, idempotent), then captured; re-captured if either tensor changed."""
+        import ttnn
+
+        fb = getattr(self, "_fb", None)
+        if fb is not None and fb["src"] is tt_tok and fb["dst"] is tok_in:
+            return fb["id"]
+        self._release_feedback_trace()
+        warm = self._feedback_ops(tt_tok, tok_in)
+        ttnn.synchronize_device(self._device)
+        tid = ttnn.begin_trace_capture(self._device, cq_id=0)
+        keep = self._feedback_ops(tt_tok, tok_in)
+        ttnn.end_trace_capture(self._device, tid, cq_id=0)
+        ttnn.synchronize_device(self._device)
+        del warm
+        self._fb = {"id": tid, "src": tt_tok, "dst": tok_in, "keep": keep}
+        logger.info(
+            f"RECORD pup feedback trace captured: {list(tt_tok.shape)} {tt_tok.dtype} -> {list(tok_in.shape)} {tok_in.dtype}"
+        )
+        return tid
+
+    def _decode_pipelined(
+        self, token: int, position: int, max_new_tokens: int, generated: list, timings
+    ) -> list[float]:
+        """``PUP_PIPELINED_DECODE=1``: the device-sampling traced decode with up to ``PUP_PIPELINE_DEPTH`` steps in
+        flight. Step 0 is today's first step (host token / position / rope / page table, sampler reset with the
+        prefill token); step k>0 gets its token from step k-1's sampler through the feedback trace and its position
+        and rope from the host (written on CQ0, which orders the write behind the running step). Each step's token is
+        read with a non-blocking D2H + event; the host blocks only on the oldest step once ``depth`` are in flight.
+        Appends to ``generated`` exactly the tokens the one-step loop would (the stop id ends it, never appended),
+        sets ``timings`` (finish, pipelined fields) and returns the per-token host arrival intervals (the first one
+        includes the pipeline fill, so the steady mean skips it like the one-step loop's)."""
+        import collections
+
+        import ttnn
+
+        gen = self._generator
+        sp = self._sampling_params
+        depth = int(_PIPELINE_DEPTH)
+        budget = max_new_tokens - len(generated)  # decode steps that may run (each yields one token)
+        timings.pipelined, timings.pipeline_depth = True, depth
+        inflight: collections.deque = collections.deque()
+        state = {"launched": 0, "enqueue": 0.0}
+        dev_in = None
+
+        def launch() -> None:
+            nonlocal dev_in
+            t0 = time.perf_counter()
+            k = state["launched"]
+            pos = torch.tensor([position + k])
+            t = torch.tensor([[token]], dtype=torch.long)
+            if k > 0:
+                host = self.model.prepare_decode_inputs_host(t, pos, page_table=None)
+                ttnn.copy_host_to_device_tensor(host[1], dev_in[1])
+                ttnn.copy_host_to_device_tensor(host[2], dev_in[2])
+            out = gen.decode_forward(
+                t,
+                pos,
+                page_table=self.page_table,
+                kv_cache=None,
+                enable_trace=True,
+                read_from_device=False,
+                sampling_params=sp,
+                prompt_tokens=t,
+                output_tokens=t,
+                reload_inputs=k == 0,
+                reload_page_table=False,
+                reload_sampling_params=k == 0,
+                reset_sampling_state=k == 0,
+            )
+            if dev_in is None:
+                dev_in = gen.trace_inputs_decode[True][0]
+            if k + 1 < budget:  # the last budgeted step's token is never fed
+                fb = self._feedback_trace(out[0][0], dev_in[0])
+                ttnn.execute_trace(self._device, fb, cq_id=0, blocking=False)
+            inflight.append(gen.read_decode_output(out, async_read=True))
+            state["launched"] = k + 1
+            if k > 0:
+                state["enqueue"] += time.perf_counter() - t0
+
+        def consume() -> int:
+            host_out, events = inflight.popleft()
+            for ev in events:
+                ttnn.event_synchronize(ev)
+            out = gen.process_decode_output_host(host_out, is_tokens=True)
+            return int(torch.as_tensor(out[0] if isinstance(out, tuple) else out).reshape(-1)[0].item())
+
+        intervals: list[float] = []
+        block = 0.0
+        stopped = False
+        consumed = 0
+        stop_at = 0
+        t_drain = None
+        t_last = time.perf_counter()
+        while True:
+            while not stopped and state["launched"] < budget and len(inflight) < depth:
+                launch()
+            if not inflight:
+                break
+            tb = time.perf_counter()
+            nxt = consume()
+            now = time.perf_counter()
+            consumed += 1
+            if stopped:
+                continue  # an overrun step: its token is discarded
+            block += now - tb
+            intervals.append(now - t_last)
+            t_last = now
+            if nxt in self.stop_ids:
+                timings.finish = "stop"
+                stopped, stop_at, t_drain = True, consumed, now
+                continue
+            generated.append(nxt)
+            if len(generated) >= max_new_tokens:
+                stopped, stop_at, t_drain = True, consumed, now
+        timings.overrun_steps = state["launched"] - (stop_at or state["launched"])
+        timings.drain_ms = 1000.0 * (time.perf_counter() - t_drain) if t_drain is not None else 0.0
+        n = max(1, state["launched"] - 1)
+        timings.step_enqueue_ms = 1000.0 * state["enqueue"] / n
+        steady_blocks = max(1, len(intervals) - 1)
+        timings.step_block_ms = 1000.0 * block / max(1, len(intervals)) if intervals else 0.0
+        logger.info(
+            f"RECORD pup pipelined decode depth {depth}: {len(intervals)} tokens read, launched {state['launched']}, "
+            f"overrun {timings.overrun_steps}, drain {timings.drain_ms:.1f} ms, enqueue {timings.step_enqueue_ms:.2f} ms/step, "
+            f"blocked {timings.step_block_ms:.2f} ms/token, steady interval "
+            f"{1000.0 * sum(intervals[1:]) / steady_blocks:.2f} ms/token"
+        )
+        return intervals
+
     # --- the request -----------------------------------------------------------------------------------------------------
 
     def generate_ids(
@@ -822,6 +1384,8 @@ class Flux3KleinUpsampler:
         import ttnn
 
         max_new_tokens = new_token_budget(inputs.prompt_tokens, max_new_tokens, self.max_seq_len)
+        if getattr(self, "_spec", None) is not None:
+            return self._generate_spec(inputs, max_new_tokens)
         timings = PupTimings(
             load_s=self.load_s, prompt_tokens=inputs.prompt_tokens, image_tokens=inputs.num_image_tokens
         )
@@ -841,7 +1405,9 @@ class Flux3KleinUpsampler:
             t_decode = time.time()
             phases: dict[str, float] = {}
             first_step: dict[str, float] | None = None
-            while len(generated) < max_new_tokens:
+            if _PIPELINED_DECODE and self.use_trace and self._sampling_params is not None:
+                decode_times = self._decode_pipelined(token, position, max_new_tokens, generated, timings)
+            while not timings.pipelined and len(generated) < max_new_tokens:
                 t_step = time.time()
                 step_phases: dict[str, float] = {}
                 result = self._decode_step(token, position, step_phases, first=first_step is None, sample=True)
@@ -869,7 +1435,9 @@ class Flux3KleinUpsampler:
             timings.step_submit_ms = 1000.0 * phases.get("submit", 0.0) / n
             timings.step_wait_ms = 1000.0 * phases.get("wait", 0.0) / n
             if "device" in phases:
-                logger.info(f"RECORD pup decode step diag (steady, {n} steps): device {1000.0 * phases['device'] / n:.1f} ms, readback {timings.step_wait_ms:.1f} ms (PUP_DIAG_SYNC)")
+                logger.info(
+                    f"RECORD pup decode step diag (steady, {n} steps): device {1000.0 * phases['device'] / n:.1f} ms, readback {timings.step_wait_ms:.1f} ms (PUP_DIAG_SYNC)"
+                )
             timings.step_convert_ms = 1000.0 * phases.get("convert", 0.0) / n
             timings.step_sample_ms = 1000.0 * phases.get("sample", 0.0) / n
             logger.info(
@@ -889,6 +1457,11 @@ class Flux3KleinUpsampler:
         ``(device argmax, target, gap)`` with ``gap = v[argmax] - v[target]`` on the presence-penalised logits of the
         TARGET prefix (so a tie shows as a gap near 0). The greedy continuation is never taken."""
         targets = [int(t) for t in target_ids]
+        if getattr(self, "_spec", None) is not None and self._spec.ready:
+            # the audit runs the plain decode trace; the spec traces bake the same KV caches, so they go first (the
+            # gates run the audit in a PUP_SPEC=0 process; the next spec request recaptures)
+            logger.warning("teacher_forced in a PUP_SPEC=1 process: shutting the spec engine down first")
+            self._spec.shutdown()
         timings = PupTimings(
             load_s=self.load_s, prompt_tokens=inputs.prompt_tokens, image_tokens=inputs.num_image_tokens
         )
@@ -934,16 +1507,26 @@ class Flux3KleinUpsampler:
         import ttnn
 
         try:
+            self._release_feedback_trace()
             if self._generator is not None:
                 self._generator.release_persistent_capture()
                 self._generator = None
-            self.model.free_kv_caches()
+            self.model.free_kv_caches()  # PUP_SPEC: also shuts the spec engine down
             self._prefill_trace_captured = False
             ttnn.synchronize_device(self._device)
         finally:
             if self._owns_device:
-                ttnn.close_mesh_device(self._device)
                 self._owns_device = False
+                self._close_owned_mesh()
+
+    def _close_owned_mesh(self) -> None:
+        import ttnn
+
+        if self._parent_device is not None:
+            parent, self._parent_device = self._parent_device, None
+            close_pup_tp_mesh(self._device, parent)
+        else:
+            ttnn.close_mesh_device(self._device)
 
 
 # --- the demo's sequential model -----------------------------------------------------------------------------------------------
@@ -972,10 +1555,11 @@ def stage_reference(image: Image.Image, path: Path) -> Path:
 
 
 class Flux3KleinUpsamplerSubprocess:
-    """``__call__`` runs this module's CLI in a child process (its own 1-chip mesh, closed on exit) and returns the
-    caption; a ``ValueError`` in the child (exit ``SUBPROCESS_PASS_THROUGH_EXIT``) is re-raised as ``ValueError`` so
-    the pipeline falls back to the prompt as typed, anything else as ``RuntimeError``. The demo's model: the ring
-    cannot share a process with the pup's fabric-less mesh. Not a pipeline default.
+    """``__call__`` runs this module's CLI in a child process (its own mesh, closed on exit: the (1, 8) TP submesh on a
+    Galaxy, else one chip; :func:`pup_tp`) and returns the caption; a ``ValueError`` in the child (exit
+    ``SUBPROCESS_PASS_THROUGH_EXIT``) is re-raised as ``ValueError`` so the pipeline falls back to the prompt as typed,
+    anything else as ``RuntimeError``. The demo's model: the DiT's ring is opened only after the child has closed its
+    mesh and fabric. Not a pipeline default.
 
     ``scratch_dir``: where the per-call directory (staged references, ``boxes.json``, ``caption.json``) is made;
     ``None`` = ``$FLUX3_KLEIN_OUT`` when set, else the ``tempfile`` default (``$TMPDIR``). ``timeout_s``: ``None``
@@ -1163,6 +1747,8 @@ __all__ = [
     "Flux3KleinUpsampler",
     "Flux3KleinUpsamplerSubprocess",
     "PupInputs",
+    "PupSpecConfig",
+    "PupSpecTimings",
     "PupTimings",
     "AUDIT_BOUNDARY",
     "audit_target_ids",
@@ -1176,9 +1762,14 @@ __all__ = [
     "load_system_prompts",
     "new_token_budget",
     "open_pup_mesh",
+    "open_pup_tp_mesh",
+    "close_pup_tp_mesh",
+    "pup_tp",
     "policy_reference",
     "presence_greedy",
     "reference_size",
+    "resolve_mtp_snapshot",
+    "spec_config_from_env",
     "split_images",
     "stage_reference",
     "token_f1",
