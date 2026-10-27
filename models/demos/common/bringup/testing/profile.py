@@ -57,6 +57,16 @@ def misses_allowed(mesh, allowed: bool) -> None:
         f(allowed)
 
 
+def record_warm(mesh, before: int | None, what: str) -> None:
+    """F197 (owner 2026-10-27): no run is called warm unless it built no program. Records <what>_new_programs (the
+    program-cache entries the run added; -1 when the mesh cannot tell) and prints NOT WARM when it built any."""
+    after = cache_entries(mesh)
+    new = -1 if before is None or after is None else after - before
+    metrics.record(f"{what}_new_programs", new)
+    if new > 0:
+        print(f"NOT WARM: the {what} run built {new} programs (program-cache misses); its host time is not a warm time")
+
+
 def warm_up(mesh, one_run) -> dict:
     """F196 (owner 2026-10-27): run until a run adds no program-cache entry (new buffer-address combinations miss the
     cache for a while; the fixed 10 of F114b was a guess), at most WALL_MAX_WARM. Returns the runs' walls and entries.
@@ -66,6 +76,10 @@ def warm_up(mesh, one_run) -> dict:
     for _ in range(limit):
         walls.append(one_run())
         entries.append(cache_entries(mesh))
+        new = None if entries[-1] is None else entries[-1] - entries[-2]
+        print(
+            f"F196 warm-up run {len(walls)}: {walls[-1]} ms, program cache {entries[-1]} entries (+{new})", flush=True
+        )
         if entries[-1] is not None and entries[-1] == entries[-2]:
             return {"walls": walls, "entries": entries, "warm": True}
     return {"walls": walls, "entries": entries, "warm": entries[0] is None}
@@ -429,9 +443,11 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     reload()
     cpu_bridge.STATS.reset()
     gap[0] = 0.0
+    n0 = cache_entries(mesh)
     t0 = time.time()
     run()
     wall = time.time() - t0 - gap[0]  # F119
+    record_warm(mesh, n0, "plain")
     cpu_bridge.record(metrics)
     bridged = {"steps": cpu_bridge.STATS.step_names, "ms": round(cpu_bridge.STATS.ms, 1)}
     reload()
@@ -449,9 +465,11 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         gap[0] = 0.0
         profiler.enable(mesh, rt=True, calls=ops_on)
         try:
+            n0 = cache_entries(mesh)
             t0 = time.time()
             run()
             rt_wall = time.time() - t0 - gap[0]
+            record_warm(mesh, n0, "profiled")
             profiler.set_layer(None)
             profiler.signpost("end")
             profiler.finish_rt()
