@@ -21,6 +21,7 @@ import json
 import math
 import multiprocessing
 import os
+import re
 import socket
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, field
@@ -77,9 +78,18 @@ class Manifest:
 
 
 def create_bundle(bundle):
-    """Create an empty bundle directory; an existing one is refused so stale clips can't be scored."""
+    """Create the bundle directory, or reuse one after removing a previous run's manifest and clips.
+
+    Only this module's own files are removed (manifest.json and p<prompt>_s<seed>.mp4 clips), so a
+    directory that also holds anything else keeps it. The old manifest goes first, so a run that dies
+    before writing its own leaves no complete bundle that could be scored.
+    """
     bundle = Path(bundle)
-    bundle.mkdir(parents=True, exist_ok=False)
+    bundle.mkdir(parents=True, exist_ok=True)
+    (bundle / "manifest.json").unlink(missing_ok=True)
+    for path in bundle.iterdir():
+        if re.fullmatch(r"p\d+_s\d+\.mp4", path.name):
+            path.unlink()
     return bundle
 
 

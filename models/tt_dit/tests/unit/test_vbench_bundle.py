@@ -74,9 +74,14 @@ def test_incomplete_or_bad_gate_is_rejected(bundle, failure, expect_error):
         vbench_bundle.read_manifest(bundle)
 
 
-def test_existing_bundle_directory_is_refused(bundle, expect_error):
-    with expect_error(FileExistsError, "vbench"):
-        vbench_bundle.create_bundle(bundle)
+def test_rerun_into_a_bundle_removes_only_its_own_files(bundle):
+    unrelated = [bundle / "notes.txt", bundle / "pizza_s1.mp4"]
+    for path in unrelated:
+        path.write_text("keep")
+    vbench_bundle.create_bundle(bundle)
+    assert not (bundle / "manifest.json").exists()
+    assert not any(vbench_bundle.clip_path(bundle, i, seed).exists() for i in range(len(PROMPTS)) for seed in SEEDS)
+    assert all(path.read_text() == "keep" for path in unrelated)
 
 
 class InlinePool:
