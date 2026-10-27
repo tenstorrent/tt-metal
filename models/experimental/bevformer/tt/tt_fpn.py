@@ -112,7 +112,7 @@ class TTFPN:
                     weights_dtype=weights_dtype,
                     input_dtype=output_conv_dtypes[i],
                     input_layout=output_conv_layouts[i],
-                    output_layout=ttnn.ROW_MAJOR_LAYOUT if in_dram else ttnn.TILE_LAYOUT,
+                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
             )
         for i in range(num_levels, len(conv_args.fpn_convs)):
@@ -124,6 +124,7 @@ class TTFPN:
                     dealloc_act=False,
                     weights_dtype=weights_dtype,
                     input_dtype=output_conv_dtypes[-1],
+                    input_layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
             )
 
@@ -170,11 +171,14 @@ class TTFPN:
         laterals = [ttnn.to_memory_config(lateral, memory_config=ttnn.DRAM_MEMORY_CONFIG) for lateral in laterals]
         for i in range(used_backbone_levels):
             lateral = ttnn.to_layout(laterals[i], ttnn.ROW_MAJOR_LAYOUT)
-            # A DRAM level stays ROW_MAJOR, as its sliced conv writes it: its consumer splits the
-            # cameras in ROW_MAJOR anyway (TTPerceptionTransformer.camera_features).
+            # Every level comes out ROW_MAJOR: its consumer splits the cameras in ROW_MAJOR anyway
+            # (TTPerceptionTransformer.camera_features), and the extra conv reshapes the last level
+            # to NHWC, which in TILE copies it, as its width is not a tile multiple.
             outs.append(self.fpn_convs[i](lateral))
         for i in range(used_backbone_levels, len(self.fpn_convs)):
-            extra_source = outs[-1]
+            # The extra conv's weights are prepared for an interleaved DRAM input; a ROW_MAJOR L1
+            # level stays in conv2d's shards.
+            extra_source = ttnn.to_memory_config(outs[-1], ttnn.DRAM_MEMORY_CONFIG)
             if i > used_backbone_levels and self.relu_before_extra_convs:
                 extra_source = ttnn.relu(extra_source)
             outs.append(self.fpn_convs[i](extra_source))
