@@ -656,9 +656,10 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
     ],
     indirect=["mesh_device", "device_params"],
 )
-# Each mesh runs the sequence that gives it the production per-chip shape (640 rows per SP row); the
-# other combinations are skipped in the test body.
-@pytest.mark.parametrize("seq_len", [5120, 1280], ids=["seq5120", "seq1280"])
+# Each mesh runs the sequence that gives it the production per-chip shape (640 rows per SP row), plus the
+# per-chip shapes smaller (320) and bigger (1280) chunks give: 8x4 2.5K chunks, 2x4 2,560-token chunks.
+# The other combinations are skipped in the test body.
+@pytest.mark.parametrize("seq_len", [5120, 1280, 2560, 10240], ids=["seq5120", "seq1280", "seq2560", "seq10240"])
 @pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
 # KV dedup through TtPrefillBlock -> ttMLA (the whole norm/attn/FFN stack, not just the MLA-level tests
 # in tests/sparse_mla/).
@@ -677,10 +678,10 @@ def test_glm_prefill_block(
 ):
     """One fused GLM decoder block (sparse-SDPA MLA + norm/residual + dense|MoE FFN) vs composed CPU ref."""
     sp_factor = mesh_device.shape[0]
-    if seq_len // sp_factor != PREFILL_CHUNK_TOKENS_PER_CHIP:
-        pytest.skip(
-            f"seq_len {seq_len} on SP={sp_factor} is not the production {PREFILL_CHUNK_TOKENS_PER_CHIP} rows/chip"
-        )
+    rows_per_chip = seq_len // sp_factor
+    production = PREFILL_CHUNK_TOKENS_PER_CHIP
+    if rows_per_chip not in (production // 2, production, 2 * production):
+        pytest.skip(f"seq_len {seq_len} on SP={sp_factor} is {rows_per_chip} rows/chip, not 320 / 640 / 1280")
     # Resolve the checkpoint only if it is already on this host: the model_path fixture downloads it
     # otherwise, and the random-weight path below needs nothing.
     model_path = find_local_model(variant)

@@ -50,10 +50,11 @@ def glm_random_moe_weights(hidden, moe_intermediate, n_routed, seed):
     return gate_weights, [_expert() for _ in range(n_routed)], _expert()
 
 
-def glm_random_layer_state_dict(config, model_cfg, layer_idx, seed):
+def glm_random_layer_state_dict(config, model_cfg, layer_idx, seed, experts=None):
     """One TtPrefillBlock state dict for global layer ``layer_idx``: dense FFN below
     first_k_dense_replace, MoE above. A GLM-5.3 ``shared`` layer owns no indexer, so its indexer
-    weights are dropped (ttMLA would ignore them anyway)."""
+    weights are dropped (ttMLA would ignore them anyway). ``experts``, a (routed, shared) pair, reuses
+    those expert tensors instead of drawing new ones; the gate is still this layer's own."""
     hidden = config.hidden_size
     base = seed + 10 * layer_idx
     mla_weights = random_mla_weights(config, seed=base)
@@ -67,20 +68,44 @@ def glm_random_layer_state_dict(config, model_cfg, layer_idx, seed):
     if layer_idx < config.first_k_dense_replace:
         layer["ffn_weights"] = glm_random_dense_ffn_weights(hidden, config.intermediate_size, base + 3)
     else:
-        gate_weights, routed, shared = glm_random_moe_weights(
-            hidden, model_cfg.MOE_INTERMEDIATE_SIZE, model_cfg.NUM_ROUTED_EXPERTS, base + 3
-        )
+        if experts is None:
+            gate_weights, routed, shared = glm_random_moe_weights(
+                hidden, model_cfg.MOE_INTERMEDIATE_SIZE, model_cfg.NUM_ROUTED_EXPERTS, base + 3
+            )
+        else:
+            routed, shared = experts
+            g = torch.Generator().manual_seed(base + 3)
+            gate_weights = {
+                "weight": (torch.randn(model_cfg.NUM_ROUTED_EXPERTS, hidden, generator=g) * hidden**-0.5).to(
+                    torch.bfloat16
+                ),
+                "e_score_correction_bias": (torch.randn(model_cfg.NUM_ROUTED_EXPERTS, generator=g) * 0.01).to(
+                    torch.float32
+                ),
+            }
         layer.update(gate_weights=gate_weights, routed_expert_weights=routed, shared_expert_weights=shared)
     return layer
 
 
-def glm_random_transformer_state_dict(config, model_cfg, num_layers, seed=42):
-    """TtPrefillTransformer state dict (embed + layers 0..num_layers-1), the shape
-    extract_tt_state_dict returns for the HF-backed variants. No norm / LM head: the chunked
-    transformer has no tail unless MTP is on."""
+def glm_random_transformer_state_dict(config, model_cfg, num_layers, seed=42, first_layer_idx=0, share_experts=False):
+    """TtPrefillTransformer state dict (embed + global layers first_layer_idx .. first_layer_idx +
+    num_layers - 1), the shape extract_tt_state_dict returns for the HF-backed variants. No norm / LM
+    head: the chunked transformer has no tail unless MTP is on.
+
+    share_experts: every MoE layer reuses one set of routed / shared expert tensors (each keeps its own
+    gate), so host RAM holds one MoE layer's experts (~19 GB) however many MoE layers are built."""
     g = torch.Generator().manual_seed(seed)
     std = float(getattr(config, "initializer_range", 0.02))
+    experts = None
+    if share_experts:
+        _, routed, shared = glm_random_moe_weights(
+            config.hidden_size, model_cfg.MOE_INTERMEDIATE_SIZE, model_cfg.NUM_ROUTED_EXPERTS, seed + 1
+        )
+        experts = (routed, shared)
     return {
         "embed_weight": (torch.randn(config.vocab_size, config.hidden_size, generator=g) * std).to(torch.bfloat16),
-        "layers": [glm_random_layer_state_dict(config, model_cfg, i, seed) for i in range(num_layers)],
+        "layers": [
+            glm_random_layer_state_dict(config, model_cfg, first_layer_idx + i, seed, experts=experts)
+            for i in range(num_layers)
+        ],
     }
