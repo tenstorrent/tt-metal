@@ -6,6 +6,7 @@ import os
 import itertools
 import json
 import time
+from types import BuiltinFunctionType, FunctionType, ModuleType
 
 from loguru import logger
 from tt_py_test_utils_common.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
@@ -59,15 +60,34 @@ TORCH_INTEGER_DTYPES = [
 NP_INTEGER_DTYPES = [np.byte, np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
 
 
+def format_parametrize_id(argname, val):
+    """Stable `argname=value` fragment for a pytest parametrize ID.
+
+    pytest-xdist requires every worker to collect the same node IDs. The default
+    repr of a ttnn op, Python function, or TensorSpec embeds a process address,
+    so workers disagree and the session aborts. Used by `merge_gate_subset` (which
+    sets `id=` itself) and by `pytest_make_parametrize_id` in tests/ttnn/conftest.py.
+    """
+    if isinstance(val, ModuleType):
+        val = val.__name__
+    elif hasattr(val, "python_fully_qualified_name"):
+        val = val.python_fully_qualified_name
+    elif type(val).__name__ == "TensorSpec":
+        val = f"TensorSpec({val.shape},{val.dtype},{val.layout})"
+    elif isinstance(val, (BuiltinFunctionType, FunctionType)):
+        val = val.__name__
+    return f"{argname}={val}"
+
+
 def merge_gate_subset(axes, keep):
     """Cross product of `axes` for a single `pytest.mark.parametrize`, marking `merge_gate` only where `keep(**case)` is true.
 
     Marks on stacked parametrize decorators combine as a union across axes, so a subset of the cross
     product can only be gated from one parametrize. `axes` maps each argname to its values, or to a
     dict of id -> value for an axis that needs explicit ids. A key of comma-separated argnames takes
-    tuples of values, like a multi-argname parametrize. List the axes in test-ID order: IDs use the
-    `argname=value` format of tests/ttnn/conftest.py, so they match the IDs of the equivalent stacked
-    decorators, whose bottom decorator comes first.
+    tuples of values, like a multi-argname parametrize. List the axes in test-ID order: IDs use
+    `format_parametrize_id`, so they match the IDs of the equivalent stacked decorators, whose
+    bottom decorator comes first.
 
     Usage: @pytest.mark.parametrize(*merge_gate_subset({...}, keep=lambda **case: ...))
     """
@@ -83,7 +103,10 @@ def merge_gate_subset(axes, keep):
             continue
         value_tuples = values if len(names) > 1 else [(value,) for value in values]
         ids_and_values_per_axis.append(
-            [("-".join(f"{name}={value}" for name, value in zip(names, vt)), tuple(vt)) for vt in value_tuples]
+            [
+                ("-".join(format_parametrize_id(name, value) for name, value in zip(names, vt)), tuple(vt))
+                for vt in value_tuples
+            ]
         )
     params = []
     for case in itertools.product(*ids_and_values_per_axis):

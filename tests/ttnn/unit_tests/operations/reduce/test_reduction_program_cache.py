@@ -422,7 +422,7 @@ def test_reduce_cache_reuse_across_scalar_signs_hw(device, isolate_program_cache
             "two_core_groups": [False, True],
             "dtype": [torch.bfloat16, torch.float32],
             "dim": {"W": -1, "H": -2, "HW": [-2, -1]},
-            "op": {"op=ttnn.std": ttnn.std, "op=ttnn.var": ttnn.var},
+            "op": [ttnn.std, ttnn.var],
         },
         keep=lambda two_core_groups, dtype, dim, op: two_core_groups
         and dtype == torch.float32

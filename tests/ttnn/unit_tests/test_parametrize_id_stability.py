@@ -4,6 +4,7 @@
 
 import torch
 
+import ttnn
 from tests.ttnn.utils_for_testing import merge_gate_subset
 
 
@@ -52,3 +53,17 @@ def test_merge_gate_subset_ids_match_stacked_parametrize(request):
     ]
     assert [param.id for param in params] == expected
     assert [param.id for param in params if param.marks] == ["dim=-2-w=64-h=15", "dim=-2-w=22-h=15"]
+
+
+def test_merge_gate_subset_ids_for_ttnn_op_have_no_memory_address(request):
+    """merge_gate_subset sets id=, so it must use the same conversion as the hook.
+
+    str(ttnn.std) embeds a process address. pytest-xdist -n 4 then aborts because
+    workers collect different node IDs. Passing the op as a list (not a dict of
+    hand-written IDs) is the case a future caller would write.
+    """
+    hook = request.config.hook.pytest_make_parametrize_id
+    _, params = merge_gate_subset({"op": [ttnn.std, ttnn.var]}, keep=lambda **_: False)
+    expected = [hook(config=request.config, val=op, argname="op") for op in (ttnn.std, ttnn.var)]
+    assert [param.id for param in params] == expected
+    assert expected == ["op=ttnn.std", "op=ttnn.var"]
