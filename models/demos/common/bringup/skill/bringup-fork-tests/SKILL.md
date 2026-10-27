@@ -28,7 +28,9 @@ the test that runs the model at its serving chunk size.
 `fork_calls.json` lists each distinct call once, as `{sig, count, op, args, kwargs}`:
 - each tensor as `{shape` (per device), `dtype, layout, buffer, memory_layout, [shard_shape, shard_cores], mesh,
   devices}`;
-- everything else by value.
+- everything else by value; a program given to `ttnn.bringup.prepare_program` / `run_prepared` as its summary
+  (kernels, defines, cores, CBs, a `digest`; never an address): one case per program, built as the model builds it,
+  run by the plain `ttnn.generic_op` and prepared with the moved tensors at other addresses (bit-identical).
 `device` records how the mesh was opened: the fabric config, plus the test's `device_params` when it has them. A case
 uses the same values. `sig` names the call. Then list the calls with no case yet:
 
@@ -53,6 +55,7 @@ case, and never loosen its tolerance. A case dict holds:
 |---|---|
 | `id` | `<model>-<short description>`, unique; the pytest id |
 | `model`, `task`, `sig` | who made the call, and the captured signature it reproduces (the checker matches `model` + `sig`) |
+| `sigs` | optional: further captured signatures the same case reproduces (a program's `prepare_program` call next to its `run_prepared` `sig`) |
 | everything the call needs | tensor shapes, dtypes, layouts and memory placement exactly as captured, the scalar and enum arguments, the compute kernel config, the mesh shape |
 | `seed` | the torch seed for its inputs |
 | tolerance | e.g. `exact: True` for pure data movement, or `pcc` / `atol` / `rtol` for math |

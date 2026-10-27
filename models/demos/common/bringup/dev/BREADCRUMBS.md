@@ -2172,3 +2172,22 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   back-to-back alternating runs (A, B, A, B) until that is understood.
 - Selftests: test_warm_wall.py (the flat path's real walls settle at run 12; never-settling walls are flagged; the
   window rule).
+
+## F201: the generic program runners' calls are recorded and tested, by program, never by address (owner, 2026-10-27)
+- Symptom: DeepSeek-V4.1 O.1 under MOE_IMPL=block passed with 0 uncovered calls while Marko's fused MoE head and the
+  exchange's sparse dispatch ran through ttnn.bringup.prepare_program / run_prepared: plain nanobind functions, not
+  ttnn operations, so fork_capture never saw them (and their program argument printed as an object address).
+- testing/fork_capture.py: patch() also wraps ttnn.bringup.prepare_program / run_prepared (PROGRAM_RUNNERS). The
+  program is recorded as program_summary(desc): per (mesh range, program) its kernels (a file's path, or the inline
+  source's hash with integer literals >= 2^16 masked as addresses), defines and compile-time args (masked the same way),
+  core ranges, config, how many cores take runtime args (never their values), CBs (size, cores, formats, buffer-backed)
+  and semaphores; `digest` names it. run_prepared carries the summary of the descriptor it was prepared from. Shapes
+  and dtypes of the io tensors as for any call.
+- testing/fork_cases.py: op_to_fork also maps a fork's plain `mod.def` functions; a case may cover several captured
+  calls (`sigs`, e.g. one program's prepare_program and run_prepared).
+- core/gate.py outputs_in: every `fork_calls_<name>.json` an optests gate names is a gate output (deleted before the
+  gate, committed by it), not only fork_calls_scaled.json (DS41's O.1 now also records MOE_IMPL=block).
+- prepared_program/tests: one case per distinct program; the program built as the model builds it, run by the plain
+  generic_op and prepared with the call site's moved tensors at other addresses (bit-identical), and the determinism check.
+- Selftests: test_fork_capture_programs.py (the same program at two addresses -> one summary and one signature; another
+  define -> another program; masking keeps shapes).
