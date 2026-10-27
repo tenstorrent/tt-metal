@@ -290,7 +290,7 @@ class QuasarModelArgs(_QuasarArgsMixin, ModelArgs):
         # ttnn.scatter is not ported to Quasar; the vision-token merge copies rows on the host instead.
         self.device_scatter = False
         # Quasar DRAM (2 x 1 GiB) cannot hold the bf16 embedding table next to the bf16 LM head; keep the table on the
-        # host and upload only the looked-up rows (QUASAR_GAPS Q14). Prefill already embeds on the host.
+        # host and upload only the looked-up rows (QUASAR_GAPS Q9). Prefill already embeds on the host.
         self.host_embedding = True
 
 

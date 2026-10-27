@@ -206,7 +206,7 @@ WORKAROUNDS = [
         name="quasar_experimental_add",
         target="ttnn.add",
         reason="base binary_ng builds Gen1 DataMovementKernels, which Quasar rejects; the stop-gap "
-        "ttnn.experimental.quasar.add runs (QUASAR_GAPS Q7)",
+        "ttnn.experimental.quasar.add runs (QUASAR_GAPS Q5)",
         remove_when="base ttnn.add (binary_ng) is ported to Quasar",
         applies=_on_quasar,
         rewrite=_to_experimental_quasar("add"),
@@ -215,7 +215,7 @@ WORKAROUNDS = [
         name="quasar_experimental_sdpa",
         target="ttnn.transformer.scaled_dot_product_attention",
         reason="base prefill SDPA builds Gen1 DataMovementKernels, which Quasar rejects; the stop-gap "
-        "ttnn.experimental.quasar.transformer.scaled_dot_product_attention runs (QUASAR_GAPS Q8)",
+        "ttnn.experimental.quasar.transformer.scaled_dot_product_attention runs (QUASAR_GAPS Q6)",
         remove_when="base ttnn.transformer.scaled_dot_product_attention is ported to Quasar",
         applies=_on_quasar,
         rewrite=_to_experimental_quasar("transformer.scaled_dot_product_attention"),
@@ -224,7 +224,7 @@ WORKAROUNDS = [
         name="quasar_experimental_sdpa_decode",
         target="ttnn.transformer.paged_scaled_dot_product_attention_decode",
         reason="base decode SDPA is not ported to Quasar; the stop-gap "
-        "ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode is (QUASAR_GAPS Q13)",
+        "ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode is (QUASAR_GAPS Q8)",
         remove_when="base ttnn.transformer.paged_scaled_dot_product_attention_decode is ported to Quasar",
         applies=_on_quasar,
         rewrite=_to_experimental_quasar("transformer.paged_scaled_dot_product_attention_decode"),
@@ -233,7 +233,7 @@ WORKAROUNDS = [
         name="quasar_experimental_mul",
         target="ttnn.mul",  # the text MLP gate (tt_transformers mlp.py); the model never calls it as ttnn.multiply
         reason="base binary_ng builds Gen1 DataMovementKernels, which Quasar rejects; the stop-gap "
-        "ttnn.experimental.quasar.multiply runs, incl. input_tensor_a_activations=[SILU] (QUASAR_GAPS Q12)",
+        "ttnn.experimental.quasar.multiply runs, incl. input_tensor_a_activations=[SILU] (QUASAR_GAPS Q7)",
         remove_when="base ttnn.multiply (binary_ng) is ported to Quasar",
         applies=_on_quasar,
         rewrite=_to_experimental_quasar("multiply"),
