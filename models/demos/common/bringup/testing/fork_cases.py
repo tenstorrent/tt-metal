@@ -37,6 +37,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[5]
 FORKS = REPO / "ttnn" / "ttnn" / "bringup"
 BIND = re.compile(r'bind_function<\s*"(\w+)"\s*,\s*"ttnn\.bringup\."\s*>')
+DEF = re.compile(r'mod\.def\(\s*"([a-z]\w*)"')  # F201: plain functions of a fork (prepared_program's runners)
 
 
 def op_to_fork() -> dict[str, str]:
@@ -46,8 +47,9 @@ def op_to_fork() -> dict[str, str]:
 
     out = {}
     for f in sorted(FORKS.glob("*/*_nanobind.cpp")):
-        for op in BIND.findall(f.read_text()):
-            out[f"ttnn.bringup.{op}"] = f.parent.name
+        text = f.read_text()
+        for op in BIND.findall(text) + DEF.findall(text):
+            out.setdefault(f"ttnn.bringup.{op}", f.parent.name)
     init = FORKS / "__init__.py"
     if init.exists():
         for node in ast.parse(init.read_text()).body:
@@ -132,7 +134,8 @@ def check(capture: Path | list[Path], model: str) -> tuple[dict, dict[str, list[
         by_fork.setdefault(fork, []).append(c)
     missing: dict[str, list[dict]] = {}
     for fork, cs in by_fork.items():
-        have = {k["sig"] for k in cases(fork) if k.get("model") == model}
+        # (F201: a case may reproduce several calls - prepare_program and run_prepared of one program: "sigs")
+        have = {s for k in cases(fork) if k.get("model") == model for s in [k["sig"], *k.get("sigs", [])]}
         gap = [c for c in cs if c["sig"] not in have and c.get("sig_full") not in have]  # F179: old cases keep matching
         if gap:
             missing[fork] = gap
