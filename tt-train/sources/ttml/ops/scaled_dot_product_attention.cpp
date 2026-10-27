@@ -287,9 +287,9 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto out = ttml::autograd::create_tensor(attn_output);
 
     // ========== Register Backward Function using sdpa_bw kernel ==========
-    // With a gate, sdpa_bw writes grad_gate into Y (attn_output): the Q reader reads each row of Y into L1 before
-    // that row's dG is written. After backward, out holds dG as its value. Single backward only: a second gated
-    // pass (retain_graph=true) throws.
+    // When the gate requires grad, sdpa_bw writes grad_gate into Y (attn_output): the Q reader reads each row of Y
+    // into L1 before that row's dG is written. After backward, out holds dG as its value. Single backward only: a
+    // second pass after Y was overwritten (retain_graph=true) throws. With a frozen gate, Y is left intact.
     ttml::autograd::GradFunction grad = [query,
                                          key,
                                          value,
@@ -300,16 +300,20 @@ autograd::TensorPtr scaled_dot_product_attention(
                                          intermediates,
                                          dropout_probability,
                                          gate_ptr]() mutable {
+        const bool compute_grad_q = query->get_requires_grad();
+        const bool compute_grad_k = key->get_requires_grad();
+        const bool compute_grad_v = value->get_requires_grad();
+        const bool compute_grad_gate = gate_ptr ? gate_ptr->get_requires_grad() : false;
+        if (!autograd::any_requires_grad(query, key, value, gate_ptr)) {
+            return;
+        }
         if (!saved_attn_output.has_value()) {
             throw std::runtime_error(
                 "scaled_dot_product_attention: backward ran twice with a gate. The first pass overwrote the "
                 "forward output, so retain_graph=true is not supported for the gated op.");
         }
-        if (!autograd::any_requires_grad(query, key, value, gate_ptr)) {
-            return;
-        }
         const ttnn::Tensor attn_output = saved_attn_output.value();
-        if (gate_ptr) {
+        if (compute_grad_gate) {
             saved_attn_output.reset();  // consumed: this pass overwrites Y with dG
         }
 
@@ -331,12 +335,20 @@ autograd::TensorPtr scaled_dot_product_attention(
             mask_tensor,
             dropout_probability,
             gate_ptr ? std::make_optional(gate_ptr->get_value()) : std::nullopt,
-            /*preallocated_grad_gate=*/gate_ptr ? std::make_optional(attn_output) : std::nullopt);
+            /*preallocated_grad_gate=*/compute_grad_gate ? std::make_optional(attn_output) : std::nullopt,
+            ttml::metal::SDPABackwardGrads{
+                .query = compute_grad_q, .key = compute_grad_k, .value = compute_grad_v, .gate = compute_grad_gate});
 
-        query->add_grad(dL_dQ);
-        key->add_grad(dL_dK);
-        value->add_grad(dL_dV);
-        if (gate_ptr && dL_dGate.has_value()) {
+        if (compute_grad_q) {
+            query->add_grad(dL_dQ.value());
+        }
+        if (compute_grad_k) {
+            key->add_grad(dL_dK.value());
+        }
+        if (compute_grad_v) {
+            value->add_grad(dL_dV.value());
+        }
+        if (compute_grad_gate && dL_dGate.has_value()) {
             gate_ptr->add_grad(dL_dGate.value());
         }
     };

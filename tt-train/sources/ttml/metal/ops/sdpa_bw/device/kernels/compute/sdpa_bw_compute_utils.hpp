@@ -132,10 +132,11 @@ void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t c
 // This is part of the softmax gradient: dS = P * (dP - u), where u = sum(P * dP) per row.
 // Since O = P @ V, we have dP = dO @ V^T, and u = sum(dO * O) row-wise.
 // The reduction is done via matmul with a column of ones (cb_mat_mul_reduction).
-// Computes u_scalar = rowsum(dO * O) and packs the result to cb_u_scalar_row.
-// When cb_u_scaler_output != 0, also packs a second copy to that CB (for DRAM flush
-// to the KV kernel). Both packs happen directly from DST at full FP32 precision,
-// avoiding a separate copy-pack cycle.
+// Computes u_scalar = rowsum(dO * O). cb_u_scalar_row is always used as scratch for the reduction.
+// PackLocal: leave the result in cb_u_scalar_row for the caller's dS (the caller pops it).
+// PackOutput: also pack a copy to cb_u_scaler_output (for DRAM flush to the KV kernel).
+// Both packs happen directly from DST at full FP32 precision, avoiding a separate copy-pack cycle.
+template <bool PackLocal, bool PackOutput>
 void compute_u_scalar_row(
     const uint32_t cb_grad_output,
     const uint32_t cb_attn_output,
@@ -144,6 +145,7 @@ void compute_u_scalar_row(
     const uint32_t tiles_per_row,
     const uint32_t scaler_bits,
     const uint32_t cb_u_scaler_output) {
+    static_assert(PackLocal || PackOutput, "compute_u_scalar_row: the result must be packed somewhere");
     const uint32_t accum_register = 0;
     // using binary_tiles_init function instead of specific mul_init() because specific one doesn't support
     // accumulation to dest regs
@@ -183,17 +185,24 @@ void compute_u_scalar_row(
 
     tile_regs_wait();
     cb_pop_front(cb_u_scalar_row, onetile);
-    cb_reserve_back(cb_u_scalar_row, onetile);
-    pack_reconfig_data_format(cb_u_scalar_row);
-    pack_tile(accum_register, cb_u_scalar_row);
+    if constexpr (PackLocal) {
+        cb_reserve_back(cb_u_scalar_row, onetile);
+        pack_reconfig_data_format(cb_u_scalar_row);
+        pack_tile(accum_register, cb_u_scalar_row);
+    }
 
-    cb_reserve_back(cb_u_scaler_output, onetile);
-    pack_reconfig_data_format(cb_u_scalar_row, cb_u_scaler_output);
-    pack_tile(accum_register, cb_u_scaler_output);
-    cb_push_back(cb_u_scaler_output, onetile);
+    if constexpr (PackOutput) {
+        cb_reserve_back(cb_u_scaler_output, onetile);
+        // The last configured PACK target is cb_u_scalar_row either way (the scratch pack above).
+        pack_reconfig_data_format(cb_u_scalar_row, cb_u_scaler_output);
+        pack_tile(accum_register, cb_u_scaler_output);
+        cb_push_back(cb_u_scaler_output, onetile);
+    }
 
     tile_regs_release();
-    cb_push_back(cb_u_scalar_row, onetile);
+    if constexpr (PackLocal) {
+        cb_push_back(cb_u_scalar_row, onetile);
+    }
 }
 
 // Gated-attention backward epilogue inputs (forward: Y = O * sigmoid(G), where O = P @ V).
@@ -210,8 +219,12 @@ void compute_u_scalar_row(
 // DRAM copy) consume bit-identical dO. The same DST register is packed twice (local + DRAM
 // copy) because a CB has a single consumer and compute and writer both need dO.
 //
+// Each output is packed only when requested: PackLocal (the Q kernel's own dP, i.e. grad_Q), PackOutput (the KV
+// kernel's dO) and PackGradGate (grad_gate). Unrequested output CBs are not touched and need not exist.
+//
 // Does NOT pop cb_grad_output / cb_attn_output / cb_gate — the caller owns them.
 // Leaves the PACK format configured for BF16; callers whose next pack is FP32 must reconfigure.
+template <bool PackLocal, bool PackOutput, bool PackGradGate>
 void compute_gated_grad_output_and_grad_gate(
     const uint32_t cb_grad_output,
     const uint32_t cb_attn_output,
@@ -220,19 +233,31 @@ void compute_gated_grad_output_and_grad_gate(
     /* output dO (to writer) */ const uint32_t cb_gated_grad_output,
     /* output dG (to writer) */ const uint32_t cb_grad_gate,
     const uint32_t tiles_per_row) {
+    static_assert(
+        PackLocal || PackOutput || PackGradGate, "compute_gated_grad_output_and_grad_gate: nothing to produce");
     cb_wait_front(cb_gate, tiles_per_row);
 
-    cb_reserve_back(cb_gated_grad_output_local, tiles_per_row);
-    cb_reserve_back(cb_gated_grad_output, tiles_per_row);
-    cb_reserve_back(cb_grad_gate, tiles_per_row);
+    if constexpr (PackLocal) {
+        cb_reserve_back(cb_gated_grad_output_local, tiles_per_row);
+    }
+    if constexpr (PackOutput) {
+        cb_reserve_back(cb_gated_grad_output, tiles_per_row);
+    }
+    if constexpr (PackGradGate) {
+        cb_reserve_back(cb_grad_gate, tiles_per_row);
+    }
 
     constexpr uint32_t sig_reg = 0;         // sigmoid(G)
     constexpr uint32_t gated_reg = 1U;      // dY, then dY * s
     constexpr uint32_t grad_gate_reg = 2U;  // Y, then Y * dY * (1 - s)
     constexpr uint32_t tmp_reg = 3U;        // dY, then dY * (1 - s)
 
-    // Previous PACK target was the FP32 u_scaler; all three outputs here are BF16.
-    pack_reconfig_data_format(cb_gated_grad_output_local);
+    // The previous PACK target may be the FP32 u_scaler; all three outputs here are BF16, so reconfigure
+    // unconditionally to one that exists.
+    constexpr bool kFirstPackIsLocal = PackLocal;
+    constexpr bool kFirstPackIsOutput = !PackLocal && PackOutput;
+    pack_reconfig_data_format(
+        kFirstPackIsLocal ? cb_gated_grad_output_local : (kFirstPackIsOutput ? cb_gated_grad_output : cb_grad_gate));
 
     // G, dY and Y share format and tile shape, so one unpack config serves all three copies.
     reconfig_data_format(cb_gate, cb_gate);
@@ -247,26 +272,42 @@ void compute_gated_grad_output_and_grad_gate(
         copy_tile(cb_gate, tile_idx, sig_reg);
         sigmoid_tile(sig_reg);
 
-        copy_tile(cb_grad_output, tile_idx, gated_reg);      // dY in gated_reg
-        copy_tile(cb_grad_output, tile_idx, tmp_reg);        // dY in tmp_reg
-        copy_tile(cb_attn_output, tile_idx, grad_gate_reg);  // Y in grad_gate_reg
+        copy_tile(cb_grad_output, tile_idx, gated_reg);  // dY in gated_reg
+        if constexpr (PackGradGate) {
+            copy_tile(cb_grad_output, tile_idx, tmp_reg);        // dY in tmp_reg
+            copy_tile(cb_attn_output, tile_idx, grad_gate_reg);  // Y in grad_gate_reg
+        }
 
-        mul_binary_tile(gated_reg, sig_reg, gated_reg);          // dO = dY * s
-        sub_binary_tile(tmp_reg, gated_reg, tmp_reg);            // dY * (1 - s) = dY - dO
-        mul_binary_tile(grad_gate_reg, tmp_reg, grad_gate_reg);  // dG = Y * dY * (1 - s) = Y * (dY - dO)
+        mul_binary_tile(gated_reg, sig_reg, gated_reg);  // dO = dY * s
+        if constexpr (PackGradGate) {
+            sub_binary_tile(tmp_reg, gated_reg, tmp_reg);            // dY * (1 - s) = dY - dO
+            mul_binary_tile(grad_gate_reg, tmp_reg, grad_gate_reg);  // dG = Y * dY * (1 - s) = Y * (dY - dO)
+        }
 
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(gated_reg, cb_gated_grad_output_local);
-        pack_tile(gated_reg, cb_gated_grad_output);
-        pack_tile(grad_gate_reg, cb_grad_gate);
+        if constexpr (PackLocal) {
+            pack_tile(gated_reg, cb_gated_grad_output_local);
+        }
+        if constexpr (PackOutput) {
+            pack_tile(gated_reg, cb_gated_grad_output);
+        }
+        if constexpr (PackGradGate) {
+            pack_tile(grad_gate_reg, cb_grad_gate);
+        }
         tile_regs_release();
     }
 
-    cb_push_back(cb_gated_grad_output_local, tiles_per_row);
-    cb_push_back(cb_gated_grad_output, tiles_per_row);
-    cb_push_back(cb_grad_gate, tiles_per_row);
+    if constexpr (PackLocal) {
+        cb_push_back(cb_gated_grad_output_local, tiles_per_row);
+    }
+    if constexpr (PackOutput) {
+        cb_push_back(cb_gated_grad_output, tiles_per_row);
+    }
+    if constexpr (PackGradGate) {
+        cb_push_back(cb_grad_gate, tiles_per_row);
+    }
 }
 
 // Computes gradient w.r.t. attention weights: dP = dO @ V^T
@@ -370,6 +411,10 @@ void compute_grad_scores(
 // MOP/addr-mods. That is safe here: every MOP-driven op of this region (bcast sub,
 // copy_tile) has already executed by then, and downstream consumers re-init their own
 // state per call (matmul_init per phase, sub_bcast_cols_init per iteration).
+//
+// PackAttnWeightsTransposed: also produce P^T (only grad_V needs it). Without it the last PACK target is
+// cb_grad_scores_transposed instead of cb_attn_weights_transposed.
+template <bool PackAttnWeightsTransposed>
 void compute_grad_scores_and_transposes(
     const uint32_t cb_grad_attn_weights,
     const uint32_t cb_attention_weights,
@@ -406,21 +451,61 @@ void compute_grad_scores_and_transposes(
 
     // In-place 32-bit tile transposes (DST holds FP32; one init serves both calls).
     transpose_dest_init</* is_32bit */ true>(cb_attention_weights);
-    transpose_dest</* is_32bit */ true>(grad_reg);          // dS -> dS^T
-    transpose_dest</* is_32bit */ true>(attn_weights_reg);  // P  -> P^T
+    transpose_dest</* is_32bit */ true>(grad_reg);  // dS -> dS^T
+    if constexpr (PackAttnWeightsTransposed) {
+        transpose_dest</* is_32bit */ true>(attn_weights_reg);  // P  -> P^T
+    }
 
     tile_regs_commit();
 
     tile_regs_wait();
     cb_reserve_back(cb_grad_scores_transposed, onetile);
-    cb_reserve_back(cb_attn_weights_transposed, onetile);
+    if constexpr (PackAttnWeightsTransposed) {
+        cb_reserve_back(cb_attn_weights_transposed, onetile);
+    }
     // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
     pack_reconfig_data_format(cb_grad_attn_weights, cb_grad_scores_transposed);
     pack_tile(grad_reg, cb_grad_scores_transposed);
-    pack_reconfig_data_format(cb_grad_scores_transposed, cb_attn_weights_transposed);
-    pack_tile(attn_weights_reg, cb_attn_weights_transposed);
+    if constexpr (PackAttnWeightsTransposed) {
+        pack_reconfig_data_format(cb_grad_scores_transposed, cb_attn_weights_transposed);
+        pack_tile(attn_weights_reg, cb_attn_weights_transposed);
+    }
     tile_regs_release();
     cb_push_back(cb_grad_scores_transposed, onetile);
+    if constexpr (PackAttnWeightsTransposed) {
+        cb_push_back(cb_attn_weights_transposed, onetile);
+    }
+}
+
+// grad_V-only counterpart of compute_grad_scores_and_transposes: P^T for dV = P^T @ dO, without dP, u or dS.
+// P is copied to DST at full FP32 (cb_attention_weights is unpack-to-dest FP32), transposed in place with the
+// 32-bit transpose_dest and packed to cb_attn_weights_transposed, the same path as P^T above — bit-identical.
+// The caller's previous unpack operands are not known here, so both sources are reconfigured unconditionally:
+// SrcA for the P copy, and SrcB for the P^T operand of the caller's update_grad_value matmul (matmul_init only
+// asserts the unpack formats, it does not program them; the full variant sets SrcB through its u_scaler bcast).
+// Leaves cb_attn_weights_transposed as the last PACK target, like the full variant. Does NOT pop P.
+void compute_attn_weights_transposed(
+    const uint32_t cb_attention_weights, /* output P^T */ const uint32_t cb_attn_weights_transposed) {
+    cb_wait_front(cb_attention_weights, onetile);
+
+    const uint32_t attn_weights_reg = 0;
+
+    tile_regs_acquire();
+    reconfig_data_format(cb_attention_weights, cb_attn_weights_transposed);
+    copy_init(cb_attention_weights);
+    copy_tile(cb_attention_weights, /* tile_idx */ 0, /* register idx */ attn_weights_reg);
+
+    transpose_dest_init</* is_32bit */ true>(cb_attention_weights);
+    transpose_dest</* is_32bit */ true>(attn_weights_reg);  // P -> P^T
+
+    tile_regs_commit();
+
+    tile_regs_wait();
+    cb_reserve_back(cb_attn_weights_transposed, onetile);
+    // 2-arg pack_reconfig: the previous PACK target is P itself (cb_attention_weights).
+    pack_reconfig_data_format(cb_attention_weights, cb_attn_weights_transposed);
+    pack_tile(attn_weights_reg, cb_attn_weights_transposed);
+    tile_regs_release();
     cb_push_back(cb_attn_weights_transposed, onetile);
 }
 
