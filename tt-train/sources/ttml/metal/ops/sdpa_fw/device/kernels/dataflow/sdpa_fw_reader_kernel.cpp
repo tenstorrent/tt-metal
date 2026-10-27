@@ -101,15 +101,17 @@ void kernel_main() {
 #ifdef USE_ATTN_MASK
             // Arbitrary mask: Sq_chunk_t x Sk_chunk_t tiles of this step, row-major, shared by the stacked
             // heads; the mask is (1, 1, S, S), so a row's Sk_chunk_t tiles are contiguous.
+            cb_reserve_back(cb_attn_mask, Sq_chunk_t * Sk_chunk_t);
+            uint32_t mask_l1_addr = get_write_ptr(cb_attn_mask);
             for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                read_tiles_by_row(
-                    cb_attn_mask,
-                    mask_address_generator,
-                    (w.first_row_tile + r) * Ht + h_start,
-                    Sk_chunk_t,
-                    tile_bytes,
-                    Sk_chunk_t);
+                const uint32_t mask_start_idx = (w.first_row_tile + r) * Ht + h_start;
+                for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+                    noc_async_read_page(mask_start_idx + n, mask_address_generator, mask_l1_addr);
+                    mask_l1_addr += tile_bytes;
+                }
             }
+            noc_async_read_barrier();
+            cb_push_back(cb_attn_mask, Sq_chunk_t * Sk_chunk_t);
 #endif
             // Note: For CAUSAL_MASK, the two reusable mask tiles are generated once by the writer.
             const uint32_t value_start_idx = value_offset + h_start * vWt;
