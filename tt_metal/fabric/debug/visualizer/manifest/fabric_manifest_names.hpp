@@ -101,11 +101,11 @@ inline std::string schema_name(const layout::Type& type) {
             } else if constexpr (std::is_same_v<E, element::Int>) {
                 return fmt::format("i{}", element_size(type) * 8);
             } else if constexpr (std::is_same_v<E, element::Enum>) {
-                return fmt::format("{}{}", k_enum_schema, e.type_name);
+                return fmt::format("{}{}", k_enum_schema, e.description->name);
             } else if constexpr (std::is_same_v<E, element::Struct>) {
-                return fmt::format("{}{}", k_struct_schema, e.type_name);
+                return fmt::format("{}{}", k_struct_schema, e.description->name);
             } else if constexpr (std::is_same_v<E, element::TaggedUnion>) {
-                return fmt::format("{}{}", k_union_schema, e.type_name);
+                return fmt::format("{}{}", k_union_schema, e.description->name);
             } else if constexpr (std::is_same_v<E, element::Bytes>) {
                 return "bytes";
             } else if constexpr (std::is_same_v<E, element::Pad>) {
