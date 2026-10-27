@@ -5,7 +5,8 @@
 # copied to DEST, and the first num_rows_to_pack 16-datum rows of it are packed into its own two-tile
 # result slot, tile % 4 16B units from the slot start. Input and output formats match, so the packed
 # rows must equal the first rows of the input tile byte for byte, and every other byte of the result
-# buffer must keep the guard value written before the run.
+# buffer must keep the guard value written before the run. The check is on raw bytes rather than a
+# golden so that it also proves nothing outside the packed rows is written.
 
 import pytest
 from helpers.device_io import read_from_device
@@ -43,7 +44,13 @@ class GuardedResultStimuliConfig(StimuliConfig):
 @pytest.mark.quasar
 @parametrize(
     formats=input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32], same=True
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.Float32,
+            DataFormat.Int32,
+        ],
+        same=True,
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dest_sync_mode=[DestSync.Half, DestSync.Full],
@@ -91,7 +98,7 @@ def test_pack_rows_to_addr_quasar(formats, dest_acc, dest_sync_mode, num_rows_to
     configuration.run()
 
     input_tile_bytes = stimuli.tile_size_A_bytes
-    slot_bytes = stimuli.buf_res_tile_size
+    slot_bytes = 2 * stimuli.buf_res_tile_size
     input_raw = read_from_device(
         TestConfig.TENSIX_LOCATION,
         stimuli.buf_a_addr,
@@ -100,13 +107,13 @@ def test_pack_rows_to_addr_quasar(formats, dest_acc, dest_sync_mode, num_rows_to
     result_raw = read_from_device(
         TestConfig.TENSIX_LOCATION,
         stimuli.buf_res_addr,
-        num_bytes=2 * tile_cnt_A * slot_bytes,
+        num_bytes=tile_cnt_A * slot_bytes,
     )
 
     rows_bytes = num_rows_to_pack * ROW_NUM_DATUMS * int(formats.output_format.size)
     expected = bytearray([GUARD_BYTE]) * len(result_raw)
     for tile in range(tile_cnt_A):
-        start = 2 * tile * slot_bytes + 16 * (tile % 4)
+        start = tile * slot_bytes + 16 * (tile % 4)
         tile_start = tile * input_tile_bytes
         expected[start : start + rows_bytes] = input_raw[
             tile_start : tile_start + rows_bytes

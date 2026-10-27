@@ -118,10 +118,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t NUM_BLOCKS          = params.NUM_BLOCKS;
-    const std::uint32_t NUM_TILES_IN_BLOCK  = params.NUM_TILES_IN_BLOCK;
-    const std::uint32_t NUM_ROWS_TO_PACK    = params.NUM_ROWS_TO_PACK;
-    const Operand& buffer_Res               = params.buffer_Res;
+    const std::uint32_t NUM_BLOCKS         = params.NUM_BLOCKS;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t NUM_ROWS_TO_PACK   = params.NUM_ROWS_TO_PACK;
+    const Operand& buffer_Res              = params.buffer_Res;
 #endif
     if constexpr (unpack_to_dest)
     {

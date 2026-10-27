@@ -21,12 +21,13 @@ ALWI void pack_rows_to_addr_init(uint32_t num_rows) { PACK((llk_pack_rows_init(n
 // NOTE: this raw path bypasses the CB/DFB write pointer, because it packs to an arbitrary L1 address.
 // On WH/BH it also bypasses the llk_pack_rows wrapper's dst_index bound check, so callers are responsible
 // for keeping idst within DEST capacity.
+
 ALWI void pack_rows_to_addr(uint32_t idst, uint32_t l1_addr) {
-#ifdef ARCH_QUASAR
+#ifndef ARCH_QUASAR
+    PACK((_llk_pack_rows_(idst, l1_addr - 1)));
+#else
     // Quasar L1 address fields have no off-by-one convention.
     PACK((llk_pack_rows_to_addr(idst, l1_addr)));
-#else
-    PACK((_llk_pack_rows_(idst, l1_addr - 1)));
 #endif
 }
 
