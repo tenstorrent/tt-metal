@@ -47,6 +47,11 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quas
 )
 from tt_py_test_utils_common.utility_functions import is_quasar
 
+# No test in this module parametrizes device_params, so the device is opened once per
+# module rather than once per test. The subprocess tests below take no `device` fixture
+# at all - each opens its own device in its own process - and are unaffected.
+pytestmark = pytest.mark.use_module_device
+
 # Resolve the inspector output the way the runtime does: <logs_dir>/generated/inspector, where
 # logs_dir is TT_METAL_LOGS_PATH if set, else the root dir (TT_METAL_HOME, else cwd). See
 # tt_metal/llrt/rtoptions.cpp. A hardcoded absolute path would be the only one in this directory and

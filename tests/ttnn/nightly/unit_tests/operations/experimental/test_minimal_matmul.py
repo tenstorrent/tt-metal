@@ -14,6 +14,12 @@ from tracy.process_model_log import (
     get_latest_ops_log_filename,
     run_device_profiler,
 )
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
 
 
 def assert_quality(torch_output, tt_output):
@@ -701,7 +707,10 @@ def _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, label):
             "are patched once and then frozen instead of on every dispatch."
         )
 
-    device.disable_and_clear_program_cache()
+    # Clear the entries this helper added, but leave the cache ENABLED: that is the state a freshly
+    # opened device has, and with a module-scoped device, exiting disabled would silently disable it
+    # for every later test in the file - including the perf gate, whose warm-up would warm nothing.
+    device.clear_program_cache()
 
 
 def test_program_cache_hit_bias(device):
@@ -879,25 +888,60 @@ def test_run_performance(device):
     assert check_result["relative_rmse"] < 0.02
 
 
-def test_performance():
-    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
-    cols = ["ATTRIBUTES"]
-    command = (
-        f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py::test_run_performance"
+def test_performance(device):
+    # Measured in-process with the real-time profiler. Running this under the Tracy
+    # profiler instead costs a subprocess launch, its own device open and a CSV
+    # post-process - ~300s to time a matmul that takes microseconds.
+    core_grid = ttnn.CoreCoord(8, 8)
+    core_count = core_grid.x * core_grid.y
+    M, K, N = 4096, 4096, 4096
+
+    torch_input = torch.randn((M, K), dtype=torch.float32)
+    weight_input = torch.randn((K, N), dtype=torch.float32)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=core_grid,
     )
 
-    run_device_profiler(command, "ttnn_minimal_matmul_performance", device_analysis_types=["device_kernel_duration"])
-    r = post_process_ops_log(
-        "ttnn_minimal_matmul_performance",
-        float_columns=float_cols,
-        columns=cols,
-        op_name="",
-        sum_vals=False,
-        has_signposts=False,
+    def run_matmul():
+        return ttnn.experimental.minimal_matmul(
+            tt_input,
+            tt_weight,
+            compute_kernel_config=compute_config,
+            config=matmul_config,
+        )
+
+    def warm_then_measure():
+        # The warm-up keeps kernel compilation out of the measured dispatch. It runs INSIDE the
+        # profiler window on purpose: its record is published asynchronously, so dispatching it
+        # before the callback is registered does not keep it out of the window, and the measured
+        # dispatch then has to be identified rather than assumed to be the only record.
+        run_matmul()
+        return run_matmul()
+
+    _, records = profile_realtime_program(device, warm_then_measure, collect_all=True)
+    assert len(records) == 2, (
+        f"expected the warm-up and the measured dispatch, got {len(records)} record(s): {records}. "
+        "An unattributed record set would grade whichever dispatch happened to land first."
     )
-    core_count = int(r["CORE COUNT"][0])
-    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
-    expected_ns = perf_model(4096, 4096, 4096, core_count, 2)
+    # runtime_id increases with dispatch order, so the measured dispatch is the later of the two.
+    record = max(records, key=lambda record: record["runtime_id"])
+    duration_ns = record["duration_ns"]
+    expected_ns = perf_model(M, K, N, core_count, 2)
 
     util = expected_ns / duration_ns
     logger.info(f"Utilization: {util*100:.1f}%")

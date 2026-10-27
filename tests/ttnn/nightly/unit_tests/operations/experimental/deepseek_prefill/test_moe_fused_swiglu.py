@@ -35,6 +35,11 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test
     to_dram_nd_sharded,
 )
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 # Device activation -> the TorchExpert reference that must match it, so a case cannot grade one
 # activation against another's golden.
 _TORCH_ACTIVATION = {
