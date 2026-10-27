@@ -55,8 +55,8 @@ class TtFFN:
 class TtMLSTM:
     w_qkv: object  # [512, 1536]: q*1/8 | k | v, each 4 heads x 128 (q, k zero-padded 64 -> 128)
     w_o: object  # [512, 512]
-    w_gates: list  # 4 x [512, 32] fp32: col 0 = i_h / 15, col 1 = f_h / 15
-    b_gates: list  # 4 x [1, 1, 1, 32] fp32
+    w_gates: object  # [512, 128] fp32, 32 columns per head: col 0 = i_h / 15, col 1 = f_h / 15
+    b_gates: object  # [1, 1, 1, 128] fp32
     w_out: object  # [512, 512], rows scaled by the multi-head norm weight
 
 
@@ -117,21 +117,18 @@ def _mlstm(device, b: df.BlockW, dtype) -> TtMLSTM:
     q = q * (df.QK_DIM**-0.5)
     pad = lambda t: torch.nn.functional.pad(t.reshape(512, 4, 64), (0, QK_PAD - 64)).reshape(512, 4 * QK_PAD)
     w_qkv = torch.cat([pad(q), pad(k), v], dim=1)
-    gates, biases = [], []
+    wg = torch.zeros(512, df.HEADS * 32)
+    bg = torch.zeros(df.HEADS * 32)
     for h in range(df.HEADS):
-        wg = torch.zeros(512, 32)
-        wg[:, 0] = g[:, h] / df.GATE_CAP
-        wg[:, 1] = g[:, df.HEADS + h] / df.GATE_CAP
-        bg = torch.zeros(32)
-        bg[0] = c.b_if[h] / df.GATE_CAP
-        bg[1] = c.b_if[df.HEADS + h] / df.GATE_CAP
-        gates.append(upload_weight(device, wg, ttnn.float32))
-        biases.append(upload_vector(device, bg, ttnn.float32))
+        wg[:, 32 * h] = g[:, h] / df.GATE_CAP
+        wg[:, 32 * h + 1] = g[:, df.HEADS + h] / df.GATE_CAP
+        bg[32 * h] = c.b_if[h] / df.GATE_CAP
+        bg[32 * h + 1] = c.b_if[df.HEADS + h] / df.GATE_CAP
     return TtMLSTM(
         upload_weight(device, w_qkv, dtype),
         upload_weight(device, o, dtype),
-        gates,
-        biases,
+        upload_weight(device, wg, ttnn.float32),
+        upload_vector(device, bg, ttnn.float32),
         upload_weight(device, _rows(c.w_mhnorm, c.w_out), dtype),
     )
 

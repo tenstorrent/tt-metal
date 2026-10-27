@@ -363,12 +363,11 @@ def mlstm_layer(
     free(q128, k128)
     for nm, t in (("q", q), ("k", k), ("v", v)):
         _keep(debug, nm, t)
-    gates = [
-        linear(xn, w.w_gates[h], precision, bias=w.b_gates[h], dtype=ttnn.float32, config=exact_config())
-        for h in range(df.HEADS)
-    ]
+    gs = linear(xn, w.w_gates, precision, bias=w.b_gates, dtype=ttnn.float32, config=exact_config())
     o = linear(xn, w.w_o, precision, role="mlstm")
     free(xn)
+    gates = [ttnn.slice(gs, (0, 0, 0, 32 * h), (B, 1, T, 32 * (h + 1))) for h in range(df.HEADS)]
+    free(gs)
     g = ttnn.concat(gates, dim=1)  # [B, 4, T, 32]
     free(*gates)
     gt = ttnn.tanh(g)
