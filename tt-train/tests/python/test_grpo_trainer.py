@@ -1259,7 +1259,7 @@ def _first_block_grads_after_one_step(fresh_device_mesh, device_config, gradient
             model_source=QWEN3_MODEL_ID,
             dataset_func=lambda: dataset,
             config=config,
-            reward_func=lambda completions, **_: [float(i % 2) for i in range(len(completions))],
+            reward_func=lambda completions, **_: [float(i * i) for i in range(len(completions))],
             optimizer_dict={"type": "AdamW", "lr": 1e-5},
             callbacks=[recorder],
         )
@@ -1284,8 +1284,8 @@ def test_grpo_gradients_match_across_device_counts(fresh_device_mesh, parallelis
     one_device = DeviceConfig({"device_config": {"mesh_shape": [1, 1]}})
     two_devices = DeviceConfig({"device_config": {parallelism: True, "mesh_shape": [1, 2]}})
 
-    expected, scored = _first_block_grads_after_one_step(fresh_device_mesh, one_device, 2)
-    actual, _ = _first_block_grads_after_one_step(fresh_device_mesh, two_devices, 1, scored)
+    actual, scored = _first_block_grads_after_one_step(fresh_device_mesh, two_devices, 1)
+    expected, _ = _first_block_grads_after_one_step(fresh_device_mesh, one_device, 2, scored)
 
     assert expected and actual.keys() == expected.keys()
     for name, grad in expected.items():
