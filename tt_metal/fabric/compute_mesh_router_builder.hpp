@@ -13,7 +13,7 @@
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/builder/connection_registry.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_collector.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_router_pass.hpp"
 
 namespace tt::tt_fabric {
 

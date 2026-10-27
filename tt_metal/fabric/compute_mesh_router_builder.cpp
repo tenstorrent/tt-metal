@@ -18,7 +18,7 @@
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/builder/injection_policy.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_collector.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_router_pass.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -701,7 +701,8 @@ void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatam
     auto* adapter_ptr = erisc_builder_->receiver_channel_to_downstream_adapter.get();
     const auto tensix_noc_x = tensix_builder.get_noc_x();
     const auto tensix_noc_y = tensix_builder.get_noc_y();
-    adapter_ptr->add_local_tensix_connection(adapter_spec, local_tensix_dir, tt::tt_metal::CoreCoord(tensix_noc_x, tensix_noc_y));
+    adapter_ptr->add_local_tensix_connection(
+        adapter_spec, local_tensix_dir, tt::tt_metal::CoreCoord(tensix_noc_x, tensix_noc_y));
 
     // Provide router NOC coordinates to relay kernel for sending packets back to router
     tensix_builder.append_relay_router_noc_xy(erisc_builder_->get_noc_x(), erisc_builder_->get_noc_y());

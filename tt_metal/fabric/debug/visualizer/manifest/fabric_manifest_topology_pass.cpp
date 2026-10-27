@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_chip_pass.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_topology_pass.hpp"
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
@@ -33,7 +33,7 @@ using manifest::router_key;
 
 // The router on `peer_chan`, or nullopt when ControlPlane has no active router there (the channel was trimmed from
 // the peer's routing planes).
-std::optional<manifest::RouterRef> peer_router_ref(
+std::optional<manifest::RouterRef> find_peer_router(
     const ControlPlane& control_plane, FabricNodeId peer_node, chan_id_t peer_chan) {
     for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(peer_node)) {
         if (chan == peer_chan) {
@@ -75,7 +75,7 @@ bool is_wrap_link(
 }
 
 // The channel of the router facing `direction` on the same chip and routing plane as the router on `chan`.
-chan_id_t sibling_chan(
+chan_id_t get_sibling_chan(
     const ControlPlane& control_plane, FabricNodeId node, chan_id_t chan, eth_chan_directions direction) {
     const auto plane = control_plane.get_routing_plane_id(node, chan);
     for (const auto& [sibling, sibling_direction] : control_plane.get_active_fabric_eth_channels(node)) {
@@ -91,18 +91,18 @@ chan_id_t sibling_chan(
         plane);
 }
 
-tt::tt_metal::CoreCoord router_logical_core(const tt::Cluster& cluster, ChipId physical_chip_id, chan_id_t chan) {
+tt::tt_metal::CoreCoord get_router_logical_core(const tt::Cluster& cluster, ChipId physical_chip_id, chan_id_t chan) {
     const auto core = cluster.get_soc_desc(physical_chip_id).get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
     return tt::tt_metal::CoreCoord(core.x, core.y);
 }
 
-tt::tt_metal::CoreCoord router_virtual_core(const tt::Cluster& cluster, ChipId physical_chip_id, chan_id_t chan) {
+tt::tt_metal::CoreCoord get_router_virtual_core(const tt::Cluster& cluster, ChipId physical_chip_id, chan_id_t chan) {
     return cluster.get_virtual_coordinate_from_logical_coordinates(
-        physical_chip_id, router_logical_core(cluster, physical_chip_id, chan), CoreType::ETH);
+        physical_chip_id, get_router_logical_core(cluster, physical_chip_id, chan), CoreType::ETH);
 }
 
 // The value of the flag field keyed `key`.
-bool flag_field(const std::vector<manifest::Field>& fields, std::string_view key) {
+bool read_flag_field(const std::vector<manifest::Field>& fields, std::string_view key) {
     const auto it = std::ranges::find(fields, key, &manifest::Field::key);
     TT_FATAL(it != fields.end(), "Fabric manifest: no field keyed {}", key);
     const auto* flag = it->content.has_value() ? std::get_if<manifest::content::Flag>(&*it->content) : nullptr;
@@ -151,8 +151,8 @@ std::vector<manifest::Router> resolve_router_identities(
             "Fabric manifest: {} has two routers keyed {}",
             node,
             router_key(identity.direction, identity.routing_plane));
-        identity.logical_core = router_logical_core(cluster, physical_chip_id, chan);
-        identity.virtual_core = router_virtual_core(cluster, physical_chip_id, chan);
+        identity.logical_core = get_router_logical_core(cluster, physical_chip_id, chan);
+        identity.virtual_core = get_router_virtual_core(cluster, physical_chip_id, chan);
         routers.push_back(std::move(router));
     }
 
@@ -167,7 +167,7 @@ std::vector<manifest::Router> resolve_router_identities(
 }
 
 // The router that leads the chip's local sync.
-manifest::RouterRef master_router_ref(
+manifest::RouterRef get_master_router(
     const std::vector<manifest::Router>& routers, FabricNodeId node, uint32_t master_eth_chan) {
     const auto it = std::ranges::find(
         routers, master_eth_chan, [](const manifest::Router& router) { return router.identity.eth_chan; });
@@ -190,7 +190,7 @@ void resolve_link_peer(
     const chan_id_t chan = router.identity.eth_chan;
     const auto peer = control_plane.try_get_connected_mesh_chip_chan_ids(node, chan);
     if (peer.has_value()) {
-        router.link.peer = peer_router_ref(control_plane, peer->first, peer->second);
+        router.link.peer = find_peer_router(control_plane, peer->first, peer->second);
     }
     router.link.cross_host = control_plane.is_cross_host_eth_link(physical_chip_id, chan);
     router.link.wrap = is_wrap_link(fabric_type, control_plane.get_mesh_graph(), node, router.identity.direction, peer);
@@ -214,7 +214,7 @@ void resolve_edge_siblings(
         const chan_id_t chan = router.identity.eth_chan;
         for (uint32_t vc = 0; vc < router.intra_chip_downstream_edges.size(); ++vc) {
             for (auto& edge : router.intra_chip_downstream_edges[vc]) {
-                const auto target = sibling_chan(control_plane, node, chan, edge.target.direction);
+                const auto target = get_sibling_chan(control_plane, node, chan, edge.target.direction);
                 const auto it = by_chan.find(target);
                 TT_FATAL(
                     it != by_chan.end(),
@@ -259,7 +259,7 @@ void resolve_edge_siblings(
                 const auto landed = landed_by.find({chan, vc, ch});
                 if (landed == landed_by.end()) {
                     TT_FATAL(
-                        !flag_field(sender.fields, manifest::k_static_connection_key),
+                        !read_flag_field(sender.fields, manifest::k_static_connection_key),
                         "Fabric manifest: {} channel {}'s VC{} sender {} waits for a sibling to connect, but no "
                         "sibling's edge lands on it",
                         node,
@@ -297,7 +297,7 @@ manifest::Chip resolve_chip_routers(
     ChipId physical_chip_id) {
     chip.routers = resolve_router_identities(std::move(chip.routers), control_plane, cluster, node, physical_chip_id);
     if (chip.local_sync.has_value()) {
-        chip.local_sync->master = master_router_ref(chip.routers, node, chip.local_sync->master_eth_chan);
+        chip.local_sync->master = get_master_router(chip.routers, node, chip.local_sync->master_eth_chan);
     }
     for (auto& router : chip.routers) {
         resolve_link_peer(router, control_plane, fabric_type, node, physical_chip_id);

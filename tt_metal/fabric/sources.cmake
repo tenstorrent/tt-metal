@@ -43,9 +43,9 @@ set(FABRIC_SOURCES
     builder/router_wiring_rules.cpp
     debug/visualizer/manifest/fabric_manifest.cpp
     debug/visualizer/manifest/fabric_manifest_build_identity.cpp
-    debug/visualizer/manifest/fabric_manifest_chip_pass.cpp
-    debug/visualizer/manifest/fabric_manifest_collector.cpp
     debug/visualizer/manifest/fabric_manifest_describe.cpp
+    debug/visualizer/manifest/fabric_manifest_router_pass.cpp
+    debug/visualizer/manifest/fabric_manifest_topology_pass.cpp
     channel_trimming_export.cpp
     channel_trimming_import.cpp
     channel_trimming_io.cpp

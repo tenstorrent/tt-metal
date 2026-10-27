@@ -40,7 +40,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_collector.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_router_pass.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
