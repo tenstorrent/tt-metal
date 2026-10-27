@@ -554,20 +554,21 @@ inline void calculate_typecast_uint16_to_uint32() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint32_to_uint16() {
-    // Kept as a plain loop (no SFPLOADMACRO): #46231 rewrote this to shift the value right by 16
-    // and renormalize (2's-complement + shift + OR) before the swap-hi-lo16 store. The historical
-    // macro used a LO16-load 2-macro pipeline on a different bit layout and computes a different
-    // result, so it is not equivalent and is not restored here. See #46751.
+    // Kept as a plain loop (no SFPLOADMACRO): #46231 rewrote this to saturate before the
+    // swap-hi-lo16 store. The historical macro used a LO16-load 2-macro pipeline on a different
+    // bit layout and computes a different result, so it is not equivalent and is not restored
+    // here. See #46751.
+    //
+    // Saturation: x >= 65536 exactly when clz(x) < 16 (SFPLZ returns 32 for x == 0), so those
+    // lanes are overwritten with 0xFFFF and the rest keep x (< 65536, high half already zero).
+    // The swap-hi-lo16 store then places the UInt16 result in the high half of the Dest word,
+    // where the packer reads it. 6 SFPU instructions per row (was 7: MOV/SHFT/IADD/SHFT/OR).
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG0, 1);
-        TTI_SFPIADD(
-            0, p_sfpu::LCONST_0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE | sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
-        TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG0, 1);
-        TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPSTORE(p_sfpu::LREG1, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
+        vUInt x = dst_reg[0].template mode<sfpi::DataLayout::U32>(ADDR_MOD_3);
+        v_if(lz(x) < 16) { x = vUInt(UINT16_LOW_MASK); }
+        v_endif;
+        dst_reg[0].template mode<sfpi::DataLayout::LO16>(ADDR_MOD_2) = x;
     }
 }
 
