@@ -125,12 +125,20 @@ def _build(mesh_device):
 
 
 def _prefill_all(model, mtp, prompt) -> tuple[int, int]:
-    """Every user slot (of every row) gets the same prompt; returns (first token, S)."""
+    """Every user slot (of every row) gets the same prompt; returns (first token, S). Logs the prefill time as the
+    run's TTFT (eager prefill with the MTP hidden capture, one call per user slot of a row, each serving its 8
+    replicas): the README's row rule wants TTFT and decode from the same run."""
     model.reset_kda_states()
     tok = pos = None
+    t0 = time.perf_counter()
     for u in range(model.max_batch):
         tok, pos = prefill_with_mtp(model, mtp, prompt, user=u)
     ttnn.synchronize_device(model.device)
+    dt = time.perf_counter() - t0
+    logger.info(
+        f"PERF-SPEC-TTFT mesh {MESH} users/row {model.max_batch}: prompt {pos} tokens, eager prefill + MTP capture "
+        f"{dt:.2f} s for {model.max_batch} prefills = {1000 * dt / model.max_batch:.0f} ms per prefill (TTFT)"
+    )
     return tok, pos
 
 
