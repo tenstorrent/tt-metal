@@ -9,7 +9,6 @@
 // level APIs
 //
 
-#include <sys/types.h>
 #include <cstddef>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -21,8 +20,6 @@
 #include <optional>
 #include <ostream>
 #include <string_view>
-#include <tt-umd/types/xy_pair.hpp>
-#include <tt-umd/types/cluster_types.hpp>
 #include <tt-umd/utils/semver.hpp>
 #include <unordered_set>
 #include <utility>

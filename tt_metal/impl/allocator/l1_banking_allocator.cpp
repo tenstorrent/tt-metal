@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <iterator>
 #include <numeric>
 #include <memory>
@@ -25,11 +24,11 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator_types.hpp"
-#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "llrt/core_descriptor.hpp"
 #include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 
 namespace tt::tt_metal {

@@ -11,7 +11,6 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>

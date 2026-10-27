@@ -3,16 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include "experimental/fabric/routing_table_generator.hpp"
 #include "fabric_host_utils.hpp"
-#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include <enchantum/enchantum.hpp>
 #include <yaml-cpp/yaml.h>
 #include <algorithm>
 #include <array>
-#include <fstream>
-#include <iomanip>
 #include <optional>
 
 #include <tt_stl/fmt.hpp>
@@ -23,13 +19,10 @@
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt_stl/indestructible.hpp>
-#include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
-#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "protobuf/mesh_graph_descriptor.pb.h"
 #include <numeric>
-#include <set>
 #include <cmath>
 #include <utility>
 

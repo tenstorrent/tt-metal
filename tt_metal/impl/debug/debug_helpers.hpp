@@ -22,7 +22,6 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "llrt.hpp"
-#include <impl/dispatch/dispatch_core_manager.hpp>
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "llrt/hal.hpp"

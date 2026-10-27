@@ -9,11 +9,12 @@
 #include <utility>
 #include <vector>
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // RoutingDirection
 
 namespace tt::tt_fabric {
 

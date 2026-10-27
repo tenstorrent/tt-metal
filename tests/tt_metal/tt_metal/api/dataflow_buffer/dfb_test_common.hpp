@@ -5,15 +5,14 @@
 #pragma once
 
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <numeric>
 #include <optional>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 #include <gtest/gtest.h>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -34,7 +33,6 @@
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel.hpp"
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
@@ -46,8 +44,6 @@
 #include <functional>
 #include <thread>
 #include <tt-metalium/bfloat16.hpp>
-#include "impl/data_format/bfloat16_utils.hpp"
-#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 

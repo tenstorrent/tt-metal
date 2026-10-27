@@ -8,8 +8,6 @@
 #include <numeric>
 #include <string>
 #include <string_view>
-#include <tt-logger/tt-logger.hpp>
-#include <tt-umd/utils/semver.hpp>
 
 #include "blackhole/bh_hal.hpp"
 #include "rtoptions.hpp"

@@ -25,7 +25,6 @@
 #include <vector>
 
 #include <tt-umd/cluster.hpp>
-#include <tt-umd/driver_atomics.hpp>
 #include <tt-umd/cluster_descriptor.hpp>
 #include <tt-umd/chip_helpers/sysmem_buffer.hpp>
 #include <tt-umd/types/core_coordinates.hpp>

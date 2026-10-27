@@ -30,8 +30,6 @@
 #include "distributed/mesh_trace.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include "impl/dispatch/vector_aligned.hpp"
-#include <impl/dispatch/dispatch_query_manager.hpp>
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
 using MeshTraceBuffer = tt::tt_metal::distributed::MeshTraceBuffer;

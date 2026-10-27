@@ -17,7 +17,6 @@ using namespace tt::tt_metal::quasar::dispatch;
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
-#include "tensix.h"
 #include "tt_align.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 

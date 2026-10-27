@@ -15,10 +15,11 @@
 #include <string>
 #include <type_traits>
 
+#include <tt-metalium/allocator.hpp>
 #include "impl/context/metal_context.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
+#include "tt_align.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"

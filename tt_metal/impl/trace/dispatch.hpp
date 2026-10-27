@@ -5,12 +5,11 @@
 #pragma once
 
 #include <device.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <cstddef>
 #include <unordered_map>
 #include <vector>
 
-#include "core_coord.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "impl/context/context_types.hpp"

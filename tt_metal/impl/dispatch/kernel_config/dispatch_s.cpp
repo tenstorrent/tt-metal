@@ -19,7 +19,6 @@
 #include "device.hpp"
 #include "dispatch.hpp"
 #include "fd_kernel.hpp"
-#include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "prefetch.hpp"
@@ -31,15 +30,12 @@
 #include "device/device_manager.hpp"
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_mem_map.hpp>
-#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "hostdev/realtime_profiler_msgs.h"
 
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/dprint_server.hpp"
-#include "impl/debug/debug_helpers.hpp"
 #include "hostdev/device_print_structures.h"
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
-#include "hostdevcommon/dprint_common.h"
 
 using namespace tt::tt_metal;
 

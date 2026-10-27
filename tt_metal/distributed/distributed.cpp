@@ -20,7 +20,6 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include "llrt/tt_cluster.hpp"
 #ifdef TT_METAL_USE_EMULE
 #include "emule_mesh_command_queue.hpp"

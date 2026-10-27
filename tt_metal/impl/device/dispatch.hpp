@@ -7,7 +7,6 @@
 #include "device.hpp"
 #include "dispatch/topology.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 

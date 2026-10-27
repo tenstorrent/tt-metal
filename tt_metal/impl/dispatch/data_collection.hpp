@@ -4,9 +4,7 @@
 
 #pragma once
 
-#include <device.hpp>
-#include <host_api.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string_view>

@@ -8,7 +8,6 @@
 #include <optional>
 
 #include "impl/debug/inspector/types.hpp"
-#include "mesh_coord.hpp"
 
 #define TT_INSPECTOR_THROW(...) \
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_initialization_is_important()) { \

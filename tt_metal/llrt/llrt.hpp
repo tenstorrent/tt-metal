@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -12,15 +11,10 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include <tt_stl/span.hpp>
-// clang-format off
 #include "hal.hpp"
 #include "binary_metadata.hpp"
 #include "tt_memory.h"
 #include <tt-umd/types/cluster_descriptor_types.hpp>
-#include <tt-umd/types/xy_pair.hpp>
-
-// clang-format on
 
 namespace tt::tt_metal {
 class MetalContext;

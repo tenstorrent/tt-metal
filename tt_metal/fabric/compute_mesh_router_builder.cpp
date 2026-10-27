@@ -15,7 +15,6 @@
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
-#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/builder/injection_policy.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -23,7 +22,6 @@
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "tt_metal/third_party/umd/device/api/umd/device/types/core_coordinates.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal.hpp"
 #include <tt-logger/tt-logger.hpp>

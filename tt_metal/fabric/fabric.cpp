@@ -27,7 +27,6 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
-#include <tt-umd/types/xy_pair.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
 #include "fabric_host_utils.hpp"
