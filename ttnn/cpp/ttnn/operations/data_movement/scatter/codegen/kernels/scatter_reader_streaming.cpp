@@ -7,7 +7,7 @@
 // not fit L1, or when the tile-row count would leave most of the grid idle.
 //
 // Work is split by Wt_output across cores (each core handles a subset of output
-// columns). For each assigned output column, ALL Wt_src src tiles are scanned
+// columns). For each assigned output column, ALL Wt_index src tiles are scanned
 // for matching indices. This mirrors gather streaming (split by output columns).
 //
 // Protocol (dual-RISC, mirrors interleaved path):
@@ -41,14 +41,12 @@ void kernel_main() {
     constexpr uint32_t cb_src = get_compile_time_arg_val(3);
     constexpr uint32_t Ht = get_compile_time_arg_val(4);
     constexpr uint32_t Wt_output = get_compile_time_arg_val(5);
-    // The host passes the INDEX tensor's geometry (Wt_index, idx_valid_*) for these; the names
-    // say src because the host slices src to the index's shape before dispatch, so the two
-    // tensors share tile geometry here.
-    constexpr uint32_t Wt_src = get_compile_time_arg_val(6);
+    // Index and src share this geometry: validate requires src to carry index's shape.
+    constexpr uint32_t Wt_index = get_compile_time_arg_val(6);
     constexpr uint32_t num_cores = get_compile_time_arg_val(7);
-    constexpr uint32_t src_valid_h_last = get_compile_time_arg_val(8);
-    constexpr uint32_t src_valid_w_last = get_compile_time_arg_val(9);
-    constexpr uint32_t Ht_per_batch_src = get_compile_time_arg_val(10);
+    constexpr uint32_t idx_valid_h_last = get_compile_time_arg_val(8);
+    constexpr uint32_t idx_valid_w_last = get_compile_time_arg_val(9);
+    constexpr uint32_t Ht_per_batch_index = get_compile_time_arg_val(10);
     constexpr uint32_t output_logical_w = get_compile_time_arg_val(11);
     constexpr auto index_ta_args = TensorAccessorArgs<12>();
     constexpr auto src_ta_args = TensorAccessorArgs<index_ta_args.next_compile_time_args_offset()>();
@@ -94,8 +92,8 @@ void kernel_main() {
         uint32_t current_output_tile_id = core_id;
         uint32_t h_src = 0;
         const bool has_src_data = map_scatter_input_page<4>(h, h_src);
-        const bool is_last_h_tile = has_src_data && ((h_src % Ht_per_batch_src) == (Ht_per_batch_src - 1));
-        const uint32_t valid_h = is_last_h_tile ? src_valid_h_last : tile_height;
+        const bool is_last_h_tile = has_src_data && ((h_src % Ht_per_batch_index) == (Ht_per_batch_index - 1));
+        const uint32_t valid_h = is_last_h_tile ? idx_valid_h_last : tile_height;
 
         for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
             // Wait for input tile from writer, copy to output
@@ -114,15 +112,15 @@ void kernel_main() {
             in_cb.pop_front(one_tile);
 
             if (has_src_data) {
-                // Stream through ALL Wt_src src tiles, scatter matching elements
-                for (uint32_t ws = 0; ws < Wt_src; ws++) {
-                    const bool is_last_w_tile = (ws == Wt_src - 1);
-                    const uint32_t valid_w = is_last_w_tile ? src_valid_w_last : tile_width;
+                // Stream through ALL Wt_index src tiles, scatter matching elements
+                for (uint32_t ws = 0; ws < Wt_index; ws++) {
+                    const bool is_last_w_tile = (ws == Wt_index - 1);
+                    const uint32_t valid_w = is_last_w_tile ? idx_valid_w_last : tile_width;
 
                     // Read index + src tiles (batched, single barrier)
                     index_cb.reserve_back(one_tile);
                     src_cb.reserve_back(one_tile);
-                    const uint32_t stile_id = h_src * Wt_src + ws;
+                    const uint32_t stile_id = h_src * Wt_index + ws;
                     noc.async_read(
                         index_accessor,
                         index_cb,
@@ -180,7 +178,7 @@ void kernel_main() {
                                     const uint32_t which_row = index_in_local_tile >> __builtin_ctz(face_size);
                                     const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
 
-                                    const uint16_t local_index = which_row * (face_size * face_size) + k * face_size +
+                                    const uint32_t local_index = which_row * (face_size * face_size) + k * face_size +
                                                                  which_col + i * (tile_width * face_size);
 
                                     write_value_to_tile(output_l1, local_index, output_df_size, src_value);
@@ -192,7 +190,7 @@ void kernel_main() {
 
                     index_cb.pop_front(one_tile);
                     src_cb.pop_front(one_tile);
-                }  // Wt_src loop
+                }  // Wt_index loop
             }  // has_src_data
 
             // Push completed output tile

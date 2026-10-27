@@ -34,7 +34,7 @@ void bind_scatter(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the output tensor. Defaults to `None`.
-            reduce (str, optional): "add" or "multiply", applied when several source values land on the same output element; any other string is rejected. Defaults to `None` (later values overwrite earlier ones).
+            reduce (str, optional): "add" or "multiply", applied when several source values land on the same output element; any other string is rejected. Defaults to `None`: each source value overwrites, and with duplicate indices along `dim` the surviving value is unspecified, as in torch.
             sub_core_grids (ttnn.CoreRangeSet, optional): specifies which cores scatter should run on. Defaults to `None`.
 
         Returns:
