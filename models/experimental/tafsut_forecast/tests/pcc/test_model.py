@@ -30,7 +30,7 @@ def test_model(device, case, prec):
     check_floors(met, prec, module=True)
 
 
-@pytest.mark.parametrize("case", ["single", "ragged4"])
+@pytest.mark.parametrize("case", ["single", "single_long", "ragged4"])
 def test_block_outputs(device, case):
     """Embedding and every block against the reference's block outputs (accuracy; module floor 0.999)."""
     from models.experimental.tafsut_forecast.reference import dataflow as df

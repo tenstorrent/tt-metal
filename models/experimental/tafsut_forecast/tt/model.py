@@ -53,6 +53,7 @@ class TtTafsut:
         self._hifi4 = ckc("HiFi4")
         self._norm = ckc("HiFi4")
         self._sdpa = ckc(self.p.sdpa_fidelity)
+        self._qkv = ckc(self.p.qkv_fidelity)
         sd = self.w.sd
 
         def up(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
@@ -186,7 +187,7 @@ class TtTafsut:
     def layer(self, h, L, inp, c, last: bool):
         B, S = h.shape[0], h.shape[1]
         x = ttnn.rms_norm(h, epsilon=df.NORM_EPS, weight=L["ln1"], compute_kernel_config=self._norm)
-        qkv = self._linear(ttnn.reshape(x, (1, 1, B * S, D)), L["wqkv"])
+        qkv = self._linear(ttnn.reshape(x, (1, 1, B * S, D)), L["wqkv"], compute_kernel_config=self._qkv)
         ttnn.deallocate(x)
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.reshape(qkv, (B, S, 3 * D)), num_heads=NH, transpose_key=False, memory_config=DRAM
