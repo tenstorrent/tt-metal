@@ -1047,9 +1047,10 @@ def test_untilize_with_unpadding_block_per_node_cb_size(
 def test_untilize_with_unpadding_block_crops_whole_tile_rows(device, padded_shape, output_shape):
     """Untilize a wide tensor while cropping away one or more whole tile rows of its padded height.
 
-    A row of 64 tiles selects the block-interleaved factory, whose work split walks the input padded
-    height. In every case at least one tile row starts at or past the end of the output, so none of
-    its rows belong to the output, and the rows before it must still come out intact.
+    The inputs are 64 tiles wide so that they take the block-interleaved factory, whose work split
+    walks the input padded height. In every case at least one tile row starts at or past the end of
+    the output, so none of its rows belong to the output, and the rows before it must still come out
+    intact.
     """
     torch.manual_seed(0)
     torch_input = torch.rand(padded_shape, dtype=torch.bfloat16)
@@ -1070,14 +1071,30 @@ def test_untilize_with_unpadding_block_crops_whole_tile_rows(device, padded_shap
 
 
 @pytest.mark.parametrize(
-    "factory", ["single_core", "multi_core_interleaved", "multi_core_sharded", "multi_core_nd_sharded"]
+    "factory",
+    [
+        "single_core",
+        "multi_core_interleaved",
+        "multi_core_sharded",
+        "multi_core_sharded_to_sharded",
+        "multi_core_nd_sharded",
+    ],
 )
 def test_untilize_with_unpadding_spec_factories_program_cache_addr_change(device, factory, isolate_program_cache):
     torch.manual_seed(0)
     shape = [1, 1, 256, 128]
     output_end = [0, 0, 200, 100]
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
-    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    height_sharded_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (64, 128), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    # Sharded-to-sharded keeps the input's sharding, so each core writes its own output shard in place.
+    if factory == "multi_core_sharded_to_sharded":
+        output_memory_config = height_sharded_config
+    else:
+        output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     def to_device(torch_tensor):
         if factory in ("single_core", "multi_core_interleaved"):
@@ -1088,11 +1105,9 @@ def test_untilize_with_unpadding_spec_factories_program_cache_addr_change(device
                 device=device,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-        if factory == "multi_core_sharded":
-            shard_spec = ttnn.ShardSpec(shard_grid, (64, 128), ttnn.ShardOrientation.ROW_MAJOR)
-            memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+        if factory in ("multi_core_sharded", "multi_core_sharded_to_sharded"):
             host_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            return ttnn.to_device(host_tensor, device, memory_config=memory_config)
+            return ttnn.to_device(host_tensor, device, memory_config=height_sharded_config)
         tensor_spec = ttnn.TensorSpec(
             shape=shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
         ).sharded_across_dims([2, 3], shard_grid, ttnn.ShardOrientation.ROW_MAJOR)

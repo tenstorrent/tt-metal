@@ -23,8 +23,7 @@ void kernel_main() {
     Noc noc;
     // The untilized block the compute kernel packs; drained here row by row.
     DataflowBuffer dfb_untilize_out(dfb::untilize_out);
-    // The output shard on this core. This kernel is its only toucher: it fills the shard in place,
-    // and nothing downstream drains it.
+    // The output shard on this core, which this kernel writes in place; no other kernel accesses it.
     LocalTensorAccessor<uint32_t> out_shard(tensor::out);
 
     // Byte offset of the next output row within the shard.

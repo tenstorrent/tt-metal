@@ -164,14 +164,13 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         "matching column shard width) when input is BLOCK_SHARDED and output is sharded",
                         operation_attributes.output_mem_config.memory_layout());
                     if (same_type) {
-                        // Same-shard-type sharded output is written in place through a
-                        // LocalTensorAccessor over this core's output shard (see the sharded
-                        // factory's same-shard-type writer), which needs a BufferType::L1 tensor, so
-                        // DRAM is rejected here. It also copies each input core's data straight into
-                        // the same physical output core, with no cross-core row remapping, so a batch
-                        // whose matrices straddle input shard boundaries after height-unpadding would
-                        // land on the wrong output core; unbatched-only until that's implemented
-                        // (matches the interleaved-output restriction below).
+                        // With same-shard-type sharded output, each core writes its own output shard
+                        // in place, so that shard must be in the core's own SRAM (BufferType::L1);
+                        // DRAM is rejected here. The same-shard-type writer also copies each input
+                        // core's data straight into the same physical output core, with no cross-core
+                        // row remapping, so a batch whose matrices straddle input shard boundaries
+                        // after height-unpadding would land on the wrong output core; unbatched-only
+                        // until that's implemented (matches the interleaved-output restriction below).
                         TT_FATAL(
                             operation_attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
                             "BLOCK_SHARDED -> BLOCK_SHARDED output must be in L1; got buffer_type={}",
@@ -244,9 +243,8 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                         "Output memory config layout must be HEIGHT_SHARDED when output is sharded but got {}",
                         operation_attributes.output_mem_config.memory_layout());
-                    // Same-shard-type sharded output is written in place through a
-                    // LocalTensorAccessor over this core's output shard (see the sharded factory's
-                    // same-shard-type writer), which needs a BufferType::L1 tensor, so DRAM is
+                    // With same-shard-type sharded output, each core writes its own output shard in
+                    // place, so that shard must be in the core's own SRAM (BufferType::L1); DRAM is
                     // rejected here.
                     TT_FATAL(
                         operation_attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
@@ -299,9 +297,8 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         operation_attributes.output_mem_config.memory_layout(),
                         input_tensor_a.memory_config().memory_layout());
                     if (same_type) {
-                        // Same-shard-type sharded output is written in place through a
-                        // LocalTensorAccessor over this core's output shard (see the sharded
-                        // factory's same-shard-type writer), which needs a BufferType::L1 tensor, so
+                        // With same-shard-type sharded output, each core writes its own output shard
+                        // in place, so that shard must be in the core's own SRAM (BufferType::L1);
                         // DRAM is rejected here.
                         TT_FATAL(
                             operation_attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1,

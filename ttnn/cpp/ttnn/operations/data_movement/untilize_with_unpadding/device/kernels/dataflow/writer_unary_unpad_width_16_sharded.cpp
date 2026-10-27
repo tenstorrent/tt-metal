@@ -18,8 +18,7 @@ void kernel_main() {
 
     // Must stay a constant expression: it feeds a static_assert and the NOC_MAX_BURST_SIZE template
     // arguments below, so the free-function form with the binding token is used rather than the
-    // DataflowBuffer member getter (which cannot yield a constant expression). The faces copied below
-    // are read from dfb::untilize_out's tiles, so that buffer's tile size is the one that applies.
+    // DataflowBuffer member getter (which cannot yield a constant expression).
     constexpr uint32_t tile_size_in_bytes = get_tile_size(dfb::untilize_out);
     constexpr uint32_t quarter_tile_size_in_bytes = tile_size_in_bytes / 4;
 
@@ -29,8 +28,7 @@ void kernel_main() {
     Noc noc;
     // The tiled block the copy compute kernel packs; drained here face by face.
     DataflowBuffer dfb_untilize_out(dfb::untilize_out);
-    // The output shard on this core. This kernel is its only toucher: it fills the shard in place,
-    // and nothing downstream drains it.
+    // The output shard on this core, which this kernel writes in place; no other kernel accesses it.
     LocalTensorAccessor<uint32_t> out_shard(tensor::out);
 
     // Byte offset of the next face write within the shard.

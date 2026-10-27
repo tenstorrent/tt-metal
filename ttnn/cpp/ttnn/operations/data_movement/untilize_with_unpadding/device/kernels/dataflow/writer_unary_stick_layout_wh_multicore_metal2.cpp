@@ -78,7 +78,7 @@ void kernel_main() {
 
         for (std::uint32_t b = 0; b < single_block_size_col_arg; b++) {
             // The work split walks the input padded height, which can extend past the output height
-            // by more than one tile row. A tile row that starts at or past the output end has no rows
+            // by one tile row or more. A tile row that starts at or past the output end has no rows
             // to write.
             std::uint32_t this_block_num_rows = tile_height;
             if (start_row_id >= total_num_rows) {

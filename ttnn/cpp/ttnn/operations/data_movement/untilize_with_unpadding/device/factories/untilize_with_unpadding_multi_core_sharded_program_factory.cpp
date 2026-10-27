@@ -48,8 +48,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
     // WIDTH_SHARDED <-> BLOCK_SHARDED with a matching column shard width (enforced in validate()).
-    // Unlike the same-shard-type out_sharded path below (a same-core L1-to-L1 copy into the output
-    // shard through a LocalTensorAccessor), the executing core here may not be the physically-
+    // Unlike the same-shard-type out_sharded path below (a same-core SRAM-to-SRAM copy into the
+    // output shard through a LocalTensorAccessor), the executing core here may not be the physically-
     // owning core of the output shard, so a dedicated writer addresses the destination via
     // TensorAccessor page-id routing instead.
     bool cross_shard_type = out_sharded && output.memory_config().memory_layout() != a.memory_config().memory_layout();
@@ -223,10 +223,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                               "writer_unary_unpad_width_16_sharded.cpp"
                             : "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
                               "writer_unary_unpad_batch_rows_sharded.cpp";
-        // The output shard lives on this same core and this writer is its only toucher: it fills the
-        // shard in place through a LocalTensorAccessor, and nothing downstream drains it. A DFB
-        // borrowed onto the shard would need the writer bound as both its producer and consumer (a
-        // data-movement self-loop), which Gen2 does not support.
+        // The output shard lives on this same core, and only this writer accesses it: it writes the
+        // shard in place through a LocalTensorAccessor. A DFB borrowed onto the shard would need the
+        // writer bound as both its producer and consumer (a data-movement self-loop), which Gen2
+        // does not support.
         writer.dfb_bindings = {DFBBinding{
             .dfb_spec_name = SH_OUT,
             .accessor_name = "untilize_out",
@@ -236,12 +236,12 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
             .tensor_parameter_name = SH_OUTPUT,
             .accessor_name = "out",
         }};
-        // The writer steps through the output shard by aligned_page_size per row, which may be larger
-        // than block_row_size due to buffer alignment padding.
-        writer.compile_time_args = {{"aligned_page_size", aligned_page_size}};
         if (unpad_tensor_w_16) {
             writer.runtime_arg_schema = {.runtime_arg_names = {"num_padded_tiles_per_core"}};
         } else {
+            // The writer steps through the output shard by aligned_page_size per row, which may be
+            // larger than block_row_size due to buffer alignment padding.
+            writer.compile_time_args = {{"aligned_page_size", aligned_page_size}};
             writer.runtime_arg_schema = {
                 .runtime_arg_names = {
                     "num_padded_tiles_per_batch",
