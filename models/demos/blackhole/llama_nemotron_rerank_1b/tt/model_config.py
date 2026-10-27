@@ -91,6 +91,13 @@ class RerankConfig:
     # dtype of the RMSNorm outputs that feed QKV and FF1/FF3 (the final norm, feeding the score head, stays bf16).
     # bfp8: 32x512 256.5 -> 251.7 M cycles; MIRACL Pearson 0.99956 (b1, b8) / 0.99963 (b32).
     norm_out_dtype: object = ttnn.bfloat8_b
+    # Output dtypes of the tensors between ops (each is written once and read once).
+    # bfp8 into / out of fused_heads_rope gives garbage K / V (Q correct): open issue, kept bf16.
+    qkv_out_dtype: object = ttnn.bfloat16  # QKV matmul -> head split + RoPE
+    heads_out_dtype: object = ttnn.bfloat16  # Q / K / V -> SDPA
+    # MIRACL batch 8: WO bfp8 Pearson 0.99963, FF2 bfp8 0.99966 (baseline 0.99966).
+    wo_out_dtype: object = ttnn.bfloat8_b  # WO matmul -> residual add
+    ff2_out_dtype: object = ttnn.bfloat8_b  # FF2 matmul -> residual add
     # Matmul math fidelity.
     mm_fidelity: object = ttnn.MathFidelity.HiFi2
     # Matmul kinds (qkv, wo, ff13s, ff13, ff2) that run at LoFi instead of mm_fidelity, comma separated.
@@ -103,6 +110,8 @@ class RerankConfig:
     mask_dtype: object = ttnn.bfloat4_b
     # Pass attn_mask_block_map so SDPA skips (q chunk, k chunk) blocks that hold no real query or key.
     sdpa_block_map: bool = True
+    # Debug only: run SDPA without the padding mask (correct only when every sequence fills its bucket).
+    sdpa_no_mask: bool = False
     # SDPA writes heads side by side ([B, 1, S, n_heads * head_dim]) so nlp_concat_heads is not needed.
     sdpa_concat_heads: bool = True
     # Residual add + following RMSNorm as one op (tt/custom_ops/fused_add_rmsnorm) writing both outputs.
@@ -112,6 +121,8 @@ class RerankConfig:
     # The fused op gives each core whole tile-rows, so below ~2 rows per core the stock add + rms_norm
     # spread wider and win (1x512: 8.8 vs 9.7 ms; 1x2048: 33.4 vs 42.2 ms; 32x512: 238 vs 226 ms).
     fuse_add_norm_min_rows: int = 8192
+    # dtype of the residual stream written by the fused add + RMSNorm.
+    residual_dtype: object = ttnn.bfloat16
     # Up to this many rows RMSNorm runs block-sharded over an 8-wide grid (with the interleaved <-> sharded
     # conversions): stock rms_norm gives each core whole tile-rows, 16 cores at 512 rows.
     # perf_tools/probe_norm.py: 128 rows 33.7 -> 10.7 us, 512 rows 33.9 -> 18.3 us.

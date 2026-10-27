@@ -29,11 +29,14 @@ WRITER_KERNEL = os.path.join(_HERE, "kernels", "writer_heads_rope.cpp")
 TILE = 32
 
 
-def fused_heads_rope(qkv, cos, sin, trans_mat, *, n_heads, n_kv_heads, batch, memory_config=None):
+def fused_heads_rope(qkv, cos, sin, trans_mat, *, n_heads, n_kv_heads, batch, memory_config=None, out_dtype=None):
     """qkv: [1, 1, B * S, (n_heads + 2 * n_kv) * D] (or [B, 1, S, ...]) bf16 TILE interleaved.
     cos / sin: [1, 1, S, D] bf16 TILE (rotary_embedding_llama layout). trans_mat: one 32x32 tile.
-    Returns (q, k, v)."""
+    Returns (q, k, v). ``out_dtype`` other than qkv's dtype is not supported yet (bfp8 K / V come
+    out wrong; open issue)."""
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    if out_dtype is not None and out_dtype != qkv.dtype:
+        raise NotImplementedError("fused_heads_rope: output dtype must match the input dtype")
     device = qkv.device()
     rows = int(qkv.padded_shape[-2]) * int(qkv.padded_shape[-3]) * int(qkv.padded_shape[0])
     width = int(qkv.padded_shape[-1])

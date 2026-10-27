@@ -242,6 +242,7 @@ class NemotronReranker:
             delta,
             consts,
             out_dtype=out_dtype or self.cfg.norm_out_dtype,
+            sum_dtype=self.cfg.residual_dtype,
             memory_config=self._mem(x.shape[-2] * x.shape[-3], x.shape[-1]),
         )
 
@@ -249,7 +250,7 @@ class NemotronReranker:
         """xn: the attention-normed residual [1, 1, B * S, dim]."""
         cfg = self.cfg
         qc, kc = sdpa_chunks(B, S)
-        qkv = self._linear(xn, layer.wqkv, "qkv")
+        qkv = self._linear(xn, layer.wqkv, "qkv", dtype=cfg.qkv_out_dtype)
         if cfg.fuse_heads_rope:
             q_r, k_r, v = fused_heads_rope(
                 qkv,
@@ -260,6 +261,7 @@ class NemotronReranker:
                 n_kv_heads=cfg.n_kv_heads,
                 batch=B,
                 memory_config=self._mem(B * S, qkv.shape[-1]),
+                out_dtype=cfg.heads_out_dtype,
             )
             ttnn.deallocate(qkv)
         else:
@@ -281,8 +283,8 @@ class NemotronReranker:
             k_r,
             v,
             is_causal=False,
-            attn_mask=mask,
-            attn_mask_block_map=block_map if self.cfg.sdpa_block_map else None,
+            attn_mask=None if cfg.sdpa_no_mask else mask,
+            attn_mask_block_map=block_map if (self.cfg.sdpa_block_map and not cfg.sdpa_no_mask) else None,
             output_concat_heads=cfg.sdpa_concat_heads,
             scale=1.0,
             compute_kernel_config=self.sdpa_ckc,
@@ -302,7 +304,7 @@ class NemotronReranker:
             o = ttnn.experimental.nlp_concat_heads(attn, memory_config=self._mem(B * S, cfg.dim))
             ttnn.deallocate(attn)
         o = ttnn.reshape(o, [1, 1, B * S, o.shape[-1]])
-        out = self._linear(o, layer.wo, "wo")
+        out = self._linear(o, layer.wo, "wo", dtype=cfg.wo_out_dtype)
         ttnn.deallocate(o)
         return out
 
@@ -322,7 +324,7 @@ class NemotronReranker:
             )
             ttnn.deallocate(g)
             ttnn.deallocate(u)
-        out = self._linear(a, layer.w2, "ff2")
+        out = self._linear(a, layer.w2, "ff2", dtype=self.cfg.ff2_out_dtype)
         ttnn.deallocate(a)
         return out
 
