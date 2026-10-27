@@ -160,7 +160,9 @@ class PackedDecodeInputs:
     def unpack(self, ids_dev: ttnn.Tensor, dp: DecodePositions):
         """Device ops only (captured with the decode step): every field of the segment into its persistent tensor."""
         fields = self.layout.fields
-        u32 = ttnn.bitcast(self.dev, ttnn.uint32)
+        dram = ttnn.DRAM_MEMORY_CONFIG  # every transient stays in DRAM (an L1 buffer alive across ops can clash
+        # with the static circular buffers of a later program: the mesh.py ``const`` note)
+        u32 = ttnn.bitcast(self.dev, ttnn.uint32, memory_config=dram)
         for name, dst in self.targets(ids_dev, dp).items():
             f = fields[name]
             want = ttnn.uint32 if f.dtype == UINT32 else ttnn.int32
@@ -170,7 +172,7 @@ class PackedDecodeInputs:
                 )
             if math.prod(list(dst.shape)) != f.n:
                 raise ValueError(f"packed field {name}: {f.n} values for a persistent tensor of shape {dst.shape}")
-            s = ttnn.slice(u32 if f.dtype == UINT32 else self.dev, list(f.start), list(f.end))
+            s = ttnn.slice(u32 if f.dtype == UINT32 else self.dev, list(f.start), list(f.end), memory_config=dram)
             shape = list(dst.shape)
             v = s if list(s.shape) == shape else ttnn.reshape(s, shape)
             ttnn.copy(v, dst)

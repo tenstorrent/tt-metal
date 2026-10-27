@@ -8,10 +8,16 @@ crosses an index_kpool boundary at every step, the first sparse pool (2047 -> 20
 (ids, positions, pool_ids, ring_slots, cur_pos, tail_pool, valid_len_rows, the per-user valid_len list) are read
 back per chip and compared with the direct path's host values; the user-partitioned cache is the second case.
 
-Four passes over the same ladder, each starting from the same prefilled state (every user's prompt re-prefilled
-after the pass's warm-up / capture, so every value a step reads was written by this pass): direct eager, packed
-eager (+ the field checks), packed traced, direct traced. The packed segments are allocated before the first
-capture (the trace rule), the per-length prefill traces are not used (eager prefills only).
+Four passes over the same ladder from the same state: direct eager, packed eager (+ the field checks), packed
+traced, direct traced. The prompts are prefilled ONCE, before any decode step (an eager 2048-token prefill after
+an MoE decode step clashes on the block: the decode's persistent L1 routing buffers (expert_stream's table / act)
+sit where the KDA sequence-parallel scan's static circular buffers of a 1024-row slab go; the existing tests only
+prefill before decoding or prefill 128 tokens after). Every pass warms up / captures at the ladder's first
+positions (the prompt ends, multiples of 4: the warm-up's latent row and ring slot are rewritten by step 0 before
+anything reads them and no pool completes there) and resets the KDA states before its ladder, so every value a
+step reads was written by the prefill or by this pass (the pools / rows of the previous pass beyond the current
+position are never ranked or attended). The packed segments are allocated before the first capture (the trace
+rule); the per-length prefill traces are not used.
 
     GLM53_MESH_SHAPE=2,4 GLM53_MODEL_LAYERS=0-3 GLM53_MODEL_B=4 GLM53_MODEL_TRACE_MB=512 \\
         pytest models/demos/glm53_flash/tests/test_decode_packed_inputs_mesh.py -s
@@ -42,7 +48,6 @@ B = int(os.environ.get("GLM53_MODEL_B", "4"))  # users per row
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 N_STEPS = int(os.environ.get("GLM53_PACKED_STEPS", "16"))  # contiguous decode steps per pass
 MAX_SEQ_LEN = 2304
-WARM_POS = MAX_SEQ_LEN - 4  # the warm-up / capture position: its state writes are never read by the ladder
 _DT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 EXPERT_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp8")]
 EXPERT_DOWN_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp8")]
@@ -122,7 +127,8 @@ class _Ladder:
 
 def _prefill_all(model: GLM53MeshModel, lens: list[int]):
     """Every user slot's prompt (eager, sequence-parallel over the rows: slot u of every row holds it): the KDA
-    slots, the latent cache rows [0, S) and the pooled-key index are rewritten from position 0."""
+    slots, the latent cache rows [0, S) and the pooled-key index are written from position 0. Runs once, before
+    any decode step (see the module docstring)."""
     for u, n in enumerate(lens):
         streams, logits, _ = model.prefill(_prompt(n), user=u)
         ttnn.deallocate(streams)
@@ -224,13 +230,14 @@ def test_packed_decode_inputs_bit_identical(mesh_device, monkeypatch, partition)
     )
     U = model.total_users
     lens = [PROMPT_LENS[u % len(PROMPT_LENS)] for u in range(B)]
-    assert max(lens) + N_STEPS < WARM_POS, (lens, N_STEPS, WARM_POS)
+    assert max(lens) + N_STEPS < MAX_SEQ_LEN and all(n % 4 == 0 for n in lens), (lens, N_STEPS, MAX_SEQ_LEN)
     ladder = _Ladder(model, lens, N_STEPS)
-    warm_ids = torch.full((U,), 1001, dtype=torch.long)
-    warm_pos = [WARM_POS] * U
+    # every pass warms up / captures at the ladder's first positions (rewritten by step 0) with its ids
+    ids0, pos0 = ladder.steps[0]
     logger.info(
         f"mesh {MESH} layers {layers} users/row {B} partition {partition}: prompts {lens}, {N_STEPS} steps per pass"
     )
+    _prefill_all(model, lens)  # once, before any decode step
 
     def direct_load(k, ids, pos):
         model.load_ids(ids)
@@ -244,27 +251,24 @@ def test_packed_decode_inputs_bit_identical(mesh_device, monkeypatch, partition)
             model.set_positions(pos)
 
     # ---- pass A: the direct per-field refreshes, eager (compiles every program, the sparse buffers included)
-    model.warmup_decode(warm_ids, warm_pos)
+    model.warmup_decode(ids0, pos0)
     assert model.packed is None
-    _prefill_all(model, lens)
+    model.reset_kda_states()  # every pass decodes the ladder from the zero KDA state
     out_a = ladder.eager(direct_load)
     logger.info(f"pass A (direct, eager): ids of the last step {out_a[-1][0].tolist()}")
 
     # ---- pass B: the packed inputs, eager; the segments are allocated here, before the first capture
     monkeypatch.setenv(PACKED_INPUTS_ENV, "1")
-    model.warmup_decode(warm_ids, warm_pos)
+    model.warmup_decode(ids0, pos0)
     assert model.packed is not None and model.packed.layout.dense == (model.positions.dense_positions is not None)
     layout = model.packed.layout
     logger.info(
         f"packed layout: segment {layout.segment_shape} int32, {layout.segments} segments, fields {list(layout.fields)}"
     )
-    # the per-user valid_len list (consumed by the unbatched top-k only): its own unpack, checked once, eagerly
+    # the per-user valid_len list (consumed by the unbatched top-k only): its own unpack of the warm-up's values
+    # (ids0 / pos0, what the model's segment holds now), checked once, eagerly, before the first capture
     per_user = dataclasses.replace(layout, per_user_valid_len=True)
     extra = PackedDecodeInputs(model.mesh, per_user, per_user.pack(model._host_ids, model.positions.host))
-    ids0, pos0 = ladder.steps[0]
-    model.layers[0].update_decode_positions(model.positions, pos0, upload=False)
-    model._host_ids = model.embedding.tokens_to_host(ids0, pad_to=U).reshape(-1)
-    extra.upload(per_user.pack(model._host_ids, pos0))
     extra.unpack(model.ids_dev, model.positions)
     ttnn.synchronize_device(mesh_device)
     saved_packed = model.packed
@@ -272,7 +276,7 @@ def test_packed_decode_inputs_bit_identical(mesh_device, monkeypatch, partition)
     _check_fields(model, per_user, ids0, pos0, per_user=True)
     model.packed = saved_packed
     ttnn.deallocate(extra.dev)
-    _prefill_all(model, lens)
+    model.reset_kda_states()
     out_b = ladder.eager(
         packed_load, on_step=lambda k, ids, pos: _check_fields(model, layout, ids, pos, per_user=False)
     )
@@ -280,8 +284,8 @@ def test_packed_decode_inputs_bit_identical(mesh_device, monkeypatch, partition)
     logger.info("pass B (packed, eager): bit-identical to pass A; every unpacked field matches the direct values")
 
     # ---- pass C: the packed inputs, traced (the unpack is part of the captured step)
-    trace_id, trace_outs = model.capture(warm_ids, warm_pos)
-    _prefill_all(model, lens)
+    trace_id, trace_outs = model.capture(ids0, pos0)
+    model.reset_kda_states()
     out_c, walls_c, loads_c = ladder.traced(trace_id, trace_outs, packed_load)
     _assert_identical("packed traced vs direct eager", out_c, out_a, ladder.steps)
     ttnn.release_trace(mesh_device, trace_id)
@@ -293,8 +297,8 @@ def test_packed_decode_inputs_bit_identical(mesh_device, monkeypatch, partition)
     # ---- pass D: the direct refreshes, traced (the knob off again; the segments stay allocated, unused)
     monkeypatch.delenv(PACKED_INPUTS_ENV, raising=False)
     model.packed = None
-    trace_id, trace_outs = model.capture(warm_ids, warm_pos)
-    _prefill_all(model, lens)
+    trace_id, trace_outs = model.capture(ids0, pos0)
+    model.reset_kda_states()
     out_d, walls_d, loads_d = ladder.traced(trace_id, trace_outs, direct_load)
     _assert_identical("direct traced vs direct eager", out_d, out_a, ladder.steps)
     ttnn.release_trace(mesh_device, trace_id)
