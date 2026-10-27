@@ -1,7 +1,6 @@
 # Numerics
 
-The numerics classes the model code, the tests and the pinned baselines use, and the relation each served path
-has to the others.
+The numerics classes the model code and the tests use, and the relation each served path has to the others.
 
 ## Classes
 
@@ -25,18 +24,11 @@ name). `--require-json-96` refuses to serve unless the `json` record matches the
 records leave the CPU stream after a near-tie; each record's first divergence index is written to `acceptance.json`
 in the run directory. The records carry their own system turn in their prompt ids.
 
-The baselines in `tools/ci/baselines/` of chunked-32k, slab2048-32k, mtp4-32k and lanes4-mtp4-32k (A3: the
-divergence indices and stream digests) and the A1 chunked-32k reference agreement are seeded from three agreeing runs
-of this port. The forced-32k (A1, A3), vision-chunked-32k and slab2048-mtp4-32k tables and the C2 eval items remain
-the source fork's unseeded proposals (`todo` in `tools/ci/pins.json`), not bitwise targets for this port;
-`tools/ci/q38_ci.py` checks runs against them and `seed` makes them targets once runs of this port agree
-([TESTING.md](TESTING.md)).
-
 ## Relations between paths
 
 - **GDN chunk recurrence**: main's `ttnn.transformer.chunk_gated_delta_rule` in every chunked form, the slab, the
-  verify-rows wrap and the lanes with the fold off. Its arithmetic differs from the source's in the last bits, so the
-  source's baselines are not bitwise targets for this port.
+  verify-rows wrap and the lanes with the fold off. Its arithmetic differs from the source's in the last bits, so
+  greedy streams are not the source's word for word.
 - **Prefill forms**: the slab body is tolerance class against the chunk bodies. A prompt shorter than 128 rows runs
   32-row chunks in every chunked form, so the `json` record is the same in all of them ([PREFILL.md](PREFILL.md)).
 - **MTP**: the verify rows compute the target in a multi-row shape, so the committed stream can part from plain

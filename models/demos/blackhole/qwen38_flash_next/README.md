@@ -93,7 +93,7 @@ and the device tests (`*_device.py`, `*_tp.py`). `tests/test_gdn_public_device.p
 against an independent recurrence; set `QWEN38_FUSED_DEVICE_TEST=1` on the held mesh. No CI pipeline runs these
 device tests; run them manually on the held mesh. The end-to-end accuracy check is the server's start-up acceptance
 gate (`--acceptance --require-json-96`, [Validation](#validation)). [docs/TESTING.md](docs/TESTING.md) covers the
-acceptance gate, the reference corpus and the regression harness.
+acceptance gate and the reference corpus.
 
 `tools/benchmark.py` scores and times GSM8K through a live OpenAI endpoint (the official 1,319-item test file at
 revision `3101c7d5072418e28b9008a6636bde82a006892c`, hash-checked; `--limit 64` is the fixed smoke subset).
@@ -114,6 +114,3 @@ CI=true python -m models.demos.blackhole.qwen38_flash_next.tools.report "$RESULT
   ([docs/NUMERICS.md](docs/NUMERICS.md)).
 - Reference agreement, task quality (GSM8K) and runtime reuse are separate gates; record each with the model
   commit, tt-metal identity, compiler, topology, checkpoint revision, command and saved responses.
-- The baselines under `tools/ci/baselines/` of chunked-32k, slab2048-32k, mtp4-32k and lanes4-mtp4-32k (A3) and
-  A1 chunked-32k are seeded from this port; forced-32k, vision-chunked-32k and slab2048-mtp4-32k remain proposals
-  from the source fork. A standalone MTP rate is not vLLM throughput.
