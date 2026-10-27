@@ -2030,7 +2030,7 @@ expert is built for small-M, DRAM-bound experts. Levers stay inside the engine (
 ### SE engine bottom-up (2026-10-27, engine alone, K3 640 rows, MT 2, KB 16, slowest chip)
 Why: rebuild the engine from math only, one ingredient at a time, to see where utilization breaks. New timing probes
 (se_engine3 _probes): NOXR / NOWR - no x / W rounds at all (the CB pushed as if the round landed); SE_WPF=n - the W
-prefetch window; SE_WNOC=0 - the W DRAM reads on NOC0 (A/B, results checked).
+prefetch window.
 | stage | probes | us | gate / up end (median / max core) |
 | s0 math only | NOXR,NOWR,NOWL | 227 | 131 / 161 |
 | s1 + W column multicast from L1 (credits) | NOXR,NOWL | 245 | 139 / 169 |
@@ -2064,3 +2064,36 @@ compute loop's 49-vs-34 cycles and the 5-vs-4 pair imbalance.
   / 312 (-27 us, -8.5%), PCC 0.99972, arena 1067 KB (vs 1229); KBD 24: 296; full-sync + KBD 16: 311.
   Not in the head yet: its RS fin (add_tiles blocks <= 8), the router on the engine (ETC x RG <= 8) and the latent
   passes assume 8 DEST tiles.
+
+### SE engine alone: 289.8 -> 249.0 us (2026-10-27, K3 640 rows, MT 2, KB 16, slowest chip, 7-run median)
+Starting point: half-sync + KBD 16 289.8 (default 316.8 / 316.9). Every step below is an opt-in switch (defaults
+unchanged); PCC 0.99972 in every run. Final set:
+SE_BRW=1 SE_BRW_BAR=0 SE_WPD=2 SE_BRW_DN1=1 SE_DN1_AT=0 SE_XPIPE=1 SE_XL=2 SE_HXINC=1 SE_PASSREV=1 SE_KBD=16 (full sync)
+-> 249.3 / 246.1 / 248.7 / 252.3 / 247.1 / 249.0 / 250.3 us (median 249.0, span ~242-244).
+- Why the W stream was slow (pure-read bench, zz_scratch_dram_mix test_edge_readers, whole grid, 35 MB): NOC0 386-391
+  GB/s, NOC1 235-249, independent of page (70 KB vs 4 KB), bank pinning and depth. The engine forced its NCRISC onto
+  NOC1 (dm RISCV_1 NOC_1) for the W reads + column multicasts: ~145 GB/s in the engine. Single-packet reads
+  (SE_WPKT 4/8/16 KB): no change. Hand trace analysis (scratchpad noc_trace_an.py): reads balanced over the 8 banks
+  (~42 in flight each), no hot bank; tt-npe's congestion figure was not used.
+- SE_BRW: gate / up W blocks read by the BRISC on its own NOC0 (the NCRISC writes a table of its blocks in stream
+  order into a per-core L1 words tensor; the BRISC issues them under transaction ids 1-12, paced to its own x round
+  position + SE_WPD - issue-only, so no circular wait; the NCRISC waits on the issued count and polls NOC0's id status
+  read-only before multicasting on NOC1). Unpaced (all at once) was worse (368: the 35 MB burst starved the x load
+  and then the x row multicasts on NOC0); paced D 4: 278.9.
+- SE_HXINC: the non-RS down starts on h columns as they land (as the RS path does): 274.8 with BRW.
+- SE_XPIPE (+ SE_XL): x owners load their steps in need order (ids 13-15 by slot), SE_XL positions ahead, and send a
+  step once its own load landed (no ports only; with ports the own shard loads first as before): 264.1.
+- SE_BRW_DN1: the down's W blocks read by the NCRISC on its own NOC1 (its old prefetch, window 3) while the BRISC
+  reads gate / up on NOC0 - both NoCs' read bandwidth: 260.0.
+- SE_PASSREV: the narrow gate / up pass first (under the x load, which binds pass 0) and the full-width passes after
+  it with only the W stream: 258-260; GUSTEP: passes 1-2 almost wait-free.
+- Lookahead sweep: XL 2 / WPD 2 best (XL 3 / WPD 4 258, XL 1 / WPD 2 253, XL 2 / WPD 3 253).
+- Tried, worse or no gain: 4 W slots (SE_NWS=4: 273-277); KB 28 full sync (arena 1700 KB); half-sync + KB 28 (286);
+  half-sync on any of these (287-300: 2-wide passes make x rounds the bound); down pacing over the gate / up
+  (SE_WDD) only moved the NOC0 contention; issuing the lookahead after each round (269-277); delaying the NOC1 down
+  reads (SE_DN1_AT 7/14/28: 258-264); family-1 x loads on NOC1 (SE_XN1: 282, an unpaced NOC1 burst); dynamic NoC mode
+  (never - removed).
+- The head (k3_ring4 640 traced) with SE_BRW: 458-460 vs 456-458 - its gate / up is paced by the x gather, not the W
+  stream; the other switches are not tried in the head yet (PASSREV / DN1 apply there; XPIPE / HXINC are no-ops).
+- Left in the engine alone (GUSTEP): pass 0 bound by the x load + its W (NOC0 reads), a ~20 us step-0 bubble, the
+  non-overlapped GLU (~20 us), the h gather's 11 latency-bound rounds (~22 us), 5-vs-4 pair imbalance.

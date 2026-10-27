@@ -27,7 +27,7 @@ from ttnn.bringup.combine_rf.lin2d import column_split, glu_weight  # noqa: F401
 
 import ttnn
 
-NWS = 3  # (W slots)
+NWS = int(__import__("os").environ.get("SE_NWS", "3"))  # (W slots; SE_NWS: A/B, <= 4 - the source words rotate over 4)
 XREADY, WV, WFREE = 0, 1, 1 + NWS  # (hand-written semaphores; the kernel_lib families' come after)
 XLD = 1 + 2 * NWS  # (my own-shard x is loaded: the NCRISC's W load may start)
 HCNT, HFREE = 1 + 2 * NWS, 3 + 2 * NWS  # (unused: the h exchange is the kernel_lib family again)
@@ -97,6 +97,11 @@ constexpr auto brx_args = TensorAccessorArgs<SE_RTR_BCT0>();  // (the router's x
 #endif
 constexpr uint32_t CB_XIN = 0, CB_HOWN = 2, CB_HALL = 3;
 constexpr uint32_t NF = NSG / 2, NOWN0 = NF / S0, NOWN1 = NF / S1;  // (steps a family a pass; per owner)
+#ifdef SE_XPIPE
+// (SE_XPIPE: my owned x slots load under transaction ids 13 .. 15 by slot, and a slot's send waits only on its id - the
+// rounds start as the first steps land, not after the whole load; the W reads keep ids 1 .. 12)
+#define XTRID(m, j) (13 + (((m) * nown + ((j) & 1 ? (i0 < GX ? NOWN0 : 0) + own_slot(j) : own_slot(j))) % 3))
+#endif
 // x position j (the j-th K step this chip processes: its own shard's first, then each shard as it lands): family j % 2,
 // owner = the family's subset[(j / 2) % S] (S divides a shard's steps / 2, so the rotation over (shard, pass, step)
 // rounds keeps every position on one owner), its local index (j / 2) / S
@@ -149,19 +154,66 @@ void kernel_main() {
         }
     }
 #endif
+    const auto xg = TensorAccessor(x_args, x_addr, 2048);
+    const uint32_t xports = get_arg_val<uint32_t>(ord0 + g);  // (the gather's ports read my own shard from here)
+#ifdef SE_XN1
+    // (SE_XN1: chunk 0's odd (family 1) steps are loaded by the NCRISC on its NOC1 - both NoCs' read bandwidth for the
+    // first pass, which the x load binds. Table at SE_WS word 512 (count, then NOC1 address lo / hi, L1 destination);
+    // word 10: table ready, 11: the NCRISC issued it all (transaction id 15 on NOC1, polled here read-only))
+    volatile tt_l1_ptr uint32_t* xsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
+    if (x_ct && !xports) {
+        uint32_t n = 0;
+        for (uint32_t j = 1; j < NSG; j += 2) {
+            const uint32_t s = step_of(j);
+            if (!(mine(j) && s * KB >= x_k0 && s * KB < x_k0 + x_ct)) continue;
+            for (uint32_t r = 0; r < MT; ++r)
+                for (uint32_t kk = 0; kk < KB; ++kk) {
+                    const uint64_t a = xg.get_noc_addr(GROW(0, cy * MT + r) * x_ct + s * KB + kk - x_k0, 0, 1);
+                    xsy[513 + 3 * n] = static_cast<uint32_t>(a), xsy[514 + 3 * n] = static_cast<uint32_t>(a >> 32);
+                    xsy[515 + 3 * n] = own_addr(0, j) + (r * KB + kk) * 2048;
+                    ++n;
+                }
+        }
+        xsy[512] = n;
+        xsy[10] = 1;
+    }
+#endif
+    auto xload_step = [&](uint32_t m, uint32_t j) {  // (one owned step of chunk m from DRAM x [rows, x_ct])
+        const uint32_t s = step_of(j);
+        if (!(mine(j) && s * KB >= x_k0 && s * KB < x_k0 + x_ct)) return;
+#ifdef SE_XN1
+        if (m == 0 && (j & 1) && !xports) return;  // (the NCRISC's)
+#endif
+#ifdef SE_XPIPE
+        noc_async_read_set_trid(XTRID(m, j));  // (its slot's transaction id: its send waits only on that)
+#endif
+        for (uint32_t r = 0; r < MT; ++r)
+            for (uint32_t kk = 0; kk < KB; ++kk)
+                noc_async_read(xg.get_noc_addr(GROW(m, cy * MT + r) * x_ct + s * KB + kk - x_k0),
+                               own_addr(m, j) + (r * KB + kk) * 2048, 2048);
+    };
+#ifdef SE_XPIPE
+    // (no ports: chunk 0's steps load in need order, SE_XL positions ahead of the rounds - all at once, every step's
+    // load lands at the end of the whole load; with ports, all of it first as before)
+    uint32_t xj = 0;
+    auto xload_upto = [&](uint32_t jmax) {
+        if (!x_ct) return;
+        for (; xj < NSG && xj <= jmax; ++xj) xload_step(0, xj);
+        noc_async_read_set_trid(0);
+    };
+#endif
     if (x_ct) {  // (alone) my steps of every chunk from DRAM x [rows, x_ct]: columns x_k0 ..
         DeviceZoneScopedN("SE-XLOAD");
-        const auto xg = TensorAccessor(x_args, x_addr, 2048);
+#ifdef SE_XPIPE
+        for (uint32_t m = 1; m < NCH; ++m)
+            for (uint32_t j = 0; j < NSG; ++j) xload_step(m, j);
+        xload_upto(xports ? NSG : SE_XL);
+        if (xports) noc_async_read_barrier();
+#else
         for (uint32_t m = 0; m < NCH; ++m)
-            for (uint32_t j = 0; j < NSG; ++j) {
-                const uint32_t s = step_of(j);
-                if (mine(j) && s * KB >= x_k0 && s * KB < x_k0 + x_ct)
-                    for (uint32_t r = 0; r < MT; ++r)
-                        for (uint32_t kk = 0; kk < KB; ++kk)
-                            noc_async_read(xg.get_noc_addr(GROW(m, cy * MT + r) * x_ct + s * KB + kk - x_k0),
-                                           own_addr(m, j) + (r * KB + kk) * 2048, 2048);
-            }
+            for (uint32_t j = 0; j < NSG; ++j) xload_step(m, j);
         noc_async_read_barrier();
+#endif
     }
     {  // (my own-shard x is loaded: count it on the gather's ports - they send it from here - and let my W load start)
         const uint32_t np0 = ord0 + g, nports = get_arg_val<uint32_t>(np0), xl_addr = get_arg_val<uint32_t>(np0 + 1);
@@ -170,6 +222,49 @@ void kernel_main() {
         noc_async_atomic_barrier();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(np0 + 2 + 2 * nports))) = 1;
     }
+#ifdef SE_BRW
+    volatile tt_l1_ptr uint32_t* wsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
+    uint32_t wn = 0, wbk = 0, wnext = 0;
+    {  // (SE_BRW: the W DRAM reads on my NOC0, all issued now - the NCRISC (NOC1) wrote a table of its blocks in its
+       // stream order at SE_WS (words: 0 ready | count, 1 issued, 3 bank; from 16: DRAM offset, L1 destination,
+       // bytes); block k under transaction id min(k, 13) + 1, which the NCRISC polls on NOC0's status before sending
+       // it. Nothing here waits on the stream later, so the x / h rounds can block freely)
+#ifdef SE_BRW_BAR
+        {  // (a grid barrier first: no weight burst while any core still loads its x - it starved the x loads.
+           // Words on core SE_BAR: 8 x loaded, 9 done (its end re-arms both); polled with 4-byte NOC0 reads)
+            const uint64_t bar = get_noc_addr(SE_BAR_X, SE_BAR_Y, SE_WS + 32);
+            noc_semaphore_inc(bar, 1);
+            noc_async_atomic_barrier();
+            volatile tt_l1_ptr uint32_t* pr = wsy + 12;
+            do {
+                noc_async_read(bar, reinterpret_cast<uint32_t>(pr), 4);
+                noc_async_read_barrier();
+                invalidate_l1_cache();
+            } while (*pr < SE_BAR_N);
+        }
+#endif
+        uint32_t r;
+        do {
+            invalidate_l1_cache();
+            r = wsy[0];
+        } while (!(r >> 31));
+        wn = r & 0xFFFF, wbk = wsy[3];
+    }
+    // (paced: the block of W round w goes out once my x round reaches w - SE_WPD; every block once my x rounds end.
+    // No wait on anyone: a holder issues up to its own position + SE_WPD and nobody needs rounds past its own)
+    auto wissue = [&](uint32_t lim) {
+        while (wnext < wn && wsy[19 + 4 * wnext] <= lim) {
+            noc_async_read_set_trid((wnext < 11 ? wnext : 11) + 1);
+            noc_async_read(get_noc_addr_from_bank_id<true>(wbk, wsy[16 + 4 * wnext]), wsy[17 + 4 * wnext], wsy[18 + 4 * wnext]);
+            wsy[1] = ++wnext;  // (issued count: the NCRISC polls a block's transaction id only once it was issued)
+        }
+        noc_async_read_set_trid(0);
+    };
+    wissue(SE_WPD);
+#define WISSUE(lim) wissue(lim)
+#else
+#define WISSUE(lim)
+#endif
     constexpr auto mx0 = McastArgs<get_named_compile_time_arg_val("x0_ct_offset"), get_named_compile_time_arg_val("x0_rt_offset")>();
     constexpr auto mx1 = McastArgs<get_named_compile_time_arg_val("x1_ct_offset"), get_named_compile_time_arg_val("x1_rt_offset")>();
 #ifndef SE_NODOWN
@@ -194,6 +289,10 @@ void kernel_main() {
             for (uint32_t st = 0; st < sps; ++st) {
                 const uint32_t j = k * sps + st;  // (position; its family j % 2 = st % 2: a block's rounds are even)
                 const uint32_t round = ((m * g + k) * NPG + pg) * (sps / 2) + st / 2;  // (the family's)
+                WISSUE(m ? 0xFFFFFFFFu : (k * NPG + pg) * sps + st + SE_WPD);
+#ifdef SE_XPIPE
+                if (m == 0 && k == 0 && pg == 0) xload_upto(j + SE_XL);
+#endif
                 cb_reserve_back(CB_XIN, MT * KB);
                 const uint32_t dst = xin + (j & 1) * MT * KB * 2048;
 #ifdef SE_PROBE_NOXR
@@ -202,6 +301,20 @@ void kernel_main() {
                 if (mine(j)) {  // (position j: the shard of rank j / sps must be in - the own shard always is)
 #ifndef SE_PROBE_NOXWAIT
                     if (j >= sps) noc_semaphore_wait_min(xready, m * (g - 1) + j / sps);
+#endif
+#ifdef SE_XPIPE
+#ifdef SE_XN1
+                    if (j < sps && x_ct && m == 0 && (j & 1) && !xports) {  // (the NCRISC's NOC1 load of it landed)
+                        do {
+                            invalidate_l1_cache();
+                        } while (xsy[11] == 0);
+                        while (!ncrisc_noc_read_with_transaction_id_flushed(1, 15)) {
+                        }
+                    } else
+#endif
+                    if (j < sps && x_ct)
+                        while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, XTRID(m, j))) {
+                        }  // (my own step's load landed)
 #endif
 #ifdef SE_PROBE_NOX
                     constexpr uint32_t XBYTES = 16;  // (timing probe: no x data)
@@ -216,6 +329,7 @@ void kernel_main() {
                 cb_push_back(CB_XIN, MT * KB);
             }
         }
+        WISSUE(0xFFFFFFFFu);  // (the rest - the down's blocks - before the h rounds, which block)
 #ifdef SE_LAT
         {  // (the latent's all-to-all: once it is packed, +1 on each destination's port word of mine)
             DeviceZoneScopedN("SE-LHAND");
@@ -251,11 +365,11 @@ void kernel_main() {
         for (uint32_t c = 0; c < GX; ++c) {
             if (c == cx) sh->send(hown, hs + c * MT * POMAX * 2048, MT * POMAX * 2048);
             else rh->receive(m * GX + c);
-#ifdef SE_RS
+#if defined(SE_RS) || defined(SE_HXINC)
             cb_push_back(CB_HALL, MT * POMAX);  // (column c's block: the down's first pass starts on its K tiles)
 #endif
         }
-#ifndef SE_RS
+#if !defined(SE_RS) && !defined(SE_HXINC)
         cb_push_back(CB_HALL, HA);
 #endif
         cb_pop_front(CB_HOWN, MT * POMAX);
@@ -275,6 +389,22 @@ void kernel_main() {
     }
 #endif
     }
+#ifdef SE_BRW
+    noc_async_read_barrier();
+#ifdef SE_BRW_BAR
+    {  // (done; core SE_BAR re-arms the barrier once every core is past it)
+        volatile tt_l1_ptr uint32_t* wsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
+        noc_semaphore_inc(get_noc_addr(SE_BAR_X, SE_BAR_Y, SE_WS + 36), 1);
+        noc_async_atomic_barrier();
+        if (cx == 0 && cy == 0) {
+            do {
+                invalidate_l1_cache();
+            } while (wsy[9] < SE_BAR_N);
+            wsy[8] = 0, wsy[9] = 0;
+        }
+    }
+#endif
+#endif
     noc_async_atomic_barrier();
 }
 """
@@ -308,6 +438,22 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) { return reinterpret_c
 // the column's W stream: block b of a chunk (gate / up pass b / NSG, step b % NSG; then down) held by row b % GY,
 // multicast down the column into W slot (round % NWS); every core pushes what lands and credits the slot's next holder
 void kernel_main() {
+#ifdef SE_XN1
+    {  // (the BRISC's family-1 x steps, on my NOC1, first thing: transaction id 15, then the issued flag)
+        volatile tt_l1_ptr uint32_t* xsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
+        {
+            do {
+                invalidate_l1_cache();
+            } while (xsy[10] == 0);
+            const uint32_t n = xsy[512];
+            noc_async_read_set_trid(15);
+            for (uint32_t i = 0; i < n; ++i)
+                noc_async_read((static_cast<uint64_t>(xsy[514 + 3 * i]) << 32) | xsy[513 + 3 * i], xsy[515 + 3 * i], 2048);
+            noc_async_read_set_trid(0);
+            xsy[11] = 1;
+        }
+    }
+#endif
     size_t a = 0;
     const uint32_t cy = get_arg_val<uint32_t>(a++), cxv = get_arg_val<uint32_t>(a++);
     const uint32_t ty = get_arg_val<uint32_t>(a++), by = get_arg_val<uint32_t>(a++);
@@ -448,11 +594,7 @@ void kernel_main() {
     }
     // the weights' DRAM reads go in stream order a window ahead of the sends (WPF of my blocks in flight): spread
     // over gate / up at the rate the stream uses them - a burst of all 35 MB at the start starved the gather
-#ifdef SE_WNOC
-    constexpr uint8_t WNOC = SE_WNOC;  // (the W DRAM reads' NoC: 0 - NOC0, which after the x load only carries BRISC's writes)
-#else
-    constexpr uint8_t WNOC = noc_index;
-#endif
+    constexpr uint8_t WNOC = noc_index;  // (the W DRAM reads: the NCRISC's own NoC)
 #ifdef SE_WPF
     constexpr uint32_t WPF = SE_WPF;  // (probe: the prefetch window)
 #else
@@ -476,10 +618,19 @@ void kernel_main() {
         for (uint32_t b2 = cy; b2 < b; b2 += GY) o += bsize(b2);
         return o;
     };
+    uint32_t dn_go = 0;  // (SE_BRW_DN1: the down's NOC1 reads start once the stream passed round SE_DN1_AT)
     auto prefetch = [&](uint32_t upto) {  // (issue my blocks of rounds < upto, and the window)
+#if defined(SE_BRW) && !defined(SE_BRW_DN1)
+        return;  // (the BRISC reads them on NOC0)
+#endif
         while (wi < WPN && (wi < upto || pending < WPF)) {
             const uint32_t b = blk(wi);
+#ifdef SE_BRW_DN1
+            if (wi % NB >= NPG * NSG && !dn_go && wi >= upto) break;  // (not yet: the first x loads go first)
+            if (b % GY != cy || wi % NB < NPG * NSG) {  // (SE_BRW_DN1: the gate / up blocks are the BRISC's, on NOC0)
+#else
             if (b % GY != cy) {
+#endif
                 ++wi;
                 continue;
             }
@@ -498,7 +649,16 @@ void kernel_main() {
 #ifdef SE_PROBE_NOWL
             noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB, WNOC), wown + lo * WTB, 16, WNOC);  // (probe)
 #else
+#ifdef SE_WPKT
+            {  // (A/B: the block as single-packet reads of SE_WPKT bytes, one transaction id - no software split)
+                const uint64_t src0 = get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB, WNOC);
+                const uint32_t nb = bsize(b) * WTB;
+                for (uint32_t q = 0; q < nb; q += SE_WPKT)
+                    noc_async_read(src0 + q, wown + lo * WTB + q, nb - q < SE_WPKT ? nb - q : SE_WPKT, WNOC);
+            }
+#else
             noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB, WNOC), wown + lo * WTB, bsize(b) * WTB, WNOC);
+#endif
 #endif
             ++pending;
         }
@@ -513,6 +673,31 @@ void kernel_main() {
 #endif
     uint32_t nf[NWS] = {};
     while (ws < NR && blk(ws) % GY != cy) ++ws;  // (skip rounds I do not hold)
+#ifdef SE_BRW
+    volatile tt_l1_ptr uint32_t* wsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
+    uint32_t nmy = 0;  // (my blocks sent)
+    {  // (my blocks in stream order for the BRISC's NOC0 reads: DRAM offset, L1 destination, bytes)
+        uint32_t n = 0;
+        for (uint32_t w = 0; w < WPN; ++w) {
+            const uint32_t b = blk(w);
+            if (b % GY != cy) continue;
+#ifdef SE_BRW_DN1
+            if (w % NB >= NPG * NSG) continue;  // (the down's: mine, on NOC1)
+#endif
+            const uint32_t o = offset_of(b);
+            wsy[16 + 4 * n] = w_addr + wbase + o * WTB;
+            wsy[17 + 4 * n] = wown + o * WTB;
+            wsy[18 + 4 * n] = bsize(b) * WTB;
+            // (its issue position in x rounds: a gate / up block its own round; the down's spread over the last SE_WDD
+            // x rounds of the gate / up (they are needed right after it) - the BRISC's pacing)
+            constexpr uint32_t NG = NPG * NSG, ND = NPD * NSD1, DD = SE_WDD < NG ? SE_WDD : NG;
+            wsy[19 + 4 * n] = w < NG ? w : NG - DD + (w - NG) * DD / ND;
+            ++n;
+        }
+        wsy[1] = 0, wsy[3] = wbank;
+        wsy[0] = n | 0x80000000u;
+    }
+#endif
 #ifdef SE_RS
     // (down + reduce-scatter) arrivals per direction in zone-slot order: slot i credited (its pages pushed - the arg's
     // high half: P, or with compact zones my tiles of its block) once my arrival counter reached its threshold (the
@@ -718,6 +903,9 @@ void kernel_main() {
     while (ws < NR || wr < NR || wc < NR || p < NPY) {
         invalidate_l1_cache();
 #endif
+#ifdef SE_BRW_DN1
+        if (!dn_go && wr >= SE_DN1_AT) dn_go = 1;
+#endif
         if (wi < WPN) prefetch(0);  // (keep the window full)
         if (ws < NR && (NOWR_ || ws < NWS || *sem(WFREE + ws % NWS) >= GY * (nf[ws % NWS] + 1))) {  // my block: down the column
             const uint32_t b = blk(ws), n = bsize(b), kb = b / GY;  // (kb: its index among my blocks)
@@ -728,9 +916,28 @@ void kernel_main() {
             for (uint32_t b2 = cy; b2 < b; b2 += GY) woff += bsize(b2);
 #endif
             if (ws < WPN) {  // (first chunk, or every chunk with the ring: its reads issued and landed)
+#ifdef SE_BRW
+#ifdef SE_BRW_DN1
+              if (ws % NB >= NPG * NSG) {  // (a down block: my own NOC1 read)
                 prefetch(ws + 1);
                 noc_async_read_barrier_with_trid(trid_of[kb], WNOC);
                 --pending;
+              } else {
+#endif
+                do {
+                    invalidate_l1_cache();
+                } while (wsy[1] <= nmy);  // (the BRISC issued it)
+                while (!ncrisc_noc_read_with_transaction_id_flushed(0, (nmy < 11 ? nmy : 11) + 1)) {
+                }  // (and its NOC0 read landed: NOC0's status, read only)
+                ++nmy;
+#ifdef SE_BRW_DN1
+              }
+#endif
+#else
+                prefetch(ws + 1);
+                noc_async_read_barrier_with_trid(trid_of[kb], WNOC);
+                --pending;
+#endif
             }
             const uint32_t dst = win + (ws % NWS) * WSLOT * WTB, vw = words + (ws & 3) * 16;
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(vw) = ws + 1;
@@ -783,6 +990,16 @@ void kernel_main() {
     }
 #endif
     noc_async_write_barrier();
+#ifdef SE_BRW
+    wsy[0] = 0, wsy[1] = 0;  // (re-arm: every block landed and sent)
+#endif
+#ifdef SE_XN1
+    {
+        volatile tt_l1_ptr uint32_t* xsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
+        noc_async_read_barrier();
+        xsy[10] = 0, xsy[11] = 0;  // (re-arm)
+    }
+#endif
 #ifdef SE_RS
     {  // re-arm my arrival counters (every increment of the call landed: each was waited to its final count)
         if (nfmax) noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(arrf)), 0u - NCH * nfmax);
@@ -1160,7 +1377,10 @@ void kernel_main() {
 #elif !defined(SE_NODOWN)
         DeviceZoneScopedN("SE-DOWN");
         // down: per pass all of K in DEST over h-all and the streamed W_down blocks, y packed once
+#ifndef SE_HXINC
         cb_wait_front(HALL, HA);
+#endif
+        uint32_t hin = 0;  // (SE_HXINC: h-all columns waited for - the first pass follows the exchange's rounds)
         for (uint32_t pd = 0; pd < NPD; ++pd) {
             const uint32_t pw = se_arg(NPG + pd);
             matmul_block_init(HALL, WIN, 0, pw, MT, POMAX);  // (h rows strided POMAX within a column's block)
@@ -1172,6 +1392,12 @@ void kernel_main() {
                     const uint32_t kt = i * KBD + k;
                     while (kt >= se_arg(NPG + NPD + c + 1)) ++c;
                     const uint32_t a0 = c * MT * POMAX + kt - se_arg(NPG + NPD + c);
+#ifdef SE_HXINC
+                    if (c >= hin) {
+                        hin = c + 1;
+                        cb_wait_front(HALL, hin * MT * POMAX);
+                    }
+#endif
 #ifndef SE_PROBE_NOMATH
                     matmul_block(HALL, WIN, a0, k * pw, 0, false, pw, MT, POMAX);
 #endif
@@ -1204,8 +1430,6 @@ def _probes():
     import os
 
     out = "".join(f"#define SE_PROBE_{p}\n" for p in os.environ.get("SE_PROBE", "").split(",") if p)
-    if os.environ.get("SE_WNOC"):  # (A/B: the W DRAM reads' NoC, 0 or 1 - results checked, not a probe)
-        out += f"#define SE_WNOC {int(os.environ['SE_WNOC'])}\n"
     if os.environ.get(
         "SE_WPF"
     ):  # (timing probe: the W prefetch window, blocks in flight a core; <= 13 transaction ids)
@@ -1326,6 +1550,9 @@ class SeEngine3:
         pwmax = (self.DT // MT) // 2 * 2
         self.NPG = max(-(-2 * p // pwmax) for p in pairs)
         self.wg = [_split_pad(2 * p, self.NPG, 2) for p in pairs]
+        if os.environ.get("SE_PASSREV") == "1":  # (A/B: the narrow gate / up pass first - under the x load, which binds
+            # the first pass anyway - and the full-width passes after it, with only the W stream left)
+            self.wg = [sorted(wg) for wg in self.wg]
         self.NGU, self.LT = self.NPG, latent  # (gate / up passes; then the latent's)
         if latent:
             lw = column_split(latent, GX, 1)
@@ -1516,6 +1743,20 @@ class SeEngine3:
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                     ttnn.BufferType.L1,
                     ttnn.ShardSpec(cores, (1, 64), ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+        if os.environ.get("SE_BRW") == "1":  # (the W reads on the BRISC's NOC0: its words with the NCRISC, 1 KB a core)
+            nw_ = 1024 if os.environ.get("SE_XN1") == "1" else 256
+            self.wsync = ttnn.from_torch(
+                torch.zeros(GX * GY, nw_, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(cores, (1, nw_), ttnn.ShardOrientation.ROW_MAJOR),
                 ),
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
@@ -1844,6 +2085,24 @@ class SeEngine3:
             nd += "#define GROW(m, lr) ((m) * CR + (lr))\n"
         if self.WRING:
             nd += f"#define SE_WRING {self.WRING}\n"
+        if os.environ.get("SE_XPIPE") == "1":  # (A/B: the x owners send a step as soon as its own load landed)
+            nd += f"#define SE_XPIPE\n#define SE_XL {int(os.environ.get('SE_XL', '3'))}u\n"
+        if os.environ.get("SE_HXINC") == "1":  # (A/B, no RS: the down starts on h columns as they land)
+            nd += "#define SE_HXINC\n"
+        if os.environ.get("SE_BRW") == "1":  # (A/B: the W DRAM reads on the BRISC's NOC0, paced)
+            assert not self.WRING, "SE_BRW: resident weights only"
+            nd += f"#define SE_BRW\n#define SE_WS {int(self.wsync.buffer_address())}u\n"
+            nd += f"#define SE_WPD {int(os.environ.get('SE_WPD', '4'))}u\n"
+            if os.environ.get("SE_XN1") == "1":  # (A/B, the engine alone - x from DRAM, no ports: family-1 x on NOC1)
+                assert self.rs is None, "SE_XN1: the engine alone only"
+                nd += "#define SE_XN1\n"
+            if os.environ.get("SE_BRW_DN1") == "1":  # (the down's W blocks on the NCRISC's NOC1, early)
+                nd += f"#define SE_BRW_DN1\n#define SE_DN1_AT {int(os.environ.get('SE_DN1_AT', '14'))}u\n"
+            nd += f"#define SE_WDD {int(os.environ.get('SE_WDD', '24'))}u\n"
+            if os.environ.get("SE_BRW_BAR", "1") == "1":
+                b0 = self.mesh.worker_core_from_logical_core(ttnn.CoreCoord(cx0, 0))
+                nd += f"#define SE_BRW_BAR\n#define SE_BAR_X {b0.x}\n#define SE_BAR_Y {b0.y}\n#define SE_BAR_N {GX * GY}u\n"
+
         if self.NCH > 1:  # (dispatch prep: every chunk's units in the last chunk's prep op - see the worklog)
             nd += "#define SE_PREP_LAST\n"
         if self.rs is not None:
