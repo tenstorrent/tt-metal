@@ -941,6 +941,7 @@ SPECIALS_READY_OPS: frozenset[MathOperation] = frozenset(
         MathOperation.LessThanEqualZero,
         MathOperation.LessThanZero,
         MathOperation.Log1p,
+        MathOperation.LogWithBase,
         MathOperation.Lrelu,
         MathOperation.Mish,
         MathOperation.Neg,
