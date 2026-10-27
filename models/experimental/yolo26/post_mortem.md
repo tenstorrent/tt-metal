@@ -48,6 +48,7 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0026 | Can one chip serve 20 camera streams at 30 FPS (600 images/s)? Live multi-stream demo | 2026-10-26 | DONE: yolo26s batch 4, 20 CAVIAR shopping-centre streams, 30.0 FPS per stream sustained 60 s with recording (599.4 images/s); ceiling 661 images/s (33 FPS per stream) |
 | YOLO26-0027 | Demo says batch 4: are the 20 streams run 4 at a time, in sequence? | 2026-10-27 | ANSWERED: yes, each 33.3 ms tick runs 5 batch-4 traces back to back (~30 ms of compute); panel changes and v2/v3 recordings |
 | YOLO26-0028 | 80 streams × 30 FPS on all 4 QB2 chips (same 20 clips on each chip), live demo + recording | 2026-10-27 | DONE: dp=4 mesh, batch 4/chip, outputs packed on device, host prep in worker processes: 2399.2 images/s = 30.0 FPS per stream for 60 s with recording; ceiling 2598.5 images/s (32.5 FPS/stream); capture hang hit 2× (OPEN, see YOLO26-0025) |
+| YOLO26-0029 | Per-camera-group latency of the multiplexed demo; cut it | 2026-10-27 | DONE (1 chip): CAM 17-20 46.9 → 39.6 ms, on screen 50.9 → 43.4 ms at 600 images/s; 4 chips: on screen 57-61 ms, unchanged within noise (device at ~92 % of its ceiling) |
 
 ## Entries
 
@@ -811,3 +812,56 @@ YOLO26-0021/0022/0025; status stays OPEN.
 
 Limits: as YOLO26-0026 (per-frame counts, no tracking, 25 FPS clips played at 30). 80 streams are 20 clips × 4
 offsets, not 80 cameras. The 4 chips run in lockstep (one mesh trace), so every chip shows the same FPS.
+
+### YOLO26-0029 — latency per camera group, and cutting it (appended 2026-10-27)
+
+Question: with 5 batches of 4 per tick (YOLO26-0027), what is the latency of CAM 05-08 vs CAM 17-20?
+
+METHOD: instrumented scratch copy of the demo (`scratchpad/bench/make_latency_copy.py`): per pass, time from the
+tick's capture to results handed to decode and to decoded; on-screen = capture to the tick's mosaic drawn. 1 chip,
+20 streams, 30 FPS, 30 s, first 2 s skipped, 840 ticks.
+
+MEASURED baseline (code as committed in 2c7aba4e2f2), decoded median: CAM 01-04 19.7 ms, 05-08 25.4, 09-12 29.0,
+13-16 41.1, 17-20 46.9; on screen 50.9 ms (p95 52.3). All cameras appear on screen together: the renderer draws a
+tick only when its 5 batches are in, so on-screen latency is that of the last group for every camera.
+
+READ (device loop): results of a batch were handed over one iteration later, after the next batch's input was
+queued. At the end of a tick the next input is the next tick's first batch, so batch 4 waited for the next tick
+(the 12 ms step between batches 3 and 4).
+
+Attempts:
+1. REFUTED: a waiter thread calling `event_synchronize` per read, plus reading first when the next input is not
+   ready. MEASURED: every group 107-136 ms, on screen 138 ms (throughput kept, 597.9 images/s); the input queue
+   stayed full. READ: `event_synchronize` releases the GIL (nanobind `gil_scoped_release`), so the GIL is not the
+   reason; cause not found, dropped.
+2. Tick-boundary flush, no thread: when the next input is not ready, read the current batch first, wait for both
+   outstanding reads, hand both over, then wait for input (the device would idle anyway). MEASURED: groups 23.9 /
+   28.3 / 33.9 / 41.0 / 48.7 ms, on screen 51.6. Little gain. Timeline (MEASURED, per batch, median ms after capture)
+   showed why: the prep thread produced batches only at 3.4 / 7.7 / 12.1 / 18.7 / 24.6 ms (≈ 5 ms per batch of 4
+   under the GIL against ~1.5 ms alone), so the device waited for input.
+3. Prep in worker processes over a shared-memory ring (the 4-chip design, YOLO26-0028). MEASURED: groups 20.2 /
+   25.0 / 31.7 / 40.5 / 45.0, on screen 48.7. Timeline: inputs ready at 1.7 ms but handed to the device loop at
+   8.7 ms; the main process was busy decoding the previous tick (~2 ms per batch) and rendering it (tiles, panel,
+   JPEG, recorder ~10 ms) under the same GIL.
+4. Both demos on one shared pipeline (`multistream_demo.run_pipeline`): prep workers, on-device output packing
+   (`pack_outputs`, decode ~0.1 ms), decode in the main process, render in its own process. `multichip_demo.py`
+   keeps only its mesh setup and mosaic layout.
+
+MEASURED result, 1 chip (60 s recording + live MJPEG, `yolo26s_20streams_1chip_v4.mp4`): 599.9 images/s =
+30.0 FPS per stream; capture-to-results median CAM 01-04 17.3 ms, 05-08 19.7, 09-12 28.8, 13-16 32.3, 17-20 39.6;
+on screen 43.4 ms; 1800 frames.
+
+4 chips (MEASURED, 30 s timelines then the 60 s recording `yolo26s_80streams_4chips_v2.mp4`): 2399.1 images/s =
+30.0 FPS per stream; capture-to-results CAM 01-04 32.7, 05-08 34.3, 09-12 49.4, 13-16 51.3, 17-20 55.4 ms (chip 1
+cameras; the 4 chips run in lockstep); on screen 61.0 ms (57.6 and 57.8 in two 30 s runs; 57-61 ms before the change).
+Timeline: 16-image prep passes take ~6-7 ms per worker in the demo (2.7 ms alone) and the device is still busy
+with the previous tick when the next tick's first pass is ready (start ~11 ms after it is ready).
+- REFUTED: 5 prep workers: all passes ready only at ~15 ms, on screen 61.1 ms.
+- REFUTED: `cv2.setNumThreads(1)` in the workers (2 workers: on screen 56.8 ms; 3 workers: 57.4 ms): no change;
+  reverted.
+- INFERRED: at 2400 of ~2600 images/s (~92 %) any start delay carries over to the next tick, so latency is set by
+  queueing; reducing device time per pass (e.g. the 8-channel uint8 input, 5/8 padding) is the remaining lever.
+
+Also fixed: the end-of-run summary measured elapsed time after the prep workers had shut down (585 images/s
+reported for 18000 images in 30 s); elapsed is now taken when the device loop ends. The per-pass latency medians
+are now part of the demos' summary log.

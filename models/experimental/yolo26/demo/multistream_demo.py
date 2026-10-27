@@ -9,7 +9,13 @@ stream is letterboxed and grouped into batches of --batch-size images; each batc
 2 command queues (upload of the next batch on CQ1 overlaps the current trace on CQ0, outputs are read back on CQ1).
 Persons (COCO class 0) are counted per stream and drawn on a mosaic with a side panel of per-stream counts.
 
-The mosaic is served live as MJPEG on http://<host>:--port/ and optionally recorded to --record.
+Processes (run_pipeline, shared with multichip_demo.py), so that preparing, decoding and drawing do not delay the
+device loop on the Python lock:
+- --prep-workers processes letterbox frames into a shared-memory ring of input buffers (PrepPool);
+- this process uploads, runs the trace and decodes; the trace also packs the outputs on device into one small
+  row-major tensor (pack_outputs), so read-back and decode stay cheap;
+- a render process draws the newest completed tick, serves the mosaic live as MJPEG on http://<host>:--port/ and
+  optionally records it to --record.
 
     python models/experimental/yolo26/demo/multistream_demo.py --videos <dir> --variant yolo26s --batch-size 4
 """
@@ -17,12 +23,14 @@ The mosaic is served live as MJPEG on http://<host>:--port/ and optionally recor
 import argparse
 import glob
 import http.server
+import multiprocessing as mp
 import os
 import queue
 import subprocess
 import threading
 import time
 from collections import deque
+from multiprocessing import shared_memory
 
 import cv2
 import numpy as np
@@ -34,6 +42,7 @@ from models.experimental.yolo26.common import YOLO26_L1_SMALL_SIZE
 from models.experimental.yolo26.runner.performant_runner import YOLO26PerformantRunner
 from models.experimental.yolo26.tt.ttnn_yolo26 import UINT8_INPUT_CHANNELS
 
+SIZE = 640
 STRIDES = [8, 16, 32]
 PERSON = 0
 PANEL_W = 420
@@ -109,29 +118,42 @@ def anchor_grid(size):
     return np.concatenate(anchors).astype(np.float32), np.concatenate(strides).astype(np.float32)
 
 
-def decode_people(host_outputs, shapes, batch, anchors, strides, conf, mesh_composer=None):
+def pack_outputs(output):
     """
-    host_outputs: [box_p3, box_p4, box_p5, cls_p3, cls_p4, cls_p5] host tile tensors (on a mesh, gathered along the
-    batch with mesh_composer, so batch counts the images of all devices).
-    Returns per image an array [k, 5] of (x1, y1, x2, y2, conf) in input-image pixels for class 0 (person).
-    NMS-free one2one head: boxes are ltrb distances in units of the stride, scores are logits.
+    On device, inside the trace: [boxes p3..p5 (ltrb x4), scores p3..p5 (80 logits)] -> one row-major DRAM tensor
+    [1, 1, sum(B * h * w), 5] of (l, t, r, b, person logit), levels in order, images in order within a level. Read-back
+    and host conversion of this are ~100x smaller than of the six tile outputs.
+    """
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    parts = []
+    for (box, _, _), (score, _, _) in zip(output["boxes"], output["scores"]):
+        # Copy out of L1 first: the slice / concat buffers do not fit next to the model's L1 outputs
+        box, score = ttnn.to_memory_config(box, dram), ttnn.to_memory_config(score, dram)
+        n = box.shape[2]
+        person = ttnn.slice(score, [0, 0, 0, PERSON], [1, 1, n, PERSON + 1], memory_config=dram)
+        parts.append(ttnn.concat([box, person], dim=3, memory_config=dram))
+    return ttnn.to_layout(ttnn.concat(parts, dim=2, memory_config=dram), ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+
+
+def decode_packed(packed, shapes, per_chip, anchors, strides, conf):
+    """
+    packed: [chips, 1, rows, 5] float (see pack_outputs). Returns per image (chip-major) an array [k, 5] of
+    (x1, y1, x2, y2, conf) in input-image pixels. NMS-free one2one head: boxes are ltrb distances in units of the
+    stride, scores are logits.
     """
     logit = np.log(conf / (1 - conf))
-    boxes, scores = [], []
-    for t, (h, w) in zip(host_outputs[:3], shapes):
-        boxes.append(ttnn.to_torch(t, mesh_composer=mesh_composer).reshape(batch, h * w, -1)[..., :4].float().numpy())
-    for t, (h, w) in zip(host_outputs[3:], shapes):
-        scores.append(
-            ttnn.to_torch(t, mesh_composer=mesh_composer).reshape(batch, h * w, -1)[..., PERSON].float().numpy()
-        )
-    boxes, scores = np.concatenate(boxes, 1), np.concatenate(scores, 1)
     people = []
-    for b in range(batch):
-        keep = np.nonzero(scores[b] > logit)[0]
-        ltrb, a, s = boxes[b, keep], anchors[keep], strides[keep]
-        xyxy = np.concatenate((a - ltrb[:, :2], a + ltrb[:, 2:]), 1) * s
-        p = 1 / (1 + np.exp(-scores[b, keep]))
-        people.append(np.concatenate((xyxy, p[:, None]), 1))
+    for chip in packed[:, 0]:
+        levels, off = [], 0
+        for h, w in shapes:
+            levels.append(chip[off : off + per_chip * h * w].reshape(per_chip, h * w, 5))
+            off += per_chip * h * w
+        for img in np.concatenate(levels, 1):
+            keep = np.nonzero(img[:, 4] > logit)[0]
+            ltrb, a, s = img[keep, :4], anchors[keep], strides[keep]
+            xyxy = np.concatenate((a - ltrb[:, :2], a + ltrb[:, 2:]), 1) * s
+            p = 1 / (1 + np.exp(-img[keep, 4]))
+            people.append(np.concatenate((xyxy, p[:, None]), 1))
     return people
 
 
@@ -219,12 +241,16 @@ class Recorder:
 class Display:
     """Per-stream annotated tiles, a side panel of people counts and throughput, composed into one mosaic."""
 
-    def __init__(self, streams, cols, tile_w, tile_h, args):
-        self.streams, self.cols, self.tile_w, self.tile_h, self.args = streams, cols, tile_w, tile_h, args
-        rows = (len(streams) + cols - 1) // cols
-        self.canvas = np.zeros((rows * tile_h, cols * tile_w + PANEL_W, 3), np.uint8)
+    def __init__(self, args, num_streams, chips):
+        self.clips = load_clips(args.videos, num_streams, args.max_frames, rgba=False)
+        self.table = stream_table(self.clips, num_streams, chips)
+        self.n, self.cols, self.args = num_streams, args.cols, args
+        self.tile_w, self.tile_h = map(int, args.tile.split("x"))
+        rows = (num_streams + self.cols - 1) // self.cols
+        self.canvas = np.zeros((rows * self.tile_h, self.cols * self.tile_w + PANEL_W, 3), np.uint8)
 
-    def tile(self, i, frame, people_src, fps):
+    def tile(self, i, frame_idx, people_src, fps):
+        frame = self.clips[self.table[i][0]]["frames"][frame_idx]
         r, c = divmod(i, self.cols)
         sx, sy = self.tile_w / frame.shape[1], self.tile_h / frame.shape[0]
         view = self.canvas[r * self.tile_h : (r + 1) * self.tile_h, c * self.tile_w : (c + 1) * self.tile_w]
@@ -249,13 +275,13 @@ class Display:
         )
         put(f"YOLO26{self.args.variant[-1]} people counting", 32, 0.7, (255, 255, 255), 2)
         put(f"1 Tenstorrent Blackhole chip, batch {self.args.batch_size}", 58)
-        put(f"{len(self.streams)} streams x {stats['stream_fps']:.1f} FPS", 96, 0.75, (90, 230, 90), 2)
+        put(f"{self.n} streams x {stats['stream_fps']:.1f} FPS", 96, 0.75, (90, 230, 90), 2)
         put(f"= {stats['total_fps']:.0f} images/s", 124)
         put(f"latency {stats['latency_ms']:.0f} ms (median)   display {stats['display_fps']:.0f} FPS", 148)
         total = sum(counts)
         put(f"People now: {total}", 186, 0.75, (255, 255, 255), 2)
         top = 214
-        row_h = max(18, (p.shape[0] - top - 10) // len(self.streams))
+        row_h = max(18, (p.shape[0] - top - 10) // self.n)
         put("camera                                   people now", top - 6, 0.42, (150, 150, 150))
         bar_x0, bar_x1 = 90, PANEL_W - 70
         scale = max(4, max(counts))
@@ -272,12 +298,192 @@ class Display:
             text(f"{n:2d}", PANEL_W - 56, y + 13)
 
 
+def stream_table(clips, num_streams, chips):
+    """
+    Stream s -> (clip entry, start frame). clips: load_clips(..., per_chip streams); the copies of an entry on
+    different chips start 1 / chips of a clip apart.
+    """
+    n = len(clips)
+    return [
+        (s % n, clips[s % n]["offset"] + (s // n) * len(clips[s % n]["frames"]) // chips) for s in range(num_streams)
+    ]
+
+
+def ring_views(shm, slots, batch):
+    return np.ndarray((slots, batch, SIZE, SIZE, UINT8_INPUT_CHANNELS), np.uint8, buffer=shm.buf)
+
+
+def prep_worker(rank, workers, args, layout, shm_name, slots, free_q, work_q, ready_q, start, t0, stop):
+    """Letterbox the current frame of each stream of this worker's passes into free ring slots, paced at --fps."""
+    per_chip, B, chips = layout
+    clips = load_clips(args.videos, per_chip, args.max_frames)
+    table = stream_table(clips, chips * per_chip, chips)
+    rgba = [c["rgba"] for c in clips]
+    letterbox = Letterbox(*rgba[0][0].shape[:2], SIZE)
+    shm = shared_memory.SharedMemory(name=shm_name)
+    ring = ring_views(shm, slots, chips * B)
+    ready_q.put(rgba[0][0].shape[:2])
+    start.wait()
+    period = 1.0 / args.fps
+    tick = 0
+    mine = [b for b in range(per_chip // B) if b % workers == rank]
+    while not stop.is_set():
+        due = t0.value + tick * period
+        now = time.perf_counter()
+        if due > now:
+            time.sleep(due - now)
+        captured = time.perf_counter()
+        for b in mine:
+            while True:
+                try:
+                    slot = free_q.get(timeout=0.5)
+                    break
+                except queue.Empty:
+                    if stop.is_set():
+                        return
+            ids = [g * per_chip + b * B + i for g in range(chips) for i in range(B)]
+            frame_idx = []
+            for j, s in enumerate(ids):
+                clip, offset = table[s]
+                f = (tick + offset) % len(rgba[clip])
+                letterbox.fill(ring[slot, j], rgba[clip][f])
+                frame_idx.append(f)
+            work_q.put((tick, b, ids, frame_idx, captured, slot))
+        tick += 1
+
+
+class PrepPool:
+    """
+    Host input preparation in worker processes. Each mesh pass b of a tick holds image j = chip g * B + i of stream
+    g * per_chip + b * B + i; passes are split round-robin over the workers. Buffers live in a shared-memory ring
+    whose letterbox padding (114 in RGB) is written once; a slot is free again once its pass has been read back.
+    """
+
+    def __init__(self, args, per_chip, chips, batch_size, workers):
+        self.batch = chips * batch_size
+        self.slots = 2 * (per_chip // batch_size) + 6
+        self.shm = shared_memory.SharedMemory(
+            create=True, size=self.slots * self.batch * SIZE * SIZE * UINT8_INPUT_CHANNELS
+        )
+        self.ring = ring_views(self.shm, self.slots, self.batch)
+        self.ring[..., :3] = 114
+        self.ring[..., 3:] = 0
+        ctx = mp.get_context("spawn")
+        self.free_q, self.work_q, self.ready_q = ctx.Queue(), ctx.Queue(), ctx.Queue()
+        for k in range(self.slots):
+            self.free_q.put(k)
+        self.start_event, self.stop, self.t0 = ctx.Event(), ctx.Event(), ctx.Value("d", 0.0)
+        self.halt = threading.Event()
+        layout = (per_chip, batch_size, chips)
+        self.procs = [
+            ctx.Process(
+                target=prep_worker,
+                args=(rank, workers, args, layout, self.shm.name, self.slots, self.free_q, self.work_q)
+                + (self.ready_q, self.start_event, self.t0, self.stop),
+                daemon=True,
+            )
+            for rank in range(workers)
+        ]
+        for p in self.procs:
+            p.start()
+
+    def start(self, prep_q, mesh_mapper=None):
+        """
+        Wait for the workers, start the ticks and feed ring slots as host tensors (no copy) to prep_q. Returns the
+        time of the first tick; src_hw is the source frame size.
+        """
+        self.src_hw = [self.ready_q.get() for _ in self.procs][0]
+        self.t0.value = time.perf_counter() + 0.1
+        self.start_event.set()
+
+        def feed():
+            while not self.halt.is_set():
+                try:
+                    tick, b, ids, frame_idx, captured, slot = self.work_q.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                host = ttnn.from_torch(
+                    torch.from_numpy(self.ring[slot]).reshape(self.batch, 1, SIZE, SIZE * UINT8_INPUT_CHANNELS),
+                    dtype=ttnn.uint8,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=mesh_mapper,
+                )
+                prep_q.put((tick, b, ids, frame_idx, captured, slot, host))
+
+        threading.Thread(target=feed, daemon=True).start()
+        return self.t0.value
+
+    def release(self, slot):
+        self.free_q.put(slot)
+
+    def close(self):
+        self.stop.set()
+        self.halt.set()
+        for p in self.procs:
+            p.join(timeout=30)
+        self.shm.unlink()  # the mapping itself goes with the process
+
+
+def render_process(make_display, args, num_streams, chips, render_q, ready_q):
+    """
+    Separate process: draw the newest completed tick (older ones are skipped if drawing falls behind), serve MJPEG,
+    record. make_display(args, num_streams, chips) gives an object with canvas, tile(s, frame_idx, dets, fps) and
+    panel(stats, counts).
+    """
+    display = make_display(args, num_streams, chips)
+    mjpeg = Mjpeg(args.port) if args.port else None
+    writer = Recorder(args.record, display.canvas.shape[1], display.canvas.shape[0], args.fps) if args.record else None
+    ready_q.put("ready")
+    latencies, shown, all_latencies = deque(maxlen=200), deque(), []
+    t_start = last = None
+    finished = False
+    while not finished:
+        msg = render_q.get()
+        try:
+            while msg is not None:
+                newer = render_q.get_nowait()
+                if newer is None:
+                    finished = True
+                    break
+                msg = newer
+        except queue.Empty:
+            pass
+        if msg is None:
+            break
+        captured, latest, fps, stats = msg
+        for s, r in enumerate(latest):
+            if r is not None:
+                display.tile(s, r[0], r[1], fps[s])
+        now = time.perf_counter()
+        t_start = t_start or now
+        latencies.append((now - captured) * 1000)
+        all_latencies.append(latencies[-1])
+        shown.append(now)
+        while now - shown[0] > 2.0:
+            shown.popleft()
+        stats["latency_ms"] = float(np.median(latencies))
+        stats["display_fps"] = len(shown) / (min(2.0, now - t_start) or 1e-3)
+        display.panel(stats, [len(r[1]) if r else 0 for r in latest])
+        if mjpeg:
+            mjpeg.publish(cv2.imencode(".jpg", display.canvas, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes())
+        if writer:
+            writer.write(display.canvas)
+        last = display.canvas
+    if writer:
+        writer.close()
+    if args.snapshot and last is not None:
+        cv2.imwrite(args.snapshot, last)
+    ready_q.put((float(np.median(all_latencies)) if all_latencies else 0.0, len(all_latencies)))
+
+
 def run_device_loop(device, runner, out_list, prep_q, post_q, t_end, images_per_batch):
     """
     Run queued host batches until t_end. prep_q items end with the host input tensor; each item is handed to post_q
     with the host outputs in place of the input once their read has finished.
 
-    CQ1 uploads the next batch while CQ0 runs the trace; outputs go DRAM -> host on CQ1.
+    CQ1 uploads the next batch while CQ0 runs the trace; outputs go DRAM -> host on CQ1. When the next batch is not
+    ready yet (end of a tick), the device would idle anyway: the current batch is read first and both outstanding
+    batches are handed over before waiting, instead of holding them until the next tick's input arrives.
     """
     staging, l1_input = runner.tt_image_res, runner.input_tensor
     read_event = ttnn.record_event(device, 1)
@@ -297,214 +503,178 @@ def run_device_loop(device, runner, out_list, prep_q, post_q, t_end, images_per_
         last_op_event = ttnn.record_event(device, 0)
 
         current = item
-        item = prep_q.get()
-        ttnn.wait_for_event(1, first_op_event)
-        ttnn.copy_host_to_device_tensor(item[-1], staging, 1)
-        write_event = ttnn.record_event(device, 1)
+        try:
+            item = prep_q.get_nowait()
+        except queue.Empty:
+            item = None
+        if item is None:
+            ttnn.wait_for_event(1, last_op_event)
+            host = [ttnn.from_device(t, blocking=False, cq_id=1) for t in dram]
+            read_event = ttnn.record_event(device, 1)
+            for event, done in ([in_flight] if in_flight else []) + [(read_event, current[:-1] + (host,))]:
+                ttnn.event_synchronize(event)
+                post_q.put(done)
+            in_flight = None
+            item = prep_q.get()
+            ttnn.wait_for_event(1, first_op_event)
+            ttnn.copy_host_to_device_tensor(item[-1], staging, 1)
+            write_event = ttnn.record_event(device, 1)
+        else:
+            ttnn.wait_for_event(1, first_op_event)
+            ttnn.copy_host_to_device_tensor(item[-1], staging, 1)
+            write_event = ttnn.record_event(device, 1)
 
-        ttnn.wait_for_event(1, last_op_event)
-        host = [ttnn.from_device(t, blocking=False, cq_id=1) for t in dram]
-        read_event = ttnn.record_event(device, 1)
+            ttnn.wait_for_event(1, last_op_event)
+            host = [ttnn.from_device(t, blocking=False, cq_id=1) for t in dram]
+            read_event = ttnn.record_event(device, 1)
 
-        # Hand the previous batch's outputs over once their read has finished (the current trace runs meanwhile)
-        if in_flight is not None:
-            ttnn.event_synchronize(in_flight[0])
-            post_q.put(in_flight[1])
-        in_flight = (read_event, current[:-1] + (host,))
+            # Hand the previous batch's outputs over once their read has finished (the current trace runs meanwhile)
+            if in_flight is not None:
+                ttnn.event_synchronize(in_flight[0])
+                post_q.put(in_flight[1])
+            in_flight = (read_event, current[:-1] + (host,))
         processed += images_per_batch
-    ttnn.event_synchronize(in_flight[0])
-    post_q.put(in_flight[1])
+    if in_flight is not None:
+        ttnn.event_synchronize(in_flight[0])
+        post_q.put(in_flight[1])
     return processed
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def run_pipeline(device, args, chips, per_chip, make_display, mesh_mapper=None, mesh_composer=None):
+    """
+    The whole demo on an open device or mesh: per_chip streams on each of chips chips, batch args.batch_size per chip.
+    Prep workers -> device loop (trace + on-device output packing, 2 CQs) -> decode (this process) -> render process.
+    """
+    B = args.batch_size
+    if per_chip % B:
+        raise ValueError("streams per chip must be a multiple of --batch-size")
+    num_streams, nb, mesh_batch = chips * per_chip, per_chip // B, chips * B
+
+    pool = PrepPool(args, per_chip, chips, B, args.prep_workers)
+    ctx = mp.get_context("spawn")
+    render_q, ready_q = ctx.Queue(maxsize=8), ctx.Queue()
+    renderer = ctx.Process(
+        target=render_process, args=(make_display, args, num_streams, chips, render_q, ready_q), daemon=True
+    )
+    renderer.start()
+
+    runner = YOLO26PerformantRunner(device, B, SIZE, args.variant)
+    infra, model_run = runner.runner_infra, runner.runner_infra.run
+
+    def run_and_pack():
+        out = model_run()
+        infra.packed = pack_outputs(out)
+        return out
+
+    infra.run = run_and_pack  # the packing is captured in the same trace
+    runner.capture_trace_2cq()
+    shapes = [(h, w) for _, h, w in infra.output_tensor["boxes"]]
+    anchors, strides = anchor_grid(SIZE)
+    ready_q.get()
+
+    prep_q = queue.Queue(maxsize=2 * nb)
+    post_q = queue.Queue()  # decode keeps up easily; unbounded so the device loop never waits
+    stats, pass_latency = {}, [[] for _ in range(nb)]
+    t_start = pool.start(prep_q, mesh_mapper)
+    letterbox = Letterbox(*pool.src_hw, SIZE)
+
+    def post():
+        """Decode every pass and free its ring slot; when a tick's nb passes are in, send it to the renderer."""
+        latest = [None] * num_streams
+        updates = [deque() for _ in range(num_streams)]
+        pending, done_ticks, images = {}, deque(), deque()
+        while (item := post_q.get()) is not None:
+            tick, b, ids, frame_idx, captured, slot, host_outputs = item
+            pool.release(slot)
+            packed = ttnn.to_torch(host_outputs[0], mesh_composer=mesh_composer).float().numpy()
+            people = decode_packed(packed.reshape(chips, 1, -1, 5), shapes, B, anchors, strides, args.conf)
+            now = time.perf_counter()
+            if captured - t_start > 2.0:
+                pass_latency[b].append((now - captured) * 1000)
+            for j, s in enumerate(ids):
+                src = letterbox.to_source(people[j][:, :4]) if len(people[j]) else np.zeros((0, 4))
+                latest[s] = (frame_idx[j], np.concatenate((src, people[j][:, 4:]), 1) if len(people[j]) else [])
+                u = updates[s]
+                u.append(now)
+                while now - u[0] > 1.0:
+                    u.popleft()
+            images.append((now, mesh_batch))
+            pending[tick] = pending.get(tick, 0) + 1
+            if pending[tick] < nb:
+                continue
+            del pending[tick]
+            done_ticks.append(now)
+            while now - done_ticks[0] > 2.0:
+                done_ticks.popleft()
+            while now - images[0][0] > 2.0:
+                images.popleft()
+            window = min(2.0, now - t_start) or 1e-3
+            stats.update(stream_fps=len(done_ticks) / window, total_fps=sum(n for _, n in images) / window)
+            fps = [(len(u) - 1) / (u[-1] - u[0]) if len(u) > 1 and u[-1] > u[0] else 0.0 for u in updates]
+            try:
+                render_q.put_nowait((captured, list(latest), fps, dict(stats)))
+            except queue.Full:
+                pass
+
+    poster = threading.Thread(target=post, daemon=True)
+    poster.start()
+    if args.port:
+        logger.info(f"live view: http://localhost:{args.port}/")
+
+    processed = 0
+    try:
+        processed = run_device_loop(device, runner, [infra.packed], prep_q, post_q, t_start + args.duration, mesh_batch)
+    finally:
+        elapsed = time.perf_counter() - t_start
+        post_q.put(None)
+        poster.join(timeout=30)
+        pool.close()
+        render_q.put(None)
+        try:
+            shown = ready_q.get(timeout=120)
+        except queue.Empty:
+            shown = None
+        renderer.join(timeout=30)
+        groups = "; ".join(
+            f"CAM {b * B + 1:02d}-{(b + 1) * B:02d} {np.median(v):.1f} ms" for b, v in enumerate(pass_latency) if v
+        )
+        logger.info(
+            f"{num_streams} streams on {chips} chip(s), target {args.fps} FPS each: processed {processed} images in "
+            f"{elapsed:.1f} s = {processed / elapsed:.1f} images/s = {processed / elapsed / num_streams:.1f} FPS per "
+            f"stream; last window {stats}; capture-to-results median per pass (chip 1 cameras): {groups}; "
+            f"on screen (median ms, frames shown): {shown}"
+        )
+        runner.release()
+
+
+def add_common_args(ap):
     ap.add_argument("--videos", required=True, help="directory of .mpg / .mp4 clips")
     ap.add_argument("--variant", default="yolo26s")
-    ap.add_argument("--streams", type=int, default=20)
     ap.add_argument("--fps", type=int, default=30, help="target FPS per stream")
-    ap.add_argument("--batch-size", type=int, default=4)
+    ap.add_argument("--batch-size", type=int, default=4, help="images per chip per pass")
+    ap.add_argument("--prep-workers", type=int, default=2, help="processes letterboxing frames")
     ap.add_argument("--duration", type=float, default=60, help="seconds to run")
     ap.add_argument("--conf", type=float, default=0.35, help="person confidence threshold")
     ap.add_argument("--max-frames", type=int, default=1500, help="frames decoded per clip (loops)")
     ap.add_argument("--port", type=int, default=8090, help="MJPEG port, 0 = off")
     ap.add_argument("--record", default="", help="record the mosaic to this .mp4")
     ap.add_argument("--snapshot", default="", help="save the last mosaic frame to this .jpg")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_common_args(ap)
+    ap.add_argument("--streams", type=int, default=20)
     ap.add_argument("--cols", type=int, default=5)
     ap.add_argument("--tile", default="384x288")
     ap.add_argument("--device-id", type=int, default=0)
     args = ap.parse_args()
-    size = 640
-    B = args.batch_size
-    if args.streams % B:
-        raise ValueError("--streams must be a multiple of --batch-size")
-    nb = args.streams // B
-
-    streams = load_clips(args.videos, args.streams, args.max_frames)
-    src_h, src_w = streams[0]["frames"][0].shape[:2]
-    letterbox = Letterbox(src_h, src_w, size)
-    anchors, strides = anchor_grid(size)
-    tile_w, tile_h = map(int, args.tile.split("x"))
-
     device = ttnn.open_device(
         device_id=args.device_id, l1_small_size=YOLO26_L1_SMALL_SIZE, trace_region_size=8000000, num_command_queues=2
     )
-    runner = YOLO26PerformantRunner(device, B, size, args.variant)
-    runner.capture_trace_2cq()
-    outputs = runner.runner_infra.output_tensor
-    out_list = [t for k in ("boxes", "scores") for t, _, _ in outputs[k]]
-    shapes = [(h, w) for _, h, w in outputs["boxes"]]
-
-    # Host input buffers: per batch slot, [B, H, W, 8] uint8 pre-filled with the letterbox padding (114 in RGB)
-    pad = np.zeros((B, size, size, UINT8_INPUT_CHANNELS), np.uint8)
-    pad[..., :3] = 114
-    prep_q = queue.Queue(maxsize=2 * nb)
-    post_q = queue.Queue()  # decode keeps up easily (~2 ms per batch); unbounded so the device loop never waits
-    stop = threading.Event()
-    t_start = [0.0]
-
-    def prep():
-        """Pace ticks at --fps; for each tick build nb host batches of the current frame of each stream."""
-        period = 1.0 / args.fps
-        tick = 0
-        t0 = time.perf_counter()
-        t_start[0] = t0
-        while not stop.is_set():
-            due = t0 + tick * period
-            now = time.perf_counter()
-            if due > now:
-                time.sleep(due - now)
-            captured = time.perf_counter()
-            for b in range(nb):
-                buf = pad.copy()
-                ids = list(range(b * B, (b + 1) * B))
-                frame_idx = []
-                for j, s in enumerate(ids):
-                    st = streams[s]
-                    f = (tick + st["offset"]) % len(st["frames"])
-                    letterbox.fill(buf[j], st["rgba"][f])
-                    frame_idx.append(f)
-                host = ttnn.from_torch(
-                    torch.from_numpy(buf).reshape(B, 1, size, size * UINT8_INPUT_CHANNELS),
-                    dtype=ttnn.uint8,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-                prep_q.put((tick, b, ids, frame_idx, captured, host))
-            tick += 1
-
-    class Results:
-        """Latest detections per stream, written for every batch; the renderer reads whatever is newest."""
-
-        def __init__(self):
-            self.lock = threading.Condition()
-            self.latest = [None] * args.streams  # (frame_idx, dets) per stream
-            self.updates = [deque() for _ in range(args.streams)]  # result timestamps, last 1 s
-            self.done_ticks, self.images = deque(), deque()
-            self.latencies = deque(maxlen=200)
-            self.tick = -1  # last tick with all streams done
-            self.tick_captured = 0.0
-            self.stats = {}
-
-    results = Results()
-
-    def post():
-        """Decode every batch (cheap); never blocks the device loop on drawing."""
-        pending = {}
-        while (item := post_q.get()) is not None:
-            tick, b, ids, frame_idx, captured, host_outputs = item
-            people = decode_people(host_outputs, shapes, B, anchors, strides, args.conf)
-            now = time.perf_counter()
-            with results.lock:
-                for j, s in enumerate(ids):
-                    src = letterbox.to_source(people[j][:, :4]) if len(people[j]) else np.zeros((0, 4))
-                    dets = np.concatenate((src, people[j][:, 4:]), 1) if len(people[j]) else []
-                    results.latest[s] = (frame_idx[j], dets)
-                    u = results.updates[s]
-                    u.append(now)
-                    while now - u[0] > 1.0:
-                        u.popleft()
-                results.images.append((now, B))
-                pending[tick] = pending.get(tick, 0) + 1
-                if pending[tick] < nb:
-                    continue
-                del pending[tick]
-                results.done_ticks.append(now)
-                for d in (results.done_ticks, results.images):
-                    while d and now - (d[0] if d is results.done_ticks else d[0][0]) > 2.0:
-                        d.popleft()
-                window = min(2.0, now - t_start[0]) or 1e-3
-                results.stats = {
-                    "stream_fps": len(results.done_ticks) / window,
-                    "total_fps": sum(n for _, n in results.images) / window,
-                }
-                results.tick, results.tick_captured = tick, captured
-                results.lock.notify_all()
-        with results.lock:
-            results.tick = None
-            results.lock.notify_all()
-
-    def render():
-        """Draw the newest completed tick; if drawing is slower than inference, display frames are skipped."""
-        display = Display(streams, args.cols, tile_w, tile_h, args)
-        mjpeg = Mjpeg(args.port) if args.port else None
-        writer = (
-            Recorder(args.record, display.canvas.shape[1], display.canvas.shape[0], args.fps) if args.record else None
-        )
-        shown, last_tick, last_frame = deque(), -1, None
-        while True:
-            with results.lock:
-                results.lock.wait_for(lambda: results.tick is None or results.tick != last_tick)
-                if results.tick is None:
-                    break
-                last_tick, captured = results.tick, results.tick_captured
-                latest = list(results.latest)
-                counts = [len(r[1]) if r else 0 for r in latest]
-                fps = [(len(u) - 1) / (u[-1] - u[0]) if len(u) > 1 and u[-1] > u[0] else 0.0 for u in results.updates]
-                stats = dict(results.stats)
-            for s, r in enumerate(latest):
-                if r is not None:
-                    display.tile(s, streams[s]["frames"][r[0]], r[1], fps[s])
-            now = time.perf_counter()
-            results.latencies.append((now - captured) * 1000)
-            shown.append(now)
-            while now - shown[0] > 2.0:
-                shown.popleft()
-            stats["latency_ms"] = float(np.median(results.latencies))
-            stats["display_fps"] = len(shown) / (min(2.0, now - t_start[0]) or 1e-3)
-            display.panel(stats, counts)
-            if mjpeg:
-                mjpeg.publish(cv2.imencode(".jpg", display.canvas, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes())
-            if writer:
-                writer.write(display.canvas)
-            last_frame = display.canvas.copy() if args.snapshot else None
-            post.stats = stats
-        if writer:
-            writer.close()
-        if last_frame is not None:
-            cv2.imwrite(args.snapshot, last_frame)
-
-    post.stats = {}
-    threads = [threading.Thread(target=f, daemon=True) for f in (prep, post, render)]
-    for t in threads:
-        t.start()
-    if args.port:
-        logger.info(f"live view: http://localhost:{args.port}/")
-
-    processed = 0
     try:
-        processed = run_device_loop(device, runner, out_list, prep_q, post_q, time.perf_counter() + args.duration, B)
+        run_pipeline(device, args, 1, args.streams, Display)
     finally:
-        stop.set()
-        post_q.put(None)
-        for t in threads[1:]:
-            t.join(timeout=30)
-        elapsed = time.perf_counter() - t_start[0]
-        logger.info(
-            f"{args.streams} streams, target {args.fps} FPS each: processed {processed} images in {elapsed:.1f} s "
-            f"= {processed / elapsed:.1f} images/s = {processed / elapsed / args.streams:.1f} FPS per stream; "
-            f"last window {post.stats}"
-        )
-        runner.release()
         ttnn.close_device(device)
 
 
