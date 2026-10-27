@@ -13,8 +13,7 @@ import torch
 import torch.nn.functional as F
 
 from models.demos.blackhole.qwen38_flash_next.checkpoint import VISION_SHARD
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import release_checkpoint  # noqa: F401
-from models.demos.blackhole.qwen38_flash_next.tests.fixtures import vision_fixture
+from models.demos.blackhole.qwen38_flash_next.tests.helpers import vision_fixture
 from models.demos.blackhole.qwen38_flash_next.tools.checkpoint_budget import vision_resident_layout
 from models.demos.blackhole.qwen38_flash_next.ttnn import vision_layout
 from models.demos.blackhole.qwen38_flash_next.vision_reference import (

@@ -16,7 +16,7 @@ import torch
 from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker
 
 import ttnn
-from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.tp_harness import DEVICE_PARAMS
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fp
 
 KERNELS = Path(__file__).parent / "kernels/source_sfpu_rounding"

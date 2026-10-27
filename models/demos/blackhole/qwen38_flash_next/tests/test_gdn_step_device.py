@@ -10,7 +10,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import (
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.tp_harness import (
     DEVICE_PARAMS,
     assert_program_cache_stable,
     assert_shards_equal,

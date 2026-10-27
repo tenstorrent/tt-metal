@@ -21,7 +21,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS, HIDDEN_SIZE, pcc
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.tp_harness import DEVICE_PARAMS, HIDDEN_SIZE, pcc
 from models.demos.blackhole.qwen38_flash_next.tt.model import text_rope
 from models.demos.blackhole.qwen38_flash_next.tt.qsa import Qwen38QSA, Qwen38QSAWeights
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_DEFAULT_QSA_CACHE_CAPACITY

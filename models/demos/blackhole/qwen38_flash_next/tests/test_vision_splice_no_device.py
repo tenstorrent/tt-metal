@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import torch
 
 from models.demos.blackhole.qwen38_flash_next.mrope import IMAGE_TOKEN_ID, Qwen38ImageGrid, mrope_positions
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import mrope_prompt
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.model import mrope_prompt
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import (
     Qwen38ChatSession,
     Qwen38PromptSnapshot,

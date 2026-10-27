@@ -9,7 +9,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS, download_replica
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.tp_harness import DEVICE_PARAMS, download_replica
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_post_rows as post
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_pre_rows as pre
 

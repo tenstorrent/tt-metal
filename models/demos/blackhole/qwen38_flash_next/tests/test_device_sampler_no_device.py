@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_sampling import sampling_logits, sampling_parameters
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.sampling import sampling_logits, sampling_parameters
 from models.demos.blackhole.qwen38_flash_next.ttnn import device_sampler as ds
 from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import (
     SAMPLING_CANDIDATE_ROW_SHAPE,

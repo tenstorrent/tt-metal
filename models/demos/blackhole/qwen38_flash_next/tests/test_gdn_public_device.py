@@ -22,7 +22,7 @@ from ttnn.operations.transformer_golden import recurrent_gated_delta_rule
 from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker
 
 import ttnn
-from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS, pcc
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.tp_harness import DEVICE_PARAMS, pcc
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused.gdn_public_adapter import chunk_public
 

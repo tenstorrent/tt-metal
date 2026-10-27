@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_sampling import sampling_parameters
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.sampling import sampling_parameters
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_server as server
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_session as session
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_mtp_device_accept as da

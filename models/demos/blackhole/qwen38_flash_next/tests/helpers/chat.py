@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fakes and fixtures shared by the chat, served-request and vision no-device tests."""
+"""Fakes shared by the chat, served-request and vision no-device tests."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import jinja2
 import pytest
 
-from models.demos.blackhole.qwen38_flash_next.chat import IM_END_ID, IM_START_ID, Qwen38OfficialChatTemplate
+from models.demos.blackhole.qwen38_flash_next.chat import IM_END_ID, IM_START_ID
 from models.demos.blackhole.qwen38_flash_next.mrope import IMAGE_TOKEN_ID, VISION_END_TOKEN_ID, VISION_START_TOKEN_ID
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import (
     THINK_END_ID,
@@ -132,11 +132,6 @@ class ChatTemplateFakeTokenizer:
                 ids.append(ord(text[position]))
                 position += 1
         return SimpleNamespace(input_ids=ids)
-
-
-@pytest.fixture(scope="module")
-def chat_template(checkpoint_dir) -> Qwen38OfficialChatTemplate:
-    return Qwen38OfficialChatTemplate(checkpoint_dir)
 
 
 def chat_request_rejection(function, *args, **kwargs) -> Qwen38ChatRequestRejected:

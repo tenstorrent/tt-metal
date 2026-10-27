@@ -4,11 +4,10 @@
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import (  # noqa: F401
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.model import (
     qsa_causal_mask,
     qsa_position_embeddings,
     qwen4_exp_transformers,
-    release_checkpoint,
     requires_transformers,
 )
 from models.demos.blackhole.qwen38_flash_next.tt.qsa import Qwen38QSA, Qwen38QSAState, Qwen38QSAWeights

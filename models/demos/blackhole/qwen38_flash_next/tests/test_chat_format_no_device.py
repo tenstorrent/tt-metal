@@ -19,7 +19,6 @@ from models.demos.blackhole.qwen38_flash_next.chat import (
     Qwen38ToolExecutionError,
     parse_assistant_completion,
 )
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_chat import chat_template  # noqa: F401
 
 
 def test_exact_artifacts_and_official_thinking_suffix(chat_template: Qwen38OfficialChatTemplate) -> None:

@@ -15,7 +15,10 @@ from models.demos.blackhole.qwen38_flash_next.mrope import (
     VISION_START_TOKEN_ID,
     Qwen38ImageGrid,
 )
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_chat import ChatTemplateFakeTokenizer, chat_request_rejection
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.chat import (
+    ChatTemplateFakeTokenizer,
+    chat_request_rejection,
+)
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_protocol as protocol
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_vision_inputs as inputs
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import Qwen38ChatRequestRejected

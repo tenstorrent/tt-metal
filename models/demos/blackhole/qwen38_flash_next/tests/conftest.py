@@ -69,10 +69,31 @@ def device_checkpoint_dir() -> Path:
     return _checkpoint_root(pytest.fail)
 
 
+@pytest.fixture(scope="module")
+def release_checkpoint(checkpoint_dir):
+    from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
+
+    return Qwen38Checkpoint(checkpoint_dir)
+
+
+@pytest.fixture(scope="module")
+def release_placement(release_checkpoint):
+    from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
+
+    return Qwen38Placement(release_checkpoint.config, mesh_shape=(1, 4), physical_ids=(0, 1, 2, 3))
+
+
+@pytest.fixture(scope="module")
+def chat_template(checkpoint_dir):
+    from models.demos.blackhole.qwen38_flash_next.chat import Qwen38OfficialChatTemplate
+
+    return Qwen38OfficialChatTemplate(checkpoint_dir)
+
+
 @pytest.fixture
 def tp_harness(mesh_device, tmp_path, device_checkpoint_dir):
     """The device-side harness on the root ``mesh_device`` fixture; imported here so no-device tests load without ttnn."""
 
-    from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import Qwen38TPHarness
+    from models.demos.blackhole.qwen38_flash_next.tests.helpers.tp_harness import Qwen38TPHarness
 
     return Qwen38TPHarness(mesh_device, tmp_path, device_checkpoint_dir)

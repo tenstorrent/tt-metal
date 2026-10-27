@@ -21,7 +21,12 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS, HIDDEN_SIZE, RESIDUAL_BRANCHES, pcc
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.tp_harness import (
+    DEVICE_PARAMS,
+    HIDDEN_SIZE,
+    RESIDUAL_BRANCHES,
+    pcc,
+)
 from models.demos.blackhole.qwen38_flash_next.tt.layer import Qwen38DecoderLayer
 from models.demos.blackhole.qwen38_flash_next.tt.model import text_rope
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE

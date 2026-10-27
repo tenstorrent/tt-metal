@@ -12,7 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_chat import chat_request_rejection, skip_without_git_checkout
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.chat import (
+    chat_request_rejection,
+    skip_without_git_checkout,
+)
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_server as server
 from models.demos.blackhole.qwen38_flash_next.tools import runtime_admission
 

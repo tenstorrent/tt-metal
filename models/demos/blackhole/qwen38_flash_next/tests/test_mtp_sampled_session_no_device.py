@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import torch
 
 from models.demos.blackhole.qwen38_flash_next.chat import EOS_TOKEN_IDS
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_sampling import (
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.sampling import (
     SAMPLING_PEAK_LIMIT,
     SamplingFakeChain,
     SamplingFakeExtension,

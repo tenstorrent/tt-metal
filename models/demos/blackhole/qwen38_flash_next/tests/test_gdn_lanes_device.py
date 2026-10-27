@@ -17,7 +17,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import (
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.tp_harness import (
     DEVICE_PARAMS,
     HIDDEN_SIZE,
     assert_tensors_equal,

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_chat import skip_without_git_checkout
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.chat import skip_without_git_checkout
 
 MODEL_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = MODEL_DIR.parents[3]

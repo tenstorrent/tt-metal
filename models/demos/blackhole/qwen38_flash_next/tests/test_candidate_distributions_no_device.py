@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_sampling import (
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.sampling import (
     SAMPLING_PEAK_LIMIT,
     sampling_host_rows,
     sampling_logits,

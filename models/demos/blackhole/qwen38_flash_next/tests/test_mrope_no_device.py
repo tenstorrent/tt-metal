@@ -30,7 +30,7 @@ from models.demos.blackhole.qwen38_flash_next.mrope import (
     rope_row,
     rope_table,
 )
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import (
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.model import (
     mrope_prompt,
     qwen4_exp_transformers,
     requires_transformers,

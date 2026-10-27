@@ -14,10 +14,6 @@ import pytest
 import torch
 
 from models.demos.blackhole.qwen38_flash_next.config import Qwen38Config, Qwen38Placement
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import (  # noqa: F401
-    release_checkpoint,
-    release_placement,
-)
 from models.demos.blackhole.qwen38_flash_next.tools.checkpoint_budget import (
     BF4_TILE_BYTES,
     TensorRecord,

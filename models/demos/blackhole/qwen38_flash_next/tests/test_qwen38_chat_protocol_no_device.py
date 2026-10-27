@@ -12,12 +12,11 @@ import json
 import pytest
 
 from models.demos.blackhole.qwen38_flash_next.chat import IM_END_ID, IM_START_ID, Qwen38OfficialChatTemplate
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_chat import (  # noqa: F401
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.chat import (
     CHAT_SPECIAL_TEXT,
     CHAT_SPECIAL_TOKENS,
     ChatTemplateFakeTokenizer,
     chat_request_rejection,
-    chat_template,
 )
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_protocol as protocol
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import (

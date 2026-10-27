@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared setup of the CPU model tests: the released checkpoint and its 1x4 placement, the pinned Transformers
-``Qwen4Exp`` oracle, the QSA test rotary tables and the MRoPE prompt builder."""
+"""Shared setup of the CPU model tests: the pinned Transformers ``Qwen4Exp`` oracle, the QSA test rotary tables and
+the MRoPE prompt builder."""
 
 import importlib
 import os
@@ -12,8 +12,6 @@ from pathlib import Path
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
-from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
 from models.demos.blackhole.qwen38_flash_next.mrope import (
     IMAGE_TOKEN_ID,
     VISION_END_TOKEN_ID,
@@ -38,16 +36,6 @@ def qwen4_exp_transformers():
         importlib.import_module(f"{package}.configuration_qwen4_exp"),
         importlib.import_module(f"{package}.modeling_qwen4_exp"),
     )
-
-
-@pytest.fixture(scope="module")
-def release_checkpoint(checkpoint_dir):
-    return Qwen38Checkpoint(checkpoint_dir)
-
-
-@pytest.fixture(scope="module")
-def release_placement(release_checkpoint):
-    return Qwen38Placement(release_checkpoint.config, mesh_shape=(1, 4), physical_ids=(0, 1, 2, 3))
 
 
 def qsa_position_embeddings(sequence: int) -> tuple[torch.Tensor, torch.Tensor]:

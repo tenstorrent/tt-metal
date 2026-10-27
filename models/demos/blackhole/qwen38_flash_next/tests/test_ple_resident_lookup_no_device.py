@@ -20,11 +20,7 @@ from torch import nn
 
 from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint, Qwen38CheckpointRowReader
 from models.demos.blackhole.qwen38_flash_next.reference import build_ngram_hash_spec, ngram_token_ids
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_model import (  # noqa: F401
-    qwen4_exp_transformers,
-    release_checkpoint,
-    requires_transformers,
-)
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.model import qwen4_exp_transformers, requires_transformers
 from models.demos.blackhole.qwen38_flash_next.tt.ple import Qwen38HostPLEEmbedding, Qwen38PLE, Qwen38PLEWeights
 from models.demos.blackhole.qwen38_flash_next.ttnn.ple import Qwen38ResidentPLELookup, ngram_token_ids_decode_step
 

@@ -3,7 +3,7 @@
 
 """The vision tower on the device against ``vision_reference.py``.
 
-Per pinned synthetic grid (``tests/fixtures/vision_fixture.py``): op pins, every block alone, the whole tower block by
+Per pinned synthetic grid (``tests/helpers/vision_fixture.py``): op pins, every block alone, the whole tower block by
 block and at the merger output, the resident DRAM bytes, the allocator peak, and cold and warm wall times. Grids too
 large for the CPU reference run the time / memory part only. The PCC floors sit one decade of the observed spread
 under the measured minima. Measured values are written to ``$QWEN38_VISION_RECORD_DIR/<grid>-<mesh>.json`` when set.
@@ -29,8 +29,8 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
-from models.demos.blackhole.qwen38_flash_next.tests.fixtures import vision_fixture
-from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS, pcc
+from models.demos.blackhole.qwen38_flash_next.tests.helpers import vision_fixture
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.tp_harness import DEVICE_PARAMS, pcc
 from models.demos.blackhole.qwen38_flash_next.ttnn.vision import VisionTower
 from models.demos.blackhole.qwen38_flash_next.vision_reference import VisionTowerConfig, VisionTowerReference
 
