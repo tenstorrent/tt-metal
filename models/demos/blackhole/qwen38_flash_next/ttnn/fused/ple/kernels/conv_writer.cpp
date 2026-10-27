@@ -13,6 +13,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 constexpr uint32_t tiles_per_core = get_compile_time_arg_val(0);
@@ -25,7 +26,7 @@ void kernel_main() {
     constexpr auto injected_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     const auto out = TensorAccessor(out_args, get_arg_val<uint32_t>(0));
     const uint32_t first = get_arg_val<uint32_t>(1);
-    Noc noc;
+    const Noc noc;
     DataflowBuffer delta(cb_out);
     {
         delta.wait_front(tiles_per_core);
@@ -48,8 +49,8 @@ void kernel_main() {
         const auto injected = TensorAccessor(injected_args, get_arg_val<uint32_t>(2));
         DataflowBuffer delta_rows(cb_delta_rows), injected_tiles(cb_injected);
         delta_rows.reserve_back(4);
-        volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(delta.get_read_ptr());
-        volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(delta_rows.get_write_ptr());
+        CoreLocalMem<volatile uint32_t> src(delta.get_read_ptr());
+        CoreLocalMem<volatile uint32_t> dst(delta_rows.get_write_ptr());
         for (uint32_t w = 0; w < 4 * bf16_tile_bytes / 4; ++w) {
             dst[w] = 0;
         }

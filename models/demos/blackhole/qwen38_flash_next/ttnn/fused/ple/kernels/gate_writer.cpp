@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr auto debug_coefficient_args = TensorAccessorArgs<debug_sum_args.next_compile_time_args_offset()>();
     const auto out = TensorAccessor(out_args, get_arg_val<uint32_t>(0));
     const uint32_t first = get_arg_val<uint32_t>(3);
-    Noc noc;
+    const Noc noc;
     if constexpr (debug) {
         const auto debug_sum = TensorAccessor(debug_sum_args, get_arg_val<uint32_t>(1));
         const auto debug_coefficient = TensorAccessor(debug_coefficient_args, get_arg_val<uint32_t>(2));

@@ -16,6 +16,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
@@ -26,7 +27,8 @@ constexpr uint32_t cb_key = 0, cb_query = 1, cb_scaler = 3, cb_scale = 5, cb_val
 
 template <typename Accessor>
 FORCE_INLINE void read_tiles(
-    Noc& noc, const Accessor& tensor, DataflowBuffer& buffer, uint32_t tiles, uint32_t tile_bytes, uint32_t first) {
+    const Accessor& tensor, DataflowBuffer& buffer, uint32_t tiles, uint32_t tile_bytes, uint32_t first) {
+    const Noc noc;
     buffer.reserve_back(tiles);
     for (uint32_t t = 0; t < tiles; ++t) {
         noc.async_read(
@@ -47,11 +49,11 @@ void kernel_main() {
     const auto zero = TensorAccessor(zero_args, get_arg_val<uint32_t>(4));
     const uint32_t first_norm_tile = get_arg_val<uint32_t>(5);
     const uint32_t first_value_tile = get_arg_val<uint32_t>(6);
-    Noc noc;
+    const Noc noc;
     DataflowBuffer key_dfb(cb_key), query_dfb(cb_query), scale_dfb(cb_scale), value_dfb(cb_value);
     {
-        read_tiles(noc, key, key_dfb, global_tiles, bf16_tile_bytes, first_norm_tile);
-        read_tiles(noc, query, query_dfb, global_tiles, bf16_tile_bytes, first_norm_tile);
+        read_tiles(key, key_dfb, global_tiles, bf16_tile_bytes, first_norm_tile);
+        read_tiles(query, query_dfb, global_tiles, bf16_tile_bytes, first_norm_tile);
         scale_dfb.reserve_back(1);
         noc.async_read(scale, scale_dfb, fp32_tile_bytes, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
     }
@@ -90,7 +92,7 @@ void kernel_main() {
                 {.offset_bytes = t * bf16_tile_bytes + bf16_face_bytes});
         }
         noc.async_read_barrier();
-        volatile tt_l1_ptr uint32_t* value_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(value_base);
+        CoreLocalMem<volatile uint32_t> value_words(value_base);
         for (uint32_t t = 0; t < local_tiles; ++t) {
             for (uint32_t face = 0; face < 2; ++face) {
                 const uint32_t row0 = (t * bf16_tile_bytes + face * bf16_face_bytes) / 4;  // 8 words per bf16 face row

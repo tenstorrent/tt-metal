@@ -26,7 +26,8 @@ constexpr uint32_t bf16_tile_bytes = 2048;
 constexpr uint32_t cb_stage = 17;
 
 template <typename Accessor>
-FORCE_INLINE void stream(Noc& noc, const Accessor& tensor, uint32_t cb_id, uint32_t first) {
+FORCE_INLINE void stream(const Accessor& tensor, uint32_t cb_id, uint32_t first) {
+    const Noc noc;
     DataflowBuffer buffer(cb_id);
     buffer.reserve_back(tiles_per_core);
     for (uint32_t t = 0; t < tiles_per_core; ++t) {
@@ -42,7 +43,8 @@ FORCE_INLINE void stream(Noc& noc, const Accessor& tensor, uint32_t cb_id, uint3
 }
 
 template <typename Src, typename Dst>
-FORCE_INLINE void shift_row(Noc& noc, const Src& src, const Dst& dst, uint32_t first) {
+FORCE_INLINE void shift_row(const Src& src, const Dst& dst, uint32_t first) {
+    const Noc noc;
     DataflowBuffer stage(cb_stage);
     stage.reserve_back(tiles_per_core);
     for (uint32_t t = 0; t < tiles_per_core; ++t) {
@@ -87,21 +89,21 @@ void kernel_main() {
     constexpr auto residual_args = TensorAccessorArgs<conv8_args.next_compile_time_args_offset()>();
     const uint32_t first = get_arg_val<uint32_t>(16);
     const uint32_t tap_first = get_arg_val<uint32_t>(17);
-    Noc noc;
+    const Noc noc;
     const auto conv0 = TensorAccessor(conv0_args, get_arg_val<uint32_t>(0));
     const auto conv3 = TensorAccessor(conv3_args, get_arg_val<uint32_t>(1));
     const auto conv6 = TensorAccessor(conv6_args, get_arg_val<uint32_t>(2));
     const auto normalized = TensorAccessor(normalized_args, get_arg_val<uint32_t>(3));
     {
-        stream(noc, conv0, 0, first);
-        stream(noc, conv3, 1, first);
-        stream(noc, conv6, 2, first);
-        stream(noc, normalized, 3, first);
-        stream(noc, TensorAccessor(tap0_args, get_arg_val<uint32_t>(4)), 4, tap_first);
-        stream(noc, TensorAccessor(tap1_args, get_arg_val<uint32_t>(5)), 5, tap_first);
-        stream(noc, TensorAccessor(tap2_args, get_arg_val<uint32_t>(6)), 6, tap_first);
-        stream(noc, TensorAccessor(tap3_args, get_arg_val<uint32_t>(7)), 7, tap_first);
-        stream(noc, TensorAccessor(gated_args, get_arg_val<uint32_t>(8)), 8, first);
+        stream(conv0, 0, first);
+        stream(conv3, 1, first);
+        stream(conv6, 2, first);
+        stream(normalized, 3, first);
+        stream(TensorAccessor(tap0_args, get_arg_val<uint32_t>(4)), 4, tap_first);
+        stream(TensorAccessor(tap1_args, get_arg_val<uint32_t>(5)), 5, tap_first);
+        stream(TensorAccessor(tap2_args, get_arg_val<uint32_t>(6)), 6, tap_first);
+        stream(TensorAccessor(tap3_args, get_arg_val<uint32_t>(7)), 7, tap_first);
+        stream(TensorAccessor(gated_args, get_arg_val<uint32_t>(8)), 8, first);
     }
     if constexpr (inject) {
         const auto residual = TensorAccessor(residual_args, get_arg_val<uint32_t>(15));
@@ -125,14 +127,14 @@ void kernel_main() {
         const auto conv5 = TensorAccessor(conv5_args, get_arg_val<uint32_t>(12));
         const auto conv7 = TensorAccessor(conv7_args, get_arg_val<uint32_t>(13));
         const auto conv8 = TensorAccessor(conv8_args, get_arg_val<uint32_t>(14));
-        shift_row(noc, conv1, conv0, first);
-        shift_row(noc, conv2, conv1, first);
-        shift_row(noc, conv3, conv2, first);
-        shift_row(noc, conv4, conv3, first);
-        shift_row(noc, conv5, conv4, first);
-        shift_row(noc, conv6, conv5, first);
-        shift_row(noc, conv7, conv6, first);
-        shift_row(noc, conv8, conv7, first);
-        shift_row(noc, normalized, conv8, first);
+        shift_row(conv1, conv0, first);
+        shift_row(conv2, conv1, first);
+        shift_row(conv3, conv2, first);
+        shift_row(conv4, conv3, first);
+        shift_row(conv5, conv4, first);
+        shift_row(conv6, conv5, first);
+        shift_row(conv7, conv6, first);
+        shift_row(conv8, conv7, first);
+        shift_row(normalized, conv8, first);
     }
 }
