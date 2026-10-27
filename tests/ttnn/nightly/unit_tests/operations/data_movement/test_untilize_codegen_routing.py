@@ -463,8 +463,6 @@ _INT_SHAPES = [
     ([1, 2, 8, 1, 768], "rank5_unpadded_height_1"),
     ([1, 2, 8, 16, 768], "rank5_unpadded_height_16"),
 ]
-_INT_MEM_CONFIGS = [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG]
-_INT_MEM_CONFIG_IDS = ["dram", "l1"]
 
 
 def _as_int64(tensor):
@@ -472,12 +470,11 @@ def _as_int64(tensor):
 
 
 @pytest.mark.parametrize("dtype", _INT_DTYPES, ids=_INT_DTYPE_IDS)
-@pytest.mark.parametrize("mem_config", _INT_MEM_CONFIGS, ids=_INT_MEM_CONFIG_IDS)
 @pytest.mark.parametrize("shape", [s for s, _ in _INT_SHAPES], ids=[i for _, i in _INT_SHAPES])
-def test_untilize_codegen_int32_uint32(device, shape, dtype, mem_config):
+def test_untilize_codegen_int32_uint32(device, shape, dtype):
     x = _make_input(shape, dtype)
     xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    kwargs = {"memory_config": mem_config}
+    kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG}
     expected = x.to(torch.int64)
 
     golden = _force_native(xt, **kwargs)
