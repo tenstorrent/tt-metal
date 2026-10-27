@@ -117,7 +117,8 @@ uint32_t get_tensor_prefetcher_signal_address(tt::tt_metal::distributed::MeshDev
 // Queue a wait on op signal `signal_id`: every prefetch request queued after it waits until each device has
 // received the signal that pairs with it (waits and signals on one id pair up in order). With
 // `capture_into_trace` the wait follows the same capture rule as queue_tensor_prefetcher_request, and each
-// replay waits for one further signal.
+// replay waits for one further signal. A NO_DISPATCH graph capture queues nothing, since no op it runs
+// raises a signal.
 void queue_tensor_prefetcher_wait_for_signal(
     tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id, bool capture_into_trace = false);
 

@@ -241,7 +241,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
             on one id pair up in order, counted per device from start_tensor_prefetcher: the n-th
             wait proceeds once the n-th signal has arrived, and a signal that arrives first is
             kept. Every device waits, so every device must signal; a signal with no matching wait
-            releases a later wait early.
+            releases a later wait early. A NO_DISPATCH graph capture queues no wait, since no op
+            it runs raises a signal.
 
             Use it to order the prefetcher after device work that has no host-side fence, e.g. a
             mask an op writes inside a trace: run that op, then signal_tensor_prefetcher, and
