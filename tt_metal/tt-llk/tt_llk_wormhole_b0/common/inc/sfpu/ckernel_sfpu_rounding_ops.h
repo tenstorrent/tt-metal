@@ -22,12 +22,25 @@ namespace sfpu
 // Implemented:Standard calling API, old bodies
 // ToDo: use sfpi API
 
+// _trunc_body_ reads the constant 23 from LReg3 and never writes it. The per-row loops in this
+// file load it once per call (_load_trunc_k23_) and instantiate the bodies with LOAD_K23 = false;
+// sfpi does not allocate LReg3 inside those loops (checked on the math ELF). Callers that wrap the
+// bodies in their own sfpi code (rdiv, fmod, remainder) keep the default and load it per element.
+sfpi_inline void _load_trunc_k23_()
+{
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_SHORT, 23);
+}
+
 // compute truncate to zero
+template <bool LOAD_K23 = true>
 sfpi_inline sfpi::vFloat _trunc_body_(sfpi::vFloat val)
 {
     sfpi::l_reg[sfpi::LRegs::LReg0] = val;
-    // set L3=23.  TODO: this could be stored in a constant register, but use by rdiv prevents this for now.
-    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_SHORT, 23);
+    if constexpr (LOAD_K23)
+    {
+        // set L3=23.  TODO: this could be stored in a constant register, but use by rdiv prevents this for now.
+        _load_trunc_k23_();
+    }
     // mask = 0x8000_0000
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x8000);
     // disable lanes where exp < 0
@@ -50,9 +63,10 @@ sfpi_inline sfpi::vFloat _trunc_body_(sfpi::vFloat val)
 }
 
 // computes floor
+template <bool LOAD_K23 = true>
 sfpi_inline sfpi::vFloat _floor_body_(sfpi::vFloat val)
 {
-    sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_(val);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_<LOAD_K23>(val);
     // if v>u, set v=v-1; this only happens for negative values.
     // on Wormhole, we don't have SFPGT, so use u<0 and (v-u)<0 instead.
     // First, ensure u<0.
@@ -66,9 +80,10 @@ sfpi_inline sfpi::vFloat _floor_body_(sfpi::vFloat val)
 }
 
 // computes ceil
+template <bool LOAD_K23 = true>
 sfpi_inline sfpi::vFloat _ceil_body_(sfpi::vFloat val)
 {
-    sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_(val);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_<LOAD_K23>(val);
     // if v<u, set v=v+1.
     // on Wormhole, we don't have SFPGT, so use u>=0 and (v-u)<0 instead.
     // First, ensure u>=0.
@@ -92,10 +107,11 @@ inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_floor_()
 {
+    _load_trunc_k23_();
 #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[0] = _floor_body_(sfpi::dst_reg[0]);
+        sfpi::dst_reg[0] = _floor_body_<false>(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
@@ -103,10 +119,11 @@ sfpi_inline void _calculate_floor_()
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_ceil_()
 {
+    _load_trunc_k23_();
 #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[0] = _ceil_body_(sfpi::dst_reg[0]);
+        sfpi::dst_reg[0] = _ceil_body_<false>(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
@@ -114,10 +131,11 @@ sfpi_inline void _calculate_ceil_()
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_trunc_()
 {
+    _load_trunc_k23_();
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[0] = _trunc_body_(sfpi::dst_reg[0]);
+        sfpi::dst_reg[0] = _trunc_body_<false>(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }
@@ -125,11 +143,12 @@ sfpi_inline void _calculate_trunc_()
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_frac_()
 {
+    _load_trunc_k23_();
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::vFloat x   = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = x - _trunc_body_(x);
+        sfpi::dst_reg[0] = x - _trunc_body_<false>(x);
         sfpi::dst_reg++;
     }
 }
