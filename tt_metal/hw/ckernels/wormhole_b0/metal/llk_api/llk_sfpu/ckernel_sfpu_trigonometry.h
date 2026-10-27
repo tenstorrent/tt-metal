@@ -732,8 +732,8 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat a = sfpi::setsgn(x, 0);
-        sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(a);
+        // _sfpu_quarter_exp_abs_ takes |x| itself; no setsgn needed here.
+        sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(x);
         sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(q);
         sfpi::vFloat y = q + q;
         r *= 0.125f;
