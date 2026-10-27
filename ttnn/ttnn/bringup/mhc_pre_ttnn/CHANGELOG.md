@@ -255,3 +255,12 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
     knobs: 640x1792 43.9 us, 640x7168 124.9 us, 1280x4096 139.6 us (README: 43.0 / 123.8 / 137.8). No op change.
     - Needed by: fork test hygiene (owner, 2026-10-27: no skip that hides a dead test)
     - Files: `tests/unit/test_mhc_pre_perf_inproc.py`
+
+### Rebase onto llk_helper_library 6b80daf43e3: kernel API port (2026-10-27)
+- What: `kernels/perf_instrumentation.hpp` includes `api/debug/kernel_profiler.hpp` (#60172); the two eltwise chains
+  of `mhc_pre_compute.cpp` (`sumsq_row`, the y-mix) pass the kernel's `DataflowBuffer` objects to their elements
+  (#60306: `BinaryFpu<..>{a, b, base_a, base_b}`, `PackTile<..>{out}`), as upstream migrated its own chain users.
+  Same LLK calls and CB sync, no behaviour change.
+- Why: all three kernels no longer compiled (missing header; the chain's static_assert on unbound buffers).
+- Needed by: rebase 2026-10-27
+- Files: `kernels/perf_instrumentation.hpp`, `kernels/mhc_pre_compute.cpp`

@@ -80,3 +80,11 @@
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: deepseek_v41_flash_d_p O.1
 - Files: tests/cases.py, tests/reference.py, tests/test_fabric_reduce_scatter_ttnn.py
+
+### Rebase onto llk_helper_library 6b80daf43e3: kernel API port (2026-10-27)
+- What: the inline default bf16 add kernel: `binary_op_init_common` -> `compute_kernel_hw_startup`, `add_tiles_init`
+  -> `add_init` (#57797, 1:1); the inline port sender includes `hostdev/fabric_edm_packet_header.hpp` (#60172). The
+  exact-fp32 kernel is unchanged. Kernel source changes, so cached descriptors and `program_hash` values change.
+- Why: both kernels no longer compiled on the new base.
+- Needed by: rebase 2026-10-27
+- Files: `fabric_reduce_scatter.py`

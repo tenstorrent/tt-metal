@@ -55,3 +55,12 @@ Tests: `tests/unit/` (the source branch's `tests/ttnn/unit_tests/operations/ccl/
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: deepseek_v41_flash_d_p O.1
 - Files: tests/cases.py, tests/test_fabric_all_gather_ttnn.py
+
+### Rebase onto llk_helper_library 6b80daf43e3: kernel API port (2026-10-27)
+- What: the sender kernel and the Python inline sender include `hostdev/fabric_edm_packet_header.hpp` (#60172);
+  `_chip_maps` passes `mesh_device` to `ttnn.cluster.get_chip_unique_id_from_fabric_node_id` (#60180). Host side, by
+  the overseer: `get_forwarding_eth_core` takes `*mesh_device`, and `ttnn.get_neighbor_eth_directions` takes
+  `mesh_device` first (#59551).
+- Why: kernel compile error; TypeError in automatic core placement.
+- Needed by: rebase 2026-10-27
+- Files: `device/kernels/fabric_all_gather_sender.cpp`, `fabric_all_gather_py.py`

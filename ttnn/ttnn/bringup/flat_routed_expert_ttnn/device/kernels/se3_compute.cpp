@@ -52,7 +52,7 @@
 #include "api/compute/eltwise_unary/gelu.h"
 #endif
 #if defined(SE_ZONES) || defined(SE_WAITZ)
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #endif
 
 // (perf probe SE_NO_MATH: no matmul - every CB handshake, unpack-side pops and pack stay; garbage outputs)

@@ -1,4 +1,4 @@
-# ttnn.bringup.flat_routed_expert, ttnn.bringup.flat_routed_expert_plan, ttnn.bringup.flat_combine_overlap, ttnn.bringup.flat_routed_expert_with_program  (+ flat_drisc_stop, flat_drisc_dump; Python: `ttnn.bringup.flat_routed_expert_ttnn.flat_expert.FlatRoutedExpert`, `FlatExpert`)
+# ttnn.bringup.flat_routed_expert, ttnn.bringup.flat_routed_expert_plan, ttnn.bringup.flat_routed_expert_with_program  (+ flat_drisc_stop, flat_drisc_dump; Python: `ttnn.bringup.flat_routed_expert_ttnn.flat_expert.FlatRoutedExpert`, `FlatExpert`)
 
 ## What it does
 New op (Marko Staletovic's, no TTNN source on this tree). Blackhole only.
@@ -12,9 +12,8 @@ New op (Marko Staletovic's, no TTNN source on this tree). Blackhole only.
   active experts' rows written.
 - `flat_routed_expert_plan`: the C++ layout plan as a dict (role cores, bank layout, done-word cores); the weight
   packer (`flat_expert.flat_weight_regions`) needs it.
-- `flat_combine_overlap`: the flat expert and `combine_fabric2d` (ttnn/cpp/.../deepseek_prefill/hybrid_routed_expert_ffn)
-  in one program per chip; combine on grid rows 0-1 starts on an expert once all y writers report it. "initial
-  version" (docstring).
+- (`flat_combine_overlap`, the flat expert overlapped with combine_fabric2d, was removed on 2026-10-27: upstream's
+  merged combine_fabric2d has none of its hooks. To be rebuilt on that combine later; CHANGELOG.md.)
 - `flat_routed_expert_with_program`: the flat expert with another op's MeshProgramDescriptor appended (one program per
   chip; the y writers report each expert to a collector core). Built for `combine_rf/sparse_combine_rf.py` (the
   router-forwarded fp32 combine; see ../combine_rf/README.md). The caller owns the arena.
@@ -28,7 +27,6 @@ New op (Marko Staletovic's, no TTNN source on this tree). Blackhole only.
 - `ttnn.bringup.unified_routed_expert_ffn` / `ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn`,
   `routed_expert_ffn`, `hybrid_routed_expert_ffn`, or a per-expert `ttnn.linear` loop, for MoE prefill on
   Blackhole with many local experts per chip (<= 64) and >= 256-row expert capacity.
-- `ttnn.experimental.deepseek_prefill.hybrid_routed_expert_ffn` + `combine_fabric2d` overlap: `flat_combine_overlap`.
 - Faster than unified at every measured M on GLM 5.3 / Kimi K2.7 / K3 shapes (table below); it LOST to unified on K2
   TP2 at M 512 / 2048 and on K2 TP4 at M 2048 (FLAT_EXPERT_WORKLOG.md "TP2 vs existing", "Final defaults").
 
@@ -54,7 +52,6 @@ Realistic (use by default):
 
 `flat_routed_expert_plan(device, hidden, intermediate, experts_per_chip, num_global_experts, max_tokens_per_expert, weights_bf8=False, pin=1, x_bf16=False, h_bf16=False)` -> dict.
 
-`flat_combine_overlap(<flat args as above>, dispatched_metadata, expert_offsets, replicated_global_expert_idx_table, *, num_experts_per_tok, seq_len_per_chip, combine_axis=0, combine_num_links=2, fwd_arrived_semaphore, final_arrived_semaphore, expert_go_semaphore, activation=0, pin=1, down_fp32=False, x_bf16=False, h_bf16=False, y_row_major=True, y_out=None)` -> combine output [1, 1, seq_len_per_chip, num_experts_per_tok, H] bf16 RM. No weights_nk / hidden.
 
 `flat_routed_expert_with_program(<flat args>, *, arena, y, extra, extra_key, collector, counts_addr, writers, activation=0, pin=1, token_index=None, down_fp32=False, x_bf16=False, h_bf16=False, l1_args=[], relay_words=None, math_fidelity=0, weights_nk=False)` -> y. `extra`: the other op's MeshProgramDescriptor (empty = "cache hit expected"); `l1_args`: per appended program, the L1 hand-off args (`sparse_combine_rf` `run.l1_args`). `math_fidelity` / `weights_nk` (P.8; defaults LoFi / [K, N]): as for flat_routed_expert. No hidden.
 
@@ -90,8 +87,8 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7) (the same 
   tok/chip 11.62 -> 10.17 (FLAT_EXPERT_WORKLOG.md "C++ op"). Host enqueue 0.154 ms per call on 2x2 (same section).
 - DeepSeek-V4.1 shape H 5120 I 2304 E 24, one chip, us per expert M 32 / 80 / 256 / 1024: 43.2 / 48.2 / 62.9 / 211.7
   (FLAT_EXPERT_WORKLOG.md "V4.1 large M").
-- flat_combine_overlap, LoudBox 8 x 1 ring, us: Kimi balanced 1140.7 vs PR hybrid overlap 1365.6; GLM balanced 810.4
-  vs 936.7 (FLAT_COMBINE_OVERLAP_WORKLOG.md 6.19).
+- flat_combine_overlap (removed 2026-10-27), LoudBox 8 x 1 ring, us: Kimi balanced 1140.7 vs PR hybrid overlap
+  1365.6; GLM balanced 810.4 vs 936.7 (FLAT_COMBINE_OVERLAP_WORKLOG.md 6.19).
 - flat_routed_expert_with_program + combine_rf, 2 x 4 LoudBox, V4.1 dims, uniform routing: flat alone 1089 us, fused
   1238 us, serial 1735 us; worst per-token rel err 2.4e-3 (FLAT_COMBINE_OVERLAP_WORKLOG.md "DeepSeek V4.1-Flash: flat +
   combine overlap").
@@ -111,16 +108,14 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7) (the same 
 - x: ROW_MAJOR bf16 DRAM interleaved; page width a multiple of 1 KB (or wide rows with `hidden`). counts / regions:
   [1, NG] uint32 RM DRAM. y_bf16 and y_row_major are exclusive.
 - `x_bf16` / `h_bf16` must match the plan the weights were laid out with.
-- Subgrid plans (2 / 3 subgrids: TP4 / TP2 at H 7168) run in the plain op; `flat_combine_overlap` takes one-subgrid
-  plans only (its combine readers rebuild the schedule without SE_SG; TT_FATAL at its call site). Until FIX.2 (reopened)
+- Subgrid plans (2 / 3 subgrids: TP4 / TP2 at H 7168) run in the plain op. Until FIX.2 (reopened)
   `flat_schedule_defines` refused every subgrid plan for the plain op too (the 12 TP2 / TP4 TT_FATAL `p.nsg == 1`
   failures since the import, DS41-63; CHANGELOG.md).
 - Perf bands (tests/unit/test_flat_expert_indexed_shapes.py `_PERF_EXPECTED_NS`) are per chip class (arch, compute
   grid): BH 11 x 10 (QuietBox / LoudBox p150, 2026-10-09) and BH 12 x 10 (Galaxy p150b, 2026-10-26). A class with no
   table skips the perf test with "no baseline". The 11 x 10 mimo flat band was seen failing fast on the 2x2 QuietBox
   (1710341 ns vs lower 1720090, 2026-10-18): recalibrate that class from its RT-CAL lines when run there.
-- flat_combine_overlap carries no weights_nk / hidden; flat_routed_expert_with_program has math_fidelity and
-  weights_nk only (no hidden).
+- flat_routed_expert_with_program has math_fidelity and weights_nk only (no hidden).
 - With the combine_rf L1 hand-off, rows wider than SPC_PIECE (default 7168 B) hang unless SPC_PIECE >= row bytes
   and the fabric payload >= row + 32 B (FLAT_COMBINE_OVERLAP_WORKLOG.md; asserted in sparse_combine_rf.py).
 - GLM's experts_ag path only builds at <= 64 experts per chip; it was never run on a 2x2 (known_issues.md DS41-63).
@@ -136,8 +131,7 @@ y = fe(x_rm_bf16, counts, regions, down_fp32=True)          # y [rows, H] bfp8 T
 Model cases (O.1): tests/cases.py + tests/test_flat_routed_expert_ttnn.py (deepseek_v41_flash_d_p's shared-expert
 call and its routed call with the weighted combine fused in, tests/weighted_case.py). Tests: tests/unit/ (test_flat_routed_expert_op.py, test_flat_expert_indexed_shapes.py, test_flat_expert_mesh.py,
 test_flat_expert_yrm.py, test_flat_uneven_split.py, test_weights_nk.py, test_flat_widths.py), tests/test_flat_bench.py (perf, fake
-weights); tests/source.yaml is empty. flat_combine_overlap:
-models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_flat_combine_overlap.py. flat_routed_expert_with_program: deepseek_v41_flash_d_p tt/perf_experts.py::test_weighted /
+weights); tests/source.yaml is empty. flat_routed_expert_with_program: deepseek_v41_flash_d_p tt/perf_experts.py::test_weighted /
 test_weighted_combine_routes.
 
 ## Used by
@@ -153,7 +147,7 @@ test_weighted_combine_routes.
   1024 rows x 1280 x 5120: 250 us a layer vs 1431 us for the ttnn.linear chain.
 - glm53_flash_d_p (via glm53_flash_d_p_lb): tt/experts_ag.py (GLM_EXPERTS_MODE=ag): indexed x, y_row_major,
   down_fp32 (GLM_AG_DOWN_FP32=1 default), clamped_silu.
-- glm53_flash_d_p_lb tests (test_flat_*.py); deepseek_v3_d_p test_flat_combine_overlap.py (flat_combine_overlap).
+- glm53_flash_d_p_lb tests (test_flat_*.py).
 
 ## History
 CHANGELOG.md, FLAT_EXPERT_WORKLOG.md, FLAT_COMBINE_OVERLAP_WORKLOG.md (paths in the worklogs are the source branch's).

@@ -63,7 +63,7 @@
 #define SE_H_WRITE(...) noc_async_write(__VA_ARGS__)
 #endif
 #ifdef SE_ZONES
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #define SE_MARK(name)            \
     {                            \
         DeviceZoneScopedN(name); \

@@ -37,3 +37,11 @@ Tests: `tests/unit/test_moe_ag_ops.py` (the source branch's nightly op test, `te
 - Tests: 71 collected (66 passed, 5 skipped) -> 67 collected, 67 passed.
 - Needed by: fork test hygiene
 - Files: `tests/unit/test_moe_ag_ops.py`
+
+### Rebase onto llk_helper_library 6b80daf43e3: kernel API port (2026-10-27)
+- What: `add_compute.cpp`: `binary_op_init_common` + `add_tiles_init` -> `compute_kernel_hw_startup` + `add_init`
+  (#57797 deleted the shims; the same 1:1 swap upstream made in its own kernels); `addt_compute.cpp`: `add_tiles_init`
+  -> `add_init`. Same init sequence, no behaviour change.
+- Why: the kernels of `moe_ag_add_rows` and `moe_ag_sum_rows_tiled` (2 blocks) no longer compiled.
+- Needed by: rebase 2026-10-27
+- Files: `device/kernels/add_compute.cpp`, `device/kernels/addt_compute.cpp`
