@@ -140,7 +140,8 @@ def passkey(gen, cfg, args):
             for r, model in enumerate(models):
                 h = model.prefill_enqueue(prompts[(r, s)][c : c + chunk], s, start_pos=c, chunk_size=chunk)
                 if c + chunk < n:
-                    h["logits"].deallocate(True)
+                    if not h.get("persistent"):  # a replayed chunk's logits row is the slot's own
+                        h["logits"].deallocate(True)
                 else:
                     pending[r] = h
             if c // chunk % 64 == 0:
@@ -198,13 +199,28 @@ def main():
         "--kv-pair-split", action="store_true", help="each chip of the pair keeps half of every 128-token block (vLLM)"
     )
     parser.add_argument("--decode", type=int, default=12, help="passkey: greedy tokens")
+    parser.add_argument(
+        "--trace-chunks",
+        action="store_true",
+        help="later chunks replay a trace of the whole chunk (TtMiMoModel.setup_prefill_chunk_traces)",
+    )
+    parser.add_argument("--trace-region-mb", type=int, default=400)
     args = parser.parse_args()
     assert args.context % args.chunk == 0
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=65536)
+    trace = {"trace_region_size": args.trace_region_mb << 20} if args.trace_chunks else {}
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=65536, **trace)
     try:
         cfg, gen = build(mesh, args)
+        if args.trace_chunks:
+            padded = prefill_padded_len(args.chunk, args.chunk, args.kv_pair_split)
+            t0 = time.time()
+            for model in gen.models[: args.rows]:
+                keys = model.setup_prefill_chunk_traces([padded])
+                model.warm_prefill_chunk_traces()
+                model.capture_prefill_chunk_traces()
+            say(f"later-chunk traces {keys} on {args.rows} rows in {time.time() - t0:.0f} s")
         (capacity if args.mode == "capacity" else passkey)(gen, cfg, args)
     finally:
         for submesh in mesh.get_submeshes():

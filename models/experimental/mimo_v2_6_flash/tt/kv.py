@@ -154,31 +154,69 @@ class PrefillTables:
         start_tensor=None,
         pair_split=False,
     ):
-        assert not pair_split or block_size == kv_pair_split.SUB, block_size
-        span = 2 * block_size if pair_split else block_size  # positions per table entry
-        assert start % span == 0, (start, span)
-        first = start // block_size
-        if pair_split:
-            fill = pair_fill_rows(table, slot, start, padded, scratch)
-        else:
-            fill = block_rows(table, slot, first, -(-padded // block_size), scratch)
+        fill, context = self.host_rows(table, slot, start, padded, block_size, scratch, context_blocks, pair_split)
         self.fill = per_chip(plan, fill, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        self.context = None
-        if context_blocks is not None:
-            assert context_blocks * span >= start + padded, (context_blocks, start, padded)
-            self.context = per_chip(
-                plan, block_rows(table, slot, 0, context_blocks, scratch), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
-            )
+        self.context = None if context is None else per_chip(plan, context, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self.window = [
             replicated(plan, torch.tensor([b, 0, 0, 0], dtype=torch.int32), ttnn.uint32) for b in (window or [])
         ]
         self.start = start_tensor
+
+    @staticmethod
+    def host_rows(table, slot, start, padded, block_size, scratch, context_blocks=None, pair_split=False):
+        """(fill [tp, 1, ceil(padded / block_size)], context [tp, 1, context_blocks] or None): the host values of
+        ``fill`` and ``context`` (see the class)."""
+        assert not pair_split or block_size == kv_pair_split.SUB, block_size
+        span = 2 * block_size if pair_split else block_size  # positions per table entry
+        assert start % span == 0, (start, span)
+        if pair_split:
+            fill = pair_fill_rows(table, slot, start, padded, scratch)
+        else:
+            fill = block_rows(table, slot, start // block_size, -(-padded // block_size), scratch)
+        context = None
+        if context_blocks is not None:
+            assert context_blocks * span >= start + padded, (context_blocks, start, padded)
+            context = block_rows(table, slot, 0, context_blocks, scratch)
+        return fill, context
 
     def release(self):
         """Free the tensors this object made (``start`` belongs to the caller)."""
         for t in [self.fill, self.context, *self.window]:
             if t is not None:
                 t.deallocate(True)
+
+
+class ChunkTables:
+    """The PrefillTables of a traced later chunk (TtMiMoModel.setup_prefill_chunk_traces): the same tensors, made once
+    (every block a scratch block) and rewritten in place before each replay (``write``). ``start`` is the traced
+    chunk's shared start tensor."""
+
+    def __init__(self, plan, padded, block_size, scratch, context_blocks=None, window_blocks=0, start_tensor=None):
+        self.plan = plan
+        tp = plan.tp
+        fill = torch.full((tp, 1, -(-padded // block_size)), scratch, dtype=torch.int32)
+        self.fill = per_chip(plan, fill, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self.context = None
+        if context_blocks is not None:
+            context = torch.full((tp, 1, context_blocks), scratch, dtype=torch.int32)
+            self.context = per_chip(plan, context, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self.window = [
+            replicated(plan, torch.tensor([scratch, 0, 0, 0], dtype=torch.int32), ttnn.uint32)
+            for _ in range(window_blocks)
+        ]
+        self.start = start_tensor
+
+    def write(self, fill, context=None, window=None):
+        """Copy a chunk's host rows (PrefillTables.host_rows; ``window`` its window blocks, in order) in place."""
+        plan = self.plan
+        ttnn.copy_host_to_device_tensor(per_chip(plan, fill, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, False), self.fill)
+        if self.context is not None:
+            host = per_chip(plan, context, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, False)
+            ttnn.copy_host_to_device_tensor(host, self.context)
+        assert len(window or []) == len(self.window), (window, len(self.window))
+        for b, t in zip(window or [], self.window):
+            host = replicated(plan, torch.tensor([b, 0, 0, 0], dtype=torch.int32), ttnn.uint32, False)
+            ttnn.copy_host_to_device_tensor(host, t)
 
 
 class BatchFillTables:
