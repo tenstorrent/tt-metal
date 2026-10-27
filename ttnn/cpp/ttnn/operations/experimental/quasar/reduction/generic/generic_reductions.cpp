@@ -540,6 +540,7 @@ Tensor reduce(
             TT_FATAL(
                 axis == rank - 1 || axis == rank - 2, "MX reductions support the H and W axes only, got dim {}", d);
         }
+        TT_FATAL(keepdim, "MX reductions need keepdim=True (the squeezing reshape is not wired for MX tiles)");
     }
     auto input_tensor =
         is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, fill_pad_value) : input_tensor_arg;
