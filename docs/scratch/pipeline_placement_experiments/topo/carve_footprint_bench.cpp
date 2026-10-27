@@ -20,6 +20,7 @@
 //   file:   cases from CARVE_CASES (one per line: name<TAB>R<TAB>C<TAB>h w;h w;...), a ring over one mesh;
 //           carve_bench_encodings.py QUICK exported this way gives the same instances as its tables.
 //   CARVE_ONLY=substring runs only the cases whose name contains it.
+//   CARVE_CHIP_LEVEL=1 solves at chip level (carve plus endpoint and host chips; see timed_chip).
 //   CARVE_ENGINES=sat,dfs limits the engines run (auto always picks SAT here, so it is redundant).
 //   CARVE_CONFLICT_CAP=n runs every engine through TopologyMappingEnumerationSession with that per-solve
 //           conflict budget. Without it solve_topology_mapping's SAT engine stops at its default cap
@@ -445,6 +446,253 @@ Outcome timed(const Case& cs, TopologyMappingSolverEngine engine, int cap_s) {
     return o;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Chip-level footprint (CARVE_CHIP_LEVEL=1): the carve AND the resolver's job in one solve, so the mapper
+// would not need the resolver afterwards. Every host slice is a 4x2-chip submesh as in resolver_same_cases:
+// horizontally adjacent slices share 4 links (chip (r,1) to (r,0)), vertically adjacent ones 2 ((3,c) to
+// (0,c)), a cable is one link between chip (0,0) of each slice. Global graph: the positions as before, plus
+// one node per CHIP; a position is adjacent to the chips inside it, chips are adjacent where a physical link
+// joins them. Target graph: the stages as before, plus two ENDPOINT nodes per pipeline edge (the exit chip in
+// the source stage and the entry chip in the destination stage, adjacent to their stage and to each other)
+// and two host endpoints on stage 0 (H2D entry, D2H exit). Endpoint nodes may only take chip nodes, stages
+// only positions of their shape. Injectivity then gives one pipeline endpoint per chip, which is the
+// resolver's default capacity on submeshes of 8 or more chips, so a solution is a carve PLUS the exit/entry
+// chip of every edge and the host chips of stage 0: everything resolve_graph_layout decides.
+struct ChipInstance {
+    Instance in;
+    uint32_t n_chips = 0, chip_base = 0;
+    size_t n_edges = 0;
+    AdjacencyGraph<Pos>::AdjacencyMap global_adj;
+    AdjacencyGraph<Stage>::AdjacencyMap target_adj;
+    std::set<Pos> chip_nodes;
+    std::vector<std::vector<uint32_t>> chip_links;  // chip -> physically linked chips
+};
+
+ChipInstance build_chip(const Case& cs) {
+    ChipInstance ci;
+    ci.in = build(cs);
+    const uint32_t n_slices = uint32_t(ci.in.nbrs.size());
+    ci.chip_base = uint32_t(ci.in.rects.size());
+    ci.n_chips = n_slices * 8;
+    ci.chip_links.assign(ci.n_chips, {});
+    std::vector<uint32_t> base;
+    uint32_t acc = 0;
+    for (auto [R, C] : cs.meshes) {
+        base.push_back(acc);
+        acc += R * C;
+    }
+    auto sid = [&](int m, int r, int c) { return base[m] + uint32_t(r * cs.meshes[m].second + c); };
+    auto chip = [&](uint32_t slice, int rr, int cc) { return slice * 8 + uint32_t(rr * 2 + cc); };
+    auto link = [&](uint32_t a, uint32_t b) {
+        ci.chip_links[a].push_back(b);
+        ci.chip_links[b].push_back(a);
+    };
+    for (size_t m = 0; m < cs.meshes.size(); ++m) {
+        const auto [R, C] = cs.meshes[m];
+        for (int r = 0; r < R; ++r) {
+            for (int c = 0; c < C; ++c) {
+                if (c + 1 < C) {
+                    for (int rr = 0; rr < 4; ++rr) {
+                        link(chip(sid(m, r, c), rr, 1), chip(sid(m, r, c + 1), rr, 0));
+                    }
+                }
+                if (r + 1 < R) {
+                    for (int cc = 0; cc < 2; ++cc) {
+                        link(chip(sid(m, r, c), 3, cc), chip(sid(m, r + 1, c), 0, cc));
+                    }
+                }
+            }
+        }
+    }
+    for (const auto& cb : cs.cables) {
+        link(chip(sid(cb.mesh_a, cb.row_a, cb.col_a), 0, 0), chip(sid(cb.mesh_b, cb.row_b, cb.col_b), 0, 0));
+    }
+    // global graph: positions (as before) + chips
+    ci.global_adj = ci.in.global_adj;
+    for (uint32_t c = 0; c < ci.n_chips; ++c) {
+        const Pos g = ci.chip_base + c;
+        ci.chip_nodes.insert(g);
+        auto& v = ci.global_adj[g];
+        for (uint32_t d : ci.chip_links[c]) {
+            v.push_back(ci.chip_base + d);
+        }
+    }
+    for (Pos p = 0; p < ci.in.rects.size(); ++p) {
+        for (uint32_t sl : ci.in.covers[p]) {
+            for (int k = 0; k < 8; ++k) {
+                const Pos g = ci.chip_base + sl * 8 + k;
+                ci.global_adj[p].push_back(g);
+                ci.global_adj[g].push_back(p);
+            }
+        }
+    }
+    // target graph: stages + 2 endpoints per edge + 2 host endpoints on stage 0
+    ci.target_adj = ci.in.target_adj;
+    const Stage n = Stage(cs.shapes.size());
+    ci.n_edges = cs.edges.size();
+    auto tlink = [&](Stage a, Stage b) {
+        ci.target_adj[a].push_back(b);
+        ci.target_adj[b].push_back(a);
+    };
+    for (size_t e = 0; e < cs.edges.size(); ++e) {
+        const Stage x = n + Stage(2 * e), y = n + Stage(2 * e + 1);
+        ci.target_adj[x];
+        ci.target_adj[y];
+        tlink(cs.edges[e].first, x);
+        tlink(cs.edges[e].second, y);
+        tlink(x, y);
+    }
+    const Stage hin = n + Stage(2 * cs.edges.size()), hout = hin + 1;
+    ci.target_adj[hin];
+    ci.target_adj[hout];
+    tlink(0, hin);
+    tlink(0, hout);
+    return ci;
+}
+
+Outcome timed_chip(const Case& cs, TopologyMappingSolverEngine engine, int cap_s) {
+    int fd[2];
+    if (pipe(fd) != 0) {
+        return {"err"};
+    }
+    const pid_t pid = fork();
+    if (pid == 0) {
+        close(fd[0]);
+        alarm(cap_s);
+        const ChipInstance ci = build_chip(cs);
+        const Stage n = Stage(cs.shapes.size());
+        MappingConstraints<Stage, Pos> constraints;
+        for (Stage k = 0; k < n; ++k) {
+            const std::set<Pos> allowed(ci.in.of_stage[k].begin(), ci.in.of_stage[k].end());
+            constraints.add_required_constraint(k, allowed);
+        }
+        for (Stage t = n; t < n + Stage(2 * ci.n_edges + 2); ++t) {
+            constraints.add_required_constraint(t, ci.chip_nodes);
+        }
+        std::map<Pos, std::vector<uint32_t>> covers;
+        for (Pos p = 0; p < ci.in.rects.size(); ++p) {
+            covers[p] = ci.in.covers[p];
+        }
+        constraints.add_resource_constraint<uint32_t>(covers);
+        const char* cap_env = std::getenv("CARVE_CONFLICT_CAP");
+        const auto t0 = std::chrono::steady_clock::now();
+        MappingResult<Stage, Pos> res;
+        if (cap_env != nullptr && engine != TopologyMappingSolverEngine::Dfs) {
+            TopologyMappingEnumerationSession<Stage, Pos> session(
+                AdjacencyGraph<Stage>(ci.target_adj),
+                AdjacencyGraph<Pos>(ci.global_adj),
+                constraints,
+                ConnectionValidationMode::STRICT,
+                /*quiet_mode=*/true,
+                engine,
+                /*unique_shapes=*/false,
+                std::atoi(cap_env));
+            res = session.next();
+        } else {
+            res = solve_topology_mapping(
+                AdjacencyGraph<Stage>(ci.target_adj),
+                AdjacencyGraph<Pos>(ci.global_adj),
+                constraints,
+                ConnectionValidationMode::STRICT,
+                /*quiet_mode=*/true,
+                engine);
+        }
+        const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::string verdict = res.success ? "yes" : (res.stats.dfs_calls >= 10000000 ? "lim" : "no");
+        std::string plan;
+        if (res.success) {
+            // the carve part, checked as before
+            std::map<Stage, Pos> stage_plan;
+            for (Stage k = 0; k < n; ++k) {
+                stage_plan[k] = res.target_to_global.at(k);
+            }
+            std::vector<int> crossings;
+            std::string bad = verify(cs, ci.in, stage_plan, &crossings);
+            // the endpoint part: every endpoint on a chip inside its stage, each edge's two chips physically
+            // linked, no chip used twice
+            std::set<Pos> used_chips;
+            auto chip_in = [&](Pos g, Stage k) {
+                const uint32_t slice = (g - ci.chip_base) / 8;
+                const auto& cov = ci.in.covers[stage_plan[k]];
+                return g >= ci.chip_base && std::find(cov.begin(), cov.end(), slice) != cov.end();
+            };
+            for (size_t e = 0; bad.empty() && e < ci.n_edges; ++e) {
+                const Pos gx = res.target_to_global.at(n + Stage(2 * e)),
+                          gy = res.target_to_global.at(n + Stage(2 * e + 1));
+                if (!chip_in(gx, cs.edges[e].first) || !chip_in(gy, cs.edges[e].second)) {
+                    bad = "endpoint outside its stage";
+                } else if (
+                    std::find(
+                        ci.chip_links[gx - ci.chip_base].begin(),
+                        ci.chip_links[gx - ci.chip_base].end(),
+                        gy - ci.chip_base) == ci.chip_links[gx - ci.chip_base].end()) {
+                    bad = "edge endpoints not physically linked";
+                } else if (!used_chips.insert(gx).second || !used_chips.insert(gy).second) {
+                    bad = "chip used by two endpoints";
+                }
+            }
+            for (Stage h = n + Stage(2 * ci.n_edges); bad.empty() && h < n + Stage(2 * ci.n_edges + 2); ++h) {
+                const Pos g = res.target_to_global.at(h);
+                if (!chip_in(g, 0)) {
+                    bad = "host endpoint outside stage 0";
+                } else if (!used_chips.insert(g).second) {
+                    bad = "host endpoint on a used chip";
+                }
+            }
+            if (!bad.empty()) {
+                verdict = "BAD";
+                plan = bad;
+            } else {
+                for (const auto& [k, p] : stage_plan) {
+                    const Rect& r = ci.in.rects[p];
+                    char b[64];
+                    std::snprintf(
+                        b, sizeof b, "%s%dx%d@m%d(%d,%d)", plan.empty() ? "" : " ", r.h, r.w, r.mesh, r.r0, r.c0);
+                    plan += b;
+                }
+                plan += " | crossings:";
+                for (int c : crossings) {
+                    const auto& cb = cs.cables[c];
+                    char b[64];
+                    std::snprintf(
+                        b,
+                        sizeof b,
+                        " m%d(%d,%d)-m%d(%d,%d)",
+                        cb.mesh_a,
+                        cb.row_a,
+                        cb.col_a,
+                        cb.mesh_b,
+                        cb.row_b,
+                        cb.col_b);
+                    plan += b;
+                }
+                plan += " | endpoints and host chips chosen, " + std::to_string(used_chips.size()) + " distinct chips";
+            }
+        }
+        char buf[8192];
+        std::snprintf(buf, sizeof buf, "%s %.6f %d %s", verdict.c_str(), s, res.stats.used_sat ? 1 : 0, plan.c_str());
+        (void)!write(fd[1], buf, std::strlen(buf) + 1);
+        _exit(0);
+    }
+    close(fd[1]);
+    char buf[8192] = {0};
+    const ssize_t got = read(fd[0], buf, sizeof buf - 1);
+    close(fd[0]);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (got <= 0) {
+        return {"cap", double(cap_s)};
+    }
+    Outcome o;
+    char verdict[8] = {0};
+    int used_sat = 0, consumed = 0;
+    std::sscanf(buf, "%7s %lf %d %n", verdict, &o.seconds, &used_sat, &consumed);
+    o.verdict = verdict;
+    o.used_sat = used_sat != 0;
+    o.plan = buf + consumed;
+    return o;
+}
+
 void run(const Case& cs, int cap_s, bool show_plan) {
     const Instance in = build(cs);
     int area = 0, slices = 0;
@@ -461,13 +709,20 @@ void run(const Case& cs, int cap_s, bool show_plan) {
     const char* only = std::getenv("CARVE_ENGINES");
     auto wanted = [&](const char* e) { return only == nullptr || std::string(only).find(e) != std::string::npos; };
     const Outcome skipped{"-"};
-    const Outcome a = wanted("auto") ? timed(cs, TopologyMappingSolverEngine::Auto, cap_s) : skipped;
-    const Outcome s = wanted("sat") ? timed(cs, TopologyMappingSolverEngine::Sat, cap_s) : skipped;
-    const Outcome d = wanted("dfs") ? timed(cs, TopologyMappingSolverEngine::Dfs, cap_s) : skipped;
+    const bool chip_level = std::getenv("CARVE_CHIP_LEVEL") != nullptr;
+    auto solve = [&](TopologyMappingSolverEngine e) {
+        return chip_level ? timed_chip(cs, e, cap_s) : timed(cs, e, cap_s);
+    };
+    const Outcome a = wanted("auto") ? solve(TopologyMappingSolverEngine::Auto) : skipped;
+    const Outcome s = wanted("sat") ? solve(TopologyMappingSolverEngine::Sat) : skipped;
+    const Outcome d = wanted("dfs") ? solve(TopologyMappingSolverEngine::Dfs) : skipped;
+    if (chip_level) {
+        brute = brute + "(slice)";  // the chip-level answer can legitimately be "no" where the slice-level one is "yes"
+    }
     bool mismatch = false;
     for (const Outcome* o : {&a, &s, &d}) {
         mismatch |= o->verdict == "BAD";
-        mismatch |= brute != "-" && (o->verdict == "yes" || o->verdict == "no") && o->verdict != brute;
+        mismatch |= !chip_level && brute != "-" && (o->verdict == "yes" || o->verdict == "no") && o->verdict != brute;
     }
     std::printf(
         "%-48s %3d/%-3d %4zu pos | brute %-3s | auto(%s) %-3s %8.3fs | sat %-3s %8.3fs | dfs %-3s %8.3fs%s\n",
@@ -799,6 +1054,67 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+        }
+    }
+    // casefile: multi-mesh cases in the CARVE_CASE_OUT format (name, meshes, cables, shapes, ring|chain) from
+    // CARVE_CASES, so a hand-written multi-mesh instance can be run without a generator.
+    if (mode == "casefile") {
+        const char* path = std::getenv("CARVE_CASES");
+        if (path == nullptr) {
+            std::fprintf(stderr, "casefile mode needs CARVE_CASES=<path>\n");
+            return 1;
+        }
+        auto split = [](const std::string& str) {
+            std::vector<std::vector<int>> out;
+            size_t p = 0;
+            while (p < str.size()) {
+                const size_t e = str.find(';', p);
+                const std::string part = str.substr(p, e == std::string::npos ? std::string::npos : e - p);
+                std::vector<int> nums;
+                size_t q = 0;
+                while (q < part.size()) {
+                    int v = 0, used = 0;
+                    if (std::sscanf(part.c_str() + q, " %d%n", &v, &used) != 1) {
+                        break;
+                    }
+                    nums.push_back(v);
+                    q += used;
+                }
+                if (!nums.empty()) {
+                    out.push_back(nums);
+                }
+                p = e == std::string::npos ? str.size() : e + 1;
+            }
+            return out;
+        };
+        std::ifstream in(path);
+        std::string line;
+        while (std::getline(in, line)) {
+            std::vector<std::string> f;
+            size_t start = 0;
+            for (size_t t = line.find('\t');; t = line.find('\t', start)) {
+                f.push_back(line.substr(start, t == std::string::npos ? std::string::npos : t - start));
+                if (t == std::string::npos) {
+                    break;
+                }
+                start = t + 1;
+            }
+            if (f.size() != 5) {
+                continue;
+            }
+            Case c;
+            c.name = f[0];
+            for (const auto& m : split(f[1])) {
+                c.meshes.push_back({m[0], m[1]});
+            }
+            for (const auto& cb : split(f[2])) {
+                c.cables.push_back({cb[0], cb[1], cb[2], cb[3], cb[4], cb[5]});
+            }
+            for (const auto& sh : split(f[3])) {
+                c.shapes.push_back({sh[0], sh[1]});
+            }
+            c.edges = ring_edges(c.shapes.size(), f[4] == "ring");
+            cases.push_back(c);
         }
     }
     if (mode == "file") {

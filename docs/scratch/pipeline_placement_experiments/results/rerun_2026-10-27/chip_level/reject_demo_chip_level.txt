@@ -1,0 +1,3 @@
+carve as footprint mapping (solve_topology_mapping): engines auto, sat, dfs; cap 20 s per solve; brute force on <= 8 stages; SAT conflict cap 2000000000
+reject demo: mesh A is one slice, mesh B a 1x4 row, cables A0-B0 and A0-B3 both land on chip (0,0) of A0; ring B0 B1 B2 B3 A0   5/5      5 pos | brute yes(slice) | auto(sat) no     0.002s | sat -      0.000s | dfs -      0.000s
+reject demo, chain instead of ring (A0 at the end needs only one crossing)   5/5      5 pos | brute yes(slice) | auto(sat) yes    0.001s | sat -      0.000s | dfs -      0.000s

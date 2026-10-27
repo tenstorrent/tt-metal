@@ -1,0 +1,2 @@
+reject demo: mesh A is one slice, mesh B a 1x4 row, cables A0-B0 and A0-B3 both land on chip (0,0) of A0; ring B0 B1 B2 B3 A0	1 1;1 4	0 0 0 1 0 0;0 0 0 1 0 3	1 1;1 1;1 1;1 1;1 1	ring
+reject demo, chain instead of ring (A0 at the end needs only one crossing)	1 1;1 4	0 0 0 1 0 0;0 0 0 1 0 3	1 1;1 1;1 1;1 1;1 1	chain

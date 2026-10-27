@@ -1,0 +1,19 @@
+carve as footprint mapping (solve_topology_mapping): engines auto, sat, dfs; cap 60 s per solve; brute force on <= 8 stages; SAT conflict cap 2000000000
+2 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 0  64/64    64 pos | brute -(slice) | auto(?) cap   60.000s | sat -      0.000s | dfs -      0.000s
+2 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 1  64/64    64 pos | brute -(slice) | auto(sat) yes    1.451s | sat -      0.000s | dfs -      0.000s
+2 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 0  64/64    64 pos | brute -(slice) | auto(sat) yes    1.142s | sat -      0.000s | dfs -      0.000s
+2 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 1  64/64    64 pos | brute -(slice) | auto(sat) yes    0.337s | sat -      0.000s | dfs -      0.000s
+4 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 0 128/128  128 pos | brute -(slice) | auto(?) cap   60.000s | sat -      0.000s | dfs -      0.000s
+4 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 1 128/128  128 pos | brute -(slice) | auto(?) cap   60.000s | sat -      0.000s | dfs -      0.000s
+4 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 0 128/128  128 pos | brute -(slice) | auto(sat) yes    1.910s | sat -      0.000s | dfs -      0.000s
+4 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 1 128/128  128 pos | brute -(slice) | auto(sat) yes    8.778s | sat -      0.000s | dfs -      0.000s
+8 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 0 256/256  256 pos | brute -(slice) | auto(?) cap   60.000s | sat -      0.000s | dfs -      0.000s
+8 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 1 256/256  256 pos | brute -(slice) | auto(?) cap   60.000s | sat -      0.000s | dfs -      0.000s
+8 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 0 256/256  256 pos | brute -(slice) | auto(?) cap   60.000s | sat -      0.000s | dfs -      0.000s
+8 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 1 256/256  256 pos | brute -(slice) | auto(?) cap   60.000s | sat -      0.000s | dfs -      0.000s
+2 32-rank meshes line, 1 cable/pair, 32/32 per mesh, seed 0  64/64    64 pos | brute -(slice) | auto(sat) yes    1.719s | sat -      0.000s | dfs -      0.000s
+2 32-rank meshes line, 4 cable/pair, 32/32 per mesh, seed 0  64/64    64 pos | brute -(slice) | auto(sat) yes    1.089s | sat -      0.000s | dfs -      0.000s
+4 32-rank meshes line, 1 cable/pair, 32/32 per mesh, seed 0 128/128  128 pos | brute -(slice) | auto(?) cap   60.000s | sat -      0.000s | dfs -      0.000s
+4 32-rank meshes line, 4 cable/pair, 32/32 per mesh, seed 0 128/128  128 pos | brute -(slice) | auto(sat) yes    6.939s | sat -      0.000s | dfs -      0.000s
+2 32-rank meshes ring, 2 cable/pair, 24/32 per mesh, seed 0  48/64    64 pos | brute -(slice) | auto(sat) yes    0.248s | sat -      0.000s | dfs -      0.000s
+4 32-rank meshes ring, 2 cable/pair, 24/32 per mesh, seed 0  96/128  128 pos | brute -(slice) | auto(sat) yes    1.434s | sat -      0.000s | dfs -      0.000s

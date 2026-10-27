@@ -282,6 +282,7 @@ Report section 5. New files under `topo/` and `results/rerun_2026-10-27/`:
 | `topo/multi_colour_test.py` | exact feasibility of the tight 1-cable multi-mesh cases by the colour test |
 | `topo/case_catalogue.py`, `topo/carve_comparison.py` | the two generated tables in the results directory |
 | `topo/resource_completeness.patch` | the env-gated encoder change (`TT_TOPOLOGY_SAT_RESOURCE_COMPLETENESS=1`), not applied to the tree by the commit |
+| `CARVE_CHIP_LEVEL=1`, `topo/reject_demo.cases`, mode `casefile` | the chip-level footprint (carve plus every endpoint and host chip in one solve; report 5.5) and the case where the slice-level carve is rejected by the resolver |
 
 Every harness re-checks every returned solution (`BAD` on failure), every SAT run has the conflict
 budget removed, and a DFS call-limit failure prints as `lim`. To reproduce the carve-requiring

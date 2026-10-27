@@ -1,0 +1,18 @@
+carve as footprint mapping (solve_topology_mapping): engines auto, sat, dfs; cap 60 s per solve; brute force on <= 8 stages; SAT conflict cap 2000000000
+8x8: 1x1, 14x 2x2, 1x1                            58/64   113 pos | brute -(slice) | auto(sat) yes    0.093s | sat -      0.000s | dfs -      0.000s
+8x8: 1x1, 15x 2x2, 3x 1x1 (fills)                 64/64   113 pos | brute -(slice) | auto(sat) yes    0.265s | sat -      0.000s | dfs -      0.000s
+8x8 ring of 64 x 1x1 (fills)                      64/64    64 pos | brute -(slice) | auto(sat) yes    0.333s | sat -      0.000s | dfs -      0.000s
+8x16: 1x1, 30x 2x2, 1x1                          122/128  233 pos | brute -(slice) | auto(sat) yes    0.620s | sat -      0.000s | dfs -      0.000s
+8x16: 1x1, 2x4 x14, 2x2 x3, 1x1 (fills)          127/128  324 pos | brute -(slice) | auto(sat) yes   13.827s | sat -      0.000s | dfs -      0.000s
+8x16 ring of 128 x 1x1 (fills)                   128/128  128 pos | brute -(slice) | auto(sat) yes    2.010s | sat -      0.000s | dfs -      0.000s
+16x16: 1x1, 62x 2x2, 1x1                         250/256  481 pos | brute -(slice) | auto(sat) yes    4.142s | sat -      0.000s | dfs -      0.000s
+random 8x8: 30 stages                             64/64   225 pos | brute -(slice) | auto(sat) yes    6.323s | sat -      0.000s | dfs -      0.000s
+random 8x8: 29 stages                             64/64   225 pos | brute -(slice) | auto(sat) yes    0.793s | sat -      0.000s | dfs -      0.000s
+random 8x8: 31 stages                             63/64   225 pos | brute -(slice) | auto(sat) yes    3.327s | sat -      0.000s | dfs -      0.000s
+random 8x8: 34 stages                             64/64   225 pos | brute -(slice) | auto(sat) yes    0.537s | sat -      0.000s | dfs -      0.000s
+random 8x8: 37 stages                             64/64   225 pos | brute -(slice) | auto(sat) yes    0.719s | sat -      0.000s | dfs -      0.000s
+random 8x16 s1.0: 37 stages                      121/128  556 pos | brute -(slice) | auto(sat) yes   24.453s | sat -      0.000s | dfs -      0.000s
+random 8x16 s1.1: 32 stages                      127/128  556 pos | brute -(slice) | auto(?) cap   60.000s | sat -      0.000s | dfs -      0.000s
+random 8x16 s1.2: 32 stages                      122/128  556 pos | brute -(slice) | auto(sat) yes    3.396s | sat -      0.000s | dfs -      0.000s
+7x7: 1x1, 10x 2x2 (only 9 fit)                    41/49    85 pos | brute -(slice) | auto(sat) no     5.847s | sat -      0.000s | dfs -      0.000s
+5x5 ring of 25 x 1x1 (odd: none)                  25/25    25 pos | brute -(slice) | auto(sat) no     0.035s | sat -      0.000s | dfs -      0.000s

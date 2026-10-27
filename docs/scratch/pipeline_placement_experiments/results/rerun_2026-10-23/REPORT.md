@@ -772,7 +772,59 @@ changed no answer, and brute force agrees wherever it applies. The limit is that
 bind only when the carve is tight; the fills at 126 and 127 of 128 get nothing. The extension is
 an "at most k slices uncovered" cardinality constraint for slack k.
 
-### 5.5 Recommendation, updated
+### 5.5 Can the carve replace the resolver? The chip-level footprint
+
+The slice-level footprint decides rectangles of ranks; the resolver then decides the exit and
+entry chip of every edge, the core slots and stage 0's host chips, in under 40 ms. Two questions
+follow: can the footprint produce a carve the resolver rejects, and could the solver do the
+resolver's job itself so the mapper needs one call?
+
+**It can.** `topo/reject_demo.cases`: mesh A is one slice, mesh B a row of four, two cables from
+A0 to B0 and to B3, both landing on chip (0,0) of A0, ring B0 B1 B2 B3 A0. The slice-level
+footprint carves it (13 ms, verified) because A0 touches both; the resolver rejects the carve
+in 1 ms because both edges need an endpoint on the same chip, which has one pipeline core
+slot. The chain version, where A0 is crossed once, passes both. The footprint never sees chips.
+
+**It could.** `CARVE_CHIP_LEVEL=1` in `carve_footprint_bench.cpp` adds one global node per chip
+and two target nodes per pipeline edge (exit chip, entry chip) plus two host endpoints on stage
+0, with endpoint nodes restricted to chips and chips adjacent where a physical link joins them
+(the same 4-2-1 link model as the resolver harness). Injectivity then gives one endpoint per
+chip, the resolver's default capacity, so one solve returns the carve and every chip the
+resolver would pick; a verified solution carries them all. On the reject demo it answers "no"
+in 3 ms. On every other case of every group its verdict equals the slice-level one
+(`chip_level/`), and it costs 5x to 30x more:
+
+| Case | slice-level footprint + completeness | chip-level footprint + completeness | resolver on the slice-level carve |
+|---|---|---|---|
+| 8x8 fill, 15x 2x2 + 1x1s | 0.026 s | 0.27 s | 0.000 s |
+| 16x16, 62x 2x2 | 0.13 s | 4.1 s | 0.004 s |
+| random 8x8: 30 stages | 0.60 s | 6.3 s | 0.001 s |
+| random 8x16 s1.0 | 5.6 s | 24 s | 0.001 s |
+| 16x16 ring of 64x 2x2 / 128 dominoes | 0.13 / 0.23 s | 4.0 / 7.0 s | 0.004 / 0.029 s |
+| heterogeneous 4-mesh rings, 6 cases | 0.13 to 2.2 s | 1.6 to 22 s | 0.001 s |
+| no-1x1 domino, 4 meshes, 4 cables | 0.28 / 0.75 s | 3.3 / 10 s | 0.004 s |
+| no-1x1 domino, 8 meshes, 4 cables | 2.6 / 21 s | cap / cap | 0.030 / 0.036 s |
+| no-1x1 mixed, 8 meshes | 24 / 36 s | cap / cap | 0.004 s |
+| multi-mesh 1x1 rings, 4 meshes, 4 cables | 0.073 / 0.59 s | 1.9 / 8.8 s | 25 s / cap (direct) |
+| 8 meshes ring, 4 cables, seed 0 | 53 s | cap | cap (direct) |
+
+Twelve cases the slice-level footprint decides within 60 s the chip-level one does not. The
+chip-level graph is about ten times larger (8 chip nodes per slice on top of the positions,
+two endpoint nodes per edge), and the SAT solver pays for it on every case while the extra
+constraint only ever bites on the capacity collision. What the chip-level encoding still lacks
+against the resolver: per-node core counts above one (k copies of each chip node; needs the
+counts in the descriptor, open question 7), the resolver's preferences (distinct chips first,
+host I/O on unused chips, links by cable tier), and the translation of a node map into
+`GraphLayoutResult`.
+
+**So: slice-level footprint for the carve, resolver as the finisher.** The resolver costs 40 ms,
+is the runtime's own code, and rejects exactly the carves the chip-level encoding would have
+avoided at 5x to 30x the price; on a rejection the enumeration session yields the next carve.
+If the mapper must be one call, the chip-level encoding is correct and verified, and this is
+its price.
+
+### 5.6 Recommendation, updated
+
 
 - **C1, the carve: the footprint encoding on the topology solver, with resource completeness.**
   It is the only engine that carves grid-shaped meshes at all, it decides 127 of the 132
@@ -780,7 +832,8 @@ an "at most k slices uncovered" cardinality constraint for slack k.
   fastest engine on every tight case. Keep the colour pre-check in front of it for tight
   multi-mesh rings; add an area pre-check (one no-1x1 ring with area 160 on 128 slices ran to
   the cap). Treat budget exhaustion and the wall-clock cap as "unknown", never "reject".
-- **C2: the resolver, unchanged**, on the footprint's slots. Worst case 36 ms over 139 carves.
+- **C2: the resolver, unchanged**, on the footprint's slots. Worst case 36 ms over 139 carves, and
+  it catches the chip-level collisions the slice-level carve cannot see (5.5).
 - **The blaze planner** stays what it is: a planner for ring-of-columns fabrics, not for
   these. Porting it to C++ (design 3.2) does not buy a C1 for grid meshes.
 - **The per-slice encoding** keeps one use: single-slice rings where the solver's bijection
