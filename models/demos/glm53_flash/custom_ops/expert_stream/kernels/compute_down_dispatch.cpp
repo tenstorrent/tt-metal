@@ -41,7 +41,8 @@ void kernel_main() {
     matmul_init(cb_a, cb_w);
 
     // ---- phase 1: per active expert its W2 block stays resident over its passes; the counts come from the
-    // metadata page (read by the unpack thread and forwarded to the math / pack threads)
+    // metadata page (read by the unpack thread and forwarded to the math / pack threads), already clamped to the
+    // pass budget by the writer (dispatch_common.hpp clamp_passes), so their sum never exceeds cb_h's P passes
     CircularBuffer meta(cb_m);
     meta.wait_front(1);
     const uint32_t n_active = meta.read_tile_value(0, 0);

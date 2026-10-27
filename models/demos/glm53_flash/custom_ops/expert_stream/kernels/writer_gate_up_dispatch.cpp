@@ -10,7 +10,9 @@
 //    that the zero routing weight annihilates; the first pass fills them with its first row);
 // 2. builds D = diag(w[t_i, e]) (BF16, exact) for the pass's rows;
 // 3. writes the finished [32, 32] tiles to act [1, P, 32, I] (tile page = pass * I_tiles + bank * ppb + q);
-// 4. on bank 0 writes the pass table row [n_rows, e, t_0 .. t_31] (uint16) that the down op dispatches from.
+// 4. on bank 0 writes the pass table row [n_rows, e, t_0 .. t_31] (uint16) that the down op dispatches from; its
+//    pad word TABLE_FLAG_WORD is 1 when the enumeration was clamped to the pass budget (dispatch_common.hpp
+//    clamp_passes: an over-budget routing, i.e. rows with more than MAX_PICKS non-zeros).
 // The compute learns each expert's pass count through the BRISC mailboxes (0 = done).
 //
 // runtime args: [x_addr, routing_addr (EP: weights), counts_addr (EP: idx), act_addr, table_addr, bank_id, group,
@@ -117,6 +119,8 @@ void kernel_main() {
         read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);
     }
     pass_bases<E>(n_tok, passes, base);
+    bool clamped = false;  // the pass budget, the same truncation in every kernel of both ops (dispatch_common.hpp)
+    clamp_passes<E>(n_tok, passes, base, dispatch_max_passes(T, E), clamped);
     const uint32_t n_mine = assign_group<E, 32>(passes, groups, group, mine);
     const volatile tt_l1_ptr uint16_t* routing = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(r_l1);
 
@@ -159,6 +163,7 @@ void kernel_main() {
                 for (uint32_t j = 0; j < 32; ++j) {
                     tab[2 + j] = j < nr_p ? rows[i0 + j] : 0xFFFF;
                 }
+                tab[TABLE_FLAG_WORD] = clamped ? 1 : 0;  // the host reads row 0's flag (op.py table_clamped)
                 noc_async_write(t_l1, s_tab.get_noc_addr(k), table_bytes);
                 noc_async_write_barrier();
             }

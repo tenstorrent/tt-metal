@@ -46,6 +46,41 @@ inline uint32_t pass_bases(const uint16_t* n, uint16_t* passes, uint16_t* base) 
     return k;
 }
 
+// The pass budget of the dispatch ops (op.py ``max_passes``): sum_e ceil(n_e / 32) <= MAX_PICKS * T / 32 + E holds
+// whenever every routing row has at most MAX_PICKS non-zeros (the top-8 router), and the act / table / resident-h
+// buffers are sized by it. A routing matrix that breaks the top-k contract (a NaN / Inf row spread over every
+// selected column by the fp32 selector matmul, stale rows past seq_len, a corrupted row gather) breaks the bound,
+// and the 2026-10-27 (2,4) block hang was exactly that: the down writer clamped its own loop to P_MAX while its
+// compute consumed the unclamped metadata page, so the op deadlocked. Every kernel that derives the enumeration
+// applies clamp_passes right after pass_bases (the computes take their per-expert counts from the writers'
+// metadata page / mailboxes, i.e. the clamped values), so the readers' expert set, the writers' activation / table
+// loops and the computes' pass totals agree whatever the counts say: an over-budget routing yields a truncated,
+// bounded result and the gate|up writer flags it in the pass table (TABLE_FLAG_WORD) instead of hanging.
+constexpr uint32_t DISPATCH_MAX_PICKS = 8;  // op.py MAX_PICKS (tests/test_dispatch_pass_budget_host.py pins the pair)
+constexpr uint32_t dispatch_max_passes(uint32_t T, uint32_t E) { return DISPATCH_MAX_PICKS * T / 32 + E; }
+constexpr uint32_t TABLE_FLAG_WORD = 63;  // pass-table pad word (uint16) = 1 when the enumeration was clamped
+
+// Truncates the enumeration to ``p_max`` passes in expert order: the expert crossing the budget keeps its first
+// passes (n[e] cut to the rows they hold), later experts get 0 passes and n[e] = 0 (inactive for every kernel);
+// base[] is rewritten for the truncated counts. Returns the clamped total; ``clamped`` reports whether the budget
+// was hit. A function of the counts alone: identical on every core and in every kernel of both ops.
+template <uint32_t E>
+inline uint32_t clamp_passes(uint16_t* n, uint16_t* passes, uint16_t* base, uint32_t p_max, bool& clamped) {
+    uint32_t k = 0;
+    clamped = false;
+    for (uint32_t e = 0; e < E; ++e) {
+        const uint32_t room = p_max - k;
+        if (passes[e] > room) {
+            passes[e] = static_cast<uint16_t>(room);
+            n[e] = static_cast<uint16_t>(room * 32);
+            clamped = true;
+        }
+        base[e] = static_cast<uint16_t>(k);
+        k += passes[e];
+    }
+    return k;
+}
+
 // Longest-processing-time assignment of the active experts to `groups` core groups by pass count (experts sorted by
 // passes descending, id ascending; each goes to the least loaded group, lowest id on ties). Fills `mine` with the
 // experts of `group` in assignment order and returns their count. Identical on every core.
