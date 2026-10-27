@@ -49,15 +49,20 @@ void kernel_main() {
         noc.async_read_barrier();
         ctr.push_back(1);
     }
+    // cos / sin are read once per seq tile, not per unit: consecutive units (g fastest) share s.
+    uint32_t last_s = 0xFFFFFFFFu;
     for (uint32_t w = 0; w < num_units; ++w) {
         const uint32_t u = unit_start + w;
         const uint32_t g = u % n_kv;
         const uint32_t s = (u / n_kv) % St;
         const uint32_t b = u / (n_kv * St);
         const uint32_t row = (b * St + s) * row_tiles;
+        const bool new_s = s != last_s;
         cin.reserve_back(unit_tiles);
-        ccos.reserve_back(Wt);
-        csin.reserve_back(Wt);
+        if (new_s) {
+            ccos.reserve_back(Wt);
+            csin.reserve_back(Wt);
+        }
         uint32_t off = 0;
         // Q heads g*q_per_kv .. +q_per_kv are contiguous in the fused row.
         for (uint32_t j = 0; j < q_per_kv * Wt; ++j, ++off) {
@@ -72,13 +77,18 @@ void kernel_main() {
             noc.async_read(
                 s_qkv, cin, in_tile, {.page_id = row + (n_heads + n_kv + g) * Wt + j}, {.offset_bytes = off * in_tile});
         }
-        for (uint32_t j = 0; j < Wt; ++j) {
-            noc.async_read(s_cos, ccos, rot_tile, {.page_id = s * Wt + j}, {.offset_bytes = j * rot_tile});
-            noc.async_read(s_sin, csin, rot_tile, {.page_id = s * Wt + j}, {.offset_bytes = j * rot_tile});
+        if (new_s) {
+            for (uint32_t j = 0; j < Wt; ++j) {
+                noc.async_read(s_cos, ccos, rot_tile, {.page_id = s * Wt + j}, {.offset_bytes = j * rot_tile});
+                noc.async_read(s_sin, csin, rot_tile, {.page_id = s * Wt + j}, {.offset_bytes = j * rot_tile});
+            }
         }
         noc.async_read_barrier();
         cin.push_back(unit_tiles);
-        ccos.push_back(Wt);
-        csin.push_back(Wt);
+        if (new_s) {
+            ccos.push_back(Wt);
+            csin.push_back(Wt);
+            last_s = s;
+        }
     }
 }

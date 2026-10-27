@@ -59,8 +59,15 @@ def fused_add_rmsnorm(
     out_dtype=None,
     norm_dtype=ttnn.bfloat16,
     memory_config=None,
+    out_memory_config=None,
+    inplace=False,
+    max_buffers=2,
 ):
-    """``a``, ``b``: ``[..., M, W]`` TILE interleaved. Returns ``(a + b, rmsnorm(a + b) * gamma)``."""
+    """``a``, ``b``: ``[..., M, W]`` TILE interleaved. Returns ``(a + b, rmsnorm(a + b) * gamma)``.
+
+    ``inplace``: the sum is written over ``a`` (each core reads a row before it writes that row, and
+    no two cores share a row), so the residual stream needs one buffer, e.g. resident in L1.
+    ``out_memory_config`` places the normed output (default: ``memory_config``)."""
     gamma_tiles, scaler_tile, eps_tile = consts
     memory_config = memory_config or a.memory_config()
     device = a.device()
@@ -74,15 +81,23 @@ def fused_add_rmsnorm(
     sum_dtype = sum_dtype or a.dtype
     out_dtype = out_dtype or sum_dtype
 
-    sum_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), sum_dtype, ttnn.TILE_LAYOUT, device, memory_config)
-    out_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), out_dtype, ttnn.TILE_LAYOUT, device, memory_config)
+    if inplace:
+        assert sum_dtype == a.dtype, "in-place sum keeps a's dtype"
+        sum_tensor = a
+    else:
+        sum_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(shape), sum_dtype, ttnn.TILE_LAYOUT, device, memory_config
+        )
+    out_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), out_dtype, ttnn.TILE_LAYOUT, device, out_memory_config or memory_config
+    )
 
     grid = device.compute_with_storage_grid_size()
     _, per_core = split_work_to_cores(rows_t, int(grid.x), int(grid.y))
     used_cores = core_ranges(per_core)
     # Double-buffer the streamed rows only when a core gets more than one; at bs1 each core
     # gets one row and the second buffer would only take L1 from interleaved L1 activations.
-    nbuf = 2 if max(n for _, _, n in per_core) > 1 else 1
+    nbuf = min(max_buffers, 2) if max(n for _, _, n in per_core) > 1 else 1
 
     def cb(index, tiles, dtype):
         tsize = TILE_BYTES[dtype]
@@ -165,5 +180,6 @@ def fused_add_rmsnorm(
         ],
         cbs=cbs,
     )
-    ttnn.generic_op([a, b, gamma_tiles, scaler_tile, eps_tile, sum_tensor, out_tensor], program)
+    io = [a, b, gamma_tiles, scaler_tile, eps_tile] + ([] if inplace else [sum_tensor]) + [out_tensor]
+    ttnn.generic_op(io, program)
     return sum_tensor, out_tensor

@@ -153,9 +153,10 @@ class NemotronReranker:
     def _linear(self, x, w, kind, activation=None, dtype=None, fuse_swiglu=False):
         rows = x.shape[-2] * x.shape[-3]
         if self.cfg.use_minimal_matmul:
-            mb, kb, nb, sh, sw = mm_block_config(kind, rows)
-            if x.dtype == ttnn.bfloat16 and kb > 16:
-                # The table is swept with bfp8 activations; bf16 in0 blocks of 32 K tiles overflow L1.
+            mb, kb, nb, sh, sw = mm_block_config(kind, rows, self.cfg.residual_l1)
+            if (x.dtype == ttnn.bfloat16 or self.cfg.residual_l1) and kb > 16:
+                # The table is swept with bfp8 activations; bf16 in0 blocks of 32 K tiles overflow L1,
+                # and so do bfp8 ones next to an L1-resident residual stream.
                 kb = 16
             return ttnn.experimental.minimal_matmul(
                 x,
@@ -236,14 +237,28 @@ class NemotronReranker:
         return self._norm_cfgs[key]
 
     def _add_norm(self, x, delta, consts, out_dtype=None):
-        """(x + delta, rmsnorm(x + delta)) in one op."""
+        """(x + delta, rmsnorm(x + delta)) in one op; with ``residual_l1`` the sum overwrites x in L1."""
+        rows, width = x.shape[-2] * x.shape[-3], x.shape[-1]
+        if self.cfg.residual_l1:
+            return fused_add_rmsnorm(
+                x,
+                delta,
+                consts,
+                out_dtype=out_dtype or self.cfg.norm_out_dtype,
+                sum_dtype=x.dtype,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                out_memory_config=self._mem(rows, width),
+                inplace=True,
+                # Single-buffered: the residual's L1 share leaves no room for a second row of CBs.
+                max_buffers=1,
+            )
         return fused_add_rmsnorm(
             x,
             delta,
             consts,
             out_dtype=out_dtype or self.cfg.norm_out_dtype,
             sum_dtype=self.cfg.residual_dtype,
-            memory_config=self._mem(x.shape[-2] * x.shape[-3], x.shape[-1]),
+            memory_config=self._mem(rows, width),
         )
 
     def _attention(self, layer, xn, B, S, mask, block_map, cos, sin):
@@ -342,22 +357,32 @@ class NemotronReranker:
         B, S = tokens.shape[0], tokens.shape[1]
         cos, sin = self.rot_mats(S)
         mask = self._padding_mask(valid, S)
-        x = ttnn.embedding(tokens, self.embed, layout=ttnn.TILE_LAYOUT, dtype=self.cfg.act_dtype)
+        fused = self.cfg.fuse_add_norm and B * S >= self.cfg.fuse_add_norm_min_rows
+        resid_l1 = fused and self.cfg.residual_l1
+        x = ttnn.embedding(
+            tokens,
+            self.embed,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=self.cfg.act_dtype,
+            memory_config=ttnn.L1_MEMORY_CONFIG if resid_l1 else ttnn.DRAM_MEMORY_CONFIG,
+        )
         x = ttnn.reshape(x, [1, 1, B * S, self.cfg.dim])
-        if self.cfg.fuse_add_norm and B * S >= self.cfg.fuse_add_norm_min_rows:
+        if fused:
             xn = self._norm(x, self.layers[0].attn_norm, self.cfg.norm_out_dtype)
             for i, layer in enumerate(self.layers):
                 a = self._attention(layer, xn, B, S, mask, block_map, cos, sin)
                 ttnn.deallocate(xn)
                 x_new, h = self._add_norm(x, a, layer.ffn_norm_consts)
-                ttnn.deallocate(x)
+                if not resid_l1:
+                    ttnn.deallocate(x)
                 ttnn.deallocate(a)
                 m = self._mlp(layer, h)
                 ttnn.deallocate(h)
                 nxt = self.layers[i + 1].attn_norm_consts if i + 1 < len(self.layers) else self.final_norm_consts
                 last = i + 1 == len(self.layers)
                 x, xn = self._add_norm(x_new, m, nxt, out_dtype=self.cfg.act_dtype if last else None)
-                ttnn.deallocate(x_new)
+                if not resid_l1:
+                    ttnn.deallocate(x_new)
                 ttnn.deallocate(m)
             ttnn.deallocate(x)
         else:

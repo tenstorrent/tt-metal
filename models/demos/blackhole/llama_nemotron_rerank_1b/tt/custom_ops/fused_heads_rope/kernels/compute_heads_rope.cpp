@@ -69,16 +69,29 @@ inline void rotary_head(uint32_t off) {
 void kernel_main() {
     constexpr uint32_t q_per_kv = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t n_kv = get_compile_time_arg_val(2);
+    constexpr uint32_t St = get_compile_time_arg_val(3);
     const uint32_t num_units = get_arg_val<uint32_t>(0);
+    const uint32_t unit_start = get_arg_val<uint32_t>(1);
     constexpr uint32_t unit_tiles = (q_per_kv + 2) * Wt;
 
     CircularBuffer in(cb_in), out(cb_out), ccos(cb_cos), csin(cb_sin), ctr(cb_trans);
     compute_kernel_hw_startup(cb_in, cb_trans, cb_out);
     ctr.wait_front(1);
+    // cos / sin stay at the CB front while consecutive units share a seq tile (mirrors the reader).
+    uint32_t last_s = 0xFFFFFFFFu;
     for (uint32_t w = 0; w < num_units; ++w) {
+        const uint32_t s = ((unit_start + w) / n_kv) % St;
+        if (s != last_s) {
+            if (last_s != 0xFFFFFFFFu) {
+                ccos.pop_front(Wt);
+                csin.pop_front(Wt);
+            }
+            ccos.wait_front(Wt);
+            csin.wait_front(Wt);
+            last_s = s;
+        }
         in.wait_front(unit_tiles);
-        ccos.wait_front(Wt);
-        csin.wait_front(Wt);
         out.reserve_back(unit_tiles);
         for (uint32_t h = 0; h < q_per_kv + 1; ++h) {  // Q heads, then K
             rotary_head<Wt>(h * Wt);
@@ -99,6 +112,8 @@ void kernel_main() {
         tile_regs_release();
         out.push_back(unit_tiles);
         in.pop_front(unit_tiles);
+    }
+    if (last_s != 0xFFFFFFFFu) {
         ccos.pop_front(Wt);
         csin.pop_front(Wt);
     }

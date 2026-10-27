@@ -52,7 +52,19 @@ def sdpa_chunks(batch, seq_len):
     return 512, 256
 
 
-def mm_block_config(kind, rows):
+# Blocks for >= 8192 rows when the residual stream is L1-resident (FU-05: CBs must end below it):
+# perf_tools/sweep_mm.py --l1-reserve-mb 64 --xdtype bfloat8_b --odtype bfloat8_b at 16384 rows.
+MM_CONFIGS_L1_RESIDUAL = {
+    "qkv": (8, 16, 2, 2, 2),
+    "wo": (8, 8, 4, 2, 2),
+    "ff13s": (2, 16, 8, 1, 4),
+    "ff2": (4, 16, 4, 1, 4),
+}
+
+
+def mm_block_config(kind, rows, l1_residual=False):
+    if l1_residual and rows >= 8192 and kind in MM_CONFIGS_L1_RESIDUAL:
+        return MM_CONFIGS_L1_RESIDUAL[kind]
     table = MM_CONFIGS[kind]
     keys = [m for m in sorted(table) if m <= rows] or [min(table)]
     return table[keys[-1]]
@@ -124,6 +136,8 @@ class RerankConfig:
     fuse_add_norm_min_rows: int = 4096
     # dtype of the residual stream written by the fused add + RMSNorm.
     residual_dtype: object = ttnn.bfloat16
+    # Fused path: keep the residual stream in L1 (one buffer, updated in place by the fused add + norm).
+    residual_l1: bool = False
     # Up to this many rows RMSNorm runs block-sharded over an 8-wide grid (with the interleaved <-> sharded
     # conversions): stock rms_norm gives each core whole tile-rows, 16 cores at 512 rows.
     # perf_tools/probe_norm.py: 128 rows 33.7 -> 10.7 us, 512 rows 33.9 -> 18.3 us.

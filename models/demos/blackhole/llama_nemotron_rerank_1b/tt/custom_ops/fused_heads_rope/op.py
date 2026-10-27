@@ -104,7 +104,7 @@ def fused_heads_rope(qkv, cos, sin, trans_mat, *, n_heads, n_kv_heads, batch, me
                 ],
             )
         )
-        compute_rt.append((core, [n]))
+        compute_rt.append((core, [n, cursor]))
         writer_rt.append((core, [q.buffer_address(), k.buffer_address(), v.buffer_address(), n, cursor]))
         cursor += n
 
@@ -123,7 +123,7 @@ def fused_heads_rope(qkv, cos, sin, trans_mat, *, n_heads, n_kv_heads, batch, me
             kernel(READER_KERNEL, reader_ct, reader_rt, ttnn.ReaderConfigDescriptor()),
             kernel(
                 COMPUTE_KERNEL,
-                [q_per_kv, Wt],
+                [q_per_kv, Wt, n_kv_heads, St],
                 compute_rt,
                 ttnn.ComputeConfigDescriptor(
                     math_fidelity=ttnn.MathFidelity.HiFi4,

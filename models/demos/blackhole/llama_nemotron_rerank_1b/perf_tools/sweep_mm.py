@@ -47,6 +47,10 @@ def main():
     ap.add_argument("--shapes", nargs="+", default=list(SHAPES))
     ap.add_argument("--wdtype", default="bfloat8_b")
     ap.add_argument("--xdtype", default="bfloat16", help="activation (in0) dtype")
+    ap.add_argument(
+        "--l1-reserve-mb", type=float, default=0, help="hold this much interleaved L1 (e.g. a resident residual)"
+    )
+    ap.add_argument("--odtype", default="bfloat16", help="output dtype")
     ap.add_argument("--top", type=int, default=4)
     ap.add_argument("--fid", nargs="+", default=["HiFi2"])
     ap.add_argument("--acc", nargs="+", type=int, default=[1, 0])
@@ -57,6 +61,16 @@ def main():
     args = ap.parse_args()
     dev = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=200_000_000)
     grid = dev.compute_with_storage_grid_size()
+    reserve = None
+    if args.l1_reserve_mb:
+        rows = int(args.l1_reserve_mb * 2**20 / (2048 * 2)) // 32 * 32
+        reserve = ttnn.from_torch(
+            torch.zeros(1, 1, rows, 2048),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
     wdt = getattr(ttnn, args.wdtype)
     ckc = {
         (f, acc): ttnn.init_device_compute_kernel_config(
