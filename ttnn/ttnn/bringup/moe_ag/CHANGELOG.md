@@ -26,3 +26,14 @@ Tests: `tests/unit/test_moe_ag_ops.py` (the source branch's nightly op test, `te
 - Needed by: <model> <task>
 - Files: <paths inside this folder>
 -->
+
+### Tests: glm_4x4 perf baselines; split / phases only where they apply (2026-10-27)
+- What: `test_moe_ag_ops_perf[glm_4x4]` skipped for lack of expected times; its four programs now have them in
+  `_PERF_EXPECTED_NS` (route_plan 50 629, local_reduce_tiled 296 880, sum_rows_tiled 97 787, untilize_x 79 511 ns:
+  the median of 3 runs of the RT-CAL lines on one BH p150 of the 2x2 QuietBox, spread <= 1.4%). The split / phases
+  cases of `test_moe_ag_local_reduce` are generated only for cases with two mesh rows (T == 2 S): galaxy and glm_4x4
+  no longer skip them at run time. No op change.
+- Why: owner, 2026-10-27: no skip that hides a dead test.
+- Tests: 71 collected (66 passed, 5 skipped) -> 67 collected, 67 passed.
+- Needed by: fork test hygiene
+- Files: `tests/unit/test_moe_ag_ops.py`

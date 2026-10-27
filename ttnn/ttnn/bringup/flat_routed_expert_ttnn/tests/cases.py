@@ -70,4 +70,23 @@ CASES = [
         "seed": 1,
         "noise": {"inputs": ["bf16", "bf16"], "out": "bf16"},
     },
+    {
+        # deepseek_v41_flash_d_p tt/shared_expert.py after FIX.1 (no padding to get around a kernel limit): the same
+        # call as the shared-expert case above, with the chip's 1152 intermediate columns at their real width (36
+        # tiles, down weights [6912, 256] per bank shard), no zero padding to a 256-column down block.
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-shared-expert-s1024-i1152-bfp8-lofi",
+        "sig": "a274529a9f",
+        "op": "flat_routed_expert",
+        "I": 1152,
+        "epc": 1,
+        "n_global": 1,
+        "m": 1024,
+        "S": 1024,
+        "wdtype": "bf8",
+        "w_std": 0.02,
+        "y_bf16": True,
+        "seed": 2,
+        "noise": {"inputs": ["bf16"], "out": "bf16"},
+    },
 ]

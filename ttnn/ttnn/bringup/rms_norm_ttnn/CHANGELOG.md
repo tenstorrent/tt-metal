@@ -170,11 +170,10 @@ Source: ai-generated (codegen, `dnijemcevic/rms_norm_replacement_run0` @ `31b0b1
 - Needed by: hy4_preview_d_p O.1
 - Files: `tests/cases.py`, `tests/test_rms_norm_ttnn.py`
 
-### Known gap: memory_config under inplace (test skipped, 2026-09-30)
-- The C++ host path (`rms_norm_ttnn.cpp`) does not refuse a `memory_config` that differs from the input's placement
-  when `program_config.inplace` is set; the Python path refuses it. `test_refuses_memory_config_disagreeing_under_inplace`
-  failed on it and is skipped until `validate()` in `rms_norm_ttnn.cpp` gets the same check. No model passes
-  `inplace` with a disagreeing `memory_config`, so no bring-up result is affected.
+### Known gap: memory_config under inplace (test skipped, 2026-09-30; fixed 2026-10-27, see the last entry)
+- The C++ host path (`rms_norm_ttnn.cpp`) did not refuse a `memory_config` that differs from the input's placement
+  when `program_config.inplace` is set. `test_refuses_memory_config_disagreeing_under_inplace` failed on it and was
+  skipped. No model passes `inplace` with a disagreeing `memory_config`, so no bring-up result is affected.
 
 ### Port to the new multicast helpers (#57547; kernel helper library @ `73027b6e6ff`, 2026-10-01)
 - What: `kernel_lib/host/mcast_host.hpp` and `kernel_lib/mcast_pipe.hpp` were replaced by
@@ -231,3 +230,31 @@ Source: ai-generated (codegen, `dnijemcevic/rms_norm_replacement_run0` @ `31b0b1
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: deepseek_v41_flash_d_p O.1
 - Files: tests/cases.py, tests/test_rms_norm_ttnn.py
+
+### Refuse a disagreeing memory_config under inplace; tests: no seed-parity cases, no run-time skips (2026-10-27)
+- What: (a) under `program_config.inplace=True` the output is the input, so a `memory_config` naming another placement
+  (memory layout, buffer type, or a shard spec that differs) is refused with a ValueError instead of being dropped
+  silently. One that names the input's placement, or a sharded one without a shard spec, is accepted as before; calls
+  without `inplace` or without `memory_config` are unchanged (same program). Both builders: `check_inplace_placement`
+  in `rms_norm_ttnn.cpp` validate(), `_inplace_placement_agrees` in the Python `resolve_program_config`. The old note
+  that the Python path already refused was wrong: it accepted and ignored the placement too (its X-03 comment said
+  so). Unskipped `test_refuses_memory_config_disagreeing_under_inplace`. Upstream refuses this case too ("Output memory
+  config must be sharded for inplace operation"); no model, model case or source test passes `inplace`.
+  (b) `tests/unit/test_rms_norm_ttnn_perf.py`: removed the seed-parity cases (`test_seed_parity`,
+  `test_sharded_seed_parity`, `test_program_is_structurally_the_seeds`). They compare against the generated
+  `ttnn.operations.rms_norm`, which exists only on the branch this op was generated on, so all 39 seed cases always
+  skipped here. Their 11 fork-only halves are kept as coverage: the operand-free interleaved row is now
+  `test_operand_cost[no_gamma-*]`; the gamma rows were identical calls to `test_operand_cost[gamma-*]` and
+  `test_sharded_operand_cost[gamma-*]`, which stay. 72 collected (33 run, 39 skipped) -> 25 collected, 25 run.
+  (c) Parameter combinations that do not apply are no longer generated (they skipped at run time):
+  `test_mixed_per_channel_format` bfloat8_b x ROW_MAJOR (no row-major form), `test_prime_width_is_correct_on_device`
+  97 rows at W 2848 except gamma_bias_residual. Test ids of the valid combinations unchanged.
+- Why: owner, 2026-10-27: a test is run and passing, not generated, or fixed; never a skip that hides a dead test or
+  a bug.
+- Tests: unit matrix 227 collected (225 passed, 1 skipped bf8b, 1 skipped inplace) -> 226 (225 passed; the inplace
+  refusal test fails on the library built before this change, as it should; after the build (2026-10-27, 2x2): it passes; option-off regression: tests/unit 1368 passed, fork_source 251 passed + 12 upstream skips, 0 failing, model cases 18 passed + 2 skipped (xing40 4x2 needs 8 chips));
+  ragged width 192 (186 passed, 6 skipped) -> 186 passed; perf 25 passed. The Python path's refusal checked by probe (DRAM memory_config refused; the input's own or
+  none accepted, identity kept); cpp_parity inplace cases pass.
+- Needed by: fork test hygiene (owner, 2026-10-27)
+- Files: `rms_norm_ttnn.cpp`, `rms_norm_ttnn_program_descriptor.py`, `tests/unit/test_rms_norm_ttnn_matrix.py`,
+  `tests/unit/test_rms_norm_ttnn_perf.py`, `tests/unit/test_rms_norm_ttnn_ragged_width.py`

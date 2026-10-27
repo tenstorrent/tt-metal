@@ -176,12 +176,18 @@ def _check(label, got, ref):
     assert p > 0.9999 and rel < 1e-2, (label, p, rel)
 
 
-@pytest.mark.parametrize("mode", ["plain", "tiled", "split", "phases"])
-@pytest.mark.parametrize("case", CASES, ids=IDS)
+# split / phases need two mesh rows (T == 2 S); not generated for the other cases.
+_REDUCE_CASES = [
+    pytest.param(case, mode, id=f"{case[0]}-{mode}")
+    for mode in ["plain", "tiled", "split", "phases"]
+    for case in CASES
+    if mode in ("plain", "tiled") or case[5] == 2 * case[6]
+]
+
+
+@pytest.mark.parametrize("case, mode", _REDUCE_CASES)
 def test_moe_ag_local_reduce(device, case, mode):
     tag, H, K, NG, EPC, T, S = case
-    if mode in ("split", "phases") and T != 2 * S:
-        pytest.skip("split / phases need two mesh rows (T == 2 S)")
     d, partial, peer = _reduce_inputs(device, case)
     args = (d["y"], d["ys"], d["w"], d["info"], S)
     if mode in ("plain", "tiled"):
@@ -323,8 +329,13 @@ _PERF_EXPECTED_NS = {
     "small_sum_rows_tiled": 18_865,
     "small_untilize_x": 13_154,
     "small_local_reduce_phase2": 15_734,
+    # glm_4x4: same chip, 2026-10-27 (3 calibration runs, spread <= 1.4%)
+    "glm_4x4_route_plan": 50_629,
+    "glm_4x4_local_reduce_tiled": 296_880,
+    "glm_4x4_sum_rows_tiled": 97_787,
+    "glm_4x4_untilize_x": 79_511,
 }
-_PERF_MARGIN = 0.05
+_PERF_MARGIN = 0.05  # slower than this fails; faster only logs a recalibration note (owner, 2026-10-27)
 _KDIR = "/bringup/moe_ag/device/kernels/"
 
 
@@ -361,14 +372,21 @@ def test_moe_ag_ops_perf(device, case):
         expected = _PERF_EXPECTED_NS.get(label)
         if expected is None:
             missing.append(label)
-        assert_op_duration_merged(
+        got = assert_op_duration_merged(  # (measures only: the check below fails on slower, never on faster)
             device,
             fn,
             _KDIR + kernel,
             expected_ns=expected or 1,
-            margin=_PERF_MARGIN if expected else float("inf"),
+            margin=float("inf"),
             label=f'"{label}"',
             iters=3,
         )
+        if expected is None:
+            continue
+        assert got <= expected * (
+            1 + _PERF_MARGIN
+        ), f'"{label}" device time {got:.0f} ns is {got / expected - 1:+.1%} vs {expected} ns: slower than the margin'
+        if got < expected * (1 - _PERF_MARGIN):
+            logger.warning(f'"{label}" {got:.0f} ns is {got / expected - 1:+.1%} vs {expected} ns: faster, recalibrate')
     if missing:
         pytest.skip(f"no baseline for {missing}; add them to _PERF_EXPECTED_NS")

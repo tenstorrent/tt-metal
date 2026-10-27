@@ -275,6 +275,33 @@ ResolvedProgramConfig resolve_program_config(
     return {static_cast<uint32_t>(subblock_w), pc.inplace};
 }
 
+// Under inplace the output is the input, so a memory_config naming another placement would be dropped: refuse it.
+// A sharded memory_config without a shard spec names the input's own layout and is accepted.
+void check_inplace_placement(
+    const Tensor& input, const std::optional<ttnn::MemoryConfig>& memory_config, bool inplace) {
+    if (!inplace || !memory_config.has_value()) {
+        return;
+    }
+    const auto& mc = *memory_config;
+    const auto& xc = input.memory_config();
+    bool agrees = mc.memory_layout() == xc.memory_layout() && mc.buffer_type() == xc.buffer_type();
+    if (agrees && mc.shard_spec().has_value()) {
+        agrees = xc.shard_spec().has_value() && mc.shard_spec()->shape == xc.shard_spec()->shape &&
+                 mc.shard_spec()->grid == xc.shard_spec()->grid &&
+                 mc.shard_spec()->orientation == xc.shard_spec()->orientation;
+    }
+    if (!agrees) {
+        throw ValueErrorCpp(fmt::format(
+            "rms_norm_ttnn: program_config.inplace=True writes the output into the input, so memory_config must name "
+            "the input's placement (shard spec included); got memory_config {} {} for an input placed {} {}. Drop "
+            "memory_config or unset inplace",
+            mc.memory_layout(),
+            mc.buffer_type(),
+            xc.memory_layout(),
+            xc.buffer_type()));
+    }
+}
+
 std::string alignment_tag(const std::vector<uint32_t>& shape) {
     const int64_t width = shape.size() >= 1 ? shape.back() : 1;
     const int64_t height = shape.size() >= 2 ? shape[shape.size() - 2] : TILE_DIM;
@@ -359,7 +386,9 @@ ResolvedProgramConfig validate(
             "WIDTH_SHARDED, BLOCK_SHARDED]",
             memory_config->memory_layout()));
     }
-    return resolve_program_config(input, program_config, dest_tile_limit(cfg));
+    const auto resolved = resolve_program_config(input, program_config, dest_tile_limit(cfg));
+    check_inplace_placement(input, memory_config, resolved.inplace);
+    return resolved;
 }
 
 bool same_placement_spec(const ttnn::MemoryConfig& a, const ttnn::MemoryConfig& b) {

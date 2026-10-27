@@ -38,3 +38,17 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Source tests: the source file's conftest (models/demos/deepseek_v3_d_p/tests/conftest.py) does not import on this
   tree (xing40_a4b_d_p/tt/settings.py passes the removed `max_precision` to Settings, F137), so the recorded baseline
   (tests/source_baseline.json, entry 0) is a collection error on both the original and the fork; re-record once it imports.
+
+### Tests: fork model-case suite with the deepseek_v41_flash_d_p cases (O.1, 2026-10-27)
+- What: tests/cases.py, reference.py, test_update_padded_kv_cache.py: one random-input case for each of the 57 calls
+  deepseek_v41_flash_d_p makes on 2x2 (capture 2026-10-27): 4_index_k_r1 (27 scalar chunk writes, SP-sharded,
+  TP-replicated, 128 wide), 0_window_kv / 3_compress_kv_r1 (28 scalar writes, TP-dedup, 512 wide, one at the
+  non-aligned start 53120), 1_compress_kv_r2 and 2_index_k_r2 (the metadata path, starts inside a stripe and valid
+  ends inside a 32-row block). The cache in the served layout (ND-sharded one record per DRAM bank, the model's
+  topology) with random prior content per chip; every chip's whole cache compared exactly (written rows vs the
+  reference's block-cyclic placement of the rotated input rows, every other row unchanged); determinism with the cache
+  restored before every call. reference.py's placement agrees with the kernels' own index arithmetic on 240 random
+  starts / valid ends (2x2, 2x4, 8x4; CPU cross-check, not shipped). No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: deepseek_v41_flash_d_p O.1
+- Files: tests/cases.py, tests/reference.py, tests/test_update_padded_kv_cache.py

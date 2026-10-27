@@ -1,9 +1,421 @@
 {
  "upstream_sha": "e3b3caa5c75e6deb0670edf8e9bc48f099b7e5c5",
  "tests": {
-  "models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_update_padded_kv_cache.py::<no results>": {
-   "original": "failed",
-   "fork": "failed"
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_full_mesh_rejects_axis_topology[blackhole-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_full_mesh_rotated[blackhole-metadata-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_full_mesh_rotated[blackhole-scalar-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-non_padded-repr-bf16_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-non_padded-repr-bf16_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-non_padded-repr-bfp8_tile-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-non_padded-repr-bfp8_tile-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-non_padded-repr-fp8_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-non_padded-repr-fp8_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-non_padded-small-bf16_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-non_padded-small-bf16_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-non_padded-small-bfp8_tile-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-non_padded-small-bfp8_tile-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-non_padded-small-fp8_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-non_padded-small-fp8_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-padded_partial-repr-bf16_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-padded_partial-repr-bf16_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-padded_partial-repr-bfp8_tile-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-padded_partial-repr-bfp8_tile-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-padded_partial-repr-fp8_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-padded_partial-repr-fp8_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-padded_partial-small-bf16_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-padded_partial-small-bf16_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-padded_partial-small-bfp8_tile-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-padded_partial-small-bfp8_tile-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-padded_partial-small-fp8_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multi_iteration_prefill[blackhole-padded_partial-small-fp8_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multihead_head_stride[blackhole-clamped-1x1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multihead_head_stride[blackhole-clamped-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multihead_head_stride[blackhole-full-1x1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_multihead_head_stride[blackhole-full-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_scaled_fp8_packed_row[blackhole-1x1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_single_device[blackhole-bf16_rm-1x1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_single_device[blackhole-bfp8_tile-1x1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_single_device[blackhole-fp8_rm-1x1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_single_iteration_prefill[blackhole-repr-bf16_rm-fabric2d-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_single_iteration_prefill[blackhole-repr-bfp8_tile-fabric2d-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_single_iteration_prefill[blackhole-repr-fp8_rm-fabric2d-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_single_iteration_prefill[blackhole-small-bf16_rm-fabric2d-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_single_iteration_prefill[blackhole-small-bfp8_tile-fabric2d-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_single_iteration_prefill[blackhole-small-fp8_rm-fabric2d-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-clamped-bf16-sp-metadata-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-clamped-bf16-sp-scalar-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-clamped-bf16-sp_tp-metadata-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-clamped-bf16-sp_tp-scalar-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-clamped-fp8_rm-sp-metadata-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-clamped-fp8_rm-sp-scalar-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-clamped-fp8_rm-sp_tp-metadata-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-clamped-fp8_rm-sp_tp-scalar-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-clamped-fp8_tile-sp-metadata-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-clamped-fp8_tile-sp-scalar-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-clamped-fp8_tile-sp_tp-metadata-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-clamped-fp8_tile-sp_tp-scalar-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-full-bf16-sp-metadata-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-full-bf16-sp-scalar-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-full-bf16-sp_tp-metadata-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-full-bf16-sp_tp-scalar-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-full-fp8_rm-sp-metadata-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-full-fp8_rm-sp-scalar-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-full-fp8_rm-sp_tp-metadata-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-full-fp8_rm-sp_tp-scalar-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-full-fp8_tile-sp-metadata-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-full-fp8_tile-sp-scalar-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-full-fp8_tile-sp_tp-metadata-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_inputs[blackhole-full-fp8_tile-sp_tp-scalar-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_rejects_transposed_tiles[blackhole-bf16-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_split_rejects_transposed_tiles[blackhole-scaled_fp8-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_tiled_fp8_wraparound[blackhole-device_params0-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_tp_sharded[blackhole-non_padded-small-bf16_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_tp_sharded[blackhole-non_padded-small-bf16_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_tp_sharded[blackhole-non_padded-small-bfp8_tile-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_tp_sharded[blackhole-non_padded-small-bfp8_tile-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_tp_sharded[blackhole-non_padded-small-fp8_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_tp_sharded[blackhole-non_padded-small-fp8_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_tp_sharded[blackhole-padded_partial-small-bf16_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_tp_sharded[blackhole-padded_partial-small-bf16_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_tp_sharded[blackhole-padded_partial-small-bfp8_tile-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_tp_sharded[blackhole-padded_partial-small-bfp8_tile-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_tp_sharded[blackhole-padded_partial-small-fp8_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_tp_sharded[blackhole-padded_partial-small-fp8_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-mid_chunk-metadata-bf16_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-mid_chunk-metadata-bf16_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-mid_chunk-metadata-bfp8_tile-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-mid_chunk-metadata-bfp8_tile-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-mid_chunk-scalar-bf16_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-mid_chunk-scalar-bf16_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-mid_chunk-scalar-bfp8_tile-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-mid_chunk-scalar-bfp8_tile-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_chip_jump-metadata-bf16_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_chip_jump-metadata-bf16_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_chip_jump-metadata-bfp8_tile-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_chip_jump-metadata-bfp8_tile-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_chip_jump-scalar-bf16_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_chip_jump-scalar-bf16_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_chip_jump-scalar-bfp8_tile-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_chip_jump-scalar-bfp8_tile-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_overflow-metadata-bf16_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_overflow-metadata-bf16_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_overflow-metadata-bfp8_tile-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_overflow-metadata-bfp8_tile-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_overflow-scalar-bf16_rm-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_overflow-scalar-bf16_rm-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_overflow-scalar-bfp8_tile-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_deepseek_prefill_update_padded_kv_cache::test_update_padded_kv_cache_valid_global_clamp[blackhole-tail_overflow-scalar-bfp8_tile-2x4]": {
+   "original": "skipped",
+   "fork": "skipped"
   }
  }
 }
