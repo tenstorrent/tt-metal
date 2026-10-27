@@ -82,6 +82,21 @@ enum class CreditCounterArray : uint8_t {
     RECEIVER_COMPLETION,
 };
 
+// What carries a VC's sender credits on a mesh.
+enum class CreditBacking : uint8_t {
+    STREAM_REGISTER,
+    L1_COUNTER,
+};
+
+// Whose sender channel each element of a credit counter array belongs to. Elements are indexed by sender channel,
+// numbered densely across the router's VCs (its compact index).
+enum class CreditCounterIndexedBy : uint8_t {
+    // This router's sender channels (the to_sender arrays).
+    OWN_SENDER_CHANNEL,
+    // The sender channels of the router on the other end of the link (the receiver arrays).
+    PEER_SENDER_CHANNEL,
+};
+
 // One element of a credit counter array on the same router.
 struct CounterRef {
     CreditCounterArray array = CreditCounterArray::TO_SENDER_ACK;
