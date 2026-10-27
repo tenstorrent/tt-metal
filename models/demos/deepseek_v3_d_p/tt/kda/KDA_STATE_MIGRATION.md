@@ -26,8 +26,10 @@ maps configs back to layers with `cache_kind` / `cache_layer_rows`.
 `ttKDA` reads and writes the native form and accepts nothing else:
 
 * `recurrent`: `[1, H_local, D, D]` FP32 TILE, interleaved DRAM, stored `[k, v]`
-* `convolution`: `[1, K-1, 3 * H_local * D]` BF16 ROW_MAJOR, interleaved DRAM, channels
-  `[q_local | k_local | v_local]`, `D` channels per head inside a branch
+* `convolution`: `[1, SEG, (K-1) * 64]` BF16 ROW_MAJOR, interleaved DRAM, one 64-channel segment per
+  row (`kda.convolution_tail_shape`): row `c` holds the `K-1` history rows of channels
+  `[64c, 64c + 64)`, row `r` at element `64r`; channels run `[q_local | k_local | v_local]`, `D` per
+  head inside a branch, `SEG = 3 * H_local * D / 64`
 
 with `H_local = 96 / TP`, `D = 128`, `K - 1 = 3`. Heads are TP-sharded; every SP row holds a replica.
 
@@ -44,7 +46,9 @@ where `L` is the rank's KDA layer count and the leading index is `slot * L + lay
 row1[...] | row2[...]` is byte-identical to the ND `[1, K-1, 64]` shard, and an interleaved page `p`
 sits at bank `p % N`, offset `(p // N) * 384`, where ND shard `s = p` would sit; the two forms are
 interchangeable for the table. The interleaved form keeps each batch's rows contiguous logical pages,
-so one whole-batch copy writes them.
+so one whole-batch copy writes them. The native convolution tail uses the same `[SEG, (K-1) * 64]`
+rows, so a slab batch is a byte copy of the native tensor and the per-layer convolution export and
+import are one `indexed_entry_copy` each, with no relayout.
 
 ## Segment numbering
 
@@ -64,8 +68,8 @@ The convolution order is the golden's `[all q | all k | all v]`. The recurrent g
 `[heads, v, k]`, the transpose of the device's `[k, v]`.
 
 `models/demos/deepseek_v3_d_p/tt/kda/state_adapter.py` owns the geometry, the maps, the per-layer
-export (`indexed_entry_copy` of the native recurrent tiles; reshape/permute to slab rows, then
-`indexed_entry_copy`, for convolution), the import (the same copies back into a native carry) and the
+export (one `indexed_entry_copy` each of the native recurrent tiles and of the native convolution
+tail, whose pages are the slab's segments), the import (the same copies back into a native carry) and the
 host decoders (`recurrent_segment_to_torch`, `convolution_segment_to_torch`, `assemble_*`). Both take
 the slot as a device tensor and resolve batch `slot * L + layer_position` on device, so a captured
 load or store follows the slot in the traced metadata. The slabs are the KDA carries' only store:

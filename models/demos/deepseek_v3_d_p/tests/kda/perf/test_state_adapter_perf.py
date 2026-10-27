@@ -176,16 +176,16 @@ def _physical_contract(state: KdaState, slabs: KdaStates, geometry: KdaContractG
     recurrent_pages = {tensor.buffer_aligned_page_size() for tensor in ttnn.get_device_tensors(state.recurrent)}
     convolution_pages = {tensor.buffer_aligned_page_size() for tensor in ttnn.get_device_tensors(state.convolution)}
     assert recurrent_pages == {4096}
-    assert convolution_pages == {128}
+    assert convolution_pages == {geometry.convolution_segment_bytes}
     assert slabs.convolution.buffer_aligned_page_size() == geometry.convolution_segment_bytes
     return {
         "recurrent_nd_shard_shape": [1, 1, geometry.head_dim, 32],
-        "convolution_nd_shard_shape": [1, geometry.conv_history, 64],
+        "convolution_nd_shard_shape": [1, 1, geometry.convolution_slab_row_width],
         "recurrent_page_bytes": 4096,
-        "convolution_page_bytes": 128,
+        "convolution_page_bytes": geometry.convolution_segment_bytes,
         "convolution_slab_page_bytes": slabs.convolution.buffer_aligned_page_size(),
         "recurrent_pages_per_segment": geometry.recurrent_segment_bytes // 4096,
-        "convolution_pages_per_segment": geometry.convolution_segment_bytes // 128,
+        "convolution_pages_per_segment": 1,
         "recurrent_segments_per_device": geometry.recurrent_shards_per_layer,
         "convolution_segments_per_device": geometry.convolution_shards_per_layer,
     }

@@ -8,6 +8,7 @@ from collections.abc import Callable, Sequence
 import torch
 import torch.nn.functional as F
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.kda import convolution_tail_to_device_layout
 
 
 def _finiteness(name: str, tensor: torch.Tensor) -> tuple[list[str], str]:
@@ -371,7 +372,7 @@ def qkv_device_inputs(
     inputs, history, taps = host
     return host, (
         qkv_to_device(inputs, device, layout=ttnn.ROW_MAJOR_LAYOUT),
-        qkv_to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        qkv_to_device(convolution_tail_to_device_layout(history), device, layout=ttnn.ROW_MAJOR_LAYOUT),
         tuple(qkv_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps),
     )
 

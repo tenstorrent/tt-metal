@@ -53,6 +53,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
+from models.demos.deepseek_v3_d_p.tt.kda.kda import convolution_tail_from_device_layout
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import deallocate_state
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
@@ -279,7 +280,9 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             tp_shards = []
             for t in range(tp_size):
                 row, column = (0, t) if SP_AXIS == 0 else (t, 0)
-                tp_shards.append(shards[row * columns + column].reshape(history, -1))
+                tp_shards.append(
+                    convolution_tail_from_device_layout(shards[row * columns + column]).reshape(history, -1)
+                )
             got_conv = torch.cat(
                 [
                     torch.cat([sh[:, stream * per_chip : (stream + 1) * per_chip] for sh in tp_shards], dim=-1)
