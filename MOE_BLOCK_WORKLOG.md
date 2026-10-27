@@ -2054,3 +2054,13 @@ the DRAM delivers ~145 GB/s of 512, NoC0 or NoC1 alike, and more in flight makes
 thrash is the likely cause; the flat expert's one-reader-a-bank pattern gets 98%). Next: W from a reader per bank
 (the DRISC / optimal-bank cores) forwarded to the column holders, or W prefetched under the previous op; then the
 compute loop's 49-vs-34 cycles and the 5-vs-4 pair imbalance.
+- The compute loop: matmul_block (MT 2 x pw 4 = the full-sync fp32 DEST, one K tile a call, 16 calls a K step, init a
+  pass, no reinit in the steps). With full-sync DEST the math waits through every pass's GLU (SiTU on the SFPU, pack
+  thread) + pack: nothing overlaps the activation. Probe NOGLU: math only 227 -> 202, engine 312 -> 289 (span); with
+  the GLU out the math-only gate / up loop is ~7% over the microbench (it was ~20%).
+- Half-sync DEST (SE_HALFSYNC=1, A/B, engine-alone path: 4 fp32 tiles a half, 2 x 2 sub-blocks, gate / up 5 passes,
+  down 11): gate / up ends 234 -> 205 but down 78 -> 99 (twice the W rounds); span 304. MT 1 (2 row chunks): 422 full
+  / 438 half - W multicast twice, out. Half-sync + down K step 16 (SE_KBD=16): 289.8 us measured / 281 span vs 316.8
+  / 312 (-27 us, -8.5%), PCC 0.99972, arena 1067 KB (vs 1229); KBD 24: 296; full-sync + KBD 16: 311.
+  Not in the head yet: its RS fin (add_tiles blocks <= 8), the router on the engine (ETC x RG <= 8) and the latent
+  passes assume 8 DEST tiles.

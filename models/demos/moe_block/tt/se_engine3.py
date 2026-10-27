@@ -20,6 +20,8 @@ row tiles a chunk: core row cy owns the chunk's row tiles cy MT .. cy MT + MT - 
   - down: per pass (<= 8 / MT output tiles) all of K in DEST over h all and the streamed W_down blocks, y packed once
     and written (NCRISC) - while the next chunk's x is still arriving."""
 
+import os
+
 import torch
 from ttnn.bringup.combine_rf.lin2d import column_split, glu_weight  # noqa: F401
 
@@ -970,7 +972,7 @@ void kernel_main() {
                 }
 #endif
                 pack_reconfig_data_format(HOWN);
-#if defined(SE_GLU)
+#if defined(SE_GLU) && !defined(SE_PROBE_NOGLU)
                 PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 #if SE_GLU == 2
                 for (uint32_t t = 0; t < MT * pw; t += 2)
@@ -1192,7 +1194,8 @@ void kernel_main() {
 
 
 def _probes():
-    """(timing only) SE_PROBE=NOX,NOW: skip the x / W data multicasts (semaphores kept); NOXR / NOWR: no x / W rounds at
+    """(timing only) SE_PROBE=NOX,NOW: skip the x / W data multicasts (semaphores kept); NOGLU: no gate / up activation (h = the
+    gate tiles); NOXR / NOWR: no x / W rounds at
     all (no multicast, no handshake / credits: the CB pushed as if the round landed - the bottom-up build's stages); NOMATH: no matmuls; NOWL: no W
     DRAM reads (16 B a block); NOXWAIT: the x rounds do not wait for a shard's arrival (gate / up at its own pace in the
     head: GU_ALONE at the head's shapes) - the results are wrong. GUWAIT (results right): gate / up's unpacker cycles
@@ -1317,7 +1320,10 @@ class SeEngine3:
         assert min(pairs) >= 1
         self.po, self.h0 = pairs, [sum(pairs[:c]) for c in range(GX)]
         self.POMAX = max(pairs)
-        pwmax = (8 // MT) // 2 * 2
+        # (DEST tiles a pass: 8 fp32 with full sync; SE_HALFSYNC=1 (A/B, engine alone): 4 a half - the GLU and pack of
+        # one pass overlap the next pass's matmuls)
+        self.DT = 4 if os.environ.get("SE_HALFSYNC") == "1" else 8
+        pwmax = (self.DT // MT) // 2 * 2
         self.NPG = max(-(-2 * p // pwmax) for p in pairs)
         self.wg = [_split_pad(2 * p, self.NPG, 2) for p in pairs]
         self.NGU, self.LT = self.NPG, latent  # (gate / up passes; then the latent's)
@@ -1326,7 +1332,7 @@ class SeEngine3:
             assert min(lw) >= 1
             self.lw, self.l0 = lw, [sum(lw[:c]) for c in range(GX)]
             self.LWMAX = max(lw)
-            npl = -(-self.LWMAX // (8 // MT))
+            npl = -(-self.LWMAX // (self.DT // MT))
             self.wg = [wg + _split(lw[c], npl, 1) for c, wg in enumerate(self.wg)]
             self.NPG += npl
         # (the latent's pages a chunk: its LAT block - with chunks its LAT + LATZ, chunk m's at m LATP: no zone reused
@@ -1335,7 +1341,7 @@ class SeEngine3:
         # down: the column's output tiles, NPD passes of widths <= 8 / MT, K steps of KBD
         pnd = column_split(self.NTH, GX, 1)
         self.n0d = [sum(pnd[:c]) for c in range(GX)]
-        self.PWDMAX = 8 // MT
+        self.PWDMAX = self.DT // MT
         self.down = down
         self.NPD = max(-(-p // self.PWDMAX) for p in pnd) if down else 0
         self.wd = [_split(p, self.NPD, 1) if down else [] for p in pnd]
@@ -1345,6 +1351,7 @@ class SeEngine3:
             self.wd = [[pw for _, pw, _ in rs.column_passes(0, c)] for c in range(GX)]
             self.NPD = len(self.wd[0])
             assert all(len(wd) == self.NPD for wd in self.wd)
+        KBD = int(os.environ.get("SE_KBD", KBD))  # (SE_KBD: A/B the down K step)
         self.KBD = KBD
         assert self.HT % KBD == 0
         self.NSD = self.HT // KBD if down else 0
@@ -1919,7 +1926,7 @@ class SeEngine3:
             comp = ttnn.ComputeConfigDescriptor()
             comp.math_fidelity = self.fid
             comp.fp32_dest_acc_en = True
-            comp.dst_full_sync_en = True
+            comp.dst_full_sync_en = self.DT == 8
             comp.math_approx_mode = False
             modes = [ttnn.UnpackToDestMode.Default] * 64  # (NUM_CIRCULAR_BUFFERS)
             modes[ACC] = ttnn.UnpackToDestMode.UnpackToDestFp32
