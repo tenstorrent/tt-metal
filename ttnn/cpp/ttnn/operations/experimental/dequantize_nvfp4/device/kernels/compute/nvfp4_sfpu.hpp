@@ -1,0 +1,111 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "sfpi.h"
+#include "sfpu/ckernel_sfpu_converter.h"
+#include "llk_math_eltwise_sfpu_common.h"
+
+namespace ckernel::sfpu {
+
+// E2M1 magnitude table: 0, .5, 1, 1.5, 2, 3, 4, 6. All decode exactly in FP32.
+sfpi_inline sfpi::vFloat nvfp4_decode_e2m1(sfpi::vUInt code) {
+    sfpi::vUInt magnitude = code & 7;
+    sfpi::vUInt bits = (((magnitude >> 1) + 126) << 23) | ((magnitude & 1) << 22);
+    sfpi::vFloat value = sfpi::as<sfpi::vFloat>(bits);
+    v_if(magnitude < 2) { value = sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vInt>(magnitude)) * 0.5f; }
+    v_endif;
+    return sfpi::copysgn(value, sfpi::as<sfpi::vFloat>((code & 8) << 28));
+}
+
+sfpi_inline sfpi::vFloat nvfp4_decode_e4m3(sfpi::vUInt code) {
+    // Scale contract: finite, nonnegative E4M3FN (0..126). Exponent bias is 7.
+    sfpi::vUInt bits = (code << 20) + (120u << 23);
+    sfpi::vFloat value = sfpi::as<sfpi::vFloat>(bits);
+    v_if(code < 8) { value = sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vInt>(code)) * 0x1p-9f; }
+    v_endif;
+    return value;
+}
+
+// Read the packed tile in D0 and write one expanded plane to D(plane+1). Keeping the
+// integer input intact allows all planes to reuse a single unpack transaction.
+template <bool byte_input, bool e2m1_scale, bool fp32_dest, bool bf16_output>
+inline void nvfp4_decode_plane(const volatile uint32_t* scales, uint32_t plane, float global_scale) {
+    _llk_math_eltwise_sfpu_start_(0);
+    // An SFPU vector covers even/odd columns of four face rows. Eight lanes
+    // share a row. LREG15 contains 2*lane_id: pick one scale byte per eight lanes.
+    const sfpi::vUInt scale_shift = (sfpi::vUInt(sfpi::vConstTileId) & 48) >> 1;
+    constexpr uint32_t vectors_per_face = 8;
+    constexpr uint32_t vectors_per_tile = 4 * vectors_per_face;
+    for (uint32_t face = 0; face < 4; ++face) {
+#pragma GCC unroll 8
+        for (uint32_t vec = 0; vec < vectors_per_face; ++vec) {
+            const uint32_t index = face * vectors_per_face + vec;
+            sfpi::vUInt packed;
+            if constexpr (byte_input || fp32_dest) {
+                // UINT8 datacopy uses integer ELWADD and produces Integer-32.
+                // UINT16 in FP32 DEST is copied into the low half of each word.
+                packed = sfpi::dst_reg[index].mode<sfpi::DataLayout::U32>();
+            } else {
+                packed = sfpi::dst_reg[index].mode<sfpi::DataLayout::U16>();
+            }
+            sfpi::vFloat value = nvfp4_decode_e2m1((packed >> (plane * 4)) & 15);
+            sfpi::vUInt codes = sfpi::vUInt(scales[face * 4 + (vec >> 1)]);
+            codes = (codes >> scale_shift) & 255;
+            sfpi::vFloat scale;
+            if constexpr (e2m1_scale) {
+                scale = nvfp4_decode_e2m1(codes);
+            } else {
+                scale = nvfp4_decode_e4m3(codes);
+            }
+            value = (value * scale) * global_scale;
+            if constexpr (bf16_output) {
+                // Blackhole stores truncate and the packer rounds ties away.
+                // Apply IEEE round-to-nearest-even explicitly in either DEST mode.
+                sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(value);
+                bits = (bits + 0x7fffu + ((bits >> 16) & 1)) & 0xffff0000u;
+                value = sfpi::as<sfpi::vFloat>(bits);
+            }
+            if constexpr (fp32_dest) {
+                sfpi::dst_reg[(plane + 1) * vectors_per_tile + index].mode<sfpi::DataLayout::F32>() = value;
+            } else {
+                sfpi::dst_reg[(plane + 1) * vectors_per_tile + index].mode<sfpi::DataLayout::F16b>() = value;
+            }
+        }
+    }
+    _llk_math_eltwise_sfpu_done_();
+}
+// The unpacker broadcasts one compact row of BF16 scales into D1 face 0.
+// Input D0 is transposed offline, so each column is a quantization group.
+// Two loads supply all scale lanes for the eight vectors in this face.
+template <bool fpu_tensor_scale>
+inline void nvfp4_decode_column_face(uint32_t plane, uint32_t face, float global_scale) {
+    _llk_math_eltwise_sfpu_start_(0);
+    const sfpi::vFloat even_scales = sfpi::dst_reg[32].mode<sfpi::DataLayout::F16b>();
+    const sfpi::vFloat odd_scales = sfpi::dst_reg[33].mode<sfpi::DataLayout::F16b>();
+    // Reinterpret the 3 magnitude bits as 1,1.5,2,3,4,6,8,12.
+    // A single LUT instruction maps x<2 to x-1 and x>=2 to x/2,
+    // giving exactly 0,.5,1,1.5,2,3,4,6 without predication.
+    const sfpi::vLut8si small(1.0f, -1.0f);
+    const sfpi::vLut8si large(0.5f, 0.0f);
+#pragma GCC unroll 8
+    for (uint32_t vec = 0; vec < 8; ++vec) {
+        const uint32_t index = face * 8 + vec;
+        sfpi::vUInt packed = sfpi::dst_reg[index].mode<sfpi::DataLayout::U16>();
+        sfpi::vUInt code = (packed >> (plane * 4)) & 15;
+        sfpi::vUInt bits = ((code & 7) << 22) + (127u << 23);
+        bits |= (code & 8) << 28;
+        sfpi::vFloat value = sfpi::lut(sfpi::as<sfpi::vFloat>(bits), small, small, large);
+        value *= (vec & 1) ? odd_scales : even_scales;
+        if constexpr (!fpu_tensor_scale) {
+            value *= global_scale;
+        }
+        // Map directly to SFPSTOCHRND's native nearest rounding.
+        const sfpi::vFloat16b rounded = sfpi::convert<sfpi::vFloat16b>(value, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg[(plane + 2) * 32 + index].mode<sfpi::DataLayout::F16b>() = rounded;
+    }
+    _llk_math_eltwise_sfpu_done_();
+}
+}  // namespace ckernel::sfpu
