@@ -3171,6 +3171,29 @@ std::string llama_8b_pod_pipeline() {
     return out.str();
 }
 
+// A part MGD that merge accepts: one FABRIC graph, MGD 1.0 meshes, plus the given pipelines.
+std::string mergeable_with_pipelines(const std::string& pipelines) {
+    return R"proto(
+               mesh_descriptors {
+                 name: "M0"
+                 arch: WORMHOLE_B0
+                 device_topology {
+                   dims: [ 1, 2 ]
+                   dim_types: [ LINE, LINE ]
+                 }
+                 host_topology { dims: [ 1, 1 ] }
+                 channels { count: 2 policy: STRICT }
+               }
+               graph_descriptors {
+                 name: "G0"
+                 type: "FABRIC"
+                 instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+               }
+               top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+           )proto" +
+           pipelines;
+}
+
 void expect_pipeline_rejected(const std::string& pipelines, const std::string& reason) {
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(mgd_with_pipelines(pipelines)); }),
@@ -3676,6 +3699,106 @@ TEST(MeshGraphDescriptorTests, ShippedMeshGraphDescriptorsStillParse) {
         ++parsed;
     }
     EXPECT_GT(parsed, 0u);
+}
+
+const std::string kMergeRing = R"proto(
+    pipeline_descriptors {
+      name: "ring"
+      stages {
+        id: "s0"
+        label: "Embedding"
+        shape { dims: [ 4, 2 ] }
+      }
+      stages {
+        id: "s1"
+        shape { dims: [ 1, 2 ] }
+      }
+      edges { src: "s0" dst: "s1" }
+      edges { src: "s1" dst: "s0" policy: STRICT }
+    }
+)proto";
+
+const std::string kMergeOther = R"proto(
+    pipeline_descriptors {
+      name: "other"
+      stages {
+        id: "s0"
+        shape { dims: [ 4, 4 ] }
+      }
+      stages {
+        id: "s1"
+        shape { dims: [ 4, 2 ] }
+      }
+      edges { src: "s0" dst: "s1" }
+    }
+)proto";
+
+// One part is copied whole, so its pipeline is unchanged and the mesh name stays unprefixed.
+TEST(MeshGraphDescriptorTests, MergeOnePartKeepsItsPipeline) {
+    const MeshGraphDescriptor source(mergeable_with_pipelines(kMergeRing));
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&source});
+
+    EXPECT_EQ(merged.mesh_id_to_instance_name().at(MeshId{0}), "M0");
+    ASSERT_EQ(merged.pipeline_descriptors().size(), 1u);
+    const PipelineDescriptorData& pipeline = merged.pipeline_descriptors().front();
+    EXPECT_EQ(pipeline.name, "ring");
+    ASSERT_EQ(pipeline.stages.size(), 2u);
+    EXPECT_EQ(pipeline.stages[0].label, "Embedding");
+    EXPECT_EQ(pipeline.stages[0].dims, (std::vector<std::int32_t>{4, 2}));
+    EXPECT_EQ(pipeline.stages[1].dims, (std::vector<std::int32_t>{1, 2}));
+    ASSERT_EQ(pipeline.edges.size(), 2u);
+    EXPECT_EQ(pipeline.edges[1].src, "s1");
+    EXPECT_EQ(pipeline.edges[1].dst, "s0");
+}
+
+// A pipeline declared on only one part is still present after the parts are merged.
+TEST(MeshGraphDescriptorTests, MergeKeepsAPipelineDeclaredOnOnePart) {
+    const MeshGraphDescriptor left(mergeable_with_pipelines(kMergeRing));
+    const MeshGraphDescriptor right(mergeable_with_pipelines(""));
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&left, &right});
+
+    EXPECT_EQ(merged.mesh_id_to_instance_name().at(MeshId{0}), "mgd0_M0");
+    EXPECT_EQ(merged.mesh_id_to_instance_name().at(MeshId{1}), "mgd1_M0");
+    ASSERT_EQ(merged.pipeline_descriptors().size(), 1u);
+    EXPECT_EQ(merged.pipeline_descriptors().front().name, "ring");
+    EXPECT_EQ(merged.pipeline_descriptors().front().stages[0].id, "s0");
+    EXPECT_EQ(merged.pipeline_descriptors().front().edges[0].dst, "s1");
+}
+
+// Each part's pipelines are appended in part order. Stage ids stay local, so both may use s0.
+TEST(MeshGraphDescriptorTests, MergeAppendsPipelinesFromEachPart) {
+    const MeshGraphDescriptor left(mergeable_with_pipelines(kMergeRing));
+    const MeshGraphDescriptor right(mergeable_with_pipelines(kMergeOther));
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&left, &right});
+
+    ASSERT_EQ(merged.pipeline_descriptors().size(), 2u);
+    EXPECT_EQ(merged.pipeline_descriptors()[0].name, "ring");
+    EXPECT_EQ(merged.pipeline_descriptors()[0].stages[1].id, "s1");
+    EXPECT_EQ(merged.pipeline_descriptors()[1].name, "other");
+    EXPECT_EQ(merged.pipeline_descriptors()[1].stages[0].id, "s0");
+    EXPECT_EQ(merged.pipeline_descriptors()[1].stages[0].dims, (std::vector<std::int32_t>{4, 4}));
+    EXPECT_EQ(merged.pipeline_descriptors()[1].edges.front().src, "s0");
+}
+
+// The same pipeline name in two parts is a merge error, and the error names both parts.
+TEST(MeshGraphDescriptorTests, MergeRejectsAPipelineNameDeclaredInTwoParts) {
+    const MeshGraphDescriptor left(mergeable_with_pipelines(kMergeRing));
+    const MeshGraphDescriptor right(mergeable_with_pipelines(kMergeRing));
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor::merge({&left, &right}); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("pipeline name 'ring' is declared in descriptor 0 and descriptor 1")));
+}
+
+// Parts that declare no pipelines still merge, and the result has none.
+TEST(MeshGraphDescriptorTests, MergeWithoutPipelinesHasNone) {
+    const MeshGraphDescriptor left(mergeable_with_pipelines(""));
+    const MeshGraphDescriptor right(mergeable_with_pipelines(""));
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&left, &right});
+
+    EXPECT_FALSE(merged.has_pipeline_descriptors());
+    EXPECT_EQ(merged.mesh_id_to_instance_name().at(MeshId{0}), "mgd0_M0");
+    EXPECT_EQ(merged.mesh_id_to_instance_name().at(MeshId{1}), "mgd1_M0");
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

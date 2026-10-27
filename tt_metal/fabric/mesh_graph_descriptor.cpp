@@ -404,6 +404,7 @@ MeshGraphDescriptor MeshGraphDescriptor::merge(
     }
 
     if (descriptors.size() == 1) {
+        // The whole proto is copied, so pipeline_descriptors is kept and names stay as written.
         auto proto = std::make_shared<proto::MeshGraphDescriptor>();
         proto->CopyFrom(*descriptors.front()->proto_);
         return MeshGraphDescriptor(std::move(proto), /*backwards_compatible=*/true);
@@ -414,6 +415,8 @@ MeshGraphDescriptor MeshGraphDescriptor::merge(
     fabric->set_name("G0");
     fabric->set_type("FABRIC");
     std::optional<proto::Policy> shared_connection_policy;
+    // Pipeline names are not remapped. The first part to declare a name owns it.
+    std::unordered_map<std::string, std::size_t> pipeline_name_part;
 
     for (std::size_t i = 0; i < descriptors.size(); ++i) {
         const std::string prefix = "mgd" + std::to_string(i) + "_";
@@ -434,6 +437,17 @@ MeshGraphDescriptor MeshGraphDescriptor::merge(
         }
         for (const auto& pin : part.pinnings()) {
             *merged->add_pinnings() = pin;
+        }
+        // A pipeline name must be unique across the parts. Stage ids stay local to their pipeline.
+        for (const auto& pipeline : part.pipeline_descriptors()) {
+            const auto [owner, inserted] = pipeline_name_part.emplace(pipeline.name(), i);
+            TT_FATAL(
+                inserted,
+                "MeshGraphDescriptor::merge: pipeline name '{}' is declared in descriptor {} and descriptor {}",
+                pipeline.name(),
+                owner->second,
+                i);
+            *merged->add_pipeline_descriptors() = pipeline;
         }
 
         const proto::NodeRef& top = part.top_level_instance();
