@@ -3181,6 +3181,7 @@ void expect_pipeline_rejected(const std::string& pipelines, const std::string& r
 
 namespace tt::tt_fabric::fabric_router_tests {
 
+// A closing edge back to an earlier stage is a ring, and it is kept.
 TEST(MeshGraphDescriptorTests, GptOssRingParsesAndIsReadable) {
     MeshGraphDescriptor desc(mgd_with_pipelines(kGptOssRing));
     ASSERT_TRUE(desc.has_pipeline_descriptors());
@@ -3201,6 +3202,7 @@ TEST(MeshGraphDescriptorTests, GptOssRingParsesAndIsReadable) {
     EXPECT_EQ(pipeline.edges[3].dst, "s0");
 }
 
+// Stage count is not limited, and stages in one pipeline may have different shapes.
 TEST(MeshGraphDescriptorTests, Llama8bPodParsesFortyStages) {
     MeshGraphDescriptor desc(mgd_with_pipelines(llama_8b_pod_pipeline()));
     ASSERT_EQ(desc.pipeline_descriptors().size(), 1u);
@@ -3215,6 +3217,7 @@ TEST(MeshGraphDescriptorTests, Llama8bPodParsesFortyStages) {
     EXPECT_EQ(pipeline.edges.back().dst, "s0");
 }
 
+// A stage shape is rank 2, and two stages in one pipeline need not share a shape.
 TEST(MeshGraphDescriptorTests, JointStageShapeParses) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
@@ -3239,6 +3242,7 @@ TEST(MeshGraphDescriptorTests, JointStageShapeParses) {
     EXPECT_EQ(stored.stages[1].dims, (std::vector<std::int32_t>{4, 4}));
 }
 
+// A fork and the edges that return from it are accepted. An omitted label stays empty.
 TEST(MeshGraphDescriptorTests, DflashForkWithFabricReturnsParses) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
@@ -3274,6 +3278,7 @@ TEST(MeshGraphDescriptorTests, DflashForkWithFabricReturnsParses) {
     EXPECT_EQ(stored.stages[0].label, "");
 }
 
+// Several pipelines stay separate records. A stage id only has to be unique inside its pipeline.
 TEST(MeshGraphDescriptorTests, TwoPipelinesInOneMgdParse) {
     MeshGraphDescriptor desc(mgd_with_pipelines(kGptOssRing + R"proto(
         pipeline_descriptors {
@@ -3295,6 +3300,7 @@ TEST(MeshGraphDescriptorTests, TwoPipelinesInOneMgdParse) {
     EXPECT_EQ(desc.pipeline_descriptors()[1].stages[0].id, "s0");
 }
 
+// Repeating an edge declares another channel. It is not a duplicate to reject.
 TEST(MeshGraphDescriptorTests, RepeatedEdgeDeclaresAnotherChannel) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
@@ -3317,6 +3323,7 @@ TEST(MeshGraphDescriptorTests, RepeatedEdgeDeclaresAnotherChannel) {
     EXPECT_EQ(desc.pipeline_descriptors().front().edges[1].dst, "s1");
 }
 
+// Two roots are accepted. The graph does not have to be one chain.
 TEST(MeshGraphDescriptorTests, TwoRootsParse) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
@@ -3344,6 +3351,7 @@ TEST(MeshGraphDescriptorTests, TwoRootsParse) {
     EXPECT_NO_THROW(MeshGraphDescriptor desc(mgd_with_pipelines(pipeline)));
 }
 
+// Out-degree is not limited.
 TEST(MeshGraphDescriptorTests, ThreeOutgoingEdgesParse) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
@@ -3372,6 +3380,7 @@ TEST(MeshGraphDescriptorTests, ThreeOutgoingEdgesParse) {
     EXPECT_NO_THROW(MeshGraphDescriptor desc(mgd_with_pipelines(pipeline)));
 }
 
+// A branch may itself fork. In-degree and out-degree are both accepted as they are.
 TEST(MeshGraphDescriptorTests, BranchStageWithOutDegreeTwoParses) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
@@ -3407,6 +3416,7 @@ TEST(MeshGraphDescriptorTests, BranchStageWithOutDegreeTwoParses) {
     EXPECT_NO_THROW(MeshGraphDescriptor desc(mgd_with_pipelines(pipeline)));
 }
 
+// A branch that never returns is accepted.
 TEST(MeshGraphDescriptorTests, DeadEndBranchParses) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
@@ -3432,6 +3442,7 @@ TEST(MeshGraphDescriptorTests, DeadEndBranchParses) {
     EXPECT_EQ(desc.pipeline_descriptors().front().stages.size(), 3u);
 }
 
+// A pipeline name must be unique in the MGD.
 TEST(MeshGraphDescriptorTests, RejectsDuplicatePipelineName) {
     expect_pipeline_rejected(
         kGptOssRing + R"proto(
@@ -3446,6 +3457,7 @@ TEST(MeshGraphDescriptorTests, RejectsDuplicatePipelineName) {
         "pipeline name 'gpt_oss_120b_single_galaxy' is empty or repeated");
 }
 
+// A pipeline name must be non-empty.
 TEST(MeshGraphDescriptorTests, RejectsEmptyPipelineName) {
     expect_pipeline_rejected(
         R"proto(
@@ -3459,6 +3471,7 @@ TEST(MeshGraphDescriptorTests, RejectsEmptyPipelineName) {
         "pipeline name '' is empty or repeated");
 }
 
+// A pipeline must declare at least one stage.
 TEST(MeshGraphDescriptorTests, RejectsPipelineWithNoStages) {
     expect_pipeline_rejected(
         R"proto(
@@ -3467,6 +3480,7 @@ TEST(MeshGraphDescriptorTests, RejectsPipelineWithNoStages) {
         "pipeline 'empty': must declare at least one stage");
 }
 
+// A stage id must be unique inside its pipeline.
 TEST(MeshGraphDescriptorTests, RejectsDuplicateStageId) {
     expect_pipeline_rejected(
         R"proto(
@@ -3485,6 +3499,7 @@ TEST(MeshGraphDescriptorTests, RejectsDuplicateStageId) {
         "pipeline 'dup': stage id 's0' is empty or repeated");
 }
 
+// A stage id must be non-empty.
 TEST(MeshGraphDescriptorTests, RejectsEmptyStageId) {
     expect_pipeline_rejected(
         R"proto(
@@ -3499,6 +3514,7 @@ TEST(MeshGraphDescriptorTests, RejectsEmptyStageId) {
         "pipeline 'blank': stage id '' is empty or repeated");
 }
 
+// An edge must name stages declared in the same pipeline.
 TEST(MeshGraphDescriptorTests, RejectsUnknownStage) {
     expect_pipeline_rejected(
         R"proto(
@@ -3514,6 +3530,7 @@ TEST(MeshGraphDescriptorTests, RejectsUnknownStage) {
         "pipeline 'missing': edge s0 -> s9 names an unknown stage");
 }
 
+// A stage may not have an edge to itself.
 TEST(MeshGraphDescriptorTests, RejectsSelfEdge) {
     expect_pipeline_rejected(
         R"proto(
@@ -3529,6 +3546,7 @@ TEST(MeshGraphDescriptorTests, RejectsSelfEdge) {
         "pipeline 'loop': self-edge on 's0'");
 }
 
+// A stage shape must be rank 2.
 TEST(MeshGraphDescriptorTests, RejectsRank3Shape) {
     expect_pipeline_rejected(
         R"proto(
@@ -3543,6 +3561,7 @@ TEST(MeshGraphDescriptorTests, RejectsRank3Shape) {
         "pipeline 'rank3': stage 's0' shape must be rank 2, dims > 0");
 }
 
+// Both shape dims must be greater than 0, and a rank other than 2 is rejected.
 TEST(MeshGraphDescriptorTests, RejectsNonPositiveShape) {
     expect_pipeline_rejected(
         R"proto(
@@ -3568,6 +3587,7 @@ TEST(MeshGraphDescriptorTests, RejectsNonPositiveShape) {
         "pipeline 'line': stage 's0' shape must be rank 2, dims > 0");
 }
 
+// An explicit STRICT policy is accepted. The stored edge keeps only its endpoints.
 TEST(MeshGraphDescriptorTests, EdgePolicyStrictParses) {
     MeshGraphDescriptor desc(mgd_with_pipelines(R"proto(
         pipeline_descriptors {
@@ -3588,6 +3608,7 @@ TEST(MeshGraphDescriptorTests, EdgePolicyStrictParses) {
     EXPECT_EQ(pipeline.edges.front().dst, "s1");
 }
 
+// An explicit policy other than STRICT is rejected. An omitted policy means STRICT.
 TEST(MeshGraphDescriptorTests, EdgePolicyRelaxedIsRejected) {
     expect_pipeline_rejected(
         R"proto(
@@ -3607,9 +3628,8 @@ TEST(MeshGraphDescriptorTests, EdgePolicyRelaxedIsRejected) {
         "pipeline 'relaxed_edge': edge s0 -> s1 policy is RELAXED; every edge is STRICT");
 }
 
+// An unknown field, a channel policy, and a comment are not pipeline-edge checks.
 TEST(MeshGraphDescriptorTests, UnknownFieldElsewhereStillParses) {
-    // Channel policy is a real field. An unknown mesh field stays legal. A comment that
-    // mentions policy is not an edge field.
     const std::string text_proto = R"proto(
         mesh_descriptors {
           name: "M0"
@@ -3635,12 +3655,14 @@ TEST(MeshGraphDescriptorTests, UnknownFieldElsewhereStillParses) {
     EXPECT_EQ(desc.pipeline_descriptors().front().name, "solo");
 }
 
+// An MGD with no pipeline_descriptors section has no pipelines.
 TEST(MeshGraphDescriptorTests, AbsentSectionIsUnchanged) {
     MeshGraphDescriptor desc(mgd_with_pipelines(""));
     EXPECT_FALSE(desc.has_pipeline_descriptors());
     EXPECT_TRUE(desc.pipeline_descriptors().empty());
 }
 
+// Shipped descriptors declare no pipelines and still parse.
 TEST(MeshGraphDescriptorTests, ShippedMeshGraphDescriptorsStillParse) {
     const std::filesystem::path root = "tt_metal/fabric/mesh_graph_descriptors";
     ASSERT_TRUE(std::filesystem::is_directory(root));
