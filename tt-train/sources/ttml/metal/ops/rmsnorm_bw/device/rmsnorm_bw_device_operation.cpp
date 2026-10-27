@@ -6,26 +6,18 @@
 
 #include "metal/common/program_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
+#include "metal/ops/common/rmsnorm_common.hpp"
 #include "rmsnorm_bw_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::rmsnorm_bw::device {
 
-namespace {
-
-// dL_dout and dL_dgate follow the gate's head-merged layout in gated mode and the input's otherwise.
-const ttnn::Shape& get_dL_dout_shape(const tensor_args_t& tensor_args) {
-    return tensor_args.gate.has_value() ? tensor_args.gate->logical_shape() : tensor_args.input.logical_shape();
-}
-
-}  // namespace
-
 void RMSNormBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_shape = [](const ttnn::Tensor& tensor, const std::string& name, const ttnn::Shape& expected) {
-        TT_FATAL(tensor.logical_shape() == expected, "{} shape {} must be {}", name, tensor.logical_shape(), expected);
-    };
-
+    constexpr std::string_view op = "RMSNormBackward";
+    // The kernels address DRAM banks directly. Outputs the op allocates take the input's, gamma's or gate's memory
+    // config.
+    const DeviceTensorRequirements in_dram{.buffer_type = tt::tt_metal::BufferType::DRAM};
     const auto& input_tensor = tensor_args.input;
     const auto& gamma_tensor = tensor_args.gamma;
     const auto& rms_tensor = tensor_args.rms;
@@ -36,37 +28,39 @@ void RMSNormBackwardDeviceOperation::validate_on_program_cache_miss(
 
     check_device_tensor(
         input_tensor,
-        "RMSNormBackward",
+        op,
         "Input",
-        {.dtypes = {tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32}});
-    check_device_tensor(gamma_tensor, "RMSNormBackward", "Gamma");
-    check_device_tensor(rms_tensor, "RMSNormBackward", "RMS");
-    check_device_tensor(dL_dout_tensor, "RMSNormBackward", "dL_dout");
-    auto rms_shape = input_tensor.logical_shape();
-    rms_shape[-1] = 1U;
-    check_shape(rms_tensor, "RMS", rms_shape);
+        {.dtypes = {tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32},
+         .buffer_type = tt::tt_metal::BufferType::DRAM});
+    check_device_tensor(gamma_tensor, op, "Gamma", in_dram);
+    check_device_tensor(rms_tensor, op, "RMS", in_dram);
+    check_device_tensor(dL_dout_tensor, op, "dL_dout", in_dram);
+    rmsnorm::check_input_and_gamma_shapes(input_tensor, gamma_tensor, op);
+    check_shape(rms_tensor, op, "RMS", rmsnorm::get_rms_shape(input_tensor));
     if (tensor_args.gate.has_value()) {
-        check_device_tensor(tensor_args.gate.value(), "RMSNormBackward", "Gate");
-        get_num_heads_of_head_merged(input_tensor, tensor_args.gate.value(), "Gate");
+        check_device_tensor(tensor_args.gate.value(), op, "Gate", in_dram);
+        check_head_merged(input_tensor, tensor_args.gate.value(), op, "Gate");
     }
-    check_shape(dL_dout_tensor, "dL_dout", get_dL_dout_shape(tensor_args));
+    const auto& output_shape = rmsnorm::get_output_shape(input_tensor, tensor_args.gate);
+    check_shape(dL_dout_tensor, op, "dL_dout", output_shape);
     if (preallocated_da_tensor.has_value()) {
-        check_device_tensor(preallocated_da_tensor.value(), "RMSNormBackward", "Preallocated dL_da");
-        check_shape(preallocated_da_tensor.value(), "Preallocated dL_da", input_tensor.logical_shape());
+        check_device_tensor(preallocated_da_tensor.value(), op, "Preallocated dL_da", in_dram);
+        check_shape(preallocated_da_tensor.value(), op, "Preallocated dL_da", input_tensor.logical_shape());
     }
     if (preallocated_dgamma_components_tensor.has_value()) {
-        TT_FATAL(args.compute_dgamma, "Preallocated dL_dgamma_components given but compute_dgamma is false");
+        TT_FATAL(args.compute_dgamma, "{}: Preallocated dL_dgamma_components given but compute_dgamma is false", op);
         check_device_tensor(
-            preallocated_dgamma_components_tensor.value(), "RMSNormBackward", "Preallocated dL_dgamma_components");
+            preallocated_dgamma_components_tensor.value(), op, "Preallocated dL_dgamma_components", in_dram);
         check_shape(
             preallocated_dgamma_components_tensor.value(),
+            op,
             "Preallocated dL_dgamma_components",
             input_tensor.logical_shape());
     }
     if (preallocated_dgate_tensor.has_value()) {
-        TT_FATAL(tensor_args.gate.has_value(), "Preallocated dL_dgate given without a gate");
-        check_device_tensor(preallocated_dgate_tensor.value(), "RMSNormBackward", "Preallocated dL_dgate");
-        check_shape(preallocated_dgate_tensor.value(), "Preallocated dL_dgate", get_dL_dout_shape(tensor_args));
+        TT_FATAL(tensor_args.gate.has_value(), "{}: Preallocated dL_dgate given without a gate", op);
+        check_device_tensor(preallocated_dgate_tensor.value(), op, "Preallocated dL_dgate", in_dram);
+        check_shape(preallocated_dgate_tensor.value(), op, "Preallocated dL_dgate", output_shape);
     }
 }
 
@@ -139,7 +133,7 @@ ttsl::hash::hash_t RMSNormBackwardDeviceOperation::compute_program_hash(
     const auto& input_logical_shape = input_tensor.logical_shape();
     // 0 is the ungated mode, which differs from gated mode with a single head.
     const uint32_t num_heads =
-        tensor_args.gate.has_value() ? tensor_args.gate->logical_shape()[-1] / input_logical_shape[-1] : 0U;
+        tensor_args.gate.has_value() ? get_num_heads_of_head_merged(input_tensor, tensor_args.gate.value()) : 0U;
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RMSNormBackwardDeviceOperation>(
         args, input_tensor.dtype(), input_logical_shape, num_heads);
 
@@ -155,24 +149,22 @@ ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation::tensor_ret
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& rms_tensor,
     const ttnn::Tensor& dL_dout_tensor,
-    float epsilon,
+    const std::optional<ttnn::Tensor>& gate,
+    bool compute_dgamma,
     const std::optional<ttnn::Tensor>& preallocated_da,
     const std::optional<ttnn::Tensor>& preallocated_dgamma_components,
-    bool compute_dgamma,
-    const std::optional<ttnn::Tensor>& gate,
     const std::optional<ttnn::Tensor>& preallocated_dgate) {
     using OperationType = ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation;
 
-    auto operation_attributes =
-        OperationType::operation_attributes_t{.epsilon = epsilon, .compute_dgamma = compute_dgamma};
+    auto operation_attributes = OperationType::operation_attributes_t{.compute_dgamma = compute_dgamma};
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .gamma = gamma_tensor,
         .rms = rms_tensor,
         .dL_dout = dL_dout_tensor,
+        .gate = gate,
         .preallocated_da = preallocated_da,
         .preallocated_dgamma_components = preallocated_dgamma_components,
-        .gate = gate,
         .preallocated_dgate = preallocated_dgate,
     };
 

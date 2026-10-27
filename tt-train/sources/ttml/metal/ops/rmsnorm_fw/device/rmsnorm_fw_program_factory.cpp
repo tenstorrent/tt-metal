@@ -6,7 +6,6 @@
 
 #include <bit>
 #include <cstdint>
-#include <enchantum/enchantum.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
@@ -75,13 +74,30 @@ struct RMSNormForwardKernels {
     tt::tt_metal::KernelHandle compute_group_2;
 };
 
+struct RMSNormForwardBuffers {
+    const tt::tt_metal::Buffer* input;
+    const tt::tt_metal::Buffer* gamma;
+    const tt::tt_metal::Buffer* gate;  // nullptr unless gated
+    const tt::tt_metal::Buffer* output;
+    const tt::tt_metal::Buffer* rms;  // nullptr unless return_intermediates
+};
+
+RMSNormForwardBuffers get_buffers(const tensor_args_t& tensor_args, const tensor_return_value_t& output) {
+    return RMSNormForwardBuffers{
+        .input = tensor_args.input.buffer(),
+        .gamma = tensor_args.gamma.buffer(),
+        .gate = tensor_args.gate.has_value() ? tensor_args.gate->buffer() : nullptr,
+        .output = output.front().buffer(),
+        .rms = output.size() > 1U ? output[1].buffer() : nullptr,
+    };
+}
+
 RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     // -------------------------------------------------------------------------
     // 1) Setup device, data formats, tile sizes, and compute split
     // -------------------------------------------------------------------------
     const auto& input = tensor_args.input;
-    const auto& gamma = tensor_args.gamma;
     const auto& gate = tensor_args.gate;
     const bool gated = gate.has_value();
 
@@ -110,7 +126,7 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
 
     // Gated mode reads the gate and writes the output in the head-merged layout; <1, 1> is the identity.
     const uint32_t layout_Ht = gated ? Ht : 1U;
-    const uint32_t layout_num_heads = gated ? get_num_heads_of_head_merged(input, gate.value(), "Gate") : 1U;
+    const uint32_t layout_num_heads = gated ? get_num_heads_of_head_merged(input, gate.value()) : 1U;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -148,6 +164,7 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     const uint64_t required_L1_in_bytes =
         weight_memory + mask_scaler_eps_memory + rms_memory + block_memory + rms_output_memory;
     const bool everything_fits_in_l1 = required_L1_in_bytes <= available_L1_in_bytes;
+    check_gated_row_fits_in_l1(gated, everything_fits_in_l1, Wt);
 
     const uint64_t required_L1_in_bytes_except_gamma = required_L1_in_bytes - Wt * bfloat16_single_tile_size_bytes +
                                                        twice_block_size * bfloat16_single_tile_size_bytes;
@@ -221,37 +238,7 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
-    auto* input_buffer = input.buffer();
-    TT_FATAL(
-        input_buffer->buffer_type() == ttnn::BufferType::DRAM,
-        "Input buffer must be in DRAM. Input buffer of type {}",
-        enchantum::to_string(input_buffer->buffer_type()));
-
-    auto* gamma_buffer = gamma.buffer();
-    TT_FATAL(
-        gamma_buffer->buffer_type() == ttnn::BufferType::DRAM,
-        "Gamma buffer must be in DRAM. Gamma buffer of type {}",
-        enchantum::to_string(gamma_buffer->buffer_type()));
-
-    auto* gate_buffer = gated ? gate->buffer() : nullptr;
-    if (gated) {
-        TT_FATAL(
-            gate_buffer->buffer_type() == ttnn::BufferType::DRAM,
-            "Gate buffer must be in DRAM. Gate buffer of type {}",
-            enchantum::to_string(gate_buffer->buffer_type()));
-    }
-
-    auto* output_buffer = output.front().buffer();
-    TT_FATAL(
-        output_buffer->buffer_type() == ttnn::BufferType::DRAM,
-        "Output buffer must be in DRAM. Output buffer of type {}",
-        enchantum::to_string(output_buffer->buffer_type()));
-
-    auto* rms_output_buffer = output.back().buffer();
-    TT_FATAL(
-        rms_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
-        "RMS output buffer must be in DRAM. RMS output buffer of type {}",
-        enchantum::to_string(rms_output_buffer->buffer_type()));
+    const auto buffers = get_buffers(tensor_args, output);
 
     // configure defines
     std::map<std::string, std::string> defines;
@@ -283,20 +270,15 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     RMSNormForwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{
         packed_scaler, packed_eps, mask_w, Wt, block_size, layout_Ht, layout_num_heads};
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
-    if (gated) {
-        tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_compile_time_args);
-    }
+    // An absent gate or rms appends zero accessor args, so the kernels' offsets do not depend on the mode.
+    tt::tt_metal::TensorAccessorArgs(buffers.input).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(buffers.gamma).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(buffers.gate).append_to(reader_compile_time_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{Wt, block_size, layout_Ht, layout_num_heads};
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
-    if (args.return_intermediates) {
-        tt::tt_metal::TensorAccessorArgs(rms_output_buffer).append_to(writer_compile_time_args);
-    } else {
-        tt::tt_metal::TensorAccessorArgs().append_to(writer_compile_time_args);
-    }
+    tt::tt_metal::TensorAccessorArgs(buffers.output).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(buffers.rms).append_to(writer_compile_time_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
@@ -342,9 +324,9 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
                 program,
                 kernels.reader,
                 core,
-                {input_buffer->address(),
-                 gamma_buffer->address(),
-                 gate_buffer != nullptr ? gate_buffer->address() : 0U,
+                {buffers.input->address(),
+                 buffers.gamma->address(),
+                 get_address_or_zero(buffers.gate),
                  num_rows,
                  start_row});
             // Writer kernel: (dst_addr, dst_rms_addr, number_of_rows, offset_in_rows)
@@ -352,7 +334,7 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
                 program,
                 kernels.writer,
                 core,
-                {output_buffer->address(), rms_output_buffer->address(), num_rows, start_row});
+                {buffers.output->address(), get_address_or_zero(buffers.rms), num_rows, start_row});
         });
 
     // -------------------------------------------------------------------------
@@ -386,16 +368,7 @@ void RMSNormForwardProgramFactory::override_runtime_arguments(
     uint32_t num_cores = shared_vars.num_cores;
     uint32_t num_cores_y = shared_vars.num_cores_y;
 
-    const auto& input_tensor = tensor_args.input;
-    const auto& gamma_tensor = tensor_args.gamma;
-    auto* input_buffer = input_tensor.buffer();
-    auto* gamma_buffer = gamma_tensor.buffer();
-    auto* gate_buffer = tensor_args.gate.has_value() ? tensor_args.gate->buffer() : nullptr;
-
-    const auto& output_tensor = output.front();
-    const auto& rms_output_tensor = output.back();
-    auto* output_buffer = output_tensor.buffer();
-    auto* rms_output_buffer = rms_output_tensor.buffer();
+    const auto buffers = get_buffers(tensor_args, output);
 
     // Only address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, rmsnorm_fw_reader_kernel);
@@ -409,17 +382,15 @@ void RMSNormForwardProgramFactory::override_runtime_arguments(
         // Update input buffers for the reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[kInputBufferIdx] = input_buffer->address();
-            runtime_args[kGammaBufferIdx] = gamma_buffer->address();
-            if (gate_buffer != nullptr) {
-                runtime_args[kGateBufferIdx] = gate_buffer->address();
-            }
+            runtime_args[kInputBufferIdx] = buffers.input->address();
+            runtime_args[kGammaBufferIdx] = buffers.gamma->address();
+            runtime_args[kGateBufferIdx] = get_address_or_zero(buffers.gate);
         }
         // Update destination buffers for the writer kernel
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kOutputBufferIdx] = output_buffer->address();
-            runtime_args[kRMSOutputBufferIdx] = rms_output_buffer->address();
+            runtime_args[kOutputBufferIdx] = buffers.output->address();
+            runtime_args[kRMSOutputBufferIdx] = get_address_or_zero(buffers.rms);
         }
     });
 }

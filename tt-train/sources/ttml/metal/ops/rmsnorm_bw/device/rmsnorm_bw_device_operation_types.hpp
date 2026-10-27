@@ -8,9 +8,9 @@
 
 namespace ttml::metal::ops::rmsnorm_bw::device {
 
-// Attributes for the backward operation (add more if needed)
+// Attributes for the backward operation (add more if needed). The backward reads rms from the forward, so it takes
+// no epsilon.
 struct RMSNormBackwardParams {
-    float epsilon = 1e-6F;
     // Without it no dL_dgamma_components are computed or written, e.g. for a frozen gamma.
     bool compute_dgamma = true;
 };
@@ -21,10 +21,10 @@ struct RMSNormBackwardInputs {
     ttnn::Tensor gamma;
     ttnn::Tensor rms;
     ttnn::Tensor dL_dout;
-    std::optional<ttnn::Tensor> preallocated_da = std::nullopt;
-    std::optional<ttnn::Tensor> preallocated_dgamma_components = std::nullopt;
     // Gated mode (see rmsnorm_fw): dL_dout and dL_dgate are head-merged like the gate, dL_da is head-major.
     std::optional<ttnn::Tensor> gate = std::nullopt;
+    std::optional<ttnn::Tensor> preallocated_da = std::nullopt;
+    std::optional<ttnn::Tensor> preallocated_dgamma_components = std::nullopt;
     std::optional<ttnn::Tensor> preallocated_dgate = std::nullopt;
 };
 

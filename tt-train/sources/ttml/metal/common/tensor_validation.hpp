@@ -70,6 +70,53 @@ inline void check_device_tensor(
     }
 }
 
+// Checks that `tensor` has the logical shape `expected`.
+inline void check_shape(
+    const ttnn::Tensor& tensor, std::string_view op, std::string_view name, const ttnn::Shape& expected) {
+    TT_FATAL(
+        tensor.logical_shape() == expected, "{}: {} shape {} must be {}", op, name, tensor.logical_shape(), expected);
+}
+
+// Checks that `head_merged` [B, 1, T, H*V] holds the tokens of `head_major` [B*H, 1, T, V] for a whole number of
+// heads H, with the heads side by side in the last dim. Heads must start on tile boundaries unless H == 1.
+inline void check_head_merged(
+    const ttnn::Tensor& head_major, const ttnn::Tensor& head_merged, std::string_view op, std::string_view name) {
+    const auto& major_shape = head_major.logical_shape();
+    const auto& merged_shape = head_merged.logical_shape();
+    TT_FATAL(
+        major_shape.rank() == 4U && merged_shape.rank() == 4U,
+        "{}: {} must be 4D like the input, got {} and input {}",
+        op,
+        name,
+        merged_shape,
+        major_shape);
+    const uint32_t head_dim = major_shape[-1];
+    TT_FATAL(
+        merged_shape[-1] % head_dim == 0,
+        "{}: {} width {} must be a whole number of heads of the input width V = {}",
+        op,
+        name,
+        merged_shape[-1],
+        head_dim);
+    const uint32_t num_heads = merged_shape[-1] / head_dim;
+    TT_FATAL(
+        num_heads == 1U || head_dim % tt::constants::TILE_WIDTH == 0,
+        "{}: {} holds {} heads of V = {}; V must be a multiple of {} so heads start on tile boundaries",
+        op,
+        name,
+        num_heads,
+        head_dim,
+        tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        merged_shape[-2] == major_shape[-2] &&
+            merged_shape[0] * merged_shape[1] * num_heads == major_shape[0] * major_shape[1],
+        "{}: {} shape {} is not the head-merged layout of input {}: expected [B, 1, T, H*V] for input [B*H, 1, T, V]",
+        op,
+        name,
+        merged_shape,
+        major_shape);
+}
+
 // Checks that `tensor` lives on the same device as `reference`. Kernels are handed raw buffer addresses,
 // so a buffer on another device would be read as if it were local. Call after check_device_tensor on both.
 inline void check_same_device(

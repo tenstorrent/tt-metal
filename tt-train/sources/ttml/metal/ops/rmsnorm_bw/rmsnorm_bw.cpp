@@ -17,15 +17,7 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw(
     bool compute_dgamma,
     const std::optional<ttnn::Tensor>& gate_tensor) {
     auto result = ttnn::prim::ttml_rmsnorm_bw(
-        input_tensor,    // [B,1,S,C]
-        gamma_tensor,    // [1,1,1,C]
-        rms_tensor,      //[B,1,S,1]
-        dL_dout_tensor,  //[B,1,S,C]
-        /* epsilon */ 1e-6F,
-        /* preallocated_da */ std::nullopt,
-        /* preallocated_dgamma_components */ std::nullopt,
-        compute_dgamma,
-        gate_tensor);
+        input_tensor, gamma_tensor, rms_tensor, dL_dout_tensor, gate_tensor, compute_dgamma);
 
     // dL_dgamma requires sum over batches so we cannot perform this sum in the kernel. Instead we return the
     // dL_dgamma_components and reduce it here.

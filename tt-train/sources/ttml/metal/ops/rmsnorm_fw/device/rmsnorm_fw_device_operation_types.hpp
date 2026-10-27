@@ -16,13 +16,12 @@ struct RMSNormForwardParams {
 struct RMSNormForwardInputs {
     const ttnn::Tensor& input;
     const ttnn::Tensor& gamma;
-
-    std::optional<ttnn::Tensor> preallocated_rms;
-    std::optional<ttnn::Tensor> preallocated_output;
-
     // Gated mode: output = rmsnorm(input) * gamma * silu(gate). `input` is head-major [B*H, 1, T, V] and `gate`
     // head-merged [B, 1, T, H*V]; the output takes the gate's layout.
     std::optional<ttnn::Tensor> gate;
+
+    std::optional<ttnn::Tensor> preallocated_rms;
+    std::optional<ttnn::Tensor> preallocated_output;
 };
 
 using operation_attributes_t = RMSNormForwardParams;

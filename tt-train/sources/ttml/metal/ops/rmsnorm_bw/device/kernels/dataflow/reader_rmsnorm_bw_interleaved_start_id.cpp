@@ -26,15 +26,20 @@ constexpr uint32_t packed_scaler = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t mask_w = get_compile_time_arg_val(2);
 constexpr uint32_t Wt = get_compile_time_arg_val(3);
-// dL_dout and the gate are head-merged: input row (b*H + h)*Ht + t is their row (b*Ht + t)*H + h, in rows of Wt
-// tiles. Ungated, Ht = H = 1 makes this the identity.
-constexpr uint32_t Ht = get_compile_time_arg_val(4);
-constexpr uint32_t num_heads = get_compile_time_arg_val(5);
+// The layout of dL_dout and the gate for head_merged_row; 1 and 1 when ungated.
+constexpr uint32_t layout_Ht = get_compile_time_arg_val(4);
+constexpr uint32_t layout_num_heads = get_compile_time_arg_val(5);
 
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
 #else
 constexpr bool do_mask_w = false;
+#endif
+
+#ifdef GATED
+constexpr bool gated = true;
+#else
+constexpr bool gated = false;
 #endif
 
 void kernel_main() {
@@ -43,7 +48,7 @@ void kernel_main() {
     uint32_t gamma_address = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t rms_a_address = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t dL_out_address = get_arg_val<uint32_t>(runtime_args_counter++);
-    [[maybe_unused]] uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);
+    uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
@@ -68,14 +73,12 @@ void kernel_main() {
     constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto rms_a_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto dL_out_args = TensorAccessorArgs<rms_a_args.next_compile_time_args_offset()>();
+    constexpr auto gate_args = TensorAccessorArgs<dL_out_args.next_compile_time_args_offset()>();
     const auto input_address_generator = TensorAccessor(input_args, input_address);
     const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address);
     const auto rms_a_address_generator = TensorAccessor(rms_a_args, rms_a_address);
     const auto dL_out_address_generator = TensorAccessor(dL_out_args, dL_out_address);
-#ifdef GATED
-    constexpr auto gate_args = TensorAccessorArgs<dL_out_args.next_compile_time_args_offset()>();
     const auto gate_address_generator = TensorAccessor(gate_args, gate_address);
-#endif
 
     // Read input tensors row by row, reading each row's data twice due to compute requirements
     uint32_t end_row = start_row + num_rows_to_process;
@@ -83,27 +86,24 @@ void kernel_main() {
         // Read RMS(a) once per row - shape [B,1,S,1], one scalar per row
         read_tiles_by_row(cb_rms_a_idx, rms_a_address_generator, r, 1, tile_bytes, 1);
 
-        const uint32_t t = r % Ht;
-        const uint32_t h = (r / Ht) % num_heads;
-        const uint32_t b = r / (Ht * num_heads);
-        const uint32_t merged_row_start = ((b * Ht + t) * num_heads + h) * Wt;
+        const uint32_t merged_row_start = head_merged_row<layout_Ht, layout_num_heads>(r) * Wt;
         // Issues the reads of the input, dL_dout and gate blocks at column c; the caller barriers and pushes them.
         auto read_row_blocks = [&](const uint32_t c) {
             read_tiles_by_row</* UseBarrier = */ false>(
                 cb_input_idx, input_address_generator, (r * Wt) + c, block_size, input_tile_bytes, block_size);
             read_tiles_by_row</* UseBarrier = */ false>(
                 cb_dL_out_idx, dL_out_address_generator, merged_row_start + c, block_size, tile_bytes, block_size);
-#ifdef GATED
-            read_tiles_by_row</* UseBarrier = */ false>(
-                cb_gate_idx, gate_address_generator, merged_row_start + c, block_size, tile_bytes, block_size);
-#endif
+            if constexpr (gated) {
+                read_tiles_by_row</* UseBarrier = */ false>(
+                    cb_gate_idx, gate_address_generator, merged_row_start + c, block_size, tile_bytes, block_size);
+            }
         };
         auto push_row_blocks = []() {
             cb_push_back(cb_input_idx, block_size);
             cb_push_back(cb_dL_out_idx, block_size);
-#ifdef GATED
-            cb_push_back(cb_gate_idx, block_size);
-#endif
+            if constexpr (gated) {
+                cb_push_back(cb_gate_idx, block_size);
+            }
         };
 
         // First pass: read row data for first compute phase

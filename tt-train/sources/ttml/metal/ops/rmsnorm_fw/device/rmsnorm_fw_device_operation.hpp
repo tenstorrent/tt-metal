@@ -36,10 +36,10 @@ namespace ttnn::prim {
 ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation::tensor_return_value_t ttml_rmsnorm_fw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
+    const std::optional<ttnn::Tensor>& gate,
     bool return_intermediates,
     float epsilon = 1e-6F,
     const std::optional<ttnn::Tensor>& preallocated_rms = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
-    const std::optional<ttnn::Tensor>& gate = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 
 }  // namespace ttnn::prim

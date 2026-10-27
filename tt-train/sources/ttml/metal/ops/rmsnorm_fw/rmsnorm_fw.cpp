@@ -14,14 +14,7 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_fw(
     bool return_intermediates,
     float epsilon,
     const std::optional<ttnn::Tensor>& gate_tensor) {
-    auto result = ttnn::prim::ttml_rmsnorm_fw(
-        input_tensor,
-        gamma_tensor,
-        return_intermediates,
-        epsilon,
-        /* preallocated_rms */ std::nullopt,
-        /* preallocated_output */ std::nullopt,
-        gate_tensor);
+    auto result = ttnn::prim::ttml_rmsnorm_fw(input_tensor, gamma_tensor, gate_tensor, return_intermediates, epsilon);
 
     if (result.size() == 1U) {
         return {result[0], std::nullopt};

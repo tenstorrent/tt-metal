@@ -2,9 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the gated mode of the RMSNorm metal ops and its autograd wrapper.
+"""Tests for the RMSNorm metal ops and their autograd wrappers through the bindings, in both modes.
 
-`x` and `dx` are head-major [B*H, 1, T, V]; `gate`, `dy`, `out` and `dgate` are head-merged [B, 1, T, H*V];
+The plain mode normalizes the last dim of a 4D `x`, in bf16 or fp32. Gated mode multiplies by silu(gate) per V-wide
+head: `x` and `dx` are head-major [B*H, 1, T, V]; `gate`, `dy`, `out` and `dgate` are head-merged [B, 1, T, H*V];
 `gamma` [1, 1, 1, V] is shared by all heads. Per head h:
     inv   = rsqrt(mean_V(x_h^2) + eps)
     u     = x_h * gamma * inv
@@ -13,6 +14,7 @@ and with du = dy * silu(gate), t = sum_V(u * du) * inv / V:
     dx     = inv * (gamma * du - t * x)
     dgate  = dy * u * silu'(gate)
     dgamma = sum over rows and heads of x * inv * du
+The plain mode is the same with silu(gate) = 1 and no dgate. The shape sweep is in tests/ops/rmsnorm_op_test.cpp.
 """
 
 from __future__ import annotations
@@ -20,9 +22,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import ttnn
 import ttml
 from bf16_ulp import assert_within_bf16_ulp
+from tensor_helpers import as_stored, sigmoid, to_device, to_host, value
 
 pytestmark = pytest.mark.requires_device
 
@@ -40,53 +42,16 @@ DX_P99_FLOOR_BINADES = 3
 # per-element ULP; only the error at the peak is bounded.
 MAX_ULP_DGAMMA = 2.0
 EPS = 1e-6
-NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
-# (batch, T, H, V). V/32 of 1, 2, 4, 8 covers head widths of 1 to 8 tiles; (1, 256, 12, 128) and
-# (1, 1024, 12, 128) are the Qwen3.8 TP=4 head layout; batch 2 checks rows are counted over the batch;
-# 131 tile-rows of a single head don't divide evenly over any Wormhole or Blackhole grid, so both
-# compute groups run; a single head may be any width, and V = 80 covers the partial last tile.
-SHAPES = [
-    (1, 32, 1, 32),
-    (1, 64, 3, 128),
-    (2, 96, 4, 64),
-    (1, 64, 2, 256),
-    (1, 256, 12, 128),
-    (1, 1024, 12, 128),
-    (1, 4192, 1, 32),
-    (2, 64, 1, 80),
-]
+# (batch, T, H, V): the Qwen3.8 TP=4 head layout. Its 384 tile-rows don't divide evenly over the cores, so both core
+# groups run.
+GATED_SHAPE = (1, 1024, 12, 128)
 DTYPES = ["bf16", "fp32"]
-AUTOGRAD_SHAPES = [(1, 64, 3, 128), (2, 32, 4, 64)]
-
-
-def to_device(array, dtype="bf16", requires_grad=False):
-    new_type = ttnn.DataType.FLOAT32 if dtype == "fp32" else ttnn.DataType.BFLOAT16
-    tensor = ttml.autograd.Tensor.from_numpy(array.astype(np.float32), layout=ttnn.Layout.TILE, new_type=new_type)
-    tensor.set_requires_grad(requires_grad)
-    return tensor
-
-
-def value(tensor):
-    """The device tensor as stored, so an fp32 input reaches the op as fp32."""
-    return tensor.get_value(NATIVE)
-
-
-def to_host(ttnn_tensor):
-    return ttml.autograd.create_tensor(ttnn_tensor).to_numpy().astype(np.float64)
+AUTOGRAD_SHAPES = [(1, 64, 3, 128)]
 
 
 def grad_of(tensor):
     return tensor.get_grad_tensor().to_numpy().astype(np.float64)
-
-
-def as_stored(array, dtype="bf16"):
-    """``array`` as held on device, so the oracle sees what the kernel received."""
-    return to_host(value(to_device(array, dtype)))
-
-
-def sigmoid(z):
-    return 1.0 / (1.0 + np.exp(-z))
 
 
 def merge_heads(a, heads):
@@ -130,7 +95,7 @@ def inputs(batch, seq, heads, dim, seed):
     merged = (batch, 1, seq, heads * dim)
     return (
         rng.normal(0.0, 1.0, (batch * heads, 1, seq, dim)) * head_scale,
-        rng.uniform(-4.0, 4.0, merged),  # gate, spanning both silu saturation tails
+        rng.uniform(-20.0, 20.0, merged),  # gate, reaching into both saturation tails of sigmoid
         rng.uniform(0.5, 1.5, (1, 1, 1, dim)),
         rng.normal(0.0, 1.0, merged),
     )
@@ -169,36 +134,34 @@ def assert_matches(got, x, gate, gamma, dy, heads, label, dtype="bf16", eps=EPS)
 
 class TestGatedMode:
     @pytest.mark.parametrize("dtype", DTYPES)
-    @pytest.mark.parametrize("batch,seq,heads,dim", SHAPES)
-    def test_matches_reference(self, batch, seq, heads, dim, dtype):
+    def test_matches_reference(self, dtype):
+        batch, seq, heads, dim = GATED_SHAPE
         x, gate, gamma, dy = inputs(batch, seq, heads, dim, seed=100 + heads * dim)
         got = run(x, gate, gamma, dy, dtype)
         assert_matches(got, x, gate, gamma, dy, heads, f"{batch}x{seq}x{heads}x{dim} {dtype}", dtype)
 
-    def test_skips_dgamma_when_not_requested(self):
-        x, gate, gamma, dy = inputs(1, 64, 3, 128, seed=17)
-        got = run(x, gate, gamma, dy, compute_dgamma=False)
-        assert got[4] is None
-        assert_matches(got, x, gate, gamma, dy, 3, "no dgamma")
-
-    def test_epsilon_dominates_tiny_inputs(self):
-        # mean(x^2) ~ 1e-4 against eps = 0.1: dropping or misreading eps would change out ~30x.
-        x, gate, gamma, dy = inputs(1, 64, 2, 64, seed=7)
-        x = x * 1e-2
-        got = run(x, gate, gamma, dy, eps=0.1)
-        assert_matches(got, x, gate, gamma, dy, 2, "eps=0.1", eps=0.1)
-
 
 class TestUngatedMode:
-    """Without a gate the op is the plain RMSNorm, which now also takes an fp32 input."""
+    """Without a gate the op is the plain RMSNorm, which also takes an fp32 input."""
 
-    @pytest.mark.parametrize("dtype", DTYPES)
-    @pytest.mark.parametrize("shape", [(1, 1, 64, 128), (2, 1, 96, 80), (1, 1, 32, 5120)])
-    def test_matches_reference(self, shape, dtype):
+    @pytest.mark.parametrize("compute_dgamma", [True, False], ids=["dgamma", "no_dgamma"])
+    @pytest.mark.parametrize(
+        "shape,dtype",
+        [
+            ((2, 1, 96, 80), "bf16"),
+            ((2, 1, 96, 80), "fp32"),
+            # The forward keeps everything but gamma in L1 and the backward streams.
+            ((1, 1, 32, 8192), "fp32"),
+            # Both stream.
+            ((1, 1, 32, 16384), "fp32"),
+        ],
+    )
+    def test_matches_reference(self, shape, dtype, compute_dgamma):
         rng = np.random.default_rng(shape[-1])
         x, dy = rng.normal(0.0, 1.0, shape), rng.normal(0.0, 1.0, shape)
         gamma = rng.uniform(0.5, 1.5, (1, 1, 1, shape[-1]))
-        got = run(x, None, gamma, dy, dtype)
+        got = run(x, None, gamma, dy, dtype, compute_dgamma)
+        assert (got[4] is not None) == compute_dgamma
         assert_matches(got, x, None, gamma, dy, 1, f"ungated {shape} {dtype}", dtype)
 
 
@@ -234,6 +197,7 @@ class TestProgramCache:
 
     def test_epsilon_and_dgamma_flag_are_part_of_the_program(self):
         x, gate, gamma, dy = inputs(1, 64, 2, 64, seed=9)
+        # mean(x^2) is 6e-6 to 2.5e-5 against eps = 0.1, so dropping or misreading eps changes out by 63-126x.
         x = x * 1e-2
         for eps, compute_dgamma in ((1e-6, True), (0.1, False), (0.1, True), (1e-6, False)):
             got = run(x, gate, gamma, dy, compute_dgamma=compute_dgamma, eps=eps)
@@ -291,6 +255,21 @@ class TestValidation:
         _, rms = ttml.ops.metal.rmsnorm_fw(value(x), value(gamma), True, EPS, value(gate))
         with expect_error(RuntimeError, "dL_dout shape"):
             ttml.ops.metal.rmsnorm_bw(value(x), value(gamma), rms, value(x), True, value(gate))
+
+    def test_rejects_gated_row_that_does_not_fit_in_l1(self, expect_error):
+        # Gated mode only has the resident-row kernels. With an fp32 x, V = 5120 still fits the forward but not the
+        # backward, and V = 8192 fits neither.
+        def gated_inputs(dim):
+            x = to_device(np.ones((1, 1, 32, dim)), "fp32")
+            return x, to_device(np.ones((1, 1, 32, dim))), to_device(np.ones((1, 1, 1, dim)))
+
+        x, gate, gamma = gated_inputs(5120)
+        _, rms = ttml.ops.metal.rmsnorm_fw(value(x), value(gamma), True, EPS, value(gate))
+        with expect_error(RuntimeError, "resident in L1"):
+            ttml.ops.metal.rmsnorm_bw(value(x), value(gamma), rms, value(gate), True, value(gate))
+        x, gate, gamma = gated_inputs(8192)
+        with expect_error(RuntimeError, "resident in L1"):
+            ttml.ops.metal.rmsnorm_fw(value(x), value(gamma), True, EPS, value(gate))
 
 
 if __name__ == "__main__":
