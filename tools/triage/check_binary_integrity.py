@@ -31,11 +31,6 @@ script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
 )
 
-# Limits for the --dump-mismatch output
-DUMP_BYTES_PER_ROW = 32
-MAX_DUMP_BYTES_PER_RANGE = 64
-MAX_DUMP_RANGES = 16
-
 
 def find_mismatched_ranges(expected: memoryview | bytes, found: bytearray | bytes) -> list[tuple[int, int]]:
     """Return (offset, length) of each run of consecutive bytes that differ. Both buffers must have the same length."""
@@ -73,22 +68,12 @@ def format_mismatch_dump(
 ) -> str:
     """Lines for --dump-mismatch: each range's L1 addresses, then its expected bytes and the bytes found in L1."""
     lines: list[str] = []
-    for number, (offset, length) in enumerate(ranges[:MAX_DUMP_RANGES], start=1):
+    for number, (offset, length) in enumerate(ranges, start=1):
         start_address = load_address + offset
         end_address = start_address + length - 1
         lines.append(f"      range {number}/{len(ranges)}: 0x{start_address:08x}-0x{end_address:08x} ({length} B)")
-
-        dumped = min(length, MAX_DUMP_BYTES_PER_RANGE)
-        for label, data in (("expected:", expected), ("found:", found)):
-            for row in range(0, dumped, DUMP_BYTES_PER_ROW):
-                row_end = min(row + DUMP_BYTES_PER_ROW, dumped)
-                prefix = label if row == 0 else ""
-                lines.append(f"        {prefix:<10}{data[offset + row : offset + row_end].hex(' ')}")
-        if length > dumped:
-            lines.append(f"        ... {length - dumped} more bytes")
-
-    if len(ranges) > MAX_DUMP_RANGES:
-        lines.append(f"      ... {len(ranges) - MAX_DUMP_RANGES} more ranges")
+        lines.append(f"        expected: {expected[offset : offset + length].hex(' ')}")
+        lines.append(f"        found:    {found[offset : offset + length].hex(' ')}")
 
     return "\n".join(lines)
 
