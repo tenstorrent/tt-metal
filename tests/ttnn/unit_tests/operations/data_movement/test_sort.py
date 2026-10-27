@@ -371,7 +371,9 @@ def test_sort_fp32_nan_index_range_every_factory(n, descending, nan_bits, stable
     torch.testing.assert_close(ttnn.to_torch(ttnn_values), gathered, rtol=0, atol=0, equal_nan=True)
 
     values = ttnn.to_torch(ttnn_values)
-    assert torch.isnan(values).sum().item() == num_nan, f"expected {num_nan} NaNs preserved, found {torch.isnan(values).sum().item()}"
+    assert (
+        torch.isnan(values).sum().item() == num_nan
+    ), f"expected {num_nan} NaNs preserved, found {torch.isnan(values).sum().item()}"
 
 
 @pytest.mark.parametrize(
