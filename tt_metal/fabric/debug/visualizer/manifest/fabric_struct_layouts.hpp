@@ -23,6 +23,47 @@
 
 namespace tt::tt_fabric::layout {
 
+// ============ Enums ============
+
+// EDMStatus's values lie far outside the range enchantum scans, so its enumerators are listed here. The X-macro lists
+// them once, for both the EnumLayout and edm_status_listed(), whose switch fails to build (-Wswitch, as an error) when
+// EDMStatus gains an enumerator the list doesn't have.
+#define FABRIC_LAYOUT_EDM_STATUSES(X) \
+    X(STARTED)                        \
+    X(REMOTE_HANDSHAKE_COMPLETE)      \
+    X(LOCAL_HANDSHAKE_COMPLETE)       \
+    X(READY_FOR_TRAFFIC)              \
+    X(TERMINATED)                     \
+    X(INITIALIZATION_STARTED)         \
+    X(TXQ_INITIALIZED)                \
+    X(STREAM_REG_INITIALIZED)         \
+    X(DOWNSTREAM_EDM_SETUP_STARTED)   \
+    X(EDM_VCS_SETUP_COMPLETE)         \
+    X(WORKER_INTERFACES_INITIALIZED)  \
+    X(ETHERNET_HANDSHAKE_COMPLETE)    \
+    X(VCS_OPENED)                     \
+    X(ROUTING_TABLE_INITIALIZED)      \
+    X(INITIALIZATION_COMPLETE)
+
+constexpr bool edm_status_listed(EDMStatus status) {
+    switch (status) {
+#define FABRIC_LAYOUT_EDM_STATUS_CASE(name) case EDMStatus::name:
+        FABRIC_LAYOUT_EDM_STATUSES(FABRIC_LAYOUT_EDM_STATUS_CASE)
+#undef FABRIC_LAYOUT_EDM_STATUS_CASE
+        return true;
+    }
+    return false;
+}
+
+template <>
+struct EnumLayout<EDMStatus> {
+#define FABRIC_LAYOUT_EDM_STATUS_ENUMERATOR(name) Enumerator{#name, EDMStatus::name},
+    static constexpr std::array enumerators = {FABRIC_LAYOUT_EDM_STATUSES(FABRIC_LAYOUT_EDM_STATUS_ENUMERATOR)};
+#undef FABRIC_LAYOUT_EDM_STATUS_ENUMERATOR
+};
+
+#undef FABRIC_LAYOUT_EDM_STATUSES
+
 // ============ Sender channels ============
 
 template <>

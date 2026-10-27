@@ -38,7 +38,13 @@ namespace tt::tt_fabric::layout {
 //       Geometry geometry;  // offset 4
 //   };
 
-// What one element is, with only the data decode needs to read it.
+struct EnumDescription;
+struct StructDescription;
+struct TaggedUnionDescription;
+
+// What one element is, with only the data decode needs to read it. An enum, struct or tagged union element points to
+// its type's description, which holds its name and what it contains. The examples below write such an element by its
+// type, e.g. Struct{WorkerXY} for the element pointing to WorkerXY's description.
 namespace element {
 
 // Unsigned integer.
@@ -51,20 +57,20 @@ struct Int {
 };
 // Enum.
 struct Enum {
-    // The enum type name
-    std::string_view type_name;
+    // The enum's name and enumerators
+    const EnumDescription* description = nullptr;
     constexpr bool operator==(const Enum&) const = default;
 };
 // Struct.
 struct Struct {
-    // The struct type name
-    std::string_view type_name;
+    // The struct's name, size and members
+    const StructDescription* description = nullptr;
     constexpr bool operator==(const Struct&) const = default;
 };
 // Tagged union: a union whose member holding the bytes is picked by the value of a member of the enclosing struct, its
 // tag. Example: geometry is the union, and kind is the tag that says which representation geometry's bytes hold. When
 // kind is DOT they hold dot, and when it is LINE they hold line. Shape::geometry's element is
-// TaggedUnion{"Geometry", "kind"}.
+// TaggedUnion{Geometry, "kind"}.
 //   enum class Kind : uint32_t { DOT, LINE };
 //   union Geometry {
 //       Point dot;
@@ -75,8 +81,8 @@ struct Struct {
 //       Geometry geometry;
 //   };
 struct TaggedUnion {
-    // The union type name (e.g. Geometry)
-    std::string_view type_name;
+    // The union's name, size, tag enum and cases (e.g. Geometry's)
+    const TaggedUnionDescription* description = nullptr;
     // The name of the enclosing struct's member that holds the tag (e.g. kind)
     std::string_view tag_member_name;
     constexpr bool operator==(const TaggedUnion&) const = default;
@@ -103,8 +109,8 @@ using Element = std::variant<
 
 // One element, or `count` of them. Examples:
 // - uint16_t counts[2]:         {element: Uint, size: 4, count: 2}
-// - RouterState state:          {element: Enum{"RouterState"}, size: 4, count: 0}
-// - std::array<WorkerXY, 3> xy: {element: Struct{"WorkerXY"}, size: 12, count: 3}
+// - RouterState state:          {element: Enum{RouterState}, size: 4, count: 0}
+// - std::array<WorkerXY, 3> xy: {element: Struct{WorkerXY}, size: 12, count: 3}
 struct Type {
     Element element;
     // Size of the whole type in bytes. For an array, one element is size / count
@@ -115,7 +121,7 @@ struct Type {
 };
 
 // A member of a struct. Example: WorkerXY worker_xy at offset 32 is
-// {name: "worker_xy", offset: 32, type: {element: Struct{"WorkerXY"}, size: 4, count: 0}, initializers: 1}
+// {name: "worker_xy", offset: 32, type: {element: Struct{WorkerXY}, size: 4, count: 0}, initializers: 1}
 struct Member {
     std::string_view name;
     uint32_t offset;
@@ -129,7 +135,7 @@ struct Member {
 // One case of a tagged union: one of its members, and the name of the tag enumerator that picks it. A member picked by
 // several tag values has a case for each. Example: Geometry has two cases.
 //   dot, picked by DOT:
-//     {member: {name: "dot", offset: 0, type: {element: Struct{"Point"}, size: 4, count: 0}}, tag_value: "DOT"}
+//     {member: {name: "dot", offset: 0, type: {element: Struct{Point}, size: 4, count: 0}}, tag_value: "DOT"}
 //   line, picked by LINE:
 //     {member: {name: "line", offset: 0, type: {element: Uint, size: 8, count: 2}}, tag_value: "LINE"}
 //
@@ -141,6 +147,33 @@ struct Member {
 struct TaggedUnionCase {
     Member member;
     std::string_view tag_value;
+};
+
+// One enumerator of an enum.
+struct Enumerator {
+    std::string_view name;
+    uint32_t value = 0;
+};
+
+// An enum's name and every enumerator it has.
+struct EnumDescription {
+    std::string_view name;
+    std::span<const Enumerator> enumerators;
+};
+
+// A described struct's name and size, and its members, which cover every byte of it in order.
+struct StructDescription {
+    std::string_view name;
+    uint32_t size = 0;
+    std::span<const Member> members;
+};
+
+// A described tagged union's name and size, the enum its tag holds, and its cases.
+struct TaggedUnionDescription {
+    std::string_view name;
+    uint32_t size = 0;
+    const EnumDescription* tag = nullptr;
+    std::span<const TaggedUnionCase> cases;
 };
 
 // Each described struct specializes StructLayout<T> with its member list. There is no primary definition, so if a
@@ -211,6 +244,12 @@ concept DescribedTaggedUnion = requires {
     TaggedUnionLayout<U>::cases;
 };
 
+// An enum whose enumerators enchantum can't find specializes EnumLayout<E> with an array named enumerators, of
+// Enumerator entries. enchantum finds an enumerator by scanning a range of values, so an enum with values far outside
+// that range, such as EDMStatus, needs one. Every other enum gets its enumerators from enchantum.
+template <typename E>
+struct EnumLayout;
+
 namespace detail {
 
 template <typename T>
@@ -276,13 +315,59 @@ constexpr std::string_view get_tagged_union_name() {
     }
 }
 
+// Returns the enumerators of E.
+template <typename E>
+constexpr auto get_enumerators() {
+    static_assert(
+        sizeof(E) <= sizeof(uint32_t) && std::is_unsigned_v<std::underlying_type_t<E>>,
+        "an enumerator's value must fit a uint32_t");
+
+    // If the enum has an EnumLayout specialization, return its enumerators from there
+    if constexpr (requires { EnumLayout<E>::enumerators; }) {
+        return EnumLayout<E>::enumerators;
+    } else { // Otherwise, use enchantum to find the enumerators
+        constexpr auto& entries = enchantum::entries<E>;
+        static_assert(!entries.empty(), "enchantum finds no enumerators of this enum; give it an EnumLayout");
+        std::array<Enumerator, entries.size()> enumerators{};
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            enumerators[i] = {entries[i].second, static_cast<uint32_t>(entries[i].first)};
+        }
+        return enumerators;
+    }
+}
+
+template <typename E>
+inline constexpr auto enumerators_of = get_enumerators<E>();
+
+}  // namespace detail
+
+// The description of enum E, which every element of E points to.
+template <typename E>
+inline constexpr EnumDescription enum_description{enchantum::type_name<E>, detail::enumerators_of<E>};
+
+// The description of described struct T, which every element of T points to. It views T's StructLayout members.
+template <typename T>
+inline constexpr StructDescription struct_description{
+    detail::get_struct_name<T>(), static_cast<uint32_t>(sizeof(T)), StructLayout<T>::members};
+
+// The description of described tagged union U, which every element of U points to. It views U's TaggedUnionLayout
+// cases.
+template <typename U>
+inline constexpr TaggedUnionDescription tagged_union_description{
+    detail::get_tagged_union_name<U>(),
+    static_cast<uint32_t>(sizeof(U)),
+    &enum_description<typename TaggedUnionLayout<U>::Tag>,
+    TaggedUnionLayout<U>::cases};
+
+namespace detail {
+
 // The Element for one element of type T: an integer, an enum or a described struct.
 template <typename T>
 constexpr Element element_of() {
     static_assert(
         !std::is_array_v<T> && !StdArray<std::remove_cv_t<T>>::value, "multidimensional arrays are not supported");
     if constexpr (std::is_enum_v<T>) { /* enum */
-        return element::Enum{enchantum::type_name<T>};
+        return element::Enum{&enum_description<T>};
     } else if constexpr (std::is_integral_v<T>) { /* integral (whole number) */
         if constexpr (std::is_signed_v<T>) {
             return element::Int{};
@@ -292,7 +377,7 @@ constexpr Element element_of() {
     } else if constexpr (std::is_union_v<T>) { /* a union needs its tag, which only the enclosing struct knows */
         static_assert(!sizeof(T*), "a union member needs LAYOUT_TAGGED_UNION, or LAYOUT_BYTES when nothing tags it");
     } else if constexpr (Described<T>) { /* defined struct type, via StructLayout<T> */
-        return element::Struct{get_struct_name<T>()};
+        return element::Struct{&struct_description<T>};
     } else { /* always fails if we get here */
         static_assert(!sizeof(T*), "member type has no StructLayout specialization; describe it or use LAYOUT_BYTES");
     }
@@ -557,7 +642,7 @@ constexpr bool validate_tagged_union_cases(const std::array<TaggedUnionCase, N>&
 
 // Layout of T's member, a described union whose member is picked by T's tag_member. tag_member must hold the union's
 // Tag enum, so decode can read it as one. Example: LAYOUT_TAGGED_UNION(Shape, geometry, kind) is
-// {name: "geometry", offset: 4, type: {element: TaggedUnion{"Geometry", "kind"}, size: 8, count: 0}}, for
+// {name: "geometry", offset: 4, type: {element: TaggedUnion{Geometry, "kind"}, size: 8, count: 0}}, for
 //   enum class Kind : uint32_t { DOT, LINE };
 //   union Geometry {        // 8 bytes, with a TaggedUnionLayout whose Tag is Kind
 //       Point dot;
@@ -582,7 +667,7 @@ constexpr bool validate_tagged_union_cases(const std::array<TaggedUnionCase, N>&
             #member,                                                                                \
             offsetof(T, member),                                                                    \
             {::tt::tt_fabric::layout::element::TaggedUnion{                                         \
-                 ::tt::tt_fabric::layout::detail::get_tagged_union_name<U>(), #tag_member},         \
+                 &::tt::tt_fabric::layout::tagged_union_description<U>, #tag_member},               \
              sizeof(U),                                                                             \
              0},                                                                                    \
             ::tt::tt_fabric::layout::initializers_of<U>()};                                         \

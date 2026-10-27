@@ -37,6 +37,9 @@ struct HalvedWord {
 
 enum class Color : uint8_t { RED, GREEN };
 
+// An enum with a value far outside the range enchantum scans, which needs an EnumLayout.
+enum class ContainsOutsideRangeEnumerator : uint32_t { NEAR = 1, AWAY = 0xA0B0C0D0 };
+
 struct Inner {
     uint16_t x;
     uint16_t y;
@@ -137,6 +140,14 @@ struct HoldsWords {
 namespace tt::tt_fabric::layout {
 
 template <>
+struct EnumLayout<layout_test::ContainsOutsideRangeEnumerator> {
+    static constexpr std::array enumerators = {
+        Enumerator{"NEAR", static_cast<uint32_t>(layout_test::ContainsOutsideRangeEnumerator::NEAR)},
+        Enumerator{"AWAY", static_cast<uint32_t>(layout_test::ContainsOutsideRangeEnumerator::AWAY)},
+    };
+};
+
+template <>
 struct StructLayout<layout_test::Inner> {
     static constexpr std::array members = {
         LAYOUT_MEMBER(layout_test::Inner, x),
@@ -180,6 +191,7 @@ using layout_test::ByteThenWord;
 using layout_test::Color;
 using layout_test::ConstructedByteThenWord;
 using layout_test::ConstructedWords;
+using layout_test::ContainsOutsideRangeEnumerator;
 using layout_test::HalvedWord;
 using layout_test::HoldsByteRun;
 using layout_test::HoldsWords;
@@ -240,8 +252,8 @@ TEST(StructLayout, MemberTypesAndNames) {
     };
     static_assert(find_layout_error<Outer>(members) == LayoutError::NONE);
 
-    EXPECT_TRUE(members[0].type.element == Element{element::Struct{"Inner"}});
-    EXPECT_TRUE(members[1].type.element == Element{element::Enum{"Color"}});
+    EXPECT_TRUE(members[0].type.element == Element{element::Struct{&struct_description<Inner>}});
+    EXPECT_TRUE(members[1].type.element == Element{element::Enum{&enum_description<Color>}});
     EXPECT_TRUE(members[2].type.element == Element{element::Int{}});
     EXPECT_TRUE(members[3].type.element == Element{element::Uint{}});
     EXPECT_EQ(members[3].offset, 6u);
@@ -252,14 +264,15 @@ TEST(StructLayout, MemberTypesAndNames) {
 // A struct whose StructLayout sets a name, such as a class template instance, should be known by that name wherever
 // it's a member, since its type name isn't available.
 TEST(StructLayout, StructLayoutNameNamesTheStruct) {
-    EXPECT_TRUE(type_of<ByteRun<4>>() == (Type{element::Struct{"ByteRun<4>"}, 4, 0}));
+    EXPECT_EQ(struct_description<ByteRun<4>>.name, "ByteRun<4>");
+    EXPECT_TRUE(type_of<ByteRun<4>>() == (Type{element::Struct{&struct_description<ByteRun<4>>}, 4, 0}));
 
     constexpr std::array members = {
         LAYOUT_MEMBER(HoldsByteRun, word),
         LAYOUT_MEMBER(HoldsByteRun, run),
     };
     static_assert(find_layout_error<HoldsByteRun>(members) == LayoutError::NONE);
-    EXPECT_TRUE(members[1].type.element == Element{element::Struct{"ByteRun<4>"}});
+    EXPECT_TRUE(members[1].type.element == Element{element::Struct{&struct_description<ByteRun<4>>}});
 }
 
 // A template instance's name should be spelled as it is written in code.
@@ -302,7 +315,7 @@ TEST(StructLayout, ConcatMembersJoinsListsInOrder) {
 // A C array of enums should be an Enum element with the array's length as its count, rather than a scalar, since
 // decode reads that many elements. It should match both on its own and as a struct member.
 TEST(StructLayout, TypeOfCArray) {
-    EXPECT_TRUE(type_of<Color[3]>() == (Type{element::Enum{"Color"}, 3, 3}));
+    EXPECT_TRUE(type_of<Color[3]>() == (Type{element::Enum{&enum_description<Color>}, 3, 3}));
 
     constexpr std::array members = {
         LAYOUT_MEMBER(WithArrays, id),
@@ -311,19 +324,19 @@ TEST(StructLayout, TypeOfCArray) {
     };
     static_assert(find_layout_error<WithArrays>(members) == LayoutError::NONE);
     EXPECT_EQ(members[1].offset, 1u);
-    EXPECT_TRUE(members[1].type == (Type{element::Enum{"Color"}, 3, 3}));
+    EXPECT_TRUE(members[1].type == (Type{element::Enum{&enum_description<Color>}, 3, 3}));
 }
 
 // A std::array should get the same Type as a C array of the same element and length since both lay out their elements
 // the same way, so decode reads them the same way. It should match both on its own and as a struct member.
 TEST(StructLayout, TypeOfStdArray) {
     constexpr Type type = type_of<std::array<Inner, 2>>();
-    EXPECT_TRUE(type == (Type{element::Struct{"Inner"}, 8, 2}));
+    EXPECT_TRUE(type == (Type{element::Struct{&struct_description<Inner>}, 8, 2}));
     EXPECT_TRUE(type == type_of<Inner[2]>());
 
     constexpr Member points = LAYOUT_MEMBER(WithArrays, points);
     EXPECT_EQ(points.offset, 4u);
-    EXPECT_TRUE(points.type == (Type{element::Struct{"Inner"}, 8, 2}));
+    EXPECT_TRUE(points.type == (Type{element::Struct{&struct_description<Inner>}, 8, 2}));
 }
 
 // An array whose length is known only at run time is described with array_of, which should give the same Type as a C
@@ -503,7 +516,9 @@ TEST(StructLayout, TaggedUnionNamesItsTag) {
     constexpr Member fields = LAYOUT_TAGGED_UNION(Tagged, fields, shape);
     EXPECT_EQ(fields.name, "fields");
     EXPECT_EQ(fields.offset, offsetof(Tagged, fields));
-    EXPECT_TRUE(fields.type == (Type{element::TaggedUnion{"ShapeFields", "shape"}, sizeof(ShapeFields), 0}));
+    EXPECT_TRUE(
+        fields.type ==
+        (Type{element::TaggedUnion{&tagged_union_description<ShapeFields>, "shape"}, sizeof(ShapeFields), 0}));
 }
 
 // A tagged union whose TaggedUnionLayout sets a name, such as a union class template instance, should be known by
@@ -511,7 +526,53 @@ TEST(StructLayout, TaggedUnionNamesItsTag) {
 TEST(StructLayout, TaggedUnionLayoutNameNamesTheUnion) {
     static_assert(validate_tagged_union_cases<Words<1>>(TaggedUnionLayout<Words<1>>::cases));
     constexpr Member value = LAYOUT_TAGGED_UNION(HoldsWords, value, width);
-    EXPECT_TRUE(value.type == (Type{element::TaggedUnion{"Words<1>", "width"}, sizeof(Words<1>), 0}));
+    EXPECT_EQ(tagged_union_description<Words<1>>.name, "Words<1>");
+    EXPECT_TRUE(
+        value.type == (Type{element::TaggedUnion{&tagged_union_description<Words<1>>, "width"}, sizeof(Words<1>), 0}));
+}
+
+// A struct's description should view its StructLayout's members, so following a Struct element reaches everything
+// decode needs to read the struct: its name, size and members.
+TEST(StructLayout, StructDescriptionViewsTheLayout) {
+    constexpr const StructDescription& inner = struct_description<Inner>;
+    EXPECT_EQ(inner.name, "Inner");
+    EXPECT_EQ(inner.size, sizeof(Inner));
+    EXPECT_EQ(inner.members.data(), StructLayout<Inner>::members.data());
+    EXPECT_EQ(inner.members.size(), StructLayout<Inner>::members.size());
+}
+
+// An enum's description should list every enumerator enchantum finds, with its value, so decode can name each value
+// the enum holds.
+TEST(StructLayout, EnumDescriptionListsEveryEnumerator) {
+    constexpr const EnumDescription& color = enum_description<Color>;
+    EXPECT_EQ(color.name, "Color");
+    ASSERT_EQ(color.enumerators.size(), 2u);
+    EXPECT_EQ(color.enumerators[0].name, "RED");
+    EXPECT_EQ(color.enumerators[0].value, 0u);
+    EXPECT_EQ(color.enumerators[1].name, "GREEN");
+    EXPECT_EQ(color.enumerators[1].value, 1u);
+}
+
+// An enum with an EnumLayout should be described by its listed enumerators, since enchantum can't find values outside
+// the range it scans.
+TEST(StructLayout, EnumLayoutListsTheEnumerators) {
+    constexpr const EnumDescription& description = enum_description<ContainsOutsideRangeEnumerator>;
+    EXPECT_EQ(description.name, "ContainsOutsideRangeEnumerator");
+    ASSERT_EQ(description.enumerators.size(), 2u);
+    EXPECT_EQ(description.enumerators[0].name, "NEAR");
+    EXPECT_EQ(description.enumerators[0].value, 1u);
+    EXPECT_EQ(description.enumerators[1].name, "AWAY");
+    EXPECT_EQ(description.enumerators[1].value, 0xA0B0C0D0u);
+}
+
+// A tagged union's description should point to its tag enum's description and view its cases, so decode can read the
+// tag and pick the case it names.
+TEST(StructLayout, TaggedUnionDescriptionNamesItsTagEnum) {
+    constexpr const TaggedUnionDescription& shape_fields = tagged_union_description<ShapeFields>;
+    EXPECT_EQ(shape_fields.name, "ShapeFields");
+    EXPECT_EQ(shape_fields.size, sizeof(ShapeFields));
+    EXPECT_EQ(shape_fields.tag, &enum_description<Shape>);
+    EXPECT_EQ(shape_fields.cases.data(), TaggedUnionLayout<ShapeFields>::cases.data());
 }
 
 }  // namespace

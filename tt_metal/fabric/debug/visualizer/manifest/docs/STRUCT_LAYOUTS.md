@@ -31,11 +31,15 @@ The element kinds are what decode needs to know to read a value:
 | Element | Read as |
 | --- | --- |
 | `Uint`, `Int` | An unsigned or signed integer, as wide as one element |
-| `Enum` | An enum, by type name, so decode can show the enumerator's name |
-| `Struct` | Another described struct, by type name, read with that struct's own layout |
-| `TaggedUnion` | A union whose live member is picked by another field (see tagged unions below) |
+| `Enum` | An enum, pointing to its description (its name and enumerators), so decode can show the enumerator's name |
+| `Struct` | Another described struct, pointing to its description (its name, size and members), read with that struct's own layout |
+| `TaggedUnion` | A union whose live member is picked by another field, pointing to its description (its name, tag enum and cases; see tagged unions below) |
 | `Bytes` | Raw bytes that decode keeps as they are, for code that knows how to read them |
 | `Pad` | Bytes that mean nothing. Decode skips them |
+
+Every described struct, enum and tagged union has one description, `struct_description<T>`, `enum_description<E>` or
+`tagged_union_description<U>`, built from its layout. Since an element points to it, anything holding a `type` can
+follow it to everything needed to read the bytes, and to the types those name in turn.
 
 Nobody writes these entries by hand. The macros below build them from the struct itself, using `offsetof`, `sizeof` and
 the field's declared type, so the offsets and sizes can't drift from the real struct.
@@ -155,7 +159,7 @@ template <>
 struct StructLayout<Shape> {
     static constexpr std::array members = {
         LAYOUT_MEMBER(Shape, kind),
-        LAYOUT_TAGGED_UNION(Shape, geometry, kind),  // {element: TaggedUnion{"Geometry", "kind"}, size: 8}
+        LAYOUT_TAGGED_UNION(Shape, geometry, kind),  // {element: TaggedUnion{Geometry, "kind"}, size: 8}
     };
 };
 ```
@@ -362,6 +366,11 @@ A layout lists the union by the members that span it. If that's a single member 
 as one. Otherwise, wrap the members in `filled_by_one_initializer`, as the 2D packet header does for its chip and mesh
 ids and for `mcast_params`. A named union field is always one value.
 
+**An enum enchantum can't reflect needs an `EnumLayout`.** An enum's enumerators come from enchantum, which finds them
+by scanning a range of values. An enum with values far outside that range, such as `EDMStatus`, specializes
+`EnumLayout<E>` with an array named `enumerators` instead. The specialization goes beside the struct layouts, so it's
+visible wherever the enum's description is used.
+
 **Bitfields would confuse the initializer count.** Two bitfields sharing a byte count as two values, but a layout can
 only describe the byte as a whole. None of the described aggregates has bitfields. If one ever does, its layout needs
 to state its count explicitly.
@@ -375,12 +384,11 @@ StructLayout<T>  ──►  manifest  ──►  capture  ──►  decode
  (compile time)      (types)        (raw bytes)     (values)
 ```
 
-1. **The manifest** writes every described struct into its `types` section: the struct's name and size, and for each
-
-   member its name, offset, size, count and how to read it (an integer width, an enum, another struct, a tagged union
-     with its tag, raw bytes, or padding). This is the layout, turned into data that tools outside the build can read.
+1. **The manifest** writes every struct, enum and tagged union its schemas name into its `types` section, following each
+   element to its description. For a struct, that's its name and size, and for each member its name, offset, size,
+   count and how to read it (an integer width, an enum, another struct, a tagged union with its tag, raw bytes, or
+   padding). This is the layout, turned into data that tools outside the build can read.
 2. **Capture** reads the router's L1 regions as raw bytes and saves them alongside the manifest. It doesn't need to
-
    understand any of the structs.
 3. **Decode** reads the manifest's types and uses them to turn the raw bytes into values:
    - integers and enums are read at their offsets, with enums shown by name;
