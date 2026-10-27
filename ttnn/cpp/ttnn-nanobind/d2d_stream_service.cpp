@@ -125,6 +125,12 @@ void py_module_types(nb::module_& mod) {
             nb::arg("coord"),
             "Logical CoreCoord of the sender service core on this coord's device.")
         .def(
+            "get_num_lanes",
+            &D2DStreamServiceSender::get_num_lanes,
+            nb::arg("coord"),
+            "Fabric lanes this coord's sender runs: max_sender_lanes, less any link whose router another D2D "
+            "service on the chip holds.")
+        .def(
             "get_data_ready_counter_addr",
             &D2DStreamServiceSender::get_data_ready_counter_addr,
             nb::arg("coord"),
