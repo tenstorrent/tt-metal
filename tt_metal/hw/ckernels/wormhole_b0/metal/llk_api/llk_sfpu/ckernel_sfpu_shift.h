@@ -53,8 +53,9 @@ inline void calculate_binary_left_shift(
         // A positive shift amount shifts left (logical).
         sfpi::vUInt result = sfpi::shft(value, shift, sfpi::ShiftMode::Logical);
 
-        // Out-of-range shift amounts (shift < 0 or shift >= 32) produce 0.
-        v_if(shift < 0 || shift >= 32) { result = 0; }
+        // Out-of-range shift amounts (shift < 0 or shift >= 32) produce 0. Tested as
+        // (unsigned)shift >> 5 != 0: one logical shift plus one SETCC, with no live copy of shift.
+        v_if(sfpi::shft(sfpi::as<sfpi::vUInt>(shift), -5, sfpi::ShiftMode::Logical) != 0) { result = 0; }
         v_endif;
 
         sfpi::dst_reg[dst_index_out * dst_tile_size].mode<layout>() = sfpi::as<vType>(result);
@@ -80,21 +81,20 @@ inline void calculate_binary_right_shift(
         sfpi::vUInt value = sfpi::as<sfpi::vUInt>(a);
         sfpi::vInt shift = sfpi::as<sfpi::vInt>(s);
 
-        // Right shift by `shift` (a negative shift amount shifts left). Out-of-range lanes are
-        // fixed up to 0 by the final guard below, so their intermediate result here is don't-care.
-        sfpi::vUInt result = sfpi::shft(value, 0 - shift, sfpi::ShiftMode::Logical);
-
-        // Arithmetic shift: when the original value is negative (and the shift is non-zero) the
-        // vacated high bits must be filled with 1's rather than 0's.
-        v_if(sfpi::as<sfpi::vInt>(value) < 0 && shift != 0) {
-            sfpi::vUInt high_ones = sfpi::shft(~sfpi::vUInt(0), 32 - shift, sfpi::ShiftMode::Logical);
-            result = result | high_ones;
-        }
-        v_endif;
+        // Arithmetic right shift through the sign-extension identity: x = value >>u shift and
+        // b = 2^31 >>u shift = 1 << (31 - shift), then (x ^ b) - b sign-extends x from bit
+        // (31 - shift). For shift == 0, b = 2^31 and (value ^ 2^31) - 2^31 == value (mod 2^32).
+        // Branch-free, so no predicate ladder on the value's sign. Out-of-range lanes are fixed
+        // up to 0 by the guard below, so their intermediate result here is don't-care.
+        const sfpi::vInt neg_shift = 0 - shift;
+        sfpi::vUInt result = sfpi::shft(value, neg_shift, sfpi::ShiftMode::Logical);
+        const sfpi::vUInt b = sfpi::shft(sfpi::vUInt(0x80000000u), neg_shift, sfpi::ShiftMode::Logical);
+        result = (result ^ b) - b;
 
         // Out-of-range shift amounts (shift < 0 or shift >= 32) produce 0, matching the sibling
-        // kernels and the original "shift_amount < 0 OR >= 32 -> 0" contract.
-        v_if(shift < 0 || shift >= 32) { result = 0; }
+        // kernels and the original "shift_amount < 0 OR >= 32 -> 0" contract. Tested as
+        // (unsigned)shift >> 5 != 0: one logical shift plus one SETCC, with no live copy of shift.
+        v_if(sfpi::shft(sfpi::as<sfpi::vUInt>(shift), -5, sfpi::ShiftMode::Logical) != 0) { result = 0; }
         v_endif;
 
         sfpi::dst_reg[dst_index_out * dst_tile_size].mode<layout>() = sfpi::as<vType>(result);
