@@ -34,6 +34,9 @@ constexpr std::uint32_t TYPECAST_INT8_MINUS_128_IMM16 = 0xC300;
 // -128 as SFPIADD's 12-bit signed immediate
 constexpr std::int32_t TYPECAST_INT8_MINUS_128_IMM12 = -128 & 0xfff;
 
+// -16 as SFPSHFT's 12-bit signed immediate: a logical right shift by 16
+constexpr std::int32_t TYPECAST_SHIFT_RIGHT_16_IMM12 = -16 & 0xfff;
+
 // SFPGT mod1 selector that sets the destination to all-ones (-1) when the comparison is true.
 constexpr std::uint32_t SFPGT_MOD1_SET_ALL_ONES = 8;
 // SFPSHFT mod1 for "VD = LREG[VC] shifted by imm12": ARG_IMM (bit 0) | IMM_USE_VC (bit 2). Spelled out
@@ -547,7 +550,7 @@ inline void calculate_typecast_uint32_to_uint16() {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         // LREG1 = LREG0 >> 16 (logical): the 3-operand form shifts the source LREG0 by the immediate and
         // writes LREG1, so the value needs no SFPMOV copy before an in-place shift.
-        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG1, SFPSHFT_MOD1_IMM_SRC_VC);
+        TTI_SFPSHFT(TYPECAST_SHIFT_RIGHT_16_IMM12, p_sfpu::LREG0, p_sfpu::LREG1, SFPSHFT_MOD1_IMM_SRC_VC);
         TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG1, SFPGT_MOD1_SET_ALL_ONES);  // Set LREG1 = -1 if greater than 0
         TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // Leaves garbage in high bits, but packer will ignore it
         TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);  // Swap hi and low 16 before write

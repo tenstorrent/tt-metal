@@ -139,12 +139,11 @@ inline void _int8_pack_fixup_() {
     // FP32_TO_UINT8(0.0) = 0, and 0 ^ 0x80 = 0x80, which is the two's-complement encoding of
     // -128 (the minimum int8 value).
     //
-    // The clamp is a float max against LCONST_0 (SFPSWAP VEC_MAX_MIN, the idiom
+    // The clamp is a max against LCONST_0 (SFPSWAP VEC_MAX_MIN, the idiom
     // calculate_typecast_fp32_to_uint16 uses) instead of the SFPSETCC / SFPMOV / SFPENCC
-    // predicate. Identical for every finite input and for +/-Inf (-Inf -> 0 -> -128; +Inf
-    // saturates to 255 -> 127); -0.0 becomes +/-0 and rounds to 0 either way. NaN lanes are
-    // implementation-defined in both forms (the sign-bit test used to send a negative-signed
-    // NaN to -128; now SFPSWAP's NaN ordering decides).
+    // predicate, and is bit-identical to it for every input: SFPSWAP compares sign-magnitude,
+    // so max(x, +0) gives +0 for every sign-set word (-0, negative denormals, -Inf, -NaN) and
+    // keeps every sign-clear word, which is exactly the old SFPSETCC(LT0) sign-bit test.
     //
     // The SFPNOP is required: the value in LREG0 is the preceding SFPMAD's result, and on
     // Blackhole the SFPU scoreboard does not stall an SFPSWAP consumer of an in-flight
@@ -153,7 +152,8 @@ inline void _int8_pack_fixup_() {
     // is why the predicate form needed none). Without it SFPSWAP reads the pre-MAD LREG0
     // and every negative input clamps to -128 (seen on silicon).
     TTI_SFPNOP;
-    TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);  // LREG0 = max(LREG0, 0.0)
+    // LREG0 = max(LREG0, 0.0)
+    TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LCONST_0, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);
     TTI_SFP_STOCH_RND(
         sfpi::SFPSTOCHRND_RND_EVEN,
         0 /*imm8*/,
