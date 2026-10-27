@@ -1136,6 +1136,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["VC0_USES_COUNTER_CREDITS"] = credit_plan.vc0_uses_counters ? 1 : 0;
     named_args["VC1_USES_COUNTER_CREDITS"] = credit_plan.vc1_uses_counters ? 1 : 0;
     named_args["VC2_USES_COUNTER_CREDITS"] = credit_plan.vc2_uses_counters ? 1 : 0;
+    // Wormhole and Blackhole have stream registers. 0 selects software counters for every credit
+    // (fabric_erisc_router_ct_args.hpp) and needs the packets-sent counter addresses below.
+    named_args["STREAM_REGISTERS_AVAILABLE"] = 1;
 
     // Flat bases for the shared free-slots table, so a VC's boundary is the same on every router.
     named_args["VC1_FABRIC_POSITION_START"] = stream_assignment.sender_flat_base(1);
@@ -1328,6 +1331,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         static_cast<uint32_t>(config.receiver_channel_remote_ack_counters_base_addr);
     named_args["LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR"] =
         static_cast<uint32_t>(config.receiver_channel_remote_completion_counters_base_addr);
+    // Unused while STREAM_REGISTERS_AVAILABLE is 1.
+    named_args["TO_RECEIVER_PACKETS_SENT_COUNTERS_BASE_ADDR"] = 0;
+    named_args["LOCAL_SENDER_PACKETS_SENT_COUNTERS_BASE_ADDR"] = 0;
 
     // --- Host signal args (defaults; compute_mesh_router_builder overrides when wait_for_host_signal) ---
     named_args["IS_LOCAL_HANDSHAKE_MASTER"] = 0;
