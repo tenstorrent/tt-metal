@@ -2169,3 +2169,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   soon as the build is found; when only it is left, the run stops waiting and `resume` re-checks.
 - Selftest: test_engine_wait.py (waits, no gate, no agent, independent work passes, runs once a build appears; no wait
   without the requirement or without a runner test).
+- Also: testing/dgen_engine.server_repo expands $USER / ~ like the spec's own paths (core/spec._expand); the 8x4 spec's
+  `/scratch/$USER/tt-d-gen` was taken literally and the built engine never found (selftest
+  test_the_specs_server_repo_expands_like_its_other_paths).
