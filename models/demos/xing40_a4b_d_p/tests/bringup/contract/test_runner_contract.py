@@ -76,9 +76,8 @@ def runner_env(out: Path, golden_dir: Path) -> dict:
         PREFILL_LAYER_ACK_D2H="1",
         PREFILL_USE_TRACE="0",
         PREFILL_H2D_SERVICE_ID=f"xing_contract_{os.getpid()}",
-        PREFILL_ENABLE_MIGRATION="1",
-        PREFILL_MOCK_MIGRATION="1",
-        PREFILL_MIGRATION_EXPORT_TO_FILE="0",
+        PREFILL_ENABLE_MIGRATION="0",  # (upstream: 0 = no live migration layer, the table stays on disk)
+        PREFILL_MIGRATION_EXPORT_TO_FILE="1",  # (and the device map file, read by the KV read-back)
         PREFILL_MIGRATION_TABLE_PATH=str(out / "table.pb"),
         PREFILL_MIGRATION_DEVICE_MAP_PATH=str(out / "device_map.json"),
         PREFILL_TRACE_DIR=str(golden_dir),
