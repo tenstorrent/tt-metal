@@ -373,16 +373,18 @@ TABLE = {
         "head",
     ),
     "MOE_HEAD": Setting(
-        "ops",
+        "fused",
         ("ops", "fused"),
         "MOE_IMPL=block only (tt/MOE_BLOCK.md): the MoE block's head. ops = a program a stage (D4): ffn_norm gathers x, "
-        "the block's ops router and ttnn shared expert, the exchange's fixed combine order (D7). fused = Marko "
-        'Staletovic\'s fused head (owner decision 2026-10-27 "go with fused head"; ops stays the default until the owner '
-        "has seen the A/B): one program a chip - x gathered over TP on its ports (ffn_norm then does not gather), the "
+        "the block's ops router and ttnn shared expert, the exchange's fixed combine order (D7). fused (default: owner "
+        "decision 2026-10-27, after the 2x2 A/B - device 61.97 vs 66.9 ms a chunk, MoE section 17.45 vs 22.03, clean "
+        "wall 102.2 vs 160.6; flat 65.74 / 138.0; the ladder at the ops head's metrics) = Marko Staletovic's fused head "
+        '(owner decision 2026-10-27 "go with fused head"): one program a chip - x gathered over TP on its ports (ffn_norm then does not gather), the '
         "shared expert engine (bfp8, LoFi as D5, clamped SiLU 10) with its row reduce-scatter, the router (logits HiFi3, "
         "fp32 sums, sqrt(softplus) with the fp32 softplus, + bias, top 6, weights / sum x 1.5), the routing exchange, "
         "the combine planner and dispatch prep; its planner has no fixed combine order, so the combine snaps each term to "
-        "2^-19 (order-independent fp32 sums: bit-identical runs; DS41's routed sums peak at 5.4, under 2^24 x 2^-19 = 32)",
+        "2^-19 (owner decision 2026-10-27: keep the snap - it supersedes D7 for the fused head; order-independent fp32 "
+        "sums: bit-identical runs; DS41's routed sums peak at 5.4, under 2^24 x 2^-19 = 32)",
     ),
     # ---- mHC (tt/mhc.py, tt/residual.py)
     "RESIDUAL_MIX": Setting(
