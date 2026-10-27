@@ -3,11 +3,14 @@
 
 """Real-weight full-model PCC on the test goldens (CONTRACT §6C), both precisions."""
 
+import os
+
 import pytest
 import torch
 
 from models.experimental.tafsut_forecast.tests.golden.goldens import load_golden
 from models.experimental.tafsut_forecast.tests.helpers import case_metrics, check_floors
+from models.experimental.tafsut_forecast.tests.perf.test_forward_perf import _record
 from models.experimental.tafsut_forecast.tt.common import Precision
 from models.experimental.tafsut_forecast.tt.model import TtTafsut
 
@@ -26,7 +29,14 @@ def test_model(device, case, prec):
     heads = []
     q = m.forecast(g["x"], g["horizon"], heads=heads)
     met = case_metrics(heads, g, q)
-    print(f"[pcc] {case}-{prec}: " + " ".join(f"{k}={v:.5f}" if isinstance(v, float) else f"{k}={v}" for k, v in met.items()))
+    print(
+        f"[pcc] {case}-{prec}: "
+        + " ".join(f"{k}={v:.5f}" if isinstance(v, float) else f"{k}={v}" for k, v in met.items())
+    )
+    # suite record for check_gates (MODEL_PERF_JSON), and the raw outputs for row-level analysis (TAFSUT_DUMP dir)
+    _record({"test": "suite", "name": case, "precision": prec, "rows": int(g["x"].shape[0]), **met})
+    if os.environ.get("TAFSUT_DUMP"):
+        torch.save({"heads": heads, "q": q}, os.path.join(os.environ["TAFSUT_DUMP"], f"{case}-{prec}.pt"))
     check_floors(met, prec, module=True)
 
 
