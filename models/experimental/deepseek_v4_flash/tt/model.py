@@ -65,7 +65,7 @@ from .decode.paged_cache import (
     build_groups,
     plan_pool_blocks,
 )
-from .common import DeepSeekV4Module, _MASK_NEG, _profile, _trace_capture_guard, _traced_decode_enabled
+from .common import CCL_TOPOLOGY, DeepSeekV4Module, _MASK_NEG, _profile, _trace_capture_guard, _traced_decode_enabled
 from .decode.decoder_layer import DeepSeekV4DecoderLayer, _strip_prefix
 from .embedding import DeepSeekV4Embedding
 from .decode.hyperconnection import DeepSeekV4HyperHead
@@ -2582,7 +2582,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 pkt = sm["pkt"]
                 ttnn.experimental.recv_async_h2d(pkt, self._pkt_socket)
                 if self.tp_size > 1:
-                    pkt = ttnn.broadcast(pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=ttnn.Topology.Ring)
+                    pkt = ttnn.broadcast(pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=CCL_TOPOLOGY)
             elif recv:
                 # Receive the residual streams + fused packet from the submesh holding the
                 # previous layer into the persistent buffers. Streams arrive row-major (no
@@ -2902,6 +2902,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
             for out in compile_outs:
                 if out is not None:
                     out.deallocate(True)
+            # Every submesh has drained once the output is read, so the profiler read's sync cannot
+            # strand a cross-submesh send. Mid-loop it could.
+            for sm in self.submeshes_io:
+                _profile(sm["device"])
         self._traces_compiled = True
         for sm, before in zip(self.submeshes_io, l1_before):
             kept = {a: s for a, s in _l1_buffers(sm["device"]).items() if before.get(a) != s}
@@ -4492,7 +4496,7 @@ class TracedPrefill:
                 # ``broadcast`` corrupts a row-major page larger than one fabric packet (~4.3 KB): send rows of <= 4 KB.
                 width = self._pkt_bcast_width
                 rows = ttnn.reshape(stage.pkt, [1, 1, self._pkt_w // width, width])
-                sent = ttnn.broadcast(rows, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=ttnn.Topology.Ring)
+                sent = ttnn.broadcast(rows, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=CCL_TOPOLOGY)
                 pkt = ttnn.reshape(sent, [1, 1, 1, self._pkt_w])
         else:
             ttnn.experimental.recv_direct_async(io.streams_in, stage.recv)

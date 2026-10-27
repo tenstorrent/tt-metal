@@ -46,6 +46,16 @@ def _traced_decode_enabled() -> bool:
     return os.environ.get("DEEPSEEK_V4_TRACED_DECODE", "1") not in ("0", "false", "False")
 
 
+# Fabric topology for every CCL (all-reduce, broadcast) in the model. Defaults to Linear;
+# ``DEEPSEEK_V4_CCL_RING=1`` switches all of them to Ring, which needs the reduced mesh axis to
+# wrap around in the fabric.
+CCL_TOPOLOGY = (
+    ttnn.Topology.Ring
+    if os.environ.get("DEEPSEEK_V4_CCL_RING", "0") not in ("0", "", "false", "False")
+    else ttnn.Topology.Linear
+)
+
+
 # Master switch for the per-module signposts. Host markers cannot bracket the ops of a replayed
 # trace, so signposts are off whenever traced decode is enabled. Otherwise they default on (a
 # no-op unless the run is captured under the Tracy profiler), and ``DEEPSEEK_V4_SIGNPOSTS=0``

@@ -439,6 +439,62 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
         two_intermediate,
         2u * attributes.intermediate_size);
 
+    TT_FATAL(
+        tensor_args.shared_gate_up_weights.has_value() == tensor_args.shared_down_weights.has_value(),
+        "fused_experts: shared_gate_up_weights and shared_down_weights must be given together");
+    if (tensor_args.shared_gate_up_weights.has_value()) {
+        const auto& gu = *tensor_args.shared_gate_up_weights;
+        const auto& dn = *tensor_args.shared_down_weights;
+        for (const Tensor* w : {&gu, &dn}) {
+            TT_FATAL(
+                w->storage_type() == StorageType::DEVICE, "fused_experts: shared expert weights must be on device");
+            TT_FATAL(
+                w->layout() == tt::tt_metal::Layout::TILE, "fused_experts: shared expert weights must be TILE layout");
+            TT_FATAL(
+                w->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                "fused_experts: shared expert weights must be in DRAM");
+            TT_FATAL(
+                w->memory_config().nd_shard_spec().has_value(),
+                "fused_experts: shared expert weights must be ND-sharded");
+        }
+        TT_FATAL(
+            static_cast<uint32_t>(gu.logical_shape()[-2]) == hidden,
+            "fused_experts: shared_gate_up_weights K ({}) must equal hidden ({})",
+            gu.logical_shape()[-2],
+            hidden);
+        const uint32_t shared_two_i = static_cast<uint32_t>(gu.logical_shape()[-1]);
+        TT_FATAL(
+            shared_two_i > 0 && shared_two_i % (2u * TILE_DIM) == 0,
+            "fused_experts: shared_gate_up_weights width ({}) must be a positive multiple of {} ([gate | up] tile "
+            "pairs)",
+            shared_two_i,
+            2u * TILE_DIM);
+        const auto& gu_shard = gu.memory_config().nd_shard_spec()->shard_shape;
+        TT_FATAL(
+            static_cast<uint32_t>(gu_shard[-2]) == hidden && static_cast<uint32_t>(gu_shard[-1]) == 2u * TILE_DIM,
+            "fused_experts: shared_gate_up_weights shard must be [{}, {}] (one I-tile's [gate | up]), got [{}, {}]",
+            hidden,
+            2u * TILE_DIM,
+            gu_shard[-2],
+            gu_shard[-1]);
+        TT_FATAL(
+            static_cast<uint32_t>(dn.logical_shape()[-2]) == shared_two_i / 2u &&
+                static_cast<uint32_t>(dn.logical_shape()[-1]) == hidden,
+            "fused_experts: shared_down_weights must be [{}, {}], got [{}, {}]",
+            shared_two_i / 2u,
+            hidden,
+            dn.logical_shape()[-2],
+            dn.logical_shape()[-1]);
+        const auto& dn_shard = dn.memory_config().nd_shard_spec()->shard_shape;
+        TT_FATAL(
+            static_cast<uint32_t>(dn_shard[-2]) == TILE_DIM && static_cast<uint32_t>(dn_shard[-1]) == kDownShardCols,
+            "fused_experts: shared_down_weights shard must be [{}, {}] (one I-tile of one H-slice), got [{}, {}]",
+            TILE_DIM,
+            kDownShardCols,
+            dn_shard[-2],
+            dn_shard[-1]);
+    }
+
     // TODO: validate per-expert weight shapes against H / 2I / I, dtypes, and tile alignment.
 }
 
@@ -509,7 +565,11 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
         weight_addresses,
         input_tile.get_height(),
         input_tile.get_width(),
-        tensor_args.routing_scores.layout() == tt::tt_metal::Layout::ROW_MAJOR);
+        tensor_args.routing_scores.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        // The shared expert's addresses are runtime args, so only its specs and clamp key the program.
+        tensor_args.shared_gate_up_weights,
+        tensor_args.shared_down_weights,
+        attributes.shared_swiglu_limit);
     return hash;
 }
 
@@ -561,11 +621,15 @@ FusedExpertsDeviceOperation::invoke(
     bool two_hub_gather,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& routing_indices,
-    const std::optional<Tensor>& ranking_scores) {
+    const std::optional<Tensor>& ranking_scores,
+    const std::optional<Tensor>& shared_gate_up_weights,
+    const std::optional<Tensor>& shared_down_weights,
+    std::optional<float> shared_swiglu_limit) {
     operation_attributes_t attributes{
         .num_experts = num_experts,
         .intermediate_size = intermediate_size,
         .swiglu_limit = swiglu_limit,
+        .shared_swiglu_limit = shared_swiglu_limit.value_or(swiglu_limit),
         // 0 means "no blocking": resolve it here so the attribute (and the program hash) always
         // carries the block size the kernels are actually compiled for.
         .experts_block_size = experts_block_size == 0 ? num_experts : std::min(experts_block_size, num_experts),
@@ -590,6 +654,8 @@ FusedExpertsDeviceOperation::invoke(
         .ranking_scores = ranking_scores,
         .gate_up_weights = gate_up_weights,
         .down_weights = down_weights,
+        .shared_gate_up_weights = shared_gate_up_weights,
+        .shared_down_weights = shared_down_weights,
     };
     return {std::move(attributes), std::move(tensor_args)};
 }
@@ -613,7 +679,10 @@ fused_experts(
     bool two_hub_gather,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& routing_indices,
-    const std::optional<Tensor>& ranking_scores) {
+    const std::optional<Tensor>& ranking_scores,
+    const std::optional<Tensor>& shared_gate_up_weights,
+    const std::optional<Tensor>& shared_down_weights,
+    std::optional<float> shared_swiglu_limit) {
     using OperationType = ttnn::operations::experimental::deepseek::moe::fused_experts::FusedExpertsDeviceOperation;
     auto [operation_attributes, tensor_args] = OperationType::invoke(
         input_tensor,
@@ -630,7 +699,10 @@ fused_experts(
         two_hub_gather,
         memory_config,
         routing_indices,
-        ranking_scores);
+        ranking_scores,
+        shared_gate_up_weights,
+        shared_down_weights,
+        shared_swiglu_limit);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

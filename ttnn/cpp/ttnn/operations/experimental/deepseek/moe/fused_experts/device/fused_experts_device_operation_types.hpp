@@ -27,6 +27,9 @@ struct operation_attributes_t {
     // Clamp limit applied inside the SwiGLU activation: silu(clamp(gate, max=limit)) * clamp(up, -limit, limit).
     float swiglu_limit{};
 
+    // The same clamp for the fused shared expert (unused without one). +inf leaves it unclamped.
+    float shared_swiglu_limit{};
+
     // How many experts' SwiGLU activations are resident in L1 at once, i.e. the size of the expert
     // blocks the op processes in sequence. 0 means "all `num_experts` in one block".
     //
@@ -114,6 +117,14 @@ struct tensor_args_t {
 
     // One down weight tensor per expert, each [I, H] (matmul-ready / transposed).
     std::vector<Tensor> down_weights;
+
+    // The always-active shared expert, computed alongside the routed ones with weight 1 for every
+    // token; both or neither are given. gate_up is [H, 2*Is] with gate/up interleaved per I-tile
+    // (DRAM ND-sharded [H, 64], one [gate_32 | up_32] shard per I-tile); down is [Is, H] DRAM
+    // ND-sharded [32, 64], so shard (t, h) is I-tile t of H-slice h. Is need not equal the routed I,
+    // and the dtype may differ from the routed weights'.
+    std::optional<Tensor> shared_gate_up_weights;
+    std::optional<Tensor> shared_down_weights;
 };
 
 using spec_return_value_t = tt::tt_metal::TensorSpec;

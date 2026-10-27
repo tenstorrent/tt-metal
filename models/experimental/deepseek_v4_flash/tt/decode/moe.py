@@ -12,12 +12,13 @@ HEIGHT_SHARDED shard height, 1 on the single-token decode path, and *not* the re
 moe_intermediate_size; ``k`` num_experts_per_tok; ``K`` / ``N`` matmul in/out features.
 """
 
+import os
 from typing import NamedTuple, Optional
 
 import ttnn
 import torch
 
-from ..common import DeepSeekV4Module, _profile, width_sharded_l1_config
+from ..common import CCL_TOPOLOGY, DeepSeekV4Module, _profile, width_sharded_l1_config
 from .decode_prefetch import (
     DECODE_LAYOUTS,
     check_decode_layout,
@@ -575,12 +576,27 @@ _FUSED_PARALLEL_EXPERTS = 6
 _FUSED_GRID_Y = 8
 _FUSED_PARALLEL_GRID_X = _FUSED_PARALLEL_EXPERTS * 2
 _FUSED_DOWN_CORES_PER_EXPERT = 2 * _FUSED_GRID_Y
+# Run the shared expert inside ``fused_experts`` wherever the op takes its 6-expert path (the only
+# path that fuses it). ``DEEPSEEK_V4_FUSE_SHARED_EXPERT=0`` keeps it as its own projections.
+FUSE_SHARED_EXPERT = os.environ.get("DEEPSEEK_V4_FUSE_SHARED_EXPERT", "1") not in ("0", "", "false", "False")
 
 
 def _fused_parallel_grid_y(intermediate: int) -> int:
     """Rows of the 6-expert grid for a per-rank ``intermediate``: 8, or 9 when its tiles do not
     split evenly over 16 cores. Mirrors ``parallel_grid_y`` in the program factory."""
     return _FUSED_GRID_Y if (intermediate // _FUSED_TILE) % _FUSED_DOWN_CORES_PER_EXPERT == 0 else _FUSED_GRID_Y + 1
+
+
+def _fused_parallel(top_k: int, device, intermediate: int) -> bool:
+    """Whether ``fused_experts`` takes its 6-expert path for ``top_k`` selected experts and a per-rank
+    ``intermediate``: 6 experts, and a device grid that holds the 12-wide grid. Mirrors
+    ``parallel_experts`` in the program factory."""
+    grid = device.compute_with_storage_grid_size()
+    return (
+        top_k == _FUSED_PARALLEL_EXPERTS
+        and grid.x >= _FUSED_PARALLEL_GRID_X
+        and grid.y >= _fused_parallel_grid_y(intermediate)
+    )
 
 
 def _fused_hidden(num_cores: int) -> int:
@@ -600,11 +616,8 @@ def _fused_compute_core_range_set(top_k: int, device, num_cores: int, intermedia
     ``cb_input`` over each core's shard and will not broadcast a row that is already supposed to
     be local.
     """
-    grid = device.compute_with_storage_grid_size()
-    gy = _fused_parallel_grid_y(intermediate)
-    parallel = top_k == _FUSED_PARALLEL_EXPERTS and grid.x >= _FUSED_PARALLEL_GRID_X and grid.y >= gy
-    if not parallel:
-        gy = _FUSED_GRID_Y
+    parallel = _fused_parallel(top_k, device, intermediate)
+    gy = _fused_parallel_grid_y(intermediate) if parallel else _FUSED_GRID_Y
     gx = _FUSED_PARALLEL_GRID_X if parallel else num_cores // _FUSED_GRID_Y
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
 
@@ -671,13 +684,13 @@ def _tp_all_reduce(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
     """Sum the TP partials (row-parallel down-proj) back to a replicated ``[..., D]``.
 
     ``tensor`` is the DRAM-interleaved ``[1,1,T,D]`` partial from the fused expert op; the result
-    is the same shape, replicated across the TP axis (ring all-reduce, both links).
+    is the same shape, replicated across the TP axis (``CCL_TOPOLOGY`` all-reduce, both links).
     """
     return ttnn.all_reduce(
         tensor,
         cluster_axis=_tp_cluster_axis(device),
         num_links=2,
-        topology=ttnn.Topology.Ring,
+        topology=CCL_TOPOLOGY,
     )
 
 
@@ -746,6 +759,66 @@ def _load_fused_weight(
         mesh_mapper=mesh_mapper,
     )
     return sharded
+
+
+class FusedSharedExpert:
+    """The shared expert as ``fused_experts`` runs it, next to the routed experts (6-expert path).
+
+    Same math as :class:`DeepSeekV4MLP`, ``down(silu(gate(x)) * up(x))`` clamped by ``swiglu_limit``
+    when ``clamp_swiglu`` is set (``inf`` otherwise), but the three projections become two DRAM
+    ND-sharded weights the op reads in place: ``gate_up`` ``[D, 2I]`` with gate/up interleaved per
+    I-tile (one ``[D, 64]`` shard per I-tile) and ``down`` ``[I, D]`` cut into ``[32, 64]`` shards.
+    Under TP each rank holds an ``I/TP`` slice, like the routed experts, and the block's all-reduce
+    sums the down partials.
+    """
+
+    def __init__(
+        self,
+        weights: dict,
+        prefix: str,
+        device: ttnn.MeshDevice,
+        config,
+        dram_banks: int,
+        cache: Optional[WeightCache] = None,
+        weight_dtype: ttnn.DataType = ttnn.bfloat8_b,
+        clamp_swiglu: bool = False,
+        tp_size: int = 1,
+    ):
+        """``weights`` holds ``<prefix>.gate_proj`` / ``up_proj`` / ``down_proj`` ``.weight`` as
+        ``[I, D]`` / ``[I, D]`` / ``[D, I]`` torch tensors or thunks (read only on a cache miss)."""
+        cache = _as_cache(cache)
+        hidden, inter = config.hidden_size, config.moe_intermediate_size
+        if inter % (_FUSED_TILE * tp_size):
+            raise ValueError(f"shared expert I={inter} does not split into whole tiles over TP{tp_size}")
+        local_inter = inter // tp_size
+        self.swiglu_limit = config.swiglu_limit if clamp_swiglu else float("inf")
+        tp_tag = f".tp{tp_size}" if tp_size > 1 else ""
+        gate = _memo(weights[f"{prefix}.gate_proj.weight"])
+        up = _memo(weights[f"{prefix}.up_proj.weight"])
+        down = _memo(weights[f"{prefix}.down_proj.weight"])
+        gate_up_name, down_name = f"{prefix}.gate_up_fused{tp_tag}", f"{prefix}.down_fused{tp_tag}"
+        gate_up_w = _materialize(
+            lambda: _interleave_gate_up_tp(torch.cat([gate(), up()]), tp_size, _FUSED_TILE),
+            cache.file(gate_up_name),
+            weight_dtype,
+        )
+        down_w = _materialize(lambda: down().t().contiguous(), cache.file(down_name), weight_dtype)
+        self.gate_up = _load_fused_weight(
+            gate_up_w,
+            device,
+            _fused_nd_dram_config(hidden, 2 * local_inter, 2 * _FUSED_TILE, dram_banks),
+            cache_file_name=cache.file(gate_up_name),
+            dtype=weight_dtype,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1) if tp_size > 1 else None,
+        )
+        self.down = _load_fused_weight(
+            down_w,
+            device,
+            _fused_nd_dram_config(_FUSED_TILE, hidden, 2 * _FUSED_TILE, dram_banks),
+            cache_file_name=cache.file(down_name),
+            dtype=weight_dtype,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0) if tp_size > 1 else None,
+        )
 
 
 class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
@@ -817,6 +890,8 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         # by all-reducing the down-proj partials in :class:`DeepSeekV4SparseMoeBlock`.
         self.intermediate = intermediate_full // tp_size
         self._core_grid = _fused_compute_core_range_set(self.top_k, device, num_cores, self.intermediate)
+        # The 6-expert path is the only one that can fuse the shared expert into the op.
+        self.parallel = _fused_parallel(self.top_k, device, self.intermediate)
         self.hidden = config.hidden_size
         self.limit = config.swiglu_limit
         # Applied inside the op on the sparse path, where the weights are derived here
@@ -917,8 +992,13 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         """The per-expert ND-sharded down weights (read in place by the prefill routed-expert op)."""
         return self._down_fused
 
-    def _run_fused(self, x_tok: ttnn.Tensor, routing: SparseRouting) -> ttnn.Tensor:
+    def _run_fused(
+        self, x_tok: ttnn.Tensor, routing: SparseRouting, shared: Optional[FusedSharedExpert] = None
+    ) -> ttnn.Tensor:
         """Run ``fused_experts`` for one token row; returns ``[1,1,1,D]``.
+
+        ``shared`` (6-expert path only) is the always-active shared expert, which the op then adds
+        to the output itself.
 
         ``x_tok`` is the single-token activation the op accepts -- ROW_MAJOR interleaved
         ``[1,1,1,D]``, or the ROW_MAJOR HEIGHT_SHARDED L1 replica (``[1,1,cores,D]`` with shard
@@ -962,11 +1042,17 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             routed_scaling_factor=self.routed_scaling_factor,
             routing_eps=self.routing_eps,
             experts_block_size=self.experts_block_size,
+            shared_gate_up_weights=None if shared is None else shared.gate_up,
+            shared_down_weights=None if shared is None else shared.down,
+            shared_swiglu_limit=None if shared is None else shared.swiglu_limit,
         )  # [1, 1, D]
         return ttnn.reshape(out, [1, 1, 1, self.hidden])
 
-    def forward(self, x_flat: ttnn.Tensor, routing: SparseRouting) -> ttnn.Tensor:
-        """``x_flat`` ``[1,1,T,D]`` plus the token's routing decision -> ``[1,1,1,D]``.
+    def forward(
+        self, x_flat: ttnn.Tensor, routing: SparseRouting, shared: Optional[FusedSharedExpert] = None
+    ) -> ttnn.Tensor:
+        """``x_flat`` ``[1,1,T,D]`` plus the token's routing decision -> ``[1,1,1,D]``, plus the
+        ``shared`` expert when given.
 
         Trace-safe: nothing is read back to host. ``T`` is the activation's *shard height*, not the
         token axis of the gathered tensor: the decode all-gather replicates the token row onto
@@ -986,7 +1072,7 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             t = x_flat.shape[2]
         _profile(self.device)
         assert t == 1, "t must be 1"
-        out = self._run_fused(x_flat, routing)
+        out = self._run_fused(x_flat, routing, shared)
         return out
 
     # The routed FFN has no host readback and no host-initialised operands, so the traced
@@ -1048,18 +1134,35 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         )
         self.is_hash = isinstance(self.gate, DeepSeekV4HashRouter)
         self.experts = experts
-        self.shared_experts = self.shared_expert_cls(
-            weights,
-            "shared_experts",
-            device,
-            cache=cache,
-            weight_dtype=weight_dtype,
-            config=config,
-            use_prefetcher=use_prefetcher,
-            prefetch_buffers=prefetch_buffers,
-            tp_size=tp_size,
-            matmul_decode=matmul_decode,
-        )
+        # On the 6-expert path ``fused_experts`` also runs the shared expert (unless
+        # DEEPSEEK_V4_FUSE_SHARED_EXPERT=0), so there is no separate shared MLP to build.
+        self.fused_shared = None
+        self.shared_experts = None
+        if FUSE_SHARED_EXPERT and experts.parallel:
+            self.fused_shared = FusedSharedExpert(
+                weights,
+                "shared_experts",
+                device,
+                config,
+                dram_banks=experts.system_config.moe.fused_dram_banks,
+                cache=cache,
+                weight_dtype=weight_dtype,
+                clamp_swiglu=self.shared_expert_cls.clamp_swiglu,
+                tp_size=tp_size,
+            )
+        else:
+            self.shared_experts = self.shared_expert_cls(
+                weights,
+                "shared_experts",
+                device,
+                cache=cache,
+                weight_dtype=weight_dtype,
+                config=config,
+                use_prefetcher=use_prefetcher,
+                prefetch_buffers=prefetch_buffers,
+                tp_size=tp_size,
+                matmul_decode=matmul_decode,
+            )
 
     def prefetch_weights(self):
         """Stage the ``[D, E]`` router gate, then the shared expert's ``[D, I]`` gate/up and
@@ -1070,7 +1173,8 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         the shared decode GCB after o_b. Queue order on each ring has to match consume order.
         """
         self.gate.prefetch_weights()
-        self.shared_experts.prefetch_weights()
+        if self.shared_experts is not None:
+            self.shared_experts.prefetch_weights()
 
     def decode_static(
         self, hidden: ttnn.Tensor, hash_token: ttnn.Tensor | None = None, image_mask: ttnn.Tensor | None = None
@@ -1123,9 +1227,12 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             routing = self.gate.forward_static(x_flat, hash_token)
         else:
             routing = self.gate(x_flat, image_mask)
-        routed = self.experts.decode_static(x_flat, routing)  # [1, 1, 1, D]
-        shared = self.shared_experts(x_flat)  # [1, 1, B, D]
-        combined = ttnn.add(routed, shared)
+        if self.fused_shared is not None:
+            combined = self.experts.decode_static(x_flat, routing, self.fused_shared)  # [1, 1, 1, D]
+        else:
+            routed = self.experts.decode_static(x_flat, routing)  # [1, 1, 1, D]
+            shared = self.shared_experts(x_flat)  # [1, 1, B, D]
+            combined = ttnn.add(routed, shared)
         combined = ttnn.to_memory_config(combined, ttnn.DRAM_MEMORY_CONFIG)
         if self.tp_size > 1:
             combined = _tp_all_reduce(combined, self.device)
