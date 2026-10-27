@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-// A Metal 2.0 port of this kernel's non-sharded path exists alongside it as
-// transpose_wh_rm_metal2.cpp. Ops still on the legacy host API bind this copy (the sharded
-// path below is compiled only from here); ops on Metal 2.0 bind the fork. Keep the two in
-// sync when changing the shared compute logic.
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as transpose_wh_rm_metal2.cpp, and
+// carries both of this file's paths (non-sharded and SHARDED). Ops ported to Metal 2.0 bind the
+// fork; this file serves the consumers still on the legacy API. Until the last of them migrates
+// and this file is retired, changes here likely belong in the fork too.
 
 #include <cstdint>
 
