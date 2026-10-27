@@ -14,19 +14,20 @@ import os
 import pytest
 import torch
 from helpers.data_format_inference import data_formats
-from helpers.format_config import FormatConfig
+from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     MatmulGolden,
     UnarySFPUGolden,
     get_golden_generator,
 )
 from helpers.llk_params import (
+    ApproximationMode,
     DestAccumulation,
     DestSync,
     MathFidelity,
     MathOperation,
     PerfRunType,
-    SfpuSrcsImpl,
+    SfpuImpl,
     Transpose,
     format_dict,
 )
@@ -42,6 +43,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    APPROX_MODE,
     CRK_TILE_DIMM,
     DEST_SYNC,
     ENABLE_2X_FORMAT,
@@ -49,7 +51,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
-    SFPU_SRCS_IMPL,
+    SFPU_IMPL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -65,13 +67,13 @@ DIMENSION_PROFILES = (
     ([32, 32], [32, 32], [32, 32]),
     ([32, 256], [64, 64], [64, 128]),
 )
+# Perf uses the multi-tile profile; one tile is too short to time.
+PERF_DIMENSION_PROFILE = DIMENSION_PROFILES[1]
 
 
 # ttsim has no SFPLOADMACRO, so under --disable-sfploadmacro only the SFPI implementation is built.
 LOADMACRO_AVAILABLE = os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") != "1"
-ALL_SFPU_SRCS_IMPLS = (
-    tuple(SfpuSrcsImpl) if LOADMACRO_AVAILABLE else (SfpuSrcsImpl.Sfpi,)
-)
+ALL_SFPU_IMPLS = tuple(SfpuImpl) if LOADMACRO_AVAILABLE else (SfpuImpl.Sfpi,)
 
 
 def _matmul_output_fits_dest(
@@ -90,14 +92,16 @@ def generate_parallel_matmul_exp_combinations(
     formats_list: list[FormatConfig],
     *,
     is_perf: bool = False,
-    impls: tuple[SfpuSrcsImpl, ...] = (SfpuSrcsImpl.Sfpi,),
+    impls: tuple[SfpuImpl, ...] = (SfpuImpl.Sfpi,),
 ):
     combinations = []
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
         formats_list
     ):
         dest_sync_modes = (DestSync.Half, DestSync.Full)
-        dimension_profiles = (DIMENSION_PROFILES[1],) if is_perf else DIMENSION_PROFILES
+        dimension_profiles = (
+            (PERF_DIMENSION_PROFILE,) if is_perf else DIMENSION_PROFILES
+        )
         for dest_sync in dest_sync_modes:
             for (
                 exp_input_dimensions,
@@ -111,28 +115,39 @@ def generate_parallel_matmul_exp_combinations(
                     dest_sync,
                 ):
                     continue
-                for sfpu_srcs_impl in impls:
-                    combinations.append(
-                        (
-                            fmt,
-                            dest_acc,
-                            dest_sync,
-                            sfpu_srcs_impl,
-                            runtime(exp_input_dimensions),
-                            runtime(input_A_dimensions),
-                            runtime(input_B_dimensions),
-                        )
+                for sfpu_impl in impls:
+                    # Accurate exp only differs for a Float32 SrcS layout with Sfpi; LoadMacro is LUT-only.
+                    approx_modes = (
+                        (ApproximationMode.Yes, ApproximationMode.No)
+                        if not is_perf
+                        and sfpu_impl == SfpuImpl.Sfpi
+                        and fmt.input_format == DataFormat.Float32
+                        and fmt.output_format == DataFormat.Float32
+                        else (ApproximationMode.Yes,)
                     )
+                    for approx_mode in approx_modes:
+                        combinations.append(
+                            (
+                                fmt,
+                                dest_acc,
+                                dest_sync,
+                                sfpu_impl,
+                                approx_mode,
+                                runtime(exp_input_dimensions),
+                                runtime(input_A_dimensions),
+                                runtime(input_B_dimensions),
+                            )
+                        )
     return combinations
 
 
-# Regular run: SFPI implementation only. The SFPLOADMACRO implementation runs in the nightly
-# function below, so a nightly session covers both.
+# Regular run: SFPI only. The SFPLOADMACRO variant is nightly-marked; no repo CI job runs it on
+# Quasar yet (ttsim has no SFPLOADMACRO), so it runs only in manual hardware/emulator sessions.
 PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
-    SFPU_UNARY_FORMATS, impls=(SfpuSrcsImpl.Sfpi,)
+    SFPU_UNARY_FORMATS, impls=(SfpuImpl.Sfpi,)
 )
 PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS = generate_parallel_matmul_exp_combinations(
-    SFPU_UNARY_FORMATS, impls=(SfpuSrcsImpl.LoadMacro,)
+    SFPU_UNARY_FORMATS, impls=(SfpuImpl.LoadMacro,)
 )
 
 
@@ -151,7 +166,8 @@ def test_sfpu_exp_parallel_matmul_quasar(
         formats,
         dest_acc,
         dest_sync,
-        sfpu_srcs_impl,
+        sfpu_impl,
+        approx_mode,
         exp_input_dimensions,
         input_A_dimensions,
         input_B_dimensions,
@@ -264,7 +280,8 @@ def test_sfpu_exp_parallel_matmul_quasar(
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
-            SFPU_SRCS_IMPL(sfpu_srcs_impl),
+            SFPU_IMPL(sfpu_impl),
+            APPROX_MODE(approx_mode),
         ],
         "runtimes": [
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),

@@ -227,7 +227,8 @@ tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& cluster_axis) {
-    tt::tt_fabric::Topology topology_ = topology.has_value() ? *topology : tt::tt_fabric::get_fabric_topology();
+    tt::tt_fabric::Topology topology_ =
+        topology.has_value() ? *topology : tt::tt_fabric::get_fabric_topology(*tensor.device());
     if (topology_ == tt::tt_fabric::Topology::Ring || topology_ == tt::tt_fabric::Topology::Torus) {
         bool wraps;
         if (cluster_axis.has_value()) {

@@ -64,7 +64,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology, sparse_mla_overlap_gather_rows
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
@@ -1997,7 +1997,8 @@ def run_chunked_transformer_updated(
             topk_cores = {resources.topk_core_grid.num_cores() for _, resources in active}
             gather_cores = {resources.gather_core_grid.num_cores() for _, resources in active}
             assert profiles == {expected_overlap_profile}, profiles
-            gather_rows = _SPARSE_MLA_OVERLAP_GATHER_ROWS  # the worker rows below the Ethernet row
+            # Per-profile, so this holds for either row count.
+            gather_rows = sparse_mla_overlap_gather_rows(next(iter(profiles)))
             assert topk_cores == {worker_grid.x * (worker_grid.y - gather_rows)}, topk_cores
             assert gather_cores == {worker_grid.x * gather_rows}, gather_cores
             observed_profile = next(iter(profiles))

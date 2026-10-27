@@ -34,7 +34,7 @@ from .llk_params import (
     ReducePool,
     SdpaFwOp,
     SdpaOp,
-    SfpuSrcsImpl,
+    SfpuImpl,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -537,11 +537,15 @@ class APPROX_MODE(TemplateParameter):
 
 
 @dataclass
-class SFPU_SRCS_IMPL(TemplateParameter):
-    sfpu_srcs_impl: SfpuSrcsImpl
+class SFPU_IMPL(TemplateParameter):
+    """Emitted as a bool: ckernel::sfpu::SfpuImpl exists only in the Quasar tree, while this
+    header is generated for every architecture. The kernel maps it back to SfpuImpl."""
+
+    sfpu_impl: SfpuImpl
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool SFPU_SRCS_LOADMACRO = {self.sfpu_srcs_impl.cpp_enum_value};"
+        load_macro = str(self.sfpu_impl == SfpuImpl.LoadMacro).lower()
+        return f"constexpr bool SFPU_IMPL_LOADMACRO = {load_macro};"
 
 
 @dataclass

@@ -115,6 +115,7 @@ def _run_sfpu_binary_llk_golden(
     dst_rounding_mode=DstRoundingMode.Default,
     format_variant=None,
     max_ulp=None,
+    sign_magnitude=False,
     broadcast_type=BroadcastType.None_,
 ):
     """Shared driver for the LLK-golden binary SFPU ops.
@@ -159,6 +160,10 @@ def _run_sfpu_binary_llk_golden(
     golden_tensor = golden_full[dst_start : dst_start + MAX_TILE_ELEMENTS].to(
         torch_format_out
     )
+    if sign_magnitude:
+        # SIGN_MAGNITUDE_FORMAT reads and writes Dest as SMAG32.
+        src_A = int32_to_smag32(src_A)
+        golden_tensor = int32_to_smag32(golden_tensor)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -177,8 +182,7 @@ def _run_sfpu_binary_llk_golden(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
-            # 2's-complement datapath (default); only the quant family reads this.
-            SIGN_MAGNITUDE_FORMAT(False),
+            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
             SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
@@ -311,6 +315,10 @@ INT_SWEEP = dict(
         MathOperation.SfpuGcd,
         MathOperation.SfpuLcm,
     ],
+    # SMAG staging is validated for ADD only.
+    sign_magnitude=lambda mathop: (
+        [False, True] if mathop == MathOperation.SfpuElwadd else [False]
+    ),
 )
 
 
@@ -324,6 +332,7 @@ def test_eltwise_binary_sfpu_int_quasar(
     dest_acc,
     mathop,
     tile_indices,
+    sign_magnitude,
     *,
     approx_mode=ApproximationMode.No,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -349,6 +358,7 @@ def test_eltwise_binary_sfpu_int_quasar(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
+        sign_magnitude=sign_magnitude,
     )
 
 

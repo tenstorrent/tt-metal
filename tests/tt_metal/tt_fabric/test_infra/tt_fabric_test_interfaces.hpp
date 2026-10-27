@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <optional>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include <random>
@@ -51,6 +52,8 @@ public:
     virtual uint32_t get_l1_unreserved_size() const = 0;
     virtual uint32_t get_l1_alignment() const = 0;
     virtual uint32_t get_max_payload_size_bytes() const = 0;
+    virtual size_t get_channel_buffer_size_bytes() const = 0;
+    virtual tt::tt_fabric::Topology get_fabric_topology() const = 0;
     virtual bool is_2D_routing_enabled() const = 0;
     virtual uint32_t get_device_frequency_mhz(const FabricNodeId& device_id) const = 0;
     virtual bool is_multi_mesh() const = 0;

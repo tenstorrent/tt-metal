@@ -35,6 +35,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/topology_check.hpp"
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
@@ -395,8 +396,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                const std::vector<int32_t>& dims,
                CoreRangeSet grid,
                ShardOrientation orientation) {
-                return self.sharded_across_dims_except(
-                    ttsl::Span<const int32_t>(dims), std::move(grid), orientation);
+                return self.sharded_across_dims_except(ttsl::Span<const int32_t>(dims), std::move(grid), orientation);
             },
             nb::arg("dims"),
             nb::arg("grid"),
@@ -728,6 +728,19 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Load tensor to file using FlatBuffer format with inline file storage.
+            )doc")
+        .def(
+            "verify_shards_match_topology",
+            &ttnn::verify_shards_match_topology,
+            nb::arg("tensor"),
+            nb::arg("compare_replica_contents") = true,
+            nb::call_guard<nb::gil_scoped_release>(),
+            R"doc(
+                Check that a host tensor's topology label describes its shards: every populated shard is labelled,
+                every labelled coordinate holds a shard, and shards the label calls replicas of each other have the
+                same size and, unless compare_replica_contents is False, the same values (tile padding is not
+                compared). Raises RuntimeError naming
+                the coordinates and the label otherwise.
             )doc");
 
     nb::class_<OverlappedTensorView>(m_tensor, "OverlappedTensor", R"doc(

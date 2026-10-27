@@ -344,8 +344,8 @@ def _ring_perf_case(shape: tuple[int, int], sp_axis: int, case_id: str, referenc
 
 
 _PERF_CASES = [
-    _ring_perf_case((8, 1), 0, "loudbox-SP8xTP1-ring", 70.3),
-    _ring_perf_case((4, 1), 0, "quietbox-SP4xTP1-ring", 71.5),
+    _ring_perf_case((8, 1), 0, "loudbox-SP8xTP1-ring", 63.6),
+    _ring_perf_case((4, 1), 0, "quietbox-SP4xTP1-ring", 64.0),
 ]
 
 
