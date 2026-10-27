@@ -1020,9 +1020,13 @@ class OptimizedDecoder(LightweightModule):
             return {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, ttnn.float32: 4096}.get(dt, 2048)
 
         out_b = pm * pn * tile_bytes(out_dtype or x.dtype)
+        budget = self._L1_CB_BUDGET
+        lowest = self.device.lowest_occupied_compute_l1_address()
+        if lowest:  # end below L1 buffers kept resident (DFlash's), less a margin for CBs this estimate leaves out
+            budget = min(budget, int(lowest) - int(self.device.l1_allocator_base()) - 32 * 1024)
         bw = None
         for d in (8, 6, 4, 3, 2, 1):
-            if kt % d == 0 and out_b + 2 * pm * d * tile_bytes(x.dtype) + 2 * d * pn * tile_bytes(w.dtype) <= self._L1_CB_BUDGET:
+            if kt % d == 0 and out_b + 2 * pm * d * tile_bytes(x.dtype) + 2 * d * pn * tile_bytes(w.dtype) <= budget:
                 bw = d
                 break
         if bw is None:

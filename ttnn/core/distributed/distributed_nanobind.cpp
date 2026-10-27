@@ -336,6 +336,14 @@ void py_module(nb::module_& mod) {
            when no L1 buffer is allocated. Circular buffers of a program must end below it.
        )doc")
         .def(
+            "l1_allocator_base",
+            [](const MeshDevice& self) {
+                return self.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+            },
+            R"doc(
+           L1 address where the L1 allocator (and a program's circular buffers) start on the compute cores.
+       )doc")
+        .def(
             "compute_with_storage_grid_size",
             &MeshDevice::compute_with_storage_grid_size,
             R"doc(
