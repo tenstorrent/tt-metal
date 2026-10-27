@@ -9,6 +9,12 @@ from models.experimental.bevformer.config.convert_upstream import convert_upstre
 from models.experimental.bevformer.config.loader import _github_raw_url
 from models.experimental.bevformer.demo.checkpoint import _mmdet3d_key
 from models.experimental.bevformer.demo.dataset import SequenceManifest
+from models.experimental.bevformer.demo.demo import _parse_args
+
+
+def test_checkpoint_cli_argument():
+    assert _parse_args([]).checkpoint == "random"
+    assert _parse_args(["--checkpoint", "model.pth"]).checkpoint == "model.pth"
 
 
 def test_normalized_config(tmp_path, expect_error):

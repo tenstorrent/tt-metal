@@ -39,7 +39,7 @@ def _parse_args(argv=None):
     parser.add_argument("--config-sha256", help="Expected SHA-256 for a remote config")
     parser.add_argument("--config-cache", help="Directory used to cache remote configs")
     parser.add_argument("--refresh-config", action="store_true", help="Refetch a cached remote config")
-    parser.add_argument("--weights", default="random", help="Checkpoint path, or 'random' for dummy weights")
+    parser.add_argument("--checkpoint", default="random", help="Checkpoint path, or 'random' for dummy weights")
     parser.add_argument("--checkpoint-format", choices=("mmdet3d", "local"), default="mmdet3d")
     parser.add_argument("--dataset-format", choices=("synthetic", "manifest"), default="synthetic")
     parser.add_argument("--dataset", help="Sequence manifest JSON (required for --dataset-format manifest)")
@@ -192,13 +192,13 @@ def run_demo(args):
 
     torch.manual_seed(args.seed)
     assert (config.num_cameras, config.can_bus_dims) == (NUM_CAMS, CAN_BUS_DIMS)
-    if args.weights == "random":
+    if args.checkpoint == "random":
         parameter_model = build_reference_bevformer((BEV_H, BEV_W))
     else:
         from models.experimental.bevformer.demo.checkpoint import load_model_checkpoint
 
         parameter_model = build_bevformer()
-        load_model_checkpoint(parameter_model, args.weights, args.checkpoint_format)
+        load_model_checkpoint(parameter_model, args.checkpoint, args.checkpoint_format)
         parameter_model.eval().requires_grad_(False)
 
     if config.class_names and len(config.class_names) != parameter_model.bbox_coder.num_classes:
@@ -242,7 +242,7 @@ def run_demo(args):
 
     logger.info(
         f"BEVFormer {config.variant}: {args.num_frames} output frames plus one preparation frame; "
-        f"weights={args.weights}, dataset={args.dataset_format}"
+        f"checkpoint={args.checkpoint}, dataset={args.dataset_format}"
     )
     device = ttnn.open_device(device_id=args.device_id, l1_small_size=32 * 1024)
     results, device_latencies, end_to_end_latencies = [], [], []
@@ -308,7 +308,7 @@ def run_demo(args):
 
     summary = {
         "variant": config.variant,
-        "weights": args.weights,
+        "checkpoint": args.checkpoint,
         "dataset_format": args.dataset_format,
         "score_threshold": parameter_model.bbox_coder.score_threshold,
         "preparation_frame": first_token,

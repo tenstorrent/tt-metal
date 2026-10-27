@@ -2,7 +2,7 @@
 
 This demo runs one unmeasured preparation frame followed by a configurable number of output
 frames. The first output frame is also executed once as an unmeasured temporal-path warmup without
-advancing the retained BEV state. Model architecture, weights, and input sequence are independent
+advancing the retained BEV state. Model architecture, checkpoint, and input sequence are independent
 command-line arguments.
 
 ## Synthetic smoke run
@@ -13,7 +13,7 @@ Its boxes have no semantic meaning.
 ```sh
 python -m models.experimental.bevformer.demo.demo \
   --config models/experimental/bevformer/config/bevformer_tiny.json \
-  --weights random \
+  --checkpoint random \
   --dataset-format synthetic \
   --num-frames 10
 ```
@@ -33,7 +33,7 @@ pattern is also used by other TT-Metal demos; numerical comparison belongs in PC
 ```sh
 python -m models.experimental.bevformer.demo.demo \
   --config /path/to/model.json \
-  --weights /path/to/checkpoint.pth \
+  --checkpoint /path/to/checkpoint.pth \
   --checkpoint-format mmdet3d \
   --dataset-format manifest \
   --dataset /path/to/sequence.json \
@@ -112,7 +112,7 @@ An upstream URL can therefore be passed directly:
 ```sh
 python -m models.experimental.bevformer.demo.demo \
   --config https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevformer/bevformer_tiny.py \
-  --weights /path/to/bevformer_tiny.pth \
+  --checkpoint /path/to/bevformer_tiny.pth \
   --dataset-format manifest \
   --dataset /path/to/sequence.json
 ```
@@ -131,7 +131,7 @@ For a normalized remote config pinned by content:
 python -m models.experimental.bevformer.demo.demo \
   --config https://raw.githubusercontent.com/ORG/REPO/COMMIT/bevformer_tiny.json \
   --config-sha256 EXPECTED_HEX_DIGEST \
-  --weights /path/to/checkpoint.pth \
+  --checkpoint /path/to/checkpoint.pth \
   --dataset-format manifest \
   --dataset /path/to/sequence.json
 ```

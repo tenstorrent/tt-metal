@@ -21,14 +21,14 @@ https://arxiv.org/abs/2203.17270
 
 ## Demo
 
-The sequence demo accepts the model variant/config, weights, and dataset independently. It runs
+The sequence demo accepts the model variant/config, checkpoint, and dataset independently. It runs
 one preparation frame followed by 10 output frames by default. From the repository root, a
 synthetic smoke run is:
 
 ```sh
 python -m models.experimental.bevformer.demo.demo \
   --config models/experimental/bevformer/config/bevformer_tiny.json \
-  --weights random \
+  --checkpoint random \
   --dataset-format synthetic \
   --num-frames 10
 ```
@@ -38,7 +38,7 @@ For a real sequence, pass the three independent inputs explicitly:
 ```sh
 python -m models.experimental.bevformer.demo.demo \
   --config /path/to/model.json \
-  --weights /path/to/checkpoint.pth \
+  --checkpoint /path/to/checkpoint.pth \
   --checkpoint-format mmdet3d \
   --dataset-format manifest \
   --dataset /path/to/sequence.json \
