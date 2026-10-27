@@ -30,8 +30,10 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.config import (
     AttentionConfig,
     RMSNormConfig,
+    act_memory_config,
     compute_kernel_config_hifi4,
 )
+from models.demos.blackhole.embedding_gemma2.tt.linear import WEIGHT_DTYPE, linear
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.rope import RotaryTables
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight, substate
@@ -137,9 +139,15 @@ class Attention(LightweightModule):
             if tuple(w.shape) != expect[k_]:
                 raise ValueError(f"{name}.{k_}_proj: expected {expect[k_]}, got {tuple(w.shape)}")
         wqkv = as_weight(
-            linear_weight(torch.cat([wq, wk, wv], dim=0)), device, cache_dir=cache_dir, name=f"{name}.wqkv.weight"
+            linear_weight(torch.cat([wq, wk, wv], dim=0)),
+            device,
+            cache_dir=cache_dir,
+            name=f"{name}.wqkv.weight",
+            dtype=WEIGHT_DTYPE,
         )
-        wo_t = as_weight(linear_weight(wo), device, cache_dir=cache_dir, name=f"{name}.o_proj.weight")
+        wo_t = as_weight(
+            linear_weight(wo), device, cache_dir=cache_dir, name=f"{name}.o_proj.weight", dtype=WEIGHT_DTYPE
+        )
         hd_norm = RMSNormConfig(dim=config.head_dim, eps=config.rms_norm_eps)
         q_norm = RMSNorm.from_state_dict(
             substate(state_dict, "q_norm"), hd_norm, device, cache_dir=cache_dir, name=f"{name}.q_norm"
@@ -150,29 +158,32 @@ class Attention(LightweightModule):
         v_norm = RMSNorm(RMSNormConfig(dim=config.head_dim, eps=config.rms_norm_eps, with_scale=False), None)
         return cls(config, wqkv, wo_t, q_norm, k_norm, v_norm, rope)
 
-    def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor, out_memory_config=None) -> ttnn.Tensor:
         cfg = self.config
-        dram = ttnn.DRAM_MEMORY_CONFIG
-        S = x.shape[2]
-        xqkv = ttnn.linear(x, self.wqkv, compute_kernel_config=self.compute_kernel_config, memory_config=dram)
+        dev = x.device()
+        B, S = x.shape[0], x.shape[2]
+        # intermediates in L1 when they fit (config.act_memory_config); the q tensor is the largest
+        mem_qkv = act_memory_config(dev, B, S, cfg.q_width + 2 * cfg.kv_width)
+        mem_q = mem_kv = act_memory_config(dev, B, S, cfg.q_width)  # one config for the q/k/v heads
+        xqkv = linear(x, self.wqkv, memory_config=mem_qkv)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=cfg.num_heads,
             num_kv_heads=cfg.num_kv_heads,
             transpose_k_heads=False,
-            memory_config=dram,
+            memory_config=mem_q,
         )
         ttnn.deallocate(xqkv)
 
-        q_n = self.q_norm(q)
-        k_n = self.k_norm(k)
-        v_n = self.v_norm(v)
+        q_n = self.q_norm(q, memory_config=mem_q)
+        k_n = self.k_norm(k, memory_config=mem_kv)
+        v_n = self.v_norm(v, memory_config=mem_kv)
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        q_r = self.rope(q_n, cfg.layer_type)
-        k_r = self.rope(k_n, cfg.layer_type)
+        q_r = self.rope(q_n, cfg.layer_type, memory_config=mem_q)
+        k_r = self.rope(k_n, cfg.layer_type, memory_config=mem_kv)
         ttnn.deallocate(q_n)
         ttnn.deallocate(k_n)
 
@@ -187,13 +198,15 @@ class Attention(LightweightModule):
                 cfg.head_dim, S, x.shape[0], cfg.num_heads, x.device().compute_with_storage_grid_size()
             ),
             compute_kernel_config=self.sdpa_compute_kernel_config,
-            memory_config=dram,
+            memory_config=mem_q,
             output_concat_heads=True,  # [B,1,S,H*hd] directly: no nlp_concat_heads
         )
         ttnn.deallocate(q_r)
         ttnn.deallocate(k_r)
         ttnn.deallocate(v_n)
 
-        out = ttnn.linear(o_cat, self.wo, compute_kernel_config=self.compute_kernel_config, memory_config=dram)
+        if out_memory_config is None:
+            out_memory_config = act_memory_config(dev, B, S, cfg.hidden_size)
+        out = linear(o_cat, self.wo, memory_config=out_memory_config)
         ttnn.deallocate(o_cat)
         return out

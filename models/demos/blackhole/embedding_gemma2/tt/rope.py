@@ -53,7 +53,7 @@ class RotaryTables(LightweightModule):
             )
         return cls(config, tables)
 
-    def forward(self, x: ttnn.Tensor, layer_type: str) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, layer_type: str, memory_config=None) -> ttnn.Tensor:
         """x [B, H, S, head_dim] -> rotated, same shape. S <= max_seq_len."""
         cos, sin = self.tables[layer_type]
-        return ttnn.experimental.rotary_embedding(x, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.experimental.rotary_embedding(x, cos, sin, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG)

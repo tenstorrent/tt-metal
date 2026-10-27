@@ -83,7 +83,7 @@ def test_perf_traced(batch, seq_len, encoder, eg2_snapshot):
     log_result("latency_e2e_ms", e2e_ms, 0.0, batch=batch, seq_len=seq_len, iters=N_ITERS)
 
 
-@pytest.mark.parametrize("batch,seq_len", [(1, 512)], ids=["b1_s512"])
+@pytest.mark.parametrize("batch,seq_len", [(1, 512), (8, 512)], ids=["b1_s512", "b8_s512"])
 def test_tracy_forward(batch, seq_len, eg2_device, tt_text_model, eg2_snapshot):
     enc = TextEncoder(tt_text_model, eg2_device)
     ids, mask = make_batch(eg2_snapshot, [seq_len] * batch)

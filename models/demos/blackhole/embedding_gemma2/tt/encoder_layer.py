@@ -23,7 +23,12 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.attention import Attention
-from models.demos.blackhole.embedding_gemma2.tt.config import EncoderLayerConfig, RMSNormConfig
+from models.demos.blackhole.embedding_gemma2.tt.config import (
+    RESIDUAL_IN_L1,
+    EncoderLayerConfig,
+    RMSNormConfig,
+    act_memory_config,
+)
 from models.demos.blackhole.embedding_gemma2.tt.mlp import MLP
 from models.demos.blackhole.embedding_gemma2.tt.per_layer_input import PerLayerInputBlock
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
@@ -83,7 +88,7 @@ class EncoderLayer(LightweightModule):
             name=f"{prefix}.self_attn",
         )
         mlp = MLP.from_state_dict(
-            substate(state_dict, "mlp"), config.mlp, device, cache_dir=cache_dir, name=f"{prefix}.mlp"
+            substate(state_dict, "mlp"), config.mlp, device, cache_dir=cache_dir, name=f"{prefix}.mlp", optimized=True
         )
         ple_block = PerLayerInputBlock.from_state_dict(
             substate(state_dict, "ple_block"), config, device, cache_dir=cache_dir, name=f"{prefix}.ple_block"
@@ -94,26 +99,27 @@ class EncoderLayer(LightweightModule):
         return cls(config, norms, attention, mlp, ple_block, float(scalar.float().item()))
 
     def forward(self, x: ttnn.Tensor, per_layer_input: ttnn.Tensor, mask: ttnn.Tensor) -> ttnn.Tensor:
-        dram = ttnn.DRAM_MEMORY_CONFIG
-        h = self.input_layernorm(x)
-        a = self.self_attn(h, mask)
+        B, S, H = x.shape[0], x.shape[2], x.shape[3]
+        mem = act_memory_config(x.device(), B, S, H)  # [B,1,S,hidden] intermediates
+        dram = mem if RESIDUAL_IN_L1 else ttnn.DRAM_MEMORY_CONFIG  # residual stream h1, h2, out
+        h = self.input_layernorm(x, memory_config=mem)
+        a = self.self_attn(h, mask, out_memory_config=mem)
         ttnn.deallocate(h)
-        a_n = self.post_attention_layernorm(a)
+        a_n = self.post_attention_layernorm(a, memory_config=mem)
         ttnn.deallocate(a)
         h1 = ttnn.add(x, a_n, memory_config=dram)
         ttnn.deallocate(a_n)
 
-        f = self.pre_feedforward_layernorm(h1)
-        m = self.mlp(f)
+        f = self.pre_feedforward_layernorm(h1, memory_config=mem)
+        m = self.mlp(f, memory_config=mem)
         ttnn.deallocate(f)
-        m_n = self.post_feedforward_layernorm(m)
+        m_n = self.post_feedforward_layernorm(m, memory_config=mem)
         ttnn.deallocate(m)
         h2 = ttnn.add(h1, m_n, memory_config=dram)
         ttnn.deallocate(h1)
         ttnn.deallocate(m_n)
 
-        h3 = self.ple_block(h2, per_layer_input)
+        # (h2 + ple) * layer_scalar
+        out = self.ple_block(h2, per_layer_input, out_scale=self.layer_scalar, out_memory_config=dram)
         ttnn.deallocate(h2)
-        out = ttnn.multiply(h3, self.layer_scalar, memory_config=dram)
-        ttnn.deallocate(h3)
         return out

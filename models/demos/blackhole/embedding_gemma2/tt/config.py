@@ -78,6 +78,29 @@ def compute_kernel_config_norm():
     )
 
 
+# Text-tower intermediates live in L1 (interleaved over every core's L1 bank) when one tensor needs
+# at most this many bytes per bank; larger ones stay in DRAM. The cap bounds the L1 the
+# interleaved intermediates take (a few live at once) so op circular buffers never clash with
+# them (E5a; doc/optimized_text/README.md "L1 placement").
+L1_ACT_BYTES_PER_BANK = int(os.environ.get("EG2_L1_ACT_BYTES_PER_BANK", str(64 * 1024)))
+# Above this many tokens per forward (batch x bucket) some ops (SDPA at S=8192) fill nearly all of
+# L1 with circular buffers (measured: CB region ending at 1484160 B of 1572864), so every
+# intermediate stays in DRAM there.
+L1_ACT_MAX_TOKENS = 4096
+# The residual stream (layer input/output, h1, h2) follows the same rule (E5a c5: -0.19 ms at
+# 1x512, -1.45 ms at 1x2048, -2.6 ms at 8x512, burst).
+RESIDUAL_IN_L1 = os.environ.get("EG2_RESIDUAL_L1", "1") == "1"
+
+
+def act_memory_config(device, batch: int, seq_len: int, width: int) -> ttnn.MemoryConfig:
+    """L1 interleaved for a bf16 [batch, 1, seq_len, width] tile tensor if it fits, else DRAM."""
+    n = 2 * int(batch) * int(seq_len) * int(width)
+    grid = device.compute_with_storage_grid_size()
+    if batch * seq_len <= L1_ACT_MAX_TOKENS and n <= L1_ACT_BYTES_PER_BANK * grid.x * grid.y:
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.DRAM_MEMORY_CONFIG
+
+
 def default_weight_cache_dir() -> Path:
     root = os.environ.get("EMBEDDING_GEMMA2_CACHE", os.path.expanduser("~/.cache/ttnn/models/embedding_gemma2"))
     return Path(root)

@@ -33,6 +33,7 @@ from models.demos.blackhole.embedding_gemma2.tt.config import (
 )
 from models.demos.blackhole.embedding_gemma2.tt.embedding import TextEmbedding
 from models.demos.blackhole.embedding_gemma2.tt.encoder_layer import EncoderLayer
+from models.demos.blackhole.embedding_gemma2.tt.linear import WEIGHT_DTYPE, linear
 from models.demos.blackhole.embedding_gemma2.tt.masks import AttentionMasks
 from models.demos.blackhole.embedding_gemma2.tt.per_layer_input import PerLayerInput
 from models.demos.blackhole.embedding_gemma2.tt.pooler import Pooler
@@ -104,7 +105,9 @@ class TextModel(LightweightModule):
         w = state_dict["embedding_projection.weight"]
         if tuple(w.shape) != (config.embedding_dim, config.hidden_size):
             raise ValueError(f"embedding_projection: unexpected shape {tuple(w.shape)}")
-        w_out = as_weight(linear_weight(w), device, cache_dir=cache_dir, name="embedding_projection.weight")
+        w_out = as_weight(
+            linear_weight(w), device, cache_dir=cache_dir, name="embedding_projection.weight", dtype=WEIGHT_DTYPE
+        )
         return cls(config, device, embedding, ple, layers, norm, w_out, rope, masks)
 
     def prepare(self, seq_len: int) -> None:
@@ -132,9 +135,7 @@ class TextModel(LightweightModule):
     def head(self, h: ttnn.Tensor) -> ttnn.Tensor:
         """Final norm + per-token 512->768 projection. [B,1,S,768]."""
         n = self.norm(h)
-        out = ttnn.linear(
-            n, self.w_out, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        out = linear(n, self.w_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(n)
         return out
 
