@@ -533,7 +533,8 @@ FastNcPath fast_nc_path(
     const auto arch = input.device()->arch();
     const bool fp32_dest_acc_en =
         std::get<2>(ttnn::get_compute_kernel_config_args(arch, fast_nc_kernel_config(arch, compute_kernel_config)));
-    return fp32_dest_acc_en ? FastNcPath::Sfpu : FastNcPath::None;
+    const bool sfpu_supported = dtype == DataType::INT32 || arch != tt::ARCH::QUASAR;
+    return (fp32_dest_acc_en && sfpu_supported) ? FastNcPath::Sfpu : FastNcPath::None;
 }
 
 Tensor non_height_width_reduce(

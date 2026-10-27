@@ -73,6 +73,9 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
             "FastReduceNC fp32_sfpu_accumulate requires FLOAT32 input, got {}",
             input.dtype());
         TT_FATAL(
+            !args.fp32_sfpu_accumulate || arch != tt::ARCH::QUASAR,
+            "FastReduceNC accurate FLOAT32 accumulation is not supported on Quasar");
+        TT_FATAL(
             std::get<2>(ttnn::get_compute_kernel_config_args(arch, args.compute_kernel_config)),
             "FastReduceNC {} accumulation on the SFPU requires fp32_dest_acc_en",
             input.dtype());
