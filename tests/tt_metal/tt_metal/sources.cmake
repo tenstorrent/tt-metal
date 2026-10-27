@@ -36,6 +36,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_quasar_semaphores.cpp
     test_quasar_sub_devices.cpp
     test_quasar_trace.cpp
+    test_quasar_trisc_mret_alias.cpp
     test_sdpa_reduce_c.cpp
     test_single_dm_l1_write.cpp
     test_quasar_dram_backing.cpp
