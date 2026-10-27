@@ -8,6 +8,10 @@ generated is a config choice, not a different script:
 - `rollout_backend: "ttt_remote_sync"` — the same script
   runs on two tt-run ranks; rank 1 generates with `tt-transformers`. See
   [Remote rollout (two ranks)](#remote-rollout-two-ranks).
+- `rollout_backend: "ttt_remote_async"` — the same two-rank launch, but rank 1
+  generates and scores continuously while rank 0 trains, and rank 0 drops batches
+  older than `max_staleness` steps. See
+  `tt-train/configs/training_configs/grpo_gsm8k_qwen3_p6b_remote_async.yaml`.
 
 The trainer API and its rank-agnostic conventions are documented in
 [`tt-train/docs/GRPO_TRAINER.md`](../../../docs/GRPO_TRAINER.md); this
