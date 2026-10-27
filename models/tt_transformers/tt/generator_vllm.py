@@ -791,6 +791,12 @@ class Phi3ForCausalLM(Generator):
         super().__init__(*args, **kwargs)
 
     @classmethod
+    def get_max_tokens_all_users(cls, **kwargs) -> int:
+        # Phi-3.5 is MHA (32 KV heads): ~209 KB/token of bfp8 KV, so the plugin's 131,072-token default (~27 GB)
+        # leaves too little of a 32 GB Blackhole chip; 65,536 tokens is ~13.7 GB next to ~3.2 GB of weights.
+        return 65_536
+
+    @classmethod
     def initialize_vllm_model(
         cls,
         hf_config,
