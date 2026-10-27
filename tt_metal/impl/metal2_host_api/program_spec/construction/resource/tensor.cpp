@@ -100,7 +100,8 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     const bool dyn_page = tensor_parameter.relaxations.dynamic_tensor_shape &&
                           !tensor_parameter.relaxations.match_page_size && !is_sharded &&
                           spec.layout() == Layout::ROW_MAJOR;
-    // A per-node binding has no CRTA words to hold runtime accessor fields.
+    // dynamic_tensor_shape's runtime accessor fields would have no reader: a per-node binding builds only a
+    // LocalTensorAccessor, which reads just its base address.
     const bool is_per_node = per_core_allocation::is_per_core_allocation(memory_config);
     TT_FATAL(
         !is_per_node || !tensor_parameter.relaxations.dynamic_tensor_shape,
