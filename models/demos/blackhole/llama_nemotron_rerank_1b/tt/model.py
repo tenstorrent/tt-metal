@@ -88,6 +88,7 @@ class NemotronReranker:
         )
         self._cos_host, self._sin_host = gather_cos_sin(torch.arange(cfg.max_seq_len), cos, sin)
         self._rot = {}
+        self._norm_cfgs = {}
 
     # ------------------------------------------------------------------ inputs
     def rot_mats(self, seq_len):
@@ -172,10 +173,50 @@ class NemotronReranker:
         return ttnn.reshape(out, [1, 1, rows, out.shape[-1]]) if out.shape[1] != 1 else out
 
     def _norm(self, x, w):
-        mem = self._mem(x.shape[-2] * x.shape[-3], x.shape[-1])
+        rows, width = x.shape[-2] * x.shape[-3], x.shape[-1]
+        mem = self._mem(rows, width)
+        if rows <= self.cfg.sharded_norm_max_rows:
+            shard, pc = self._norm_shard(rows, width)
+            xs = ttnn.interleaved_to_sharded(x, shard)
+            y = ttnn.rms_norm(
+                xs,
+                epsilon=self.cfg.norm_eps,
+                weight=w,
+                program_config=pc,
+                compute_kernel_config=self.norm_ckc,
+                memory_config=shard,
+            )
+            ttnn.deallocate(xs)
+            out = ttnn.sharded_to_interleaved(y, mem)
+            ttnn.deallocate(y)
+            return out
         return ttnn.rms_norm(
             x, epsilon=self.cfg.norm_eps, weight=w, compute_kernel_config=self.norm_ckc, memory_config=mem
         )
+
+    def _norm_shard(self, rows, width):
+        """Block-shard [rows, width] over 8 core columns x (one core row per tile-row, up to 8)."""
+        key = (rows, width)
+        if key not in self._norm_cfgs:
+            mt, wt = rows // 32, width // 32
+            gx = 8
+            gy = max(d for d in range(1, 9) if mt % d == 0)
+            shard = ttnn.create_sharded_memory_config(
+                shape=(rows // gy, width // gx),
+                core_grid=ttnn.CoreGrid(y=gy, x=gx),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(gx, gy),
+                subblock_w=4,
+                block_h=mt // gy,
+                block_w=wt // gx,
+                inplace=False,
+            )
+            self._norm_cfgs[key] = (shard, pc)
+        return self._norm_cfgs[key]
 
     def _add_norm(self, x, delta, consts):
         """(x + delta, rmsnorm(x + delta)) in one op."""

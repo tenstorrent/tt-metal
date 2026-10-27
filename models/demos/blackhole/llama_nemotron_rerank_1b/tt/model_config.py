@@ -86,6 +86,10 @@ class RerankConfig:
     # The fused op gives each core whole tile-rows, so below ~2 rows per core the stock add + rms_norm
     # spread wider and win (1x512: 8.8 vs 9.7 ms; 1x2048: 33.4 vs 42.2 ms; 32x512: 238 vs 226 ms).
     fuse_add_norm_min_rows: int = 8192
+    # Up to this many rows RMSNorm runs block-sharded over an 8-wide grid (with the interleaved <-> sharded
+    # conversions): stock rms_norm gives each core whole tile-rows, 16 cores at 512 rows.
+    # perf_tools/probe_norm.py: 128 rows 33.7 -> 10.7 us, 512 rows 33.9 -> 18.3 us.
+    sharded_norm_max_rows: int = 512
     # minimal_matmul with the swept block sizes instead of ttnn.linear's own config.
     use_minimal_matmul: bool = True
     # FF1 + FF3 + silu(gate) * up as one minimal_matmul (fuse_swiglu) over an interleaved weight.
