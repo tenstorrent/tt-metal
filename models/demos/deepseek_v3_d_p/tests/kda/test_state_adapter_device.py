@@ -19,7 +19,11 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
+from models.demos.deepseek_v3_d_p.tt.kda.kda import (
+    KdaState,
+    convolution_tail_from_device_layout,
+    convolution_tail_to_device_layout,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     KdaContractGeometry,
     KdaStates,
@@ -87,8 +91,10 @@ def _native_from_global(mesh_device, geometry, recurrent, convolution) -> KdaSta
     """TP-shard heads, replicate across SP, in the layout the layer itself produces."""
     tp = geometry.tensor_parallel_size
     rec_dims, conv_dims = [None, None], [None, None]
-    rec_dims[TP_AXIS], conv_dims[TP_AXIS] = 1, -1
-    stacked_conv = torch.cat([_per_chip_convolution(geometry, convolution, col) for col in range(tp)], dim=-1)
+    rec_dims[TP_AXIS], conv_dims[TP_AXIS] = 1, 1
+    stacked_conv = convolution_tail_to_device_layout(
+        torch.cat([_per_chip_convolution(geometry, convolution, col) for col in range(tp)], dim=-1)
+    )
     mesh_shape = tuple(mesh_device.shape)
     return KdaState(
         recurrent=ttnn.from_torch(
@@ -165,7 +171,6 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     # 1. Every slab batch holds its layer's per-chip state, on every SP replica, bit for bit.
     rec_shards = _shards(slabs.recurrent, mesh_device)
     conv_shards = _shards(slabs.convolution, mesh_device)
-    seg = geometry.convolution_shards_per_layer
     for (slot, layer), (recurrent, convolution) in patterns.items():
         batch = slabs.batch_index(slot, layer)
         for row in range(rows):
@@ -177,10 +182,9 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
                 assert_bit_identical(
                     want_rec, rec_shards[(row, col)][batch], name=f"S slot{slot} L{layer} ({row},{col})"
                 )
-                got_conv = conv_shards[(row, col)][batch].reshape(seg, geometry.conv_history, 64).permute(1, 0, 2)
                 assert_bit_identical(
                     want_conv,
-                    got_conv.reshape(geometry.conv_history, -1),
+                    convolution_tail_from_device_layout(conv_shards[(row, col)][batch]),
                     name=f"conv slot{slot} L{layer} ({row},{col})",
                 )
 
@@ -235,9 +239,10 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
             coord[TP_AXIS] = col
             want_rec, want_conv = _expected_chip(geometry, recurrent, convolution, coord[TP_AXIS])
             assert_bit_identical(want_rec, rec_shards[(0, col)][batch], name=f"replay S slot{slot} L{layer} col{col}")
-            got_conv = conv_shards[(0, col)][batch].reshape(seg, geometry.conv_history, 64).permute(1, 0, 2)
             assert_bit_identical(
-                want_conv, got_conv.reshape(geometry.conv_history, -1), name=f"replay conv slot{slot} L{layer} col{col}"
+                want_conv,
+                convolution_tail_from_device_layout(conv_shards[(0, col)][batch]),
+                name=f"replay conv slot{slot} L{layer} col{col}",
             )
 
     # 4. The address table resolves every (layer, segment, slot) to the right bytes, and the segment

@@ -36,6 +36,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.kda import convolution_tail_from_device_layout
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
@@ -281,7 +282,9 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             tp_shards = []
             for t in range(tp_size):
                 row, column = (0, t) if SP_AXIS == 0 else (t, 0)
-                tp_shards.append(shards[row * columns + column].reshape(history, -1))
+                tp_shards.append(
+                    convolution_tail_from_device_layout(shards[row * columns + column]).reshape(history, -1)
+                )
             got_conv = torch.cat(
                 [
                     torch.cat([sh[:, stream * per_chip : (stream + 1) * per_chip] for sh in tp_shards], dim=-1)
