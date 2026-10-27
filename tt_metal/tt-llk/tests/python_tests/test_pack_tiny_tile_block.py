@@ -42,6 +42,7 @@ from helpers.utils import passed_test
 
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 FORMATS_F32 = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+FORMATS_BFP8 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b)
 
 
 def _make_config(
@@ -148,7 +149,7 @@ def _make_config(
         (32, 32),  # face_r_dim=16, num_faces=4 (baseline)
     ],
     num_tiles=[1, 2, 4, 8],
-    pack_mode=[0, 1, 2, 3],
+    pack_mode=[0, 1, 2, 3, 4],
 )
 def test_pack_tiny_tile_block(
     formats,
@@ -157,8 +158,38 @@ def test_pack_tiny_tile_block(
     num_tiles,
     pack_mode,
 ):
-    if pack_mode == 3 and tile_dims == (32, 32):
-        pytest.skip("The dense block pack records at most eight PACRs per tile")
+    if pack_mode >= 3 and tile_dims == (32, 32):
+        pytest.skip("The replay block packs record at most eight PACRs per tile")
+    configuration, golden_tensor, torch_format = _make_config(
+        tile_dims, num_tiles, formats, dest_acc, pack_mode
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), f"Length mismatch: got {len(res_from_L1)}, expected {len(golden_tensor)}"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=FORMATS_BFP8,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    tile_dims=[(16, 32)],  # face_r_dim=16, num_faces=2: block-float faces need 16 rows
+    num_tiles=[2, 4, 8],
+    pack_mode=[1, 2, 4],
+)
+def test_pack_tiny_tile_block_bfp(
+    formats,
+    dest_acc,
+    tile_dims,
+    num_tiles,
+    pack_mode,
+):
+    """Block-float small tiles keep the tile close: the closed MOP run (1), _llk_pack_ per tile (2) and the closed replay run (4)."""
     configuration, golden_tensor, torch_format = _make_config(
         tile_dims, num_tiles, formats, dest_acc, pack_mode
     )

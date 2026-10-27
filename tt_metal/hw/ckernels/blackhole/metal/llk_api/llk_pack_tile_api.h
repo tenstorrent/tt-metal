@@ -196,18 +196,22 @@ inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
     return get_local_cb_interface(output_id).fifo_page_size < 0x1000;
 }
 
-// Small tiles (one to four faces of 1 to 16 rows, at most eight PACRs): plain format, full tile width, one tile per CB page.
-inline bool llk_pack_block_is_dense(const std::uint32_t output_id) {
-    const std::uint32_t dst_format = pack_dst_format[output_id];
+// Small tiles: one to four faces of 1 to 16 rows, at most eight PACRs, full tile width; block-float tiles need 16-row faces.
+inline bool llk_pack_block_is_small(const std::uint32_t output_id) {
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
-    if (IS_BFP_FORMAT(dst_format) || get_output_tile_c_dim(output_id) != TILE_C_DIM) {
+    return get_output_tile_c_dim(output_id) == TILE_C_DIM && num_faces * (face_r_dim < 4 ? 1 : face_r_dim >> 2) <= 8 &&
+           (!IS_BFP_FORMAT(pack_dst_format[output_id]) || face_r_dim == FACE_R_DIM);
+}
+
+// Small tiles of a plain format, one tile per CB page: they run back to back with one close.
+inline bool llk_pack_block_is_dense(const std::uint32_t output_id) {
+    const std::uint32_t dst_format = pack_dst_format[output_id];
+    if (IS_BFP_FORMAT(dst_format) || !llk_pack_block_is_small(output_id)) {
         return false;
     }
-    if (num_faces * (face_r_dim < 4 ? 1 : face_r_dim >> 2) > 8) {
-        return false;
-    }
-    const std::uint32_t tile_words = (num_faces * face_r_dim * FACE_C_DIM * datum_size_in_bytes(dst_format)) >> 4;
+    const std::uint32_t tile_words =
+        (get_output_num_faces(output_id) * get_output_face_r_dim(output_id) * FACE_C_DIM * datum_size_in_bytes(dst_format)) >> 4;
     return get_local_cb_interface(output_id).fifo_page_size == tile_words;
 }
 
@@ -217,10 +221,13 @@ inline void llk_pack_block_dense_init(const std::uint32_t output) {
     const std::uint8_t output_id = get_output_id(output);
     if (llk_pack_block_is_dense(output_id)) {
         _llk_pack_block_dense_init_(get_output_face_r_dim(output_id), get_output_num_faces(output_id));
+    } else if (llk_pack_block_is_small(output_id) && llk_pack_block_is_closable(output_id)) {
+        _llk_pack_block_closed_replay_init_(get_output_face_r_dim(output_id), get_output_num_faces(output_id));
     }
 }
 
-// dense_small: the caller called llk_pack_block_dense_init for this output, small tiles then run back to back with one close.
+// dense_small: the caller called llk_pack_block_dense_init for this output, small tiles then run from a replay buffer: back to back with one close
+// for plain formats, one tile close each from the replay buffer instead of a MOP restart otherwise.
 template <bool is_fp32_dest_acc_en, bool dense_small = false>
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);
@@ -254,6 +261,13 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
             get_local_cb_interface(output_id).fifo_page_size * ntiles;
         _llk_pack_block_dense_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
             start_tile_index, pack_tile_addr, ntiles, get_output_face_r_dim(output_id), get_output_num_faces(output_id));
+    } else if (dense_small && ntiles > 1 && llk_pack_block_is_small(output_id) && llk_pack_block_is_closable(output_id)) {
+        const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
+        std::uint32_t pack_tile_addr =
+            get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
+        get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
+        _llk_pack_block_closed_replay_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+            start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_face_r_dim(output_id), get_output_num_faces(output_id));
     } else if (ntiles > 1 && llk_pack_block_is_closable(output_id)) {
         const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
         std::uint32_t pack_tile_addr =

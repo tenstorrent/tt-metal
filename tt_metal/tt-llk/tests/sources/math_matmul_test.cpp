@@ -254,7 +254,11 @@ inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std
         return;
     }
 #endif
-    if constexpr (MATMUL_PACK_FORM == 4)
+    if constexpr (MATMUL_PACK_FORM == 5)
+    {
+        _llk_pack_block_closed_replay_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride, face_r_dim, num_faces);
+    }
+    else if constexpr (MATMUL_PACK_FORM == 4)
     {
         _llk_pack_block_dense_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, face_r_dim, num_faces);
     }
@@ -302,10 +306,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
             formats.pack_dst, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+#if defined(ARCH_BLACKHOLE) && MATMUL_PACK_FORM == 5
+        _llk_pack_block_closed_replay_init_(in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, num_faces);
+#endif
 #if defined(ARCH_BLACKHOLE) && MATMUL_PACK_FORM == 4
         _llk_pack_block_dense_init_(in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, num_faces);
 #endif
-#if defined(ARCH_BLACKHOLE) && MATMUL_PACK_FORM != 0 && MATMUL_PACK_FORM != 4
+#if defined(ARCH_BLACKHOLE) && MATMUL_PACK_FORM != 0 && MATMUL_PACK_FORM != 4 && MATMUL_PACK_FORM != 5
         if (num_faces == 4 && !PARTIAL_FACE_PACK)
         {
             _llk_pack_block_fast_init_();

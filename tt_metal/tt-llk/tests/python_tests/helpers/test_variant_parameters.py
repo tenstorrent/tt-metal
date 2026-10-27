@@ -1015,7 +1015,7 @@ class PACK_BLOCK(TemplateParameter):
 
 class MATMUL_PACK_BLOCK(TemplateParameter):
     """Output pack form of the matmul kernels (see matmul_pack_form), picked from columns the test already reports, so
-    it adds no column: 0 per tile, 1 one block run, 2 the closed block, 4 the dense replay run of small tiles."""
+    it adds no column: 0 per tile, 1 one block run, 2 the closed block, 4 the dense replay run of small tiles, 5 the closed replay run of small tiles."""
 
     def __init__(self, pack_block: int = 0):
         self.matmul_pack_block = int(pack_block)
@@ -1038,7 +1038,7 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
 
 @dataclass
 class TINY_PACK_MODE(TemplateParameter):
-    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile, 3 dense replay run."""
+    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile, 3 dense replay run, 4 closed replay run."""
 
     tiny_pack_mode: int = 0
 
