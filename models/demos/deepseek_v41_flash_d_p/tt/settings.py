@@ -285,6 +285,14 @@ TABLE = {
         "flat_routed_expert_with_program (whose program key bakes xg's address) hits its program cache on every "
         "warm run; off (shipped) = a new gather buffer a call (56 addresses over 5 runs: never warm, F196 census)",
     ),
+    "EXPERTS_LAYOUT": Setting(
+        "marko",
+        ("legacy", "marko"),
+        "the flat expert op's work layout (owner 2026-10-27: Marko's by default after the 2x2 A/B, device 65.74 vs 68.10 ms / chunk on our layout, experts 15.88 vs 17.85, L.last within limits): legacy = the plan before "
+        "his DRISC-only / even-split defaults (the cached weights and numbers so far); marko = his defaults plus what his "
+        "MoE block passes per model (rows_hint = expected rows an expert, one x helper; moe_block.layout_of). marko "
+        "re-lays out the cached weights (new cache files)",
+    ),
     "EXPERTS_WEIGHT_CACHE": Setting(
         "on",
         ("on", "off"),
