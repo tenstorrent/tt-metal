@@ -7,11 +7,15 @@
 // expert's block is streamed once and kept by the compute over the expert's passes.
 //
 // runtime args: [w_addr, counts_addr (EP: idx_addr), bank_id, vc, c0, (EP) base_addr, (EP = 2) t_valid, idx_page]
+// REGIONS_SRC (regions_src.hpp, as reader_down.cpp): the regions lists' per-expert down tensors (common runtime
+// args down_addr[0..E)); the core's columns of K tile i are one packet of cols tiles at (i * C + c0) * tile_bytes,
+// seg_tiles packets per expert, k-major in the CB (compute_down_dispatch.cpp REGIONS_SRC).
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "dispatch_common.hpp"
+#include "regions_src.hpp"
 
 void kernel_main() {
     const uint32_t w_addr = get_arg_val<uint32_t>(0);
@@ -78,7 +82,16 @@ void kernel_main() {
         read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);
     }
 
+#ifdef REGIONS_SRC
+    constexpr uint32_t C = bank_expert_stride / seg_bytes;  // output columns per bank
+    constexpr uint32_t src_step = C * tile_bytes;           // the next K tile of the core's columns
+    static_assert(page_bytes == cols * tile_bytes, "regions-sourced down packets are one K tile of the core's columns");
+    const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, 0);
+    (void)w_addr;  // the per-expert addresses come from the common runtime args
+#else
+    constexpr uint32_t src_step = page_bytes;
     const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, w_addr);
+#endif
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
     noc_async_read_one_packet_set_state<true>(w_base, page_bytes, vc);
 
@@ -97,10 +110,14 @@ void kernel_main() {
     for (uint32_t e = 0; e < E; ++e) {
         if (n_tok[e] != 0) {  // the expert's block once; the compute keeps it over the expert's passes
             noc_async_read_set_trid(trid);
+#ifdef REGIONS_SRC
+            uint32_t src = get_common_arg_val<uint32_t>(e) + c0 * tile_bytes;
+#else
             uint32_t src = e * bank_expert_stride + c0 * seg_bytes;
+#endif
             for (uint32_t c = 0; c < pages_per_block; ++c) {
                 noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
-                src += page_bytes;
+                src += src_step;
                 l1_write += page_bytes;
             }
             ++issued;

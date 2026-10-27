@@ -14,10 +14,17 @@
 // runtime args: [w_addr, routing_addr, bank_id, vc, c0, (ROUTING_FOLD) base_addr]
 // E1 variants ROUTING_FOLD / SCAN_WORDS as reader_gate_up.cpp (the routing window of this chip's E experts inside the
 // router's full matrix via the per-chip base page; the word-wise scan).
+// REGIONS_SRC (2026-10-27, regions_src.hpp / regions.py): the weights are the regions prefill path's per-expert
+// DRAM-interleaved down tensors [I, H] (w_addr unused; common runtime args = down_addr[0..E)): tile (i, h) sits in
+// bank h % banks at (i * C + h / banks) * tile_bytes (C = H / 32 / banks = bank_expert_stride / seg_bytes columns per
+// bank), so this core's `cols` columns [c0, c0 + cols) of K tile i are ONE packet of cols tiles at
+// (i * C + c0) * tile_bytes: seg_tiles packets per expert, k-major in the CB (compute_down.cpp REGIONS_SRC indexes
+// tile i * cols + c). The same bytes and packet count as the stacked block at the 8x4 shapes.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "regions_src.hpp"
 #include "routing_scan.hpp"
 
 void kernel_main() {
@@ -85,7 +92,16 @@ void kernel_main() {
     const uint32_t n = scan_active<E, M>(routing, active);
 #endif
 
+#ifdef REGIONS_SRC
+    constexpr uint32_t C = bank_expert_stride / seg_bytes;  // output columns per bank
+    constexpr uint32_t src_step = C * tile_bytes;           // the next K tile of the core's columns
+    static_assert(page_bytes == cols * tile_bytes, "regions-sourced down packets are one K tile of the core's columns");
+    const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, 0);
+    (void)w_addr;  // the per-expert addresses come from the common runtime args
+#else
+    constexpr uint32_t src_step = page_bytes;
     const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, w_addr);
+#endif
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
     noc_async_read_one_packet_set_state<true>(w_base, page_bytes, vc);
 
@@ -102,10 +118,14 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < n; ++i) {
         noc_async_read_set_trid(trid);
+#ifdef REGIONS_SRC
+        uint32_t src = get_common_arg_val<uint32_t>(active[i]) + c0 * tile_bytes;
+#else
         uint32_t src = static_cast<uint32_t>(active[i]) * bank_expert_stride + c0 * seg_bytes;
+#endif
         for (uint32_t c = 0; c < pages_per_block; ++c) {
             noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
-            src += page_bytes;
+            src += src_step;
             l1_write += page_bytes;
         }
         if (free_blocks == num_buffers - extra_in_flight) {

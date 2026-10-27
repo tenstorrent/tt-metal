@@ -503,3 +503,15 @@ whatever the active count), and the measured EP time was dominated by the gate|u
 streaming. The down op's activation traffic (every core reads every pass's 128 KB block at full width) stays the
 secondary item: a NOC multicast of each pass's block to the bank's 8 cores (one read per bank instead of eight)
 once the (2,4) numbers show the down op above ~200 us.
+
+## 13. Regions-sourced stream: one expert copy (2026-10-27, device-free)
+
+`doc/mesh/regions_decode.md`. The per-expert DRAM-interleaved regions tensors (`tt/moe.py` `_build_dispatch_path`)
+already have the bank-local, K-contiguous column layout of section 9's stacked copy at the 8x4 shapes (an 8-column
+tile tensor on 8 banks: column `n` in bank `n`, K stride 1 tile; the down `[256, 4096]`: bank `b` = output columns
+`b + 8 m`, the core's columns contiguous per K tile), so `REGIONS_SRC` variants of the stream / dispatch kernels read
+them in place through per-expert base addresses (common runtime args) and the stacked copy (9.41 GiB per chip) is
+not needed: `GLM53_REGIONS_DECODE=stream`. Same packets (16 x 8.7 KB per column, 8 x 8.7 KB per down block), same
+products in the same order (bit-identical), the down block k-major in the CB. At ppb > 1 (1024-wide block slices) the
+gate|up packets are single tiles (8x the issue count; the test platform only). Planner / layout math:
+`custom_ops/expert_stream/regions.py`, `tests/test_regions_decode_host.py`.

@@ -23,12 +23,16 @@
 //   gate|up core per bank per group writes one tile row of the expert; writer_gate_up.cpp FUSED_SIGNAL). The
 //   semaphores are program-initialised to 0 at every launch (the dispatch writes the initial values) and reset to 0
 //   here after the last wait, so a replay sees zeros either way.
+// * REGIONS_SRC (regions_src.hpp): the reader streams the regions lists, where this core's c-th column is the output
+//   tile column bank + banks * (r * cols + c) (from today's col0 = bank * C + r * cols) instead of col0 + c; the two
+//   compile-time args [h_tiles, banks] follow the accessor args (op.py appends them under regions_src only).
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "regions_src.hpp"
 #include "routing_scan.hpp"
 
 void kernel_main() {
@@ -50,8 +54,15 @@ void kernel_main() {
 #ifdef ROUTING_FOLD
     constexpr auto base_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr uint32_t ARG_NEXT = 5;
+    constexpr uint32_t CT_TAIL = base_args.next_compile_time_args_offset();
 #else
     constexpr uint32_t ARG_NEXT = 4;
+    constexpr uint32_t CT_TAIL = out_args.next_compile_time_args_offset();
+#endif
+#ifdef REGIONS_SRC
+    constexpr uint32_t h_tiles = get_compile_time_arg_val(CT_TAIL);    // output tile columns (H / 32)
+    constexpr uint32_t banks = get_compile_time_arg_val(CT_TAIL + 1);  // DRAM banks
+    constexpr uint32_t C = h_tiles / banks;
 #endif
 
     constexpr uint32_t E_TILES = (E + 31) / 32;
@@ -145,7 +156,11 @@ void kernel_main() {
             z32[j] = 0;
         }
         for (uint32_t c = 0; c < cols; ++c) {
+#ifdef REGIONS_SRC
+            noc_async_write(z, s_out.get_noc_addr(regions_out_col(col0, C, banks, c)), tile_page);
+#else
             noc_async_write(z, s_out.get_noc_addr(col0 + c), tile_page);
+#endif
         }
         noc_async_write_barrier();
         noc_async_full_barrier();  // exit contract (this early return included)
@@ -154,7 +169,11 @@ void kernel_main() {
     cb_wait_front(cb_out, cols);
     const uint32_t o_l1 = get_read_ptr(cb_out);
     for (uint32_t c = 0; c < cols; ++c) {
+#ifdef REGIONS_SRC
+        noc_async_write(o_l1 + c * tile_page, s_out.get_noc_addr(regions_out_col(col0, C, banks, c)), tile_page);
+#else
         noc_async_write(o_l1 + c * tile_page, s_out.get_noc_addr(col0 + c), tile_page);
+#endif
     }
     noc_async_write_barrier();
     cb_pop_front(cb_out, cols);

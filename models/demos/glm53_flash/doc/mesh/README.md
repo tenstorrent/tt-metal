@@ -1151,3 +1151,17 @@ the host capture tool crashes on 45 layers); the single-layer harness keeps the 
 0.949673 = exactly the 1 M step and the 1 M numerics (with the copy: 70.9 ms / 0.861457). The full-wall harness at position 1024
 agrees: 73.1 ms at 256 K, 159.2 ms at 1 M (per-layer eager walls dispatch-bound on both). Next: `e2e_8x4_B4_cap1m_bfp4` (do both copies
 fit with bfp4 experts?) and the one-copy streaming decode (`GLM53_REGIONS_DECODE`).
+### 2026-10-27: regions-sourced streaming decode (device-free, `arg/glm53_regions_stream`, `doc/mesh/regions_decode.md`)
+
+The 1 M step (152 ms vs 70.9 at 256 K, same prompts and users) was the expert path: above the planner's fit point the
+stacked stream copy (9.41 GiB per chip) is dropped and decode runs on the regions prefill kernel (+80 ms per step, other
+numerics). The regions lists themselves -- per-expert DRAM-interleaved `[4096, 256]` / `[256, 4096]` tensors -- already
+sit bank-locally in the stream op's order (tile column `n` of an 8-column tile tensor lives in bank `n`, K-contiguous:
+the allocator's page round-robin), so the second copy duplicated bytes that were already in place. `GLM53_REGIONS_DECODE=stream`
+(default `off`) makes the stream / dispatch ops read the regions lists (REGIONS_SRC kernel variants, the per-expert
+addresses as common runtime args, the down block k-major, the (bank, column) maps re-derived): the same packets from
+the same banks at the 8x4 shapes, bit-identical results, no second copy (the one-copy configuration never uploads
+the stacked tensors). Expected: 1 M x 4 users 152 -> ~71 ms, served 6.6 -> ~14 tok/s per user; 32 x 1 M on the
+regions-sourced dispatch ops. Host tests green (planner vs an independent page map, kernel ABI, plumbing); the
+one-chip op A/B and the (2,4) block test (one-copy vs regions fallback vs stacked, bit-identity asserted) are written
+and not yet run.

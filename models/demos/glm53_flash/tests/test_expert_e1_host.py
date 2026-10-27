@@ -235,10 +235,10 @@ def test_block_kernel_abi_and_default_vectors():
     assert wd.count("noc_async_full_barrier();") == 2
     # the default descriptors: today's literal orders and no defines (whitespace-insensitive: black wraps them)
     desc = _sq(inspect.getsource(O.ExpertGateUpStream.descriptors))
-    assert (
-        _sq("reader_rt[core.x][core.y] = [w13.buffer_address(), routing.buffer_address(), bank, vc, r] + base_rt")
-        in desc
-    )
+    # (2026-10-27: ``w_addr`` is the stacked tensor's address, 0 under ``regions_src`` where the per-expert addresses
+    # ride as common runtime args; the stacked program's words are unchanged)
+    assert _sq("w_addr = 0 if src is not None else w13.buffer_address()") in desc
+    assert _sq("reader_rt[core.x][core.y] = [w_addr, routing.buffer_address(), bank, vc, r] + base_rt") in desc
     assert _sq("[x.buffer_address(), routing.buffer_address(), act.buffer_address(), bank, r] + base_rt + tail") in desc
     assert (
         _sq(
@@ -252,7 +252,8 @@ def test_block_kernel_abi_and_default_vectors():
     )
     assert _sq("compute_ct = [cb_x, cb_w, cb_d, cb_h, cb_out, self.kt, self.ppb]") in desc
     desc = _sq(inspect.getsource(O.ExpertDownStream.descriptors))
-    assert _sq("[w2.buffer_address(), routing.buffer_address(), bank, vc, r * self.cols] + base_rt") in desc
+    assert _sq("w_addr = 0 if src is not None else w2.buffer_address()") in desc
+    assert _sq("[w_addr, routing.buffer_address(), bank, vc, r * self.cols] + base_rt") in desc
     assert (
         _sq(
             "[routing.buffer_address(), act.buffer_address(), out.buffer_address(), bank * self.C + r * self.cols,] + base_rt + tail"
@@ -440,7 +441,7 @@ def test_fused_program_structure():
         _sq("cb=(0, 1, 2, 3, 4, 5, 16)") in src and _sq("cb=(8, 9, 10, 11, 17)") in src
     )  # distinct CB ids per core set
     assert _sq("ttnn.SemaphoreDescriptor(self.SEM_BASE + i, ttnn.CoreType.WORKER, self.down.cores, 0)") in src
-    assert _sq("ttnn.generic_op([w13, w2, x, routing, act, out]") in src
+    assert _sq("weights = [w13, w2]") in src and _sq("ttnn.generic_op(weights + [x, routing, act, out]") in src
     k = inspect.getsource(O._BankStreamOp._kernels)
     assert 'KERNEL_DIR / f"compute_{name}.cpp"' in k  # the same compute sources for both forms
     # the down cores are placed first (nearest their banks), the gate|up cores around them
@@ -592,8 +593,11 @@ def test_fold_serves_and_x_into_l1():
     src = inspect.getsource(M.TtRoutedExperts._block_stream)
     assert (
         "base = self.stream_base" in src
-        and "self.stream_op.forward(xb, dense_w, self.w13, self.w2, act, out, base=base)" in src
+        and "op, w13, w2 = self._stream_source()" in src
+        and "op.forward(xb, dense_w, w13, w2, act, out, base=base)" in src
     )
+    # the stacked op and tensors unless GLM53_REGIONS_DECODE=stream (2026-10-27)
+    assert "return self.stream_op, self.w13, self.w2" in inspect.getsource(M.TtRoutedExperts._stream_source)
     src = inspect.getsource(M.TtRoutedExperts.forward)
     assert "x = self._gather_rows_compact(x, l1=self._stream_x_into_l1(self.mesh.rows * T))" in src
     src = inspect.getsource(M.TtRoutedExperts._gather_rows_compact)

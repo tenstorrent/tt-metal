@@ -50,6 +50,7 @@ from models.demos.glm53_flash.custom_ops.expert_stream.op import (
     MAX_PICKS,
     ExpertDispatch,
     ExpertStream,
+    RegionsSource,
     down_stream_layout,
     fold_base_host,
     gate_up_stream_layout,
@@ -67,6 +68,11 @@ from models.demos.glm53_flash.custom_ops.expert_stream.plan import (
     placement_perm,
     plan_for_32row,
     plan_from_env,
+)
+from models.demos.glm53_flash.custom_ops.expert_stream.regions import (
+    REGIONS_DECODE_ENV,
+    regions_decode_mode,
+    regions_stream_feasible,
 )
 from models.demos.glm53_flash.custom_ops.router_topk.op import RouterTopk
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
@@ -297,6 +303,29 @@ def prefill_experts_for(dense: bool, stream: bool, env=None) -> str:
 
 def regions_keep_stacked() -> bool:
     return os.environ.get("GLM53_REGIONS_KEEP_STACKED", "0") == "1"
+
+
+# GLM53_REGIONS_DECODE (2026-10-27; custom_ops/expert_stream/regions.py, doc/mesh/regions_decode.md): ``off`` (default) =
+# today's rule (decode on the stacked stream copy when ``GLM53_REGIONS_KEEP_STACKED=1`` kept it, else through the
+# regions kernel: ~+80 ms per 45-layer step on the 8x4 at >= 512 K x 4 users and at 128 K x 32 users, where the second
+# copy does not fit beside the caches); ``stream`` = the stream / dispatch ops read the regions path's per-expert lists
+# themselves (``RegionsSource``, the REGIONS_SRC kernels: the same bytes from the same banks, bit-identical results, no
+# second copy -- in the one-copy configuration the stacked tensors are never uploaded, ``one_copy_config``); ``regions``
+# = every shape through the regions kernel even with the stacked copy present (the A/B reference). Read per call like
+# the glue knobs (a function of the env and the static shape: a captured trace replays its mode).
+def one_copy_config(dense: bool, stream: bool, prefill_mode: str | None = None, env=None) -> bool:
+    """The one-copy configuration: the stream layout with the regions prefill path, ``GLM53_REGIONS_DECODE=stream`` and
+    no ``GLM53_REGIONS_KEEP_STACKED``: the regions lists serve prefill AND decode, the stacked tensors are never built
+    (``TtRoutedExperts.__init__``) nor required in the cache (``cache_complete``)."""
+    env = os.environ if env is None else env
+    mode = prefill_experts_for(dense, stream, env) if prefill_mode is None else prefill_mode
+    return bool(
+        stream
+        and not dense
+        and mode == "regions"
+        and regions_decode_mode(env) == "stream"
+        and env.get("GLM53_REGIONS_KEEP_STACKED", "0") != "1"
+    )
 
 
 # regions path: gathered tokens per kernel call (bounds the [T*k + E_local*32, H] bf16 region buffer: 1.09 GB for a 16 K
@@ -696,7 +725,9 @@ class TtRoutedExperts(LightweightModule):
         files = list(cls.cache_files(cache_dir, mesh, expert_dtype, expert_down_dtype, dense, stream).values())
         mode = prefill_experts_for(dense, stream) if prefill_experts is None else prefill_experts
         if stream and not dense and mode in ("dispatch", "regions"):
-            files += list(cls.cache_files(cache_dir, mesh, expert_dtype, expert_down_dtype, False, False).values())
+            block_files = list(cls.cache_files(cache_dir, mesh, expert_dtype, expert_down_dtype, False, False).values())
+            # the one-copy configuration loads the block layout only (the stream tensorbins are never read)
+            files = block_files if one_copy_config(dense, stream, mode) else files + block_files
         return all(f.is_file() for f in files)
 
     def __init__(
@@ -813,27 +844,38 @@ class TtRoutedExperts(LightweightModule):
                 "w2 (stream)",
             )
 
+        prefill_mode = prefill_experts_for(dense, stream)
+        # the one-copy configuration (GLM53_REGIONS_DECODE=stream, regions prefill, no keep_stacked): the regions
+        # lists serve decode through the REGIONS_SRC stream ops, so the stacked stream tensors are never uploaded
+        self.one_copy = one_copy_config(dense, stream, prefill_mode)
         if stream:
             rows13 = E_loc * 2 * (I_loc // TILE // 8) * (H // TILE) * TILE  # ppb column pairs per bank
             rows2 = E_loc * (H // TILE // 8) * (I_loc // TILE) * TILE
-            self.w13 = self.mesh.upload_cached(
-                make_w13_stream,
-                expert_dtype,
-                files["w13"],
-                rows=0,
-                cols=1,
-                memory_config=stream_memory_config(rows13),
-                expect_shape=(tpr, ep, rows13, 256),
-            )
-            self.w2 = self.mesh.upload_cached(
-                make_w2_stream,
-                expert_down_dtype,
-                files["w2"],
-                rows=0,
-                cols=1,
-                memory_config=stream_memory_config(rows2),
-                expect_shape=(tpr, ep, rows2, 256),
-            )
+            if self.one_copy:
+                self.w13 = self.w2 = None
+                logger.info(
+                    f"routed experts: {REGIONS_DECODE_ENV}=stream: the stacked stream copy is not built "
+                    "(the regions lists serve decode through the regions-sourced stream ops)"
+                )
+            else:
+                self.w13 = self.mesh.upload_cached(
+                    make_w13_stream,
+                    expert_dtype,
+                    files["w13"],
+                    rows=0,
+                    cols=1,
+                    memory_config=stream_memory_config(rows13),
+                    expect_shape=(tpr, ep, rows13, 256),
+                )
+                self.w2 = self.mesh.upload_cached(
+                    make_w2_stream,
+                    expert_down_dtype,
+                    files["w2"],
+                    rows=0,
+                    cols=1,
+                    memory_config=stream_memory_config(rows2),
+                    expect_shape=(tpr, ep, rows2, 256),
+                )
             self.stream_x_l1 = os.environ.get("GLM53_STREAM_X_L1", "1") == "1"
             self.stream_act_l1 = os.environ.get("GLM53_STREAM_ACT_L1", "1") == "1"
             # phase 2: > 32 gathered tokens go through the per-expert dispatch ops (weights read once)
@@ -852,26 +894,9 @@ class TtRoutedExperts(LightweightModule):
                 e1["fused"],
             )
             self.experts_32row = experts_32row_mode(os.environ)
-            down_readers = (
-                int(os.environ["GLM53_STREAM_DOWN_READERS"]) if os.environ.get("GLM53_STREAM_DOWN_READERS") else None
-            )  # auto: 2 at I_loc = 256, 4 at 1024, 8 at 2048
-            self.stream_op = ExpertStream(
-                device,
-                E_loc,
-                H,
-                I_loc,
-                H,
-                groups=int(os.environ.get("GLM53_STREAM_GROUPS", "12")),
-                down_readers=down_readers,
-                w13_dtype=expert_dtype,
-                routing_fold=self.stream_fold,
-                scan_words=self.stream_scan_words,
-                fused=self.stream_fused,
-                fused_groups=int(os.environ["GLM53_STREAM_FUSED_GROUPS"])
-                if os.environ.get("GLM53_STREAM_FUSED_GROUPS")
-                else None,
-                fused_down_readers=down_readers,
-            )
+            # the stacked block op (placement only: nothing on device); the regions-sourced twin is built on first
+            # use with the same knobs (``_regions_stream_op``)
+            self.stream_op = ExpertStream(device, E_loc, H, I_loc, H, **self._stream_op_kwargs())
             # the selector fold's per-chip base page: column c's experts start at c * E_local (a 32 B uint16 page,
             # sharded over the mesh columns, replicated over the rows; 0 on one chip)
             self.stream_base = (
@@ -910,8 +935,16 @@ class TtRoutedExperts(LightweightModule):
             self.w2 = self.mesh.upload_cached(
                 make_w2, expert_down_dtype, files["w2"], rows=2, cols=1, expect_shape=(1, E, I, H)
             )
-        self.prefill_experts = prefill_experts_for(dense, stream)
+        self.prefill_experts = prefill_mode
         self._dispatch = None
+        # GLM53_REGIONS_DECODE=stream: the regions lists as the stream ops' weight source (``_init_regions_source``,
+        # after the lists exist); the ops are built on first use. ``paths_used`` / ``last_path`` record which expert
+        # path ``_local_experts`` took (host bookkeeping for the tests; nothing on device).
+        self._regions_src: RegionsSource | None = None
+        self._regions_ops: dict = {}
+        self.regions_stream_ok, self.regions_stream_reason = False, "no regions lists"
+        self.paths_used: set[str] = set()
+        self.last_path: str | None = None
         # the regions / dispatch per-expert lists are sliced out of the block layout ([1,E,H,2I] / [1,E,I,H]); with
         # the stream layout that source is loaded from the block-op cache files (or the host tensors), sliced and
         # released again (``_build_dispatch_path``): the stream tensors stay the stacked decode copy
@@ -928,6 +961,10 @@ class TtRoutedExperts(LightweightModule):
         )
         if self.prefill_experts in ("dispatch", "regions"):
             self._build_dispatch_path(fabric=self.prefill_experts == "dispatch")
+        if self.stream and self._dispatch is not None:
+            self._init_regions_source()
+        elif self.one_copy:
+            raise RuntimeError("the one-copy configuration needs the regions lists (GLM53_PREFILL_EXPERTS=regions)")
         # never retain the block-layout loaders past construction: ``make_w13`` / ``make_w2`` close over the layer's raw
         # ``gate_up`` / ``down`` checkpoint tensors (~11 GB per layer in bf16), so keeping them for 45 layers held
         # ~450 GB of host memory and the OOM killer took the 8x4 loads (2026-10-26, three kills)
@@ -1066,10 +1103,79 @@ class TtRoutedExperts(LightweightModule):
             dense_w = ttnn.typecast(dense_w, ttnn.bfloat16)
         if self.stream_x_l1 and not xb.is_sharded() and xb.memory_config().buffer_type != ttnn.BufferType.L1:
             xb = ttnn.to_memory_config(xb, ttnn.L1_MEMORY_CONFIG)  # the 96 gate|up cores re-read x: L1 is cheaper
-        act, out = self.stream_op.alloc(self.device, act_l1=self.stream_act_l1)
-        self.stream_op.forward(xb, dense_w, self.w13, self.w2, act, out, base=base)
+        op, w13, w2 = self._stream_source()
+        act, out = op.alloc(self.device, act_l1=self.stream_act_l1)
+        op.forward(xb, dense_w, w13, w2, act, out, base=base)
         ttnn.deallocate(act)
         return out
+
+    def _stream_op_kwargs(self) -> dict:
+        """The block stream op's knobs (the stacked op at construction and its regions-sourced twin share them)."""
+        down_readers = (
+            int(os.environ["GLM53_STREAM_DOWN_READERS"]) if os.environ.get("GLM53_STREAM_DOWN_READERS") else None
+        )  # auto: 2 at I_loc = 256, 4 at 1024, 8 at 2048
+        return dict(
+            groups=int(os.environ.get("GLM53_STREAM_GROUPS", "12")),
+            down_readers=down_readers,
+            w13_dtype=self.expert_dtype,
+            routing_fold=self.stream_fold,
+            scan_words=self.stream_scan_words,
+            fused=self.stream_fused,
+            fused_groups=int(os.environ["GLM53_STREAM_FUSED_GROUPS"])
+            if os.environ.get("GLM53_STREAM_FUSED_GROUPS")
+            else None,
+            fused_down_readers=down_readers,
+        )
+
+    def _init_regions_source(self):
+        """The regions lists (``_build_dispatch_path``) as a ``RegionsSource`` for the REGIONS_SRC stream / dispatch
+        ops when the chip's slice is bank-local on this device's DRAM banks (``regions_stream_feasible``: I_local/32
+        and H/32 multiples of the bank count); otherwise the reason is logged and ``GLM53_REGIONS_DECODE=stream``
+        falls back to today's paths (the one-copy configuration then has no fast decode: refused)."""
+        banks = self.device.dram_grid_size().x
+        ok, reason = regions_stream_feasible(
+            self.H, self.I_local, self.H, banks=banks, w13=self.expert_dtype, w2=self.expert_down_dtype
+        )
+        self.regions_stream_ok, self.regions_stream_reason = ok, reason
+        if ok:
+            d = self._dispatch
+            self._regions_src = RegionsSource(
+                d["gate"], d["up"], d["down"], banks, w13_dtype=self.expert_dtype, w2_dtype=self.expert_down_dtype
+            )
+            plan = self._regions_src.plan
+            logger.info(
+                f"routed experts: regions lists usable as the stream source on {banks} banks (ppb {plan.ppb}, gate|up "
+                f"packets {plan.gate_packet_tiles} tile(s) x {plan.gate_pages_per_col} per column, down {plan.cols} "
+                f"columns per core x {plan.down_pages_per_expert} packets per expert); {REGIONS_DECODE_ENV}="
+                f"{regions_decode_mode()}"
+            )
+        else:
+            logger.warning(f"routed experts: the regions lists cannot feed the stream ops on this device: {reason}")
+            if self.one_copy:
+                raise RuntimeError(f"{REGIONS_DECODE_ENV}=stream without the stacked copy cannot decode here: {reason}")
+
+    def _regions_serves(self, mode: str | None = None) -> bool:
+        """``GLM53_REGIONS_DECODE=stream`` with the regions lists present and bank-local: the stream family reads
+        them (``RegionsSource``) instead of the stacked copy, whether or not that copy was kept."""
+        mode = regions_decode_mode() if mode is None else mode
+        return mode == "stream" and self._regions_src is not None
+
+    def _regions_stream_op(self) -> ExpertStream:
+        """The regions-sourced block op (built on first use; placement only, nothing allocated on device)."""
+        if "block" not in self._regions_ops:
+            E_loc, K, I_loc, H = self.dispatch_shapes
+            self._regions_ops["block"] = ExpertStream(
+                self.device, E_loc, K, I_loc, H, regions_src=True, **self._stream_op_kwargs()
+            )
+        return self._regions_ops["block"]
+
+    def _stream_source(self):
+        """(block op, w13, w2) of the stream block path: the regions-sourced op over the regions lists under
+        ``GLM53_REGIONS_DECODE=stream``, else the stacked tensors."""
+        if self._regions_serves():
+            return self._regions_stream_op(), self._regions_src, self._regions_src
+        assert self.w13 is not None, "the stream block path needs the stacked copy or GLM53_REGIONS_DECODE=stream"
+        return self.stream_op, self.w13, self.w2
 
     def _fold_serves(self, dense_w: ttnn.Tensor) -> bool:
         """E1 (a): the selector fold applies to a bf16 routing matrix over all E experts (the fused router's decode
@@ -1093,10 +1199,12 @@ class TtRoutedExperts(LightweightModule):
             and self._stream_serves(T_gathered)
         )
 
-    def _dispatch_op(self, T: int):
+    def _dispatch_op(self, T: int, regions: bool = False):
         """The dispatch ops for T gathered tokens (one program per T, cached). ``GLM53_EXPERT_PLAN`` (item (d),
-        ``custom_ops/expert_stream/plan.py``) adds the streaming knobs on top of today's defaults."""
-        if T not in self.dispatch_ops:
+        ``custom_ops/expert_stream/plan.py``) adds the streaming knobs on top of today's defaults. ``regions``: the
+        regions-sourced twin (``regions_src=True``, cached apart; the pair-unit kernels are stacked-only)."""
+        key = (T, "regions") if regions else T
+        if key not in self.dispatch_ops:
             E_loc, K, I_loc, H = self.dispatch_shapes
             kw = dict(
                 groups=int(os.environ.get("GLM53_STREAM_GROUPS", "12")),
@@ -1123,21 +1231,28 @@ class TtRoutedExperts(LightweightModule):
                 kw.update(plan.op_kwargs())
                 logger.info(f"hybrid dispatch op T={T}: expert plan {plan.op_kwargs()}")
             if mode == "units":
+                if regions:
+                    raise ValueError(
+                        f"GLM53_EXPERTS_32ROW=units takes the stacked layout: {REGIONS_DECODE_ENV}=stream cannot serve it"
+                    )
                 kw["units"] = True
-            self.dispatch_ops[T] = ExpertDispatch(self.device, E_loc, K, I_loc, H, T, **kw)
-        return self.dispatch_ops[T]
+            self.dispatch_ops[key] = ExpertDispatch(self.device, E_loc, K, I_loc, H, T, regions_src=regions, **kw)
+        return self.dispatch_ops[key]
 
     def _block_dispatch(self, x: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
         """All T (multiple of 32, <= 256) gathered tokens through the dispatch ops: the column selector matmul,
-        the row-major copy of x and the per-expert counts, the gate|up dispatch, the down dispatch -> [1,1,T,H]."""
+        the row-major copy of x and the per-expert counts, the gate|up dispatch, the down dispatch -> [1,1,T,H].
+        Under ``GLM53_REGIONS_DECODE=stream`` the regions-sourced twins read the regions lists."""
         if self.select is not None:
             dense_w = ttnn.matmul(dense_w, self.select_bf16, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)
         elif dense_w.dtype != ttnn.bfloat16:
             dense_w = ttnn.typecast(dense_w, ttnn.bfloat16)
-        op = self._dispatch_op(x.shape[-2])
+        regions = self._regions_serves()
+        op = self._dispatch_op(x.shape[-2], regions=regions)
+        w13, w2 = (self._regions_src, self._regions_src) if regions else (self.w13, self.w2)
         x_rm, counts = ExpertDispatch.prepare(x, dense_w)
         act, table, out = op.alloc(self.device, act_l1=self.stream_act_l1)
-        op.forward(x_rm, dense_w, counts, self.w13, self.w2, act, table, out)
+        op.forward(x_rm, dense_w, counts, w13, w2, act, table, out)
         for t in (x_rm, counts, act, table):
             ttnn.deallocate(t)
         return out
@@ -1257,7 +1372,7 @@ class TtRoutedExperts(LightweightModule):
         if self._block_source is not None:
             ttnn.deallocate(w13_src)  # the transient block-layout source; the stream tensors are the stacked copy
             ttnn.deallocate(w2_src)
-        if not regions_keep_stacked():
+        if not regions_keep_stacked() and self.w13 is not None:  # (already None in the one-copy configuration)
             ttnn.deallocate(self.w13)
             ttnn.deallocate(self.w2)
             self.w13 = self.w2 = None
@@ -1629,8 +1744,14 @@ class TtRoutedExperts(LightweightModule):
         """Whether the stream family handles ``T_gathered`` tokens: the stream tensors are present (not dropped for
         the regions lists) and T is a block (<= 32) or a dispatch-op range (33..``STREAM_DISPATCH_MAX_T``, whole
         tiles); the regions / dispatch lists serve the rest (long prefill chunks, or everything once the stacked copy
-        is dropped: ``GLM53_REGIONS_KEEP_STACKED=0``)."""
-        if not self.stream or self.w13 is None:
+        is dropped: ``GLM53_REGIONS_KEEP_STACKED=0`` -- unless ``GLM53_REGIONS_DECODE=stream`` lets the stream family
+        read the regions lists; ``GLM53_REGIONS_DECODE=regions`` sends every shape to the regions kernel)."""
+        if not self.stream:
+            return False
+        mode = regions_decode_mode()
+        if mode == "regions" and self._dispatch is not None:
+            return False  # the A/B knob: the regions kernel serves every shape
+        if self.w13 is None and not self._regions_serves(mode):
             return False
         if T_gathered <= TILE:
             return True
@@ -1646,25 +1767,30 @@ class TtRoutedExperts(LightweightModule):
         T = x.shape[-2]
         block = self._block_stream if self.stream else self._block
         if self.dense:
-            y = self._block_dense(x, dense_w)
+            path, y = "dense", self._block_dense(x, dense_w)
         elif self._stream_serves(T) and T > TILE:
-            y = self._block_dispatch(x, dense_w)  # 33..256 gathered tokens: the stream dispatch ops
-        elif self._dispatch is not None and (T > TILE or self.w13 is None):
-            # the per-expert lists serve prefill (and decode too when they replaced the stacked tensors)
+            # 33..256 gathered tokens: the stream dispatch ops (over the regions lists under GLM53_REGIONS_DECODE=stream)
+            path = "dispatch_regions" if self._regions_serves() else "dispatch"
+            y = self._block_dispatch(x, dense_w)
+        elif self._dispatch is not None and (T > TILE or not self._stream_serves(T)):
+            # the per-expert lists serve prefill (and decode too when the stream family does not: the stacked tensors
+            # dropped without GLM53_REGIONS_DECODE=stream, or GLM53_REGIONS_DECODE=regions)
             assert (
                 idx is not None and w is not None
             ), "the dispatch / regions prefill paths need the router's top-k lists"
             if self._dispatch["fabric"]:
-                y = self._forward_dispatch(x, idx, w)
+                path, y = "fabric", self._forward_dispatch(x, idx, w)
             else:
-                y = self._forward_regions_chunked(x, dense_w, idx, w)
+                path, y = "regions", self._forward_regions_chunked(x, dense_w, idx, w)
         elif self.prefill_experts == "batched" and T > TILE and not self.stream:
-            y = self._forward_batched(x, dense_w)
+            path, y = "batched", self._forward_batched(x, dense_w)
         elif T <= TILE:
+            path = ("stream_regions" if self._regions_serves() else "stream") if self.stream else "blocks"
             y = block(x, dense_w)
             if self.stream and T < TILE:
                 y = ttnn.slice(y, [0, 0, 0, 0], [1, 1, T, self.H])
         else:
+            path = "blocks"
             outs = []
             for t0 in range(0, T, TILE):
                 t1 = min(t0 + TILE, T)
@@ -1674,6 +1800,8 @@ class TtRoutedExperts(LightweightModule):
             y = ttnn.concat(outs, dim=-2)
             for o in outs:
                 ttnn.deallocate(o)
+        self.last_path = path
+        self.paths_used.add(path)
         return y
 
 

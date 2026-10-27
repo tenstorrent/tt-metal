@@ -234,12 +234,23 @@ class GLM53MeshModel:
                 scratch_slot=scratch,
                 trace_mb=int(os.environ.get("GLM53_MODEL_TRACE_MB", "512")),
             )
-            keep = plan.fits(max_batch, max_seq_len)
+            from models.demos.glm53_flash.custom_ops.expert_stream.regions import (
+                REGIONS_DECODE_ENV,
+                regions_decode_mode,
+                resolve_keep_stacked,
+            )
+
+            fits = plan.fits(max_batch, max_seq_len)
+            mode = regions_decode_mode()
+            # GLM53_REGIONS_DECODE=stream: the regions lists serve decode too (one copy), whatever the planner says
+            keep = resolve_keep_stacked(fits, mode)
             os.environ["GLM53_PREFILL_EXPERTS"] = "regions"
             os.environ["GLM53_REGIONS_KEEP_STACKED"] = "1" if keep else "0"
             logger.info(
                 f"mesh model: GLM53_PREFILL_EXPERTS=auto -> regions prefill, stacked decode copy "
-                f"{'kept' if keep else 'dropped (does not fit beside the caches)'} for {max_batch} users/row x {max_seq_len}"
+                f"{'kept' if keep else 'dropped'} for {max_batch} users/row x {max_seq_len} (planner: "
+                f"{'fits' if fits else 'does not fit'} beside the caches; {REGIONS_DECODE_ENV}={mode}"
+                f"{': the stream ops read the regions lists, one copy' if mode == 'stream' else ''})"
             )
         snapshot = snapshot or default_snapshot_dir()
         headers = shard_headers(snapshot)

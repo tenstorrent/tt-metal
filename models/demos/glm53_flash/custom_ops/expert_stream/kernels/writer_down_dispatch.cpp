@@ -26,6 +26,9 @@
 // runtime args: [counts_addr (EP: idx_addr), table_addr, act_addr, out_addr, col0, (EP) base_addr, (EP = 2) t_valid,
 //                idx_page]
 // compile-time 20: GATHER_ROTATE (1 = rotate the phase-1 activation tile reads per core: dispatch_common.hpp).
+// REGIONS_SRC (regions_src.hpp): the output tile column of this core's c-th column is bank + banks * (r * cols + c)
+// (from col0 = bank * C + r * cols) instead of col0 + c; `banks` is the compile-time arg after the accessor args
+// (op.py appends it under regions_src only). col0 keeps its other role (the per-core gather rotation seed).
 
 #include <stdint.h>
 
@@ -33,6 +36,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "dispatch_common.hpp"
+#include "regions_src.hpp"
 
 void kernel_main() {
     const uint32_t counts_addr = get_arg_val<uint32_t>(0);
@@ -68,6 +72,10 @@ void kernel_main() {
     constexpr auto act_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<act_args.next_compile_time_args_offset()>();
     constexpr auto base_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+#ifdef REGIONS_SRC
+    constexpr uint32_t banks = get_compile_time_arg_val(base_args.next_compile_time_args_offset());
+    constexpr uint32_t C = h_tiles / banks;  // output columns per bank
+#endif
 
     constexpr uint32_t E_TILES = (E + 31) / 32;
     constexpr uint32_t RT = T / 32;
@@ -248,7 +256,12 @@ void kernel_main() {
         cb_wait_front(cb_out, cols);
         const uint32_t o_l1 = get_read_ptr(cb_out);
         for (uint32_t c = 0; c < cols; ++c) {
-            noc_async_write(o_l1 + c * tile_page, s_out.get_noc_addr(r * h_tiles + col0 + c), tile_page);
+#ifdef REGIONS_SRC
+            const uint32_t col = regions_out_col(col0, C, banks, c);
+#else
+            const uint32_t col = col0 + c;
+#endif
+            noc_async_write(o_l1 + c * tile_page, s_out.get_noc_addr(r * h_tiles + col), tile_page);
         }
         noc_async_write_barrier();
         cb_pop_front(cb_out, cols);

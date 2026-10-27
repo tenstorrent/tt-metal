@@ -61,6 +61,17 @@ today's program, selected in ``tt/moe.py`` by ``GLM53_STREAM_FOLD`` / ``GLM53_ST
   per-group semaphores on every down core (``fused_semaphores``), the down writer polls the slot of the expert it
   loads next: the down stream of expert e overlaps the gate|up stream of the later experts and one launch replaces
   two (the down op's prelude -- routing read, scan, mailbox -- no longer waits for the gate|up op to end).
+
+Regions-sourced weights (2026-10-27, ``regions_src=True`` on every op, ``RegionsSource`` in place of ``w13`` / ``w2``;
+``regions.py``, ``doc/mesh/regions_decode.md``): the ops read the regions prefill path's per-expert DRAM-interleaved
+tensors (``gate[e]`` / ``up[e]`` [K, I], ``down[e]`` [I, H]) instead of the stacked bank-sharded copy, which is then
+not needed at all (9.41 GiB per chip at the 8x4 shapes). A DRAM-interleaved tile tensor already places tile column
+``n`` in bank ``n % banks`` (when ``I/32`` is a multiple of the bank count) at the K stride ``ppb`` tiles, so at the
+8x4 (``ppb = 1``) the gate|up stream is byte-for-byte the stacked one from a different base address per expert
+(common runtime args); the down block comes k-major (one packet of ``cols`` tiles per K tile) and the down compute
+indexes it so. The ``REGIONS_SRC`` kernel variants are preprocessor-gated: the default programs are unchanged, and
+the results are bit-identical to the stacked ops (the same products in the same order; the act / out tiles land at
+the same global columns through a different (bank, column) map).
 """
 
 from __future__ import annotations
@@ -72,6 +83,7 @@ import torch
 
 import ttnn
 from models.demos.glm53_flash.custom_ops.expert_stream.plan import fused_core_plan, fused_semaphores
+from models.demos.glm53_flash.custom_ops.expert_stream.regions import MAX_RUNTIME_ARGS, plan_regions_stream
 
 KERNEL_DIR = Path(
     os.environ.get("GLM53_STREAM_KERNEL_DIR", "") or Path(__file__).parent / "kernels"
@@ -160,6 +172,54 @@ def upload_stream_weights(device, layout: torch.Tensor, dtype=ttnn.bfloat8_b, me
         memory_config=stream_memory_config(rows),
         mesh_mapper=mesh_mapper,
     )
+
+
+class RegionsSource:
+    """The regions prefill path's per-expert weight lists as the stream / dispatch ops' weight source
+    (``regions_src=True``; ``tt/moe.py`` ``_build_dispatch_path`` builds the lists, ``regions.py`` the layout
+    math): ``gate[e]`` / ``up[e]`` ``[K, I]`` and ``down[e]`` ``[I, H]`` TILE tensors, DRAM interleaved, one
+    buffer each. The kernels take every expert's buffer address as common runtime args (``gate_up_addrs``: gate
+    then up, 2 E words; ``down_addrs``: E words; the per-kernel limit is ``MAX_RUNTIME_ARGS``) and walk the
+    interleaved pages bank-locally themselves; ``plan`` (``plan_regions_stream``) says whether the shapes allow it
+    (``bank_local``) and sizes the packets. ``tensors`` is the io list handed to the generic op (the buffers stay
+    in the program's dependency set, ahead of today's io order). On a mesh the lists are mesh tensors with one
+    address per expert on every chip (the slices are mesh-uniform allocations); on a program-cache hit the common
+    runtime args are rewritten in place (tt_metal ``apply_descriptor_runtime_args``), so every layer's list applies."""
+
+    def __init__(self, gate, up, down, banks: int, w13_dtype=ttnn.bfloat8_b, w2_dtype=ttnn.bfloat8_b):
+        assert len(gate) == len(up) == len(down) > 0, (len(gate), len(up), len(down))
+        self.E = len(gate)
+        K, I = int(gate[0].shape[-2]), int(gate[0].shape[-1])
+        I2, H = int(down[0].shape[-2]), int(down[0].shape[-1])
+        assert I2 == I, f"down [{I2}, {H}] does not match gate [{K}, {I}]"
+        for name, lst, shape, dtype in (
+            ("gate", gate, (K, I), w13_dtype),
+            ("up", up, (K, I), w13_dtype),
+            ("down", down, (I, H), w2_dtype),
+        ):
+            for e, t in enumerate(lst):
+                assert tuple(t.shape)[-2:] == shape, (name, e, tuple(t.shape), shape)
+                assert t.layout == ttnn.TILE_LAYOUT, (name, e, t.layout)
+                mc = t.memory_config()
+                assert mc.buffer_type == ttnn.BufferType.DRAM and not t.is_sharded(), (name, e, mc)
+                assert t.dtype == dtype, (name, e, t.dtype, dtype)
+        self.gate, self.up, self.down = list(gate), list(up), list(down)
+        self.K, self.I, self.H = K, I, H
+        self.banks = banks
+        self.w13_dtype, self.w2_dtype = w13_dtype, w2_dtype
+        self.plan = plan_regions_stream(K, I, H, banks=banks, w13=w13_dtype, w2=w2_dtype)
+        if not self.plan.bank_local:
+            raise ValueError(f"regions-sourced stream at K={K} I={I} H={H} on {banks} banks: {self.plan.reason}")
+        self.gate_up_addrs = [int(t.buffer_address()) for t in self.gate] + [int(t.buffer_address()) for t in self.up]
+        self.down_addrs = [int(t.buffer_address()) for t in self.down]
+        assert len(self.gate_up_addrs) <= MAX_RUNTIME_ARGS, f"{self.E} experts: too many common runtime args"
+
+    def tensors(self) -> list:
+        return self.gate + self.up + self.down
+
+    def check(self, E: int, K: int, I: int, H: int | None = None):
+        assert (self.E, self.K, self.I) == (E, K, I), ((self.E, self.K, self.I), (E, K, I))
+        assert H is None or self.H == H, (self.H, H)
 
 
 # ---------------------------------------------------------------------------------------------------- golden
@@ -417,12 +477,20 @@ class _BankStreamOp:
         compute_ct,
         fidelity=ttnn.MathFidelity.HiFi2,
         defines=(),
+        reader_common=None,
+        compute_defines=(),
     ) -> list:
         """The three kernel descriptors of one streaming program on this placement's cores. ``defines``: the E1
         preprocessor variants of the data-movement kernels (``("ROUTING_FOLD", "1")`` ...); empty = today's kernels
-        (a kernel descriptor without defines is today's descriptor)."""
+        (a kernel descriptor without defines is today's descriptor). ``reader_common``: the reader's common runtime
+        args (the regions-sourced per-expert addresses); ``compute_defines``: the compute kernel's variants
+        (``REGIONS_SRC`` on the down computes); both default to today's descriptors."""
         dm = ttnn.DataMovementConfigDescriptor
         extra = {"defines": [tuple(d) for d in defines]} if defines else {}
+        reader_extra = dict(extra)
+        if reader_common:
+            reader_extra["common_runtime_args"] = [int(a) for a in reader_common]
+        compute_extra = {"defines": [tuple(d) for d in compute_defines]} if compute_defines else {}
         return [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / f"reader_{name}.cpp"),
@@ -430,7 +498,7 @@ class _BankStreamOp:
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
-                **extra,
+                **reader_extra,
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / f"writer_{name}.cpp"),
@@ -448,6 +516,7 @@ class _BankStreamOp:
                 config=ttnn.ComputeConfigDescriptor(
                     math_fidelity=fidelity, fp32_dest_acc_en=True, math_approx_mode=False
                 ),
+                **compute_extra,
             ),
         ]
 
@@ -462,9 +531,40 @@ class _BankStreamOp:
         compute_ct,
         fidelity=ttnn.MathFidelity.HiFi2,
         defines=(),
+        reader_common=None,
+        compute_defines=(),
     ) -> ttnn.ProgramDescriptor:
-        kernels = self._kernels(name, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, fidelity, defines)
+        kernels = self._kernels(
+            name,
+            reader_ct,
+            reader_rt,
+            writer_ct,
+            writer_rt,
+            compute_ct,
+            fidelity,
+            defines,
+            reader_common=reader_common,
+            compute_defines=compute_defines,
+        )
         return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+
+
+REGIONS_DEFINE = ("REGIONS_SRC", "1")
+
+
+def _regions_source(w, regions_src: bool, E: int, K: int, I: int, H: int | None = None):
+    """The ``RegionsSource`` behind a weight argument of a ``regions_src`` op (None on a stacked op); the flag and
+    the argument must agree (a stacked tensor on a regions-sourced program would be walked as interleaved pages)."""
+    is_src = isinstance(w, RegionsSource)
+    assert is_src == bool(regions_src), (
+        "regions_src=True takes a RegionsSource in place of the stacked weights"
+        if regions_src
+        else "a RegionsSource needs regions_src=True"
+    )
+    if is_src:
+        w.check(E, K, I, H)
+        return w
+    return None
 
 
 def _down_readers(C: int, seg_tiles: int) -> int:
@@ -495,7 +595,9 @@ class ExpertGateUpStream(_BankStreamOp):
     TILE (written at the active experts' tiles). ``groups`` = cores per bank = how many experts stream in
     parallel; the activation (K / 32 tiles, 256 KB at K = 4096) stays resident on every core.
     ``routing_fold``: routing = the router's full [1, 1, 32, E_total] matrix and ``__call__`` takes the chip's
-    ``base`` page (``fold_base_tensor``); ``scan_words``: the word-wise scan; both default off (today's program)."""
+    ``base`` page (``fold_base_tensor``); ``scan_words``: the word-wise scan; both default off (today's program).
+    ``regions_src``: ``w13`` is a ``RegionsSource`` (the regions lists; the REGIONS_SRC kernels, the per-expert
+    addresses as common runtime args, single-tile packets at ppb > 1)."""
 
     def __init__(
         self,
@@ -508,6 +610,7 @@ class ExpertGateUpStream(_BankStreamOp):
         routing_fold: bool = False,
         scan_words: bool = False,
         exclude: set[tuple[int, int]] | None = None,
+        regions_src: bool = False,
     ):
         super().__init__(device, groups, exclude=exclude)
         self.E, self.K, self.I = E, K, I
@@ -521,14 +624,23 @@ class ExpertGateUpStream(_BankStreamOp):
         self.w_dtype, self.w_tile = w_dtype, WEIGHT_TILE_BYTES[w_dtype]  # bfp8 or bfp4 gate|up weights
         self.col_bytes = self.kt * self.w_tile
         self.expert_stride = 2 * self.ppb * self.col_bytes
-        self.page_bytes = _packet_bytes(self.kt, self.w_tile)
+        self.regions_src = bool(regions_src)
+        if self.regions_src:
+            # the regions lists' K stride is ppb tiles: whole-column packets at ppb = 1 (today's size), one tile else
+            self.regions_plan = plan_regions_stream(K, I, None, banks=self.banks, w13=w_dtype)
+            self.page_bytes = self.regions_plan.gate_packet_bytes
+        else:
+            self.page_bytes = _packet_bytes(self.kt, self.w_tile)
         self.routing_fold, self.scan_words = bool(routing_fold), bool(scan_words)
 
     def descriptors(self, x, routing, w13, act, base=None, cb=(0, 1, 2, 3, 4, 5, 16), fused_rt=None):
         """(cbs, kernels) of the gate|up program. ``cb``: the CB indices (x, w, r0, r1, d, h, out); ``fused_rt``:
-        the FUSED_SIGNAL runtime tail of the writer (``ExpertStreamFused``)."""
+        the FUSED_SIGNAL runtime tail of the writer (``ExpertStreamFused``). ``w13``: the stacked tensor, or the
+        ``RegionsSource`` under ``regions_src``."""
         cb_x, cb_w, cb_r0, cb_r1, cb_d, cb_h, cb_out = cb
         assert (base is not None) == self.routing_fold, "routing_fold takes the chip's base page"
+        src = _regions_source(w13, self.regions_src, self.E, self.K, self.I)
+        w_addr = 0 if src is not None else w13.buffer_address()
         e_tiles = -(-self.E // TILE)
         r_pages = fold_r_tiles(self.E) + 1 if self.routing_fold else e_tiles  # + the base page
         cbs = [
@@ -544,7 +656,7 @@ class ExpertGateUpStream(_BankStreamOp):
         tail = list(fused_rt or [])
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, bank, r, vc in self.assignments:
-            reader_rt[core.x][core.y] = [w13.buffer_address(), routing.buffer_address(), bank, vc, r] + base_rt
+            reader_rt[core.x][core.y] = [w_addr, routing.buffer_address(), bank, vc, r] + base_rt
             writer_rt[core.x][core.y] = (
                 [x.buffer_address(), routing.buffer_address(), act.buffer_address(), bank, r] + base_rt + tail
             )
@@ -569,13 +681,29 @@ class ExpertGateUpStream(_BankStreamOp):
             writer_ct += ttnn.TensorAccessorArgs(base).get_compile_time_args()
         compute_ct = [cb_x, cb_w, cb_d, cb_h, cb_out, self.kt, self.ppb]
         defines = _e1_defines(self.routing_fold, self.scan_words, "FUSED_SIGNAL" if fused_rt is not None else None)
-        kernels = self._kernels("gate_up", reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, defines=defines)
+        if src is not None:
+            defines.append(REGIONS_DEFINE)
+        kernels = self._kernels(
+            "gate_up",
+            reader_ct,
+            reader_rt,
+            writer_ct,
+            writer_rt,
+            compute_ct,
+            defines=defines,
+            reader_common=src.gate_up_addrs if src is not None else None,
+        )
         return cbs, kernels
+
+    def io(self, x, routing, w13, act, base=None) -> list:
+        """The generic op's io list in today's order (the weights first: the stacked tensor, or the regions lists)."""
+        weights = w13.gate + w13.up if isinstance(w13, RegionsSource) else [w13]
+        return weights + [x, routing, act] + ([base] if base is not None else [])
 
     def __call__(self, x, routing, w13, act, base=None):
         cbs, kernels = self.descriptors(x, routing, w13, act, base=base)
         program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        ttnn.generic_op([w13, x, routing, act] + ([base] if base is not None else []), program)
+        ttnn.generic_op(self.io(x, routing, w13, act, base), program)
         return act
 
 
@@ -584,7 +712,7 @@ class ExpertDownStream(_BankStreamOp):
     w2: ``upload_stream_weights(down_stream_layout(...))``, out [1, 1, 32, H] BF16 TILE DRAM (the expert sum).
     ``readers`` cores per bank split the bank's C = H / 32 / banks output columns (cols = C / readers <= 8;
     None = the fewest readers whose expert block fits, ``_down_readers``). ``routing_fold`` / ``scan_words`` as the
-    gate|up op."""
+    gate|up op. ``regions_src``: ``w2`` is a ``RegionsSource`` (one packet of ``cols`` tiles per K tile, k-major)."""
 
     def __init__(
         self,
@@ -596,6 +724,7 @@ class ExpertDownStream(_BankStreamOp):
         routing_fold: bool = False,
         scan_words: bool = False,
         exclude: set[tuple[int, int]] | None = None,
+        regions_src: bool = False,
     ):
         banks = device.dram_grid_size().x
         self.seg_tiles = I // TILE
@@ -609,15 +738,23 @@ class ExpertDownStream(_BankStreamOp):
         assert self.cols <= 8, f"{self.cols} output columns per core exceed the 8 fp32 DST tiles"
         self.seg_bytes = self.seg_tiles * BFP8_TILE_BYTES
         self.block_tiles = self.cols * self.seg_tiles
-        self.page_bytes = _packet_bytes(self.seg_tiles)
+        self.regions_src = bool(regions_src)
+        if self.regions_src:
+            self.regions_plan = plan_regions_stream(H, I, H, banks=self.banks, down_readers=readers)
+            assert self.regions_plan.cols == self.cols, (self.regions_plan.cols, self.cols)
+            self.page_bytes = self.regions_plan.down_packet_bytes  # one K tile of the core's columns
+        else:
+            self.page_bytes = _packet_bytes(self.seg_tiles)
         self.bank_expert_stride = self.C * self.seg_bytes
         self.routing_fold, self.scan_words = bool(routing_fold), bool(scan_words)
 
     def descriptors(self, act, routing, w2, out, base=None, cb=(0, 1, 2, 3, 16), fused_rt=None):
         """(cbs, kernels) of the down program. ``cb``: (a, w, r0, r1, out); ``fused_rt``: the FUSED_WAIT runtime
-        tail of the writer (``ExpertStreamFused``)."""
+        tail of the writer (``ExpertStreamFused``). ``w2``: the stacked tensor, or the ``RegionsSource``."""
         cb_a, cb_w, cb_r0, cb_r1, cb_out = cb
         assert (base is not None) == self.routing_fold, "routing_fold takes the chip's base page"
+        src = _regions_source(w2, self.regions_src, self.E, self.H, self.I, self.H)
+        w_addr = 0 if src is not None else w2.buffer_address()
         e_tiles = -(-self.E // TILE)
         r_pages = fold_r_tiles(self.E) + 1 if self.routing_fold else e_tiles
         cbs = [
@@ -632,7 +769,7 @@ class ExpertDownStream(_BankStreamOp):
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, bank, r, vc in self.assignments:
             reader_rt[core.x][core.y] = [
-                w2.buffer_address(),
+                w_addr,
                 routing.buffer_address(),
                 bank,
                 vc,
@@ -666,15 +803,34 @@ class ExpertDownStream(_BankStreamOp):
         if self.routing_fold:
             reader_ct += ttnn.TensorAccessorArgs(base).get_compile_time_args()
             writer_ct += ttnn.TensorAccessorArgs(base).get_compile_time_args()
+        if src is not None:  # the output column map's constants, after every accessor (writer_down.cpp CT_TAIL)
+            writer_ct += [self.H // TILE, self.banks]
         compute_ct = [cb_a, cb_w, cb_out, self.seg_tiles, self.cols]
         defines = _e1_defines(self.routing_fold, self.scan_words, "FUSED_WAIT" if fused_rt is not None else None)
-        kernels = self._kernels("down", reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, defines=defines)
+        if src is not None:
+            defines.append(REGIONS_DEFINE)
+        kernels = self._kernels(
+            "down",
+            reader_ct,
+            reader_rt,
+            writer_ct,
+            writer_rt,
+            compute_ct,
+            defines=defines,
+            reader_common=src.down_addrs if src is not None else None,
+            compute_defines=[REGIONS_DEFINE] if src is not None else (),
+        )
         return cbs, kernels
+
+    def io(self, act, routing, w2, out, base=None) -> list:
+        """The generic op's io list in today's order (the weights first)."""
+        weights = list(w2.down) if isinstance(w2, RegionsSource) else [w2]
+        return weights + [act, routing, out] + ([base] if base is not None else [])
 
     def __call__(self, act, routing, w2, out, base=None):
         cbs, kernels = self.descriptors(act, routing, w2, out, base=base)
         program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        ttnn.generic_op([w2, act, routing, out] + ([base] if base is not None else []), program)
+        ttnn.generic_op(self.io(act, routing, w2, out, base), program)
         return out
 
 
@@ -701,6 +857,7 @@ class ExpertStreamFused:
         w13_dtype=ttnn.bfloat8_b,
         routing_fold: bool = False,
         scan_words: bool = False,
+        regions_src: bool = False,
     ):
         grid = device.compute_with_storage_grid_size()
         banks = device.dram_grid_size().x
@@ -708,7 +865,14 @@ class ExpertStreamFused:
         self.groups, self.down_readers = plan["groups"], plan["down_readers"]
         self.sems_per_group, self.n_sems = fused_semaphores(self.groups, E)
         self.down = ExpertDownStream(
-            device, E, I, H, self.down_readers, routing_fold=routing_fold, scan_words=scan_words
+            device,
+            E,
+            I,
+            H,
+            self.down_readers,
+            routing_fold=routing_fold,
+            scan_words=scan_words,
+            regions_src=regions_src,
         )
         self.gate_up = ExpertGateUpStream(
             device,
@@ -720,10 +884,12 @@ class ExpertStreamFused:
             routing_fold=routing_fold,
             scan_words=scan_words,
             exclude=self.down.core_set,
+            regions_src=regions_src,
         )
         assert not (self.gate_up.core_set & self.down.core_set), "fused placement: the two kernel sets overlap"
         self.E, self.K, self.I, self.H = E, K, I, H
         self.banks = banks
+        self.regions_src = bool(regions_src)
         self.down_xy = self.down.noc_xy()
 
     alloc = None  # set below (shared with ExpertStream)
@@ -752,7 +918,11 @@ class ExpertStreamFused:
             for i in range(self.n_sems)
         ]
         program = ttnn.ProgramDescriptor(kernels=gu_kernels + dn_kernels, semaphores=sems, cbs=gu_cbs + dn_cbs)
-        ttnn.generic_op([w13, w2, x, routing, act, out] + ([base] if base is not None else []), program)
+        if isinstance(w13, RegionsSource):
+            weights = w13.tensors()  # w2 is the same source
+        else:
+            weights = [w13, w2]
+        ttnn.generic_op(weights + [x, routing, act, out] + ([base] if base is not None else []), program)
         return out
 
     __call__ = forward
@@ -762,7 +932,8 @@ class ExpertStreamFused:
 class ExpertStream:
     """The chip's routed-expert block as the two streaming ops: ``forward(x, routing, act, out)``. ``fused`` runs
     ``ExpertStreamFused`` (one program) instead; ``routing_fold`` / ``scan_words`` select the E1 kernel variants
-    (``forward`` then takes the chip's ``base`` page)."""
+    (``forward`` then takes the chip's ``base`` page); ``regions_src``: ``forward`` takes the ``RegionsSource`` as
+    both ``w13`` and ``w2`` (the regions lists serve the block; no stacked copy)."""
 
     def __init__(
         self,
@@ -779,9 +950,11 @@ class ExpertStream:
         fused: bool = False,
         fused_groups: int | None = None,
         fused_down_readers: int | None = None,
+        regions_src: bool = False,
     ):
         self.fused = bool(fused)
         self.routing_fold = bool(routing_fold)
+        self.regions_src = bool(regions_src)
         if self.fused:
             self.fused_op = ExpertStreamFused(
                 device,
@@ -794,15 +967,31 @@ class ExpertStream:
                 w13_dtype=w13_dtype,
                 routing_fold=routing_fold,
                 scan_words=scan_words,
+                regions_src=regions_src,
             )
             self.gate_up, self.down = self.fused_op.gate_up, self.fused_op.down
         else:
             self.fused_op = None
             self.gate_up = ExpertGateUpStream(
-                device, E, K, I, groups, w_dtype=w13_dtype, routing_fold=routing_fold, scan_words=scan_words
+                device,
+                E,
+                K,
+                I,
+                groups,
+                w_dtype=w13_dtype,
+                routing_fold=routing_fold,
+                scan_words=scan_words,
+                regions_src=regions_src,
             )
             self.down = ExpertDownStream(
-                device, E, I, H, down_readers, routing_fold=routing_fold, scan_words=scan_words
+                device,
+                E,
+                I,
+                H,
+                down_readers,
+                routing_fold=routing_fold,
+                scan_words=scan_words,
+                regions_src=regions_src,
             )
         self.E, self.K, self.I, self.H = E, K, I, H
 
@@ -863,11 +1052,16 @@ class ExpertGateUpDispatch(_BankStreamOp):
         prefetch_pairs: int = 1,
         packet_tiles: int | None = None,
         gather_rotate: bool = False,
+        regions_src: bool = False,
     ):
         super().__init__(device, groups)
         assert T % TILE == 0 and T <= 256, T  # counts are exact BF16 integers up to 256
         assert groups <= 32, groups
         self.E, self.K, self.I, self.T = E, K, I, T
+        # regions_src: the regions lists' per-expert gate / up tensors as the weight source (REGIONS_SRC kernels,
+        # common runtime args); the pair-unit kernels keep the stacked layout only
+        self.regions_src = bool(regions_src)
+        assert not (self.regions_src and units), "the units kernels take the stacked layout only"
         # decode ledger item (d) knobs (custom_ops/expert_stream/plan.py; the defaults are today's program):
         # unit_pairs = pairs per work unit of the units kernels (ppb / unit_pairs cores per bank per expert),
         # prefetch_pairs = pairs in flight ahead of the compute (the weight ring has prefetch_pairs + 1 slots),
@@ -898,7 +1092,14 @@ class ExpertGateUpDispatch(_BankStreamOp):
         self.w_dtype, self.w_tile = w_dtype, WEIGHT_TILE_BYTES[w_dtype]  # bfp8 or bfp4 gate|up weights
         self.col_bytes = self.kt * self.w_tile
         self.expert_stride = 2 * self.ppb * self.col_bytes
-        self.page_bytes = _packet_bytes(self.kt, self.w_tile, packet_tiles)
+        if self.regions_src:
+            self.regions_plan = plan_regions_stream(
+                K, I, None, banks=self.banks, w13=w_dtype, packet_tiles=packet_tiles
+            )
+            assert self.regions_plan.bank_local, self.regions_plan.reason
+            self.page_bytes = self.regions_plan.gate_packet_bytes
+        else:
+            self.page_bytes = _packet_bytes(self.kt, self.w_tile, packet_tiles)
         assert (
             self.ppb % self.unit_pairs == 0
         ), f"{self.unit_pairs} pairs per unit do not divide {self.ppb} pairs per bank"
@@ -911,6 +1112,8 @@ class ExpertGateUpDispatch(_BankStreamOp):
         the [x | w] rows (L1), counts = the id rows [1, t_valid, 1, K] UINT16 (L1), routing unused (pass x_rm),
         t_valid = the valid row count (<= T)."""
         cb_xrm, cb_x, cb_w, cb_r, cb_c0, cb_c1, cb_d, cb_h, cb_t, cb_out = 0, 1, 2, 3, 4, 5, 6, 7, 8, 16
+        src = _regions_source(w13, self.regions_src, self.E, self.K, self.I)
+        w_addr = 0 if src is not None else w13.buffer_address()
         e_tiles = -(-self.E // TILE)
         rt = self.T // TILE
         c_tiles = rt + 1 if self.ep else e_tiles  # EP: the index tiles + the expert base page
@@ -939,7 +1142,7 @@ class ExpertGateUpDispatch(_BankStreamOp):
         ep_mode = 2 if self.ep_rm else int(self.ep)
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, bank, r, vc in self.assignments:
-            reader_rt[core.x][core.y] = [w13.buffer_address(), counts.buffer_address(), bank, vc, r] + extra_rt
+            reader_rt[core.x][core.y] = [w_addr, counts.buffer_address(), bank, vc, r] + extra_rt
             writer_rt[core.x][core.y] = [
                 x_rm.buffer_address(),
                 routing.buffer_address(),
@@ -998,8 +1201,11 @@ class ExpertGateUpDispatch(_BankStreamOp):
             writer_ct,
             writer_rt,
             compute_ct,
+            defines=[REGIONS_DEFINE] if src is not None else (),
+            reader_common=src.gate_up_addrs if src is not None else None,
         )
-        ttnn.generic_op([w13, x_rm, routing, counts, act, table] + ([base] if self.ep else []), program)
+        weights = src.gate + src.up if src is not None else [w13]
+        ttnn.generic_op(weights + [x_rm, routing, counts, act, table] + ([base] if self.ep else []), program)
         return act
 
 
@@ -1021,12 +1227,14 @@ class ExpertDownDispatch(_BankStreamOp):
         picks: int = MAX_PICKS,
         ep_rm: bool = False,
         gather_rotate: bool = False,
+        regions_src: bool = False,
     ):
         super().__init__(device, readers)
         assert T % TILE == 0 and T <= 256, T
         self.E, self.I, self.H, self.T = E, I, H, T
         self.ep, self.picks, self.ep_rm = ep, picks, ep_rm
         self.gather_rotate = bool(gather_rotate)  # rotate the per-pass activation reads per core (H1)
+        self.regions_src = bool(regions_src)  # the regions lists' per-expert down tensors (REGIONS_SRC kernels)
         self.seg_tiles = I // TILE
         self.C = H // TILE // self.banks
         assert self.C % readers == 0, (self.C, readers)
@@ -1035,7 +1243,12 @@ class ExpertDownDispatch(_BankStreamOp):
         self.block_tiles = self.cols * self.seg_tiles
         assert self.block_tiles <= 128, f"{self.block_tiles} tiles per expert block: use more readers"
         self.seg_bytes = self.seg_tiles * BFP8_TILE_BYTES
-        self.page_bytes = _packet_bytes(self.seg_tiles)
+        if self.regions_src:
+            self.regions_plan = plan_regions_stream(H, I, H, banks=self.banks, down_readers=readers)
+            assert self.regions_plan.bank_local and self.regions_plan.cols == self.cols, self.regions_plan
+            self.page_bytes = self.regions_plan.down_packet_bytes  # one K tile of the core's columns
+        else:
+            self.page_bytes = _packet_bytes(self.seg_tiles)
         self.bank_expert_stride = self.C * self.seg_bytes
         self.P = max_passes(T, E)
         self.J = MAX_PICKS
@@ -1056,6 +1269,8 @@ class ExpertDownDispatch(_BankStreamOp):
 
     def __call__(self, act, table, counts, w2, out, base=None, t_valid=None, out_chunk=None):
         cb_a, cb_w, cb_c0, cb_c1, cb_t, cb_id, cb_h, cb_g, cb_m, cb_out = 0, 1, 2, 3, 4, 5, 6, 7, 8, 16
+        src = _regions_source(w2, self.regions_src, self.E, self.H, self.I, self.H)
+        w_addr = 0 if src is not None else w2.buffer_address()
         e_tiles = -(-self.E // TILE)
         c_tiles = self.T // TILE + 1 if self.ep else e_tiles
         assert (base is not None) == self.ep, "EP mode takes the expert base tensor"
@@ -1091,7 +1306,7 @@ class ExpertDownDispatch(_BankStreamOp):
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, bank, r, vc in self.assignments:
             reader_rt[core.x][core.y] = [
-                w2.buffer_address(),
+                w_addr,
                 counts.buffer_address(),
                 bank,
                 vc,
@@ -1145,6 +1360,8 @@ class ExpertDownDispatch(_BankStreamOp):
         ]
         for t in (counts, table, act, out, base if self.ep else counts):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        if src is not None:  # the output column map's bank count, after every accessor (writer_down_dispatch.cpp)
+            writer_ct += [self.banks]
         compute_ct = [cb_a, cb_w, cb_id, cb_h, cb_g, cb_out, self.seg_tiles, self.cols, self.J, rt_out, cb_m]
         program = self._program(
             "down_dispatch",
@@ -1155,8 +1372,12 @@ class ExpertDownDispatch(_BankStreamOp):
             writer_rt,
             compute_ct,
             fidelity=ttnn.MathFidelity.HiFi4,
+            defines=[REGIONS_DEFINE] if src is not None else (),
+            reader_common=src.down_addrs if src is not None else None,
+            compute_defines=[REGIONS_DEFINE] if src is not None else (),
         )
-        ttnn.generic_op([w2, act, table, counts, out] + ([base] if self.ep else []), program)
+        weights = list(src.down) if src is not None else [w2]
+        ttnn.generic_op(weights + [act, table, counts, out] + ([base] if self.ep else []), program)
         return out
 
 
@@ -1182,6 +1403,7 @@ class ExpertDispatch:
         prefetch_pairs: int = 1,
         packet_tiles: int | None = None,
         gather_rotate: bool = False,
+        regions_src: bool = False,
     ):
         self.gate_up = ExpertGateUpDispatch(
             device,
@@ -1198,11 +1420,22 @@ class ExpertDispatch:
             prefetch_pairs=prefetch_pairs,
             packet_tiles=packet_tiles,
             gather_rotate=gather_rotate,
+            regions_src=regions_src,
         )
         self.down = ExpertDownDispatch(
-            device, E, I, H, T, down_readers, ep=ep, ep_rm=ep_rm, gather_rotate=gather_rotate
+            device,
+            E,
+            I,
+            H,
+            T,
+            down_readers,
+            ep=ep,
+            ep_rm=ep_rm,
+            gather_rotate=gather_rotate,
+            regions_src=regions_src,
         )
         self.E, self.K, self.I, self.H, self.T, self.ep, self.ep_rm = E, K, I, H, T, ep, ep_rm
+        self.regions_src = bool(regions_src)
         self.P = self.gate_up.P
 
     def alloc(self, device, act_l1: bool = True, t_valid: int | None = None, out_chunk: int | None = None):

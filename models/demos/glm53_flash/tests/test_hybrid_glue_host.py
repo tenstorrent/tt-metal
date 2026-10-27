@@ -151,7 +151,8 @@ def test_prefill_experts_resolution_table():
     assert stream and M.prefill_experts_for(False, stream, env) == "regions"
     assert M.STREAM_DISPATCH_MAX_T == 256
     src = inspect.getsource(M.TtRoutedExperts.__init__)
-    assert "self.prefill_experts = prefill_experts_for(dense, stream)" in src
+    # (2026-10-27: resolved once, before the stream branch, which skips the stacked upload in the one-copy configuration)
+    assert "prefill_mode = prefill_experts_for(dense, stream)" in src and "self.prefill_experts = prefill_mode" in src
     assert 'if not (dense or stream) else "blocks"' not in src
 
 
@@ -179,13 +180,18 @@ def test_stream_regions_cache_and_source(monkeypatch, tmp_path):
     assert "make_w13, self.expert_dtype, files_block" in src and "expect_shape=(1, E, H, 2 * self.I)" in src
 
 
-def test_stream_serves_and_list_gathers():
+def test_stream_serves_and_list_gathers(monkeypatch):
     """The stream family serves <= 32 gathered tokens (block op) and 33..256 (dispatch ops) when its tensors are
-    present; the regions lists serve the rest, and the router's top-k lists are gathered only for them."""
+    present; the regions lists serve the rest, and the router's top-k lists are gathered only for them.
+    GLM53_REGIONS_DECODE (2026-10-27): ``stream`` lets the family serve from the regions lists without the stacked
+    copy, ``regions`` sends every shape to the regions kernel when the lists exist."""
 
     class _RE:
         stream, w13, stream_dispatch = True, object(), True
+        _dispatch, _regions_src = None, None  # no regions lists: the knob cannot redirect
+        _regions_serves = M.TtRoutedExperts._regions_serves
 
+    monkeypatch.delenv("GLM53_REGIONS_DECODE", raising=False)
     serves = M.TtRoutedExperts._stream_serves
     assert serves(_RE(), 32) and serves(_RE(), 64) and serves(_RE(), 256)
     assert not serves(_RE(), 288) and not serves(_RE(), 48) and not serves(_RE(), 4096)
@@ -195,6 +201,18 @@ def test_stream_serves_and_list_gathers():
     blk = _RE()
     blk.stream = False
     assert not serves(blk, 32)
+    one_copy = _RE()
+    one_copy.w13, one_copy._dispatch, one_copy._regions_src = None, object(), object()
+    assert not serves(one_copy, 32)  # off: today's fallback
+    monkeypatch.setenv("GLM53_REGIONS_DECODE", "stream")
+    assert serves(one_copy, 32) and serves(one_copy, 256) and not serves(one_copy, 288)
+    assert not serves(dropped, 32)  # stream without the lists (not bank-local / no regions path): no redirect
+    both = _RE()
+    both._dispatch, both._regions_src = object(), object()
+    monkeypatch.setenv("GLM53_REGIONS_DECODE", "regions")
+    assert not serves(both, 32) and not serves(both, 64)  # the A/B knob forces the regions kernel
+    assert serves(_RE(), 32)  # ... only when the lists exist
+    monkeypatch.delenv("GLM53_REGIONS_DECODE", raising=False)
     fwd = inspect.getsource(M.TtRoutedExperts.forward)
     assert "self._stream_serves(self.mesh.rows * T)" in fwd and "idx = w = None" in fwd
     loc = inspect.getsource(M.TtRoutedExperts._local_experts)
