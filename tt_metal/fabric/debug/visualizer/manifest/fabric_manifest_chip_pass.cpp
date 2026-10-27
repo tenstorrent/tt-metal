@@ -7,11 +7,8 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
 #include <llrt/tt_cluster.hpp>
-#include <enchantum/enchantum.hpp>
-#include <umd/device/arch/architecture_implementation.hpp>
 
 #include <algorithm>
-#include <array>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -21,13 +18,11 @@
 #include <utility>
 #include <vector>
 
-#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_describe.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_catalog.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
-#include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_fabric {
 
@@ -35,9 +30,6 @@ namespace {
 
 using manifest::direction_letter;
 using manifest::router_key;
-using tt::tt_metal::FWMailboxMsg;
-using tt::tt_metal::HalL1MemAddrType;
-using tt::tt_metal::HalProgrammableCoreType;
 
 // The router on `peer_chan`, or nullopt when ControlPlane has no active router there (the channel was trimmed from
 // the peer's routing planes).
@@ -118,13 +110,15 @@ bool flag_field(const std::vector<manifest::Field>& fields, std::string_view key
     return flag->value;
 }
 
-// The collected routers in the order ControlPlane lists the chip's active channels, each with its key and cores.
-std::vector<manifest::Router> key_routers(
+// Resolves each collected router's identity from its Ethernet channel: its key (direction and routing plane, ie. E0)
+// and cores. Returns the routers in the order ControlPlane lists the chip's active channels.
+std::vector<manifest::Router> resolve_router_identities(
     std::vector<manifest::Router> collected,
     const ControlPlane& control_plane,
     const tt::Cluster& cluster,
     FabricNodeId node,
     ChipId physical_chip_id) {
+    // Index the collected routers by their Ethernet channel
     std::map<chan_id_t, manifest::Router> by_chan;
     for (auto& router : collected) {
         const chan_id_t chan = router.identity.eth_chan;
@@ -138,6 +132,7 @@ std::vector<manifest::Router> key_routers(
     std::vector<manifest::Router> routers;
     std::set<std::pair<eth_chan_directions, routing_plane_id_t>> keys;
     for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
+        // Get the router for this channel
         const auto it = by_chan.find(chan);
         TT_FATAL(
             it != by_chan.end(),
@@ -147,6 +142,7 @@ std::vector<manifest::Router> key_routers(
         manifest::Router router = std::move(it->second);
         by_chan.erase(it);
 
+        // Fill in the router's identity
         auto& identity = router.identity;
         identity.direction = direction;
         identity.routing_plane = control_plane.get_routing_plane_id(node, chan);
@@ -159,11 +155,14 @@ std::vector<manifest::Router> key_routers(
         identity.virtual_core = router_virtual_core(cluster, physical_chip_id, chan);
         routers.push_back(std::move(router));
     }
+
+    // Ensure none of the collected routers haven't been resolved
     TT_FATAL(
         by_chan.empty(),
         "Fabric manifest: {} has {} collected routers on channels that are not active fabric routers",
         node,
         by_chan.size());
+
     return routers;
 }
 
@@ -181,7 +180,8 @@ manifest::RouterRef master_router_ref(
         .node = node, .direction = it->identity.direction, .routing_plane = it->identity.routing_plane};
 }
 
-void join_link(
+// Resolves the router's link to the peer router on its other end, and whether the link crosses hosts or wraps.
+void resolve_link_peer(
     manifest::Router& router,
     const ControlPlane& control_plane,
     FabricType fabric_type,
@@ -196,8 +196,9 @@ void join_link(
     router.link.wrap = is_wrap_link(fabric_type, control_plane.get_mesh_graph(), node, router.identity.direction, peer);
 }
 
-// Resolves each edge to its sibling.
-void join_edges(std::vector<manifest::Router>& routers, const ControlPlane& control_plane, FabricNodeId node) {
+// Resolves each downstream edge to the sibling router it lands on.
+void resolve_edge_siblings(
+    std::vector<manifest::Router>& routers, const ControlPlane& control_plane, FabricNodeId node) {
     std::map<chan_id_t, const manifest::Router*> by_chan;
     for (const auto& router : routers) {
         by_chan.emplace(router.identity.eth_chan, &router);
@@ -285,159 +286,113 @@ void join_edges(std::vector<manifest::Router>& routers, const ControlPlane& cont
     }
 }
 
-// ============ Architecture ============
-
-uint32_t hal_address(const tt::tt_metal::Hal& hal, HalL1MemAddrType area) {
-    return static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, area));
-}
-
-uint32_t hal_size(const tt::tt_metal::Hal& hal, HalL1MemAddrType area) {
-    return hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, area);
-}
-
-// A HAL area holding a whole number of `one`s, described from its address as one of them or as an array of as many as
-// the HAL's size holds.
-manifest::content::L1 hal_area(const tt::tt_metal::Hal& hal, HalL1MemAddrType area, const layout::Type& one) {
-    const uint32_t size = hal_size(hal, area);
-    TT_FATAL(
-        one.size > 0 && size >= one.size && size % one.size == 0,
-        "Fabric manifest: the HAL's {} area is {} bytes, which is not a whole number of its {}-byte {}",
-        manifest::lower_enum_name(area),
-        size,
-        one.size,
-        manifest::schema_name(one));
-    const uint32_t n = size / one.size;
-    return {.address = hal_address(hal, area), .type = n == 1 ? one : layout::Type{one.element, n * one.size, n}};
-}
-
-// A base firmware word, whose address the HAL keeps among its Ethernet firmware mailbox values; null when it is 0.
-std::optional<manifest::content::L1> base_fw_word(const tt::tt_metal::Hal& hal, tt::tt_metal::FWMailboxMsg word) {
-    const uint32_t address = hal.get_eth_fw_mailbox_val(word);
-    if (address == 0) {
-        return std::nullopt;
-    }
-    return manifest::content::L1{.address = address, .type = layout::type_of<uint32_t>()};
-}
-
-// The kernel picks its heartbeat word's address by architecture: Blackhole's, or else Wormhole's.
-manifest::Heartbeat heartbeat(tt::ARCH arch) {
-    return manifest::Heartbeat{
-        .word =
-            {.address = arch == tt::ARCH::BLACKHOLE ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE
-                                                    : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE,
-             .type = layout::type_of<uint32_t>()},
-        .magic = FABRIC_KERNEL_HEARTBEAT_MAGIC,
-        .magic_mask = FABRIC_KERNEL_HEARTBEAT_MAGIC_MASK,
-        .period_iters = FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS,
-    };
-}
-
-// Where a stream register is in its stream's block, and how many of its low bits hold its value.
-manifest::StreamRegisterLayout stream_register_layout(const tt::tt_metal::Hal& hal, manifest::StreamRegister reg) {
-    switch (reg) {
-        case manifest::StreamRegister::BUF_SPACE_AVAILABLE:
-            // The bits above the count can hold other state.
-            return {
-                .offset = static_cast<uint32_t>(
-                    hal.get_noc_stream_remote_dest_buf_space_available_reg_index() * sizeof(uint32_t)),
-                .bits = hal.get_noc_stream_remote_dest_words_free_width()};
-        case manifest::StreamRegister::REMOTE_SRC:
-            // The fabric's scratch register: four 6-bit fields on Wormhole and Blackhole (fabric_stream_regs.hpp).
-            return {
-                .offset = static_cast<uint32_t>(hal.get_noc_stream_remote_src_reg_index() * sizeof(uint32_t)),
-                .bits = 24};
-    }
-    TT_THROW("Fabric manifest: unknown stream register {}", static_cast<int>(reg));
-}
-
-manifest::StreamRegisters stream_registers(const tt::tt_metal::Hal& hal) {
-    TT_FATAL(
-        hal.has_stream_registers(),
-        "Fabric manifest: the HAL gives no stream register addresses on {}",
-        manifest::lower_enum_name(hal.get_arch()));
-    manifest::StreamRegisters out{
-        .base = hal.get_noc_overlay_start_addr(),
-        .stride = hal.get_noc_stream_reg_space_size(),
-        .count = StreamRegAssignments::num_eth_stream_registers,
-    };
-    for (const auto reg : enchantum::values<manifest::StreamRegister>) {
-        out.registers.emplace_back(reg, stream_register_layout(hal, reg));
-    }
-    return out;
-}
-
-manifest::CoreRegisters core_registers(const tt::tt_metal::Hal& hal) {
-    const auto arch = hal.get_arch();
-    manifest::CoreRegisters out{
-        .soft_reset = hal.get_risc_soft_reset_addr(),
-        .wall_clock_low = hal.get_wall_clock_low_addr(),
-        .wall_clock_high = hal.get_wall_clock_high_addr(),
-    };
-    TT_FATAL(
-        out.soft_reset != 0 && out.wall_clock_low != 0 && out.wall_clock_high != 0,
-        "Fabric manifest: the HAL gives no soft reset or wall clock address on {}",
-        manifest::lower_enum_name(arch));
-    const auto umd_arch = tt::umd::ArchitectureImplementation::create(arch);
-    TT_FATAL(
-        umd_arch != nullptr, "Fabric manifest: UMD has no soft reset bits for {}", manifest::lower_enum_name(arch));
-    constexpr std::array k_eriscs = {tt::umd::RiscType::ERISC0, tt::umd::RiscType::ERISC1};
-    const uint32_t num_eriscs = hal.get_num_physical_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
-    TT_FATAL(
-        num_eriscs > 0 && num_eriscs <= k_eriscs.size(),
-        "Fabric manifest: the HAL gives {} ERISCs on {}, but the manifest has soft reset bits for 1 to {}",
-        num_eriscs,
-        manifest::lower_enum_name(arch),
-        k_eriscs.size());
-    out.reset_masks.reserve(num_eriscs);
-    for (uint32_t erisc = 0; erisc < num_eriscs; ++erisc) {
-        out.reset_masks.push_back(umd_arch->get_soft_reset_reg_value(k_eriscs[erisc]));
-    }
-    return out;
-}
-
-}  // namespace
-
-manifest::Chip join_chip(
+// Resolves the Ethernet channels the builders recorded to the routers they name: each router's key and cores, the
+// local sync master, each link's peer, and each edge's sibling.
+manifest::Chip resolve_chip_routers(
     manifest::Chip chip,
     const ControlPlane& control_plane,
     const tt::Cluster& cluster,
     FabricType fabric_type,
     FabricNodeId node,
     ChipId physical_chip_id) {
-    chip.routers = key_routers(std::move(chip.routers), control_plane, cluster, node, physical_chip_id);
+    chip.routers = resolve_router_identities(std::move(chip.routers), control_plane, cluster, node, physical_chip_id);
     if (chip.local_sync.has_value()) {
         chip.local_sync->master = master_router_ref(chip.routers, node, chip.local_sync->master_eth_chan);
     }
     for (auto& router : chip.routers) {
-        join_link(router, control_plane, fabric_type, node, physical_chip_id);
+        resolve_link_peer(router, control_plane, fabric_type, node, physical_chip_id);
     }
-    join_edges(chip.routers, control_plane, node);
+    resolve_edge_siblings(chip.routers, control_plane, node);
     return chip;
 }
 
-manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
-    return manifest::Arch{
-        .arch = hal.get_arch(),
-        .areas =
-            manifest::ArchAreas{
-                .heartbeat = heartbeat(hal.get_arch()),
-                .fabric_telemetry =
-                    hal_area(hal, HalL1MemAddrType::FABRIC_TELEMETRY, layout::type_of<FabricTelemetry>()),
-                .routing_table = hal_area(hal, HalL1MemAddrType::ROUTING_TABLE, layout::type_of<routing_l1_info_t>()),
-                .eth_fw_mailbox =
-                    hal.get_supports_eth_fw_mailbox()
-                        ? std::optional(hal_area(hal, HalL1MemAddrType::ETH_FW_MAILBOX, layout::type_of<uint32_t>()))
-                        : std::nullopt,
-                .base_fw_port_status = base_fw_word(hal, FWMailboxMsg::PORT_STATUS),
-                .base_fw_train_status = base_fw_word(hal, FWMailboxMsg::TRAIN_STATUS),
-                .base_fw_retrain_count = base_fw_word(hal, FWMailboxMsg::RETRAIN_COUNT),
-                .base_fw_rx_link_up = base_fw_word(hal, FWMailboxMsg::RX_LINK_UP),
-                .base_fw_postcode = base_fw_word(hal, FWMailboxMsg::POSTCODE),
-            },
-        .stream_registers = stream_registers(hal),
-        .core_registers = core_registers(hal),
-        .types = manifest::described_struct_types(),
-    };
+manifest::Chip describe_chip(
+    const ControlPlane& control_plane,
+    const tt::Cluster& cluster,
+    const FabricBuilderContext& builder_context,
+    FabricType fabric_type,
+    FabricNodeId node) {
+    // Get the chip's coordinates in its mesh
+    const MeshCoordinate mesh_coord = control_plane.get_mesh_graph().chip_to_coordinate(node.mesh_id, node.chip_id);
+    std::vector<uint32_t> coords(mesh_coord.coords().begin(), mesh_coord.coords().end());
+
+    // Non-local chips, where locality is at the host rank granularity, can only be described by their place in the
+    // mesh. The chip's owning rank takes care of more in depth description.
+    const auto physical_chip_id = control_plane.try_get_physical_chip_id_from_fabric_node_id(node);
+    if (!physical_chip_id.has_value()) {
+        return manifest::Chip{.fabric_node_id = node, .mesh_coord = std::move(coords)};
+    }
+
+    // A chip that built no routers published nothing, so it starts with no routers
+    manifest::Chip chip = builder_context.has_manifest_chip(*physical_chip_id)
+                              ? builder_context.get_manifest_chip(*physical_chip_id)
+                              : manifest::Chip{};
+
+    // Fill in the chip's details
+    chip.fabric_node_id = node;
+    chip.mesh_coord = std::move(coords);
+    chip.physical_chip_id = physical_chip_id;
+    chip.asic_id = *control_plane.get_asic_id_from_fabric_node_id(node);
+
+    // Resolve the chip's routers against the control plane and the chip's other routers
+    return resolve_chip_routers(std::move(chip), control_plane, cluster, fabric_type, node, *physical_chip_id);
 }
+
+manifest::Mesh describe_mesh(
+    const ControlPlane& control_plane,
+    const tt::Cluster& cluster,
+    const FabricBuilderContext& builder_context,
+    FabricType fabric_type,
+    MeshId mesh_id) {
+    // Get the mesh's shape and configuration
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const MeshShape mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+    manifest::Mesh mesh{.mesh_id = mesh_id, .express_routing = control_plane.express_routing_enabled(mesh_id)};
+    for (size_t dim = 0; dim < mesh_shape.dims(); ++dim) {
+        mesh.shape.push_back(mesh_shape[dim]);
+    }
+
+    // has_genuine_torus_axis() is defined only for a 2D shape, and deliberately reports false for a declared
+    // torus axis whose extent is too small to realize a distinct wrap edge.
+    if (mesh_shape.dims() == 2) {
+        mesh.torus = manifest::MeshTorus{
+            .y = has_genuine_torus_axis(fabric_type, mesh_shape, 0),
+            .x = has_genuine_torus_axis(fabric_type, mesh_shape, 1),
+        };
+    }
+
+    // The builder context plans credits only for the meshes on this host
+    const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
+    if (std::ranges::find(local_mesh_ids, mesh_id) != local_mesh_ids.end()) {
+        mesh.credit_transport = manifest::describe_credit_transport(builder_context, mesh_id);
+    }
+
+    // Describe each chip in the mesh
+    for (const auto& [_, fabric_chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+        mesh.chips.push_back(
+            describe_chip(control_plane, cluster, builder_context, fabric_type, FabricNodeId(mesh_id, fabric_chip_id)));
+    }
+
+    return mesh;
+}
+
+}  // namespace
+
+namespace manifest {
+
+std::vector<Mesh> describe_meshes(
+    const ControlPlane& control_plane, const tt::Cluster& cluster, const FabricBuilderContext& builder_context) {
+    const FabricType fabric_type = get_fabric_type(control_plane.get_fabric_config(), cluster.is_ubb_galaxy());
+    auto mesh_ids = control_plane.get_mesh_graph().get_all_mesh_ids();
+    std::ranges::sort(mesh_ids, {}, [](const MeshId& mesh_id) { return *mesh_id; });
+    std::vector<Mesh> meshes;
+    meshes.reserve(mesh_ids.size());
+    for (const auto& mesh_id : mesh_ids) {
+        meshes.push_back(describe_mesh(control_plane, cluster, builder_context, fabric_type, mesh_id));
+    }
+    return meshes;
+}
+
+}  // namespace manifest
 
 }  // namespace tt::tt_fabric
