@@ -720,28 +720,21 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
         // so scores+4 (TTI addr 4) is dst_reg[2], not dst_reg[4] (that earlier off-by-stride wrote to
         // addr 8 and left scores+4 untouched -> full top-8). Reset Dst RWC first so the dst_reg base
         // lines up with the TTI ADDR_MOD_3 base. Zero the dropped slots' idx too (matches the topk<=4
-        // path), same read-modify-write the scores use: load the row, zero the dropped lanes in-register,
-        // store all lanes back (kept lanes round-trip exactly). NOTE: the idx row must be read/written as
-        // vFloat (the default mod-0 SrcB raw-bit passthrough), NOT vUInt -- a vUInt dst_reg store here
-        // simply did not land. The mod-0 passthrough preserves the kept ids (e.g. 337/75) bit-for-bit.
+        // path). A mode-0 SFPSTORE writes only the lane-enabled lanes, so inside the v_if a store of
+        // 0.0f (LCONST_0) zeroes exactly the dropped lanes and leaves the kept lanes untouched -- no
+        // load / cmov / store-all round trip per row (4 SFPU instructions instead of 10). NOTE: the
+        // idx row is stored through the vFloat (mod-0 raw-bit) path, NOT vUInt -- a vUInt dst_reg
+        // store here simply did not land.
         constexpr int drop_thr = 16 * (static_cast<int>(topk) - 4); // tileid >= drop_thr -> rank >= topk
         constexpr int sc4_dreg = (scores_offset + 4) / 2;           // scores+4 (TTI addr 4)  -> dst_reg 2
         constexpr int ix4_dreg = (indices_offset + 4) / 2;          // indices+4 (TTI addr 68) -> dst_reg 34
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        sfpi::vFloat sc = sfpi::dst_reg[sc4_dreg];
         v_if (sfpi::vConstTileId >= drop_thr)
         {
-            sc = 0.0f;
+            sfpi::dst_reg[sc4_dreg] = 0.0f;
+            sfpi::dst_reg[ix4_dreg] = 0.0f;
         }
         v_endif;
-        sfpi::dst_reg[sc4_dreg] = sc;
-        sfpi::vFloat ix         = sfpi::dst_reg[ix4_dreg];
-        v_if (sfpi::vConstTileId >= drop_thr)
-        {
-            ix = 0.0f;
-        }
-        v_endif;
-        sfpi::dst_reg[ix4_dreg] = ix;
     }
 
     // ---- normalization tail (same as _generalized_moe_gate_top8) ----
