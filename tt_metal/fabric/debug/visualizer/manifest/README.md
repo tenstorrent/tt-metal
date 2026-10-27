@@ -27,11 +27,11 @@ Set `TT_METAL_FABRIC_GENERATE_MANIFEST=1`. Each MPI rank writes one file:
 
 The router builders are destroyed once the fabric program is compiled, so the manifest is built in three steps:
 
-1. **Collect, per router, while the builders exist** (`fabric_manifest_collector.cpp`). It reads the builder objects
+1. **Collect, per router, while the builders exist** (`fabric_manifest_router_pass.cpp`). It reads the builder objects
    and the inputs (ie. ct args, defines) each ERISC was fed, and fills the model
    (`fabric_manifest_model.hpp`). Plain facts are read through the field tables (`fabric_manifest_fields.hpp`), one
-   entry each; facts that need logic are computed in the collector.
-2. **Join, per chip** (`fabric_manifest_chip_pass.cpp`). It adds what only ControlPlane, the cluster and the chip's
+   entry each; facts that need logic are computed in the router pass.
+2. **Join, per chip** (`fabric_manifest_topology_pass.cpp`). It adds what only ControlPlane, the cluster and the chip's
    other routers know: router keys, peers, cores, cross-host and wrap links, and sibling producers.
 3. **Write** (`fabric_manifest.cpp`). The writer is the one place that decides the JSON's key names and shape.
 
@@ -112,16 +112,16 @@ means.
 
 ## Computed facts
 
-These need logic beyond reading one argument, so they are code in the collector or the chip pass rather than table
+These need logic beyond reading one argument, so they are code in the router pass or the topology pass rather than table
 entries.
 
 - **Router shape** (`shape`): the VC count and the receivers per VC come from the builder's VC shape, and the senders
-  per VC and the ERISC count from what the kernel is fed. The collector throws when the receivers the shape lists
+  per VC and the ERISC count from what the kernel is fed. The router pass throws when the receivers the shape lists
   differ from the ones the kernel runs.
 - **Channel status** (`status`): `active` when an ERISC runs the channel's step. Otherwise the reason, checked in the
   order the builder applies them: `vc_not_serviced` (the kernel does not run the VC on this router), `mux` (a VC0
   sender other than the worker channel, in mux mode; the tensix mux carries its traffic) or `trimmed` (the applied
-  channel trimming profile turned it off). The collector throws when it knows no reason.
+  channel trimming profile turned it off). The router pass throws when it knows no reason.
 - **Serviced by** (`serviced_by`): the ERISCs whose `IS_SENDER_CHANNEL_<c>_SERVICED` or
   `IS_RECEIVER_CHANNEL_<c>_SERVICED` is set, as `erisc<n>`. Empty when the kernel does not run the VC.
 - **Sender producer** (`producer`): `"worker"` for the worker channel, `"tensix_mux"` for it in mux mode, the
@@ -180,8 +180,8 @@ manifest.
 
 ## Arguments the manifest leaves out
 
-Every named argument and define the router kernel is fed is read by a field table or by the collector, or is listed
-in [FIELDS.md](FIELDS.md#arguments-the-manifest-leaves-out) with a reason. Otherwise the collector throws.
+Every named argument and define the router kernel is fed is read by a field table or by the router pass, or is listed
+in [FIELDS.md](FIELDS.md#arguments-the-manifest-leaves-out) with a reason. Otherwise the router pass throws.
 
 ## Updating the manifest
 
@@ -190,16 +190,16 @@ names what to update. By kind of change:
 
 | Change | What fails | What to edit |
 | --- | --- | --- |
-| New named compile-time argument | The collector: "... is fed to the router, but neither a field table nor the collector reads it" | A field table entry in `fabric_manifest_fields.hpp`, or an entry with a reason in `k_unrecorded_args` |
-| New define | The collector: "the define ... is fed to the router, but the collector does not read it" | Read it in the collector and list it in `k_collector_defines`, or add it to `k_unrecorded_defines` with a reason |
-| Removed argument | The collector: "missing fabric router named compile-time argument ..." | Delete its table entry. An unrecorded entry for it is not detected; delete it by hand |
-| Collector code reads a new argument | `get_named_arg`: "the collector reads ..., which no field table reads" | Add it to `k_collector_args` |
+| New named compile-time argument | The router pass: "... is fed to the router, but neither a field table nor the router pass reads it" | A field table entry in `fabric_manifest_fields.hpp`, or an entry with a reason in `k_unrecorded_args` |
+| New define | The router pass: "the define ... is fed to the router, but the router pass does not read it" | Read it in the router pass and list it in `k_router_pass_defines`, or add it to `k_unrecorded_defines` with a reason |
+| Removed argument | The router pass: "missing fabric router named compile-time argument ..." | Delete its table entry. An unrecorded entry for it is not detected; delete it by hand |
+| Router pass code reads a new argument | `get_named_arg`: "the router pass reads ..., which no field table reads" | Add it to `k_router_pass_args` |
 | New struct in L1 | The build, when a field's content names a struct with no `StructLayout` | A `StructLayout<T>` (`fabric_struct_layouts.hpp`). `types` picks it up from the schema that names it |
 | New enum | Nothing for an enum enchantum reads; the build, when enchantum finds none of its enumerators | Nothing, or an `EnumLayout<E>` (`fabric_struct_layouts.hpp`) for an enum enchantum can't read. `types` picks it up from the schema that names it |
 | New enum value | Nothing for enums enchantum reads; the build for `EDMStatus` | `FABRIC_LAYOUT_EDM_STATUSES` (`fabric_struct_layouts.hpp`) for `EDMStatus` |
 | New or renamed field category, field kind, Z port role or channel status | The schema check, on the name in `vocabulary` | Its list in `fabric_manifest_schema.json` (`field_category`, `field_kind`, `z_port_role` or `channel_status`) |
 | New label key (a key whose value is one of a fixed set of names) | Nothing | A list in `make_vocabulary_json` (`fabric_manifest.cpp`) named for what the label is, and the same name in the schema's `vocabulary` |
-| New computed fact | Nothing | The model, the collector or chip pass, the writer, the tests, a paragraph above, and the schema |
+| New computed fact | Nothing | The model, the router pass or topology pass, the writer, the tests, a paragraph above, and the schema |
 | A change to the JSON's shape | The schema check | `fabric_manifest_schema.json` |
 | A field table or unrecorded list change | `ManifestDocs.UpToDate` | Regenerate `FIELDS.md` (below) |
 
@@ -244,8 +244,8 @@ What it would take to cover the parts "What the manifest doesn't cover" lists:
 This README covers the manifest's shape and how it is built at a high level. Manifest generation needs in-depth docs,
 one per part, like decode's `docs/`:
 
-- the collector and its field tables: how each argument is read, and the unrecorded lists;
-- the chip pass: router keys, peers, cores, links and sibling producers;
+- the router pass and its field tables: how each argument is read, and the unrecorded lists;
+- the topology pass: router keys, peers, cores, links and sibling producers;
 - the struct layouts: how a `StructLayout` describes a struct, and how the layout checks catch a struct that changed;
 - the writer: how the model becomes JSON.
 
