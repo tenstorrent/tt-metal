@@ -291,10 +291,13 @@ DRAM_ACTIVATION_LEVELS = _C3_C4_LEVELS
 # whole tiles wide.
 DRAM_CONV_SLICES = 8
 
-# Layers run one camera at a time with every activation in L1 (layer1, layer2): the whole batch does
-# not fit L1, so its blocks would move each tensor through DRAM, several times over; one camera's do
-# fit. A listed layer is also in DRAM_ACTIVATION_STAGES, whose weights it takes.
-PER_CAMERA_STAGES = (0, 1)
+# Layers run on a group of cameras at a time with every activation in L1, by layer (0 is layer1): the
+# whole batch does not fit L1, so its blocks would move each tensor through DRAM, several times
+# over; a group's do fit. One camera for layer1 and layer2; three for layer3, whose DCN runs slower
+# per camera on fewer, and whose first block then runs on the whole batch (TTResLayer). layer4 runs
+# whole: its DCN alone takes about 1.1 MB of L1 per core, which leaves no room for a group's
+# activations. A listed layer is also in DRAM_ACTIVATION_STAGES, whose weights it takes.
+CAMERA_GROUPS = {0: 1, 1: 1, 2: 3}
 
 # Layers whose non-DCN conv2s are block sharded (layer3, layer4): height sharded, each core of
 # tiny's layer4 conv2 would hold its whole 512-channel 3x3 weight, more than L1.
@@ -331,7 +334,7 @@ def tt_resnet_kwargs():
     return dict(
         dram_activation_stages=DRAM_ACTIVATION_STAGES,
         dram_conv_slices=DRAM_CONV_SLICES,
-        per_camera_stages=PER_CAMERA_STAGES,
+        camera_groups=CAMERA_GROUPS,
         block_sharded_stages=BLOCK_SHARDED_STAGES,
         fp32_acc_stages=FP32_ACC_STAGES,
         dcn_sharded_input_stages=DCN_SHARDED_INPUT_STAGES,

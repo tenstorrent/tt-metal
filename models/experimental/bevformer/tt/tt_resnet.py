@@ -102,7 +102,8 @@ class TTModulatedDeformConv2dPack:
         (1, 1, B*H_out*W_out, C_out) output, also in conv2d's layout, and its height and width."""
         if self.input_memory_config is not None:
             x = ttnn.to_memory_config(x, self.input_memory_config)
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             x_dcn = x
         else:
             # One untilize feeds both conv_offset and the DCN: conv2d reshapes its input
@@ -132,11 +133,15 @@ class TTResLayer:
     ``input_dtype``, ``input_layout`` and ``dram_input`` describe the layer input, which
     only the first block reads. The other arguments go to every block.
 
-    With ``per_camera``, the layer runs its blocks one camera at a time with every activation in
-    L1 (TTCameraBottleneck): each camera's rows of the DRAM input go into L1, pass through every
-    block there, and only the layer's output returns to DRAM. Such a layer takes the weights of a
-    DRAM layer.
+    With ``cameras``, the layer runs its blocks on that many cameras at a time with every activation
+    in L1 (TTCameraBottleneck): each group's rows of the DRAM input go into L1, pass through every
+    block there, and only the layer's output returns to DRAM. A strided first block whose group
+    input would take more than CAMERA_INPUT_MAX_SHARD_BYTES per core runs on the whole batch first
+    (``whole_first_block``), as the subsample holds a second copy of that input. Such a layer takes
+    the weights of a DRAM layer.
     """
+
+    CAMERA_INPUT_MAX_SHARD_BYTES = 512 * 1024
 
     def __init__(
         self,
@@ -154,24 +159,45 @@ class TTResLayer:
         weights_dtype=ttnn.bfloat8_b,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
-        per_camera=False,
+        cameras=None,
     ):
         num_blocks = len(conv_pth)
         self.layer = []
-        self.per_camera = per_camera
-        if per_camera:
+        self.cameras = cameras
+        if cameras is not None:
             assert input_layout == ttnn.TILE_LAYOUT, "a per-camera layer slices its cameras out of a TILE input"
-            first = conv_args[0].conv1
+            self.whole_first_block = None
+            if self._first_block_too_wide(conv_args[0].conv1, cameras, device):
+                self.whole_first_block = TTBottleneck(
+                    conv_args[0],
+                    conv_pth[0],
+                    device,
+                    dram_activation=dram_activation,
+                    dram_input=dram_input,
+                    dram_conv_slices=dram_conv_slices,
+                    block_sharded=block_sharded,
+                    fp32_acc=fp32_acc,
+                    dcn_sharded_input=dcn_sharded_input,
+                    conv2_act_block_h=conv2_act_block_h,
+                    weights_dtype=weights_dtype,
+                    input_dtype=input_dtype,
+                    input_layout=input_layout,
+                )
+            start = 0 if self.whole_first_block is None else 1
+            first = conv_args[start].conv1
+            assert first.batch_size % cameras == 0, f"{first.batch_size} cameras do not split into groups of {cameras}"
             self.batch_size = first.batch_size
             self.camera_rows = first.input_height * first.input_width
             self.in_channels = first.in_channels
-            for j in range(num_blocks):
+            for j in range(start, num_blocks):
                 self.layer.append(
                     TTCameraBottleneck(
                         conv_args[j],
                         conv_pth[j],
                         device,
+                        cameras=cameras,
                         fp32_acc=fp32_acc,
+                        dcn_sharded_input=dcn_sharded_input,
                         conv2_act_block_h=conv2_act_block_h,
                         weights_dtype=weights_dtype,
                     )
@@ -200,8 +226,19 @@ class TTResLayer:
             )
         self.output_dtype = self.layer[-1].output_dtype
 
+    @classmethod
+    def _first_block_too_wide(cls, conv1, cameras, device):
+        """Whether a group's input to a strided first block with ``conv1`` exceeds
+        CAMERA_INPUT_MAX_SHARD_BYTES per core, in bfloat16."""
+        if tuple(conv1.stride) == (1, 1):
+            return False
+        grid = device.compute_with_storage_grid_size()
+        rows = cameras * conv1.input_height * conv1.input_width
+        shard_rows = math.ceil(math.ceil(rows / ttnn.TILE_SIZE) / (grid.x * grid.y)) * ttnn.TILE_SIZE
+        return shard_rows * conv1.in_channels * 2 > cls.CAMERA_INPUT_MAX_SHARD_BYTES
+
     def __call__(self, x):
-        if self.per_camera:
+        if self.cameras is not None:
             return self.run_per_camera([self], x)
         for block in self.layer:
             x = block(x)
@@ -209,19 +246,31 @@ class TTResLayer:
 
     @staticmethod
     def run_per_camera(layers, x):
-        """Consecutive per-camera ``layers`` on the DRAM batch ``x``, one camera at a time: its rows go
-        into L1, pass through every block of every layer there, and the last layer's output is
-        gathered back into one DRAM batch. Only that output crosses DRAM."""
+        """Consecutive per-camera ``layers`` with one group size on the DRAM batch ``x``, a group of
+        cameras at a time: its rows go into L1, pass through every block of every layer there, and
+        the last layer's output is gathered back into one DRAM batch. Only that output crosses DRAM."""
         first = layers[0]
-        rows = first.camera_rows
+        assert all(layer.cameras == first.cameras for layer in layers), "chained layers share a group size"
+        assert all(layer.whole_first_block is None for layer in layers[1:]), "only a run's first layer reads DRAM"
+        if first.whole_first_block is not None:
+            x = first.whole_first_block(x)
+        rows = first.cameras * first.camera_rows
+        # A group that starts inside a tile row makes the slice untilize, slice and tilize again, with
+        # temporaries the size of the group; those go through DRAM, and one copy brings the group
+        # into L1.
+        aligned = rows % ttnn.TILE_SIZE == 0
         outs = []
-        for camera in range(first.batch_size):
+        for group in range(first.batch_size // first.cameras):
             y = ttnn.slice(
                 x,
-                [0, 0, camera * rows, 0],
-                [1, 1, (camera + 1) * rows, first.in_channels],
-                memory_config=first.layer[0].input_memory_config,
+                [0, 0, group * rows, 0],
+                [1, 1, (group + 1) * rows, first.in_channels],
+                memory_config=first.layer[0].input_memory_config if aligned else ttnn.DRAM_MEMORY_CONFIG,
             )
+            if not aligned:
+                staged = y
+                y = ttnn.to_memory_config(staged, first.layer[0].input_memory_config)
+                ttnn.deallocate(staged)
             for layer in layers:
                 for block in layer.layer:
                     y = block(y)
@@ -233,41 +282,55 @@ class TTResLayer:
         return out
 
 
+def _for_cameras(args, cameras):
+    """A copy of the conv args ``args`` with its batch set to ``cameras``."""
+    group = type(args)(args)
+    group["batch_size"] = cameras
+    return group
+
+
 class TTCameraBottleneck:
-    """A bottleneck without DCN on one camera, every tensor in L1.
+    """A bottleneck on ``cameras`` cameras at a time, every tensor in L1.
 
     The whole-batch block (TTBottleneck) moves each of its tensors through DRAM, several times over in
-    its width slices and layout changes, which bounds it by DRAM bandwidth. One camera's
+    its width slices and layout changes, which bounds it by DRAM bandwidth. A few cameras'
     activations fit in L1, so here they stay there: every tensor is height-sharded over the grid
     with the same rows per core, the 1x1 convs run as linears on those shards, conv2 as an L1
-    conv2d, and the residual add writes into conv3's output. A strided block (a layer's first,
-    whose 1x1 conv1 and downsample share the stride) takes that subsample of its input in L1 first.
-    ``conv_pth`` holds a DRAM layer's weights (``create_resnet_parameters``): Linear weights for the
-    1x1 convs, conv2d's for conv2.
+    conv2d or the DCN (TTModulatedDeformConv2dPack, built for the group), and the residual add
+    writes into conv3's output. A strided block (a layer's first, whose 1x1 conv1 and downsample
+    share the stride) takes that subsample of its input in L1 first. ``conv_pth`` holds a DRAM
+    layer's weights (``create_resnet_parameters``): Linear weights for the 1x1 convs.
     """
 
     def __init__(
-        self, conv_args, conv_pth, device, fp32_acc=False, conv2_act_block_h=None, weights_dtype=ttnn.bfloat8_b
+        self,
+        conv_args,
+        conv_pth,
+        device,
+        cameras=1,
+        fp32_acc=False,
+        dcn_sharded_input=False,
+        conv2_act_block_h=None,
+        weights_dtype=ttnn.bfloat8_b,
     ):
-        assert "conv_offset" not in conv_pth.conv2, "a per-camera block has no DCN"
-        conv1_args, conv2_args = conv_args.conv1, conv_args.conv2
+        conv1_args = conv_args.conv1
+        self.with_dcn = "conv_offset" in conv_pth.conv2
+        conv2_geometry = conv_args.conv2.conv_offset if self.with_dcn else conv_args.conv2
         self.stride = tuple(conv1_args.stride)
-        assert tuple(conv2_args.stride) == (
-            1,
-            1,
-        ), f"a per-camera block's conv2 runs at stride 1, got {conv2_args.stride}"
+        assert tuple(conv2_geometry.stride) == (1, 1), f"conv2 runs at stride 1, got {conv2_geometry.stride}"
         if "downsample" in conv_pth:
             assert tuple(conv_args.downsample[0].stride) == self.stride, "conv1 and the downsample share a stride"
         else:
             assert self.stride == (1, 1), f"a block without a downsample runs at stride 1, got {self.stride}"
         self.device = device
+        self.cameras = cameras
         self.in_channels = conv1_args.in_channels
         self.input_height, self.input_width = conv1_args.input_height, conv1_args.input_width
-        self.height, self.width = conv2_args.input_height, conv2_args.input_width
+        self.height, self.width = conv2_geometry.input_height, conv2_geometry.input_width
         grid = device.compute_with_storage_grid_size()
         self.grid = grid
-        self.input_shard_tiles = self._shard_tiles(self.input_height * self.input_width)
-        self.shard_tiles = self._shard_tiles(self.height * self.width)
+        self.input_shard_tiles = self._shard_tiles(cameras * self.input_height * self.input_width)
+        self.shard_tiles = self._shard_tiles(cameras * self.height * self.width)
         self.fp32_acc = fp32_acc
         math_fidelity = ttnn.MathFidelity.HiFi2 if ttnn.get_arch_name() == "blackhole" else ttnn.MathFidelity.LoFi
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -285,9 +348,24 @@ class TTCameraBottleneck:
             self._linear(conv_args.downsample[0], conv_pth.downsample, None) if "downsample" in conv_pth else None
         )
 
-        self.conv2_channels = (conv2_args.in_channels, conv2_args.out_channels)
+        if self.with_dcn:
+            dcn_args = type(conv_args.conv2)(conv_args.conv2)
+            dcn_args["conv_offset"] = _for_cameras(conv2_geometry, cameras)
+            # The BatchNorm is folded into the DCN weights; the ReLU runs inside the DCN op.
+            self.dcn = TTModulatedDeformConv2dPack(
+                dcn_args,
+                conv_pth.conv2,
+                device,
+                input_dtype=ttnn.bfloat16,
+                relu=True,
+                weights_dtype=weights_dtype,
+                sharded_input=dcn_sharded_input,
+            )
+            return
+
+        self.conv2_channels = (conv2_geometry.in_channels, conv2_geometry.out_channels)
         self.conv2_weight, self.conv2_bias = conv_pth.conv2.weight, conv_pth.conv2.bias
-        self.conv2_kernel, self.conv2_padding = tuple(conv2_args.kernel_size), tuple(conv2_args.padding)
+        self.conv2_kernel, self.conv2_padding = tuple(conv2_geometry.kernel_size), tuple(conv2_geometry.padding)
         # The input shard is conv2d's to use as it is, and freed once the halo has read it.
         self.conv2_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
@@ -302,7 +380,7 @@ class TTCameraBottleneck:
         # that call here keeps the forward free of host work.
         warmup = ttnn.to_memory_config(
             ttnn.zeros(
-                (1, 1, self.height * self.width, self.conv2_channels[0]),
+                (1, 1, cameras * self.height * self.width, self.conv2_channels[0]),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
@@ -317,7 +395,7 @@ class TTCameraBottleneck:
         return math.ceil(math.ceil(rows / ttnn.TILE_SIZE) / (self.grid.x * self.grid.y))
 
     def _sharded(self, channels, shard_tiles=None):
-        """The block's layout: one camera's rows height-sharded over the grid, ``shard_tiles`` tile
+        """The block's layout: the group's rows height-sharded over the grid, ``shard_tiles`` tile
         rows per core, the block's own by default."""
         shard_tiles = self.shard_tiles if shard_tiles is None else shard_tiles
         return ttnn.create_sharded_memory_config(
@@ -328,15 +406,22 @@ class TTCameraBottleneck:
             use_height_and_width_as_shard_shape=True,
         )
 
+    # Weight tiles a linear multicasts per inner block: every core holds that block, in0_block_w by
+    # the whole output width, which for layer4's 2048-channel outputs would outgrow L1.
+    LINEAR_WEIGHT_BLOCK_TILES = 128
+
     def _linear(self, conv, params, activation):
-        """A 1x1 conv as a linear on the block's shards: each core multiplies its own rows, its whole
-        inner dimension at once (a sharded input is read from its shard), with the weights
+        """A 1x1 conv as a linear on the block's shards: each core multiplies its own rows, its inner
+        dimension in the widest blocks whose weights fit LINEAR_WEIGHT_BLOCK_TILES, with the weights
         multicast."""
         in_t, out_t = conv.in_channels // ttnn.TILE_SIZE, conv.out_channels // ttnn.TILE_SIZE
         max_subblock = 4 if self.fp32_acc else 8
+        in0_block_w = max(
+            w for w in range(1, in_t + 1) if in_t % w == 0 and w * out_t <= self.LINEAR_WEIGHT_BLOCK_TILES
+        )
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(self.grid.x, self.grid.y),
-            in0_block_w=in_t,
+            in0_block_w=in0_block_w,
             out_subblock_h=1,
             out_subblock_w=max(w for w in range(1, max_subblock + 1) if out_t % w == 0),
             out_block_h=1,
@@ -360,6 +445,22 @@ class TTCameraBottleneck:
         )
 
     def _conv2(self, x):
+        if self.with_dcn:
+            if self.dcn.input_memory_config is None:
+                # Without a sharded input the DCN's offset conv reads conv1's output from DRAM.
+                staged = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                # The DCN's circular buffers fill L1 from the bottom up to the lowest tensor in it,
+                # so its ROW_MAJOR input moves to the top of L1 once the TILE copies are freed.
+                tiled = ttnn.to_memory_config(x, self.dcn.input_memory_config)
+                staged = ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(tiled)
+                ttnn.deallocate(x)
+                staged = ttnn.reallocate(staged)
+            ttnn.deallocate(x)
+            y, _, _ = self.dcn(staged)
+            ttnn.deallocate(staged)
+            return y
         y, [self.conv2_weight, self.conv2_bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv2_weight,
@@ -369,7 +470,7 @@ class TTCameraBottleneck:
             out_channels=self.conv2_channels[1],
             input_height=self.height,
             input_width=self.width,
-            batch_size=1,
+            batch_size=self.cameras,
             kernel_size=self.conv2_kernel,
             stride=(1, 1),
             padding=self.conv2_padding,
@@ -387,12 +488,13 @@ class TTCameraBottleneck:
         ttnn.deallocate(x)
         flat = ttnn.sharded_to_interleaved(rm, ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(rm)
-        nhwc = [1, self.input_height, self.input_width, self.in_channels]
+        nhwc = [self.cameras, self.input_height, self.input_width, self.in_channels]
         sub = ttnn.slice(
             ttnn.reshape(flat, nhwc), [0, 0, 0, 0], nhwc, [1, *self.stride, 1], memory_config=ttnn.L1_MEMORY_CONFIG
         )
         ttnn.deallocate(flat)
-        tiled = ttnn.to_layout(ttnn.reshape(sub, (1, 1, self.height * self.width, self.in_channels)), ttnn.TILE_LAYOUT)
+        rows = self.cameras * self.height * self.width
+        tiled = ttnn.to_layout(ttnn.reshape(sub, (1, 1, rows, self.in_channels)), ttnn.TILE_LAYOUT)
         ttnn.deallocate(sub)
         out = ttnn.to_memory_config(tiled, self._sharded(self.in_channels))
         ttnn.deallocate(tiled)
@@ -413,7 +515,10 @@ class TTCameraBottleneck:
         ttnn.deallocate(y)
         ttnn.add(out, identity, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)], output_tensor=out)
         ttnn.deallocate(identity)
-        return out
+        # The output, the next block's input, sits wherever L1 had room among this block's
+        # tensors; moved to the top of the now free L1, it leaves the next block's circular
+        # buffers, which fill L1 from the bottom, room below it.
+        return ttnn.reallocate(out)
 
 
 class TTBottleneck:
@@ -676,13 +781,14 @@ class TTResNet:
         dcn_sharded_input_stages=(),
         conv2_act_block_h=None,
         weights_dtype=ttnn.bfloat8_b,
-        per_camera_stages=(),
+        camera_groups=None,
     ):
         """The per-layer arguments of layer ``i`` (0 is layer1); a layer after a DRAM layer reads
         its input from DRAM."""
-        assert set(per_camera_stages) <= set(dram_activation_stages), "a per-camera layer takes a DRAM layer's weights"
+        camera_groups = camera_groups or {}
+        assert set(camera_groups) <= set(dram_activation_stages), "a per-camera layer takes a DRAM layer's weights"
         return dict(
-            per_camera=i in per_camera_stages,
+            cameras=camera_groups.get(i),
             dram_activation=i in dram_activation_stages,
             dram_input=i not in dram_activation_stages and i - 1 in dram_activation_stages,
             dram_conv_slices=dram_conv_slices,
@@ -742,16 +848,22 @@ class TTResNet:
         outs = []
         i = 0
         while i < self.num_layers:
-            # Consecutive per-camera layers run together, so the activations between them stay in
-            # L1; only the last one's output is gathered into DRAM.
+            # Consecutive per-camera layers with one group size run together, so the activations
+            # between them stay in L1, up to the first whose output is a level.
+            cameras = self.res_layers[i].cameras
             j = i
-            while self.res_layers[i].per_camera and j + 1 < self.num_layers and self.res_layers[j + 1].per_camera:
+            while (
+                cameras is not None
+                and j not in self.out_indices
+                and j + 1 < self.num_layers
+                and self.res_layers[j + 1].cameras == cameras
+                and self.res_layers[j + 1].whole_first_block is None
+            ):
                 j += 1
-            assert not set(range(i, j)) & set(self.out_indices), "only a per-camera run's last layer can be an output"
             # A run of chained layers is one region, named by its span.
             region = f"ResNet Layer{i + 1}" if i == j else f"ResNet Layer{i + 1}-{j + 1}"
             signpost(header=f"{region} Start")
-            if self.res_layers[i].per_camera:
+            if cameras is not None:
                 x = TTResLayer.run_per_camera(self.res_layers[i : j + 1], x)
             else:
                 x = self.res_layers[i](x)
