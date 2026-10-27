@@ -66,8 +66,8 @@ constexpr uint32_t stat_theta = 14;      // fl32(v * S) of the draw that produce
 constexpr uint32_t stat_kept = 15;       // the kept count of the row that produced x*
 
 union Bits {
-    float f;
-    uint32_t u;
+    float value;
+    uint32_t word;
 };
 
 FORCE_INLINE uint32_t key_of(uint32_t bits) {
@@ -76,15 +76,15 @@ FORCE_INLINE uint32_t key_of(uint32_t bits) {
 }
 
 FORCE_INLINE float as_float(uint32_t bits) {
-    Bits b;
-    b.u = bits;
-    return b.f;
+    Bits pun;
+    pun.word = bits;
+    return pun.value;
 }
 
-FORCE_INLINE uint32_t as_bits(float f) {
-    Bits b;
-    b.f = f;
-    return b.u;
+FORCE_INLINE uint32_t as_bits(float value) {
+    Bits pun;
+    pun.value = value;
+    return pun.word;
 }
 
 // The policy row's sampling parameters.
@@ -94,12 +94,12 @@ struct SamplingPolicy {
     float min_weight;
 };
 
-// Row r's kept set in the work arrays of the stage at `words`: sorted_ids / sorted_values / weights / inclusive over
-// its top_k lanes, `kept` and its total `total_kept`; bit r of `guard_mask` when the kept minimum does not clear the
-// shard floor (the largest shard minimum). The table weights are read through `stage`.
+// Row `row`'s kept set in the work arrays of the stage at `words`: sorted_ids / sorted_values / weights / inclusive
+// over its top_k lanes, `kept` and its total `total_kept`; bit `row` of `guard_mask` when the kept minimum does not
+// clear the shard floor (the largest shard minimum). The table weights are read through `stage`.
 template <typename Table>
 void build_row(
-    uint32_t r,
+    uint32_t row,
     CoreLocalMem<volatile uint32_t> words,
     const SamplingPolicy& sampling_policy,
     const Table& table,
@@ -121,7 +121,7 @@ void build_row(
     CoreLocalMem<volatile uint32_t> chunk_offset = words + work_chunk;
     uint32_t floor_key = 0;
     {
-        CoreLocalMem<volatile uint32_t> row_lanes = words + (stage_rows + r * row_bytes) / 4;
+        CoreLocalMem<volatile uint32_t> row_lanes = words + (stage_rows + row * row_bytes) / 4;
         for (uint32_t d = 0; d < lanes / shard_lanes; ++d) {
             uint32_t shard_min_key = 0xFFFFFFFFu;
             for (uint32_t c = 0; c < shard_lanes; ++c) {
@@ -202,7 +202,7 @@ void build_row(
         }
         total_kept = inclusive[kept - 1];
         if (key_of(sorted_values[kept - 1]) <= floor_key) {
-            guard_mask |= 1u << r;
+            guard_mask |= 1u << row;
         }
     }
 }
@@ -276,13 +276,13 @@ void kernel_main() {
     const uint32_t base = stage.get_write_ptr();
     CoreLocalMem<volatile uint32_t> words(base);
     {
-        for (uint32_t r = 0; r < rows; ++r) {
+        for (uint32_t row = 0; row < rows; ++row) {
             noc.async_read(
                 candidate_rows,
                 stage,
                 row_bytes,
-                {.page_id = r, .offset_bytes = 0},
-                {.offset_bytes = stage_rows + r * row_bytes});
+                {.page_id = row, .offset_bytes = 0},
+                {.offset_bytes = stage_rows + row * row_bytes});
         }
         noc.async_read(
             draft_row, stage, token_row_bytes, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = stage_drafts});
