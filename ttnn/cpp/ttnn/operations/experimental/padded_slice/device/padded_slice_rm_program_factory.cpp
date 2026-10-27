@@ -4,22 +4,22 @@
 
 #include "padded_slice_rm_program_factory.hpp"
 #include "padded_slice_utils.hpp"
-#include "slice_cb_descriptor.hpp"
 
-#include <tt-metalium/program_descriptors.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include "optional"
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
 #include "ttnn/common/constants.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <ranges>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
@@ -27,16 +27,35 @@
 #include <tt-metalium/tt_align.hpp>
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::experimental::prim {
 
+// Spec names. Op-scoped namespace rather than an anonymous one: the two padded_slice factories share a
+// CMake target, where same-named anonymous-namespace constants collide under a unity build.
+namespace padded_slice_rm_metal2 {
+const KernelSpecName READER{"reader"};
+const KernelSpecName WRITER{"writer"};
+
+const DFBSpecName OUT{"out"};
+const DFBSpecName TEMP_PAD{"temp_pad"};
+const DFBSpecName NON_ALIGNED{"non_aligned"};
+
+const ScratchpadSpecName ID_PER_DIM{"id_per_dim"};
+
+const TensorParamName INPUT{"input"};
+const TensorParamName OUTPUT{"output"};
+}  // namespace padded_slice_rm_metal2
+
 namespace {
 
-constexpr uint32_t kPaddedSliceRmReaderKernelIdx = 0;
-constexpr uint32_t kPaddedSliceRmReaderAddressArgIdx = 0;
-constexpr uint32_t kPaddedSliceRmReaderSrcOffsetArgIdx = 9;
-constexpr uint32_t kPaddedSliceRmReaderMisalignmentArgIdx = 10;
-constexpr uint32_t kPaddedSliceRmOutputCbIndex = 0;
+// Layout of the per-core reader argument vector built below: nine named scalars, then the three
+// num_dims-long vararg blocks. The input base address is a tensor binding, not an argument.
+constexpr uint32_t kPaddedSliceRmReaderUnpaddedStickSizeArgIdx = 0;
+constexpr uint32_t kPaddedSliceRmReaderStartIdArgIdx = 3;
+constexpr uint32_t kPaddedSliceRmReaderSrcOffsetArgIdx = 7;
+constexpr uint32_t kPaddedSliceRmReaderMisalignmentArgIdx = 8;
+constexpr uint32_t kPaddedSliceRmReaderVarargsBase = 9;
 
 // The reader builds its TensorAccessor on the input buffer's base address and applies this core's
 // read-window offset to every read, so the address it receives is a plain buffer base.
@@ -76,19 +95,11 @@ PaddedSliceRmReaderOffset padded_slice_rm_reader_offset(
         core_w_index = core_index;
     }
     const uint32_t width_offset = core_w_index * output_row_size_bytes_offset;
-    // When the exact start isn't aligned to the source buffer, create_descriptor enables the reader's
+    // When the exact start isn't aligned to the source buffer, create_program_artifacts enables the reader's
     // non-aligned path, which reads from the aligned offset below it and skips `misalignment` bytes.
     const uint32_t exact_offset = begins_bytes + width_offset;
     const uint32_t misalignment = exact_offset % src_buffer_alignment;
     return {.src_offset_bytes = exact_offset - misalignment, .misalignment = misalignment};
-}
-
-void update_padded_slice_rm_output_cb(Program& program, Buffer& output_buffer) {
-    for (const auto& cb : program.circular_buffers()) {
-        if (cb->buffer_indices().contains(static_cast<uint8_t>(kPaddedSliceRmOutputCbIndex))) {
-            UpdateDynamicCircularBufferAddress(program, cb->id(), output_buffer);
-        }
-    }
 }
 
 }  // namespace
@@ -159,22 +170,21 @@ get_padded_slice_runtime_args_rm_sharded_output(
             num_input_sticks_per_dim[i],
             accumulated_total_per_dim[i]);
     }
-    using namespace tt::tt_metal::experimental;
     auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
 
     uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
+    // The input base address is a tensor binding, and the reader's accessor takes its page size from
+    // that binding, so this list is scalars only.
     std::vector<uint32_t> common_reader_kernel_args = {
-        0u,  // input buffer base address, set per core
-        input_page_size,
-        output_row_size_bytes,
+        output_row_size_bytes,  // unpadded_stick_size, set per core
         output_row_size_bytes_offset,
         num_dims,
-        0,
-        0,
-        0,
-        0,
+        0,   // start_id, set per core
+        0,   // num_sticks_per_core, set per core
+        0,   // num_sticks_per_core_read, set per core
+        0,   // num_read_per_barrier, set per core
         0u,  // src_offset_bytes, set per core
         0u,  // misalignment, set per core
     };
@@ -223,9 +233,8 @@ get_padded_slice_runtime_args_rm_sharded_output(
             this_core_num_sticks = 0;
         }
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
-        reader_kernel_args[kPaddedSliceRmReaderAddressArgIdx] = input_tensor.buffer()->address();
-        reader_kernel_args[2] = this_input_row_size_bytes;
-        uint32_t addr_offset = 5;
+        reader_kernel_args[kPaddedSliceRmReaderUnpaddedStickSizeArgIdx] = this_input_row_size_bytes;
+        uint32_t addr_offset = kPaddedSliceRmReaderStartIdArgIdx;
         reader_kernel_args[addr_offset++] = start_id;
         reader_kernel_args[addr_offset++] = this_core_num_sticks;
         reader_kernel_args[addr_offset++] = this_core_num_sticks;
@@ -257,11 +266,15 @@ get_padded_slice_runtime_args_rm_sharded_output(
     return ret_val;
 }
 
-ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_program_artifacts(
     const PaddedSliceParams& operation_attributes, const PaddedSliceInputs& tensor_args, Tensor& output) {
+    using namespace padded_slice_rm_metal2;
+
     const auto& a = tensor_args.input;
     const auto& output_tensor_start = operation_attributes.padded_slice_start;
     const auto& output_tensor_end = operation_attributes.padded_slice_end;
+    const auto& input_mesh = a.mesh_tensor();
+    const auto& output_mesh = output.mesh_tensor();
 
     const ttnn::Shape output_shape = output.logical_shape();
     ttnn::Shape actual_output_shape = output_tensor_end;
@@ -269,12 +282,10 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
         actual_output_shape[i] = output_tensor_end[i] - output_tensor_start[i];
     }
 
-    ProgramDescriptor desc;
-
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     TT_FATAL(src0_buffer != nullptr, "Input buffer should be allocated on device");
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     TT_FATAL(output.is_sharded(), "Output Tensor must be sharded.");
     auto output_shard_spec = output.shard_spec().value();
@@ -302,10 +313,6 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
         dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1,
         "Output buffer should be L1 for padded_slice operation with tiled inputs");
 
-    uint32_t output_cb_index = kPaddedSliceRmOutputCbIndex;
-    uint32_t temp_pad_cb_index = 1;
-    uint32_t non_aligned_temp_cb_index = 2;
-
     auto src_buffer_alignment = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
@@ -330,90 +337,259 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
     }
 
     // The kernel advances the write pointer by the aligned row size (stick_size_offset),
-    // so the CB page size must match to avoid overflow.
-    uint32_t output_cb_page_size =
+    // so the DFB entry size must match to avoid overflow.
+    uint32_t output_dfb_page_size =
         is_non_aligned ? tt::round_up(output_row_size_bytes, dst_buffer_alignment) : output_row_size_bytes;
 
     uint32_t num_output_sticks_per_core = output_shard_spec.shape[0];
 
-    desc.cbs.push_back(make_slice_cb_descriptor(
-        output_cb_index, total_cores, output_cb_page_size, num_output_sticks_per_core, cb_data_format, dst_buffer));
+    // ---- Dataflow buffers ----
+    // The output DFB is a window onto the resident output shard; its backing address comes from the
+    // OUTPUT tensor argument on every dispatch.
+    Group<DataflowBufferSpec> dataflow_buffers;
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = OUT,
+        .entry_size = output_dfb_page_size,
+        .num_entries = num_output_sticks_per_core,
+        .data_format_metadata = dfb_data_format,
+        .borrowed_from = OUTPUT,
+    });
     if (output_row_size_bytes > slice_row_size_bytes) {
         pad_output_row = true;
-        desc.cbs.push_back(
-            make_slice_cb_descriptor(temp_pad_cb_index, total_cores, output_row_size_bytes, 1, cb_data_format));
-    } else {
-        non_aligned_temp_cb_index = temp_pad_cb_index;  // Use the unused temp pad index so that CBs are continuous.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = TEMP_PAD,
+            .entry_size = output_row_size_bytes,
+            .num_entries = 1,
+            .data_format_metadata = dfb_data_format,
+        });
     }
     uint32_t num_trids = 2;
     if (is_non_aligned) {
         // Scratch page must accommodate padded_stick_size + worst-case misalignment.
         const uint32_t scratch_page_size =
             tt::align((a.logical_shape()[-1] * a.element_size()) + src_buffer_alignment, src_buffer_alignment);
-        desc.cbs.push_back(make_slice_cb_descriptor(
-            non_aligned_temp_cb_index, total_cores, scratch_page_size, num_trids, cb_data_format));
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = NON_ALIGNED,
+            .entry_size = scratch_page_size,
+            .num_entries = num_trids,
+            .data_format_metadata = dfb_data_format,
+        });
     }
 
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)output_cb_index};
+    // Scratchpad for the reader's per-dimension index counter: seeded from the id_per_dim vararg block,
+    // then advanced on the device.
+    const std::uint32_t num_dims = static_cast<std::uint32_t>(a.logical_shape().rank());
+    ScratchpadSpec id_per_dim_scratch{
+        .unique_id = ID_PER_DIM,
+        .size_per_node = num_dims * static_cast<uint32_t>(sizeof(uint32_t)),
+    };
 
-    std::vector<uint32_t> reader_compile_time_args_vec = {
-        (uint32_t)is_non_aligned, non_aligned_temp_cb_index, num_trids};
-    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
+    // ---- Kernels ----
+    // The non-aligned scratch exists only when the read window isn't aligned to the source buffer; the
+    // reader compiles that path, and binds the scratch, under NON_ALIGNED.
+    Group<DFBBinding> reader_dfb_bindings = {
+        DFBBinding{
+            .dfb_spec_name = OUT,
+            .accessor_name = "out",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+    };
+    KernelSpec::CompilerOptions::Defines reader_defines;
+    if (is_non_aligned) {
+        // The reader alone fills and drains the scratch (TRID staging), so it binds both ends.
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = NON_ALIGNED,
+            .accessor_name = "non_aligned",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = NON_ALIGNED,
+            .accessor_name = "non_aligned",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+        reader_defines.emplace("NON_ALIGNED", "1");
+    }
 
-    KernelDescriptor reader_kernel;
-    reader_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
-        "padded_slice_reader_rm_interleaved_start_id.cpp";
-    reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel.core_ranges = total_cores;
-    reader_kernel.compile_time_args = reader_compile_time_args_vec;
-    reader_kernel.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_kernel;
-    writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel.core_ranges = total_cores;
-    writer_kernel.config = WriterConfigDescriptor{};
-    if (pad_output_row) {
-        writer_compile_time_args_vec.push_back((std::uint32_t)temp_pad_cb_index);
-        writer_compile_time_args_vec.push_back(output.element_size());
-        writer_kernel.kernel_source =
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
             "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
-            "writer_unary_sharded_padded_rm.cpp";
-    } else {
-        writer_kernel.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp";
-    }
-    writer_kernel.compile_time_args = std::move(writer_compile_time_args_vec);
+            "padded_slice_reader_rm_interleaved_start_id.cpp",
+        .compiler_options = {.defines = std::move(reader_defines)},
+        .dfb_bindings = std::move(reader_dfb_bindings),
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{
+                    .scratchpad_spec_name = ID_PER_DIM,
+                    .accessor_name = "id_per_dim",
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INPUT,
+                    .accessor_name = "src",
+                },
+            },
+        .compile_time_args = {{"num_trids", num_trids}},
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names =
+                    {
+                        "unpadded_stick_size",
+                        "stick_size_offset",
+                        "num_dims",
+                        "start_id",
+                        "num_sticks_per_core",
+                        "num_sticks_per_core_read",
+                        "num_read_per_barrier",
+                        "src_offset_bytes",
+                        "misalignment",
+                    },
+            },
+        .hw_config = ttnn::create_reader_datamovement_config(),
+        // Three num_dims-long blocks: num_unpadded_sticks, num_padded_sticks, then the id_per_dim seed.
+        .advanced_options = {.num_runtime_varargs = 3 * num_dims},
+    };
 
+    // pad_output_row selects the writer source, as before: the op's pad writer when the output row is
+    // wider than the sliced row, otherwise the Metal 2.0 fork of data_movement/sharded's plain writer,
+    // whose binding and argument names (dfb::out, num_units) are the fork's interface, inherited here.
+    // The output DFB is fill-only on the pad-writer path (the output is resident); the CONSUMER label
+    // there only completes the reader's PRODUCER end.
+    const DFBBinding writer_out_binding{
+        .dfb_spec_name = OUT,
+        .accessor_name = "out",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    };
+    KernelSpec writer =
+        pad_output_row
+            ? KernelSpec{
+                  .unique_id = WRITER,
+                  .source =
+                      "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
+                      "writer_unary_sharded_padded_rm.cpp",
+                  .dfb_bindings =
+                      {
+                          writer_out_binding,
+                          // The pad writer alone zero-fills the pad row and NoC-reads from it, so it
+                          // binds both ends.
+                          DFBBinding{
+                              .dfb_spec_name = TEMP_PAD,
+                              .accessor_name = "temp_pad",
+                              .endpoint_type = DFBEndpointType::PRODUCER,
+                          },
+                          DFBBinding{
+                              .dfb_spec_name = TEMP_PAD,
+                              .accessor_name = "temp_pad",
+                              .endpoint_type = DFBEndpointType::CONSUMER,
+                          },
+                      },
+                  .compile_time_args = {{"output_elem_size", output.element_size()}},
+                  .runtime_arg_schema =
+                      {
+                          .runtime_arg_names =
+                              {
+                                  "num_units",
+                                  "num_elements_per_row",
+                                  "unpadded_row_size_bytes",
+                                  "padded_row_size_bytes",
+                              },
+                      },
+                  .hw_config = ttnn::create_writer_datamovement_config(),
+              }
+            : KernelSpec{
+                  .unique_id = WRITER,
+                  .source =
+                      "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                      "writer_unary_sharded_metal2.cpp",
+                  .dfb_bindings = {writer_out_binding},
+                  .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
+                  .hw_config = ttnn::create_writer_datamovement_config(),
+              };
+
+    // ---- Per-core runtime args ----
     auto all_runtime_args = get_padded_slice_runtime_args_rm_sharded_output(
         a, output, output_tensor_start, actual_output_shape, iter_cores);
 
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
     uint32_t i = 0;
     for (const auto& core : iter_cores) {
-        reader_kernel.runtime_args.emplace_back(core, all_runtime_args[i].first);
-        writer_kernel.runtime_args.emplace_back(core, all_runtime_args[i].second);
+        const std::vector<uint32_t>& r = all_runtime_args[i].first;
+        const std::vector<uint32_t>& w = all_runtime_args[i].second;
+
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"unpadded_stick_size", r[0]},
+             {"stick_size_offset", r[1]},
+             {"num_dims", r[2]},
+             {"start_id", r[3]},
+             {"num_sticks_per_core", r[4]},
+             {"num_sticks_per_core_read", r[5]},
+             {"num_read_per_barrier", r[6]},
+             {"src_offset_bytes", r[7]},
+             {"misalignment", r[8]}});
+        // The three per-dimension blocks follow the scalars in the same order the kernel reads them.
+        reader_run_args.advanced_options.runtime_varargs[core] =
+            std::vector<uint32_t>(r.begin() + kPaddedSliceRmReaderVarargsBase, r.end());
+
+        if (pad_output_row) {
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {{"num_units", w[0]},
+                 {"num_elements_per_row", w[1]},
+                 {"unpadded_row_size_bytes", w[2]},
+                 {"padded_row_size_bytes", w[3]}});
+        } else {
+            // The plain writer reads only the unit count.
+            AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"num_units", w[0]}});
+        }
         i++;
     }
 
-    // kPaddedSliceRmReaderKernelIdx is the GetRuntimeArgs index in override_runtime_arguments.
-    // Capture it from the push so a reorder fails here instead of patching the writer.
-    const uint32_t reader_kernel_idx = static_cast<uint32_t>(desc.kernels.size());
-    desc.kernels.push_back(std::move(reader_kernel));
-    desc.kernels.push_back(std::move(writer_kernel));
-    TT_FATAL(
-        reader_kernel_idx == kPaddedSliceRmReaderKernelIdx,
-        "Padded-slice RM reader must be kernel index {}, got {}",
-        kPaddedSliceRmReaderKernelIdx,
-        reader_kernel_idx);
-    return desc;
+    ProgramSpec spec{
+        .name = "padded_slice_rm",
+        .kernels = {std::move(reader), std::move(writer)},
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = {std::move(id_per_dim_scratch)},
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = INPUT, .spec = a.tensor_spec()},
+                TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {READER, WRITER},
+                    .target_nodes = total_cores,
+                },
+            },
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args = {
+        {INPUT, input_mesh},
+        {OUTPUT, output_mesh},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
-void PaddedSliceRMProgramFactory::override_runtime_arguments(
-    Program& program,
+tt::tt_metal::experimental::ProgramRunArgs PaddedSliceRMProgramFactory::override_runtime_arguments(
     const PaddedSliceParams& /*operation_attributes*/,
     const PaddedSliceInputs& tensor_args,
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
+    using namespace padded_slice_rm_metal2;
+
     const auto& src_tensor = tensor_args.input;
     auto& dst_tensor = output;
     TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
@@ -421,18 +597,16 @@ void PaddedSliceRMProgramFactory::override_runtime_arguments(
     TT_FATAL(src_buffer != nullptr, "Input buffer should be allocated on device");
     auto* dst_buffer = dst_tensor.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    update_padded_slice_rm_output_cb(program, *dst_buffer);
-
-    const auto output_shard_spec = dst_tensor.shard_spec().value();
-    const bool rm_orientation = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-    const auto iter_cores = corerange_to_cores(output_shard_spec.grid, std::nullopt, rm_orientation);
 
     // The read-window offsets follow from the slice bounds and the output sharding, both part of the
-    // program-cache key; only the input buffer's base can differ between dispatches.
-    for (const auto& core : iter_cores) {
-        auto& reader_args = GetRuntimeArgs(program, kPaddedSliceRmReaderKernelIdx, core);
-        reader_args[kPaddedSliceRmReaderAddressArgIdx] = src_buffer->address();
-    }
+    // program-cache key; only the input buffer's base and the output shard backing the output DFB can
+    // differ between dispatches. Both travel as tensor bindings, so a cache hit refreshes exactly those.
+    ProgramRunArgs run_args;
+    run_args.tensor_args = {
+        {INPUT, src_tensor.mesh_tensor()},
+        {OUTPUT, dst_tensor.mesh_tensor()},
+    };
+    return run_args;
 }
 
 }  // namespace ttnn::experimental::prim
