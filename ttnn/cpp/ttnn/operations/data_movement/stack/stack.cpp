@@ -5,6 +5,7 @@
 #include "stack.hpp"
 
 #include <algorithm>
+#include <numeric>
 #include <vector>
 
 #include <tt-metalium/tensor/tensor_types.hpp>
@@ -30,11 +31,8 @@ Tensor stack_via_leading_axis(const std::vector<Tensor>& input_tensors, const in
         leading.push_back(ttnn::unsqueeze(tensor, 0));
     }
     const Tensor stacked = ttnn::concat(leading, 0);
-    ttsl::SmallVector<int64_t> dims;
-    dims.reserve(rank + 1);
-    for (int axis = 1; axis <= rank; ++axis) {
-        dims.push_back(axis);
-    }
+    ttsl::SmallVector<int64_t> dims(rank);
+    std::iota(dims.begin(), dims.end(), 1);
     dims.push_back(0);
     return ttnn::permute(stacked, dims);
 }
