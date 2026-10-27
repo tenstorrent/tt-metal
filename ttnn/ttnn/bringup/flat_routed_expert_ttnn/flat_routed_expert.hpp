@@ -42,7 +42,8 @@ ttnn::Tensor flat_routed_expert(
     bool y_bf16 = false,
     uint32_t math_fidelity = 0,
     bool weights_nk = false,
-    uint32_t hidden = 0);
+    uint32_t hidden = 0,
+    uint32_t max_y_writers = 0);
 
 // The flat routed expert with another op's programs appended, one program per chip (device/
 // flat_with_program_device_operation.hpp): the flat expert's arguments as for flat_routed_expert, plus the caller's
@@ -83,7 +84,8 @@ ttnn::Tensor flat_routed_expert_with_program(
     uint32_t math_fidelity = 0,
     bool weights_nk = false,
     bool patch_addresses = false,
-    const std::vector<uint32_t>& extra_addrs = {});
+    const std::vector<uint32_t>& extra_addrs = {},
+    uint32_t max_y_writers = 0);
 
 // The plan for a device / config (cached): what the weight layout and the done words need.
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(

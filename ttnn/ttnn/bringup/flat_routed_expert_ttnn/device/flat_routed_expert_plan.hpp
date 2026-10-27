@@ -60,6 +60,13 @@ struct FlatRoutedExpertConfig {
     // (a bfp8 tile then shares its exponents along K: exact for e2m1 x ue8m0 weights); no plan change. (FIX.9 removed
     // P.3's DeepSeek-only h options routed_weight / fp8_act_quant: no model used them.)
     bool weights_nk = false;
+    // DeepSeek-V4.1 option (0: off, the plan unchanged). At most this many y writers (down cores + reader tails): the
+    // L1 hand-off of a combine appended with flat_with_program has one landed counter per writer (combine_rf
+    // sparse_combine_rf.py L1_MAX_WRITERS, 32). The down cores are cut to fit before their column split is chosen (in
+    // the plan's own order, nearest first); the cells left over stay idle (free for the appended op). A Galaxy chip
+    // with its east DRAM readers in column 7 has 40 down cores at V4.1-Flash (4 columns each), column 6 has 32 (5
+    // each): capped at 32, both get the same down split and weight layout.
+    uint32_t max_y_writers = 0;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "hidden",
@@ -78,7 +85,8 @@ struct FlatRoutedExpertConfig {
         "y_bf16",
         "math_fidelity",
         "cmb_rt",
-        "weights_nk");
+        "weights_nk",
+        "max_y_writers");
     auto attribute_values() const {
         return std::forward_as_tuple(
             hidden,
@@ -97,7 +105,8 @@ struct FlatRoutedExpertConfig {
             y_bf16,
             math_fidelity,
             cmb_rt,
-            weights_nk);
+            weights_nk,
+            max_y_writers);
     }
 };
 
