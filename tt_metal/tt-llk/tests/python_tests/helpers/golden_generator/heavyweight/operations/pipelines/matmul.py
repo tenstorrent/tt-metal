@@ -3,7 +3,7 @@
 
 """Matmul — the MVMUL family."""
 
-from functools import partial
+from functools import lru_cache, partial
 from typing import Dict, Tuple
 
 import torch
@@ -32,6 +32,28 @@ TILE_DATUMS = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 K_FACE_DIM = MAX_FACE_R_DIM
 #: K faces in one tile, hence Dest writes per fidelity phase.
 K_FACES = DEFAULT_TILE_R_DIM // K_FACE_DIM
+
+
+@lru_cache(maxsize=None)
+def _face_order_permutation() -> Tuple[torch.Tensor, torch.Tensor]:
+    """The index permutations between face order and logical row-major order.
+
+    The tilize helpers are pure rearrangements, but they finish by casting to
+    the dtype of the ``stimuli_format`` they were given, and there is no
+    ``DataFormat`` wide enough for an integer matmul's accumulator. Running an
+    ``arange`` through them instead captures the rearrangement on its own, and
+    the data is then reordered by indexing -- which cannot change its type.
+
+    Returns ``(to_logical, to_face_order)``, the inverse of each other.
+    """
+    index = torch.arange(TILE_DATUMS)
+    to_logical = untilize_block(
+        index, stimuli_format=DataFormat.Int32, **tilize_kwargs()
+    ).flatten()
+    to_face_order = tilize_block(
+        index, stimuli_format=DataFormat.Int32, **tilize_kwargs()
+    ).flatten()
+    return to_logical.long(), to_face_order.long()
 
 
 def tilize_kwargs() -> dict:
@@ -163,6 +185,9 @@ class MatmulGolden(Golden):
         row 0 is logical row 0 columns 0-15 followed by logical row 1 columns
         0-15. The leading entries of each row line up, which is exactly why the
         wrong answer reads as a plausible one.
+
+        Rearranges without converting, so an integer register stays an integer
+        one all the way into :meth:`.Fpu.sum_of_products`.
         """
         # Against the full tile, not datums_per_tile(**geometry): the product
         # below is a 32x32 one whatever geometry says, so a partial-face tile
@@ -176,22 +201,21 @@ class MatmulGolden(Golden):
                 f"A partial-face or multi-tile matmul is a block matmul over "
                 f"the inner dimension, which this golden does not model yet."
             )
-        return untilize_block(
-            values.float(), stimuli_format=DataFormat.Float32, **tilize_kwargs()
-        ).reshape(TILE_DIM, TILE_DIM)
+        to_logical, _ = _face_order_permutation()
+        return values[to_logical].reshape(TILE_DIM, TILE_DIM)
 
     @staticmethod
     def _from_tile(matrix: torch.Tensor, geometry: Dict) -> torch.Tensor:
-        """The logical result back in face order, which is how Dest holds it."""
-        return (
-            tilize_block(
-                matrix.reshape(-1).float(),
-                stimuli_format=DataFormat.Float32,
-                **tilize_kwargs(),
-            )
-            .flatten()
-            .float()
-        )
+        """The logical result back in face order, which is how Dest holds it.
+
+        Keeps the product's own type. An integer matmul accumulates in int64
+        and reaches 2**35, which the ``Int32`` the tilize helpers would cast to
+        cannot hold -- it would wrap to a negative number here, *before*
+        :func:`..storage.to_dest_storage` had a chance to saturate it, turning
+        a clean clamp into a sign flip.
+        """
+        _, to_face_order = _face_order_permutation()
+        return matrix.reshape(-1)[to_face_order]
 
     def _product(
         self, srcA: torch.Tensor, srcB: torch.Tensor, geometry: Dict, k_face: int
