@@ -219,6 +219,19 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
                 device.impl().drisc_l1_arena().receiver_zone_size() > 0,
             "PrefetcherPipeSpace: PrefetcherPipeL1Source::DramReceiverZone needs DRAM cores with a DRISC L1 receiver "
             "zone (Quasar CCEs)");
+        TT_FATAL(
+            config_.ring_size % kDramReceiverCreditUnitBytes == 0,
+            "PrefetcherPipeSpace: DRAM-receiver ring_size {} B must be a non-zero multiple of the {} B credit unit",
+            config_.ring_size,
+            kDramReceiverCreditUnitBytes);
+        const uint32_t receiver_zone_size = device.impl().drisc_l1_arena().receiver_zone_size();
+        TT_FATAL(
+            static_cast<uint64_t>(kDramReceiverConfigPageBytes) + config_.ring_size <= receiver_zone_size,
+            "PrefetcherPipeSpace: DRAM-receiver ring_size {} B and its {} B config page exceed the {} B DRISC L1 "
+            "receiver zone",
+            config_.ring_size,
+            kDramReceiverConfigPageBytes,
+            receiver_zone_size);
         // receiver_domain holds DRAM-logical coords. The receiver page is the fixed
         // dram_receiver_config_page.hpp layout, whatever max_receivers_per_pipe is; that count sizes the
         // senders' state instead.
