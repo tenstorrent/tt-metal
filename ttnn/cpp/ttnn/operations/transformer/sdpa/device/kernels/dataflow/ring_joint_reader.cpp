@@ -1840,10 +1840,16 @@ void kernel_main() {
             // sequence into cb_k_in / cb_v_in (same pieces, same pooled pages, same phase-alignment dummies), so
             // the producer's write pointer for a piece is every consumer's page for it.
             //   consumer: reserve the piece's K and V pages, credit the producer (+1), wait until the delivered
-            //     count reaches the piece, push. Credits run ahead up to kv_cb_pages pieces, never past the
-            //     iteration's last piece (the pooled and dummy pages after it are this core's own).
+            //     count reaches the piece, push. At most one credit is outstanding (the next piece's), and never
+            //     past the iteration's last piece (the pooled and dummy pages after it are this core's own).
             //   producer: reserve its own pages, read K and V from DRAM, push them for its compute, wait for
             //     receivers x (piece + 1) credits, multicast K and V to every rectangle, then the new count.
+            // The credits share one counter, so the sum says every consumer has freed its page only because no
+            // consumer can credit two pieces ahead: when the producer waits for piece p, every consumer has
+            // received at most p - 1 and so credited at most p, and the sum reaches receivers x p only if each one
+            // has. With a deeper lookahead, a fast consumer's extra credits would stand in for a slow one's and the
+            // multicast would overwrite a page the slow core's compute has not popped. The CB still holds
+            // kv_cb_pages pieces: the lookahead bounds only the producer's lead over the slowest receipt.
             [[maybe_unused]] const uint32_t g_base = sol_members_base + 2 * sol_n_members;
             [[maybe_unused]] const uint32_t g_role = sol_res_mcast ? get_arg_val<uint32_t>(g_base) : 0;
             [[maybe_unused]] uint32_t g_granted = 0;  // pieces credited this iteration
@@ -1856,8 +1862,8 @@ void kernel_main() {
                 CircularBuffer cb_v(cb_v_in);
                 const uint32_t k_need = k_chunk_tiles * (g_ahead + 1);
                 const uint32_t v_need = v_cb_entry_tiles * (g_ahead + 1);
-                if (!blocking && (g_ahead + 1 > kv_cb_pages || !cb_k.pages_reservable_at_back(k_need) ||
-                                  !cb_v.pages_reservable_at_back(v_need))) {
+                if (!blocking &&
+                    (g_ahead > 0 || !cb_k.pages_reservable_at_back(k_need) || !cb_v.pages_reservable_at_back(v_need))) {
                     return false;
                 }
                 cb_k.reserve_back(k_need);
@@ -2001,7 +2007,7 @@ void kernel_main() {
                                         if (g_role != 0) {
                                             stream_piece_group(res_nb[i0], res_nq[i0], k);
                                         } else {
-                                            stream_piece(res_nb[i0], res_nq[i0], k, false);
+                                            stream_piece(res_nb[i0], res_nq[i0], k, j < n_pieces);
                                         }
                                     } else if constexpr (sol_chain_credits) {
                                         stream_piece_credited(res_nb[i0], res_nq[i0], k);

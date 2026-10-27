@@ -3537,16 +3537,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
 
     // D1 group delivery: per core [role, producer x, producer y, receivers, rectangles, (x0, y0, x1, y1, cores)...].
-    // A group is a head chain's members (resident chains hold single-head cores only); the producer is the chain's
-    // injector, which reads every piece from DRAM. The receivers are covered by rectangles of consecutive NoC x on
-    // one row each, so a multicast never lands on a core outside the group. The injector is the first member in core
-    // order, so it sits at the start of its row and does not split a rectangle.
+    // A group is a head chain's members (resident chains hold single-head cores only); the producer reads every piece
+    // from DRAM. The receivers are covered by rectangles of consecutive NoC x on one row each, so a multicast never
+    // lands on a core outside the group. The producer is the first member in core order (not the chain's injector,
+    // which the chain setup may move to the middle of a row): it starts its row, so it does not split a rectangle,
+    // and a group of consecutive cores spanning two rows needs two rectangles.
     constexpr uint32_t kSolGroupMaxRects = 8;
     std::vector<std::vector<uint32_t>> sol_group_args(num_cores, std::vector<uint32_t>{0u, 0u, 0u, 0u, 0u});
     if (sol_res_mcast) {
         for (uint32_t h = 0; h < static_cast<uint32_t>(head_segments.size()); ++h) {
             std::vector<uint32_t> members;
-            std::optional<uint32_t> producer;
             for (const auto& seg : head_segments[h]) {
                 const auto& cfg = head_chain_configs.at(seg.core_idx);
                 if (!cfg.participates || cfg.head != h ||
@@ -3559,18 +3559,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                     seg.core_idx,
                     h);
                 members.push_back(seg.core_idx);
-                if (cfg.is_injector) {
-                    producer = seg.core_idx;
-                }
             }
             if (members.size() < 2) {
                 continue;
             }
-            TT_FATAL(producer.has_value(), "sol resident group delivery: head {} chain has no injector", h);
-            const CoreCoord prod_phys = core_work[*producer].physical_core;
+            const uint32_t producer = *std::min_element(members.begin(), members.end());
+            const CoreCoord prod_phys = core_work[producer].physical_core;
             std::map<uint32_t, std::vector<uint32_t>> receiver_xs_by_row;
             for (const uint32_t ci : members) {
-                if (ci != *producer) {
+                if (ci != producer) {
                     receiver_xs_by_row[core_work[ci].physical_core.y].push_back(core_work[ci].physical_core.x);
                 }
             }
@@ -3595,12 +3592,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             for (const uint32_t ci : members) {
                 auto& a = sol_group_args[ci];
                 a = {
-                    ci == *producer ? 1u : 2u,
+                    ci == producer ? 1u : 2u,
                     static_cast<uint32_t>(prod_phys.x),
                     static_cast<uint32_t>(prod_phys.y),
                     n_receivers,
                     0u};
-                if (ci == *producer) {
+                if (ci == producer) {
                     a[4] = static_cast<uint32_t>(rects.size());
                     for (const auto& r : rects) {
                         a.insert(a.end(), r.begin(), r.end());
@@ -3611,7 +3608,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 tt::LogOp,
                 "sol resident group: head {} producer core {} -> {} receivers in {} rectangles",
                 h,
-                *producer,
+                producer,
                 n_receivers,
                 rects.size());
         }
