@@ -130,6 +130,7 @@ void kernel_main() {
                     partial_row_tiles);
             }
             noc_semaphore_inc(get_noc_addr(unit.merger_x, unit.merger_y, get_semaphore(sem_ids[unit.sem_idx])), 1);
+            noc_async_atomic_barrier();  // the kernel must not end with the increment in flight
             return;
         }
 #endif
