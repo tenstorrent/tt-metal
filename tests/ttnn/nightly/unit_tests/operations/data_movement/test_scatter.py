@@ -240,9 +240,9 @@ def test_scatter_add_zero_volume(input_shape, dim, index_shape, device):
             6,
         ),
         ([50, 20], 0, [50, 20], [200, 80], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 5),
-        # bfloat16 TILE int32 rows route to codegen (ttnn::scatter() in scatter.cpp; the gate is
-        # codegen/scatter_codegen_supported.hpp): TILE stays TILE, so native's to_layout legs never
-        # run and the count is lower than native's.
+        # bfloat16 TILE rows with an int32 or uint32 index route to codegen (ttnn::scatter() in
+        # scatter.cpp; the gate is codegen/scatter_codegen_supported.hpp): TILE stays TILE, so
+        # native's to_layout legs never run and the count is lower than native's.
         ([10, 10, 10], 1, [2, 30, 10], [2, 30, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 4),
         ([10, 30, 6, 10], -1, [2, 30, 6, 5], [2, 30, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 2),
         ([10, 30, 6, 10], 2, [2, 30, 6, 5], [2, 30, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, 6),
@@ -454,9 +454,9 @@ def test_scatter_reduction_high_rank_unequal_leading_dims(
         ([10, 1, 10, 1, 10], 0, [10, 1, 10, 1, 10], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR, 3),
         ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, 1),
         ([50, 20], 0, [50, 20], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 4),
-        # bfloat16 TILE int32 rows route to codegen (ttnn::scatter() in scatter.cpp; the gate is
-        # codegen/scatter_codegen_supported.hpp): TILE stays TILE, so native's to_layout legs never
-        # run and the count is lower than native's.
+        # bfloat16 TILE rows with an int32 or uint32 index route to codegen (ttnn::scatter() in
+        # scatter.cpp; the gate is codegen/scatter_codegen_supported.hpp): TILE stays TILE, so
+        # native's to_layout legs never run and the count is lower than native's.
         ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 3),
         ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 3),
         ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 3),
