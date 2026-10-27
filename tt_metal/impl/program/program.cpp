@@ -1171,6 +1171,25 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                     }
                 }
             }
+            // set_remote_circular_buffer_init bakes the align call into the kernel for every core it runs on,
+            // including cores that don't own the remote CB. Firmware only zeroes a remote CB interface it scans,
+            // so scan down to that index here too; otherwise those cores align against a prior program's stale
+            // remote CB.
+            if (hal.get_supports_cbs(programmable_core_type_index)) {
+                for (auto id : kernels) {
+                    for (const auto& kernel_cr : handle_to_kernel.at(id)->logical_coreranges()) {
+                        for (const auto& circular_buffer : this->circular_buffers_on_corerange(kernel_cr)) {
+                            if (circular_buffer->remote_buffer_indices().empty() ||
+                                circular_buffer->local_buffer_indices().empty()) {
+                                continue;
+                            }
+                            min_remote_cb_start_index = std::min(
+                                min_remote_cb_start_index,
+                                static_cast<uint32_t>(*circular_buffer->remote_buffer_indices().begin()));
+                        }
+                    }
+                }
+            }
             TT_FATAL(
                 max_local_cb_end_index <= min_remote_cb_start_index,
                 "Circular buffer indices overlap for KernelGroup {} on programmable core type {}. Local end index {}, "

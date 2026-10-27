@@ -105,6 +105,14 @@ void bind_fused_experts(nb::module_& mod) {
                 ``routing_indices``; pass the very same tensor as ``routing_scores`` when ranking and
                 weighting use one row (the op then reads it once). Ties are broken toward the lower
                 expert id.
+            shared_gate_up_weights: Optional always-active shared expert's gate_up, [H, 2*Is] with
+                gate/up interleaved per I-tile and DRAM ND-sharded [H, 64]. Given together with
+                ``shared_down_weights``, the shared expert is added to the output with weight 1 for
+                every token. Its I and dtype are independent of the routed experts'. Requires the
+                6-expert path.
+            shared_down_weights: The shared expert's down, [Is, H], DRAM ND-sharded [32, 64].
+            shared_swiglu_limit: Clamp limit for the shared expert's SwiGLU. Defaults to
+                ``swiglu_limit``; ``float("inf")`` leaves it unclamped.
         )doc",
         &ttnn::experimental::deepseek::moe::fused_experts,
         nb::arg("input_tensor"),
@@ -122,7 +130,10 @@ void bind_fused_experts(nb::module_& mod) {
         nb::arg("two_hub_gather") = true,
         nb::arg("memory_config") = std::nullopt,
         nb::arg("routing_indices") = std::nullopt,
-        nb::arg("ranking_scores") = std::nullopt);
+        nb::arg("ranking_scores") = std::nullopt,
+        nb::arg("shared_gate_up_weights") = std::nullopt,
+        nb::arg("shared_down_weights") = std::nullopt,
+        nb::arg("shared_swiglu_limit") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts::detail

@@ -110,7 +110,10 @@ struct FusedExpertsDeviceOperation {
         bool two_hub_gather,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<Tensor>& routing_indices,
-        const std::optional<Tensor>& ranking_scores);
+        const std::optional<Tensor>& ranking_scores,
+        const std::optional<Tensor>& shared_gate_up_weights,
+        const std::optional<Tensor>& shared_down_weights,
+        std::optional<float> shared_swiglu_limit);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts
@@ -132,5 +135,8 @@ fused_experts(
     bool two_hub_gather = true,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& routing_indices = std::nullopt,
-    const std::optional<Tensor>& ranking_scores = std::nullopt);
+    const std::optional<Tensor>& ranking_scores = std::nullopt,
+    const std::optional<Tensor>& shared_gate_up_weights = std::nullopt,
+    const std::optional<Tensor>& shared_down_weights = std::nullopt,
+    std::optional<float> shared_swiglu_limit = std::nullopt);
 }  // namespace ttnn::prim

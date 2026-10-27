@@ -49,6 +49,7 @@
 //   17: split_col (first act tile of each expert that hub1 owns; == i_tiles when there is one hub)
 //   18: num_hubs  (1, or 2 for the two-hub gather/broadcast)
 //   19+: TensorAccessorArgs(output)
+//   then: shared_i_tiles (6-expert path's shared expert I-tiles; 0 without one)
 //
 // Runtime args:
 //   0: output base address
@@ -86,6 +87,7 @@ void kernel_main() {
     constexpr uint32_t num_hubs = get_compile_time_arg_val(18);
 
     constexpr auto out_args = TensorAccessorArgs<19>();
+    constexpr uint32_t shared_i_tiles = get_compile_time_arg_val(out_args.next_compile_time_args_offset());
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_index = get_arg_val<uint32_t>(1);
@@ -159,7 +161,27 @@ void kernel_main() {
             bump_gather();
             cb_out.pop_front(scatter_tiles);
         }
+        // Shared-expert tile j of this group runs on local core j + 1 and lands right after the routed
+        // activation, in the last hub's range (see run_reader_loop).
+        const uint32_t shared_tiles = expert_group < shared_i_tiles
+                                          ? (shared_i_tiles - expert_group + num_expert_groups - 1u) / num_expert_groups
+                                          : 0u;
+        if (local_idx >= 1u && local_idx < 1u + shared_tiles) {
+            cb_out.wait_front(1);
+            noc.async_write(
+                cb_out,
+                UnicastEndpoint{},
+                act_tile_bytes,
+                {.offset_bytes = 0},
+                {.noc_x = num_hubs > 1 ? hub1_noc_x : hub0_noc_x,
+                 .noc_y = num_hubs > 1 ? hub1_noc_y : hub0_noc_y,
+                 .addr = act_slot_base + (i_tiles + local_idx - 1u) * act_tile_bytes});
+            noc.async_write_barrier();
+            bump_gather();
+            cb_out.pop_front(1);
+        }
         if (!down_core) {
+            noc.async_atomic_barrier();
             return;
         }
 
@@ -229,4 +251,6 @@ void kernel_main() {
         noc.async_write_barrier();
         cb_down_out.pop_front(kOutTiles);
     }
+    // Every Semaphore::up above is a non-posted atomic; async_write_barrier does not drain those.
+    noc.async_atomic_barrier();
 }

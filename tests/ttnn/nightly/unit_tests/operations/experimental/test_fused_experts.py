@@ -960,3 +960,156 @@ def test_fused_experts_gather_hubs_grouped(device, hidden, intermediate, num_exp
     # Six distinct experts on one token is exactly what selects the 96-core path.
     ref, got_two, got_one = _run_both_gather_shapes(device, hidden, intermediate, num_experts, top_k, 0)
     _assert_gather_shapes_agree(ref, got_two, got_one)
+
+
+def _shared_expert_weights(device, hidden: int, shared_intermediate: int):
+    """Random shared-expert gate_up ``[H, 2Is]`` / down ``[Is, H]`` weights, on host and in the bf8
+    DRAM layout ``fused_experts`` fuses them from: gate_up interleaved per I-tile into one
+    ``[H, 64]`` [gate_32 | up_32] shard each, and down cut into ``[32, 64]`` shards (one I-tile row
+    of one H-slice)."""
+    gate_up = (torch.rand((hidden, 2 * shared_intermediate), dtype=torch.bfloat16) - 0.5).float()
+    down = (torch.rand((shared_intermediate, hidden), dtype=torch.bfloat16) - 0.5).float()
+    dram_core_range_set = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)]
+    )
+    gate_up_tt = ttnn.from_torch(
+        _interleave_gate_up(gate_up, TILE),
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=_nd_sharded_dram_memory_config(hidden, 2 * shared_intermediate, 2 * TILE, dram_core_range_set),
+    )
+    down_tt = ttnn.from_torch(
+        down,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=_nd_sharded_dram_memory_config(TILE, hidden, DOWN_SHARD_COLS, dram_core_range_set),
+    )
+    return gate_up, down, gate_up_tt, down_tt
+
+
+@pytest.mark.parametrize(
+    "hidden, intermediate, shared_intermediate",
+    [
+        # DeepSeek-V4-Flash at TP4: 16 routed and 16 shared I-tiles per rank on a 12x8 grid, the
+        # shared tiles dealt 3,3,3,3,2,2 over the six expert groups.
+        (4096, 512, 512),
+        # DeepSeek-V4.1-Flash at TP4: 18 I-tiles (12x9 grid, 18 gate_up cores per group), 80 H
+        # shards (5 per down core) and exactly 3 shared tiles per group.
+        (5120, 576, 576),
+        # A shared I that differs from the routed one: the shared slice is sized on its own.
+        (4096, 512, 1024),
+        # Unsplit V4 shared expert: 64 tiles, 11 per group on most groups -- the most shared work
+        # one group can take (shared_slots + 2 <= 16 gate_up cores).
+        (4096, 2048, 2048),
+    ],
+    ids=("v4_tp4", "v41_tp4", "shared_i_differs", "v4_tp1"),
+)
+@pytest.mark.parametrize("batch", (1, 2), ids=lambda b: f"batch{b}")
+# V4.1's shared expert takes the routed experts' clamp; V4's does not (an infinite limit).
+@pytest.mark.parametrize("shared_limit", (7.0, float("inf")), ids=("shared_clamped", "shared_unclamped"))
+def test_fused_experts_shared_expert(device, hidden, intermediate, shared_intermediate, batch, shared_limit):
+    """The always-active shared expert fused into the 6-expert path:
+
+        output = sum_i w[:, hit_ids[i]] * routed_i(x) + swiglu(x @ shared_gate_up) @ shared_down
+
+    with the shared term unweighted and its SwiGLU clamped by ``shared_swiglu_limit``. Each expert
+    group computes a round-robin share of the shared I-tiles next to its routed expert and folds the
+    matching shared down rows into its partial, so the cross-group reduce sums the shared down too.
+
+    Besides the torch golden, the fused output minus the same op's routed-only output must be the
+    shared expert alone: the routed part is the same computation in both calls, so this isolates
+    the shared term, which the routed sum could otherwise drown out of a PCC.
+    """
+    num_experts, top_k = 16, 6
+    i_tiles = intermediate // TILE
+    grid_y = 8 if i_tiles % 16 == 0 else 9
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 12 or grid.y < grid_y:
+        pytest.skip(f"the 6-expert path at I={intermediate} needs a 12x{grid_y} compute grid, got {grid.x}x{grid.y}")
+
+    torch.manual_seed(0)
+    limit = 7.0
+    scaling = 2.5
+    eps = 1e-20
+    tokens = batch
+
+    # Every token picks the same six experts, so the union is six: what selects the parallel path.
+    ids = torch.arange(top_k, dtype=torch.int64).repeat(tokens, 1)
+    scores = torch.rand((tokens, num_experts), dtype=torch.bfloat16).float() + 0.5
+    x = (torch.rand((tokens, hidden), dtype=torch.bfloat16) - 0.5).float()
+
+    gate_up, down, gate_up_tt, down_tt = _expert_weights(device, hidden, intermediate, num_experts)
+    shared_gate_up, shared_down, shared_gate_up_tt, shared_down_tt = _shared_expert_weights(
+        device, hidden, shared_intermediate
+    )
+
+    # The op takes at most a tile height of token rows: the 1x32 decode tile for one token, a full
+    # 32x32 tile for a batch.
+    x_tt = ttnn.from_torch(
+        x.reshape(1, 1, tokens, hidden),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((1, 32)) if tokens == 1 else ttnn.Tile((32, 32)),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ids_tt = ttnn.from_torch(
+        ids.to(torch.int32).reshape(1, 1, tokens, top_k),
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    scores_tt = ttnn.from_torch(
+        scores.reshape(1, 1, tokens, num_experts),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def run(**shared):
+        return (
+            ttnn.to_torch(
+                ttnn.experimental.deepseek.moe.fused_experts(
+                    x_tt,
+                    routing_indices=ids_tt,
+                    routing_scores=scores_tt,
+                    gate_up_weights=gate_up_tt,
+                    down_weights=down_tt,
+                    num_experts=top_k,
+                    intermediate_size=intermediate,
+                    swiglu_limit=limit,
+                    top_k=top_k,
+                    routed_scaling_factor=scaling,
+                    routing_eps=eps,
+                    **shared,
+                )
+            )
+            .float()
+            .reshape(tokens, hidden)
+        )
+
+    got_fused = run(
+        shared_gate_up_weights=shared_gate_up_tt,
+        shared_down_weights=shared_down_tt,
+        shared_swiglu_limit=shared_limit,
+    )
+    got_routed = run()
+
+    x_dev = ttnn.to_torch(x_tt).float().reshape(tokens, hidden)
+    scores_dev = ttnn.to_torch(scores_tt).float().reshape(tokens, num_experts)
+    ref_routed, hit_ids = _gather_reference(x_dev, scores_dev, ids, gate_up, down, intermediate, limit, scaling, eps)
+    assert len(hit_ids) == top_k
+    ref_shared = _swiglu(x_dev @ shared_gate_up, shared_intermediate, shared_limit) @ shared_down
+
+    passing, pcc_msg = comp_pcc(ref_routed, got_routed, pcc=0.98)
+    assert passing, f"routed-only output vs torch golden: {pcc_msg} | {comp_allclose(ref_routed, got_routed)}"
+    ref = ref_routed + ref_shared
+    passing, pcc_msg = comp_pcc(ref, got_fused, pcc=0.98)
+    assert passing, f"fused routed + shared vs torch golden: {pcc_msg} | {comp_allclose(ref, got_fused)}"
+    got_shared = got_fused - got_routed
+    passing, pcc_msg = comp_pcc(ref_shared, got_shared, pcc=0.98)
+    assert passing, f"fused shared term vs torch golden: {pcc_msg} | {comp_allclose(ref_shared, got_shared)}"

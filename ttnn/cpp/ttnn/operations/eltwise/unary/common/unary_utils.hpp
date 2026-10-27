@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/tile.hpp>
 #include <optional>
 
 namespace ttnn::operations::unary {
@@ -21,6 +22,12 @@ struct UnaryShardSpecs {
 };
 
 std::optional<UnaryShardSpecs> get_shard_specs(
+    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec);
+
+// ROW_MAJOR shards whose width is a multiple of 32 but whose element count is not a whole 32x32
+// tile (a one-row width shard is the usual case) are computed in place as 1x32 pages. The
+// interleaved fallback noc-reads a buffer the core already owns and hangs.
+std::optional<tt::tt_metal::Tile> row_major_sharded_1x32_tile(
     const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec);
 
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);

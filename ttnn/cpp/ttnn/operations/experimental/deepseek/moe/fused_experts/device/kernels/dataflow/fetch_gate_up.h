@@ -429,7 +429,103 @@ inline void build_routing_scalars(
 // groups' matching H-slices are reduced onto group 0 (see the writer / compute kernels).
 constexpr uint32_t kNoDownShard = 0xFFFFFFFFu;
 
-template <typename GateUpArgs, typename DownArgs>
+// The always-active shared expert on the 6-expert path. Its I-tiles are dealt round-robin over the
+// groups (tile t to group t % num_groups), and a group's j-th tile runs on local core
+// j + kSharedFirstLocal, which keeps it off hub0 (local core 0) and hub1 (the last one). That core
+// streams the tile's [H, 64] gate_up shard in [chunk_k, 2] chunks, and its SwiGLU tile is gathered
+// behind the group's routed activation in cb_act (at i_tiles + j). Each down core then multiplies
+// those tiles by the matching rows of the shared down for its H-slices; down is ND-sharded [32, 64],
+// so I-tile t of H-slice h is shard t * num_h_shards + h.
+//
+// The compile-time block a reader kernel appends after its routed weight addresses is the first
+// kSharedExpertCtArgs fields below in order, then the gate_up and down TensorAccessorArgs. i_tiles
+// is 0 when there is no shared expert.
+constexpr uint32_t kSharedExpertCtArgs = 8;
+constexpr uint32_t kSharedFirstLocal = 1;
+
+struct SharedExpert {
+    uint32_t i_tiles;       // shared I-tiles over all groups (0: no shared expert)
+    uint32_t slots;         // cb_act tiles reserved per group, ceil(i_tiles / num_groups)
+    uint32_t num_h_shards;  // H-slices: shard (t, h) of the down is t * num_h_shards + h
+    uint32_t cb_gate_up;
+    uint32_t cb_down;
+    uint32_t gate_up_tile_bytes;
+    uint32_t down_tile_bytes;
+    uint32_t chunk_k;  // K tile-rows per streamed gate_up chunk
+    uint32_t gate_up_addr;
+    uint32_t down_addr;
+};
+
+template <uint32_t base>
+inline SharedExpert shared_expert_args(uint32_t gate_up_addr, uint32_t down_addr) {
+    return SharedExpert{
+        get_compile_time_arg_val(base),
+        get_compile_time_arg_val(base + 1),
+        get_compile_time_arg_val(base + 2),
+        get_compile_time_arg_val(base + 3),
+        get_compile_time_arg_val(base + 4),
+        get_compile_time_arg_val(base + 5),
+        get_compile_time_arg_val(base + 6),
+        get_compile_time_arg_val(base + 7),
+        gate_up_addr,
+        down_addr,
+    };
+}
+
+// Shared I-tiles group `group` owns: t = group, group + num_groups, ... below i_tiles.
+inline uint32_t shared_tiles_of_group(uint32_t i_tiles, uint32_t group, uint32_t num_groups) {
+    return group < i_tiles ? (i_tiles - group + num_groups - 1u) / num_groups : 0u;
+}
+
+// Stream shared I-tile `tile`'s [k_tiles, 2] gate_up shard into cb_gate_up, one chunk at a time.
+template <typename Args>
+inline void fetch_shared_gate_up(
+    const Noc& noc, const SharedExpert& shared, const Args& args, uint32_t tile, uint32_t k_tiles) {
+    const uint32_t chunk_tiles = 2u * shared.chunk_k;
+    const uint32_t chunk_bytes = chunk_tiles * shared.gate_up_tile_bytes;
+    const auto w = TensorAccessor(args, shared.gate_up_addr);
+    ShardView w_shard(w);
+    CircularBuffer cb(shared.cb_gate_up);
+    for (uint32_t c = 0; c < k_tiles / shared.chunk_k; ++c) {
+        cb.reserve_back(chunk_tiles);
+        noc.async_read(
+            w_shard, cb, chunk_bytes, {.shard_id = tile, .offset_bytes = c * chunk_bytes}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb.push_back(chunk_tiles);
+    }
+}
+
+// Read the group's shared down rows for H-slice `h_shard` ([group_tiles, 2] tiles, row j being
+// I-tile group + j * num_groups) into one [slots, 2] slot of cb_down.
+template <typename Args>
+inline void fetch_shared_down(
+    const Noc& noc,
+    const SharedExpert& shared,
+    const Args& args,
+    uint32_t group,
+    uint32_t group_tiles,
+    uint32_t num_groups,
+    uint32_t h_shard) {
+    constexpr uint32_t kOutTilesPerCore = 2;
+    const uint32_t row_bytes = kOutTilesPerCore * shared.down_tile_bytes;
+    const auto w = TensorAccessor(args, shared.down_addr);
+    ShardView w_shard(w);
+    CircularBuffer cb(shared.cb_down);
+    cb.reserve_back(shared.slots * kOutTilesPerCore);
+    for (uint32_t j = 0; j < group_tiles; ++j) {
+        const uint32_t tile = group + j * num_groups;
+        noc.async_read(
+            w_shard,
+            cb,
+            row_bytes,
+            {.shard_id = tile * shared.num_h_shards + h_shard},
+            {.offset_bytes = j * row_bytes});
+    }
+    noc.async_read_barrier();
+    cb.push_back(shared.slots * kOutTilesPerCore);
+}
+
+template <typename GateUpArgs, typename DownArgs, typename SharedGateUpArgs, typename SharedDownArgs>
 inline void run_reader_loop(
     const Noc& noc,
     uint32_t num_active,
@@ -477,7 +573,10 @@ inline void run_reader_loop(
     const ActGatherConfig& gather,
     uint32_t sem_reduce_id,
     uint32_t cb_reduce_id,
-    uint32_t down_local) {
+    uint32_t down_local,
+    const SharedExpert& shared,
+    const SharedGateUpArgs& shared_gate_up_args,
+    const SharedDownArgs& shared_down_args) {
     constexpr uint32_t kOutTilesPerCore = 2;
     const bool is_hub = gather.role != 0;
 
@@ -491,10 +590,28 @@ inline void run_reader_loop(
         const bool is_root = expert_group == 0 && down_core;
         const uint32_t out_tiles = shards_per_core * kOutTilesPerCore;
         const uint32_t reduce_tiles = (num_expert_groups - 1u) * out_tiles;
+        // The group's shared-expert tiles follow its routed activation in the cb_act block, which
+        // every group sizes for the largest share so the pages stay in step chip-wide.
+        const uint32_t shared_tiles = shared_tiles_of_group(shared.i_tiles, expert_group, num_expert_groups);
+        const uint32_t act_tiles = i_tiles + shared.slots;
+        const bool shared_core = local_idx >= kSharedFirstLocal && local_idx < kSharedFirstLocal + shared_tiles;
+
+        auto fetch_shared_down_slice = [&](uint32_t j) {
+            if (shared_tiles > 0) {
+                fetch_shared_down(
+                    noc,
+                    shared,
+                    shared_down_args,
+                    expert_group,
+                    shared_tiles,
+                    num_expert_groups,
+                    down_local * shards_per_core + j);
+            }
+        };
 
         CircularBuffer cb_act(cb_act_id);
         if (is_hub) {
-            cb_act.reserve_back(i_tiles);
+            cb_act.reserve_back(act_tiles);
         }
         if (is_root) {
             CircularBuffer cb_reduce(cb_reduce_id);
@@ -515,6 +632,14 @@ inline void run_reader_loop(
                     local_idx * i_shards_per_core + s,
                     gate_up_args,
                     ct_gu_addr_base);
+            }
+            if (shared_core) {
+                fetch_shared_gate_up(
+                    noc,
+                    shared,
+                    shared_gate_up_args,
+                    expert_group + (local_idx - kSharedFirstLocal) * num_expert_groups,
+                    k_tiles);
             }
         }
 
@@ -550,6 +675,7 @@ inline void run_reader_loop(
                     down_local * shards_per_core + j_down,
                     down_args,
                     ct_down_addr_base);
+                fetch_shared_down_slice(j_down);
             }
         }
 
@@ -557,24 +683,28 @@ inline void run_reader_loop(
             DeviceZoneScopedN("FE_SYNC");
             if (is_hub) {
                 // Single expert per group, so each hub multicasts its own column range of that one
-                // expert; `num_producers` chunks is the whole gather target (every core of the group
-                // owns a chunk, so there are no slot-free acks).
+                // expert; `num_producers` chunks plus one per shared tile is the whole gather target
+                // (every core of the group owns a chunk, so there are no slot-free acks). The shared
+                // tiles sit right after the routed ones and belong to the last hub, whose range
+                // therefore stays contiguous.
                 const bool is_hub0 = gather.role == 1;
+                const uint32_t act_cols = i_tiles + shared_tiles;
                 const uint32_t region_first = is_hub0 ? 0u : gather.split_col;
-                const uint32_t region_cols = is_hub0 ? gather.split_col : (i_tiles - gather.split_col);
+                const uint32_t region_cols =
+                    is_hub0 ? (gather.num_hubs > 1 ? gather.split_col : act_cols) : (act_cols - gather.split_col);
                 const uint32_t act_l1 = cb_act.get_write_ptr();
                 hub_gather_broadcast_block(
                     noc,
                     cb_act_id,
                     act_l1,
-                    i_tiles,
+                    act_tiles,
                     /*next_block_act_tiles=*/0u,
                     act_tile_bytes,
                     /*block_experts=*/1u,
-                    i_tiles,
+                    act_tiles,
                     region_first,
                     region_cols,
-                    /*gather_target=*/num_producers,
+                    /*gather_target=*/num_producers + shared_tiles,
                     sem_gather_id,
                     sem_bcast_id,
                     /*blocks_done=*/gather.num_hubs,
@@ -589,7 +719,7 @@ inline void run_reader_loop(
                 receiver_recv_act_block(
                     noc,
                     cb_act_id,
-                    i_tiles,
+                    act_tiles,
                     sem_bcast_id,
                     sem_gather_id,
                     /*blocks_done=*/gather.num_hubs,
@@ -612,6 +742,7 @@ inline void run_reader_loop(
                     down_local * shards_per_core + j_down,
                     down_args,
                     ct_down_addr_base);
+                fetch_shared_down_slice(j_down);
             }
         }
 
