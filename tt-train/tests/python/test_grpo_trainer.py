@@ -1028,7 +1028,26 @@ def _failing_reward(completions, **kwargs):
     raise ValueError("reward failed")
 
 
-def _trainer_with_remote_rollout(monkeypatch, client, reward_funcs):
+def _zero_reward(completions, **kwargs):
+    return [0.0] * len(completions)
+
+
+class _FailingTrainBegin(TrainerCallback):
+    def on_train_begin(self, trainer):
+        raise ValueError("on_train_begin failed")
+
+
+def _remote_grpo_config():
+    return GRPOConfig(
+        **{
+            **_HOST_GRPO_CONFIG,
+            "rollout_backend": "ttt_remote_sync",
+            "remote_rollout": RemoteRolloutConfig(mesh_shape=[1, 1], max_batch_size=1, max_seq_len=64),
+        }
+    )
+
+
+def _trainer_with_remote_rollout(monkeypatch, client, reward_funcs, callbacks=()):
     """A real GRPOTrainer on the ttt_remote_sync backend whose rollouts go through ``client``.
     Device, fabric and MPI setup are patched out."""
 
@@ -1049,33 +1068,33 @@ def _trainer_with_remote_rollout(monkeypatch, client, reward_funcs):
     monkeypatch.setattr(grpo_trainer_module, "is_rollout_rank", lambda config: False)
     monkeypatch.setattr(GRPOTrainer, "_build_policy", build_policy)
     monkeypatch.setattr(sync_remote_rollout_batch_source, "weights_ref_hf_dict", lambda model: {})
-    config = GRPOConfig(
-        **{
-            **_HOST_GRPO_CONFIG,
-            "rollout_backend": "ttt_remote_sync",
-            "remote_rollout": RemoteRolloutConfig(mesh_shape=[1, 1], max_batch_size=1, max_seq_len=64),
-        }
-    )
     return GRPOTrainer(
         transformer_config=SimpleNamespace(model_type="llama"),
         device_config=SimpleNamespace(enable_fsdp=False),
         model_source=HF_MODEL_ID,
         dataset_func=lambda: None,
-        config=config,
+        config=_remote_grpo_config(),
         reward_funcs=reward_funcs,
         optimizer_dict={},
+        callbacks=list(callbacks),
     )
 
 
-def test_failed_trainer_shuts_down_the_rollout_server(mpi_loopback, monkeypatch, expect_error):
-    """A trainer that fails mid-run sends OP_SHUTDOWN; the rollout server stops and closes its
+@pytest.mark.parametrize(
+    "reward_func, callbacks, message",
+    [(_failing_reward, [], "reward failed"), (_zero_reward, [_FailingTrainBegin()], "on_train_begin failed")],
+)
+def test_failed_trainer_shuts_down_the_rollout_server(
+    mpi_loopback, monkeypatch, expect_error, reward_func, callbacks, message
+):
+    """A trainer that fails before or during training sends OP_SHUTDOWN; the rollout server stops and closes its
     sampler, and the atexit backstop sends nothing more."""
     queues, at_exit = mpi_loopback
     sampler = _EchoSampler()
     client, server_thread = _start_rollout_server(sampler)
-    trainer = _trainer_with_remote_rollout(monkeypatch, client, reward_funcs=[_failing_reward])
+    trainer = _trainer_with_remote_rollout(monkeypatch, client, reward_funcs=[reward_func], callbacks=callbacks)
 
-    with expect_error(ValueError, "reward failed"):
+    with expect_error(ValueError, message):
         trainer.train()
 
     server_thread.join(timeout=30)
@@ -1084,6 +1103,24 @@ def test_failed_trainer_shuts_down_the_rollout_server(mpi_loopback, monkeypatch,
     assert at_exit == [client.shutdown]
     at_exit[0]()
     assert queues[mpi_rollout._INFER_REQ_HDR_TAG].empty()
+
+
+@pytest.mark.parametrize(
+    "model_type, enable_fsdp, local_source, message",
+    [
+        ("qwen3", False, False, "supports Llama models only"),
+        ("llama", True, False, "does not support FSDP"),
+        ("llama", False, True, "needs a HuggingFace Hub model id"),
+    ],
+)
+def test_validate_remote_inputs_rejects(tmp_path, expect_error, model_type, enable_fsdp, local_source, message):
+    with expect_error(ValueError, message):
+        grpo_trainer_module._validate_remote_inputs(
+            _remote_grpo_config(),
+            SimpleNamespace(model_type=model_type),
+            SimpleNamespace(enable_fsdp=enable_fsdp),
+            str(tmp_path) if local_source else HF_MODEL_ID,
+        )
 
 
 class _RepeatSampler(_EchoSampler):
