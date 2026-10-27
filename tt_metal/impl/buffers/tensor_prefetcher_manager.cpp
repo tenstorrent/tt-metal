@@ -1752,23 +1752,26 @@ void TensorPrefetcherManager::queue_to_target(
 }
 
 void TensorPrefetcherManager::require_receivers_off_sender_cces(const RequestTarget& target) const {
-    const metal_SocDescriptor& soc_desc = MetalContext::instance(mesh_device_->impl().get_context_id())
-                                              .get_cluster()
-                                              .get_soc_desc(devices_.front()->id());
-    std::unordered_set<uint32_t> sender_cces;
-    for (const CoreCoord& sender_logical : sender_logical_cores_) {
-        sender_cces.insert(package_dram_core_index(soc_desc, sender_logical));
-    }
-    for (const std::pair<CoreCoord, CoreRangeSet>& sender_and_receivers : target.mapping) {
-        for (const CoreCoord& receiver : corerange_to_cores(sender_and_receivers.second)) {
-            const uint32_t receiver_cce = package_dram_core_index(soc_desc, receiver);
-            TT_FATAL(
-                !sender_cces.contains(receiver_cce),
-                "QueueTensorPrefetcherRequest: receiver CCE {} (logical {}) is one of this prefetcher's provisioned "
-                "sender CCEs, so its receiver Program cannot run while the prefetcher does. Leave its bank out of "
-                "QuasarTensorPrefetcherConfig::dram_sender_banks.",
-                receiver_cce,
-                receiver.str());
+    const Cluster& cluster = MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster();
+    // Logical-to-CCE resolution follows each device's DRAM harvesting, so every device is checked.
+    for (const IDevice* device : devices_) {
+        const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(device->id());
+        std::unordered_set<uint32_t> sender_cces;
+        for (const CoreCoord& sender_logical : sender_logical_cores_) {
+            sender_cces.insert(package_dram_core_index(soc_desc, sender_logical));
+        }
+        for (const std::pair<CoreCoord, CoreRangeSet>& sender_and_receivers : target.mapping) {
+            for (const CoreCoord& receiver : corerange_to_cores(sender_and_receivers.second)) {
+                const uint32_t receiver_cce = package_dram_core_index(soc_desc, receiver);
+                TT_FATAL(
+                    !sender_cces.contains(receiver_cce),
+                    "QueueTensorPrefetcherRequest: receiver CCE {} (logical {}) on device {} is one of this "
+                    "prefetcher's provisioned sender CCEs, so its receiver Program cannot run while the prefetcher "
+                    "does. Leave its bank out of QuasarTensorPrefetcherConfig::dram_sender_banks.",
+                    receiver_cce,
+                    receiver.str(),
+                    device->id());
+            }
         }
     }
 }
