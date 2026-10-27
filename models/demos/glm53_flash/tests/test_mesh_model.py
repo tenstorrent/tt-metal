@@ -63,7 +63,7 @@ def test_mesh_model_chain_and_perf(mesh_device):
         cfg,
         layers,
         max_batch=B,
-        max_seq_len=256,
+        max_seq_len=int(os.environ.get("GLM53_MODEL_MAX_SEQ_LEN", "256")),  # 1048576 = the served capacity
         weight_cache_path=CACHE_ROOT,
         expert_dtype=EXPERT_DTYPE,
         expert_down_dtype=EXPERT_DOWN_DTYPE,
@@ -244,7 +244,7 @@ def test_mesh_model_ttft(mesh_device):
         cfg,
         layers,
         max_batch=B,
-        max_seq_len=512,
+        max_seq_len=int(os.environ.get("GLM53_MODEL_MAX_SEQ_LEN", "512")),
         weight_cache_path=CACHE_ROOT,
         expert_dtype=EXPERT_DTYPE,
         expert_down_dtype=EXPERT_DOWN_DTYPE,
