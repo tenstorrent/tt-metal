@@ -83,7 +83,10 @@ def test_the_probe_sizes_its_build_and_its_floor_from_one_value():
 
     from pathlib import Path
 
-    src = Path("scripts/tt_hw_planner/commands/emit_e2e.py").read_text()
+    # Anchored at the repo, not at the caller's cwd: a relative path made this test pass from
+    # the repo root and fail from the package directory, on identical code.
+    repo = Path(__file__).resolve().parents[4]
+    src = (repo / "scripts" / "tt_hw_planner" / "commands" / "emit_e2e.py").read_text()
     tpl = re.search(r'_STACK_PROBE = """(.*?)"""', src, re.S).group(1)
     assert "layers={cap}" in tpl, "the probe build must be sized by the cap placeholder"
     assert "stack_member_floor({cap})" in tpl, "the floor must come from the SAME cap"

@@ -9,7 +9,9 @@ retry after any unclean end resets first, the remedy follows the evidence, and a
 is never thrown away for a later one that crashed.
 """
 
+import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -39,8 +41,11 @@ def _quiet(monkeypatch):
     probes._NODE_ID_CACHE.clear()
 
 
-def _scripted(steps, seen_env):
-    """Each step is (exit code, log text, write a CSV?); the CSV names its attempt."""
+def _scripted(steps, seen_env, stamp=None):
+    """Each step is (exit code, log text, write a CSV?); the CSV names its attempt.
+
+    `stamp`, when given, forces every CSV to the same mtime -- see the tie test below.
+    """
     n = [0]
 
     def execute(cmd, cwd, env, timeout_s, log_path):
@@ -51,19 +56,22 @@ def _scripted(steps, seen_env):
         if csv:
             d = Path(cmd[cmd.index("-o") + 1]) / "reports" / ("ts%d" % n[0])
             d.mkdir(parents=True, exist_ok=True)
-            (d / "ops_perf_results_x.csv").write_text("OP CODE,ATTEMPT\nMatmul,%d\n" % n[0])
+            out = d / "ops_perf_results_x.csv"
+            out.write_text("OP CODE,ATTEMPT\nMatmul,%d\n" % n[0])
+            if stamp is not None:
+                os.utime(out, (stamp, stamp))
         return code
 
     return execute
 
 
-def _run(tmp_path, steps):
+def _run(tmp_path, steps, stamp=None):
     envs, resets = [], []
     rp = probes.make_run_profiled(
         tmp_path,
         "t.py",
         "S128",
-        execute=_scripted(steps, envs),
+        execute=_scripted(steps, envs, stamp),
         collect_runner=_collect_one,
         device_reset=lambda **kw: resets.append(kw) or True,
         extra_env={probes.PERF_FLUSH_EVERY_ENV: "4"},
@@ -213,3 +221,25 @@ def test_every_tool_launched_pytest_turns_pytests_timeout_off():
     cmd = probes.build_tracy_command("t.py", None, "/tmp/out")
     i = cmd.index("pytest")
     assert cmd[i + 1 : i + 3] == list(probes.PYTEST_NO_TIMEOUT)
+
+
+def test_two_attempts_sharing_one_mtime_still_resolve_to_the_retry(tmp_path):
+    """The clock cannot separate them, so the result must not be decided by directory order.
+
+    Attempts that finish inside one filesystem timestamp tick land on the SAME mtime -- observed
+    here with real writes, both stamped 1793137690.562393 -- and the dropped-marker attempt then
+    passed the watermark and tied the sort. `found[-1]` returned whichever the glob listed last,
+    so roughly a third of runs reported the attempt that LOST markers as the clean retry's result:
+    a wrong measurement, reported with no warning, from the tool whose job is measuring.
+
+    Here the tie is forced rather than raced, so the guarantee is pinned instead of sampled.
+    """
+    # One shared mtime, comfortably past the watermark each attempt takes when it starts -- the
+    # point is the tie between the two attempts, not whether they clear the watermark.
+    stamp = time.time() + 60.0
+    csv, envs, _ = _run(tmp_path, [(0, _burst(), True), (0, "1 passed", True)], stamp=stamp)
+    tied = sorted((tmp_path / "profiles" / "tracy_out").rglob("ops_perf_results_*.csv"))
+    assert len(tied) == 2, "both attempts must have written a CSV for this to be a tie at all"
+    assert len({p.stat().st_mtime_ns for p in tied}) == 1, "the mtimes are not actually tied"
+    assert len(envs) == 2, "the dropped-marker attempt was retried"
+    assert csv.read_text().endswith("Matmul,2\n"), "the tie resolved to the earlier attempt"

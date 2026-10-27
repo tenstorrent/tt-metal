@@ -44,7 +44,10 @@ def test_the_profiled_run_gates_before_building_the_model():
     board is how a profile ends up sampled entirely at the clamped 800 MHz."""
     src = (_PA / "agent" / "probes.py").read_text()
     i = src.index("def run_profiled(")
-    body = src[i : i + 4000]
+    # Read the WHOLE nested body, not a fixed byte window. A 4000-char window passed until the
+    # command build moved four lines down (2026-10-27, the mid-run-dump decision) and then failed
+    # on a function whose ordering was still correct -- a brittle probe, not a real regression.
+    body = src[i : src.index("\ndef ", i + 1)]
     assert "_wait_for_thermal_headroom_before_device_work" in body, "profiled runs launch ungated"
     assert body.index("_wait_for_thermal_headroom_before_device_work") < body.index(
         "build_tracy_command"

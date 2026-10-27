@@ -567,6 +567,17 @@ _CRASH_RE = re.compile(
     r"|loc\([^\n]*\):\s*error:[^\n]*|ttmlir[^\n]*?error[^\n]*)"
 )
 _DEVICE_CRASH_RE = re.compile(r"Segmentation fault|core dumped|Aborted|terminate called|libc\+\+abi")
+# The kernel or the cgroup took the run out for memory. Distinct from a device crash: nothing is
+# wedged and no reset helps -- the capture simply needs to stop holding its markers (see
+# mid_run_dump_default).
+_MEMORY_KILL_RE = re.compile(
+    r"Out of memory|out-of-memory|oom[-_]kill|Killed process|MemoryError|std::bad_alloc", re.IGNORECASE
+)
+# 128+SIGKILL: what a cgroup memory kill leaves as the exit code when nothing was logged.
+_SIGKILL_EXIT = 137
+_MID_RUN_DUMP_ENV = "PERF_MCP_PROFILER_MID_RUN_DUMP"
+_PUSH_DEVICE_TO_TRACY_ENV = "PERF_MCP_PROFILER_PUSH_DEVICE_TO_TRACY"
+_FLAG_OFF_WORDS = ("0", "false", "no", "off")
 # pytest end-of-run summary: BOTH "failed" and "error" (collection/fixture errors print as
 # "N errors", never "failed") mark a non-passing run.
 _TEST_FAILED_RE = re.compile(r"=+\s*(\d+)\s+(?:failed|error)", re.IGNORECASE)
@@ -2324,6 +2335,80 @@ def preflight_collect(
     return n
 
 
+def memory_killed(code, log_text: str) -> bool:
+    """Did this attempt die because the host ran out of memory, rather than because anything broke?
+
+    A cgroup kill leaves 137 and often no message at all -- the process is gone before it can log --
+    so the exit code counts as evidence on its own. Everything else about the attempt looks like a
+    clean failure, which is why this needs asking separately."""
+    if code == _SIGKILL_EXIT:
+        return True
+    return bool(_MEMORY_KILL_RE.search(log_text or ""))
+
+
+def mid_run_dump_default(drain_loaded: bool, env=None) -> bool:
+    """Should each profiler read be written out mid-run instead of held in host memory until exit?
+
+    WHY THIS IS NO LONGER ALWAYS-ON WHEN THE DRAIN LOADS. It was introduced for a 32-chip WH Galaxy
+    (2026-09-28) whose profiled worker reached 320 GB resident growing 2.5 GB/min -- tt-metal holds
+    every marker read until the final dump -- and it was wired to "is the drain plugin loaded",
+    which is true on every box. That is a memory remedy gated on something that is not memory.
+
+    It is not free. Measured on a T3K 2x4 (2026-10-27), the SAME capture with the drain loaded and
+    nothing else changed: vision_encode 1m43s with the dump off, 24+ min with it on -- a ~14x
+    slowdown, because every read writes out instead of buffering. A whole-pipeline capture went
+    from 27 minutes to over ten hours, past the discovery ceiling, and the run was killed with no
+    baseline. That box has 503 GB and the capture peaked well inside it, so it was paying the
+    slowdown to prevent an overflow that could not happen.
+
+    SO: ASK THE MACHINE, DO NOT PREDICT IT. Start without the dump and let the run tell us -- if the
+    host really cannot hold the markers, the attempt dies with a memory kill and the caller retries
+    with the dump on (see memory_killed). A wrong guess costs one attempt; the previous behaviour
+    cost every run on every box that did not need it. Galaxy still gets the dump, on its second
+    attempt, without a threshold anyone had to pick.
+
+    PERF_MCP_PROFILER_MID_RUN_DUMP forces it either way for an operator who already knows.
+    """
+    if not drain_loaded:
+        return False
+    return bool(_forced_profiler_flag(_MID_RUN_DUMP_ENV, env))
+
+
+def push_device_to_tracy_default(env=None) -> bool:
+    """Should device markers be pushed into the tracy stream as well as the device log?
+
+    SAME WIRING MISTAKE AS ABOVE, SAME CORRECTION. This was `push_device_to_tracy=not _drain`, so
+    the one fact "the tool's own tree is importable" decided a question about tracy-capture's
+    appetite for device markers. It is not evidence about that, and the two parted company exactly
+    where it mattered: with no drain the push came back on.
+
+    It loses captures. Measured here 2026-10-27: a run that pushed device markers finished 31
+    minutes of device work and then tracy-capture died of SIGSEGV before writing a trace, so there
+    was no .tracy at all. The same pipeline with the push disabled wrote a 41 MB device perf report
+    of 167,888 rows.
+
+    And it buys nothing the report needs. Device markers reach the device log either way, and the
+    ops report is built from that log; the tracy stream carries the host side. The push is only
+    worth having when a person wants device zones in the tracy GUI, so that person asks for it with
+    PERF_MCP_PROFILER_PUSH_DEVICE_TO_TRACY.
+    """
+    return bool(_forced_profiler_flag(_PUSH_DEVICE_TO_TRACY_ENV, env))
+
+
+def _forced_profiler_flag(name: str, env=None) -> bool | None:
+    """An explicit yes/no for one profiler switch, or None when nobody said anything.
+
+    Both switches above default off and are overridable the same way, so one place decides what
+    counts as set and what counts as off; two copies would let "off" mean different things.
+    `env` is the profiled run's environment, falling back to this process's.
+    """
+    src = env if isinstance(env, dict) else os.environ
+    raw = str(src.get(name) or os.environ.get(name) or "").strip()
+    if not raw:
+        return None
+    return raw.lower() not in _FLAG_OFF_WORDS
+
+
 def profiler_drain_plugin(tt_metal_root) -> str | None:
     """The dotted name the profiled pytest imports agent/profiler_drain by, from where this tool sits
     in the tree it profiles; None when the tool lives outside it (the run then goes without)."""
@@ -2419,14 +2504,23 @@ def make_run_profiled(
         # device markers out of the tracy stream: every marker held until exit was 320 GB and
         # climbing, and pushed into tracy it segfaulted tracy-capture (WH Galaxy, 2026-09-28).
         _drain = profiler_drain_plugin(root)
-        cmd = build_tracy_command(
-            node_id,
-            None,
-            out_dir,
-            plugins=(_drain,) if _drain else (),
-            mid_run_dump=bool(_drain),
-            push_device_to_tracy=not _drain,
-        )
+        # The dump is the one of the three that is NOT free -- see mid_run_dump_default. It starts
+        # off and is turned on by a memory kill, so a box that needs it gets it and a box that does
+        # not keeps its speed.
+        mid_run_dump = mid_run_dump_default(bool(_drain), env)
+        mem_retry = 0
+
+        def _build_cmd():
+            return build_tracy_command(
+                node_id,
+                None,
+                out_dir,
+                plugins=(_drain,) if _drain else (),
+                mid_run_dump=mid_run_dump,
+                push_device_to_tracy=push_device_to_tracy_default(env),
+            )
+
+        cmd = _build_cmd()
         support_count = int(env.get(_SUPPORT_COUNT_ENV) or 0)
         t_start = time.monotonic()
         partial_reason = None
@@ -2437,6 +2531,7 @@ def make_run_profiled(
         # markers or a later one crashes: {"drops", "csv", "log", "reason"}.
         best = None
         kept = None  # the attempt the result comes from when it is not the last one run
+        csv_before: dict[Path, int] = {}  # CSVs already on disk when the current attempt started
 
         def _set_aside_log() -> Path | None:
             # Each launch reopens log_path for writing; keep the finished attempt's log as
@@ -2462,15 +2557,59 @@ def make_run_profiled(
             _kill = {"fault_is_certain": True} if _dr.reset_is_mandatory_after_kill(env=env) else {}
             device_reset(error_text=error_text, **_kill)
 
-        def _find_csv(watermark: float) -> Path | None:
+        # The two places a profiled run may leave its ops CSV, as (base, pattern). Named once so
+        # the pre-attempt snapshot and the search that consults it cannot look in different places.
+        _CSV_SEARCH = ((out_dir, "**/ops_perf_results_*.csv"), (root, "generated/profiler/**/ops_perf_results_*.csv"))
+
+        def _csv_marks() -> dict[Path, int]:
+            """path -> mtime_ns for every CSV _find_csv could pick, read before an attempt runs.
+
+            THE WATERMARK ALONE CANNOT TELL TWO ATTEMPTS APART. It is a wall-clock instant with
+            50 ms of slack for clock-vs-filesystem skew, so two attempts that finish inside one
+            filesystem timestamp tick get the SAME mtime: the earlier attempt's CSV passes
+            `mtime > watermark` and then TIES the sort, and which one `found[-1]` returns is
+            directory order. Reproduced here 2026-10-27 -- both attempts' CSVs stamped
+            1793137690.562393 -- and the retry then reported the dropped-marker attempt's numbers
+            as if they were the clean one's, in about a third of trials.
+
+            Comparing a file against its own recorded mtime answers "was this written by THIS
+            attempt" exactly: no clock, no slack, no granularity to lose. The watermark stays as
+            the cheap first filter and as the answer for files that did not exist at all.
+            """
+            marks: dict[Path, int] = {}
+            for base, pattern in _CSV_SEARCH:
+                for path in base.glob(pattern):
+                    try:
+                        marks[path] = path.stat().st_mtime_ns
+                    except OSError:  # vanished between glob and stat
+                        pass
+            return marks
+
+        def _find_csv(watermark: float, before: dict[Path, int] | None = None) -> Path | None:
+            before = before or {}
+
+            def _written_by_this_attempt(path: Path) -> bool:
+                try:
+                    st = path.stat()
+                except OSError:
+                    return False
+                if before.get(path) == st.st_mtime_ns:
+                    return False  # untouched since this attempt started, whatever the clock says
+                return st.st_mtime > watermark
+
+            # Newest wins, with the path as a final tiebreak so a remaining tie is at least the
+            # same answer every time rather than whatever order the directory happened to list in.
+            def _newest_first(path: Path) -> tuple[int, str]:
+                return (path.stat().st_mtime_ns, str(path))
+
             # layer 1: directed output (-o). out_dir PERSISTS across iterations, so a PRIOR
             # run's CSV is still sitting here -- filter to THIS run (mtime > watermark) or the
             # glob can return the stale baseline. That stale-CSV reuse made every REMEASURE
             # re-read the baseline, so real edits measured identical to baseline and were
             # wrongly flagged inert/no-gain and reverted (the "zero gains" root cause).
             found = sorted(
-                (p for p in out_dir.glob("**/ops_perf_results_*.csv") if p.stat().st_mtime > watermark),
-                key=lambda p: p.stat().st_mtime,
+                (p for p in out_dir.glob(_CSV_SEARCH[0][1]) if _written_by_this_attempt(p)),
+                key=_newest_first,
             )
             # layer 2: the stdout path is AUTHORITATIVE -- tracy logs the exact CSV it wrote for
             # THIS run ("OPs csv generated at: <path>"). Trust it over the glob, which can tie or
@@ -2488,12 +2627,8 @@ def make_run_profiled(
             # layer 3: watermark fallback in the shared area
             if not found:
                 found = sorted(
-                    (
-                        p
-                        for p in root.glob("generated/profiler/**/ops_perf_results_*.csv")
-                        if p.stat().st_mtime > watermark
-                    ),
-                    key=lambda p: p.stat().st_mtime,
+                    (p for p in root.glob(_CSV_SEARCH[1][1]) if _written_by_this_attempt(p)),
+                    key=_newest_first,
                 )
             return found[-1] if found else None
 
@@ -2502,6 +2637,7 @@ def make_run_profiled(
                 env[_SUPPORT_COUNT_ENV] = str(support_count)
             for _attempt in range(retries + 1):
                 watermark = time.time() - 0.05
+                csv_before = _csv_marks()
                 try:
                     code = execute(cmd, root, env, timeout_s, log_path)
                     break
@@ -2524,6 +2660,22 @@ def make_run_profiled(
                 break
             if code != 0:
                 log_text = log_path.read_text(errors="ignore") if log_path.is_file() else ""
+                # THE HOST COULD NOT HOLD THE MARKERS -- the one failure the mid-run dump exists to
+                # prevent, and the reason it no longer runs on every box by default. Turn it on and
+                # profile again. Once only: with the dump already on, memory is not what this
+                # attempt is about, and a second flip would loop.
+                if not mid_run_dump and mem_retry < 1 and memory_killed(code, log_text):
+                    mem_retry += 1
+                    mid_run_dump = True
+                    cmd = _build_cmd()
+                    with open(log_path, "a") as fh:
+                        fh.write(
+                            "\n[harness] the host ran out of memory holding profiler markers; "
+                            "re-profiling with --dump-device-data-mid-run (each read released)\n"
+                        )
+                    _set_aside_log()
+                    _reset_before_retry(log_text)
+                    continue
                 # A device or capture-tool crash (the tracy capture tool segfaulting at shutdown
                 # after "1 passed", WH Galaxy 2026-09-28) leaves no CSV and a dirty board: reset
                 # and run again. Any other non-zero exit is tracy's own verdict, raised as before.
@@ -2595,7 +2747,7 @@ def make_run_profiled(
             # EVERY MARKER OR ANOTHER ATTEMPT. A dropped marker is a missing op, and a profile
             # missing ops ranks the wrong ones; retry while attempts remain, with the knob the drop
             # evidence points at, and keep the cleanest finished attempt in case none is complete.
-            _csv = _find_csv(watermark)
+            _csv = _find_csv(watermark, csv_before)
             _new_best = _csv is not None and (best is None or evidence["drops"] < best["drops"])
             if _new_best:
                 _copy = profiles_dir / ("run%d_raw.csv.best" % i)
@@ -2629,7 +2781,7 @@ def make_run_profiled(
             _reset_before_retry(log_text)
         wall_ms = (time.monotonic() - t_start) * 1000.0
 
-        newest = None if kept is not None else _find_csv(watermark)
+        newest = None if kept is not None else _find_csv(watermark, csv_before)
         if newest is None and kept is None and best is not None:
             kept, partial_reason = best, best["reason"]  # the last attempt left no CSV
         if kept is not None:

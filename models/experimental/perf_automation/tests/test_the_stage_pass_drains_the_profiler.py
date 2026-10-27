@@ -249,8 +249,19 @@ def test_make_run_profiled_passes_it(tmp_path, monkeypatch):
     with pytest.raises(probes.TracyRunError):  # allow-pytest.raises: no expect_error fixture
         rp("e2e", 1, 128, tmp_path / "profiles", 0)
     assert seen and seen[0][seen[0].index("x.profiler_drain") - 1] == "-p"
-    assert "--dump-device-data-mid-run" in seen[0]
     assert "--disable-device-data-push-to-tracy" in seen[0], "device markers stay out of tracy-capture"
+    # BEHAVIOUR CHANGE, 2026-10-27: this used to assert --dump-device-data-mid-run was ALSO passed,
+    # because the drain and the dump were wired to the same condition. They answer different
+    # questions -- the drain is about buffers filling on device, the dump is about the HOST running
+    # out of memory holding what was drained -- and the dump costs ~14x wall-clock on a T3K (a
+    # 27-minute capture became 10.5 hours). It is now off unless asked for; the drain is unchanged.
+    assert "--dump-device-data-mid-run" not in seen[0], "the dump is no longer implied by the drain"
+
+    seen.clear()
+    monkeypatch.setenv("PERF_MCP_PROFILER_MID_RUN_DUMP", "1")
+    with pytest.raises(probes.TracyRunError):  # allow-pytest.raises: no expect_error fixture
+        rp("e2e", 1, 128, tmp_path / "profiles", 0)
+    assert "--dump-device-data-mid-run" in seen[0], "a host that needs the dump cannot ask for it"
 
 
 def test_a_read_by_the_tests_own_wrapper_is_not_repeated(profiling, small_buffer, monkeypatch):
