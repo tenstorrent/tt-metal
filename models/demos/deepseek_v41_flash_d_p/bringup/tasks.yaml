@@ -10409,12 +10409,18 @@ tasks:
   gate:
     cmd: BRINGUP_CAPTURE_FORKS=models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh
       --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture
-      && python -m models.demos.common.bringup.testing.fork_cases --capture models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls.json
-      --run-tests
+      && DS41_MOE_IMPL=block BRINGUP_CAPTURE_FORKS=models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls_block.json
+      BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      -p models.demos.common.bringup.testing.fork_capture && python -m models.demos.common.bringup.testing.fork_cases
+      --capture models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls.json models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls_block.json
+      --run-tests --lint
     metrics:
       forks_used: '>= 0'
       fork_calls_uncovered: == 0
       fork_tests_failed: == 0
+      fork_cases_lint: == 0
+      fork_tests_passed: '>= 0'
+      fork_tests_skipped: '>= 0'
   role: optests
   paths:
   - ttnn/ttnn/bringup
