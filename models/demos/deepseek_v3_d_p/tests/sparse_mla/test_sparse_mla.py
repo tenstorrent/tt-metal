@@ -991,25 +991,31 @@ def test_sparse_mla_rotated_chunked(
 # single-shot CPU reference: 8x4 at 2,048 vs 5,120 (256 vs 640 query rows per chip, the workload test's
 # configs), 2x4 at 1,280 vs 2,560. The GLM-5.3 workload's KV diverges between chunk sizes after the first MoE
 # layer; this isolates the sparse MLA. The total is a whole number of chunks at both sizes.
+# (mesh, SP mesh axis, device params, total tokens, chunk sizes). A 4x4 stage (a galaxy tray half) runs SP on its
+# axis-1 ring at 2.5K / 5K chunks (640 / 1,280 rows per chip); the LoudBox 4x2 is its analog at half scale and
+# needs the 4x2 mesh graph descriptor (the LoudBox auto-discovers as 2x4).
 _CHUNK_SIZE_CASES = [
-    ((8, 4), 10240, [2048, 5120]),
-    ((2, 4), 7680, [1280, 2560]),
+    ((8, 4), 0, torus_xy_device_params(worker_l1_size=_worker_l1_size()), 10240, [2048, 5120]),
+    ((2, 4), 0, fabric2d_device_params(worker_l1_size=_worker_l1_size()), 7680, [1280, 2560]),
+    ((4, 4), 1, torus_x_device_params(worker_l1_size=_worker_l1_size()), 10240, [2560, 5120]),
+    ((4, 2), 1, fabric2d_device_params(worker_l1_size=_worker_l1_size()), 7680, [1280, 2560]),
 ]
 
 
 @pytest.mark.parametrize(
-    "variant, mesh_device, device_params, total, chunk",
+    "variant, mesh_device, device_params, sp_axis, total, chunk",
     [
         pytest.param(
             "glm_5_3",
             mesh,
-            _device_params_for_mesh(mesh),
+            device_params,
+            sp_axis,
             total,
             chunk,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=f"mesh-{mesh[0]}x{mesh[1]}"),
-            id=f"glm_5_3-shape-{mesh[0]}x{mesh[1]}-c{chunk}",
+            id=f"glm_5_3-shape-{mesh[0]}x{mesh[1]}{'-sp1' if sp_axis else ''}-c{chunk}",
         )
-        for mesh, total, chunks in _CHUNK_SIZE_CASES
+        for mesh, sp_axis, device_params, total, chunks in _CHUNK_SIZE_CASES
         for chunk in chunks
     ],
     indirect=["variant", "mesh_device", "device_params"],
@@ -1017,10 +1023,18 @@ _CHUNK_SIZE_CASES = [
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_chunk_size_vs_reference(
-    mesh_device, total, chunk, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+    mesh_device, sp_axis, total, chunk, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
 ):
     run_sparse_mla_rotated_case(
-        variant, config_only, mesh_device, [chunk] * (total // chunk), chunk, ds_layer, ds_checkpoint, ds_repo
+        variant,
+        config_only,
+        mesh_device,
+        [chunk] * (total // chunk),
+        chunk,
+        ds_layer,
+        ds_checkpoint,
+        ds_repo,
+        sp_axis=sp_axis,
     )
 
 
