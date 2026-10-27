@@ -367,7 +367,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
 }
 
 bool assign_runtime_args_to_program(
-    const std::shared_ptr<distributed::MeshDevice>&  /*mesh_device*/,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     distributed::MeshWorkload& workload,
     int num_cores_r,
     int num_cores_c,
