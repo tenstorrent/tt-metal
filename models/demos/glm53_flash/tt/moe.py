@@ -305,8 +305,8 @@ def regions_keep_stacked() -> bool:
     return os.environ.get("GLM53_REGIONS_KEEP_STACKED", "0") == "1"
 
 
-# GLM53_REGIONS_DECODE (2026-10-27; custom_ops/expert_stream/regions.py, doc/mesh/regions_decode.md): ``off`` (default) =
-# today's rule (decode on the stacked stream copy when ``GLM53_REGIONS_KEEP_STACKED=1`` kept it, else through the
+# GLM53_REGIONS_DECODE (2026-10-27; custom_ops/expert_stream/regions.py, doc/mesh/regions_decode.md; ``stream`` is the
+# default since 2026-10-27): ``off`` = the earlier rule (decode on the stacked stream copy when ``GLM53_REGIONS_KEEP_STACKED=1`` kept it, else through the
 # regions kernel: ~+80 ms per 45-layer step on the 8x4 at >= 512 K x 4 users and at 128 K x 32 users, where the second
 # copy does not fit beside the caches); ``stream`` = the stream / dispatch ops read the regions path's per-expert lists
 # themselves (``RegionsSource``, the REGIONS_SRC kernels: the same bytes from the same banks, bit-identical results, no

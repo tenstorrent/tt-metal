@@ -69,7 +69,7 @@ def _tiles_of(packets: list[tuple[int, int]], tile_bytes: int) -> list[int]:
 
 # ---------------------------------------------------------------------------------------------- knob
 def test_decode_mode_knob():
-    assert R.regions_decode_mode({}) == "off"
+    assert R.regions_decode_mode({}) == "stream"  # the default since 2026-10-27
     for m in R.REGIONS_DECODE_MODES:
         assert R.regions_decode_mode({R.REGIONS_DECODE_ENV: m}) == m
     with expect_error(ValueError, "GLM53_REGIONS_DECODE"):

@@ -45,11 +45,12 @@ REGIONS_DECODE_MODES = ("off", "stream", "regions")
 
 
 def regions_decode_mode(env=None) -> str:
-    """``GLM53_REGIONS_DECODE``: ``off`` (default: today's rule -- the stacked stream copy when kept, else the regions
-    kernel), ``stream`` (the stream / dispatch ops read the regions lists: one expert copy serves prefill and decode),
+    """``GLM53_REGIONS_DECODE``: ``stream`` (default since 2026-10-27: the stream / dispatch ops read the regions lists, one
+    expert copy serves prefill and decode, bit-identical to the stacked copy), ``off`` (the earlier rule -- the stacked
+    stream copy when kept, else the regions kernel),
     ``regions`` (every shape through the regions kernel even when the stacked copy is present: the A/B reference)."""
     env = os.environ if env is None else env
-    mode = env.get(REGIONS_DECODE_ENV, "off")
+    mode = env.get(REGIONS_DECODE_ENV, "stream")
     if mode not in REGIONS_DECODE_MODES:
         raise ValueError(f"{REGIONS_DECODE_ENV}={mode!r}: expected one of {REGIONS_DECODE_MODES}")
     return mode
