@@ -270,6 +270,111 @@ def test_mla_decode_pair_split_merge(device, batch_positions, function_level_def
         assert passing, f"user {b} at {p}: on-device merge vs full attention: {message}"
 
 
+def grouped_decode_program(reqs, table_tokens, cands):
+    """The grouped decode's program: decode_program's; from 8 candidates 128-token K chunks and at most 32 cores per
+    request (8 Q tiles beside 256-token chunks, or one more tree-reduction round, overflow L1)."""
+    program = decode_program(reqs, table_tokens)
+    if cands >= 8:
+        program.k_chunk_size = 128
+        program.max_cores_per_head_batch = min(program.max_cores_per_head_batch, 32)
+    return program
+
+
+def run_grouped_decode(device, q_slots, k_cache, v_cache, page_table_tt, cur_pos, scale, cands):
+    """A speculative verify's decode with one KV scan per request (spec_multi_pos_tiles): q_slots [1, R * T, NH, DK],
+    candidate j of request r in slot r * T + j, goes in as Q [1, R, T * 32, DK] (DRAM interleaved) with candidate j's
+    heads in rows 0..NH-1 of its 32-row tile j; ``page_table_tt`` has one row per request and ``cur_pos`` one entry per
+    candidate. Returns (out [1, R * T, NH, DV], lse [1, R * T, NH]) per slot, as the per-slot decode does."""
+    slots = q_slots.shape[1]
+    reqs = slots // cands
+    q = torch.zeros(1, reqs, cands, TILE, DK)
+    q[:, :, :, :NH] = q_slots.reshape(1, reqs, cands, NH, DK)
+    out, lse = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+        ttnn.from_torch(
+            q.reshape(1, reqs, cands * TILE, DK), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        ),
+        k_cache.tt,
+        v_cache.tt,
+        head_dim_v=DV,
+        page_table_tensor=page_table_tt,
+        cur_pos_tensor=ttnn.from_torch(torch.tensor(cur_pos, dtype=torch.int32), device=device, dtype=ttnn.int32),
+        scale=scale,
+        program_config=grouped_decode_program(reqs, page_table_tt.shape[-1] * BLOCK, cands),
+        compute_kernel_config=compute_config(),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        return_lse=True,
+        spec_multi_pos_tiles=cands,
+    )
+    assert tuple(out.shape) == (1, reqs, cands * TILE, DV), out.shape
+    assert tuple(lse.shape) == (1, reqs, cands * TILE, 1), lse.shape
+    out = ttnn.to_torch(out).float().reshape(1, reqs, cands, TILE, DV)[:, :, :, :NH].reshape(1, slots, NH, DV)
+    lse = ttnn.to_torch(lse).float().reshape(1, reqs, cands, TILE)[:, :, :, :NH].reshape(1, slots, NH)
+    return out, lse
+
+
+@pytest.mark.parametrize("layout", ["global", "pair_split"])
+@pytest.mark.parametrize(
+    "cands, starts",
+    [
+        (4, [1000]),
+        (4, [61, 2044 - 3]),
+        (4, [0, 30, 126, 1500]),
+        (8, [123]),
+    ],
+    ids=["t4_r1", "t4_r2", "t4_r4", "t8_r1"],
+)
+def test_mla_decode_spec_multi_pos(device, layout, cands, starts, function_level_defaults, reset_seeds):
+    """A speculative verify's MLA decode with one KV scan per request (spec_multi_pos_tiles = T candidates per page
+    table row, return_lse): every candidate's output and lse match the per-slot decode (one row per candidate, the
+    request's table row repeated) and the torch reference. Request r's candidates are at global positions
+    starts[r] + j; with a pair split (each chip caching half of every 128-token block, both chips run) a candidate's
+    position is the chip's local L(p, c) - 1, so near 64 chip 1 has leading -1 candidates (no local key yet) and
+    repeated bounds. The last request of a call leaves its last two candidates as gaps (-1, a verify row with fewer
+    drafts). A -1 candidate gets output 0 and lse -1e30. The two decodes round differently (the per-slot one runs
+    16-row half tiles), so the grouped one must be as close to the reference as the per-slot one, not bit-equal."""
+    n = 2048  # global tokens per request
+    scale = DK**-0.5
+    reqs = len(starts)
+    slots = reqs * cands
+    q_slots = torch.randn(1, slots, NH, DK)
+    glob = [[s + j for j in range(cands)] for s in starts]
+    glob[-1][-2:] = [-1, -1]
+    k_global, v_global = torch.randn(reqs, n, DK), torch.randn(reqs, n, DV)
+    chips = (None,) if layout == "global" else (0, 1)
+    n_local = n if layout == "global" else n // 2
+    page_table = make_page_table(reqs, n_local // BLOCK)
+    group_table_tt = ttnn.from_torch(page_table.to(torch.int32), device=device, dtype=ttnn.int32)
+    slot_table = page_table.repeat_interleave(cands, dim=0)  # the per-slot decode: each slot its request's row
+    slot_table_tt = ttnn.from_torch(slot_table.to(torch.int32), device=device, dtype=ttnn.int32)
+    for c in chips:
+        k_seqs = k_global if c is None else split_global(k_global, c)
+        v_seqs = v_global if c is None else split_global(v_global, c)
+        k_cache = PagedCache(device, k_seqs, page_table, ttnn.bfloat8_b)
+        v_cache = PagedCache(device, v_seqs, page_table, ttnn.bfloat8_b)
+        pos = [p if (p < 0 or c is None) else visible_local(p, c) - 1 for row in glob for p in row]
+        what = f"{layout} chip {c}"
+        out, lse = run_grouped_decode(device, q_slots, k_cache, v_cache, group_table_tt, pos, scale, cands)
+        k_slots = PagedCache(device, k_seqs.repeat_interleave(cands, dim=0), slot_table, ttnn.bfloat8_b)
+        v_slots = PagedCache(device, v_seqs.repeat_interleave(cands, dim=0), slot_table, ttnn.bfloat8_b)
+        ref_out_tt, ref_lse_tt = run_decode(
+            device, q_slots, k_slots, v_slots, slot_table_tt, pos, scale, False, return_lse=True
+        )
+        for s, p in enumerate(pos):
+            r = s // cands
+            tag = f"{what} request {r} candidate {s % cands} at local {p}"
+            if p < 0:
+                assert torch.all(out[0, s] == 0), f"{tag}: a -1 candidate's output must be 0"
+                assert torch.all(lse[0, s] == NO_KEY_LSE), f"{tag}: a -1 candidate's lse must be -1e30"
+                continue
+            visible = (torch.arange(n_local) <= p)[None, :].expand(NH, n_local)
+            ref_out, ref_lse = ref_attention(q_slots[0, s], k_cache.seqs[r], v_cache.seqs[r], scale, visible)
+            assert_lse_close(lse[0, s], ref_lse, 0.05, tag)
+            assert_lse_close(ref_lse_tt[0, s, :, 0], ref_lse, 0.05, f"{tag}, the per-slot decode")
+            grouped = float(comp_pcc(ref_out, out[0, s], 0.999)[1])
+            per_slot = float(comp_pcc(ref_out, ref_out_tt[0, s], 0.999)[1])
+            assert grouped >= 0.999 and grouped >= per_slot - 2e-4, f"{tag}: PCC {grouped} (per-slot {per_slot})"
+
+
 # ---------------------------------------------------------------- chunked prefill
 def prefill_program(q_chunk, k_chunk):
     return ttnn.SDPAProgramConfig(

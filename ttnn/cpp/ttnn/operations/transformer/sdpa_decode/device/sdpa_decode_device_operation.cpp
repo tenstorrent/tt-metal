@@ -91,7 +91,11 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(operation_attributes.is_causal, "spec_multi_pos_tiles requires is_causal");
         TT_FATAL(operation_attributes.paged_attention, "spec_multi_pos_tiles requires paged attention");
         TT_FATAL(tensor_args.page_table_tensor.has_value(), "spec_multi_pos_tiles requires a page_table tensor");
-        TT_FATAL(!use_mla, "spec_multi_pos_tiles is not supported with multi-latent attention");
+        // MLA reads V from the K cache's first columns when no V cache is given (reuse_k), which the spec path
+        // does not handle; with its own V cache it is a one-KV-head decode with a narrower V.
+        TT_FATAL(
+            !use_mla || tensor_args.v.has_value(),
+            "spec_multi_pos_tiles with multi-latent attention needs a separate V cache (input_tensor_v)");
         TT_FATAL(
             !operation_attributes.sliding_window_size.has_value() ||
                 operation_attributes.sliding_window_size.value() == 0,
@@ -594,7 +598,6 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!lse.is_sharded(), "lse output must be interleaved (DRAM or L1)");
         TT_FATAL(operation_attributes.is_causal, "return_lse needs causal decode");
         TT_FATAL(!tensor_args.attention_sink.has_value(), "return_lse is not supported with an attention sink");
-        TT_FATAL(!spec_multi_pos, "return_lse is not supported with spec_multi_pos_tiles");
         TT_FATAL(k_shape[1] == 1, "return_lse needs one KV head, got {}", k_shape[1]);
         TT_FATAL(input_tensors.at(0).layout() == Layout::TILE, "return_lse needs a TILE layout Q (got ROW_MAJOR)");
         auto expected = compute_output_specs(operation_attributes, tensor_args).logical_shape();
@@ -718,7 +721,8 @@ std::tuple<Tensor, Tensor> sdpa_decode_with_lse(
     uint32_t k_chunk_size,
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
-    std::optional<uint32_t> head_dim_v) {
+    std::optional<uint32_t> head_dim_v,
+    uint32_t spec_multi_pos_tiles) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = make_sdpa_decode_params(
         is_causal,
@@ -735,7 +739,7 @@ std::tuple<Tensor, Tensor> sdpa_decode_with_lse(
         head_dim_v,
         std::nullopt,
         std::nullopt,
-        0);
+        spec_multi_pos_tiles);
     auto tensor_args = OperationType::tensor_args_t{
         .q = input_tensor_q,
         .k = input_tensor_k,

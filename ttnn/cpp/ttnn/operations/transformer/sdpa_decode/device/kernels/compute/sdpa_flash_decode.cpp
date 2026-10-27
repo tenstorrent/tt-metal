@@ -173,11 +173,17 @@ void kernel_main() {
             CircularBuffer(cb_cur_pos).wait_front(1);
             if constexpr (spec_multi_pos) {
                 // cur_pos holds B*Tg bounds; this batch row owns the group starting at
-                // cur_batch*Tg. Within a group positions are ascending: entry 0 is the
-                // smallest bound (mask predicate), entry Tg-1 the largest (KV scan range).
+                // cur_batch*Tg. Within a group positions are ascending, -1 entries apart
+                // (spec_group_bounds): the smallest bound is the mask predicate's, the largest
+                // the KV scan range.
                 const uint32_t spec_pos_base = cur_batch * spec_multi_pos_T;
-                spec_pos_min = read_tile_value(cb_cur_pos, 0, spec_pos_base);
-                cur_pos = read_tile_value(cb_cur_pos, 0, spec_pos_base + spec_multi_pos_T - 1);
+                uint32_t spec_pos[spec_multi_pos_T];
+                for (uint32_t j = 0; j < spec_multi_pos_T; ++j) {
+                    spec_pos[j] = read_tile_value(cb_cur_pos, 0, spec_pos_base + j);
+                }
+                const SpecGroupBounds bounds = spec_group_bounds<spec_multi_pos_T>(spec_pos);
+                spec_pos_min = bounds.lo;
+                cur_pos = bounds.hi;
             } else {
                 cur_pos = read_tile_value(cb_cur_pos, 0, cur_batch / q_heads_parallel_factor);
             }

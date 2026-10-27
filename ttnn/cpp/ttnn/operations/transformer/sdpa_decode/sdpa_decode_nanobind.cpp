@@ -36,7 +36,8 @@ std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> paged_flash_m
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    bool return_lse) {
+    bool return_lse,
+    uint32_t spec_multi_pos_tiles) {
     if (return_lse) {
         return ttnn::transformer::paged_flash_multi_latent_attention_decode_with_lse(
             input_tensor_q,
@@ -52,7 +53,8 @@ std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> paged_flash_m
             sliding_window_size,
             memory_config,
             program_config,
-            compute_kernel_config);
+            compute_kernel_config,
+            spec_multi_pos_tiles);
     }
     return ttnn::transformer::paged_flash_multi_latent_attention_decode(
         input_tensor_q,
@@ -68,7 +70,8 @@ std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> paged_flash_m
         sliding_window_size,
         memory_config,
         program_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        spec_multi_pos_tiles);
 }
 }  // namespace
 
@@ -226,6 +229,11 @@ void bind_sdpa_decode(nb::module_& mod) {
             return_lse (bool): also return the log-sum-exp of every (user, head). Defaults to `False`, which
                 leaves the op (programs and results) unchanged. Needs one KV head, no attention sink and a TILE
                 layout Q.
+            spec_multi_pos_tiles (int): T > 0 folds T candidate positions (a speculative verify) onto each page
+                table row, which then scans its KV once for all of them: Q [1 x b x T*32 x dh] DRAM interleaved,
+                candidate j's heads in its own 32-row tile j, and cur_pos_tensor int32 [b * T], ascending within a
+                row's group except for -1 entries (a candidate with no visible key: output 0, lse -1e30). Needs
+                `input_tensor_v`. Defaults to 0 (off).
 
         Returns:
             ttnn.Tensor: the output [1 x b x nh x head_dim_v], or with `return_lse=True` the tuple
@@ -260,6 +268,7 @@ void bind_sdpa_decode(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("return_lse") = false);
+        nb::arg("return_lse") = false,
+        nb::arg("spec_multi_pos_tiles") = 0u);
 }
 }  // namespace ttnn::operations::transformer

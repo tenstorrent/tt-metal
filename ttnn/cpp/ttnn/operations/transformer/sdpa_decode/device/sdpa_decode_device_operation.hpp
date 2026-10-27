@@ -129,7 +129,7 @@ Tensor sdpa_decode(
 // sdpa_decode plus the per-(user, head) log-sum-exp as a second output (see SdpaDecodeInputs::lse_output).
 // Supported for causal decode with one KV head, no attention sink, a TILE layout Q and no Q-head parallelism
 // (paged MLA with height-sharded Q is the intended path). Users skipped with cur_pos = -1 get output rows 0 and
-// lse = -1e30.
+// lse = -1e30; so do the candidates at cur_pos = -1 of a spec_multi_pos_tiles group.
 std::tuple<Tensor, Tensor> sdpa_decode_with_lse(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
@@ -149,6 +149,7 @@ std::tuple<Tensor, Tensor> sdpa_decode_with_lse(
     uint32_t k_chunk_size,
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
-    std::optional<uint32_t> head_dim_v);
+    std::optional<uint32_t> head_dim_v,
+    uint32_t spec_multi_pos_tiles = 0);
 
 }  // namespace ttnn::prim
