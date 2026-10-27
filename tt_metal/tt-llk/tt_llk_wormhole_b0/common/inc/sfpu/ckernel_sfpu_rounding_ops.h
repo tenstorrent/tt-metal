@@ -155,8 +155,20 @@ sfpi_inline sfpi::vFloat _round_even_(sfpi::vFloat v)
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
-void _calculate_round_(const int decimals)
+sfpi_inline void _calculate_round_(const int decimals)
 {
+    if (decimals == 0)
+    {
+        // coeff == inverse == 1.0f: the two SFPMUL (+ their SFPNOP shadows) per row would be
+        // multiplies by 1.0, so round the value directly.
+        for (int d = 0; d < ITERATIONS; ++d)
+        {
+            sfpi::dst_reg[0] = _round_even_(sfpi::dst_reg[0]);
+            sfpi::dst_reg++;
+        }
+        return;
+    }
+
     const auto exp10i = [](int n)
     {
         if (n > 38) // 38 is max decimal places float32 can store for positive values
