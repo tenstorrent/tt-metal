@@ -227,6 +227,9 @@ private:
         // The DRISC L1 range each of those addresses lies in, in mapping order. Weak, like the rest of
         // this struct: it only tells stop whether that range still belongs to the target.
         std::vector<std::weak_ptr<DriscL1Allocation>> state_alloc_per_sender;
+        // The DRAM receivers' receiver-zone range the senders store data and credits into, held with the state
+        // ranges once stop drains them. Empty for worker receivers and pipes.
+        std::weak_ptr<DriscL1Allocation> receiver_alloc;
         // Bank-local slab index of each sender's first receiver, in mapping order: local receiver
         // r of sender s reads slab recv_index_base_per_sender[s] + r. Stamped into every layout
         // slot of that sender's page.
@@ -239,7 +242,11 @@ private:
 
     void worker_loop();
     // Add `word` to sender slot `sender`'s drain targets, dropping the ones whose memory is gone.
-    void record_drain_target(uint32_t sender, uint32_t word, const std::weak_ptr<DriscL1Allocation>& state);
+    void record_drain_target(
+        uint32_t sender,
+        uint32_t word,
+        const std::weak_ptr<DriscL1Allocation>& state,
+        const std::weak_ptr<DriscL1Allocation>& receivers);
     // record_drain_target for each sender `target` maps to.
     void record_drain_targets(const RequestTarget& target, const std::vector<uint32_t>& target_sender_indices);
     // One DRAIN request per page's worth of every sender's live drain targets, for stop to send ahead
@@ -316,15 +323,16 @@ private:
     // A target stop must drain on one sender: its DRAIN word (state address | kDrainTargetPipeBit for a
     // pipe) and the DRISC L1 range that address lies in. The range expiring means the target is gone
     // and its memory may already hold something else, so stop skips it rather than read that memory
-    // as counters.
+    // as counters. `receivers` is the target's DRAM receiver zone, if it has one.
     struct DrainTarget {
         uint32_t word = 0;
         std::weak_ptr<DriscL1Allocation> state;
+        std::weak_ptr<DriscL1Allocation> receivers;
     };
     // drain_targets_per_sender_[s]: every target sender slot s has been queued for since start.
     std::vector<std::vector<DrainTarget>> drain_targets_per_sender_;
-    // The ranges stop is draining, held until the kernels have exited so none can be reused while a
-    // DRAIN reads it.
+    // The ranges stop is draining, and the DRAM receiver zones their senders write, held until the kernels have
+    // exited so none can be reused while a DRAIN reads it or a sender writes it.
     std::vector<std::shared_ptr<DriscL1Allocation>> drain_holds_;
     // drain_holds_ of every Stop whose senders did not finish: a sender or receiver may still write those
     // ranges, so they are never released while this manager lives.

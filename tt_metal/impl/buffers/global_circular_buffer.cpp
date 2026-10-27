@@ -643,6 +643,7 @@ struct GlobalCircularBufferDramSenderInternals {
     static DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
     static DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb);
     static std::shared_ptr<DriscL1Allocation> sender_state_drisc_l1_allocation(const GlobalCircularBuffer& gcb);
+    static std::shared_ptr<DriscL1Allocation> receiver_drisc_l1_allocation(const GlobalCircularBuffer& gcb);
     static const std::vector<std::vector<CoreCoord>>& receiver_logical_cores_per_sender(
         const GlobalCircularBuffer& gcb);
 };
@@ -681,6 +682,11 @@ DeviceAddr GlobalCircularBufferDramSenderInternals::sender_state_drisc_l1_base(c
 std::shared_ptr<DriscL1Allocation> GlobalCircularBufferDramSenderInternals::sender_state_drisc_l1_allocation(
     const GlobalCircularBuffer& gcb) {
     return gcb.impl().drisc_sender_state_alloc_;
+}
+
+std::shared_ptr<DriscL1Allocation> GlobalCircularBufferDramSenderInternals::receiver_drisc_l1_allocation(
+    const GlobalCircularBuffer& gcb) {
+    return gcb.impl().drisc_receiver_alloc_;
 }
 
 const std::vector<std::vector<CoreCoord>>& GlobalCircularBufferDramSenderInternals::receiver_logical_cores_per_sender(
@@ -762,6 +768,11 @@ DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb) {
 std::shared_ptr<DriscL1Allocation> sender_state_drisc_l1_allocation(const GlobalCircularBuffer& gcb) {
     return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::
         sender_state_drisc_l1_allocation(gcb);
+}
+
+std::shared_ptr<DriscL1Allocation> receiver_drisc_l1_allocation(const GlobalCircularBuffer& gcb) {
+    return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::receiver_drisc_l1_allocation(
+        gcb);
 }
 
 const std::vector<std::vector<CoreCoord>>& receiver_logical_cores_per_sender(const GlobalCircularBuffer& gcb) {

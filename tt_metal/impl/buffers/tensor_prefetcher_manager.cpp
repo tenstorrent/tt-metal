@@ -877,6 +877,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     target.state_addr_per_sender.assign(
         target.mapping.size(), static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb)));
     target.state_alloc_per_sender.assign(target.mapping.size(), experimental::sender_state_drisc_l1_allocation(gcb));
+    target.receiver_alloc = experimental::receiver_drisc_l1_allocation(gcb);
     // The GCB's mapping is immutable and fixes its own bank-local slab numbering, so the bases
     // come straight back out of it.
     target.recv_index_base_per_sender = recv_index_bases_per_sender(target.mapping);
@@ -1796,17 +1797,23 @@ void TensorPrefetcherManager::record_drain_targets(
         target.transport == TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE ? kDrainTargetPipeBit : 0u;
     for (size_t m = 0; m < target_sender_indices.size(); ++m) {
         record_drain_target(
-            target_sender_indices[m], target.state_addr_per_sender[m] | pipe_bit, target.state_alloc_per_sender[m]);
+            target_sender_indices[m],
+            target.state_addr_per_sender[m] | pipe_bit,
+            target.state_alloc_per_sender[m],
+            target.receiver_alloc);
     }
 }
 
 void TensorPrefetcherManager::record_drain_target(
-    uint32_t sender, uint32_t word, const std::weak_ptr<DriscL1Allocation>& state) {
+    uint32_t sender,
+    uint32_t word,
+    const std::weak_ptr<DriscL1Allocation>& state,
+    const std::weak_ptr<DriscL1Allocation>& receivers) {
     auto& targets = drain_targets_per_sender_[sender];
     std::erase_if(targets, [](const DrainTarget& t) { return t.state.expired(); });
     const auto it = std::find_if(targets.begin(), targets.end(), [&](const DrainTarget& t) { return t.word == word; });
     if (it == targets.end()) {
-        targets.push_back(DrainTarget{word, state});
+        targets.push_back(DrainTarget{word, state, receivers});
     }
 }
 
@@ -1820,6 +1827,9 @@ std::vector<TensorPrefetcherManager::Request> TensorPrefetcherManager::build_dra
             if (auto alive = t.state.lock()) {
                 words_per_sender[s].push_back(t.word);
                 drain_holds_.push_back(std::move(alive));
+                if (std::shared_ptr<DriscL1Allocation> receivers = t.receivers.lock()) {
+                    drain_holds_.push_back(std::move(receivers));
+                }
             }
         }
         max_words = std::max(max_words, words_per_sender[s].size());
@@ -2231,23 +2241,19 @@ void TensorPrefetcherManager::stop() {
     } catch (const std::exception& error) {
         wait_failure = std::current_exception();
         log_error(tt::LogMetal, "Tensor prefetcher: waiting for the senders to exit failed: {}", error.what());
-        log_cce_sender_statuses();
-        drain_holds_after_failed_stop_.insert(
-            drain_holds_after_failed_stop_.end(),
-            std::make_move_iterator(drain_holds_.begin()),
-            std::make_move_iterator(drain_holds_.end()));
     }
-    // A sender the worker gave up on may still be running, so its DRAIN ranges stay held as above.
+    // A sender that did not exit, or that the worker gave up on, may still be running, so its DRAIN ranges and the
+    // DRAM receiver zones it writes stay held.
     const bool worker_gave_up_on_sender = worker_gave_up_on_sender_.load();
-    if (worker_gave_up_on_sender && !wait_failure) {
+    const bool senders_may_still_run = wait_failure || worker_gave_up_on_sender;
+    std::vector<std::string> failed_senders;
+    if (senders_may_still_run) {
         log_cce_sender_statuses();
         drain_holds_after_failed_stop_.insert(
             drain_holds_after_failed_stop_.end(),
             std::make_move_iterator(drain_holds_.begin()),
             std::make_move_iterator(drain_holds_.end()));
-    }
-    std::vector<std::string> failed_senders;
-    if (!worker_gave_up_on_sender && !wait_failure) {
+    } else {
         failed_senders = failed_cce_senders();
     }
     const uint32_t dropped_request_pages = dropped_request_pages_.load();

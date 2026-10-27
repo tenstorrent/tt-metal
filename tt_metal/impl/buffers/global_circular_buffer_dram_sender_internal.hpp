@@ -49,6 +49,10 @@ namespace tt::tt_metal::experimental {
 // Null for worker-sender GCBs.
 std::shared_ptr<DriscL1Allocation> sender_state_drisc_l1_allocation(const GlobalCircularBuffer& gcb);
 
+// The receiver-zone range holding each DRAM receiver's config page and FIFO, which the senders store data and
+// credits into. Null unless the GCB has DRAM receivers.
+std::shared_ptr<DriscL1Allocation> receiver_drisc_l1_allocation(const GlobalCircularBuffer& gcb);
+
 // Each sender's receivers as logical coords, row-wise (the order the DRISC kernel's slab
 // indices follow). Logical rather than physical because the physical worker coord depends on
 // which device of the mesh is being addressed. Empty for worker-sender GCBs.
