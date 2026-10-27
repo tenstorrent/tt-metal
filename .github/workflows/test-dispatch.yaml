@@ -185,5 +185,13 @@ jobs:
           uv pip install pytest-repeat
           ${{ matrix.command.run }}
         shell: bash
+      # A test that writes files under /work/generated/outputs gets them uploaded as an artifact.
+      - name: 📤 Upload outputs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: outputs-${{ strategy.job-index }}
+          path: docker-job/generated/outputs/
+          if-no-files-found: ignore
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
