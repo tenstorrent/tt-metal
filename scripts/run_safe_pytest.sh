@@ -839,10 +839,12 @@ _stop_warm() {
         _alive "$pid" || return 0
         sleep 0.1
     done
+    # The whole process group: the warm process leads its own (setsid), and a `tt-smi -r` it
+    # started at device close must not outlive it.
     echo "SAFE_PYTEST: warm process did not exit in 60 s; killing it"
     WARM_KILLED=true
-    kill -KILL "$pid" 2>/dev/null
-    while _alive "$pid"; do sleep 0.1; done
+    kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
+    while _alive "$pid" || pgrep -g "$pid" >/dev/null 2>&1; do sleep 0.1; done
 }
 # Before this call touches the dirty flag or resets the device, it must hold the lock and the
 # warm process that ran its session must be gone. A call that started the warm process shares
@@ -851,7 +853,11 @@ _stop_warm() {
 _own_device() {
     [[ "$WARM" == attach || "$WARM" == spawn ]] || return 0
     [[ "${WARM_OWNED:-false}" == true ]] && return 0
-    _stop_warm "$WARM_SERVED_PID"
+    local pid=$WARM_SERVED_PID
+    # No pid reported (the client could not record it): for a call that started the warm
+    # process, it is the one in the pid file; an attached call waits on the lock below anyway.
+    [[ -z "$pid" && "$WARM" == spawn ]] && pid=$(cat "$WARM_PID_FILE" 2>/dev/null)
+    _stop_warm "$pid"
     [[ "$WARM" == attach ]] && _lock_device
     [[ "${WARM_KILLED:-false}" == true ]] && touch "$DIRTY_FLAG"
     WARM_OWNED=true

@@ -209,9 +209,11 @@ fi
 
 # --- Acquire flock (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
-    exec 9>"$LOCK_FILE"
     echo "TT_PROBE: Waiting for device lock..."
-    flock 9
+    # Each 20 s retry opens the lock file again, so a warm test process
+    # (scripts/safe_pytest_warm.py) that started after this wait began sees that the device is
+    # wanted (it watches opens of the lock file) and lets go of it.
+    until { exec 9>"$LOCK_FILE"; flock -w 20 9; }; do :; done
     TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
     echo "TT_PROBE: Device lock acquired"
 

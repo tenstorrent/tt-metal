@@ -75,7 +75,10 @@ YIELD_MARK = os.environ.get("SAFE_PYTEST_WARM_YIELD", "/tmp/tt-device.warm-yield
 # 60 s covers ~94% of the gaps between consecutive calls in a tilize eval run (median 0.05 s).
 IDLE_S = float(os.environ.get("SAFE_PYTEST_WARM_IDLE_S", "60"))
 MAX_RUNS = int(os.environ.get("SAFE_PYTEST_WARM_MAX_RUNS", "200"))
-MAX_AGE_S = float(os.environ.get("SAFE_PYTEST_WARM_MAX_AGE_S", "7200"))
+# Bounds how long any runner can wait behind a warm process it cannot signal (one that queued on
+# the lock before this worker existed and never reopens the lock file): under the 900 s the graded
+# runner (eval_test_runner.sh) waits for the lock.
+MAX_AGE_S = float(os.environ.get("SAFE_PYTEST_WARM_MAX_AGE_S", "600"))
 MAX_RSS_GB = float(os.environ.get("SAFE_PYTEST_WARM_MAX_RSS_GB", "16"))
 
 # Environment variables the worker accepts with a different value than it started with: they are
@@ -481,12 +484,29 @@ class Worker:
         covers runners that started waiting before this process (and its inotify watch) existed:
         run_safe_pytest.sh, tt-probe.sh and eval_test_runner.sh all open it with `exec 9>`, and
         the truncation updates its mtime."""
-        if self.since_ms is None:
-            return False
         try:
-            return os.stat(self.lock_path).st_mtime_ns // 1_000_000 > self.since_ms
+            st = os.stat(self.lock_path)
         except OSError:
             return True
+        if self.since_ms is not None and st.st_mtime_ns // 1_000_000 > self.since_ms:
+            return True
+        # Blocked flock waiters, where /proc/locks shows them (same PID namespace): catches a
+        # runner that queued before this worker existed and never reopens the lock file.
+        want = f"{os.major(st.st_dev):02x}:{os.minor(st.st_dev):02x}:{st.st_ino}"
+        try:
+            with open("/proc/locks") as f:
+                return any("->" in line and want in line.split() for line in f)
+        except OSError:
+            return False
+
+    def _yield_mark(self) -> None:
+        """Keep the next lock winner from starting a new warm process before a waiter got its
+        turn (run_safe_pytest.sh reads this mark)."""
+        try:
+            with open(YIELD_MARK, "a"):
+                os.utime(YIELD_MARK)
+        except OSError:
+            pass
 
     def serve(self) -> None:
         import select
@@ -506,14 +526,13 @@ class Worker:
                 ready, _, _ = select.select([lock_watch, listener], [], [], 0.5)
                 if lock_watch in ready or self._lock_file_touched():
                     # Checked first: a waiter that queued during the last session goes ahead of
-                    # this checkout's next call. The mark keeps the next lock winner from
-                    # starting a new warm process before that waiter got its turn.
+                    # this checkout's next call.
                     print("warm worker: another process wants the device, exiting", flush=True)
-                    try:
-                        with open(YIELD_MARK, "a"):
-                            os.utime(YIELD_MARK)
-                    except OSError:
-                        pass
+                    self._yield_mark()
+                    return
+                if time.time() - self.started > MAX_AGE_S:
+                    print(f"warm worker: up {MAX_AGE_S:.0f} s, making way for any waiter, exiting", flush=True)
+                    self._yield_mark()
                     return
                 if not ready:
                     if time.time() - last > IDLE_S:
@@ -610,6 +629,13 @@ class Worker:
         if dr is not None:
             dr.release()
         sys.stdout.flush()
+        sys.stderr.flush()
+        try:
+            import ctypes
+
+            ctypes.CDLL(None).fflush(None)  # the runtime's C/C++ log output, before re-reading it
+        except (OSError, AttributeError):
+            pass
         if self._closed_with_stuck_ethernet(log_offset):
             # Still holding the lock: reset here, before anyone else gets the device.
             print("warm worker: Ethernet cores stuck after closing the device; resetting", flush=True)
