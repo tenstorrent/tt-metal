@@ -153,6 +153,41 @@ def test_mesh_model_chain_and_perf(mesh_device):
         model.replay(trace_id, blocking=False)
     ttnn.synchronize_device(mesh_device)
     ms = (time.perf_counter() - t0) / N_PERF * 1e3
+    if os.environ.get("GLM53_MODEL_SIGNPOST", "0") == "1":
+        # device-profiler attribution of the FULL traced step (tests/perf_mesh_report.py): one signposted replay, then
+        # one eager step with per-layer BEGIN/END signposts (labels ``L{i}_{KDA|DSA}``); run under ``python -m tracy -r -p``
+        from tracy import signpost
+
+        ttnn.synchronize_device(mesh_device)
+        signpost("PERF_DECODE")
+        model.replay(trace_id)
+        ttnn.synchronize_device(mesh_device)
+        signpost("PERF_DECODE_END")
+        undo = []
+        for i, dec in zip(layers, model.layers):
+            orig = dec.decode_forward
+            label = f"L{i}_{'KDA' if dec.is_kda else 'DSA'}"
+
+            def wrapped(*a, _orig=orig, _label=label, **kw):
+                signpost(f"{_label}_BEGIN")
+                try:
+                    return _orig(*a, **kw)
+                finally:
+                    signpost(f"{_label}_END")
+
+            dec.decode_forward = wrapped
+            undo.append((dec, orig))
+        try:
+            signpost("PERF_EAGER")
+            outs = model.decode_step(model.ids_dev, model.positions)
+            ttnn.synchronize_device(mesh_device)
+            signpost("PERF_EAGER_END")
+        finally:
+            for dec, orig in undo:
+                dec.decode_forward = orig
+        for t_ in outs:
+            if t_ is not None:
+                ttnn.deallocate(t_)
     logger.info(
         f"PERF mesh {MESH} layers {len(layers)} users/row {B} (total {U}, {os.environ.get('GLM53_MODEL_PERF_IDS', 'distinct')} ids): traced decode step {ms:.2f} ms "
         f"-> {1e3 / ms:.1f} tok/s per user, {U * 1e3 / ms:.0f} tok/s aggregate "
