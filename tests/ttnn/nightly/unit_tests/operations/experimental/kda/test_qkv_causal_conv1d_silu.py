@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
@@ -697,6 +698,83 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_tensors(
             channel_chunk_size=384,
             actual_start=zero_actual_start,
         )
+
+
+def _cancelling_tap_inputs(
+    sequence: int, widths: tuple[int, int, int], seed: int
+) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]]:
+    """Massive activations (|x| 32-96, as real projected q/k/v channels) under taps whose sum nearly cancels.
+
+    Taps 0-2 share a sign and tap 3 cancels them to within ``delta`` (|delta| <= 0.02 of the 0.25-0.45 tap sum), so
+    every running tap sum is about 0.3 |x| ~ 10-40 while the pre-activation is about |x| delta ~ 1. Rows vary by
+    about 1 % so neighbouring outputs differ. All values are bf16, so the reference products are exact.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    channels = sum(widths)
+    rows = 3 + sequence
+    magnitude = 32 + 64 * torch.rand(channels, generator=generator)
+    sign = torch.where(torch.rand(channels, generator=generator) < 0.5, -1.0, 1.0)
+    window = (sign * magnitude * (1 + 0.01 * torch.randn(rows, channels, generator=generator))).bfloat16()
+    same_sign = (0.05 + 0.1 * torch.rand(3, channels, generator=generator)).bfloat16().float()
+    delta = 0.02 * (2 * torch.rand(channels, generator=generator) - 1)
+    tap_sign = torch.where(torch.rand(channels, generator=generator) < 0.5, -1.0, 1.0)
+    taps = [(tap_sign * same_sign[j]).bfloat16() for j in range(3)]
+    taps.append((tap_sign * (delta - same_sign.sum(0))).bfloat16())
+    window = window[None]
+    return window[:, 3:].contiguous(), window[:, :3].contiguous(), tuple(tap[None, None] for tap in taps)
+
+
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32-carry", "bf16-carry"])
+def test_qkv_causal_conv1d_silu_fp32_accumulation_resolves_cancelling_taps(
+    zero_actual_start, device: ttnn.Device, fp32_dest_acc_en: bool
+) -> None:
+    """With fp32_dest_acc_en the four taps accumulate in FP32 destination registers, not rounded to BF16 per tap.
+
+    Contract (tt_metal_tracker-g1b.5.19): per element, |out - silu(sum x_j w_j)| <= 2^-8 |out| + 2^-10 S with
+    S = sum_j |x_j w_j|: the output rounding plus a few FP32 roundings of terms and sums of magnitude <= S. BF16
+    destination registers round each partial sum (~0.3 S) to 2^-9 relative, about 2^-10.7 S per tap, three times, and
+    must exceed the bound on these inputs (the case is sensitive to the accumulation precision).
+    """
+    widths = (512, 512, 512)
+    inputs, history, taps = _cancelling_tap_inputs(_SEQUENCE, widths, seed=519)
+    window = torch.cat((history, inputs), dim=1).double()
+    terms = torch.stack([window[:, j : j + _SEQUENCE] * taps[j].double() for j in range(4)])
+    expected = F.silu(terms.sum(0))
+    bound = 2.0**-8 * expected.abs() + 2.0**-10 * terms.abs().sum(0)
+    assert float(terms[:3].sum(0).abs().median()) > 8 * float(terms.sum(0).abs().median()), "taps must cancel"
+
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=False,
+    )
+    outputs = _run(
+        qkv_to_device(inputs, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        qkv_to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        tuple(qkv_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps),
+        widths=widths,
+        channel_chunk_size=768,
+        compute_kernel_config=config,
+        actual_start=zero_actual_start,
+    )
+    actual = torch.cat([ttnn.to_torch(output) for output in outputs], dim=-1).double()
+    ratio = (actual - expected).abs() / bound
+    worst = int(ratio.argmax())
+    logger.info(
+        f"cancelling taps (fp32_dest_acc_en={fp32_dest_acc_en}): peak error/bound {float(ratio.max()):.3f}, "
+        f"median {float(ratio.median()):.3f}, elements over bound {int((ratio > 1).sum())}/{ratio.numel()}, "
+        f"peak abs error {float((actual - expected).abs().max()):.4e}"
+    )
+    if not fp32_dest_acc_en:
+        assert float(ratio.max()) > 1.0, "the BF16 carry must breach the FP32-carry bound on cancelling taps"
+        return
+    assert float(ratio.max()) <= 1.0, (
+        f"element {worst}: |out - ref| = {float((actual - expected).flatten()[worst].abs()):.4e} exceeds "
+        f"2^-8 |ref| + 2^-10 sum|terms| = {float(bound.flatten()[worst]):.4e} "
+        f"({int((ratio > 1).sum())} of {ratio.numel()} elements over)"
+    )
 
 
 @pytest.mark.parametrize(
