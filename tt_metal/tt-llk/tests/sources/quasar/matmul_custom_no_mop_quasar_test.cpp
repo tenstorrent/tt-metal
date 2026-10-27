@@ -87,8 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
 
-    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(
-        static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
 
     // ENABLE_2X_FORMAT enables the 2x-packed FP4 matmul path (8 MVMULs per tile vs 16, K-dim halved per
     // MVMUL via the SrcA 2x sub-datum expansion). Set when SrcA/SrcB are configured as MxFp4_2x_A/B.

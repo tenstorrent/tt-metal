@@ -91,7 +91,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
         DataFormat src_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(src_format, src_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
 
         _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM, 1 /*num_matrices*/);
 
@@ -137,7 +137,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
         const DataFormat math_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<false, is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
     }
     else
     {
