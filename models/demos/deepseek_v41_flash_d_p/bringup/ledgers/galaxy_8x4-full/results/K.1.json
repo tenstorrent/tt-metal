@@ -55,6 +55,10 @@
   "pcc_producer_kv_window_kv_limit": {
    "t": "2026-10-27T19:47:33",
    "value": 0.9434091107889953
+  },
+  "smoke_runner_ok": {
+   "t": "2026-10-27T23:18:34",
+   "value": 1
   }
  },
  "task": "K.1"

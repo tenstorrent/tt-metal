@@ -384,6 +384,7 @@ tasks:
   device: true
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
   frozen:
     files:
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-s10240.json: 311b050919e517571bcaee18edce7417538b3cc5595e16f9f777efcfaf06ef8d
