@@ -208,10 +208,7 @@ class FastArgmax:
                 core_ranges=cores,
                 compile_time_args=ct,
                 runtime_args=rt,
-                config=ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_0,
-                    noc=ttnn.NOC.NOC_0,
-                ),
+                config=ttnn.ReaderConfigDescriptor(),
             )
             cb = ttnn.CBDescriptor(
                 total_size=cb_total,
@@ -233,6 +230,8 @@ class FastArgmax:
                 self._program[ttnn.MeshCoordinateRange(coord, coord)] = _make()
         else:
             self._program = _make()
+
+        ttnn.experimental.prepare_generic_op([self._inp, self._out_wide], self._program)
 
     def __call__(self, rm):
         if self._program is None:
