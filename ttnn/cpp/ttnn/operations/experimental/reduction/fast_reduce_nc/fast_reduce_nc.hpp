@@ -12,6 +12,7 @@ namespace ttnn::experimental::reduction {
 
 // `output_dtype` sets the dtype produced by the final prim::fast_reduce_nc stage;
 // `fp32_intermediate_stages` keeps non-final stages in FLOAT32 to avoid double-rounding.
+// `fp32_sfpu_accumulate` sums FLOAT32 input on the SFPU at full precision instead of the FPU (tf32).
 ttnn::Tensor fast_reduce_nc(
     const ttnn::Tensor& input,
     ttsl::Span<const int32_t> dims,
@@ -20,7 +21,8 @@ ttnn::Tensor fast_reduce_nc(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::DataType>& output_dtype = std::nullopt,
-    bool fp32_intermediate_stages = false);
+    bool fp32_intermediate_stages = false,
+    bool fp32_sfpu_accumulate = false);
 
 // Single non-spatial reduction with two contiguous, tile-aligned output channel regions.
 std::tuple<Tensor, Tensor> fast_reduce_nc_split(

@@ -279,27 +279,31 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
+    const bool sfpu_accumulate =
+        input_data_format == tt::DataFormat::Int32 ||
+        (input_data_format == tt::DataFormat::Float32 && operation_attributes.fp32_sfpu_accumulate);
     const auto* const compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
+        sfpu_accumulate
+            ? "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc_sfpu.cpp"
+            : "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
 
     KernelSpec::CompilerOptions::Defines compute_defines;
     if (fp32_dest_acc_en) {
         compute_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
-    const bool fp32_input_in_dest = fp32_dest_acc_en && input_data_format == tt::DataFormat::Float32;
-    if (fp32_input_in_dest) {
-        compute_defines.emplace("REDUCE_FP32_IN_DEST", "1");
-    }
 
     // Style A: op resolves a TTNN ComputeKernelConfig, so the arch-agnostic helper
     // carries the four knobs (math_fidelity / math_approx_mode / fp32_dest_acc_en /
     // dst_full_sync_en) to their Metal 2.0 equivalents.
-    ComputeHardwareConfig compute_hw =
-        ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     // Metal 2.0 requires an explicit unpack_modes entry when a compute kernel consumes a
-    // Float32 DFB with enable_32_bit_dest = true.
-    if (fp32_input_in_dest) {
+    // Float32 DFB with enable_32_bit_dest = true. Legacy set no unpack_to_dest_mode (Default),
+    // which maps to UnpackToSrc. Only the input DFB (c_0) can be Float32; the zero DFB is BF16.
+    // unpack_modes is a plain member of the (single, generation-agnostic) ComputeHardwareConfig.
+    if (sfpu_accumulate) {
         compute_hw.unpack_modes.emplace(FRNC_IN0, UnpackMode::UnpackToDest);
+    } else if (fp32_dest_acc_en && input_data_format == tt::DataFormat::Float32) {
+        compute_hw.unpack_modes.emplace(FRNC_IN0, UnpackMode::UnpackToSrc);
     }
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_cols_per_core_group) {

@@ -19,7 +19,8 @@ ttnn::Tensor fast_reduce_nc(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
-    bool fp32_intermediate_stages) {
+    bool fp32_intermediate_stages,
+    bool fp32_sfpu_accumulate) {
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE,
         "Input tensor storage type must be DEVICE but got {}",
@@ -32,7 +33,8 @@ ttnn::Tensor fast_reduce_nc(
         compute_kernel_config,
         tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
-        /*default_fp32_acc=*/input.dtype() == tt::tt_metal::DataType::FLOAT32);
+        /*default_fp32_acc=*/input.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            input.dtype() == tt::tt_metal::DataType::INT32);
 
     ttsl::SmallVector<int32_t> sorted_dims(dims.begin(), dims.end());
     std::sort(sorted_dims.begin(), sorted_dims.end());
@@ -49,11 +51,19 @@ ttnn::Tensor fast_reduce_nc(
             memory_config,
             kernel_config_val,
             sub_core_grids,
-            intermediate_dtype);
+            intermediate_dtype,
+            fp32_sfpu_accumulate);
         temp_input = temp_output;
     }
     return ttnn::prim::fast_reduce_nc(
-        temp_input, sorted_dims.front(), output, memory_config, kernel_config_val, sub_core_grids, output_dtype);
+        temp_input,
+        sorted_dims.front(),
+        output,
+        memory_config,
+        kernel_config_val,
+        sub_core_grids,
+        output_dtype,
+        fp32_sfpu_accumulate);
 }
 
 std::tuple<Tensor, Tensor> fast_reduce_nc_split(
