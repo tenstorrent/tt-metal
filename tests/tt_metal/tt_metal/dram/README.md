@@ -407,7 +407,7 @@ On `mimir_2x_package` (rv-zebu-08, one session after bring-up, 2026-10-22), ever
 | 125 | pass with `TT_METAL_FORCE_REINIT=1` |
 | 130 | inconclusive: 0 corrupted words, but in that version (sibling iDMA as the ITN source) the ITN writes did not overlap the AMO rounds; the accumulate did. The host-released SPA stream has not run |
 
-On `mimir_2x_package` (2026-10-26, at `3a3d04f9bd2`), a run of the current tree on all four CCEs and every route started: row 81, the MM-8 rerun of rows 75, 76 and 80 (`Op/L1InvalidateFull` last), then rows 90-130 in order with row 96 last. The probe rows 82-89 were left out: they ran on all four CCEs on 2026-10-22 and only record. It ran in five emulator sessions, each after bring-up: soc-c-24 (40 cases), soc-zebu-01 (24 cases), soc-c-23 (89 cases), soc-zebu-01 again (80 cases, 2026-10-26 to 2026-10-27) and rv-zebu-08 (48 cases, 2026-10-27). Each ended when the session ended; the fourth ended when the emulator stopped serving during `MimirAtomicLocal.Soak/Cce1`, which is not counted and ran again in the fifth. 281 of the 361 cases have run: 259 pass and 22 fail. Only row 106's failures needed a fresh session; each was followed by bring-up, and `SnoopConfig` and an iDMA case passed before the next case.
+On `mimir_2x_package` (2026-10-26, at `3a3d04f9bd2`), a run of the current tree on all four CCEs and every route started: row 81, the MM-8 rerun of rows 75, 76 and 80 (`Op/L1InvalidateFull` last), then rows 90-130 in order with row 96 last. The probe rows 82-89 were left out: they ran on all four CCEs on 2026-10-22 and only record. It ran in six emulator sessions, each after bring-up: soc-c-24 (40 cases), soc-zebu-01 (24 cases), soc-c-23 (89 cases), soc-zebu-01 again (80 cases, 2026-10-26 to 2026-10-27), rv-zebu-08 (48 cases, 2026-10-27) and soc-c-31 (13 cases, 2026-10-27). Each ended when the session ended. The fourth ended when the emulator stopped serving during `MimirAtomicLocal.Soak/Cce1`, which is not counted and ran again in the fifth. The sixth ended with `MimirTridIdma.Saturate/Cce2` killed mid-run, which is not counted. Sessions 1-5 ran at `3a3d04f9bd2` (before the branch was rebased onto main) with UMD `d7547af48`; the sixth ran at `86924f535c9`, after the rebase and the port of `mimir_tests` to a unit MeshDevice, with UMD `f0d497f33`. 294 of the 361 cases have run: 272 pass and 22 fail. Only row 106's failures needed a fresh session; each was followed by bring-up, and `SnoopConfig` and an iDMA case passed before the next case.
 
 | Rows | Result on `mimir_2x_package`, 2026-10-26 |
 |---|---|
@@ -422,9 +422,10 @@ On `mimir_2x_package` (2026-10-26, at `3a3d04f9bd2`), a run of the current tree 
 | 110, 111, 112 | pass on all four CCEs |
 | 113 (MM-8 `MimirDmIdma.Copy`) | pass on all 12 routes |
 | 114 | pass on all four CCEs |
-| 115 | `UniqueIdsLocalGddr/Cce0` passes; CCEs 1-3 have not run |
+| 115, 116, 117 | pass on all four CCEs |
+| 118 | `Saturate` passes on CCE 0 and CCE 1 (about 15 min a case); CCE 2 and CCE 3 have not run |
 
-The rest, from row 115's `MimirTridIdma.UniqueIdsLocalGddr/Cce1` on (80 cases: rows 115-130, then row 96), has not run. The run directory is `/localdev/sagarwal/mm4x_runs_2026-10-26/mimir_2x_package/` (`cases.tsv` is the case order, `results.tsv` the results, `run.sh` resumes the run and skips recorded cases).
+The rest, from row 118's `MimirTridIdma.Saturate/Cce2` on (67 cases: rows 118-130, then row 96), has not run. The run directory is `/localdev/sagarwal/mm4x_runs_2026-10-26/mimir_2x_package/` (`cases.tsv` is the case order, `results.tsv` the results, `run.sh` resumes the run and skips recorded cases).
 
 On `mimir_1x1` (soc-c-23, 2026-10-23), every MM4x case that runs on 1x1 ran once on CCE 0 and CCE 1 against the current tree (R1 removed): 167 cases, including the 5 compile rows and row 125. The cases that skip on 1x1 (CCE 2 and 3, rows marked 2x only, the remote-CCE legs) were not run. After each case that stopped for a fresh session, bring-up was rerun and `SnoopConfig` and an iDMA case passed before the next case. 154 pass and 13 fail; after the `kModeTridTable` change (row 118) Saturate passes, so 156 pass and 11 fail, all in rows 99, 100, 106 and 109.
 
