@@ -1523,10 +1523,12 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(schema_name({element::Int{}, 2, 0}), "i16");
     // An array's integers take their width from one element.
     EXPECT_EQ(schema_name({element::Uint{}, 8, 2}), "u32");
-    EXPECT_EQ(schema_name({element::Enum{"RouterState"}, 4, 0}), "enum:RouterState");
-    EXPECT_EQ(schema_name({element::Struct{"WorkerXY"}, 4, 0}), "struct:WorkerXY");
+    EXPECT_EQ(schema_name({element::Enum{&layout::enum_description<RouterState>}, 4, 0}), "enum:RouterState");
+    EXPECT_EQ(schema_name({element::Struct{&layout::struct_description<WorkerXY>}, 4, 0}), "struct:WorkerXY");
     EXPECT_EQ(
-        schema_name({element::TaggedUnion{"NocCommandFields", "noc_send_type"}, 40, 0}), "union:NocCommandFields");
+        schema_name(
+            {element::TaggedUnion{&layout::tagged_union_description<NocCommandFields>, "noc_send_type"}, 40, 0}),
+        "union:NocCommandFields");
     EXPECT_EQ(schema_name({element::Bytes{}, 1, 0}), "bytes");
     EXPECT_EQ(schema_name({element::Pad{}, 1, 0}), "pad");
     EXPECT_EQ(schema_name(layout::type_of<uint32_t>()), "u32");
@@ -1563,9 +1565,9 @@ TEST(ManifestTypes, EveryTypeALayoutNamesIsDescribed) {
     for (const auto& type : structs) {
         for (const auto& member : type.members) {
             if (const auto* s = std::get_if<layout::element::Struct>(&member.type.element)) {
-                EXPECT_TRUE(struct_names.contains(s->type_name)) << type.name << "." << member.name;
+                EXPECT_TRUE(struct_names.contains(s->description->name)) << type.name << "." << member.name;
             } else if (const auto* e = std::get_if<layout::element::Enum>(&member.type.element)) {
-                EXPECT_TRUE(enum_names.contains(e->type_name)) << type.name << "." << member.name;
+                EXPECT_TRUE(enum_names.contains(e->description->name)) << type.name << "." << member.name;
             }
         }
     }
