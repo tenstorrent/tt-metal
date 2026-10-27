@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
@@ -34,6 +35,9 @@
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "xtensor/generators/xbuilder.hpp"
+
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
 
 class SDPAForwardTest : public ::testing::Test {
 protected:
@@ -1772,11 +1776,11 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
     };
     EXPECT_NO_THROW(run(0U, 0U));
     EXPECT_NO_THROW(run(S, S));
-    EXPECT_THROW(run(48U, 0U), std::exception) << "q_chunk_size must be a tile multiple";
-    EXPECT_THROW(run(0U, 48U), std::exception) << "k_chunk_size must be a tile multiple";
-    EXPECT_THROW(run(96U, 0U), std::exception) << "q_chunk_size must divide the sequence length";
-    EXPECT_THROW(run(0U, 2U * S), std::exception) << "k_chunk_size must divide the sequence length";
-    EXPECT_THROW(run(0U, 0U, 2U), std::exception) << "heads_per_item must divide the heads per kv head (1 here)";
+    EXPECT_THAT([&] { run(48U, 0U); }, ThrowsMessage<std::exception>(HasSubstr("q_chunk_size (48)")));
+    EXPECT_THAT([&] { run(0U, 48U); }, ThrowsMessage<std::exception>(HasSubstr("k_chunk_size (48)")));
+    EXPECT_THAT([&] { run(96U, 0U); }, ThrowsMessage<std::exception>(HasSubstr("q_chunk_size (96)")));
+    EXPECT_THAT([&] { run(0U, 2U * S); }, ThrowsMessage<std::exception>(HasSubstr("k_chunk_size (512)")));
+    EXPECT_THAT([&] { run(0U, 0U, 2U); }, ThrowsMessage<std::exception>(HasSubstr("heads_per_item (2)")));
 
     // Head dim 512 with whole-sequence chunks: the circular buffers do not fit L1.
     const std::array<std::size_t, 4> wide_shape{1U, 2U, S, 512U};
@@ -1787,22 +1791,56 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
     auto wide_query = make_wide(4U);
     auto wide_key = make_wide(5U);
     auto wide_value = make_wide(6U);
-    EXPECT_THROW(
-        metal::sdpa_fw(
-            wide_query,
-            wide_key,
-            wide_value,
-            metal::AttentionMaskType::Causal,
-            std::nullopt,
-            0.0F,
-            false,
-            std::nullopt,
-            {.q_chunk_size = S, .k_chunk_size = S}),
-        std::exception)
+    EXPECT_THAT(
+        [&] {
+            metal::sdpa_fw(
+                wide_query,
+                wide_key,
+                wide_value,
+                metal::AttentionMaskType::Causal,
+                std::nullopt,
+                0.0F,
+                false,
+                std::nullopt,
+                {.q_chunk_size = S, .k_chunk_size = S});
+        },
+        ThrowsMessage<std::exception>(HasSubstr("SDPA forward circular buffers need")))
         << "a user config that overflows L1 must be refused with a message, not die in the allocator";
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
+    // Two chunkings on the same tensors are two cached programs; the first one again is a hit.
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+    const std::array<std::size_t, 4> shape{1U, 2U, 256U, 64U};
+    auto make = [&](uint32_t seed) {
+        return core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed), device);
+    };
+    auto query = make(1U);
+    auto key = make(2U);
+    auto value = make(3U);
+    auto run = [&](const metal::SDPAForwardProgramConfig& cfg) {
+        return core::to_xtensor(
+            metal::sdpa_fw(
+                query, key, value, metal::AttentionMaskType::Causal, std::nullopt, 0.0F, false, std::nullopt, cfg)[0]
+                .value());
+    };
+    const metal::SDPAForwardProgramConfig a{.q_chunk_size = 128U, .k_chunk_size = 256U};
+    const metal::SDPAForwardProgramConfig b{.q_chunk_size = 32U, .k_chunk_size = 64U};
+    const auto entries0 = device->num_program_cache_entries();
+    const xt::xarray<float> out_a = run(a);
+    const auto entries_a = device->num_program_cache_entries();
+    ASSERT_GT(entries_a, entries0) << "first config did not populate the cache";
+    const xt::xarray<float> out_b = run(b);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "second config must miss: different program";
+    const xt::xarray<float> out_a_again = run(a);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "first config again must hit";
+    EXPECT_TRUE(xt::all(xt::equal(out_a, out_a_again))) << "cache hit must reproduce the first run";
+    EXPECT_LT(xt::mean(xt::abs(out_a - out_b))(), kCrossChunkingMeanAbsTol) << "both chunkings compute the same op";
+}
+
     // The op hashes its attributes by reflection; the chunk knobs must take part, or a second config on
     // the same shapes would silently reuse the first config's cached program.
     using Params = ttml::metal::ops::sdpa_fw::device::SDPAForwardParams;
