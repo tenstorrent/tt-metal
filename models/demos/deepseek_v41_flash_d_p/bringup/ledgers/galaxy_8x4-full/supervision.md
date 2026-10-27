@@ -452,3 +452,9 @@ check (F196 / F197); host times stay hidden until verified warm.
   4 skip, 3 errors; none runs the changed code: test_acc_dtype 3 errors (2x2 mesh hard-coded, fabric init fails on a
   Galaxy), test_column_planner_mc 15 fail (planner alone forced to 8x4, overflows its L1), test_flat_routed_expert_op
   [tp4] AssertionError (16,1,6,2) (NEW on this node, uninvestigated), k2 perf band 4.7 % slow. -> owner report; F.1.
+- 23:18 GOAL MET: K.1#test_runner_smoke PASS (gate --unit, 780 s): tt-d-gen a9701ce6675 drives the real prefill runner
+  over all 40 layers (160-token padded smoke prompt), KV of every served cache of 40 layers read through the exported
+  table (192 records, [0,128)), stand-in decode on the device (tail recompute at start 128, ~1.2 s a step):
+  'We need answer one word. Capital of France = Paris'. Unit stamp kept; dump copy /data/dnijemcevic/k1_smoke_20261027_2305.
+  Next per the owner's order: B (test_adapter_acks), K.1 commit, then the reconcile with origin model_bringup, the
+  5-position profile (flat + block), torus.
