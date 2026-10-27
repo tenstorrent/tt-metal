@@ -1251,6 +1251,23 @@ user): x1.68 (the test prints x5.53 against its eager plain loop). The (2,4) blo
 the eager one. This is the first measured point above 20 tok/s per user; it becomes a README row once a run reports its TTFT with it,
 and reaches serving through the adapter's speculative path (the gemma4_mtp pattern: B(K+1) <= 32 per row, greedy only).
 
+16:30 Served speculative decode, code only (branch `arg/glm53_served_spec`, no device run yet): the vLLM adapter implements the
+plugin's speculative contract (`docs/SPEC_DECODE_CONTRACT.md`): `spec_plan` (K = min(num_speculative_tokens, `GLM53_VLLM_SPEC_K`
+default 3, 32 // users_per_row - 1), narrow decode on, accept `argmax_ids`, the hidden state on device), `decode_forward(spec_mode)`
+= graph V over every slot's `[anchor, d_1 .. d_K]` rows (the plugin's placeholder columns carry the anchor), `propose_draft_tokens`
+= graph C (the fused KDA / index commit with the runner's accepted counts) + graph D (levels 2..K from the accepted row), or D0 after
+an ordinary step; the ordinary decode of a speculating launch is graph P (the plain step + MTP level 1, `SpecDecoder(plain_draft=True)`)
+so the MTP cache follows every position; the prefill fills the MTP cache per chunk from the chunk's streams (one extra DSA + MoE layer
+per chunk, ~1/45 of the prefill; the last row of an intermediate chunk takes the chunk's greedy chunk-end token). Switch
+`GLM53_VLLM_SPEC=1` (off = today's adapter bit for bit) with `GLM53_PARTITION_USERS=0`; `GLM53_SPEC_COMMIT` defaults to `fused` in the
+adapter. v1 limits: replicated caches (the user partition is refused: `DsaSpecState`), the dense range (a slot whose anchor + K passes
+2050 gets no drafts and its steps are plain; a verify the plugin still sends is answered ONE column wide = the plain step, the drafts
+counted rejected: lossless), greedy rows (sampled requests take the plain step through narrow decode), no wave prefill. Host tests
+`tests/test_serving_spec_host.py` (13: the K policy, the block translation, the boot order, the per-chunk MTP fill, the served loop vs
+the plain chain on a Markov fake with a predictable drafter, the one-column fallback, the contract guards); block test
+`tests/test_serving_spec_mesh.py` (the adapter through `initialize_vllm_model` on (2,4) x 4 layers, the runner's calls, tokens vs
+the adapter's own plain decode) queued.
+
 16:33 `spec_8x4_K3_fused_ttft` (wt_frozen25): the spec run now reports its TTFT -> README row: 32 users (4 per row), 32-token prompt,
 K=3 fused: lossless, 3.20 tokens per user per iteration, 42.0 ms per token = 23.8 tok/s per user (762 aggregate); TTFT 994 ms = the
 eager prefill with the MTP hidden capture (3.98 s for the 4 prefills of a row, each serving 8 replicas). Served spec v1 (agent,

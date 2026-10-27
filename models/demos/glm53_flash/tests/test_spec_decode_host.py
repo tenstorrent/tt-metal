@@ -137,6 +137,17 @@ def test_accept_greedy_cases():
     assert m1.tolist() == [0, 0] and c1 == [[3], [4]] and b1.tolist() == [3, 4]
 
 
+def test_serving_draft_len_cap_mirrors_spec_draft_len():
+    """``tt/vllm_spec.py`` (host-only, no ttnn) carries its own copy of the policy for the adapter's ``spec_plan``."""
+    from models.demos.glm53_flash.tt.vllm_spec import MAX_VERIFY_ROWS as SERVING_MAX_ROWS
+    from models.demos.glm53_flash.tt.vllm_spec import draft_len_cap
+
+    assert SERVING_MAX_ROWS == MAX_VERIFY_ROWS
+    for B in (1, 2, 3, 4, 5, 8, 10, 16, 17, 32, 33):
+        for k in (1, 3, 7, 31):
+            assert draft_len_cap(B, k) == spec_draft_len(B, k), (B, k)
+
+
 def test_draft_len_policy():
     assert spec_draft_len(1, 31) == 31 and spec_draft_len(1, 3) == 3
     assert spec_draft_len(4, 7) == 7 and spec_draft_len(4, 3) == 3
