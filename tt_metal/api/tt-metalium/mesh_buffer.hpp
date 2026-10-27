@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -177,13 +178,18 @@ private:
         state_(ExternallyOwnedState{}) {}
 
     void initialize_device_buffers();
+    // The per-device view at `coord`, a non-owning Buffer at address_ on that device.
+    std::shared_ptr<Buffer> make_device_buffer(const MeshCoordinate& coord) const;
     MeshBufferConfig config_;
     DeviceLocalBufferConfig device_local_config_;
     std::weak_ptr<MeshDevice> mesh_device_;
     DeviceAddr address_ = 0;
     DeviceAddr device_local_size_ = 0;
 
-    DistributedMeshContainer<std::shared_ptr<Buffer>> buffers_;
+    // Per-device views. Only the reference buffer is made up front; get_device_buffer makes the rest on first
+    // use, since most buffers are never addressed per device and making 32 views per allocation is host time.
+    mutable DistributedMeshContainer<std::shared_ptr<Buffer>> buffers_;
+    mutable std::mutex device_buffers_mutex_;
 
     // `MeshBufferState` specifies the state of the MeshBuffer. It can either be:
     // 1. Owned - a single device buffer is responsible for providing the address for the entire mesh buffer.

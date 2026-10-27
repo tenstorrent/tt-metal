@@ -295,32 +295,39 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     return mesh_buffer;
 }
 
-void MeshBuffer::initialize_device_buffers() {
-    auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
-        std::shared_ptr<Buffer> buffer = BufferImpl::create(
-            device()->impl().get_device(coord),
-            address_,
-            device_local_size_,
-            device_local_config_.page_size,
-            device_local_config_.buffer_type,
-            device_local_config_.sharding_args,
-            device_local_config_.bottom_up,
-            /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
-        // For per-core allocation, propagate per-core addresses from the backing buffer.
-        if (per_core_allocation::is_per_core_allocation(*buffer)) {
-            TT_FATAL(
-                std::holds_alternative<OwnedBufferState>(state_),
-                "Per-core allocation is not supported for externally-owned MeshBuffers");
-            auto& owned = std::get<OwnedBufferState>(state_);
-            per_core_allocation::copy_per_core_addresses(*buffer, *owned.backing_buffer);
-        }
-        return buffer;
-    };
+std::shared_ptr<Buffer> MeshBuffer::make_device_buffer(const MeshCoordinate& coord) const {
+    std::shared_ptr<Buffer> buffer = BufferImpl::create(
+        device()->impl().get_device(coord),
+        address_,
+        device_local_size_,
+        device_local_config_.page_size,
+        device_local_config_.buffer_type,
+        device_local_config_.sharding_args,
+        device_local_config_.bottom_up,
+        /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
+    // For per-core allocation, propagate per-core addresses from the backing buffer.
+    if (per_core_allocation::is_per_core_allocation(*buffer)) {
+        TT_FATAL(
+            std::holds_alternative<OwnedBufferState>(state_),
+            "Per-core allocation is not supported for externally-owned MeshBuffers");
+        const auto& owned = std::get<OwnedBufferState>(state_);
+        per_core_allocation::copy_per_core_addresses(*buffer, *owned.backing_buffer);
+    }
+    return buffer;
+}
 
-    for (auto& [coord, device_buffer] : buffers_) {
-        if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr) {
-            if (mesh_device->impl().is_local(coord)) {
-                device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(init_device_buffer_at_address(coord));
+void MeshBuffer::initialize_device_buffers() {
+    // The reference buffer -- the first local device's -- is what Tensor::buffer() reads, so it is made now.
+    // The other local devices' views are made by get_device_buffer when first asked for. Emule registers each
+    // view's range as it is made and checks device accesses against them, so there every view is made now.
+    if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr) {
+        const bool all_now =
+            mesh_device->impl().metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+        bool reference_made = false;
+        for (auto& [coord, device_buffer] : buffers_) {
+            if ((all_now || !reference_made) && mesh_device->impl().is_local(coord)) {
+                device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(make_device_buffer(coord));
+                reference_made = true;
             }
         }
     }
@@ -449,7 +456,17 @@ MeshDevice* MeshBuffer::device() const {
 }
 
 Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
-    return buffers_.at(device_coord).value().get();
+    std::lock_guard<std::mutex> lock(device_buffers_mutex_);
+    auto& device_buffer = buffers_.at(device_coord);
+    // A local device's view not made yet is made now. A remote device has none, and neither does a per-core
+    // buffer after deallocation (it owned its per-device allocations); value() reports both.
+    if (device_buffer.is_remote() && !per_core_allocation::is_per_core_allocation(device_local_config_.sharding_args)) {
+        if (auto mesh_device = mesh_device_.lock();
+            mesh_device != nullptr && mesh_device->impl().is_local(device_coord)) {
+            device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(make_device_buffer(device_coord));
+        }
+    }
+    return device_buffer.value().get();
 }
 
 Buffer* MeshBuffer::get_reference_buffer() const {
