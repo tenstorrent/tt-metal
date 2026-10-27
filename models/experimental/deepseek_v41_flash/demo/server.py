@@ -131,6 +131,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     load_vision_config,
     pipeline_stage_count,
 )
+from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
 from models.experimental.deepseek_v41_flash.tt.vision import (
     DELIMITER_ROWS,
@@ -155,7 +156,6 @@ from models.experimental.deepseek_v4_flash.demo.server import (
     check_args,
     serve,
 )
-from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import plan_layer_placement
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
@@ -1006,7 +1006,7 @@ class V41ChatEngine(ChatEngine):
             layer_submesh_ids=plan_layer_placement(num_layers, num_stages, 1),
             image_rows=args.image_rows if vision else 0,
         )
-        self.lm_head = Linear(
+        self.lm_head = DeepSeekV41LMHead(
             dequantized(loader, "lm_head.weight", translate=True),
             self.model.last_device,
             self.weight_cache.file("lm_head") if self.weight_cache else None,
