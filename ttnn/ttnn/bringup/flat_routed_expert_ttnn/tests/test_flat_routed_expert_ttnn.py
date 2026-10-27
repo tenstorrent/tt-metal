@@ -81,6 +81,12 @@ def _rm(mesh_device, t, mapper, dtype):
     )
 
 
+def _layout(c):
+    """The case's layout: a flat_layouts preset name, or a dict of FlatLayoutOptions fields."""
+    lay = c["layout"]
+    return getattr(flat_layouts, lay) if isinstance(lay, str) else dict(lay)
+
+
 def _formats(c):
     return dict(x_bf16=c["x_bf16"], h_bf16=c["h_bf16"], fidelity=ref.FIDELITY[c["math_fidelity"]])
 
@@ -92,7 +98,8 @@ def _rel_pcc(got, want):
 
 
 _SHARED = [c for c in CASES if c["op"] == "flat_routed_expert"]
-_ROUTED = [c for c in CASES if c["op"] == "flat_routed_expert_with_program"]
+_ROUTED = [c for c in CASES if c["op"] == "flat_routed_expert_with_program" and "via" not in c]
+_EXCHANGE = [c for c in CASES if c.get("via") == "moe_block_exchange"]
 
 
 @pytest.mark.timeout(1800)
@@ -126,7 +133,7 @@ def test_flat_routed_expert(mesh_device, device_params, case):
         h_bf16=c["h_bf16"],
         weights_nk=c["weights_nk"],
         check_exact=True,
-        layout=getattr(flat_layouts, c["layout"]),
+        layout=_layout(c),
     )
     rep = ttnn.ReplicateTensorToMesh(mesh_device)
     chips = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(0, 1))
@@ -134,12 +141,13 @@ def test_flat_routed_expert(mesh_device, device_params, case):
     regions = _rm(mesh_device, torch.tensor([[0]], dtype=torch.int32), rep, ttnn.uint32)
     # chip (r, cc) reads its mesh row's S rows of the column's gathered [R S, H] rows: token index r S + t
     tok = torch.stack([r * S + torch.arange(S) for r in range(R)]).to(torch.int32)
-    tidx = _rm(mesh_device, tok.reshape(R, 1, 1, S).expand(R, C, 1, S), chips, ttnn.uint32)
+    tidx = ttnn.reshape(_rm(mesh_device, tok.reshape(R, 1, 1, S).expand(R, C, 1, S), chips, ttnn.uint32), [1, S])
 
     def inputs(seed):
         gx = torch.Generator().manual_seed(seed)
         x = torch.randn(C, R * S, H, generator=gx).to(torch.bfloat16)  # mesh column cc's gathered rows
-        return x, _rm(mesh_device, x.unsqueeze(0).expand(R, C, R * S, H), chips, ttnn.bfloat16)
+        xd = _rm(mesh_device, x.unsqueeze(0).expand(R, C, R * S, H), chips, ttnn.bfloat16)
+        return x, ttnn.reshape(xd, [R * S, H])  # (the model's [R S, H] per chip)
 
     def call(xd):
         return fe(
@@ -237,7 +245,7 @@ def test_flat_routed_expert_with_program(mesh_device, device_params, case):
         h_bf16=c["h_bf16"],
         weights_nk=c["weights_nk"],
         check_exact=True,
-        layout=getattr(flat_layouts, c["layout"]),
+        layout=_layout(c),
     )
     del per_dev
     logger.info(f"{c['id']}: {E} experts built and laid out in {time.time() - t0:.0f} s")
@@ -309,3 +317,149 @@ def test_flat_routed_expert_with_program(mesh_device, device_params, case):
     determinism.assert_deterministic(
         lambda: wc(fe, *dev, c["math_fidelity"]), lambda: wc(fe, *dev_b, c["math_fidelity"]), first=out, label=c["id"]
     )
+
+
+def _joint_rows(ids, wts):
+    """The joint routing rows the MoE block's router writes (combine_rf/router_topk.py): per token its K ids, then its K
+    weights' bf16 bits, as uint16; [T, K] ids / bf16 weights -> [T / 32, 32 x 2 K] int32 holding the uint16 values."""
+    bits = wts.to(torch.bfloat16).view(torch.int16).to(torch.int32) & 0xFFFF
+    T, K = ids.shape
+    return torch.cat([ids.to(torch.int32), bits], dim=1).reshape(T // 32, 32 * 2 * K)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, case",
+    [(tuple(c["mesh"]), _device_params(c), c) for c in _EXCHANGE],
+    ids=[c["id"] for c in _EXCHANGE],
+    indirect=["mesh_device", "device_params"],
+)
+def test_flat_routed_expert_exchange(mesh_device, device_params, case):
+    """The op inside the MoE block's token exchange (models/demos/moe_block TokenExchange: routing gather, planner,
+    dispatch, then flat_routed_expert_with_program with the exchange's fp32 weighted combine), built as the block builds
+    it, on random owners' rows and routing. Every chip's output (its own tokens' routed sums, bf16) vs float64:
+    out[t] = sum_k w[t, k] ffn_{ids[t, k]}(x[t]) over all K picks (the exchange sends every pick to its expert's chip and
+    the combine brings it home). Limit: calib x the formats run (reference.ffn(formats=), y bf16, fp32 sums of w y,
+    bf16 out) vs float64. The combine's 2^-19 snap of each term is below that noise (not modelled)."""
+    from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+
+    from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import planned_accumulators
+    from models.demos.moe_block.moe_block import (
+        ExpertActivation,
+        Geometry,
+        MoEDtypes,
+        MoEModel,
+        RoutedExperts,
+        RouterConfig,
+        TokenExchange,
+    )
+
+    c = case
+    R, C = c["mesh"]
+    N = R * C
+    H, I, E, K = c["H"], c["I"], c["E"], c["K"]
+    model = MoEModel(  # (only the routed experts' dims are used by the exchange; the rest as the model's)
+        num_experts=E,
+        top_k=K,
+        emb_dim=H,
+        routed_expert_hidden_dim=I,
+        routed_expert_activation=ExpertActivation("clamped_silu", limit=10.0),
+        router=RouterConfig(score_func="sqrtsoftplus", route_scale=c["route_scale"]),
+        shared_expert_hidden_dim=I,
+        shared_expert_activation=ExpertActivation("clamped_silu", limit=10.0),
+    )
+    g_ = Geometry.of(mesh_device, model, c["chunk"], c["links"], zigzag=False)
+    assert not (g_.sp_wraps or g_.tp_wraps), "FABRIC_2D lines"
+    S, epc = g_.tokens_per_chip, g_.experts_per_chip
+    gids = RoutedExperts.gids_of(g_)  # (chip k = r C + c holds experts [k epc, (k + 1) epc))
+    g = torch.Generator().manual_seed(c["seed"])
+    t0 = time.time()
+    experts = [_expert(c, g) for _ in range(E)]
+    op = FlatRoutedExpert(
+        mesh_device,
+        [[experts[e] for e in gl] for gl in gids],
+        m=RoutedExperts.cap_of(g_),
+        H=H,
+        I=I,
+        gids=gids,
+        n_global=E,
+        wdtype=c["wdtype"],
+        act=c["act"],
+        pin=c["pin"],
+        x_bf16=c["x_bf16"],
+        h_bf16=c["h_bf16"],
+        weights_nk=c["weights_nk"],
+        check_exact=True,
+        layout=_layout(c),
+    )
+    logger.info(f"{c['id']}: {E} experts built and laid out in {time.time() - t0:.0f} s")
+    rexp = RoutedExperts(mesh_device, g_, model, None, MoEDtypes(), op=op, layout=_layout(c))
+    acc = planned_accumulators(mesh_device, op.plan, (False, False))
+    ex = TokenExchange(mesh_device, g_, model, rexp, accumulators=acc, combine_snap=c["combine_snap"])
+    chips = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+
+    def inputs(seed):
+        gi = torch.Generator().manual_seed(seed)
+        x = (torch.randn(N, S, H, generator=gi) * c["x_std"]).to(torch.bfloat16)
+        ids = torch.stack([torch.stack([torch.randperm(E, generator=gi)[:K] for _ in range(S)]) for _ in range(N)])
+        w = torch.rand(N, S, K, generator=gi) + 0.5
+        wts = (w / w.sum(-1, keepdim=True) * c["route_scale"]).to(torch.bfloat16)
+        own = ttnn.from_torch(
+            x.reshape(N, 1, S, H),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=chips,
+        )
+        return (x, ids, wts), (own, torch.cat([_joint_rows(ids[k], wts[k]) for k in range(N)]))
+
+    def call(own, rows):
+        """The exchange frees the routing rows it is given (the router writes fresh ones every call): a fresh upload
+        of the same rows each call."""
+        r = ttnn.from_torch(
+            rows,
+            dtype=ttnn.uint16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=chips,
+        )
+        return ex(own, r)
+
+    host, dev = inputs(c["seed"] + 100)
+    out = call(*dev)
+    assert list(out.shape)[-2:] == [S, H], out.shape
+    x, ids, wts = host
+    fmt = _formats(c)
+    for d, t in enumerate(ttnn.get_device_tensors(out)):
+        got = ttnn.to_torch(t).double().reshape(S, H)
+        want = torch.zeros(S, H, dtype=torch.float64)
+        real = torch.zeros(S, H, dtype=torch.float32)
+        for e in sorted(set(ids[d].flatten().tolist())):
+            tk = (ids[d] == e).nonzero()
+            xs = x[d][tk[:, 0]]
+            w1, w3, w2 = experts[e]
+            want.index_add_(
+                0,
+                tk[:, 0],
+                ref.ffn(xs.double(), w1.double(), w3.double(), w2.double(), c["act"])
+                * wts[d][tk[:, 0], tk[:, 1]].double().unsqueeze(1),
+            )
+            real.index_add_(
+                0,
+                tk[:, 0],
+                ref.ffn(xs.float(), w1.float(), w3.float(), w2.float(), c["act"], formats=fmt)
+                * wts[d][tk[:, 0], tk[:, 1]].float().unsqueeze(1),
+            )
+        real = round_to(real, c["noise"]["out"]).double()
+        noise = float((real - want).norm() / want.norm())
+        rel, pcc = _rel_pcc(got, want)
+        rel_m = float((got - real).norm() / want.norm())
+        logger.info(
+            f"{c['id']} chip {d}: rel {rel:.3e} (limit {CALIB * noise:.3e}, noise {noise:.3e}; vs the formats run "
+            f"{rel_m:.3e}) pcc {pcc:.6f} (a diagnostic)"
+        )
+        assert rel <= CALIB * noise, f"chip {d}: rel L2 {rel:.3e} > limit {CALIB * noise:.3e}"
+    _, dev_b = inputs(c["seed"] + 101)
+    determinism.assert_deterministic(lambda: call(*dev), lambda: call(*dev_b), first=out, label=c["id"])
