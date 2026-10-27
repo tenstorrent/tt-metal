@@ -179,6 +179,25 @@ def load_vgg_weights_from_torch(vgg_config, torch_vgg, device, dtype=ttnn.bfloat
                     if bias_ttnn is not None:
                         layer["bias"] = bias_ttnn
 
+                    config = layer["config"]
+                    is_1x1 = (
+                        config["kernel_size"] == (1, 1) and config["stride"] == (1, 1) and config["padding"] == (0, 0)
+                    )
+                    if is_1x1 and weight_device_placement is not None:
+                        layer["weight_2d"] = ttnn.from_torch(
+                            weight.reshape(layer["out_channels"], layer["in_channels"]).permute(1, 0),
+                            device=weight_device_placement,
+                            dtype=dtype,
+                            layout=ttnn.TILE_LAYOUT,
+                        )
+                        if bias is not None:
+                            layer["bias_1d"] = ttnn.from_torch(
+                                bias.reshape((-1,)),
+                                device=weight_device_placement,
+                                dtype=dtype,
+                                layout=ttnn.TILE_LAYOUT,
+                            )
+
                     torch_idx += 1
                     break
                 torch_idx += 1
