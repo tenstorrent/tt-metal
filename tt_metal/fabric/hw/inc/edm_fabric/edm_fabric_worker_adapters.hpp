@@ -704,19 +704,13 @@ private:
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = get_fabric_worker_noc()) {
         if constexpr (!connection_interface::kernel_stream_registers_available) {
-            // Software credits: publish the write count that includes the packet just written, once
-            // that write has landed. Called before advance_buffer_slot_write_index() counts it.
-            // Posted payload writes are not covered by the flush.
-            noc_async_writes_flushed(noc);
-            noc_inline_dw_write<InlineWriteDst::L1>(
-                get_noc_addr(
-                    this->edm_noc_x,
-                    this->edm_noc_y,
-                    this->edm_copy_of_wr_counter_addr +
-                        offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter),
-                    noc),
+            // Software credits: the count includes the packet just written; called before
+            // advance_buffer_slot_write_index() counts it.
+            fabric_publish_producer_write_count(
+                this->edm_noc_x,
+                this->edm_noc_y,
+                this->edm_copy_of_wr_counter_addr + offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter),
                 this->buffer_slot_write_counter.counter + 1,
-                0xF,
                 noc);
             return;
         }
