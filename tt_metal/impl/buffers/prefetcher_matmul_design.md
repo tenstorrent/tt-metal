@@ -325,9 +325,9 @@ DRISC L1 total: 128 KB. The relevant slice for the prefetcher kernel:
 [UNRESERVED + kSenderStateZoneSize, END)          kernel_working_region (~92 KB)
 
   kernel_working_region:
-    +--- noc_xy table   (2 * 4 * num_receivers bytes)
-    +--- config struct  (20 B)
-    +--- alignment slack
+    +--- per-CQ signal slots
+    +--- H2D socket config + request FIFO
+    +--- selector scratch (512 B, DRAM-aligned: the mask a request's group selector names)
     +--- stage ring     (the rest; split into rotating slots: two halves
                          for the K-row-major path, three thirds for the
                          receiver-contiguous path)
@@ -505,6 +505,51 @@ in1 source stays on the legacy MeshWorkload builder.
   runs a forwarder (`reader_bmm_tile_layout_in0_ring_hop_metal2.cpp`) that binds `in2`, so `in2` has
   the workers' address there and pushes each shard once it has passed it on, and a compute kernel as
   `in2`'s consumer that pops each shard without reading it. One weight.
+
+#### Sparse matmul over PrefetcherPipes
+
+`ttnn.sparse_matmul(..., prefetcher_pipes=pipes)` runs the MoE expert projection with the experts
+streamed by the Tensor prefetcher, and only the experts its sparsity mask selects. Routing happens on
+device, so the selection is made on device too: the op queues `(weight, block_count, [], sparsity)`
+itself, and the request carries the mask page's location, not its contents.
+
+- **Grouped weight.** The fused `[1, E, K, N]` expert weight is receiver-contiguous with an
+  NdShardSpec shard of `[E, K, N / ring_size]`: every receiver slab stacks all E experts, each a
+  `K x n_per_recv` block, so expert `e` of slab `r` starts at
+  `bank_local_base + r * recv_stride_bytes + e * group_stride_bytes`, with
+  `group_stride_bytes = K_tiles * n_per_recv * tile_bytes` and `recv_stride_bytes = E * group_stride_bytes`.
+  The layout carries `group_stride_bytes` and the request entry `num_groups`; a grouped weight queued
+  without a selector streams every expert.
+- **Selector.** The entry names the mask page as a NoC endpoint (virtual coordinates, NOC 0: a DRAM
+  page's bank endpoint that forwards DRAM reads, or the L1 core holding it) and its address. When the
+  DRISC kernel reaches the entry it NoC-reads the mask (16-bit words, up to 256 experts) into a 512 B
+  scratch carved between the socket FIFO and the stage ring, then streams each expert whose word is
+  non-zero, in ascending order, exactly as it would stream an ungrouped weight. The in1 reader of the
+  matmul skips the masked-out experts before touching the pipe, in the same order, so both ends agree
+  on how many K-blocks arrive. A traced request replays the mask read, so it follows a mask the
+  device rewrites between replays.
+- **Consumer.** The sparse op selects a Metal 2.0 spec factory when pipes are given, which runs the
+  dense mcast-in0 body over pipes with its `SPARSITY` paths on: the in0 sender and the in1
+  sender/writer each self-loop a one-entry DFB holding the mask page, the in0 kernels run on BRISC
+  (they hand batch validity to compute through the BRISC mailbox), and the receivers and compute loop
+  `nnz` times or, with `nnz` unset, take each expert's validity from the in0 sender. Without a
+  sparsity block the dense program is unchanged.
+- **Request.** The op builds the request from its own arguments: the K-blocking its program config
+  implies, and `sparsity` as the selector. It validates first, then queues the request on the
+  calling thread's current queue (so a trace recording there captures it), then launches. A request
+  queued for a matmul that is then rejected would leave the DRISC kernel blocked on a ring nothing
+  drains, and `stop_tensor_prefetcher` behind it. Under a NO_DISPATCH graph capture it queues
+  nothing.
+- **Contracts.** The mask must be written before the op is called (fence the writing queue with
+  `wait_for_cq_on_tensor_prefetcher`) and must not change until the matmul has run; otherwise the
+  prefetcher and the matmul disagree on which experts arrive and the pipes deadlock. That fence
+  cannot be captured into a trace while the request is re-sent on every `execute_trace`, so a mask
+  written by an op inside the same trace (the MoE router) is not fenced on replay: today the mask must
+  be written, and fenced, before `execute_trace`. `nnz` keeps its
+  exact-count contract (#45943), and over pipes a wrong `nnz` also stalls the prefetcher, so prefer
+  `nnz=None`. Mask mode only (no `indices`, no per-group `bias`), `is_input_b_sparse=True`, one mask
+  page (no outer batch), interleaved activation and output, one output block per worker, and a ring
+  of at least two K-blocks.
 
 #### Fit ladder (receiver-contiguous)
 

@@ -14,7 +14,7 @@
  */
 
 // UMD: re-exports tt::ARCH (used in configure_mock_mode parameter).
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include <cstdint>
 #include <optional>

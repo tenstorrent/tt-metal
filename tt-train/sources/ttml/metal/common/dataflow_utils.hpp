@@ -7,12 +7,12 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <tt-metalium/constants.hpp>
 
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
+#include "api/tile_constants.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 #ifndef FORCE_INLINE

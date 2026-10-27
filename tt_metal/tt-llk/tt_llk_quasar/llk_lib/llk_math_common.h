@@ -12,7 +12,11 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
+#ifdef ENV_LLK_INFRA
 static DataFormatConfigSet data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
+#else
+extern thread_local DataFormatConfigSet data_format_config_set;
+#endif
 
 // Bitmask helper: maps a DataFormat enum value to its corresponding bit in a 64-bit set
 inline constexpr std::uint64_t df_bit(DataFormat df)

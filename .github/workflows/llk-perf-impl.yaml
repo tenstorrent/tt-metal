@@ -49,6 +49,26 @@ on:
         required: false
         default: false
         type: boolean
+      debug-symbols:
+        description: "Build the ELFs with -g"
+        required: false
+        default: true
+        type: boolean
+      shadow-compile-runner:
+        description: "Also build each shard on this CPU runner, measure it on the board and compare, report-only (blank = off)"
+        required: false
+        default: ""
+        type: string
+      offload-compile:
+        description: "With shadow-compile-runner: measure the CPU build on the board instead of compiling there (falls back to a board compile)"
+        required: false
+        default: false
+        type: boolean
+      shadow-compile-workers:
+        description: "pytest -n on the shadow compile runner"
+        required: false
+        default: 24
+        type: number
 
 permissions:
   checks: write
@@ -121,9 +141,92 @@ jobs:
     with:
       docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
 
-  llk-perf-exec:
+  llk-perf-shadow-compile:
     needs: [load-test-matrix, build-images]
-    if: ${{ inputs.architecture != 'quasar' && needs.load-test-matrix.outputs.matrix != '[]' }}
+    if: ${{ inputs.shadow-compile-runner != '' && inputs.architecture != 'quasar' && needs.load-test-matrix.outputs.matrix != '[]' }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    # Must not match the gate's leg filter ("_<arch> group N/M").
+    name: "Shadow compile, shard ${{ matrix.test-group.split_group }} on ${{ join(matrix.test-group.runs_on, ' ') }}"
+    runs-on: ${{ inputs.shadow-compile-runner }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install SFPI and zstd
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          cd tests
+          ./setup_testing_env.sh
+          command -v zstd || { apt-get update -qq && apt-get install -y -qq zstd; }
+      - name: Set CHIP_ARCH
+        shell: bash
+        env:
+          RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
+        run: |
+          RUN_LABEL="${RUN_ON_LABELS%% *}"
+          if [[ "$RUN_LABEL" =~ N150 ]]; then
+            CHIP_ARCH=wormhole
+          elif [[ "$RUN_LABEL" =~ P150 ]]; then
+            CHIP_ARCH=blackhole
+          else
+            echo "::error::cannot tell the architecture from '$RUN_ON_LABELS'"
+            exit 1
+          fi
+          echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
+      - name: Compile
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
+          TT_LLK_DISABLE_ASSERTS: "1"
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          LLK_PERF_PHASE: compile
+          LLK_PERF_COMPILE_WORKERS: ${{ inputs.shadow-compile-workers }}
+          MATRIX_CMD: ${{ matrix.test-group.cmd }}
+        run: |
+          "$GITHUB_WORKSPACE/.github/scripts/utils/host-load-sidecar.sh" \
+            --interval 5 \
+            --label "shadow compile ${{ matrix.test-group.name }} on ${{ inputs.shadow-compile-runner }} (-n ${{ inputs.shadow-compile-workers }})" \
+            --output "$GITHUB_STEP_SUMMARY" \
+            -- bash -c "$MATRIX_CMD"
+      - name: Pack the ELFs
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
+          TT_LLK_DISABLE_ASSERTS: "1"
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          MATRIX_CMD: ${{ matrix.test-group.cmd }}
+        run: |
+          python3 tests/llk_perf_offload.py pack --cmd "$MATRIX_CMD" \
+            --out "$RUNNER_TEMP/shadow/llk-elfs-${CHIP_ARCH}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}.tar.zst" \
+            --junit tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-compile.xml
+      - name: Upload the ELFs
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          path: ${{ runner.temp }}/shadow/llk-elfs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}.tar.zst
+          archive: false
+          retention-days: 1
+          if-no-files-found: error
+
+  llk-perf-exec:
+    needs: [load-test-matrix, build-images, llk-perf-shadow-compile]
+    if: >-
+      ${{ !cancelled() && inputs.architecture != 'quasar' && needs.build-images.result == 'success'
+          && needs.load-test-matrix.result == 'success' && needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:
@@ -135,6 +238,9 @@ jobs:
       image: ${{ needs.build-images.outputs.llk-ci-tag }}
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
     steps:
+      - name: Record the job start
+        if: ${{ inputs.shadow-compile-runner != '' }}
+        run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -162,14 +268,64 @@ jobs:
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
+      - name: "Offload: install zstd"
+        id: offload-zstd
+        if: ${{ inputs.offload-compile && inputs.shadow-compile-runner != '' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        shell: bash
+        run: command -v zstd || { apt-get update -qq && apt-get install -y -qq zstd; }
+      - name: "Offload: download the CPU-built ELFs"
+        id: offload-download
+        if: ${{ steps.offload-zstd.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: llk-elfs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}.tar.zst
+          path: ${{ runner.temp }}/offload-download
+      - name: "Offload: unpack and check the CPU-built ELFs"
+        id: offload-unpack
+        if: ${{ steps.offload-download.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
+          TT_LLK_DISABLE_ASSERTS: "1"
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          MATRIX_CMD: ${{ matrix.test-group.cmd }}
+        run: |
+          python3 tests/llk_perf_offload.py unpack --cmd "$MATRIX_CMD" \
+            --dir "$RUNNER_TEMP/offload-download" --delete-archive
+      - name: "Offload: fall back to a board compile"
+        id: offload-fallback
+        if: ${{ inputs.offload-compile && steps.offload-unpack.outcome != 'success' }}
+        shell: bash
+        run: |
+          echo "::warning::No usable CPU build for this shard; the board compiles it."
+          echo "### Offload fallback: the board compiled this shard" >> "$GITHUB_STEP_SUMMARY"
+      - name: "Offload: report the fallback to Slack"
+        if: ${{ steps.offload-fallback.outcome == 'success' && github.event_name == 'schedule' }}
+        continue-on-error: true
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "LLK perf CPU compile offload (board fell back to compiling ${{ matrix.test-group.name }})"
+          slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
+          status: failure
       - name: Run tests
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
           PIPELINE: ${{ inputs.pipeline }}
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          LLK_PERF_PHASE: ${{ steps.offload-unpack.outcome == 'success' && 'run' || 'all' }}
         run: |
           ${{ matrix.test-group.cmd }}
 
@@ -210,6 +366,166 @@ jobs:
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
           include_passed: true
           annotate_only: true
+
+      # Shadow steps: after the official upload, report-only, llk-shadow-* artifacts only.
+      - name: "Shadow: check the time left"
+        id: shadow-gate
+        if: ${{ success() && inputs.shadow-compile-runner != '' && !inputs.offload-compile }}
+        shell: bash
+        env:
+          TIMEOUT_MINUTES: ${{ matrix.test-group.timeout }}
+        run: |
+          # Must exceed the sum of the shadow step timeouts below (29 min).
+          left=$(( TIMEOUT_MINUTES - ( $(date +%s) - JOB_START_EPOCH ) / 60 ))
+          echo "minutes-left=$left" >> "$GITHUB_OUTPUT"
+          if (( left >= 33 )); then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Shadow pass skipped: ${left} min left before the ${TIMEOUT_MINUTES} min timeout"
+          fi
+      - name: "Shadow: install zstd"
+        id: shadow-zstd
+        if: ${{ steps.shadow-gate.outputs.run == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        run: command -v zstd || { apt-get update -qq && apt-get install -y -qq zstd; }
+      - name: "Shadow: download the CPU-built ELFs"
+        id: shadow-download
+        if: ${{ steps.shadow-zstd.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: llk-elfs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}.tar.zst
+          path: ${{ runner.temp }}/shadow-download
+      - name: "Shadow: compare the board build with the CPU build"
+        id: shadow-identity
+        if: ${{ steps.shadow-download.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 4
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          python3 tests/llk_perf_offload.py verify-tree \
+            --dir "$RUNNER_TEMP/shadow-download" \
+            --out "$RUNNER_TEMP/shadow-report/identity.json"
+      - name: "Shadow: unpack and check the CPU-built ELFs"
+        id: shadow-unpack
+        if: ${{ !cancelled() && steps.shadow-download.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
+          TT_LLK_DISABLE_ASSERTS: "1"
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          MATRIX_CMD: ${{ matrix.test-group.cmd }}
+        run: |
+          python3 tests/llk_perf_offload.py unpack --cmd "$MATRIX_CMD" \
+            --dir "$RUNNER_TEMP/shadow-download" --no-junit --delete-archive
+      - name: "Shadow: measure the CPU-built ELFs"
+        id: shadow-measure
+        if: ${{ steps.shadow-unpack.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
+          TT_LLK_DISABLE_ASSERTS: "1"
+          PIPELINE: ${{ inputs.pipeline }}
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          LLK_PERF_PHASE: run
+          LLK_PERF_EXITFIRST: "false"
+          LLK_PERF_REPORT_TAG: "-shadow"
+          PERF_RUN_TAG: ${{ env.PERF_RUN_TAG }}-shadow
+        run: |
+          ${{ matrix.test-group.cmd }}
+      - name: "Shadow: collect the results"
+        if: ${{ !cancelled() && steps.shadow-gate.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          STATUS: >-
+            {"ran": ${{ steps.shadow-gate.outputs.run }}, "minutes_left": ${{ steps.shadow-gate.outputs.minutes-left }},
+             "steps": {"zstd": "${{ steps.shadow-zstd.outcome }}", "download": "${{ steps.shadow-download.outcome }}",
+             "identity": "${{ steps.shadow-identity.outcome }}", "unpack": "${{ steps.shadow-unpack.outcome }}",
+             "measure": "${{ steps.shadow-measure.outcome }}"}}
+        run: |
+          mkdir -p "$RUNNER_TEMP/shadow-report/perf"
+          echo "$STATUS" > "$RUNNER_TEMP/shadow-report/status.json"
+          cp -r "perf_data/runs/${PERF_RUN_TAG}-shadow" "$RUNNER_TEMP/shadow-report/perf/" || true
+          cp tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-shadow*.xml "$RUNNER_TEMP/shadow-report/" || true
+      - name: "Shadow: upload the results"
+        if: ${{ !cancelled() && steps.shadow-gate.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          # Not perf-data-*: the warehouse upload and the gates must not read it.
+          name: llk-shadow-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
+          path: ${{ runner.temp }}/shadow-report/
+          retention-days: 14
+
+  llk-perf-shadow-compare:
+    name: "Shadow compile: compare board-built and CPU-built results"
+    needs: [build-images, load-test-matrix, llk-perf-exec]
+    if: ${{ !cancelled() && inputs.shadow-compile-runner != '' && !inputs.offload-compile && needs.llk-perf-exec.result != 'skipped' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm"
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref }}
+          sparse-checkout: |
+            tt_metal/tt-llk/tests
+            .github/actions/report-failure
+      - name: Download the official results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: perf-data-*${{ inputs.artifact-suffix }}
+          path: shadow-compare/official
+      - name: Download the shadow results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: llk-shadow-*${{ inputs.artifact-suffix }}
+          path: shadow-compare/shadow
+      - name: Compare
+        shell: bash
+        env:
+          EXPECTED_MATRIX: ${{ needs.load-test-matrix.outputs.matrix }}
+        run: |
+          python3 tt_metal/tt-llk/tests/llk_perf_shadow_compare.py \
+            --official shadow-compare/official --shadow shadow-compare/shadow \
+            --suffix "${{ inputs.artifact-suffix }}" --expected-matrix "$EXPECTED_MATRIX" \
+            --out shadow-compare/report.json
+      - name: Upload the comparison
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: llk-shadow-report${{ inputs.artifact-suffix }}
+          path: shadow-compare/report.json
+          retention-days: 30
+      - name: Report a CHECK to Slack
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "LLK perf shadow compile (report-only)"
+          slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
+          status: failure
 
   upload-perf-data:
     name: "Upload perf data to the warehouse"

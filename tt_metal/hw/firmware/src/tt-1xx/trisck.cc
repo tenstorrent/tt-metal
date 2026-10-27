@@ -8,6 +8,8 @@
 //      Need to make sure no other file includes these lists since it also include global parameter definitions
 // 2) instantiate global variables
 
+#include "defines_generated.h"
+
 #include "internal/firmware_common.h"
 #include "api/compile_time_args.h"
 
@@ -90,6 +92,12 @@ uint32_t _start() {
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
     run_kernel();
+#if defined(ARCH_BLACKHOLE) && defined(UCK_CHLKC_UNPACK) && defined(MATMUL_UNPACK_TTSYNC)
+    // the next kernel on the core starts with Auto TTSync off and the default MOP and REPLAY declarations
+    if constexpr (MATMUL_UNPACK_TTSYNC) {
+        _llk_unpack_AB_matmul_ttsync_restore_();
+    }
+#endif
     WAYPOINT("KD");
     EARLY_RETURN_FOR_DEBUG_EXIT;
 #endif

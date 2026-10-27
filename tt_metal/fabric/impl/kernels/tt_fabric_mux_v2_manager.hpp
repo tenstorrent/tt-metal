@@ -73,7 +73,12 @@ inline void record_retired_worker_credit(ManagerClientState& state) { state.loca
 
 // Bounded head poll: with flush=false credit notify, the next retire often races ahead of
 // HW `_sent`. A short spaced retry absorbs that gap without returning to service_client.
+// Adjusted for wormhole to account for longer credit notify latency.
+#if defined(ARCH_WORMHOLE)
+constexpr uint32_t kTridHeadSentRetryAttempts = 20;
+#else
 constexpr uint32_t kTridHeadSentRetryAttempts = 10;
+#endif
 
 inline void retire_published_ring_entries(
     volatile tt_l1_ptr tt::tt_fabric::FabricMuxV2SharedTridRingHeader* shared_ring_header_ptr,

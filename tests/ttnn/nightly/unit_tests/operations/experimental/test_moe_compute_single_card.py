@@ -185,6 +185,10 @@ def _run_moe_compute_single_card_test(
     ccl_knobs=False,
     local_output_memory_config=None,
     check_writes_owned_rows_only=False,
+    activation_limit=None,
+    weight_initializer=None,
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    fp32_dest_acc_en=False,
 ):
     """
     Single-card MoE compute test body. The op is called with cluster_axis=op_cluster_axis:
@@ -394,9 +398,16 @@ def _run_moe_compute_single_card_test(
 
     w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(mesh_device, hidden_size, N)
 
-    torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
-    torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
-    torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
+    if weight_initializer is None:
+        torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
+        torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
+        torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
+    else:
+        assert not has_bias and not compute_only, (
+            f"weight_initializer supports the fused path without bias only; got has_bias={has_bias}, "
+            f"compute_only={compute_only}"
+        )
+        torch_w0, torch_w1, torch_w2 = weight_initializer(num_layers, experts_per_device, hidden_size, N)
 
     # Bias tensors (mirrors test_moe_compute_6U.run_moe_compute_test bias block).
     # Use the same _bias_std and PyTorch shape conventions so the prepare-with-bias
@@ -424,6 +435,7 @@ def _run_moe_compute_single_card_test(
         torch_b1=torch_b1,
         torch_b2=torch_b2,
         activation_type=activation_type,
+        activation_limit=activation_limit,
     )
 
     w0_w1_mem_config, w2_mem_config, _, _ = get_weight_mem_configs(
@@ -517,6 +529,9 @@ def _run_moe_compute_single_card_test(
             optional_output_tensor=optional_combine_output_tensor,
             activation_type=activation_type,
             compute_only=compute_only,
+            activation_limit=activation_limit,
+            math_fidelity=math_fidelity,
+            fp32_dest_acc_en=fp32_dest_acc_en,
             **ccl_kwargs,
         )
 
@@ -527,6 +542,18 @@ def _run_moe_compute_single_card_test(
             ttnn.to_torch(device_tensor, mesh_composer=None).contiguous().view(torch.int16)
             for device_tensor in ttnn.get_device_tensors(tensor)
         ]
+
+    def check_structured_combine(tt_combine_output):
+        # Exact BFP4 weights leave no quantization error: check the gain as well as the correlation.
+        actual = ttnn.to_torch(ttnn.get_device_tensors(tt_combine_output)[0]).float()
+        expected = combine_goldens[0][layer_id].float()
+        assert tuple(actual.shape) == tuple(
+            expected.shape
+        ), f"output shape {tuple(actual.shape)}, golden {tuple(expected.shape)}"
+        assert bool(torch.isfinite(actual).all()), f"{int((~torch.isfinite(actual)).sum())} non-finite output values"
+        relative_l2 = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected).clamp_min(1e-8)
+        logger.debug(f"Structured weights combine relative L2: {float(relative_l2):.8f}")
+        assert relative_l2 < 0.03, f"relative L2 {float(relative_l2):.6f} >= 0.03"
 
     def deallocate_l1_moe_compute_outputs(output_tensors):
         # Slots 3 and 4 share a backing buffer; deallocating slot 4 releases the shared L1 output.
@@ -745,6 +772,8 @@ def _run_moe_compute_single_card_test(
     assert matmul_all_passed, "Matmul output tensor verification failed!"
     if not compute_only:
         assert combine_all_passed, "Combine output tensor verification failed!"
+        if weight_initializer is not None:
+            check_structured_combine(combine_output_tensor)
 
         # Read before the deallocations below: to_memory_config returns slot 5 itself when it is
         # already DRAM interleaved, so combine_output_tensor may alias tt_combine_output_tensor.
@@ -772,6 +801,8 @@ def _run_moe_compute_single_card_test(
         cache_hit_combine_all_passed = validate_combine_output(cache_hit_combine_output_tensor, base_pcc_threshold)
         logger.info(f"Combine Output Tensor Cache Hit: {'PASSED' if cache_hit_combine_all_passed else 'FAILED'}")
         assert cache_hit_combine_all_passed, "Combine output tensor cache-hit verification failed!"
+        if weight_initializer is not None:
+            check_structured_combine(cache_hit_combine_output_tensor)
 
         deallocate_l1_moe_compute_outputs(cache_hit_outputs)
         ttnn.deallocate(cache_hit_outputs[5])
@@ -1578,3 +1609,188 @@ def test_moe_compute_axis_extent_selects_path(mesh_device, mesh_shape, expect_er
         _call_moe_compute_for_rejection(mesh_device, cluster_axis=0, topology=None, num_links=0)
     with expect_error(RuntimeError, r"num_links must be greater than 0|un-initialized fabric context"):
         _call_moe_compute_for_rejection(mesh_device, cluster_axis=1, topology=None, num_links=0)
+
+
+def _clamp_boundary_weights(layers, experts, hidden, intermediate):
+    """Power-of-two sparse projections, exact in BFP4: every gate / up output is one scaled input and every
+    down output one scaled activation. Inputs cover [-0.5, 0.5), so gate x32 and up x64 reach both clamp
+    limits, and the negative gate branch stays unbounded."""
+    assert intermediate <= hidden, f"structured weights need intermediate <= hidden; got {intermediate} > {hidden}"
+    gate = torch.zeros((layers, experts, hidden, intermediate), dtype=torch.bfloat16)
+    up = torch.zeros_like(gate)
+    down = torch.zeros((layers, experts, intermediate, hidden), dtype=torch.bfloat16)
+    columns = torch.arange(intermediate)
+    gate[:, :, columns, columns] = 32.0
+    up[:, :, (columns + 17) % hidden, columns] = 64.0
+    down[:, :, columns, columns] = 1 / 32
+    return gate, up, down
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 500000}], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+@pytest.mark.parametrize("tokens", [1, 4])
+@pytest.mark.parametrize("activation_limit", [0.125, 10.0])
+def test_moe_compute_single_card_clamped_silu(mesh_device, mesh_shape, tokens, activation_limit):
+    """CLAMPED_SILU in SingleDevice with exact weights; the small limit clips both gate and up."""
+    hidden_size = 4096
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=2,
+        tokens_per_device=tokens,
+        selected_experts_k=2,
+        N=2048,
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.CLAMPED_SILU,
+        activation_limit=activation_limit,
+        compute_only=False,
+        weight_initializer=_clamp_boundary_weights,
+    )
+
+
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "activation_limit, error",
+    [
+        (None, "activation_limit is required for CLAMPED_SILU"),
+        (0.0, "activation_limit must be finite and positive"),
+        (-0.0, "activation_limit must be finite and positive"),
+        (-1.0, "activation_limit must be finite and positive"),
+        (float("nan"), "activation_limit must be finite and positive"),
+        (float("inf"), "activation_limit must be finite and positive"),
+        (-float("inf"), "activation_limit must be finite and positive"),
+    ],
+    ids=["missing", "zero", "negative-zero", "negative", "nan", "positive-inf", "negative-inf"],
+)
+def test_moe_compute_clamped_silu_rejects_invalid_limit(mesh_device, mesh_shape, expect_error, activation_limit, error):
+    before = mesh_device.num_program_cache_entries()
+    with expect_error(RuntimeError, error):
+        _call_moe_compute_for_rejection(
+            mesh_device, activation_type=MoEActivationFunction.CLAMPED_SILU, activation_limit=activation_limit
+        )
+    after = mesh_device.num_program_cache_entries()
+    assert after == before, f"a rejected call changed the program cache: {before} -> {after} entries"
+
+
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "activation_type", [None, MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU, MoEActivationFunction.GELU]
+)
+def test_moe_compute_other_activations_reject_limit(mesh_device, mesh_shape, expect_error, activation_type):
+    before = mesh_device.num_program_cache_entries()
+    with expect_error(RuntimeError, "must be omitted for other activations"):
+        _call_moe_compute_for_rejection(mesh_device, activation_type=activation_type, activation_limit=10.0)
+    after = mesh_device.num_program_cache_entries()
+    assert after == before, f"a rejected call changed the program cache: {before} -> {after} entries"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 500000}], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_clamped_silu_limit_is_program_cache_key(mesh_device, mesh_shape):
+    """A second limit compiles one new program; returning to the first hits its cached program."""
+    mesh_device.disable_and_clear_program_cache()
+    mesh_device.enable_program_cache()
+    hidden_size = 512
+    ring_n = effective_matmul_ring_size(mesh_device)
+    cache_entries = []
+    for activation_limit in (0.125, 10.0, 0.125):
+        _run_moe_compute_single_card_test(
+            mesh_device=mesh_device,
+            mesh_shape=mesh_shape,
+            experts_per_device=2,
+            tokens_per_device=4,
+            selected_experts_k=2,
+            N=max(256, 32 * ring_n),
+            hidden_size=hidden_size,
+            output_height_shard_dim=4,
+            output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
+            dtype=ttnn.bfloat16,
+            activation_type=MoEActivationFunction.CLAMPED_SILU,
+            activation_limit=activation_limit,
+            compute_only=False,
+            weight_initializer=_clamp_boundary_weights,
+        )
+        ttnn.synchronize_device(mesh_device)
+        cache_entries.append(mesh_device.num_program_cache_entries())
+    assert cache_entries[1] == cache_entries[0] + 1, "changing the clamp must compile exactly one new MoE program"
+    assert cache_entries[2] == cache_entries[1], "returning to the original clamp must hit its cached program"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 500000}], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+@pytest.mark.parametrize("tokens", [1, 4])
+@pytest.mark.parametrize(
+    "activation_type",
+    [
+        MoEActivationFunction.SILU,
+        MoEActivationFunction.SWIGLU,
+        MoEActivationFunction.GELU,
+        MoEActivationFunction.CLAMPED_SILU,
+    ],
+)
+def test_moe_compute_fp32_dest_activations(mesh_device, mesh_shape, tokens, activation_type):
+    """HiFi4 with FP32 DEST: every activation's packer SFPU path on four FP32 DEST tiles, exact weights."""
+    hidden_size = 768
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=2,
+        tokens_per_device=tokens,
+        selected_experts_k=2,
+        N=max(384, 32 * ring_n),
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
+        dtype=ttnn.bfloat16,
+        activation_type=activation_type,
+        activation_limit=10.0 if activation_type == MoEActivationFunction.CLAMPED_SILU else None,
+        compute_only=False,
+        weight_initializer=_clamp_boundary_weights,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 500000}], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_precision_is_program_cache_key(mesh_device, mesh_shape):
+    """Fidelity and DEST format each select their own cached program."""
+    mesh_device.disable_and_clear_program_cache()
+    mesh_device.enable_program_cache()
+    hidden_size = 768
+    ring_n = effective_matmul_ring_size(mesh_device)
+    modes = [
+        (ttnn.MathFidelity.LoFi, False),
+        (ttnn.MathFidelity.HiFi4, False),
+        (ttnn.MathFidelity.HiFi4, True),
+        (ttnn.MathFidelity.LoFi, True),
+        (ttnn.MathFidelity.LoFi, False),
+    ]
+    cache_entries = []
+    for fidelity, fp32_dest in modes:
+        _run_moe_compute_single_card_test(
+            mesh_device=mesh_device,
+            mesh_shape=mesh_shape,
+            experts_per_device=2,
+            tokens_per_device=4,
+            selected_experts_k=2,
+            N=max(384, 32 * ring_n),
+            hidden_size=hidden_size,
+            output_height_shard_dim=4,
+            output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
+            dtype=ttnn.bfloat16,
+            activation_type=MoEActivationFunction.CLAMPED_SILU,
+            activation_limit=10.0,
+            compute_only=False,
+            weight_initializer=_clamp_boundary_weights,
+            math_fidelity=fidelity,
+            fp32_dest_acc_en=fp32_dest,
+        )
+        ttnn.synchronize_device(mesh_device)
+        cache_entries.append(mesh_device.num_program_cache_entries())
+    assert cache_entries[1:4] == [cache_entries[0] + n for n in (1, 2, 3)], cache_entries
+    assert cache_entries[4] == cache_entries[3], "returning to default precision must hit its cached program"

@@ -400,7 +400,7 @@ class TtDFlashDrafter:
 
         ``layer_ack_base`` is the global layer id this drafter's layer 0 acks as, i.e. the verifier's total
         layer count (draft layer i -> global ``layer_ack_base + i``). Used by the host-callback path only;
-        the device path is counted positionally by ``LayerAckService`` and ignores the record's contents.
+        the device path labels records by position (``LayerAckService``) and checks the record's identity.
 
         ``metadata``: (slot_id, actual_start, actual_end) device tensors, replacing the host scalars for
         tracing. ``trace_controller`` routes the host-callback ack via ``layer_ack``.

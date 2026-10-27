@@ -211,7 +211,7 @@ void GlobalCircularBufferImpl::initialize_dram_sender_state_block(uint32_t max_n
 
     auto* noc_xy_words = reinterpret_cast<uint32_t*>(block_bytes.data() + sizeof(DramSenderStateBlock));
 
-    const auto& devices = device_->get_devices();
+    const auto& devices = device_->impl().get_devices();
     const std::vector<uint8_t> pages_sent_zero_bytes(2 * sizeof(uint32_t) * max_num_receivers_per_sender, 0);
     for (size_t s = 0; s < sender_receiver_core_mapping_.size(); ++s) {
         const CoreCoord& sender_logical = sender_receiver_core_mapping_[s].first;

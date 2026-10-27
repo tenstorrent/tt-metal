@@ -213,7 +213,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
              {"num_hw_blocks_per_core", num_hw_blocks_per_core},
              {"last_output_row_num_datums", last_output_row_num_datums},
              {"pack_num_pages_last_col", pack_num_pages_last_col},
-             {"pack_num_pages_last_row_col", pack_num_pages_last_row_col}},
+             {"pack_num_pages_last_row_col", pack_num_pages_last_row_col},
+             // ht<=8: compute holds both ends of the output shard DFB and must pop what it pushes.
+             {"out_is_self_loop", static_cast<uint32_t>(!ht_gt_8)}},
         .hw_config = compute_hw,
     };
 

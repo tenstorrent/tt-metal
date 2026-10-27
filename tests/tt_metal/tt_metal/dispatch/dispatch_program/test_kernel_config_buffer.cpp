@@ -58,7 +58,7 @@ protected:
     // determines where unreserved_base_ is positioned and thus the kernel config buffer size.
     // Larger worker_l1_size -> higher unreserved_base_ -> smaller kernel config buffer and vice versa
     void compute_memory_layout() {
-        TT_FATAL(!devices_.empty() && !devices_[0]->get_devices().empty(), "No devices available for testing");
+        TT_FATAL(!devices_.empty() && !devices_[0]->get_device_ids().empty(), "No devices available for testing");
 
         unreserved_base_ = devices_[0]->allocator()->get_base_allocator_addr(HalMemType::L1);
         auto l1_base = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);

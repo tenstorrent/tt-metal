@@ -25,6 +25,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_STREAM_NARROW)
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, !is_fp32_dest_acc_en
+#else
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
+#endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
         formats.unpack_B_src,
@@ -37,7 +42,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.TILE_SIZE_UNPACK_B,
         params.TILE_SIZE_UNPACK_A);
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
-    _llk_unpack_AB_matmul_init_<>(
+    _llk_unpack_AB_matmul_init_<MATMUL_UNPACK_INIT_TEMPLATE_ARGS>(
         params.UNPACK_TRANSPOSE_FACES,
         params.CT_DIM,
         params.RT_DIM,

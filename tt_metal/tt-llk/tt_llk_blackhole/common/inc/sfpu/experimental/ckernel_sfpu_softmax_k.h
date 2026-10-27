@@ -10,11 +10,11 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
+#include "ckernel_sfpu_binary_bcast.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_reduce.h"
 #include "lltt.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_binary_bcast.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 
 namespace ckernel
@@ -22,7 +22,7 @@ namespace ckernel
 namespace sfpu
 {
 
-// sfpu/ckernel_sfpu_binary_bcast.h (included above) used to define these; #49682 moved that header to
+// ckernel_sfpu_binary_bcast.h (included above) used to define these; #49682 moved that header to
 // LTILEID-derived lane masks and dropped them. Values carried over verbatim. SFPCONFIG target index used
 // with an immediate mask to force LReg[11] = 1.0 on specific SFPU instances (= specific "SFPU columns"
 // within each 8-lane group) and 0.0 on the others. Bit N of the mask corresponds to SFPU instance N; the
@@ -99,7 +99,7 @@ inline void _softmax_k_()
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
     TTI_SFPLOADI(p_sfpu::LREG4, 0, 0);
     TTI_SFPNOP;
-    sfpu::horizontal_reduce<false>();
+    sfpu::horizontal_reduce();
 
     // Broadcast the column-0 sum across all eight SFPU columns.
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG7, 0);

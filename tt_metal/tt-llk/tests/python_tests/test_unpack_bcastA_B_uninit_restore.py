@@ -7,8 +7,8 @@ This is Phase 3 + Phase 4 of the unpacker-stride coverage roadmap, covering the
 two PR #45127 changes that touch the SrcA **Y-stride**:
 
 * **C1 / Phase 4** — `_llk_unpack_bcastA_B_uninit_` now restores the canonical
-  Y-stride (`canonical_unpA_y_stride(dst)` = 16 for bf16) instead of the hardcoded
-  bcast value 32. NO existing test calls this function at all.
+  Y-stride (`canonical_unpA_y_stride(dst)`, FACE_R_DIM x the dst datum size) instead
+  of the hardcoded bcast value 32. NO existing test calls this function at all.
 * **C2 / Phase 3** — `_llk_unpack_reconfig_data_format_srca_impl_` (FACE_ROW_MAJOR
   branch) now also (re)writes that canonical Y-stride. The matmul-tilize test only
   ever calls the reconfig with `p_dim_stride_target::IGNORE`, so the new write is
@@ -17,22 +17,25 @@ two PR #45127 changes that touch the SrcA **Y-stride**:
 `_llk_unpack_bcastA_B_init_` mutates the SrcA Y-stride to 32. The kernel runs a
 bcast op (run 0), restores via the method under test (uninit OR reconfig), then
 does a plain `_llk_unpack_A_` datacopy of the ORIGINAL operand-A tile (run 1) with
-no other state reset. If the restore leaves Y-stride at 32 instead of the canonical
-16, run 1 reads SrcA with the wrong row stride and diverges from the datacopy golden.
+no other state reset. If the restore writes a wrong Y-stride, run 1 reads SrcA with
+the wrong row stride and diverges from the datacopy golden.
 
-Only 16-bit formats (Float16_b / Float16) expose the bug: for those the canonical
-Y-stride is 16, whereas the old hardcoded value was 32. (Float32's canonical stride
-is already 32, so it would not reveal the regression.)
+Limitation: this test only catches a restore that writes a wrong value, not a missing
+restore. `canonical_unpA_x_stride` buckets by `fmt & 0x3`, so Float16_b, the only
+format run here, gets the 2-byte stride: canonical Y-stride = 16 x 2 = 32, exactly the
+value `_llk_unpack_bcastA_B_init_` writes. Catching a missing restore needs a dst whose
+canonical Y-stride is not 32 (Tf32 -> 64, Bfp8_b -> 16) or a register readback like
+`unpack_canonical_baseline_check_test.cpp` does.
 """
 
 from dataclasses import dataclass
 
 import torch
 from conftest import skip_for_blackhole
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import DataCopyGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathOperation, format_dict
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -68,13 +71,7 @@ class RESTORE_VIA_RECONFIG(TemplateParameter):
 @parametrize(
     # Same format for both ops so the run-1 datacopy needs no data-format reconfig —
     # isolating the Y-stride restore as the only state change that matters.
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-        ],
-        same=True,
-    ),
+    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
     dest_acc=[DestAccumulation.No],
     # "uninit" -> Phase 4 (C1); "reconfig" -> Phase 3 (C2).
     restore_via_reconfig=[False, True],

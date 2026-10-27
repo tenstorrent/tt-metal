@@ -181,6 +181,7 @@ ttsl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    // semaphore is excluded from the key and re-applied by AllToAllAsyncProgram::override_runtime_arguments
     return tt::tt_metal::operation::hash_operation<AllToAllAsyncDeviceOperation>(
         operation_attributes.in_dim,
         operation_attributes.out_dim,
@@ -214,8 +215,7 @@ Tensor all_to_all_async(
     TT_FATAL(norm_out_dim >= 0 && norm_out_dim < rank, "Invalid out_dim: {}", out_dim);
 
     // Compute ring_size from number of devices
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
-    uint32_t num_devices = devices.size();
+    uint32_t num_devices = input_tensor.device_storage().get_coords().size();
     TT_FATAL(num_devices > 0, "all_to_all_async requires at least one device, but has {}", num_devices);
 
     ttnn::ccl::Topology ccl_topology = topology;

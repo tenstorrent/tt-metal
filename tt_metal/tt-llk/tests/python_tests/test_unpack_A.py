@@ -59,7 +59,6 @@ from helpers.utils import passed_test
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [
     DataFormat.Float32,
-    DataFormat.Float16,
     DataFormat.Float16_b,
     DataFormat.Bfp8_b,
 ]

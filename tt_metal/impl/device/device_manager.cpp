@@ -22,6 +22,8 @@
 #include "firmware/profiler_initializer.hpp"
 #include "firmware/fabric_firmware_initializer.hpp"
 #include "firmware/dispatch_kernel_initializer.hpp"
+#include "impl/streaming_profiler/sync/link_sync.hpp"
+#include "impl/streaming_profiler/sync/tile_sync.hpp"
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -447,7 +449,7 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
 }
 
 void DeviceManager::initialize_profiler() {
-    auto active_devices = this->get_all_active_devices_impl();
+    auto active_devices = this->get_all_active_devices();
     initializers_[ProfilerInitializer::key] =
         std::make_unique<ProfilerInitializer>(descriptor_, skip_remote_devices_, ctx_.profiler_state_manager().get());
     initializers_[ProfilerInitializer::key]->init(active_devices, init_done_);
@@ -461,7 +463,15 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
             tt::LogMetal, "Initializing Fabric and Dispatch Firmware for Galaxy cluster (this may take a few minutes)");
     }
 
-    auto active_devices = this->get_all_active_devices_impl();
+    auto active_devices = this->get_all_active_devices();
+
+    // These run before the fabric and dispatch firmware start. Measuring the tile clock offsets needs the Tensix, eth
+    // and DRAM cores to itself, and a fabric router that runs the device-to-device sync must not read what an earlier
+    // process left in its L1.
+    if (env_impl_.get_rtoptions().get_streaming_profiler_enabled()) {
+        streaming_profiler::measure_tile_clock_offsets(active_devices, ctx_.get_context_id());
+        streaming_profiler::link_sync::clear_port_state(active_devices, ctx_.get_context_id());
+    }
 
     initializers_[FabricFirmwareInitializer::key] =
         std::make_unique<FabricFirmwareInitializer>(descriptor_, env_impl_.get_control_plane());
@@ -485,7 +495,7 @@ void DeviceManager::reset_dispatch_topology() {
 void DeviceManager::initialize_dispatch_firmware(bool force_recreate_topology) {
     // This function is used by DispatchContext for manual FD setup.
     // It will re initialize the dispatch firmware on the active devices after it was manually disabled
-    auto active_devices = this->get_all_active_devices_impl();
+    auto active_devices = this->get_all_active_devices();
     init_done_.erase(DispatchKernelInitializer::key);
     if (force_recreate_topology) {
         reset_dispatch_topology();
@@ -538,7 +548,7 @@ const std::unordered_set<CoreCoord>& DeviceManager::get_virtual_dispatch_routing
 }
 
 void DeviceManager::init_firmware_on_active_devices() {
-    auto active_devices = this->get_all_active_devices_impl();
+    auto active_devices = this->get_all_active_devices();
 
     initializers_[CommandQueueInitializer::key] =
         std::make_unique<CommandQueueInitializer>(descriptor_, skip_remote_devices_);
@@ -559,27 +569,14 @@ DeviceManager::DeviceManager(MetalEnv& env, MetalContext& ctx) :
     log_debug(tt::LogMetal, "DeviceManager constructor");
 }
 
-Device* DeviceManager::get_active_device_internal(ChipId device_id) const {
+Device* DeviceManager::get_active_device(ChipId device_id) const {
     auto* device = get_device(device_id);
     TT_ASSERT(device != nullptr, "DeviceManager does not contain device {}", device_id);
     TT_ASSERT(device->is_initialized(), "Device {} is not initialized", device_id);
     return device;
 }
 
-IDevice* DeviceManager::get_active_device(ChipId device_id) const { return get_active_device_internal(device_id); }
-
-std::vector<IDevice*> DeviceManager::get_all_active_devices() const {
-    std::vector<IDevice*> user_devices;
-    user_devices.reserve(this->devices_.size());
-    for (const auto& device : this->devices_) {
-        if (device && device->is_initialized()) {
-            user_devices.push_back(device.get());
-        }
-    }
-    return user_devices;
-}
-
-std::vector<Device*> DeviceManager::get_all_active_devices_impl() const {
+std::vector<Device*> DeviceManager::get_all_active_devices() const {
     std::vector<Device*> user_devices;
     user_devices.reserve(this->devices_.size());
     for (const auto& device : this->devices_) {
@@ -651,7 +648,7 @@ bool DeviceManager::close_device(ChipId device_id) {
     // from device close, we can call this on remote devices too
     ZoneScoped;
     const auto& mmio_device_id = env_impl_.get_cluster().get_associated_mmio_device(device_id);
-    std::vector<IDevice*> devices_to_close;
+    std::vector<Device*> devices_to_close;
     for (const auto& mmio_controlled_device_id :
          env_impl_.get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id)) {
         auto* device = this->get_device(mmio_controlled_device_id);
@@ -662,7 +659,7 @@ bool DeviceManager::close_device(ChipId device_id) {
     return this->close_devices(devices_to_close);
 }
 
-bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*skip_synchronize*/) {
+bool DeviceManager::close_devices(const std::vector<Device*>& devices, bool /*skip_synchronize*/) {
     ZoneScoped;
 
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.

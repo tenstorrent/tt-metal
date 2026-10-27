@@ -1,10 +1,10 @@
 # Running LLK Tests on ttsim
 
 [ttsim](https://github.com/tenstorrent/ttsim) is Tenstorrent's functional
-simulator. It models a Wormhole or Blackhole chip end-to-end on a plain
-x86_64 Linux host — no silicon required. The LLK test suite can target
-ttsim with the same pytest invocations used for silicon, modulo a couple
-of environment variables.
+simulator. It models a Wormhole, Blackhole, or Quasar chip end-to-end on
+a plain x86_64 Linux host — no silicon required. The LLK test suite can
+target ttsim with the same pytest invocations used for silicon, modulo a
+couple of environment variables.
 
 ## Prerequisites
 
@@ -71,9 +71,50 @@ the most common format and no SFPU/tilize paths.
 
 | Arch | LLK tests on ttsim |
 |---|---|
-| Blackhole | Working (validated against ttsim v1.5.5). |
-| Wormhole B0 | Working (validated against ttsim v1.5.5). |
-| Quasar | Not validated. |
+| Blackhole | Working |
+| Wormhole B0 | Working |
+| Quasar | Working |
+
+## Skip list
+
+Tests that ttsim cannot run yet are listed in
+[`tests/pipeline_reorg/ttsim-skip-list.yaml`](../../../tests/pipeline_reorg/ttsim-skip-list.yaml),
+the same file the ttnn simulator jobs use.
+[`run_ttsim_regression.sh`](run_ttsim_regression.sh) reads it by default
+and passes the matching entries to pytest as `--deselect`. A plain
+`pytest` command does not consult the file.
+
+LLK entries are pytest node ids from the repo root, and they have to
+start with `tt_metal/tt-llk/tests/python_tests/`. The script drops that
+prefix, because this suite collects with `python_tests/` as its root.
+Put an entry under `wormhole_b0`, `blackhole`, or `quasar`. The ttnn
+jobs only apply the first two, so a `quasar:` entry does not affect them.
+
+`--deselect` matches a prefix of the node id. `file.py::test_name` also
+drops `test_name_extra`. To drop a single parametrized case, keep the
+`[` and enough of the parameter id that nothing else shares that prefix.
+
+```yaml
+quasar:
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_rand_quasar.py::test_rand_quasar
+```
+
+See which prefixes the script would drop, without downloading ttsim:
+
+```bash
+cd $TT_METAL_HOME/tt_metal/tt-llk/tests
+./run_ttsim_regression.sh -a quasar --list-ignore
+```
+
+`--no-ignore` runs every collected test. The weekly ttsim workflow does
+that, so a test on this list still appears in the weekly report. The
+Quasar PR gate, and LLK sanity when that leg is turned on, use the list.
+Those two jobs run the functional Quasar suite as two shards on ttsim
+and pass `--no-html`; they keep the JUnit XML and skip the HTML report.
+Editing the skip list or `tt_metal/ttsim-version` reruns the PR-gate
+shards. The script itself downloads the release named in
+`tt_metal/ttsim-version` when `TT_METAL_SIMULATOR` is unset, which is
+the build CI runs.
 
 ## Limitations
 
@@ -90,7 +131,8 @@ the most common format and no SFPU/tilize paths.
   `UnimplementedFunctionality` errors from the simulator. See the
   [ttsim README](https://github.com/tenstorrent/ttsim) for the error
   taxonomy, and file a bug against the ttsim repo with a minimal repro
-  if you hit one.
+  if you hit one. A gap that should not fail the Quasar PR gate belongs
+  on the skip list above; the weekly run still executes it.
 - **Performance.** ttsim is substantially slower than silicon for
   individual tests. Use it for correctness and CI coverage, not
   performance measurements.

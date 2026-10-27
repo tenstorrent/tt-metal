@@ -30,10 +30,12 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import Deep
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.v4 import golden
-from models.demos.deepseek_v3_d_p.tests.v4.test_block import _pack_streams, _test_config, _unpack_streams
+from models.demos.deepseek_v3_d_p.tests.v4.helpers import pack_streams, unpack_streams
+from models.demos.deepseek_v3_d_p.tests.v4.test_block import _test_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Block
+from models.demos.deepseek_v3_d_p.tt.v4.weights import v4_layer_from_checkpoint
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs
 
@@ -88,7 +90,7 @@ def run_chunked_block_v4(mesh_device, device_params, num_links, variant, layer_i
         f"[v4 chunked] {variant.__name__} layer {layer_idx}: {attn_kind} / {mlp_kind} / " f"{n_chunks} x {CHUNK} tokens"
     )
 
-    ref = golden.v4_layer_from_checkpoint(config, layer_idx, checkpoint)
+    ref = v4_layer_from_checkpoint(config, layer_idx, checkpoint)
     block = TtV4Block(
         mesh_device=mesh_device,
         config=config,
@@ -116,7 +118,7 @@ def run_chunked_block_v4(mesh_device, device_params, num_links, variant, layer_i
         start = chunk * CHUNK
         rows = trace.layer_input(layer_idx, start, start + CHUNK).reshape(1, CHUNK, n, config.hidden_size)
         tt_in = ttnn.from_torch(
-            _pack_streams(rows, tp_factor),
+            pack_streams(rows, tp_factor),
             device=mesh_device,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
@@ -128,7 +130,7 @@ def run_chunked_block_v4(mesh_device, device_params, num_links, variant, layer_i
             input_ids=trace.token_ids(CHUNK, start),
         )
         full = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3)))
-        out_accum[start : start + CHUNK] = _unpack_streams(full, n, tp_factor)[0].float()
+        out_accum[start : start + CHUNK] = unpack_streams(full, n, tp_factor)[0].float()
         ttnn.synchronize_device(mesh_device)
 
         # Every chunk drives identical device shapes, so one compiled program has to serve them all;

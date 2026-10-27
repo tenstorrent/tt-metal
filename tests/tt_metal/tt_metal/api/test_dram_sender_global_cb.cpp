@@ -125,11 +125,11 @@ TEST_F(DramSenderGCBMultiDeviceFixture, ConfigAndSenderStateUsePerDeviceDramTopo
     // green run read as proof.
     bool any_sender_placement_differs = false;
 
-    IDevice* reference_device = mesh_device_->get_devices().front();
+    auto* reference_device = mesh_device_->impl().get_devices().front();
     auto& cluster = MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster();
     std::vector<uint8_t> sender_state_bytes(sizeof(DramSenderStateBlock) + 2 * sizeof(uint32_t));
 
-    for (IDevice* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         for (uint32_t bank = 0; bank < num_banks; ++bank) {
             const std::vector<CoreCoord> device_senders = mesh_device_->impl().dram_sender_logical_cores(device, bank);
             ASSERT_EQ(device_senders.size(), kSendersPerBank);

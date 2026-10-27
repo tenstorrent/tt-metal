@@ -87,5 +87,4 @@ void kernel_main() {
     }
 
     noc.async_read_barrier();
-    dfb_out.push_back(num_sticks_unpadded);
 }

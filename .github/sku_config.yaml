@@ -197,6 +197,10 @@ skus:
       - tt-ubuntu-2204-medium-stable
     merge_queue_sku: cpu_medium_prio
 
+  cpu_xlarge:
+    runs_on:
+      - tt-ubuntu-2204-xlarge-stable
+
   # GitHub-hosted CPU-only runner: no Tenstorrent device, no Harbor access.
   # Used for host-only (CPU_-prefixed) subsets of device test binaries so scarce
   # self-hosted device runners only execute tests that actually need silicon.

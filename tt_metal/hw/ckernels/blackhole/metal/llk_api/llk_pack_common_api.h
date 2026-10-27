@@ -27,9 +27,9 @@
  *
  * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_math_set_fp32_dest_acc.
  */
-inline void llk_pack_wait_fp32_dest_acc() {
+inline void llk_pack_wait_fp32_dest_acc(bool enable) {
     SAN_HOOK(unsupported());
-    _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>();
+    _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(enable);
 }
 
 /**
@@ -119,13 +119,14 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @tparam math_clears_dest    Release without clearing; the math thread clears the section when it acquires it.
+ * @tparam words               Release word form (LLK_PACK_SECTION_WORDS in llk_pack_common.h); 0 is the full sequence.
  */
-template <bool is_fp32_dest_acc_en, bool math_clears_dest = false>
+template <bool is_fp32_dest_acc_en, bool math_clears_dest = false, std::uint32_t words = LLK_PACK_SECTION_WORDS>
 inline void llk_pack_dest_section_done() {
     static_assert(
         !math_clears_dest || !llk_unpack_may_write_dest(),
         "math_clears_dest needs the math thread as DEST's only writer: no 32-bit unpack source in the kernel");
-    _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en, !math_clears_dest>();
+    _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en, !math_clears_dest, words>();
 }
 
 /**
@@ -182,6 +183,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
         StateVal<Operand<Exu::Pack>::PartialFace>(false),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
+    LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],

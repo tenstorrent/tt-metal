@@ -37,12 +37,12 @@ from ...models.vae.vae_ltx import LTXVideoVAEAdapter, upsample_latent
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.fuse_loras import LoraSpec
-from ...utils.host_affinity import pin_one_thread_per_core
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.progress import Watchdog
 from ...utils.tensor import bf16_tensor
+from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from ...utils.tracing import StateTensor
 from ...utils.video import Audio
 
@@ -241,10 +241,6 @@ class LTXPipeline:
         lora_cache_capacity: int = 2,
         image_conditioning: bool | None = None,
     ):
-        # Host affinity, explicit (not an import side effect): in a process re-execed by
-        # ``reexec_pinned_before_torch`` this only caps torch's pool to the narrowed mask; otherwise it narrows
-        # the threads still carrying the full mask. tt-metal's own single-CPU placements are left alone.
-        pin_one_thread_per_core("LTX pipeline")
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
@@ -810,6 +806,7 @@ class LTXPipeline:
         self._prepare_vae_encoder()
         return self.vae_encoder(image_BCFHW)
 
+    @cap_torch_threads_to_half_the_cpus()
     def decode_latents(
         self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int, *, output_type: str = "float"
     ) -> torch.Tensor:
@@ -1338,6 +1335,7 @@ class LTXPipeline:
             return self.tt_mel_decoder.forward_traced(audio_spatial)
         return self.tt_mel_decoder(audio_spatial)
 
+    @cap_torch_threads_to_half_the_cpus()
     def decode_audio(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> Audio:
         """Decode an audio latent ``(1, audio_N, 128)`` to a waveform, fully on device.
 

@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define CKL_ELTWISE_CHAIN_PACK_BLOCK
-#define CKL_ELTWISE_CHAIN_PACK_BLOCK_IF (get_compile_time_arg_val(13) >= 4)  // CT arg 13: per_core_N
-
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
@@ -233,7 +230,7 @@ void kernel_main() {
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global_mcast(dfb_ex_global_mcast_id);
-    DataflowBuffer& dfb_ex_global = num_cores_per_mcast_group == 1 ? dfb_ex_partial : dfb_ex_global_mcast;
+    auto& dfb_ex_global = num_cores_per_mcast_group == 1 ? dfb_ex_partial : dfb_ex_global_mcast;
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_in(dfb_in_id);
     DataflowBuffer dfb_in_negative_mask(dfb_in_negative_mask_id);
@@ -245,9 +242,7 @@ void kernel_main() {
     DataflowBuffer dfb_outgamma(dfb_outgamma_id);
     // dfb_inbeta_id always aliases one of these buffers; bind the existing object.
     static_assert(dfb_inbeta_id == dfb_in_id || dfb_inbeta_id == dfb_out_id || dfb_inbeta_id == dfb_outgamma_id);
-    DataflowBuffer& dfb_inbeta = dfb_inbeta_id == dfb_in_id    ? dfb_in
-                                 : dfb_inbeta_id == dfb_out_id ? dfb_out
-                                                               : dfb_outgamma;
+    auto& dfb_inbeta = dfb_inbeta_id == dfb_in_id ? dfb_in : dfb_inbeta_id == dfb_out_id ? dfb_out : dfb_outgamma;
     DataflowBuffer dfb_rowvalid(dfb_rowvalid_id);
     DataflowBuffer dfb_scaler(dfb_scaler_id);
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
@@ -318,15 +313,8 @@ void kernel_main() {
                     }
                     tile_regs_commit();
                     tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-                    if constexpr (subblock_w > 2) {
-                        pack_block_mop(0, dfb_mask_last_id, subblock_w);
-                    } else
-#endif
-                    {
-                        for (uint32_t w = 0; w < subblock_w; ++w) {
-                            pack_tile(w, dfb_mask_last_id);
-                        }
+                    for (uint32_t w = 0; w < subblock_w; ++w) {
+                        pack_tile(w, dfb_mask_last_id);
                     }
                     tile_regs_release();
                     index_subblock_w_offset += subblock_w;
@@ -357,15 +345,8 @@ void kernel_main() {
                     }
                     tile_regs_commit();
                     tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-                    if constexpr (subblock_w > 2) {
-                        pack_block_mop(0, dfb_x_id, subblock_w);
-                    } else
-#endif
-                    {
-                        for (uint32_t dst_i = 0; dst_i < subblock_w; ++dst_i) {
-                            pack_tile(dst_i, dfb_x_id);
-                        }
+                    for (uint32_t dst_i = 0; dst_i < subblock_w; ++dst_i) {
+                        pack_tile(dst_i, dfb_x_id);
                     }
                     tile_regs_release();
                     index_subblock_w_offset += subblock_w;
@@ -389,15 +370,8 @@ void kernel_main() {
                     }
                     tile_regs_commit();
                     tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-                    if constexpr (subblock_w > 2) {
-                        pack_block_mop(0, dfb_x_id, subblock_w);
-                    } else
-#endif
-                    {
-                        for (uint32_t i = 0; i < subblock_w; ++i) {
-                            pack_tile(i, dfb_x_id);
-                        }
+                    for (uint32_t i = 0; i < subblock_w; ++i) {
+                        pack_tile(i, dfb_x_id);
                     }
                     tile_regs_release();
                     index_subblock_w_offset += subblock_w;
@@ -758,7 +732,11 @@ void kernel_main() {
 
     if constexpr (!use_negative_mask) {
         dfb_out.push_back(per_core_MN);
+#ifdef TILIZE_IN
+        // Only the tilize path fills dfb_in (and waits on it above); without TILIZE_IN nothing was
+        // pushed, so a pop would over-acknowledge and break the later gamma/beta waits on this CB.
         dfb_in.pop_front(per_core_MN);
+#endif
 
     } else {
         // nothing, for the negative mask implementation, cb_in_id is the only cb in use, and it already has the data

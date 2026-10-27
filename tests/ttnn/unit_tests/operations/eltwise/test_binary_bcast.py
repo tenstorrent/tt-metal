@@ -9,8 +9,8 @@ import ttnn
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_pcc,
 )
-from models.common.utility_functions import torch_random
-from models.common.utility_functions import divup
+from tt_py_test_utils_common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import divup
 from itertools import product as parameters
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt

@@ -102,10 +102,30 @@ ChipId GetPCIeDeviceID(ChipId device_id);
 /**
  * Creates a Program object which is the main container that bundles kernels, circular buffers, and/or semaphores for execution on device
  *
+ * The Program is bound to the default MetalContext, so this overload cannot be used with a MeshDevice that belongs to a
+ * different MetalEnv. Prefer the overload that takes a MeshDevice.
+ *
  * Return value: Program
  */
 // clang-format on
 Program CreateProgram();
+
+// clang-format off
+/**
+ * Creates a Program object which is the main container that bundles kernels, circular buffers, and/or semaphores for execution on device
+ *
+ * The Program is bound to the MetalEnv that owns `mesh_device`. All later operations on the Program (CreateKernel,
+ * CreateCircularBuffer, ...) resolve their hardware description, runtime options, and build environment from that env.
+ * The Program can only be compiled and enqueued on devices from the same MetalEnv.
+ *
+ * Return value: Program
+ *
+ * | Argument    | Description                                                | Type                       | Valid Range | Required |
+ * |-------------|------------------------------------------------------------|----------------------------|-------------|----------|
+ * | mesh_device | The mesh device whose MetalEnv the Program will be bound to | distributed::MeshDevice &  |             | Yes      |
+ */
+// clang-format on
+Program CreateProgram(distributed::MeshDevice& mesh_device);
 
 // clang-format off
 /**

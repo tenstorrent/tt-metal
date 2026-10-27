@@ -31,7 +31,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "impl/program/program_impl.hpp"
 #include "llk_device_fixture.hpp"

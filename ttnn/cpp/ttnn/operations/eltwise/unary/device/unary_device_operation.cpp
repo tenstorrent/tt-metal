@@ -15,10 +15,11 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::unary {
 namespace {
 
-// is_integer_dtype doesn't include INT8 as of now because no unary op has native INT8 implementation yet.
+// No unary op has a native INT8 implementation yet, so INT8 is accepted only by the dtype-agnostic
+// copy/typecast ops in unary_op_supports_integer_dtype.
 bool is_integer_dtype(DataType dtype) {
     return dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16 ||
-           dtype == DataType::UINT8;
+           dtype == DataType::UINT8 || dtype == DataType::INT8;
 }
 
 bool is_int32(DataType dtype) { return dtype == DataType::INT32; }
@@ -392,7 +393,9 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         distribution_key(
             output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr, "output"),
         src_shard_vol,
-        dst_shard_vol);
+        dst_shard_vol,
+        // The DRAM read flow selects kernel defines, dataflow buffers and semaphores.
+        get_dram_read_plan(attributes.op_chain, input_tensor, output_spec, attributes.worker_grid).flow);
 }
 
 bool UnaryDeviceOperation::skip_launch(
@@ -422,7 +425,7 @@ Tensor unary(
         optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : (output_memory_config);
 
     auto worker_grid = ttnn::operations::unary::get_worker_grid(
-        input, optional_output_tensor, std::optional<MemoryConfig>(output_memory_config), sub_core_grids);
+        op_chain, input, optional_output_tensor, std::optional<MemoryConfig>(output_memory_config), sub_core_grids);
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .op_chain = op_chain,

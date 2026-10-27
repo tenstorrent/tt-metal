@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import copy
 
 import ttnn
-from models.common.utility_functions import comp_allclose
+from tt_py_test_utils_common.utility_functions import comp_allclose
 from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import (
@@ -20,7 +20,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     to_torch,
     to_ttnn,
 )
-from models.common.utility_functions import skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 
 # Module-scoped device: opens once per file instead of once per test case.
 pytestmark = pytest.mark.use_module_device

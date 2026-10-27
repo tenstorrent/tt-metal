@@ -241,6 +241,7 @@ def test_dprint_tile(formats):
     case=[
         (DataFormat.Float16_b, DestAccumulation.Yes, False),
         (DataFormat.Float16_b, DestAccumulation.No, False),
+        # The only Float16 dest dump: covers the exp-A branch of the host dest decoder.
         (DataFormat.Float16, DestAccumulation.No, False),
     ],
 )

@@ -166,8 +166,8 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
     fabric2d()  # warm-up, before the signpost
     ttnn.synchronize_device(mesh_device)
 
-    # Synced after every launch. This doesn't change device time; it stops a chip that runs a launch
-    # ahead from overwriting a neighbour's forwarding buffer before the neighbour has read it.
+    # Synced after every launch so launches never overlap and each chip's device time is its own launch;
+    # overlap is the subject of test_dispatch_fabric2d_back_to_back and _overlapped_skew, not this one's.
     signpost("dispatch_fabric2d")
     for _ in range(ITERATIONS):
         fabric2d()

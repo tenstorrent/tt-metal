@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
 
 #include <cstdint>
 
@@ -34,8 +34,15 @@ struct MatmulSubblock {
 
 // Apply a packed affine pair to a state: out = affine_a * state + affine_b. Unlike matmul_affine, this emits only
 // the transformed state; affine_b is loaded directly into DST so the matmul accumulates without an L1 partial.
-template <uint32_t Mt, uint32_t Kt, uint32_t Vt, uint32_t AffineRowStride = Kt + Vt>
-FORCE_INLINE void matmul_add_affine_b(DataflowBuffer& affine, DataflowBuffer& state, DataflowBuffer& out) {
+template <
+    uint32_t Mt,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t AffineRowStride = Kt + Vt,
+    typename AffineDFB,
+    typename StateDFB,
+    typename OutDFB>
+FORCE_INLINE void matmul_add_affine_b(AffineDFB& affine, StateDFB& state, OutDFB& out) {
     constexpr uint32_t subblock_cols = MatmulSubblock<Mt, Vt>::columns;
     constexpr uint32_t subblock_rows = MatmulSubblock<Mt, Vt>::rows;
 
@@ -74,9 +81,6 @@ FORCE_INLINE void matmul_add_affine_b(DataflowBuffer& affine, DataflowBuffer& st
             }
             tile_regs_commit();
             tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, out_id, subblock_rows * subblock_cols);
-#else
             for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
                 for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
                     pack_tile(
@@ -85,7 +89,6 @@ FORCE_INLINE void matmul_add_affine_b(DataflowBuffer& affine, DataflowBuffer& st
                         (m + subblock_row) * Vt + n + subblock_col);
                 }
             }
-#endif
             tile_regs_release();
         }
     }
@@ -94,9 +97,17 @@ FORCE_INLINE void matmul_add_affine_b(DataflowBuffer& affine, DataflowBuffer& st
 
 // Compose packed affine pairs: out_a = a * affine_a and out_b = a * affine_b + local_b. The local B term is
 // preloaded into DST before matmul accumulation, then the packed A and B columns are emitted to separate buffers.
-template <uint32_t Mt, uint32_t Kt, uint32_t At, uint32_t Vt>
-FORCE_INLINE void matmul_affine(
-    DataflowBuffer& a, DataflowBuffer& affine, DataflowBuffer& local_b, DataflowBuffer& out_a, DataflowBuffer& out_b) {
+template <
+    uint32_t Mt,
+    uint32_t Kt,
+    uint32_t At,
+    uint32_t Vt,
+    typename ADFB,
+    typename AffineDFB,
+    typename LocalBDFB,
+    typename OutADFB,
+    typename OutBDFB>
+FORCE_INLINE void matmul_affine(ADFB& a, AffineDFB& affine, LocalBDFB& local_b, OutADFB& out_a, OutBDFB& out_b) {
     constexpr uint32_t Nt = At + Vt;
     constexpr uint32_t subblock_cols = MatmulSubblock<Mt, At, Vt>::columns;
     constexpr uint32_t subblock_rows = MatmulSubblock<Mt, At, Vt>::rows;
@@ -132,9 +143,6 @@ FORCE_INLINE void matmul_affine(
             }
             tile_regs_commit();
             tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, n < At ? out_a_id : out_b_id, subblock_rows * subblock_cols);
-#else
             for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
                 for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
                     const uint32_t column = n + subblock_col;
@@ -146,7 +154,6 @@ FORCE_INLINE void matmul_affine(
                     }
                 }
             }
-#endif
             tile_regs_release();
         }
     }
@@ -154,7 +161,8 @@ FORCE_INLINE void matmul_affine(
     out_b.push_back(Mt * Vt);
 }
 
-FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) {
+template <typename InDFB, typename OutDFB>
+FORCE_INLINE void copy(InDFB& in, OutDFB& out, uint32_t tiles) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     const uint32_t in_id = in.get_id();
@@ -170,13 +178,9 @@ FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) 
         }
         tile_regs_commit();
         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(0, out_id, batch_tiles);
-#else
         for (uint32_t tile = 0; tile < batch_tiles; ++tile) {
             pack_tile(tile, out_id, first_tile + tile);
         }
-#endif
         tile_regs_release();
     }
     out.push_back(tiles);

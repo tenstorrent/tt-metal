@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 
-from models.common.utility_functions import tt2torch_tensor
+from tt_py_test_utils_common.utility_functions import tt2torch_tensor
 
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_numeric_metrics, check_with_pcc

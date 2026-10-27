@@ -433,8 +433,9 @@ class SFTTrainer:
         """Restore training state from a checkpoint and advance ``self.step``.
 
         Delegates to ``checkpoint_loader`` if one was supplied; otherwise reads
-        the default ``{step, model_state}`` format and copies parameters via
-        ``param.assign(...)``.  Returns the step the checkpoint was taken at.
+        the default ``{step, model_state}`` format and loads parameters with
+        ``ttml.autograd.assign_numpy``, in the dtype each is stored in.  Returns
+        the step the checkpoint was taken at.
         Call before :meth:`train` — the loop iterates from ``self.step`` to
         ``cfg.max_steps`` so resume picks up exactly where the run stopped.
         """
@@ -442,8 +443,6 @@ class SFTTrainer:
             step = int(self._checkpoint_loader(self, path))
             self.step = step
             return step
-
-        import ml_dtypes
 
         with open(path, "rb") as f:
             ckpt = pickle.load(f)
@@ -454,11 +453,7 @@ class SFTTrainer:
         for name, arr in model_state.items():
             if name not in params:
                 continue
-            arr_bf16 = arr.astype(ml_dtypes.bfloat16)
-            restored = ttml.autograd.Tensor.from_numpy(
-                arr_bf16, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-            )
-            params[name].assign(restored)
+            ttml.autograd.assign_numpy(params[name], arr)
 
         self.step = step
         return step

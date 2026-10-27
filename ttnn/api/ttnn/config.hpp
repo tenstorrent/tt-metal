@@ -40,6 +40,12 @@ struct Config {
         float comparison_mode_pcc = 0.9999;
         std::filesystem::path root_report_path = "generated/ttnn/reports";
         std::optional<std::filesystem::path> report_name = std::nullopt;
+        // The CCL output-topology helpers (ttnn/operations/ccl/common/host/ccl_topology_utils.hpp) TT_FATAL on a
+        // TensorTopology they cannot label honestly when this is true. When false, they log and return no label, and
+        // the op's output keeps the input's label. false by default; intended to be set in CI (TTNN_CONFIG_OVERRIDES)
+        // as a follow-up. Appended last: the positional constructor and the index accessors below embed the member
+        // order, so a new member goes at the end.
+        bool strict_ccl_topology = false;
     };
 
 private:

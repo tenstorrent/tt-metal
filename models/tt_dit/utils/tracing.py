@@ -337,6 +337,19 @@ class Tracer:
             Tracer._traces_live[d.id()] -= 1
             ttnn.release_trace(d, trace_id)
 
+    def release_inputs(self) -> None:
+        """Drop the references to the last call's inputs, freeing the device memory they hold.
+
+        Only meaningful before a trace has been captured: afterwards the stored inputs are the
+        trace's own input buffers, which every execution writes through.
+        """
+        if self._trace_ids is not None:
+            msg = "inputs cannot be released once the trace has been captured"
+            raise RuntimeError(msg)
+
+        self._args = ()
+        self._kwargs = {}
+
     def release_function(self) -> None:
         """Drop the reference to the wrapped function.
 

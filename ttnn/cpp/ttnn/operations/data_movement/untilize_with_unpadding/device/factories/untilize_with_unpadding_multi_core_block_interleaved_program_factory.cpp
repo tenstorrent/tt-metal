@@ -226,10 +226,6 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
     uint32_t single_sub_block_size_cliff_col_wh =
         single_block_size_cliff_col * single_block_size / single_sub_block_size;
     KernelSpec::CompilerOptions::Defines compute_kernel_defines;
-    if (input_dfb_data_format == tt::DataFormat::Int32 || input_dfb_data_format == tt::DataFormat::UInt32 ||
-        input_dfb_data_format == tt::DataFormat::Float32) {
-        compute_kernel_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     const std::string compute_kernel_path(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh_metal2.cpp");

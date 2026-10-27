@@ -53,16 +53,21 @@ def gather_cache_tp0(tt_cache, mesh_device) -> torch.Tensor:
 def gather_cache_natural(tt_cache, mesh_device, tp_shard_kv: bool = False):
     """Gather a KV/indexer cache to host float32 in shard-major (block-cyclic) order, returning
     ``(cache [num_slots, seq_len_cache, head_dim], stripe_count)`` for the caller to un-rotate.
+    An ``MlaKvCache`` is decoded to logical [latent || RoPE] rows (incl. packed scaled FP8).
 
     TP-sharded, every tp-coord holds a distinct slice, so flatten into linear chip order (sp_coord*tp +
     tp_coord) over sp*tp stripes. Mirrors sparse_mla/test_sparse_mla.py::_cache_natural."""
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache
+
     sp, tp = mesh_device.shape[0], mesh_device.shape[1]
+    is_mla_cache = isinstance(tt_cache, MlaKvCache)
     cache_sr = ttnn.to_torch(
-        tt_cache,
+        tt_cache.storage if is_mla_cache else tt_cache,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(
-        torch.float32
     )  # [num_slots, tp, seq_dim, head_dim]
+    if is_mla_cache:
+        cache_sr = tt_cache.unpack_host(cache_sr)
+    cache_sr = cache_sr.to(torch.float32)
     if not tp_shard_kv:
         return cache_sr[:, 0], sp
     local = cache_sr.shape[2] // sp  # per-chip rows = seq_len_cache / (sp*tp)
@@ -70,6 +75,21 @@ def gather_cache_natural(tt_cache, mesh_device, tp_shard_kv: bool = False):
         [cache_sr[:, t, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)], dim=1
     )  # [num_slots, sp*tp*local == seq_len_cache, head_dim] in linear chip order
     return flat, sp * tp
+
+
+def tp_stripe_major_cache(linear_chip_order: torch.Tensor, sp: int, tp: int) -> torch.Tensor:
+    """[seq, D] in linear chip order -> [tp, seq/tp, D]: a dims[sp]=2, dims[tp]=1 mapper then puts rank
+    s*tp+t on chip (s, t). Inverse of gather_cache_natural(tp_shard_kv=True)."""
+    seq, head_dim = linear_chip_order.shape
+    local = seq // (sp * tp)
+    return linear_chip_order.reshape(sp, tp, local, head_dim).permute(1, 0, 2, 3).reshape(tp, seq // tp, head_dim)
+
+
+def preload_cache(host_tensor, storage) -> None:
+    """Copy a host-staged cache onto device, keeping the cache's declared topology (the copy would replace it)."""
+    topology = storage.tensor_topology()
+    ttnn.copy_host_to_device_tensor(host_tensor, storage)
+    storage.update_tensor_topology(topology)
 
 
 def unrotate_cache_layer(cache_slot: torch.Tensor, positions: torch.Tensor, total_len: int) -> torch.Tensor:

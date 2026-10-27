@@ -7,7 +7,7 @@
 import pytest
 import ttnn
 
-from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_wormhole_b0_or_blackhole
 from tests.ttnn.nightly.unit_tests.operations.fused import (
     test_two_pass_group_norm as group_norm,
     test_two_pass_group_norm_dram as group_norm_dram,

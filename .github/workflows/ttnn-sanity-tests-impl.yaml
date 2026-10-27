@@ -104,6 +104,7 @@ jobs:
       sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
       skip-args-wormhole_b0: ${{ steps.skip-list.outputs.skip-args-wormhole_b0 }}
       skip-args-blackhole: ${{ steps.skip-list.outputs.skip-args-blackhole }}
+      skip-args-quasar: ${{ steps.skip-list.outputs.skip-args-quasar }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_sanity_tests.yaml
       TTSIM_SKIP_LIST_YAML: ./tests/pipeline_reorg/ttsim-skip-list.yaml
@@ -141,8 +142,12 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, yaml
           skips = yaml.safe_load(open(os.environ["TTSIM_SKIP_LIST_YAML"])) or {}
-          for arch in ("wormhole_b0", "blackhole"):
-              args = " ".join("--deselect=" + p for p in (skips.get(arch) or []))
+          for arch in ("wormhole_b0", "blackhole", "quasar"):
+              ids = skips.get(arch) or []
+              bad = [p for p in ids if not isinstance(p, str)]
+              if bad:
+                  raise SystemExit(f"{arch} skip-list entries are not strings (quote ids that end in ':'): {bad}")
+              args = " ".join("--deselect=" + p for p in ids)
               print(f"skip-args-{arch}={args}")
           PY
 
@@ -450,7 +455,7 @@ jobs:
             export OMP_NUM_THREADS=2
             export MKL_NUM_THREADS=2
             export OMP_WAIT_POLICY=passive
-            export PYTEST_ADDOPTS="-p no:timeout -n 4 ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+            export PYTEST_ADDOPTS="-p no:timeout -n 4 ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
             # Strip the per-test `pytest --timeout N` from the cmd: the simulator is ~10-50x slower than
             # HW, so that per-op limit kills slow-but-correct ops (the job timeout-minutes is the backstop;
             # PYTEST_ADDOPTS also sets -p no:timeout). Run that cmd with xdist; if a worker crashes (xdist
@@ -458,7 +463,7 @@ jobs:
             # with --lf for actionable diagnostics.
             export cmd=$(printf '%s' '${{ matrix.test-group.cmd }}' | sed -E 's/[[:space:]]+--timeout[[:space:]]+[0-9]+//g')
             # PYTEST_ADDOPTS for the serial fallback re-run (drops -n 4); applied only on retry.
-            export SERIAL_ADDOPTS="-p no:timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+            export SERIAL_ADDOPTS="-p no:timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
             # Wrap the whole sim run in the host-load sidecar so its usage report covers both
             # the parallel run and any serial re-run. Written to /work/mem_report.json (even
             # on failure — emitted before the sidecar exits) so the Upload mem report step

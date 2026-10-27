@@ -54,6 +54,15 @@ struct MatmulDeviceOperation {
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
 
+// The in1 transport and output geometry that mcast_in0 over prefetcher_pipes requires: one output block
+// per worker, pipes of one kind and ring size whose ring holds the reader's lookahead, and, for DRAM-sender
+// pipes, a receiver-contiguous weight whose shards match this matmul's per-worker blocks.
+void validate_prefetcher_pipes_mcast_in0_geometry(
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
+    const Tensor& input_tensor_b,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config);
+
 MatmulParams create_matmul_attributes(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,

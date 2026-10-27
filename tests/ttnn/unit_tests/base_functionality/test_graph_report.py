@@ -6857,3 +6857,72 @@ class TestReportModesDuringTraceCapture:
                 ttnn.end_trace_capture(device, trace_id, cq_id=0)
                 ttnn.release_trace(device, trace_id)
         ttnn.synchronize_device(device)
+
+
+# mesh_device depends on silicon_arch_name, which conftest only parametrizes for tests that name it at collection.
+@pytest.mark.usefixtures("silicon_arch_name")
+def test_multihost_graph_report(request):
+    """
+    Smoke test for graph reports in a multi-process (multi-host) run: every rank captures its own graph and rank 0
+    merges all of them into one db.sqlite, with each rank's rows tagged by rank. The report is left under
+    generated/ttnn/reports, so this test also serves as a quick way to produce a small multi-rank report.
+
+    Skipped unless launched with tt-run on at least two ranks, e.g. on a T3K:
+        tt-run --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml \\
+            pytest tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_multihost_graph_report
+    """
+    if not ttnn.using_distributed_env():
+        pytest.skip("needs a multi-process run launched with tt-run")
+    if ttnn.graph.is_graph_capture_active():
+        pytest.skip("graph reporting is already on for this run, so the nested fixture would join that capture")
+    # Requested here rather than as an argument so a single-process run skips without opening the mesh.
+    mesh_device = request.getfixturevalue("mesh_device")
+    rank = int(ttnn.distributed_context_get_rank())
+    world_size = int(ttnn.distributed_context_get_size())
+
+    with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+        "enable_logging", True
+    ), ttnn.manage_config("enable_graph_report", True), ttnn.manage_config("report_name", None):
+        # The report directory is stamped with the current minute, so start every rank together.
+        ttnn.distributed_context_barrier()
+        with contextlib.contextmanager(graph_report.run_pytest_graph_report_fixture)(request):
+            report_path = Path(ttnn.CONFIG.report_path)
+            # Build on host and then move to device: from_torch(device=...) would touch the other ranks' chips.
+            x = ttnn.from_torch(
+                torch.rand((32, 32), dtype=torch.bfloat16),
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            # A few cheap ops, so each rank's part of the report has more than one operation.
+            x = ttnn.to_device(x, mesh_device)
+            y = ttnn.relu(x)
+            y = ttnn.add(y, x)
+            ttnn.multiply(y, x)
+            ttnn.synchronize_device(mesh_device)
+
+    config_path = report_path / f"config_{rank + 1}_of_{world_size}.json"
+    assert config_path.exists(), f"rank {rank} wrote no {config_path.name} under {report_path}"
+    if rank != 0:
+        return
+
+    db_path = report_path / "db.sqlite"
+    assert db_path.exists(), f"no db.sqlite written under {report_path}"
+    op_names = ("ttnn.relu", "ttnn.add", "ttnn.multiply")
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        op_counts = {}
+        for op_name in op_names:
+            cursor.execute("SELECT rank, COUNT(*) FROM operations WHERE name = ? GROUP BY rank", (op_name,))
+            op_counts[op_name] = dict(cursor.fetchall())
+        cursor.execute("SELECT rank, COUNT(*) FROM devices GROUP BY rank")
+        device_counts = dict(cursor.fetchall())
+    finally:
+        conn.close()
+    # Exact counts rather than presence, so an op recorded more than once or a rank missing devices is caught.
+    for op_name in op_names:
+        expected = {r: 1 for r in range(world_size)}
+        assert op_counts[op_name] == expected, f"{op_name} count per rank {op_counts[op_name]}, expected {expected}"
+    # Assumes every rank opens the same number of devices, as each half of the T3K two-rank binding does.
+    expected = {r: mesh_device.get_num_devices() for r in range(world_size)}
+    assert device_counts == expected, f"device count per rank {device_counts}, expected {expected}"

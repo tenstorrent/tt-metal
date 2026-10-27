@@ -35,11 +35,12 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::tt_metal::distributed::test {
 
@@ -275,9 +276,9 @@ TEST_F(DispatchContextFixture, RefusesResidentL1OnDispatchCores) {
     EXPECT_NE(error.find("core (12,0)"), std::string::npos);
     EXPECT_NE(error.find("core (12,1)"), std::string::npos);
     EXPECT_NE(error.find("interleaved allocation"), std::string::npos) << error;
-    for (IDevice* device : mesh->get_devices()) {
-        EXPECT_NE(error.find("chip " + std::to_string(device->id()) + " "), std::string::npos)
-            << "Missing conflict for chip " << device->id();
+    for (ChipId device_id : mesh->get_device_ids()) {
+        EXPECT_NE(error.find("chip " + std::to_string(device_id) + " "), std::string::npos)
+            << "Missing conflict for chip " << device_id;
     }
 
     // A refusal must leave the original Slow Dispatch queue usable.
@@ -620,7 +621,7 @@ TEST_F(DispatchContextFixture, ResidentOnRootRefusedWhenSessionEnteredFromSubmes
     ASSERT_FALSE(error.empty()) << "a root-owned resident on the dispatch cores was not seen from a submesh session";
     EXPECT_NE(error.find("core (12,0)"), std::string::npos);
     EXPECT_NE(error.find("core (12,1)"), std::string::npos);
-    const ChipId chip = submesh->get_devices()[0]->id();
+    const ChipId chip = submesh->get_device_ids()[0];
     EXPECT_NE(error.find("chip " + std::to_string(chip) + " "), std::string::npos) << error;
 }
 
@@ -655,12 +656,12 @@ TEST_F(DispatchContextFixture, ResidentOnSubmeshRefusedWhenSessionEnteredFromRoo
     EXPECT_NE(error.find("core (12,1)"), std::string::npos);
 
     // The report must be per chip: the chip holding the resident is named, no other chip is.
-    const ChipId resident_chip = submesh->get_devices()[0]->id();
+    const ChipId resident_chip = submesh->get_device_ids()[0];
     EXPECT_NE(error.find("chip " + std::to_string(resident_chip) + " "), std::string::npos) << error;
-    for (IDevice* device : mesh->get_devices()) {
-        if (device->id() != resident_chip) {
-            EXPECT_EQ(error.find("chip " + std::to_string(device->id()) + " "), std::string::npos)
-                << "chip " << device->id() << " holds no resident but was reported:\n"
+    for (ChipId device_id : mesh->get_device_ids()) {
+        if (device_id != resident_chip) {
+            EXPECT_EQ(error.find("chip " + std::to_string(device_id) + " "), std::string::npos)
+                << "chip " << device_id << " holds no resident but was reported:\n"
                 << error;
         }
     }
@@ -700,8 +701,8 @@ TEST_F(DispatchContextFixture, ResidentOnSiblingSubmeshRefused) {
 
     const std::string error = capture_default_fd_refusal(session_mesh.get());
     ASSERT_FALSE(error.empty()) << "a resident owned by a sibling submesh was not seen";
-    const ChipId resident_chip = resident_mesh->get_devices()[0]->id();
-    const ChipId session_chip = session_mesh->get_devices()[0]->id();
+    const ChipId resident_chip = resident_mesh->get_device_ids()[0];
+    const ChipId session_chip = session_mesh->get_device_ids()[0];
     EXPECT_NE(error.find("chip " + std::to_string(resident_chip) + " "), std::string::npos) << error;
     EXPECT_EQ(error.find("chip " + std::to_string(session_chip) + " "), std::string::npos)
         << "the session's own chip holds nothing but was reported:\n"
@@ -741,7 +742,7 @@ TEST_F(DispatchContextFixture, ResidentOnNestedSubmeshRefused) {
 
     const std::string error = capture_default_fd_refusal(mesh.get());
     ASSERT_FALSE(error.empty()) << "a resident owned by a submesh-of-a-submesh was not seen from a root session";
-    const ChipId leaf_chip = leaf->get_devices()[0]->id();
+    const ChipId leaf_chip = leaf->get_device_ids()[0];
     EXPECT_NE(error.find("chip " + std::to_string(leaf_chip) + " "), std::string::npos) << error;
 }
 
@@ -762,7 +763,7 @@ TEST_F(DispatchContextFixture, ChipArenaResidentOnPrefetchCoreRefused) {
         GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
     }
 
-    IDevice* device = mesh->get_devices()[0];
+    auto* device = mesh->impl().get_devices()[0];
     auto& arena = device->allocator_impl()->persistent_l1();
     const auto allocation = arena.allocate(CoreRangeSet(CoreRange({12, 0})), /*size=*/4096, /*alignment=*/64);
     const std::string error = capture_default_fd_refusal(mesh.get());
@@ -808,7 +809,7 @@ TEST_F(DispatchContextFixture, NdShardedResidentWithDataOnDispatchCoresRefused) 
     EXPECT_NE(error.find("core (12,1)"), std::string::npos);
 
     // Ground truth: the page at the resident's address on (12,1) of chip 0 really is inside the footprint.
-    IDevice* device = mesh->get_devices()[0];
+    auto* device = mesh->impl().get_devices()[0];
     std::vector<uint32_t> pattern(page_size / sizeof(uint32_t));
     std::iota(pattern.begin(), pattern.end(), 0x20190400);
     ::tt::tt_metal::detail::WriteToDeviceL1(
@@ -905,7 +906,7 @@ TEST_F(DispatchContextFixture, LedgerGuardIsBlindToFixedAddressAndRawWrites) {
         GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
     }
 
-    IDevice* device = mesh->get_devices()[0];
+    auto* device = mesh->impl().get_devices()[0];
     const DeviceAddr base = allocator_l1_base(mesh.get());
     const DeviceAddr l1_top = mesh->l1_size_per_core();
 
@@ -1058,7 +1059,7 @@ TEST_F(DispatchContextFixture, UnitMeshSessionDoesNotThrowTrackerError) {
     ASSERT_NE(unit->get_parent_mesh(), nullptr);
     // Documents the cause: the parent view exists and has local devices, but was never initialized.
     EXPECT_FALSE(unit->get_parent_mesh()->is_initialized());
-    EXPECT_FALSE(unit->get_parent_mesh()->get_view().get_devices().empty());
+    EXPECT_FALSE(unit->get_parent_mesh()->get_device_ids().empty());
 
     std::string error;
     try {

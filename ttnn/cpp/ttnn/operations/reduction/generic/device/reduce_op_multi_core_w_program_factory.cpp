@@ -321,6 +321,9 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     }
     // Accurate fp32: route Float32 through the SFPU (needs 32-bit DEST)
     const bool fp32_sfpu_reduce = is_sfpu_reduce && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en;
+    if (rm_path && dst_cb_data_format != src0_cb_data_format) {
+        reduce_defines["REDUCE_RM_MIXED_FORMAT"] = "1";
+    }
 
     // ---- Reader kernel ----
     Group<DFBBinding> reader_dfb_bindings;

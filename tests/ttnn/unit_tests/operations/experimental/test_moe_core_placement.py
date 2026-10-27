@@ -5,7 +5,7 @@
 import pytest
 import ttnn
 
-from models.common.utility_functions import is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim
 
 

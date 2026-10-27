@@ -65,8 +65,9 @@ python3 -m pytest -v --tt-arch blackhole \
   'models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc[llama31]'
 ```
 
-To exercise both allocated slots, set `PREFILL_PRODUCER_NUM_USERS=2`. One trace
-can be reused for both; use `PREFILL_PRODUCER_SLOT_TRACES=/path/A,/path/B` with
+To exercise both allocated slots, set `PREFILL_PRODUCER_NUM_USERS=2`; to allocate
+more, also set `PREFILL_NUM_USERS` (for example both to 4). One trace can be
+reused for every slot; use `PREFILL_PRODUCER_SLOT_TRACES=/path/A,/path/B` with
 different prompts to detect swapped slot identities. The synthetic table tests
 continue to check both allocated slots even when the model accuracy test uses one.
 
@@ -98,7 +99,8 @@ Reference validation runs on the MPI worker, where the model's Python dependenci
 ## Address-table contract
 
 The table contains 16 configurations, ordered `k_h0` through `k_h7`, then
-`v_h0` through `v_h7`. Each describes 32 layers, two slots and the configured token capacity.
+`v_h0` through `v_h7`. Each describes 32 layers, the `PREFILL_NUM_USERS` slots (two by default)
+and the configured token capacity.
 A page contains 32 tokens × 128 head elements: four BFP8 tiles, each 1088 bytes,
 for a total of 4352 bytes. K is stored after RoPE in Meta-interleaved order.
 
@@ -131,7 +133,7 @@ synthetic address test remains the focused 2K case. The standard launcher passed
 all-layer K/V PCC at 2K, 4K, 8K, 16K, 32K and 64K with one active slot, using
 prefixes of the saved 128K reference. Twelve consecutive 4K runs also passed
 without resets between runs. These checks use the unchanged PCC threshold of
-0.99. Two allocated slots remain a model constraint.
+0.99.
 
 ## Real loopback migration remains a separate gate
 

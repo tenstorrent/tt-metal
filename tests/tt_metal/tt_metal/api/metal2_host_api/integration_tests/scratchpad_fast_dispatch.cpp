@@ -15,7 +15,7 @@
 //     base address to the kernel.
 //   - ScratchpadNocEndpoints: the scratchpad works as either endpoint of a NoC transaction.
 //
-// Both rely on the same host-visibility trick: the kernel writes its Scratchpad::get_base_address()
+// Both rely on the same host-visibility trick: the kernel writes its scratchpad base address
 // to a host-known fixed L1 address (passed as a named RTA), which lets the host find the
 // framework-allocated region and read it back directly.
 
@@ -46,7 +46,7 @@ namespace {
 // Verification approach (see scratchpad_write_pattern.cpp for the device side):
 //   - One DM kernel binds a single 64-byte (16 x uint32_t) scratchpad.
 //   - The kernel writes a known pattern {0xC0DE0000 + i} into scratchpad[0..16), then writes its
-//     own Scratchpad::get_base_address() into a host-known fixed L1 address (passed as a named RTA).
+//     own scratchpad base address into a host-known fixed L1 address (passed as a named RTA).
 //   - The host reads that fixed address to learn the scratchpad's allocated base address, then reads
 //     64 bytes of L1 at that base address and checks the pattern.
 //   This closes the loop on both (a) and (b): the host both learns where the framework put the

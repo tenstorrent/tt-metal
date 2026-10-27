@@ -181,15 +181,8 @@ struct Rope {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-                if constexpr (Wt > 1) {
-                    pack_block_mop(0, args.rotated_in_interm_cb, Wt);
-                } else
-#endif
-                {
-                    for (uint32_t j = 0; j < Wt; ++j) {
-                        pack_tile(j, args.rotated_in_interm_cb, j);
-                    }
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    pack_tile(j, args.rotated_in_interm_cb, j);
                 }
                 tile_regs_release();
                 cb_push_back(args.rotated_in_interm_cb, Wt);
@@ -215,15 +208,8 @@ struct Rope {
 
                 tile_regs_commit();
                 tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-                if constexpr (Wt > 1) {
-                    pack_block_mop(0, args.out_cb, Wt);
-                } else
-#endif
-                {
-                    for (uint32_t j = 0; j < Wt; ++j) {
-                        pack_tile(j, args.out_cb);
-                    }
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    pack_tile(j, args.out_cb);
                 }
                 tile_regs_release();
                 cb_push_back(args.out_cb, Wt);

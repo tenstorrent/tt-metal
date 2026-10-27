@@ -24,6 +24,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/api/allocator/hybrid_allocator_fixture.hpp"
 #include "impl/context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -156,7 +157,7 @@ TEST_F(HybridAllocatorTest, RefusesToPlaceBesideAPerCoreHogWhenNotScoped) {
 // same BufferShardingArgs behave as range lockstep through a mesh and as default lockstep through
 // a device, so the dependency subtraction is scoped too. This exercises that second path.
 TEST_F(HybridAllocatorTest, ScopesDependenciesOnADirectBufferCreate) {
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     ASSERT_GE(device->compute_with_storage_grid_size().x, 2u);
     const CoreCoord hogged_core(0, 0);
     const CoreCoord free_core(1, 0);
@@ -190,7 +191,7 @@ TEST_F(HybridAllocatorTest, ScopesDependenciesOnADirectBufferCreate) {
 // A sub-region view shares its parent's allocation, so the query must agree on both. view()
 // rebuilds BufferShardingArgs from the specs alone, which drops anything held outside them.
 TEST_F(HybridAllocatorTest, SurvivesASubRegionView) {
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     constexpr DeviceAddr kPages = 4;
     auto args = BufferShardingArgs(
         ShardSpecBuffer(CoreRangeSet(CoreCoord(0, 0)), {1, kPages}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, kPages}),
@@ -210,7 +211,7 @@ TEST_F(HybridAllocatorTest, SurvivesASubRegionView) {
 // Only the L1 branch of allocate_buffer reads the flag, so anywhere else it would be a no-op that
 // is_range_lockstep_allocation() still reports as enabled.
 TEST_F(HybridAllocatorTest, RejectsNonL1Buffers) {
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     auto args = BufferShardingArgs(
         ShardSpecBuffer(CoreRangeSet(CoreCoord(0, 0)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1}),
         TensorMemoryLayout::HEIGHT_SHARDED);

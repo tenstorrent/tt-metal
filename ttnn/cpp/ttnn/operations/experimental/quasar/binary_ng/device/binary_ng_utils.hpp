@@ -165,7 +165,7 @@ struct NativeKnob {
 // shard's tiles past the largest multiple of that count go through small owned rings, and a slice is borrowed
 // only when that count divides it.
 struct NativeTuning {
-    bool enabled = false;        // TTNN_QSR_NATIVE; 0 and unset both mean OFF
+    bool enabled = true;         // TTNN_QSR_NATIVE: on unless set to 0
     bool implicit_sync = false;  // NOT consumed, and native_tuning() throws if set: enabling it needs the
                                  // guarantee that no thread draws zero tiles, which uneven tile counts removed
     NativeKnob reader_threads{"TTNN_QSR_READER_THREADS"};    // R
@@ -184,11 +184,20 @@ struct NativeTuning {
 // The user DM cores of a Quasar cluster, which the reader and the writer threads share.
 inline constexpr uint32_t kNativeUserDmCores = 6;
 
-// What a program moves over the NoC, and from where. A borrowed operand moves nothing.
+// The largest compute batch of a native compute kernel: the tiles that one DST section holds at the factory's compute
+// config, 8 slots in a 16-bit DST and 4 in a 32-bit DST. The FPU kernel takes one slot per tile, and the SFPU kernel
+// two, the copies of the two operands. The legacy binary_ng runs the SFPU kernel at 2 in a 16-bit DST, as 4 fails on
+// Blackhole for a reason not yet known.
+uint32_t native_max_tiles_per_cycle(bool sfpu, bool dst_32bit);
+
+// What a program moves over the NoC, and from where, and which compute kernel it runs in which DST mode. A borrowed
+// operand moves nothing.
 struct NativeMoves {
-    bool inputs = false;  // a or b is read over the NoC
-    bool output = false;  // c is written over the NoC
-    bool dram = false;    // a, b or c is in DRAM, interleaved or sharded
+    bool inputs = false;     // a or b is read over the NoC
+    bool output = false;     // c is written over the NoC
+    bool dram = false;       // a, b or c is in DRAM, interleaved or sharded
+    bool sfpu = false;       // the SFPU compute kernel runs the op
+    bool dst_32bit = false;  // the DST is 32-bit (fp32_dest_acc_en)
 };
 
 // The values one program runs with.
@@ -204,12 +213,19 @@ struct NativeConfig {
 // The compute count of every program: the knob, else the rule's 4.
 uint32_t native_compute_threads(const NativeTuning& tuning);
 
+// True when every tile of a compute batch comes out right. The SFPU kernel copies each operand through the
+// single-operand unpack, which strides, so its batches are exact at every ring stride. The FPU kernel's two-operand
+// unpack steps one ring entry per tile of a batch, so its batches are exact only at ring stride 1, R = C = W = 1. The
+// rule batches only where this holds, and the factory warns where a set batch breaks it.
+bool native_compute_batch_exact(const NativeConfig& config, bool sfpu);
+
 // Each set knob, else the rule's value for what the program moves. The rule takes the most threads and, with
-// every operand in L1, the largest batches the hardware allows: C = 4; R = C when an input moves, else 1;
+// every operand in L1, the largest batches that come out right: C = 4; R = C when an input moves, else 1;
 // W = min(C, 6 - R) when the output moves, else 1, so R + W fits the 6 user DM cores; DM batch 8; compute batch
-// 8 where R <= C and W <= C, else 1; both batches 1 beside a DRAM operand; ring depth two batches per thread, a
-// multiple of each. A borrowed input runs R = 1 and a borrowed output W = 1, whatever is set. Above ring
-// stride 1 only one tile of each compute batch comes out right.
+// native_max_tiles_per_cycle on the SFPU kernel where R <= C and W <= C, and on the FPU kernel at R = C = W = 1 only,
+// else 1; both batches 1 beside a DRAM operand; ring depth two batches per thread, a multiple of each. A borrowed input
+// runs R = 1 and a borrowed output W = 1, whatever is set. Above ring stride 1 only one tile of each FPU-kernel
+// compute batch comes out right, so the rule does not batch the FPU kernel there; a set batch still runs.
 NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves);
 
 // "8 (rule)" or "8 (TTNN_QSR_DM_BATCH)": a value the knob or the rule gave, with its source, for messages.

@@ -125,9 +125,6 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
 
     // ---- Compute kernels (full + cliff) ----
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (float32_dtype) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
     auto make_compute_hw = [&]() -> ComputeHardwareConfig {
         ttnn::ComputeKernelConfig cfg{
             .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};

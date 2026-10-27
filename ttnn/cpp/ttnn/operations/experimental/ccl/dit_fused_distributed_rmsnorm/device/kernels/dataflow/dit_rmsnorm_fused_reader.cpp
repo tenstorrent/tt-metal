@@ -25,7 +25,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/core_local_mem.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {

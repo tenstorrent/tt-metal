@@ -5,22 +5,22 @@
 //
 // Both halves run on ALL the op's cores, one after the other, and they share L1: their circular
 // buffers are laid over one arena and their semaphores are drawn from one id block. So the pass
-// boundary is not per-core ordering -- core X's pass B multicasts weights into core Y's L1, over
-// the very buffers Y may still be reading for pass A. Nothing may cross until pass A is finished
+// boundary is not per-core ordering -- core X's the second pass multicasts weights into core Y's L1, over
+// the very buffers Y may still be reading for the first pass. Nothing may cross until the first pass is finished
 // EVERYWHERE.
 //
 // Both data-movement kernels arrive, and the master waits for two arrivals per core. That is what
 // makes the barrier sufficient without a separate local handshake: the writer is the last stage of
-// a core's pipeline, so its pass A completing implies that core's compute has already pushed
+// a core's pipeline, so its the first pass completing implies that core's compute has already pushed
 // everything and finished reading. Waiting on readers alone would let a core whose reader ran dry
 // early release the grid while its own compute was still mid-matmul.
 //
 // The compute kernels do not take part, and cannot -- a TRISC has no NoC. They are gated
-// implicitly: compute's first pass-B action that touches shared L1 is packing an output, which
+// implicitly: compute's first second-pass action that touches shared L1 is packing an output, which
 // cannot happen until it has inputs, and those only arrive from a reader already past the barrier.
 //
-// The master also ZEROES the shared semaphore block before releasing. Pass A leaves those ids at
-// arbitrary values and pass B's waits assume they start at zero; doing it from the master, before
+// The master also ZEROES the shared semaphore block before releasing. The first pass leaves those ids at
+// arbitrary values and the second pass's waits assume they start at zero; doing it from the master, before
 // the release, means no core can observe a half-reset block.
 
 #pragma once
@@ -68,10 +68,10 @@ inline void hybrid_pass_barrier() {
     Noc noc;
     Semaphore<> barrier_sem(d::arg(d::BARRIER_SEM_ID));
 
-    // Everything this kernel issued for pass A must have landed before it claims to be done: an
+    // Everything this kernel issued for the first pass must have landed before it claims to be done: an
     // increment that overtakes an outstanding transaction would release the grid over data still
     // moving. READS matter as much as writes here -- the two halves' circular buffers alias the
-    // same arena bytes, so a pass-A read landing after the release is overwritten by pass B.
+    // same arena bytes, so a pass-A read landing after the release is overwritten by the second pass.
     noc.async_write_barrier();
     noc.async_read_barrier();
     noc_async_atomic_barrier();
@@ -81,7 +81,7 @@ inline void hybrid_pass_barrier() {
     if (d::arg(d::IS_MASTER) != 0) {
         barrier_sem.wait_min(d::arg(d::TOTAL_ARRIVALS));
 
-        // Hand pass B a zeroed block. Done per id through the public set/multicast pair rather
+        // Hand the second pass a zeroed block. Done per id through the public set/multicast pair rather
         // than as one write over the semaphore region, so the barrier's own id -- which must
         // survive -- cannot be caught by a range that grows later.
         const uint32_t shared = d::arg(d::SHARED_SEM_COUNT);
@@ -101,7 +101,7 @@ inline void hybrid_pass_barrier() {
         }
         // The zeroing must have LANDED before anyone is let go -- a barrier, not a flush.
         // async_writes_flushed only waits for departure, and the release below is a local store
-        // that frees this core's writer immediately; that writer issues pass B on the OTHER NoC,
+        // that frees this core's writer immediately; that writer issues the second pass on the OTHER NoC,
         // which has no ordering against this one. Its increment could then reach a remote
         // semaphore ahead of this still-in-flight zeroing multicast and be erased, hanging the
         // receiver.
@@ -124,7 +124,7 @@ inline void hybrid_pass_barrier() {
 
 #else
 
-// Pass A is not run, or this is a compute kernel with no NoC of its own.
+// The first pass is not run, or this is a compute kernel with no NoC of its own.
 inline void hybrid_pass_barrier() {}
 
 #endif

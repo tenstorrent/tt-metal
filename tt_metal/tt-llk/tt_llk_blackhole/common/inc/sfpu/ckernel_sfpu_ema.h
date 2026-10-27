@@ -19,6 +19,7 @@
  * respectively from the current tile in dst 0.
  * The element format is taken from the configured DEST format rather than fixed here, so the
  * load stays correct under both a 16-bit and a 32-bit DEST.
+ * Loads and stores use ADDR_MOD_7, which the EMA init programs with zero increments, so a preceding FPU init cannot skew DEST.
  */
 template <std::uint32_t I, std::uint32_t J>
 sfpi_inline void _ema_load_current_input_()
@@ -30,10 +31,10 @@ sfpi_inline void _ema_load_current_input_()
     constexpr std::uint32_t offset2        = dst_reg_offset + 16;
     constexpr std::uint32_t offset3        = dst_reg_offset + 18;
 
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset0); // row0
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset1); // row1
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset2); // row2
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset3); // row3
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset0);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset1);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset2);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset3);
 }
 
 /**
@@ -57,10 +58,10 @@ sfpi_inline void _ema_store_current_input_()
     constexpr std::uint32_t offset2        = dst_reg_offset + 16;
     constexpr std::uint32_t offset3        = dst_reg_offset + 18;
 
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset0); // row0
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset1); // row1
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset2); // row2
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset3); // row3
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset0);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset1);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset2);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset3);
 }
 
 /*

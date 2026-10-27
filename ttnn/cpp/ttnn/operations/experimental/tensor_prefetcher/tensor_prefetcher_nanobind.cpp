@@ -8,6 +8,8 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -122,10 +124,12 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to queue on.
-                tensors (List[Tuple[ttnn.Tensor, int] | Tuple[ttnn.Tensor, int, List[int]]]): the
-                    full, flattened list of weights to prefetch (at least one), streamed in
-                    list order. Each item is (weight, block_count) or, to enable per-tensor
-                    streaming, (weight, block_count, rotation). block_count is the number of
+                tensors (List[Tuple[ttnn.Tensor, int] | Tuple[ttnn.Tensor, int, List[int]] |
+                    Tuple[ttnn.Tensor, int, List[int], ttnn.Tensor]]): the full, flattened list of
+                    weights to prefetch (at least one), streamed in list order. Each item is
+                    (weight, block_count), (weight, block_count, rotation) to enable per-tensor
+                    streaming, or (weight, block_count, rotation, selector) for a grouped weight
+                    (see selector below; pass rotation=[] for batched delivery). block_count is the number of
                     K-blocks to divide that tensor's K dimension into (the consumer matmul
                     waits on block_count pages per layer). Pass distinct tensors for distinct
                     layers, or repeat a tensor to replay it.
@@ -138,6 +142,22 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     (and start before the whole tensor lands, allowing a shallow GCB). rotation[r]
                     = r reproduces the natural topology order; the matmul must consume in the
                     matching order, else it deadlocks.
+
+                    selector (grouped weights only) is a mask with one entry per group, for a
+                    weight whose NdShardSpec shard is (num_groups, K, N / ring_size) -- e.g. a fused
+                    [1, E, K, N] expert stack. The prefetcher reads it on device and streams, in
+                    ascending group order, only the groups whose mask entry is non-zero, which is
+                    what ttnn.sparse_matmul consumes for the same mask. ROW_MAJOR BFLOAT16 or UINT16
+                    of shape [..., num_groups] (num_groups <= 256), DRAM interleaved or on one L1
+                    core. The mask must be written before this request is queued (fence the writing
+                    queue with wait_for_cq_on_tensor_prefetcher) and must not change until the
+                    consuming sparse_matmul has run, else the prefetcher and the matmul disagree on
+                    which experts arrive and deadlock. Reading it on device is what keeps a
+                    captured request correct when the mask changes between trace replays.
+                    wait_for_cq_on_tensor_prefetcher cannot be captured into a trace, so a mask
+                    written by an op inside the same trace is not fenced on replay: the mask must
+                    be written, and fenced, before execute_trace. A grouped weight without a
+                    selector streams every group.
                 global_cb (GlobalCircularBuffer): a DRAM-sender GCB (created via
                     ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher).
                     Supply exactly one of global_cb / prefetcher_pipes.

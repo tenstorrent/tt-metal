@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define CKL_ELTWISE_CHAIN_PACK_BLOCK
-
 #include <cstdint>
 
+#include "api/compute/tile_move_copy.h"  // dummy_unpack
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
@@ -113,17 +112,10 @@ void kernel_main() {
         pack_init(dfb::rotated_interm);
 #endif
         ACQ();
-#ifdef ARCH_BLACKHOLE
-        for (uint32_t j = 0; j < Wt; ++j) {
-            matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);
-        }
-        pack_block_mop(0, dfb::rotated_interm, Wt);
-#else
         for (uint32_t j = 0; j < Wt; ++j) {
             matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);
             pack_tile(j, dfb::rotated_interm, j);
         }
-#endif
         REL();
         rotated_in_interm_dfb_obj.push_back(Wt);
         mul_bcast_rows_init(dfb::rotated_interm, dfb::sin);
@@ -176,6 +168,12 @@ void kernel_main() {
             cos_interm_dfb_obj,
             sin_interm_dfb_obj,
             out_dfb_obj);
+        // The output is the borrowed output shard and this kernel is its only producer and consumer (self-loop):
+        // pop each block once it is written so the buffer is left balanced. dummy_unpack orders the pop after
+        // the wait on Quasar (nothing unpacks this buffer).
+        out_dfb_obj.wait_front(Wt);
+        dummy_unpack(dfb::out);
+        out_dfb_obj.pop_front(Wt);
     }
 
     // Done with the sin/cos matrices, so remove from DFB

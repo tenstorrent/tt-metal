@@ -83,7 +83,7 @@ from utils.device_setup import setup_device, teardown_device
 from utils.lora import LORA_TARGETS_ACCEPTED, LORA_TARGETS_ALL, inject_adapter_in_model, normalize_lora_targets
 from utils.memory import MemoryUsageTracker, finalize_memory
 from ttml.common.performance import get_device_peak_tflops_bf16
-from ttml.common.utils import no_grad, build_causal_mask
+from ttml.common.utils import no_grad
 from utils.tensor_utils import (
     create_input_tensor,
     create_target_tensor,
@@ -180,7 +180,6 @@ def generate_text(model, config, tokenizer, prompt, max_tokens, max_seq_len, dev
     ctx = ttml.autograd.AutoContext.get_instance()
     with no_grad():
         orig_vocab = config.vocab_size
-        causal_mask = build_causal_mask(max_seq_len, device=True)
 
         prompt_tokens = tokenizer.encode(prompt)
         current_tokens = list(prompt_tokens)
@@ -193,7 +192,7 @@ def generate_text(model, config, tokenizer, prompt, max_tokens, max_seq_len, dev
             padded[0, 0, 0, : len(tokens_window)] = np.array(tokens_window, dtype=np.uint32)
 
             input_tensor = create_input_tensor(padded)
-            logits = model(input_tensor, causal_mask)
+            logits = model(input_tensor, None)
             logits_np = extract_logits(logits, distributed)
 
             pred_pos = len(tokens_window) - 1
@@ -661,8 +660,9 @@ def main():
             skip_model_weights=True,
         )
 
-    # Causal mask (shared across all steps)
-    causal_mask = build_causal_mask(args.max_seq_len, device=True)
+    # No mask tensor: with query length == key length the fused SDPA applies the causal mask itself. A dense
+    # [1, 1, T, T] mask would select its arbitrary-mask path, which reads every key block and streams the mask.
+    causal_mask = None
 
     # Training state
     ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED)

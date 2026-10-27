@@ -1,10 +1,12 @@
-supported_archs: [wormhole, quasar]
+# Quasar keeps its own copy on Float16 (quasar/hifi_elwmul_overwrite.yaml): Quasar allows HiFi4
+# only when SrcA and SrcB are both wide (Float16, Tf32 or Float32), and Float16_b is not.
+supported_archs: [wormhole]
 
 operands:
-  - {name: seed, dims: [32, 32], format: Float16}
-  - {name: a, dims: [32, 32], format: Float16}
-  - {name: b, dims: [32, 32], format: Float16}
-  - {name: out, dims: [32, 32], format: Float16}
+  - {name: seed, dims: [32, 32], format: Float16_b}
+  - {name: a, dims: [32, 32], format: Float16_b}
+  - {name: b, dims: [32, 32], format: Float16_b}
+  - {name: out, dims: [32, 32], format: Float16_b}
 
 operations:
   - dest_sync: SyncFull

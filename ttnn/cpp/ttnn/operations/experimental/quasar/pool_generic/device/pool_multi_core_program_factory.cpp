@@ -1259,8 +1259,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // result stays resident (the DFB is borrowed from OUTPUT_TENSOR and sized to the
         // full output shard, so the producer never wraps), so there is no real consumer.
         // Self-loop the compute as producer+consumer to satisfy the SPSC completeness
-        // check (mirrors the mpwi writer-face self-loop on DFB_OUT); no kernel-side
-        // pop is needed since the data is the final resident output.
+        // check (mirrors the mpwi writer-face self-loop on DFB_OUT). The compute kernel pops
+        // each block after pushing it so the DFB is left balanced (the data stays resident).
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_OUT,
             .accessor_name = "out_cb",

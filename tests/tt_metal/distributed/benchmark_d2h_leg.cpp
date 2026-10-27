@@ -94,8 +94,7 @@ public:
             return;
         }
 
-        IDevice* const device = mesh_->get_devices().front();
-        const CoreCoord grid = device->compute_with_storage_grid_size();
+        const CoreCoord grid = mesh_->compute_with_storage_grid_size();
         grid_width_ = static_cast<uint32_t>(grid.x);
         grid_height_ = static_cast<uint32_t>(grid.y);
         if (cores_ == 0 || cores_ > grid_width_ * grid_height_ || cores_ > kProvisionedCores) {
@@ -103,8 +102,8 @@ public:
             return;
         }
 
-        const uint32_t l1_base = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
-        l1_ = L1MapUVA::compute(l1_base, static_cast<uint32_t>(device->l1_size_per_core()), page_bytes_, false);
+        const uint32_t l1_base = static_cast<uint32_t>(mesh_->allocator()->get_base_allocator_addr(HalMemType::L1));
+        l1_ = L1MapUVA::compute(l1_base, static_cast<uint32_t>(mesh_->l1_size_per_core()), page_bytes_, false);
         if (const std::string e = l1_.fits(page_bytes_); !e.empty()) {
             fail(state, e);
             return;

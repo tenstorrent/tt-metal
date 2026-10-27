@@ -29,8 +29,7 @@
 #include "experimental/kernel_args.h"
 #include "eltwise_utils_common.hpp"
 #if HAS_MAIN_RING
-// Its preprocess helper names dfb::pre_lhs, which a program with no borrowed ring does not have. Its helpers
-// also build a DataflowBuffer per call, which drains on return: rework them before the gate admits activations.
+// Its format reference names dfb::pre_lhs, which a program with no borrowed ring does not have.
 #include "eltwise_utils_dfb.hpp"
 #endif
 
@@ -71,13 +70,20 @@ void kernel_main() {
     DataflowBuffer dfb_post_lhs(dfb_post_lhs_id);
     DataflowBuffer dfb_post_rhs(dfb_post_rhs_id);
     DataflowBuffer dfb_out(dfb_out_id);
+    // An activation chain reads its operand from the pre ring. Each object drains once, at kernel exit.
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
+#endif
 
     // Inline helper to process n tiles
     auto process_tiles = [&](uint32_t n) {
-        PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, n);
+        PREPROCESS(LHS, dfb_pre_lhs, dfb_post_lhs, dfb_out_id, n);
         dfb_post_lhs.wait_front(n);
 
-        PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, n);
+        PREPROCESS(RHS, dfb_pre_rhs, dfb_post_rhs, dfb_out_id, n);
         dfb_post_rhs.wait_front(n);
 
         dfb_out.reserve_back(n);
@@ -130,7 +136,7 @@ void kernel_main() {
 #endif
 #if TAIL_TILES
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST) or defined(PACK_RELU)
-#error "the tail rings carry no activation chain or fused RELU, and the native gate admits neither"
+#error "the tail rings carry no activation chain or fused RELU: the factory runs no tail beside one"
 #endif
     // A borrowed shard's tiles past the largest multiple of C: one tail entry per compute thread. A thread
     // past TAIL_TILES computes on padding, which the writer drops.

@@ -39,6 +39,10 @@ class GptOss120BConfig:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 128
     NUM_EXPERTS_PER_TOKEN = 4
+    # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
+    # what it trades. Held at 8: top-4 over a 2880 embedding makes this the shallowest forwarding region
+    # of the eight at 10 MB a chip, and halving it again costs 14.8% on hot_expert traffic to save 5 MB.
+    COMBINE_FWD_REDUCTION = 8
     NUM_SHARED_EXPERTS = 0
     # GPT-OSS routes with no expert groups; selection is a plain top-k over all experts.
     NUM_EXPERT_GROUPS = 1

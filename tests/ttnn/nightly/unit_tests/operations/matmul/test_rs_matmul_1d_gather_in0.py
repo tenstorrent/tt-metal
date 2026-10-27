@@ -5,13 +5,13 @@
 import pytest
 from loguru import logger
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 import torch
 import itertools
 import os
 
 from conftest import is_6u
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (

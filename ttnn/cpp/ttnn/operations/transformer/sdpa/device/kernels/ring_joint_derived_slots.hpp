@@ -25,7 +25,8 @@ constexpr uint32_t kDerivedJointLPartialCol = 8;
 constexpr uint32_t kDerivedSlotCount = 9;
 
 // Common-runtime-arg layout: the metadata block (when present) precedes the logical-length pair.
-constexpr uint32_t kReaderMetadataCommonArgCount = 4;  // slot_id addr, num_layers, layer_idx, kv_actual_isl addr
+// slot_id addr, num_layers, layer_idx, batch count, kv_actual_isl addr
+constexpr uint32_t kReaderMetadataCommonArgCount = 5;
 constexpr uint32_t kWriterMetadataCommonArgCount = 1;  // kv_actual_isl addr
 
 // A tile-aligned placeholder implies partial column 0, but a device tensor can land mid-tile at any

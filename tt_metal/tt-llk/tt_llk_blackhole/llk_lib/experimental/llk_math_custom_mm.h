@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "experimental/llk_custom_mm_common.h"
 #include "llk_assert.h"
 
 using namespace ckernel;
@@ -22,25 +23,47 @@ using namespace ckernel::math;
 // in0 tile shape: [{1, 2, 4, 8}, 32]
 // in1 tile shape: [32, 32]
 // rt_dim: 1
-// ct_dim: any integer from 1 to 16
+// ct_dim: any integer from 1 to 34, as long as the ct_dim output tiles fit in the DEST sync region
+//         (custom_mm_tile_rows of the CustomMmDestLayout each)
 // kt_dim: any integer from 1 to 256 (inclusive)
 // fidelity: LoFi only
 // throttle: not supported
 
-template <bool transpose, bool split_acc, bool dense_packing>
+/**
+ * @brief Whether ct_dim output tiles from dst_index fit in the DEST sync region.
+ *
+ * @tparam Dst: DEST sync mode the kernel runs with, values = <SyncHalf/SyncFull>
+ * @tparam layout: DEST layout of the output tiles; dst_index counts tiles of its custom_mm_tile_rows.
+ * @param dst_index: First DEST tile index, as passed to @ref _llk_math_custom_mm_.
+ * @param ct_dim: Number of output column tiles.
+ * @note For LLK asserts: reads the DEST accumulation mode from config.
+ */
+template <DstSync Dst, CustomMmDestLayout layout>
+inline bool custom_mm_fits_dest(const std::uint32_t dst_index, const std::uint32_t ct_dim)
+{
+    constexpr std::uint32_t unit_rows = 16; // DstTileShape::Tile16x16
+    return (dst_index + ct_dim) * custom_mm_tile_rows(layout) <= get_dest_max_tiles_rt<Dst, DstTileShape::Tile16x16>() * unit_rows;
+}
+
+template <bool transpose, CustomMmDestLayout layout>
 inline void custom_mm_configure_addrmod()
 {
+    constexpr bool split_acc = custom_mm_split_acc(layout);
+    constexpr bool compact   = layout == CustomMmDestLayout::Compact;
+
     constexpr std::uint8_t ADDR_MOD_0_SRCA_INCR  = transpose ? 32 : 16;
+    constexpr std::uint8_t ADDR_MOD_0_DEST_INCR  = compact ? 8 : 16;
     constexpr std::uint8_t ADDR_MOD_1_SRCA_INCR  = transpose ? (64 - 16) : 16;
-    constexpr std::uint16_t ADDR_MOD_1_DEST_INCR = split_acc ? (1024 - 8) : (1024 - 16);
-    constexpr std::uint8_t ADDR_MOD_2_DEST_INCR  = dense_packing ? 32 : 64;
+    constexpr std::uint16_t ADDR_MOD_1_DEST_INCR = (split_acc || compact) ? (1024 - 8) : (1024 - 16);
+    constexpr std::uint8_t ADDR_MOD_2_DEST_INCR  = custom_mm_tile_rows(layout);
 
     addr_mod_t {
         .srca = {.incr = ADDR_MOD_0_SRCA_INCR, .clr = 0, .cr = 0},
         .srcb = {.incr = 0, .clr = 0, .cr = 0},
-        .dest = {.incr = 16, .clr = 0, .cr = 0},
+        .dest = {.incr = ADDR_MOD_0_DEST_INCR, .clr = 0, .cr = 0},
     }
-        .set(ADDR_MOD_0); // Move to the next face in width dimension, if transpose that is face 2 instead of face 1
+        .set(ADDR_MOD_0); // Move to the next face in width dimension, if transpose that is face 2 instead of face 1,
+                          // if Compact output face 1 starts at row 8 instead of 16
 
     addr_mod_t {
         .srca = {.incr = ADDR_MOD_1_SRCA_INCR, .clr = 0, .cr = 0},
@@ -55,8 +78,7 @@ inline void custom_mm_configure_addrmod()
         .srcb = {.incr = 0, .clr = 1, .cr = 0},
         .dest = {.incr = ADDR_MOD_2_DEST_INCR, .clr = 0, .cr = 1},
     }
-        .set(ADDR_MOD_2); // Move to the next tile in width dimension,
-                          // if dense_packing next tile starts at row 32 instead of 64
+        .set(ADDR_MOD_2); // Move to the next tile in width dimension, custom_mm_tile_rows down
 
     addr_mod_t {
         .srca = {.incr = 0, .clr = 1, .cr = 0},
@@ -167,19 +189,20 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
  * @brief Configure the math thread for custom_mm: programs address mods and the MVMUL MOP.
  *
  * @tparam transpose: Transpose in1 faces during the multiply.
- * @tparam split_acc: Accumulate into split DEST halves that the finalize pass merges.
- * @tparam dense_packing: Lay output tiles 32 DEST rows apart instead of 64.
+ * @tparam layout: DEST layout of the output tiles, see CustomMmDestLayout. Pack with the same layout through
+ *                 @ref _llk_pack_custom_mm_init_.
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
- * @param ct_dim: Number of output column tiles.
+ * @param ct_dim: Number of output column tiles, 1 to 34.
  * @note Establishes the operand-driven default Src zero-substitution state, which @ref _llk_math_custom_mm_ asserts
  *       under LLK asserts. Re-run this init after any math op that leaves the flag at keep (a copy init does).
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_custom_mm_init_.
  */
-template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
+template <bool transpose = false, CustomMmDestLayout layout = CustomMmDestLayout::Default>
 inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim = 1)
 {
-    custom_mm_configure_addrmod<transpose, split_acc, dense_packing>();
-    custom_mm_configure_mop<split_acc>(operandB_face_r_dim, ct_dim);
+    LLK_ASSERT(ct_dim >= 1 && ct_dim <= CUSTOM_MM_MAX_CT_DIM, "custom_mm: ct_dim must be 1 to 34");
+    custom_mm_configure_addrmod<transpose, layout>();
+    custom_mm_configure_mop<custom_mm_split_acc(layout)>(operandB_face_r_dim, ct_dim);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
@@ -190,16 +213,20 @@ inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, c
 /**
  * @brief Run the custom_mm MVMUL MOP over kt_dim k-tiles into DEST.
  *
- * @tparam finalize: Merge the split accumulators at the end; must be false unless the init used split_acc.
+ * @tparam layout: Must match the init.
+ * @tparam finalize: Merge the split accumulators at the end of the call; defaults to true for the SplitAcc layouts,
+ *                  which alone allow it. Pass false on all but the last of several calls accumulating into the
+ *                  same tiles.
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
- * @param dst_index: DEST tile index to write.
- * @param kt_dim: Number of k-tiles to accumulate.
- * @param ct_dim: Number of output column tiles.
+ * @param dst_index: First DEST output tile, counted in custom_mm_tile_rows of the layout.
+ * @param kt_dim: Number of k-tiles to accumulate, 1 to 256.
+ * @param ct_dim: Number of output column tiles; must match the init, whose MOP bakes it in.
  * @note Call @ref _llk_math_custom_mm_init_ first, and again after any other math op (a copy init leaves the Src
  *       zero flag at keep).
+ * @note Callers that know the DEST sync mode should also assert @ref custom_mm_fits_dest.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_custom_mm_.
  */
-template <bool finalize = true>
+template <CustomMmDestLayout layout = CustomMmDestLayout::Default, bool finalize = custom_mm_split_acc(layout)>
 inline void _llk_math_custom_mm_(
     const std::uint32_t operandB_face_r_dim, const std::uint32_t dst_index, const std::uint32_t kt_dim, const std::uint32_t ct_dim = 1)
 {
@@ -207,9 +234,13 @@ inline void _llk_math_custom_mm_(
         math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
         "custom_mm: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
         "this call left it at keep, so denormal Src operands would not be flushed");
+    LLK_ASSERT(kt_dim >= 1 && kt_dim <= CUSTOM_MM_MAX_KT_DIM, "custom_mm: kt_dim must be 1 to 256");
 
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    static_assert(!finalize || custom_mm_split_acc(layout), "custom_mm: finalize merges split partials, so it needs a SplitAcc layout");
+    constexpr std::uint32_t tile_rows     = custom_mm_tile_rows(layout);
+    constexpr DstTileShape dst_tile_shape = tile_rows == 16 ? DstTileShape::Tile16x16 : (tile_rows == 32 ? DstTileShape::Tile32x16 : DstTileShape::Tile32x32);
+    math::set_dst_write_addr<dst_tile_shape, UnpackDestination::SrcRegs>(dst_index);
 
     // Run mop kt_dim - 1 times, the last inner dim is handled separately to choose whether to run finalization or not
     for (std::uint32_t i = 0; i < kt_dim - 1; i++)

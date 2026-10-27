@@ -21,15 +21,20 @@ namespace kda {
 // identically specified buffers. Handshake: receivers reserve their slots, reset valid and raise ready; the
 // sender stages its reads, waits for every receiver, multicasts the data, flushes, then multicasts the valid
 // flag before publishing its own copy.
+template <typename DFB>
 struct SharedInput {
-    DataflowBuffer* buffer;
+    DFB* buffer;
     uint32_t tiles;
     uint32_t slot;
 };
+// kda::SharedInput{&buffer, tiles, slot} deduces the buffer's type; an array spells it out:
+// kda::SharedInput<decltype(buffer)> inputs[N] = {{&buffer, tiles, slot}, ...}.
+template <typename DFB>
+SharedInput(DFB*, uint32_t, uint32_t) -> SharedInput<DFB>;
 
-template <typename Accessor>
+template <typename Accessor, typename DFB>
 FORCE_INLINE uint32_t
-stage_contiguous_tiles(const Accessor& accessor, DataflowBuffer& buffer, Noc& noc, uint32_t base, uint32_t count) {
+stage_contiguous_tiles(const Accessor& accessor, DFB& buffer, Noc& noc, uint32_t base, uint32_t count) {
     buffer.reserve_back(count);
     const uint32_t entry_size = buffer.get_entry_size();
     uint32_t tile = 0;
@@ -40,10 +45,10 @@ stage_contiguous_tiles(const Accessor& accessor, DataflowBuffer& buffer, Noc& no
     return buffer.get_write_ptr();
 }
 
-template <uint32_t N, typename ReadySem, typename ValidSem>
+template <uint32_t N, typename ReadySem, typename ValidSem, typename DFB>
 FORCE_INLINE void multicast_shared(
     Noc& noc,
-    SharedInput (&inputs)[N],
+    SharedInput<DFB> (&inputs)[N],
     ReadySem& ready,
     ValidSem& valid,
     uint32_t x0,
@@ -74,9 +79,9 @@ FORCE_INLINE void multicast_shared(
     }
 }
 
-template <uint32_t N, typename ReadySem, typename ValidSem>
+template <uint32_t N, typename ReadySem, typename ValidSem, typename DFB>
 FORCE_INLINE void receive_shared(
-    Noc& noc, SharedInput (&inputs)[N], ReadySem& ready, ValidSem& valid, uint32_t sender_x, uint32_t sender_y) {
+    Noc& noc, SharedInput<DFB> (&inputs)[N], ReadySem& ready, ValidSem& valid, uint32_t sender_x, uint32_t sender_y) {
     for (auto& input : inputs) {
         input.buffer->reserve_back(input.tiles);
     }

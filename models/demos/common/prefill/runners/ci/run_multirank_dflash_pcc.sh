@@ -71,9 +71,12 @@ DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
 #      two under it and is also the value a plain Kimi 2-galaxy run settled on. It fails on rank 1 at
 #      MLA_START of layer 0, i.e. only once tokens flow -- never at init -- so a too-large value survives
 #      weight load and warmup before killing the run.
-#   PREFILL_NUM_USERS=69   -- the sc4 allocation ceiling, so the leg fails on a capacity regression.
-#      Rank 3 sets it: drafter K+V on top of 15 verifier layers is 398 MB a user, and 70 overruns DRAM
-#      once the 256 MB trace region is carved off. Only slot 0 has a golden, so the rest sit idle.
+#   PREFILL_NUM_USERS=68   -- the sc4 allocation ceiling, so the leg fails on a capacity regression.
+#      Rank 3 sets it: drafter K+V on top of 15 verifier layers is 398 MB a user, and 69 overruns DRAM
+#      once the 256 MB trace region and the routed expert / combine overlap are carved off. The overlap
+#      costs ~446 MB a chip: combine_fabric2d's persistent ~373 MB forwarding buffer, plus combine's 73 MB
+#      output, which is live beside the dispatch buffer instead of replacing it. Only slot 0 has a golden,
+#      so the rest sit idle.
 #      Every one of these stays overridable -- the manifest is applied with setdefault.
 case "${MODEL}" in
   kimi27) MANIFEST="${MANIFEST_DIR}/kimi27_dflash.json" ;;

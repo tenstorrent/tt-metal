@@ -127,6 +127,25 @@ def test_padded_slice_rm_last_dim_pads_sliced_row(device, begins, ends, shard_sh
     assert passed, message
 
 
+# Last-dim start that isn't a multiple of the DRAM alignment (64 B on Blackhole, 32 B on Wormhole),
+# including starts that aren't 16 B aligned either.
+@pytest.mark.parametrize(
+    "begins, ends, shard_shape",
+    (
+        ([0, 0, 0, 1], [1, 1, 64, 57], (8, 56)),
+        ([0, 0, 0, 4], [1, 1, 64, 64], (8, 64)),
+        ([0, 0, 0, 8], [1, 1, 64, 64], (8, 64)),
+        ([0, 0, 0, 24], [1, 1, 64, 64], (8, 48)),
+    ),
+)
+def test_padded_slice_rm_last_dim_unaligned_start(device, begins, ends, shard_shape):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    tt_input, output_mem_config, expected = _last_dim_padded_slice_setup(device, begins, ends, shard_shape, core_grid)
+    actual = ttnn.experimental.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
+    passed, message = assert_equal(expected, ttnn.to_torch(actual))
+    assert passed, message
+
+
 # Last-dim offset, shard width == sliced width: Quasar read bound without the pad writer.
 def test_quasar_padded_slice_rm_last_dim_no_pad(device):
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
@@ -146,3 +165,42 @@ def test_quasar_padded_slice_rm_last_dim_pad_rejected(device, expect_error):
     tt_input, output_mem_config, _ = _last_dim_padded_slice_setup(device, begins, ends, shard_shape, core_grid)
     with expect_error(RuntimeError, r"pad-row path \(output_row > slice_row\) not yet ported"):
         ttnn.experimental.quasar.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
+
+
+# The row-major pad writer zero-filled its scratch page only for 2- and 4-byte elements, so a uint8
+# output copied stale L1 into the padding columns.
+@pytest.mark.requires_grid_size((8, 1))
+def test_padded_slice_rm_uint8_pads_with_zeros(device):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    begins, ends, shard_shape = [0, 0, 0, 0], [1, 1, 64, 40], (8, 64)
+
+    # Leave non-zero data behind in L1 for a pad page that is never cleared to pick up.
+    for _ in range(2):
+        poison = ttnn.from_torch(
+            torch.full([1, 1, 512, 512], 0x7B7B, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(ttnn.add(poison, poison))
+        ttnn.deallocate(poison)
+
+    torch.manual_seed(0)
+    torch_input = torch.randint(1, 256, [1, 1, 64, 64], dtype=torch.uint8)
+    expected = torch.nn.functional.pad(torch_input[..., :40], (0, shard_shape[1] - 40))
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    actual = ttnn.experimental.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
+    passed, message = assert_equal(expected, ttnn.to_torch(actual))
+    assert passed, message

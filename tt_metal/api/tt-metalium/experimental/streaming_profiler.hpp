@@ -6,39 +6,37 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <iterator>
-#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device_types.hpp>
+#include <tt_stl/strong_type.hpp>
 
-// Streaming profiler host API: a callback registered here receives the records device kernels emit.
+// The streaming profiler's host API. A callback registered here receives the profiler records that device kernels emit.
 //
 // This API is experimental and may change or be removed without notice.
 //
-//     auto handle = RegisterCallback("my-tool", [](const Batch<RecordType::Zones>& b) {
-//         for (const Zone& z : b.zones()) {
-//             use(z.site().name, z.core().logical, z.duration());
-//         }
-//     });
-//     ...
-//     UnregisterCallback(handle);
+//     Callback callback = RegisterCallback(
+//         [](const Batch<Zone>& batch) {
+//             for (const Zone& zone : batch.records<Zone>()) {
+//                 use(zone.site().name, zone.core().logical, zone.duration());
+//             }
+//         },
+//         "my-tool");
 //
-namespace tt::tt_metal::streaming_profiler {
-class Service;
-}
-
 namespace tt::tt_metal::experimental::streaming_profiler {
 
-enum class Risc : uint8_t { BRISC = 0, NCRISC = 1, TRISC0 = 2, TRISC1 = 3, TRISC2 = 4 };
+enum class Processor : uint8_t { BRISC = 0, NCRISC = 1, TRISC0 = 2, TRISC1 = 3, TRISC2 = 4, ERISC0 = 5, ERISC1 = 6 };
 
 struct SourceLocation {
     std::string_view file;  // Valid for the lifetime of the process.
@@ -55,42 +53,26 @@ struct MarkerSite {
  * @brief The core a record came from.
  *
  * `logical` is the coordinate a program addresses it with; `physical` is its NoC 0 position on the die.
+ * Tensix and Ethernet cores have separate logical grids, so two cores on a device can share `logical` but never
+ * `physical`.
  */
 struct Core {
     CoreCoord logical;
     CoreCoord physical;
     ChipId chip_id = 0;
-    Risc risc = Risc::BRISC;
+    Processor processor = Processor::BRISC;
 };
 
 /** @brief Site name of a stall zone. */
 inline constexpr std::string_view STALL_ZONE_NAME = "PROFILER-STALL";
 
-/** @brief Record types a callback can subscribe to; combine with `|`. */
-enum class RecordType : uint32_t {
-    Zones = 1u << 0,
-    TimestampedData = 1u << 1,
-    Events = 1u << 2,
-    All = Zones | TimestampedData | Events,
-};
-constexpr RecordType operator|(RecordType a, RecordType b) {
-    return static_cast<RecordType>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
-}
-
-template <RecordType K>
-class Batch;
-
-enum class CallbackHandle : uint64_t {};
+class Zone;
+class TimestampedData;
+class Event;
+class Callback;
 
 // Implementation detail.
 namespace detail {
-constexpr bool has(RecordType set, RecordType type) {
-    return (static_cast<uint32_t>(set) & static_cast<uint32_t>(type)) != 0;
-}
-constexpr bool covers(RecordType set, RecordType subset) {
-    return (static_cast<uint32_t>(set) & static_cast<uint32_t>(subset)) == static_cast<uint32_t>(subset);
-}
-
 inline constexpr uint32_t ZONE_ID_BITS = 27;
 inline constexpr uint32_t ZONE_LOCAL_BITS = 14;
 inline constexpr uint32_t ZONE_TU_COUNT = 1u << (ZONE_ID_BITS - ZONE_LOCAL_BITS);
@@ -110,27 +92,17 @@ inline const MarkerSite& site_of(uint32_t zone_id) {
     return s != nullptr ? *s : UNNAMED_SITE;
 }
 
-CallbackHandle register_callback(std::string name, std::function<void(const Batch<RecordType::All>&)> callback);
-
-template <typename Signature>
-inline constexpr RecordType batch_arg = RecordType{};
-template <typename R, RecordType K>
-inline constexpr RecordType batch_arg<std::function<R(const Batch<K>&)>> = K;
-template <typename R, RecordType K>
-inline constexpr RecordType batch_arg<std::function<R(Batch<K>)>> = K;
-
-template <typename F>
-constexpr RecordType accepted_batch() {
-    using G = std::remove_reference_t<std::unwrap_ref_decay_t<F>>;
-    if constexpr (requires { std::function{std::declval<G>()}; }) {
-        return batch_arg<decltype(std::function{std::declval<G>()})>;
-    } else {
-        return RecordType{};
-    }
-}
+struct BatchData;
+using CallbackId = ttsl::StrongType<uint32_t, struct CallbackIdTag>;
+Callback register_callback(std::string name, uint32_t types, std::function<void(const BatchData&)> callback);
+using RecordSpans = std::tuple<std::span<const Zone>, std::span<const TimestampedData>, std::span<const Event>>;
+template <typename T>
+inline constexpr uint32_t record_bit = []<std::size_t... I>(std::index_sequence<I...>) {
+    return ((std::same_as<std::tuple_element_t<I, RecordSpans>, std::span<const T>> ? 1u << I : 0u) | ...);
+}(std::make_index_sequence<std::tuple_size_v<RecordSpans>>());
 }  // namespace detail
 
-/** @brief Base class of every record: its site, core, program id and clock. */
+/** @brief Base class of every record, holding its site, core and program runtime ID. */
 class Record {
 public:
     /** @brief The marker this record came from. */
@@ -141,37 +113,41 @@ public:
             .logical = CoreCoord(logical_x_, logical_y_),
             .physical = CoreCoord(physical_x_, physical_y_),
             .chip_id = chip_id_,
-            .risc = static_cast<Risc>(risc_)};
+            .processor = processor_};
     }
     /** @brief Host runtime ID of the program. */
     uint32_t runtime_id() const { return runtime_id_; }
-    /** @brief The chip's clock frequency in GHz. */
-    double frequency_ghz() const { return frequency_hz_ * 1e-9; }
 
 protected:
-    std::chrono::nanoseconds ticks_to_ns(uint64_t ticks) const {
-        return std::chrono::nanoseconds(static_cast<int64_t>(static_cast<double>(ticks) * 1e9 / frequency_hz_));
-    }
-    std::chrono::steady_clock::time_point host_time(uint64_t ticks) const {
-        const double cycles = static_cast<double>(static_cast<int64_t>(ticks) + offset_);
-        return std::chrono::steady_clock::time_point(
-            std::chrono::nanoseconds(static_cast<int64_t>(cycles * 1e9 / frequency_hz_)));
+    static std::chrono::steady_clock::time_point tsc_to_steady(int64_t tsc) {
+        const TscToSteadyLine& line = tsc_to_steady_line_;
+        if (tsc < line.from || tsc > line.to) {
+            return refill_tsc_to_steady_line(tsc);
+        }
+        return line.at(tsc);
     }
 
-    uint64_t timestamp_;
-    union {
-        uint64_t duration_;     // Zone
-        uint64_t value_count_;  // TimestampedData
+    uint64_t device_cycles_ = 0;
+    uint32_t zone_id_ = 0;
+    uint32_t runtime_id_ = 0;
+    uint8_t logical_x_ = 0, logical_y_ = 0, physical_x_ = 0, physical_y_ = 0;
+    uint16_t chip_id_ = 0;
+    Processor processor_ = Processor::BRISC;
+    int64_t tsc_ = 0;
+
+private:
+    struct TscToSteadyLine {
+        int64_t from = 0, to = -1;
+        int64_t origin = 0, base_ns = 0;
+        double value = 0.0, slope = 0.0;
+        std::chrono::steady_clock::time_point at(int64_t tsc) const {
+            return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(
+                base_ns + static_cast<int64_t>(std::nearbyint(value + slope * static_cast<double>(tsc - origin)))));
+        }
     };
-    uint32_t zone_id_;
-    uint32_t runtime_id_;
-    uint16_t logical_x_, logical_y_, physical_x_, physical_y_;
-    uint16_t chip_id_;
-    uint8_t risc_;
-    uint32_t frequency_hz_;
-    int64_t offset_;
+    static std::chrono::steady_clock::time_point refill_tsc_to_steady_line(int64_t tsc);
+    static constinit thread_local TscToSteadyLine tsc_to_steady_line_;
 };
-static_assert(sizeof(Record) == 48);
 
 /**
  * @brief One closed DeviceZoneScopedN scope.
@@ -181,183 +157,175 @@ static_assert(sizeof(Record) == 48);
  */
 class Zone : public Record {
 public:
-    /** @brief Start of the zone in device clock ticks. */
-    uint64_t start_timestamp() const { return timestamp_; }
-    /** @brief End of the zone in device clock ticks. */
-    uint64_t end_timestamp() const { return timestamp_ + duration_; }
+    /** @brief When the zone opened, on steady_clock. */
+    std::chrono::steady_clock::time_point start_time() const { return tsc_to_steady(tsc_); }
+    /** @brief When the zone closed, on steady_clock. */
+    std::chrono::steady_clock::time_point end_time() const { return tsc_to_steady(end_tsc_); }
+    /** @brief When the zone opened, in host reference cycles (the x86 time-stamp counter). */
+    int64_t start_host_cycles() const { return tsc_; }
+    /** @brief When the zone closed, in host reference cycles (the x86 time-stamp counter). */
+    int64_t end_host_cycles() const { return end_tsc_; }
+    /** @brief When the zone opened, in the core's own clock cycles. */
+    uint64_t start_device_cycles() const { return device_cycles_; }
+    /** @brief When the zone closed, in the core's own clock cycles. */
+    uint64_t end_device_cycles() const { return device_cycles_ + duration_cycles_; }
     /** @brief Length of the zone. */
-    std::chrono::nanoseconds duration() const { return ticks_to_ns(duration_); }
-    /** @brief Start of the zone on the host clock. */
-    std::chrono::steady_clock::time_point start_time() const { return host_time(timestamp_); }
-    /** @brief End of the zone on the host clock. */
-    std::chrono::steady_clock::time_point end_time() const { return host_time(timestamp_ + duration_); }
-};
-static_assert(sizeof(Zone) == 48 && std::is_standard_layout_v<Zone>);
-
-/**
- * @brief One DeviceTimestampedData marker with its values.
- *
- * Variable-length: to keep one past the callback, memcpy its size_bytes() bytes.
- */
-class TimestampedData : public Record {
-public:
-    TimestampedData() = default;
-    TimestampedData(const TimestampedData&) = delete;
-    TimestampedData& operator=(const TimestampedData&) = delete;
-    /** @brief When the marker was recorded, in device clock ticks. */
-    uint64_t timestamp() const { return timestamp_; }
-    /** @brief When the marker was recorded, on the host clock. */
-    std::chrono::steady_clock::time_point time() const { return host_time(timestamp_); }
-    /** @brief The marker's values. */
-    std::span<const uint64_t> payload() const {
-        return std::span<const uint64_t>(reinterpret_cast<const uint64_t*>(this + 1), value_count_);
+    std::chrono::nanoseconds duration() const { return end_time() - start_time(); }
+    /** @brief The device's average clock frequency over the zone. */
+    double frequency_ghz() const {
+        return static_cast<double>(duration_cycles_) / static_cast<double>(duration().count());
     }
-    /** @brief Size of the record including its values. */
-    size_t size_bytes() const { return sizeof(TimestampedData) + value_count_ * sizeof(uint64_t); }
-
-    /** @brief Iterates the TimestampedData records of a batch. */
-    class iterator {
-    public:
-        using iterator_category = std::forward_iterator_tag;
-        using value_type = TimestampedData;
-        using difference_type = std::ptrdiff_t;
-
-        iterator() = default;
-        explicit iterator(const std::byte* p) : p_(p) {}
-        const TimestampedData& operator*() const { return *reinterpret_cast<const TimestampedData*>(p_); }
-        const TimestampedData* operator->() const { return reinterpret_cast<const TimestampedData*>(p_); }
-        iterator& operator++() {
-            p_ += (**this).size_bytes();
-            return *this;
-        }
-        iterator operator++(int) {
-            iterator old = *this;
-            ++*this;
-            return old;
-        }
-        bool operator==(const iterator&) const = default;
-
-    private:
-        const std::byte* p_ = nullptr;
-    };
-};
-static_assert(sizeof(TimestampedData) == 48 && std::is_standard_layout_v<TimestampedData>);
-
-/** @brief One DeviceRecordEvent marker. */
-class Event : public Record {
-public:
-    /** @brief When the marker was recorded, in device clock ticks. */
-    uint64_t timestamp() const { return timestamp_; }
-    /** @brief When the marker was recorded, on the host clock. */
-    std::chrono::steady_clock::time_point time() const { return host_time(timestamp_); }
-};
-static_assert(sizeof(Event) == 48 && std::is_standard_layout_v<Event>);
-
-/**
- * @brief The records of each type in K, in the order the device emitted them.
- *
- * The spans and ranges are valid inside the callback; copy the records to keep them.
- */
-template <RecordType K>
-class Batch {
-public:
-    static constexpr RecordType types = K;
-
-    Batch() = default;
-    template <RecordType K2>
-        requires(detail::covers(K2, K))
-    explicit Batch(const Batch<K2>& full) :
-        zones_(full.zones_),
-        timestamped_data_(full.timestamped_data_),
-        events_(full.events_),
-        dropped_(full.dropped_),
-        stall_count_(full.stall_count_) {}
-
-    std::span<const Zone> zones() const
-        requires(detail::has(K, RecordType::Zones))
-    {
-        return zones_;
-    }
-    std::ranges::subrange<TimestampedData::iterator> timestamped_data() const
-        requires(detail::has(K, RecordType::TimestampedData))
-    {
-        return timestamped_data_;
-    }
-    std::span<const Event> events() const
-        requires(detail::has(K, RecordType::Events))
-    {
-        return events_;
-    }
-    /**
-     * @brief Bytes of device output lost since this callback last ran; nonzero if the callback could not keep up with
-     *        incoming data.
-     *
-     * Raising TT_METAL_STREAMING_PROFILER_FIFO_MB lets a callback fall further behind before it loses data.
-     */
-    uint64_t dropped_bytes() const { return dropped_; }
-    /**
-     * @brief Stalls on any core since the previous batch: times a core waited for the profiler to drain its records.
-     */
-    uint64_t stall_count() const { return stall_count_; }
 
 private:
-    template <RecordType>
-    friend class Batch;
-    friend class tt::tt_metal::streaming_profiler::Service;
-    std::span<const Zone> zones_;
-    std::ranges::subrange<TimestampedData::iterator> timestamped_data_;
-    std::span<const Event> events_;
-    uint64_t dropped_ = 0;
-    uint64_t stall_count_ = 0;
+    uint64_t duration_cycles_ = 0;
+    int64_t end_tsc_ = 0;
+};
+
+/** @brief Base class of records that mark one instant. */
+class PointRecord : public Record {
+public:
+    /** @brief When the marker was recorded, on steady_clock. */
+    std::chrono::steady_clock::time_point time() const { return tsc_to_steady(tsc_); }
+    /** @brief When the marker was recorded, in host reference cycles (the x86 time-stamp counter). */
+    int64_t host_cycles() const { return tsc_; }
+    /** @brief When the marker was recorded, in the core's own clock cycles. */
+    uint64_t device_cycles() const { return device_cycles_; }
+};
+
+/** @brief One DeviceTimestampedData marker and the values it recorded. */
+class TimestampedData : public PointRecord {
+public:
+    TimestampedData() = default;
+    TimestampedData(const TimestampedData& other);
+    TimestampedData(TimestampedData&& other) noexcept;
+    TimestampedData& operator=(TimestampedData other) noexcept;
+    ~TimestampedData();
+
+    /** @brief The marker's values. */
+    std::span<const uint64_t> payload() const { return {values_, value_count_}; }
+
+private:
+    uint64_t value_count_ = 0;
+    const uint64_t* values_ = nullptr;
+};
+
+/** @brief One DeviceRecordEvent marker. */
+class Event : public PointRecord {};
+
+/** @brief A type a Batch can hold: Zone, TimestampedData or Event. */
+template <typename T>
+concept RecordType = detail::record_bit<T> != 0;
+
+template <RecordType... Ts>
+    requires(sizeof...(Ts) > 0)
+class Batch;
+
+// Implementation detail.
+namespace detail {
+struct BatchData {
+    RecordSpans records;
+    uint64_t dropped_bytes = 0;
+    uint64_t stall_count = 0;
+};
+template <typename Signature>
+struct BatchParameter {};
+template <typename R, typename... Ts>
+struct BatchParameter<std::function<R(const Batch<Ts...>&)>> {
+    using type = Batch<Ts...>;
+};
+template <typename R, typename... Ts>
+struct BatchParameter<std::function<R(Batch<Ts...>)>> {
+    using type = Batch<Ts...>;
+};
+template <typename F>
+using CallbackBatch =
+    typename BatchParameter<decltype(std::function{std::declval<std::unwrap_ref_decay_t<F>>()})>::type;
+}  // namespace detail
+
+/** @brief A copy-constructible callable taking one `const Batch<Ts...>&`. */
+template <typename F>
+concept BatchCallable = requires { typename detail::CallbackBatch<F>; } && std::is_copy_constructible_v<F>;
+
+/**
+ * @brief A registered callback, which stays registered until this object is destroyed, reset or assigned over.
+ *
+ * If the callback is running, unregistering waits for it to return.
+ */
+class [[nodiscard]] Callback {
+public:
+    Callback() = default;
+    Callback(Callback&& other) noexcept;
+    Callback& operator=(Callback&& other) noexcept;
+    ~Callback();
+
+    /** @brief Unregisters the callback. */
+    void reset() noexcept;
+
+private:
+    friend Callback detail::register_callback(
+        std::string name, uint32_t types, std::function<void(const detail::BatchData&)> callback);
+    explicit Callback(detail::CallbackId id) : id_(id) {}
+    detail::CallbackId id_;
 };
 
 /**
  * @brief Registers a callback to be invoked when streaming profiler records arrive from a device.
  *
- * The callable takes `const Batch<K>&`; K selects the record types delivered. Multiple callbacks can be registered;
- * each runs on its own thread, one invocation at a time. If a callback shares a resource with other callbacks, access
- * it in a thread-safe way (e.g. with a lock). Callbacks that are too slow to keep up with incoming data miss records;
- * this is reported by Batch::dropped_bytes. May be called before, during or between captures.
+ * Multiple callbacks can be registered; each runs on its own thread, one invocation at a time. If a callback shares a
+ * resource with other callbacks, access it in a thread-safe way (e.g. with a lock). Callbacks that are too slow to keep
+ * up with incoming data miss records; this is reported by Batch::dropped_bytes. TT_METAL_STREAMING_PROFILER_FIFO_MB
+ * sets how far a callback can fall behind before it misses records. May be called before, during or between captures.
  *
- * @param name Appears in the profiler's logs and thread names.
- * @return A handle that can be passed to UnregisterCallback() to remove the callback.
+ * @param callback Takes one `const Batch<Ts...>&`; Ts selects the record types it receives.
+ * @param name Optional name for the callback in the profiler's logs and thread names.
+ * @return The registration; the callback runs until it is destroyed.
  */
-template <typename F>
-[[nodiscard]] CallbackHandle RegisterCallback(std::string name, F callback) {
-    constexpr RecordType K = detail::accepted_batch<F>();
-    static_assert(K != RecordType{}, "the callback must take one Batch<K> parameter");
-    static_assert(std::is_copy_constructible_v<F>, "the callback must be copy-constructible");
+template <BatchCallable F>
+Callback RegisterCallback(F callback, std::string name = {}) {
     return detail::register_callback(
         std::move(name),
-        [cb = std::move(callback)](const Batch<RecordType::All>& full) mutable { cb(Batch<K>(full)); });
+        detail::CallbackBatch<F>::kTypes,
+        [callback = std::move(callback)](const detail::BatchData& data) mutable {
+            callback(detail::CallbackBatch<F>(data));
+        });
 }
 
 /**
- * @brief Registers a callback, under a generated name, to be invoked when streaming profiler records arrive from a
- *        device.
+ * @brief A batch of records passed to a callback.
  *
- * The callable takes `const Batch<K>&`; K selects the record types delivered. Multiple callbacks can be registered;
- * each runs on its own thread, one invocation at a time. If a callback shares a resource with other callbacks, access
- * it in a thread-safe way (e.g. with a lock). Callbacks that are too slow to keep up with incoming data miss records;
- * this is reported by Batch::dropped_bytes. May be called before, during or between captures.
- *
- * @return A handle that can be passed to UnregisterCallback() to remove the callback.
+ * Records from one processor are in the order it emitted them (for zones, the order they closed). The records are valid
+ * only until the callback returns; to keep one, copy it.
  */
-template <typename F>
-[[nodiscard]] CallbackHandle RegisterCallback(F callback) {
-    return RegisterCallback(std::string{}, std::move(callback));
-}
+template <RecordType... Ts>
+    requires(sizeof...(Ts) > 0)
+class Batch {
+public:
+    /** @brief The batch's records of type T. */
+    template <typename T>
+        requires(std::same_as<T, Ts> || ...)
+    std::span<const T> records() const {
+        return std::get<std::span<const T>>(data_.records);
+    }
+    /**
+     * @brief Bytes of device output lost since the callback last ran.
+     *
+     * Nonzero if the callback could not keep up with incoming data. Raising TT_METAL_STREAMING_PROFILER_FIFO_MB lets a
+     * callback fall further behind before it loses data.
+     */
+    uint64_t dropped_bytes() const { return data_.dropped_bytes; }
+    /** @brief How many times the cores in this batch waited for the profiler to drain their records. */
+    uint64_t stall_count() const { return data_.stall_count; }
 
-/**
- * @brief Unregisters a previously registered callback by its handle.
- *
- * Blocks until any in-flight invocation of that callback has completed.
- */
-void UnregisterCallback(CallbackHandle handle);
+private:
+    template <BatchCallable F>
+    friend Callback RegisterCallback(F callback, std::string name);
+    static constexpr uint32_t kTypes = (detail::record_bit<Ts> | ...);
+    explicit Batch(const detail::BatchData& data) : data_(data) {}
 
-/**
- * @brief Returns true if the streaming profiler is currently running on at least one chip.
- */
+    detail::BatchData data_;
+};
+
+/** @brief Returns true if the streaming profiler is currently running on at least one device. */
 bool IsActive();
 
 }  // namespace tt::tt_metal::experimental::streaming_profiler

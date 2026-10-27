@@ -9,9 +9,10 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 #include "internal/risc_attribs.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 
 using namespace tt::constants;
 void kernel_main() {
@@ -35,7 +36,8 @@ void kernel_main() {
 
     // The input-shard NoC coordinate tables ride as runtime varargs: noc_x values at vararg
     // indices [0, in_num_cores), noc_y values at [in_num_cores, 2 * in_num_cores).
-    const uint32_t q_start_addr = TensorAccessor(tensor::qkv_in).get_bank_base_address();
+    // Raw: same L1 address on the source cores (no handle form yet).
+    const uint32_t q_start_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::qkv_in));
 
     uint32_t device_batch_offset = 0;
 

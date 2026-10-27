@@ -16,6 +16,7 @@ from models.tt_transformers.tt.model_config import (
     compute_galaxy_width_shard_cores,
     compute_padded_vocab_size,
     create_galaxy_ff1_out_reduce_scatter_memcfg,
+    disables_batched_prefill,
     should_pad_sampling_logits_to_power_of_2,
 )
 
@@ -124,6 +125,20 @@ def test_compute_padded_vocab_size_rejects_invalid_num_devices(expect_error):
 
 
 @pytest.mark.parametrize(
+    "optimizations",
+    [
+        "precision_cfg = {ff1_3: bfp8}",
+        "fidelity_cfg = {li_ff1_3: hifi4}",
+        "precision_cfg = {ff1_3: bfp8, wqkv: bf16}, fidelity_cfg = {li_ff1_3: hifi4}",
+    ],
+)
+def test_parse_optimizations_accepts_either_section(optimizations):
+    from models.tt_transformers.tt.model_config import parse_optimizations
+
+    assert callable(parse_optimizations(optimizations))
+
+
+@pytest.mark.parametrize(
     ("vocab_size", "num_devices", "expected"),
     [
         (128256, 32, 128 * 1024),
@@ -207,6 +222,22 @@ def test_compute_galaxy_width_shard_cores_rejects_non_positive_width(expect_erro
 
 
 @pytest.mark.parametrize(
+    ("grid_x", "grid_y", "n_tiles"),
+    [
+        (11, 10, 48),  # Qwen2.5-1.5B dim on a p150b
+        (11, 10, 72),  # Gemma-2-2B dim on a p150b
+        (12, 10, 48),
+    ],
+)
+def test_find_grid_fits_the_blackhole_device_grid(monkeypatch, grid_x, grid_y, n_tiles):
+    monkeypatch.setattr("models.tt_transformers.tt.model_config.is_wormhole_b0", lambda: False)
+    args = SimpleNamespace(max_grid_size=ttnn.CoreGrid(x=grid_x, y=grid_y))
+    rows, cols = ModelArgs.find_grid(args, n_tiles)
+    assert rows <= grid_y and cols <= grid_x
+    assert n_tiles % (rows * cols) == 0
+
+
+@pytest.mark.parametrize(
     ("base_model_name", "padded_vocab_size", "sampling_splits", "expected"),
     [
         ("Llama-3.1-70B", 128256, 4, True),
@@ -221,6 +252,24 @@ def test_should_pad_sampling_logits_to_power_of_2(base_model_name, padded_vocab_
 def test_should_pad_sampling_logits_to_power_of_2_rejects_invalid_sampling_splits(expect_error):
     with expect_error(ValueError, "sampling_splits must be >= 1"):
         should_pad_sampling_logits_to_power_of_2("Llama-3.1-70B", 128256, 0)
+
+
+@pytest.mark.parametrize(
+    ("base_model_name", "device_name", "expected"),
+    [
+        ("Llama-3.1-8B", "P100", True),
+        ("Llama-3.1-8B", "P150", True),
+        ("Llama-3.1-8B", "P300", True),
+        ("Llama-3.1-8B", "P150x4", True),
+        ("Llama-3.1-8B", "P150x8", True),
+        ("Llama-3.1-8B", "N150", False),
+        ("Llama-3.1-8B", "T3K", False),
+        ("Qwen3-32B", "P150x4", True),
+        ("Qwen3-32B", "P150", False),
+    ],
+)
+def test_disables_batched_prefill(base_model_name, device_name, expected):
+    assert disables_batched_prefill(base_model_name, device_name) is expected
 
 
 def _llama_model_args(device_name="P150"):
@@ -267,7 +316,11 @@ def test_llama31_8b_dram_reader_counts_remain_default_on_unvalidated_devices():
         ("N150", "Llama-3.1-8B", 512, 4),
         ("N150", "Llama-3.1-8B", 1024, 4),
         ("N150", "Llama-3.1-8B", 2048, 4),
+        ("N150", "Llama-Krikri-8B-Base", 512, 4),
         ("N150", "Llama-3.2-3B", 512, None),
+        ("P100", "Llama-3.1-8B", 480, None),
+        ("P100", "Llama-3.1-8B", 512, 4),
+        ("P100", "Llama-3.1-8B", 2048, 4),
         ("P150", "Llama-3.1-8B", 512, None),
         ("T3K", "Llama-3.1-8B", 512, None),
     ],
@@ -293,3 +346,9 @@ def test_llama8_n150_prefill_k_block_scope(device_name, model_name, seq_len, exp
     assert overrides == [expected_override]
     assert config.in0_block_w == (4 if expected_override else 8)
     assert (args.dim // ttnn.TILE_SIZE) % config.in0_block_w == 0
+
+
+@pytest.mark.parametrize("key", ["hidden_act", "hidden_activation"])
+def test_gelu_pytorch_tanh_maps_to_gelu_tanh(key):
+    activation = ModelArgs._get_hidden_activation_type(None, {key: "gelu_pytorch_tanh"})
+    assert activation.op_type == ttnn.UnaryOpType.GELU_TANH

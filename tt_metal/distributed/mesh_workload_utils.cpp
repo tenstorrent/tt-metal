@@ -19,7 +19,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -32,8 +32,9 @@ struct GoSignalSequenceConfig {
     MeshDevice* mesh_device;
     SubDeviceId sub_device_id;
     uint32_t expected_num_workers_completed;
-    CoreCoord dispatch_core;
     bool send_mcast;
+    // Launch message slot the go is for (the sub-device's launch message write pointer).
+    uint32_t go_ring_slot;
     const program_dispatch::ProgramDispatchMetadata& dispatch_metadata;
     std::optional<uint32_t> config_ring_sync_count;
 };
@@ -75,17 +76,12 @@ void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const G
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*config.sub_device_id),
-            *config.config_ring_sync_count,
-            config.cq_id);
+            *config.config_ring_sync_count);
     }
 
     const uint8_t sub_device_index = *config.sub_device_id;
     const uint32_t go_message = hal.make_go_msg_u32(
-        dev_msgs::RUN_MSG_GO,
-        config.dispatch_core.x,
-        config.dispatch_core.y,
-        metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index) +
-            metal_ctx.dispatch_mem_map().get_completion_counter_offset(config.cq_id));
+        dev_msgs::RUN_MSG_GO, metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index));
 
     // When running with dispatch_s enabled:
     //   - dispatch_d must notify dispatch_s that a go signal can be sent.
@@ -107,6 +103,7 @@ void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const G
         (config.send_mcast && config.mesh_device->impl().has_noc_mcast_txns(config.sub_device_id))
             ? *config.sub_device_id
             : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+        config.go_ring_slot,
         dispatcher);
 
     TT_ASSERT(commands.size_bytes() == commands.write_offset_bytes());
@@ -119,8 +116,8 @@ HostMemDeviceCommand build_go_signal_sequence(
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     bool send_mcast,
+    uint32_t go_ring_slot,
     const program_dispatch::ProgramDispatchMetadata& dispatch_metadata,
     std::optional<uint32_t> config_ring_sync_count) {
     const GoSignalSequenceConfig config{
@@ -128,8 +125,8 @@ HostMemDeviceCommand build_go_signal_sequence(
         .mesh_device = mesh_device,
         .sub_device_id = sub_device_id,
         .expected_num_workers_completed = expected_num_workers_completed,
-        .dispatch_core = dispatch_core,
         .send_mcast = send_mcast,
+        .go_ring_slot = go_ring_slot,
         .dispatch_metadata = dispatch_metadata,
         .config_ring_sync_count = config_ring_sync_count};
     HostMemDeviceCommand commands(mesh_device->impl().metal_context(), go_signal_sequence_size(config));
@@ -146,8 +143,8 @@ void write_go_signal_sequence(
     SubDeviceId sub_device_id,
     SystemMemoryManager& sysmem_manager,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     bool send_mcast,
+    uint32_t go_ring_slot,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md,
     std::optional<uint32_t> config_ring_sync_count) {
     const GoSignalSequenceConfig config{
@@ -155,8 +152,8 @@ void write_go_signal_sequence(
         .mesh_device = mesh_device,
         .sub_device_id = sub_device_id,
         .expected_num_workers_completed = expected_num_workers_completed,
-        .dispatch_core = dispatch_core,
         .send_mcast = send_mcast,
+        .go_ring_slot = go_ring_slot,
         .dispatch_metadata = dispatch_md,
         .config_ring_sync_count = config_ring_sync_count};
     const uint32_t cmd_sequence_sizeB = go_signal_sequence_size(config);

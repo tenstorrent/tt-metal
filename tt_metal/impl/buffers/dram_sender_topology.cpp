@@ -26,7 +26,7 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
     DramSenderSplit split) {
     // Sender coords name endpoint roles, so resolving them against any one device gives the
     // mapping for the whole mesh; validate_dram_senders_across_mesh rechecks that per device.
-    const auto& devices = mesh_device->get_devices();
+    const auto& devices = mesh_device->impl().get_devices();
     TT_FATAL(
         !devices.empty(),
         "Cannot build a DRAM sender mapping for a mesh with no local devices (shape {}); a submesh whose slots are "
@@ -80,7 +80,7 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
 void validate_dram_senders_across_mesh(
     const distributed::MeshDevice* mesh_device, const std::vector<std::pair<CoreCoord, CoreRangeSet>>& mapping) {
     std::unordered_map<uint32_t, std::vector<CoreCoord>> senders_by_bank;
-    for (const IDevice* device : mesh_device->get_devices()) {
+    for (const auto* device : mesh_device->impl().get_devices()) {
         senders_by_bank.clear();
         for (const auto& [sender_logical, _receivers] : mapping) {
             const auto bank_id = static_cast<uint32_t>(sender_logical.x);

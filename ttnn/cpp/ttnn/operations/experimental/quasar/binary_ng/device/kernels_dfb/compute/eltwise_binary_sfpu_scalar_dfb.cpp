@@ -55,12 +55,13 @@
 
 // Process n LHS tiles against the scalar tile parked at index 0 in dfb_post_rhs.
 // The DataflowBuffer arguments are kernel_main's objects: an object built here would drain at every return.
+template <typename DFBPreLhs, typename DFBPostLhs, typename DFBPostRhs, typename DFBOut>
 FORCE_INLINE void process_sfpu_scalar_tiles(
     uint32_t n,
-    DataflowBuffer& dfb_pre_lhs,
-    DataflowBuffer& dfb_post_lhs,
-    DataflowBuffer& dfb_post_rhs,
-    DataflowBuffer& dfb_out ISCLOSE_RT_ARG_PARAMS) {
+    DFBPreLhs& dfb_pre_lhs,
+    DFBPostLhs& dfb_post_lhs,
+    DFBPostRhs& dfb_post_rhs,
+    DFBOut& dfb_out ISCLOSE_RT_ARG_PARAMS) {
     const uint32_t dfb_post_lhs_id = dfb_post_lhs.get_id();
     const uint32_t dfb_post_rhs_id = dfb_post_rhs.get_id();
     const uint32_t dfb_out_id = dfb_out.get_id();
@@ -153,7 +154,7 @@ void kernel_main() {
 #if HAS_ACTIVATIONS(LHS)
     DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
 #else
-    DataflowBuffer& dfb_pre_lhs = dfb_post_lhs;
+    auto& dfb_pre_lhs = dfb_post_lhs;
 #endif
 #if HAS_ACTIVATIONS(RHS)
     DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);

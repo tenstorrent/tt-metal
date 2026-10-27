@@ -24,7 +24,7 @@ from typing import Optional
 
 import pytest
 
-from models.common.utility_functions import is_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import is_blackhole, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_p150
 from tests.ttnn.profiling.realtime_profiler_utils import assert_op_duration_merged, require_realtime_profiler
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning

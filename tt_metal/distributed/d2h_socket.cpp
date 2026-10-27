@@ -25,7 +25,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "impl/threading/thread_pool.hpp"
-#include <umd/device/io_window/io_window.hpp>
+#include <tt-umd/io_window/io_window.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <atomic>
@@ -104,6 +104,8 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
         // Before pinning, which fixes the pages in place: a FIFO on another NUMA node reads at half the bandwidth.
         // Worker senders keep the default placement.
         if (sender_core_type_ != HalProgrammableCoreType::TENSIX) {
+            // Huge pages make a large FIFO faster to pin and raise its bandwidth.
+            madvise(p, alloc_size, MADV_HUGEPAGE);
             bind_memory_to_numa_node(
                 p,
                 alloc_size,

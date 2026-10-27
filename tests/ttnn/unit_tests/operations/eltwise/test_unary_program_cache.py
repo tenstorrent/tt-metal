@@ -436,11 +436,13 @@ def test_unary_sharded_mixed_inplace_outofplace(device, first_inplace):
 # =============================================================================
 
 
+# Both shapes are above the small-tensor worker grid (get_worker_grid), so they share the full grid and the cache entry,
+# while their work splits differ: 441 tiles against 1024 tiles over every core.
 @pytest.mark.parametrize(
     "shape_first, shape_second",
     [
-        ([1, 1, 32, 64], [1, 1, 128, 256]),  # grow volume
-        ([1, 1, 128, 256], [1, 1, 32, 64]),  # shrink volume
+        ([1, 1, 672, 672], [1, 1, 1024, 1024]),  # grow volume
+        ([1, 1, 1024, 1024], [1, 1, 672, 672]),  # shrink volume
     ],
 )
 def test_unary_inplace_cache_reuse_different_shapes(device, shape_first, shape_second):

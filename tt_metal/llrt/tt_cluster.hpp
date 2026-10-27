@@ -24,17 +24,17 @@
 #include <unordered_set>
 #include <vector>
 
-#include <umd/device/cluster.hpp>
-#include <umd/device/driver_atomics.hpp>
-#include <umd/device/cluster_descriptor.hpp>
-#include <umd/device/chip_helpers/sysmem_buffer.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/io_window_config.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/cluster_types.hpp>
-#include <umd/device/types/host_memory.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/driver_atomics.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
+#include <tt-umd/chip_helpers/sysmem_buffer.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/io_window_config.hpp>
+#include <tt-umd/soc_descriptor.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_types.hpp>
+#include <tt-umd/types/host_memory.hpp>
 
 namespace tt {
 namespace llrt {
@@ -128,6 +128,7 @@ public:
         ChipId chip_id, tt::tt_metal::CoreCoord logical_coord, const CoreType& core_type, bool no_warn = false) const;
     const std::unordered_set<tt::tt_metal::CoreCoord>& get_virtual_worker_cores(ChipId chip_id) const;
     const std::unordered_set<tt::tt_metal::CoreCoord>& get_virtual_eth_cores(ChipId chip_id) const;
+    IpVariant get_quasar_ip_variant() const;
 
     uint32_t get_harvesting_mask(ChipId chip) const {
         return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
@@ -160,7 +161,8 @@ public:
         uint64_t addr,
         std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
 
-    // Access physical noc coordinates. Does write without effects of write combining
+    // Access physical noc coordinates. Does write without effects of write combining. On a remote chip a payload
+    // that lies in L1 or a DRAM bank goes out as a block; anything else keeps register-width writes.
     void write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
     // Write to core without effects of write combining
@@ -330,6 +332,12 @@ public:
     // Configures ethernet cores for fabric routers depending on whether fabric is enabled
     void configure_ethernet_cores_for_fabric_routers(
         tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
+
+    // Wormhole silicon only. Restricts the ethernet cores UMD uses for host transfers to the remote (non-MMIO) chips
+    // behind this MMIO chip to the given channels. UMD does not lock its core list against in-flight remote transfers,
+    // so call this before any other thread (e.g. the watcher) can access remote chips.
+    void configure_ethernet_cores_for_remote_transfers(
+        ChipId mmio_chip_id, const std::set<tt_fabric::chan_id_t>& eth_chans);
 
     // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;

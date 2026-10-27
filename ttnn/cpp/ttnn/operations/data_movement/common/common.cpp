@@ -537,6 +537,13 @@ uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
     return static_cast<uint32_t>(ttnn::operations::core::available_program_l1_capacity(input_tensor_a.device()));
 }
 
+uint32_t get_static_l1_space(const Tensor& input_tensor_a) {
+    auto* device = input_tensor_a.device();
+    const uint32_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint32_t ceiling = device->l1_size_per_core();
+    return ceiling > base ? ceiling - base : 0;
+}
+
 uint32_t get_pending_l1_output_reservation(
     const Tensor& input_tensor_a,
     const ttnn::Shape& output_padded_shape,

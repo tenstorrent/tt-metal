@@ -603,6 +603,10 @@ void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_roo
 
 Program CreateProgram() { return Program(); }
 
+Program CreateProgram(distributed::MeshDevice& mesh_device) {
+    return Program(std::make_shared<detail::ProgramImpl>(extract_context_id(&mesh_device)));
+}
+
 KernelHandle CreateDataMovementKernel(
     Program& program,
     const KernelSource& kernel_src,

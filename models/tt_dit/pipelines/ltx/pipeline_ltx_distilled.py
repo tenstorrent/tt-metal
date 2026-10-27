@@ -22,6 +22,7 @@ from ...models.vae.vae_ltx import upsample_latent
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
+from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from ...utils.video import export_video_audio, export_video_audio_yuv
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
@@ -112,6 +113,7 @@ class LTXDistilledPipeline(LTXPipeline):
             logger.info(f"I2V: pinning {n_cond} frame-0 tokens (strength={image_cond_strength})")
         return _I2VConditioning(denoise_mask=denoise_mask, clean_latent=clean_latent, n_cond=n_cond)
 
+    @cap_torch_threads_to_half_the_cpus()
     def warmup_buffers(
         self,
         *,
@@ -645,6 +647,7 @@ class LTXDistilledPipeline(LTXPipeline):
             if s["nonfinite"]:
                 logger.warning(f"{label}/{name}: {s['nonfinite']} non-finite elements in post-denoise latent")
 
+    @cap_torch_threads_to_half_the_cpus()
     def generate(
         self,
         prompt: str,

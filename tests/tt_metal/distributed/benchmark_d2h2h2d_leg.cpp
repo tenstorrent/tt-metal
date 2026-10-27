@@ -25,6 +25,7 @@
 #include "hd_socket_test_utils.hpp"
 #include "leg_benchmark_common.hpp"
 
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "tt_metal/distributed/d2h2h2d_socket.hpp"
 #include "tt_metal/distributed/host_rdma_window.hpp"
 
@@ -200,7 +201,7 @@ public:
         warmup_msgs_ = static_cast<uint64_t>(cores_) * warmup_iters_;
 
         mesh_ = split_unit_mesh(kDeviceId);
-        IDevice* const device = mesh_->get_devices().front();
+        auto* const device = mesh_->impl().get_devices().front();
         const CoreCoord grid = device->compute_with_storage_grid_size();
         grid_width_ = static_cast<uint32_t>(grid.x);
 

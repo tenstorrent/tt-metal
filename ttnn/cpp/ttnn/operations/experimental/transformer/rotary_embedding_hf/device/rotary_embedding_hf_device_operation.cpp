@@ -61,8 +61,36 @@ void RotaryEmbeddingHfDeviceOperation::validate_on_program_cache_miss(
             "Input must be HEIGHT_SHARDED in decode mode");
         TT_FATAL(cos.is_sharded(), "Cos must be sharded in decode mode");
         TT_FATAL(sin.is_sharded(), "Sin must be sharded in decode mode");
+        const auto& input_shard_spec = input_tensor.shard_spec().value();
+        // The sharded decode factory reads batch_per_core cos/sin tile rows on every core of the grid's bounding box.
+        const uint32_t batch_size = input_tensor.padded_shape()[1];
+        const auto grid_extent = input_shard_spec.grid.bounding_box().grid_size();
+        const uint32_t batch_parallel_factor = std::min<uint32_t>(batch_size, grid_extent.x * grid_extent.y);
+        const uint32_t batch_per_core = (batch_size + batch_parallel_factor - 1) / batch_parallel_factor;
+        for (const auto* trig : {&cos, &sin}) {
+            TT_FATAL(
+                trig->memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                "Cos/sin must be HEIGHT_SHARDED in decode mode, got {}",
+                trig->memory_config().memory_layout());
+            const auto& trig_shard_spec = trig->shard_spec().value();
+            TT_FATAL(
+                trig_shard_spec.grid == input_shard_spec.grid,
+                "Cos/sin shard grid {} must match input shard grid {} in decode mode",
+                trig_shard_spec.grid,
+                input_shard_spec.grid);
+            TT_FATAL(
+                trig_shard_spec.orientation == input_shard_spec.orientation,
+                "Cos/sin shard orientation {} must match input shard orientation {} in decode mode",
+                trig_shard_spec.orientation,
+                input_shard_spec.orientation);
+            TT_FATAL(
+                trig_shard_spec.shape[0] == batch_per_core * TILE_HEIGHT,
+                "Cos/sin shard height {} must be {} ({} users per core) in decode mode",
+                trig_shard_spec.shape[0],
+                batch_per_core * TILE_HEIGHT,
+                batch_per_core);
+        }
 
-        uint32_t batch_size = input_tensor.padded_shape()[1];
         TT_FATAL(cos.padded_shape()[1] == batch_size, "Cos batch dim must match input");
         TT_FATAL(sin.padded_shape()[1] == batch_size, "Sin batch dim must match input");
         TT_FATAL(cos.padded_shape()[0] == 1, "Cos seq_len must be 1 in decode mode");

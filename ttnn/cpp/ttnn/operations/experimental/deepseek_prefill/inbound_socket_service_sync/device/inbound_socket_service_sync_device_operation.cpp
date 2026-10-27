@@ -72,6 +72,51 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             args.overhang_size_bytes,
             args.page_size);
     }
+
+    if (tensor_args.tokens_out.has_value() || tensor_args.overhang_out.has_value() ||
+        tensor_args.metadata_out.has_value()) {
+        const auto specs = compute_output_specs(args, tensor_args);
+        // The factory hands the kernel each destination's address and the service's own chips write it, so a
+        // same-shaped tensor on another mesh would be left untouched while this mesh scribbled over whatever
+        // happens to sit at that address. The generic checks do not catch it: they cover allocation and
+        // relative mesh coordinates, not device identity.
+        const auto validate_destination_device = [&backing](const std::optional<Tensor>& destination) {
+            TT_FATAL(
+                !destination.has_value() || destination->device() == backing.device(),
+                "inbound_socket_service_sync: every caller-supplied destination must live on the service's mesh "
+                "device");
+        };
+        validate_destination_device(tensor_args.tokens_out);
+        validate_destination_device(tensor_args.overhang_out);
+        validate_destination_device(tensor_args.metadata_out);
+        if (tensor_args.tokens_out.has_value()) {
+            TT_FATAL(
+                tensor_args.tokens_out->tensor_spec() == specs.front(),
+                "inbound_socket_service_sync: tokens_out spec must match the op's first output spec -- the service "
+                "backing per-shard spec, less the overhang tail when the split is on (the kernel copies it "
+                "page-for-page)");
+        }
+        if (tensor_args.overhang_out.has_value()) {
+            TT_FATAL(
+                args.overhang_size_bytes > 0,
+                "inbound_socket_service_sync: overhang_out requires overhang_size_bytes > 0; with the split off "
+                "there is no second output for it to receive");
+            TT_FATAL(
+                tensor_args.overhang_out->tensor_spec() == specs[1],
+                "inbound_socket_service_sync: overhang_out spec must match the op's second output spec -- the "
+                "service backing per-shard spec with its last dim cut down to the overhang tail");
+        }
+        if (tensor_args.metadata_out.has_value()) {
+            TT_FATAL(
+                args.metadata_size_bytes > 0,
+                "inbound_socket_service_sync: metadata_out requires metadata_size_bytes > 0; the metadata path is "
+                "compiled out of the kernel, so nothing would ever be written to it");
+            TT_FATAL(
+                tensor_args.metadata_out->tensor_spec() == specs.back(),
+                "inbound_socket_service_sync: metadata_out spec must be [1, 1, 1, metadata_size_bytes / 4] uint32 "
+                "ROW_MAJOR interleaved DRAM");
+        }
+    }
 }
 
 InboundSocketServiceSyncOperation::spec_return_value_t InboundSocketServiceSyncOperation::compute_output_specs(
@@ -106,8 +151,19 @@ InboundSocketServiceSyncOperation::tensor_return_value_t InboundSocketServiceSyn
     auto* device = tensor_args.backing.device();
     std::vector<Tensor> outputs;
     outputs.reserve(specs.size());
-    for (const auto& spec : specs) {
-        outputs.push_back(create_device_tensor(spec, device));
+    for (size_t i = 0; i < specs.size(); ++i) {
+        const bool is_tokens = i == 0;
+        const bool is_overhang = args.overhang_size_bytes > 0 && i == 1;
+        const bool is_metadata = args.metadata_size_bytes > 0 && i + 1 == specs.size();
+        if (is_tokens && tensor_args.tokens_out.has_value()) {
+            outputs.push_back(*tensor_args.tokens_out);
+        } else if (is_overhang && tensor_args.overhang_out.has_value()) {
+            outputs.push_back(*tensor_args.overhang_out);
+        } else if (is_metadata && tensor_args.metadata_out.has_value()) {
+            outputs.push_back(*tensor_args.metadata_out);
+        } else {
+            outputs.push_back(create_device_tensor(specs[i], device));
+        }
     }
     return outputs;
 }
@@ -126,7 +182,12 @@ namespace {
 // static_casts below).
 template <typename ServiceT>
 std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(
-    const ServiceT& service, uint32_t metadata_size_bytes, uint32_t overhang_size_bytes) {
+    const ServiceT& service,
+    uint32_t metadata_size_bytes,
+    uint32_t overhang_size_bytes,
+    const std::optional<ttnn::Tensor>& tokens_out,
+    const std::optional<ttnn::Tensor>& overhang_out,
+    const std::optional<ttnn::Tensor>& metadata_out) {
     using OperationType = ttnn::experimental::prim::InboundSocketServiceSyncOperation;
 
     const auto& backing = service.get_backing_tensor();
@@ -160,19 +221,32 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(
         }
     }
 
-    return ttnn::device_operation::launch<OperationType>(attrs, OperationType::tensor_args_t{backing});
+    return ttnn::device_operation::launch<OperationType>(
+        attrs, OperationType::tensor_args_t{backing, tokens_out, overhang_out, metadata_out});
 }
 
 }  // namespace
 
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
-    const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes, uint32_t overhang_size_bytes) {
-    return inbound_socket_service_sync_impl(service, metadata_size_bytes, overhang_size_bytes);
+    const tt::tt_metal::H2DStreamService& service,
+    uint32_t metadata_size_bytes,
+    uint32_t overhang_size_bytes,
+    const std::optional<ttnn::Tensor>& tokens_out,
+    const std::optional<ttnn::Tensor>& overhang_out,
+    const std::optional<ttnn::Tensor>& metadata_out) {
+    return inbound_socket_service_sync_impl(
+        service, metadata_size_bytes, overhang_size_bytes, tokens_out, overhang_out, metadata_out);
 }
 
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
-    const ttnn::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes, uint32_t overhang_size_bytes) {
-    return inbound_socket_service_sync_impl(service, metadata_size_bytes, overhang_size_bytes);
+    const ttnn::D2DStreamServiceReceiver& service,
+    uint32_t metadata_size_bytes,
+    uint32_t overhang_size_bytes,
+    const std::optional<ttnn::Tensor>& tokens_out,
+    const std::optional<ttnn::Tensor>& overhang_out,
+    const std::optional<ttnn::Tensor>& metadata_out) {
+    return inbound_socket_service_sync_impl(
+        service, metadata_size_bytes, overhang_size_bytes, tokens_out, overhang_out, metadata_out);
 }
 
 }  // namespace ttnn::prim

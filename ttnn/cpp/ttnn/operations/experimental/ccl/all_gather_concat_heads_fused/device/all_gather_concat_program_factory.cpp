@@ -168,11 +168,8 @@ ProgramDescriptor build_program_descriptor(
     const auto& mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    IDevice* target_device = mesh_device->get_device(mesh_coordinate);
 
-    std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
-                                        ? mesh_view.get_devices_on_column(mesh_coordinate[1])
-                                        : mesh_view.get_devices_on_row(mesh_coordinate[0]);
+    const uint32_t coord_index = mesh_coordinate[operation_attributes.cluster_axis];
     const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
                                      ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
                                      : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);
@@ -181,7 +178,7 @@ ProgramDescriptor build_program_descriptor(
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t ring_index = 0;
     for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-        if (devices.at(i) == target_device) {
+        if (i == coord_index) {
             ring_index = i;
             if (i != 0) {
                 backward_fabric_node_id = fabric_node_ids.at(i - 1);
@@ -206,7 +203,7 @@ ProgramDescriptor build_program_descriptor(
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        target_device->id(),
+        mesh_coordinate,
         is_first_chip,
         is_last_chip);
 

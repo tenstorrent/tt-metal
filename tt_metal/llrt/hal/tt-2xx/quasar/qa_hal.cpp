@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <filesystem>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -300,9 +301,16 @@ public:
         includes.reserve(14);
 
         // Common includes for all core types
-        // A Quasar IP variant goes first so its headers shadow the base ones under tt_llk_quasar.
-        if (const auto& variant = params.rtoptions.get_quasar_arch_variant(); !variant.empty()) {
-            includes.push_back("tt_metal/tt-llk/tt_llk_quasar/arch/" + variant);
+        // A Quasar IP variant's LLK headers go first so they shadow the base ones under tt_llk_quasar.
+        auto variant = hal_.quasar_arch_variant_;
+        const std::string lower_variant = [&]() {
+            std::string result = std::string(enchantum::to_string(variant));
+            std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+            return result;
+        }();
+        const std::string variant_llk_dir = "tt_metal/tt-llk/tt_llk_quasar/arch/" + lower_variant;
+        if (std::filesystem::is_directory(params.rtoptions.get_root_dir() + variant_llk_dir)) {
+            includes.push_back(variant_llk_dir);
         }
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
@@ -311,21 +319,12 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
-        // Snapshot the env once: includes() runs separately for firmware and
-        // kernel builds, and a mid-process env change must not compile them
-        // against different maps.
-        static const char* const quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
-        // TODO: Use UMD supplied variant instead of env var
-        // defaults to Quasar if no variant is set
-        if (quasar_variant != nullptr && (std::string(quasar_variant) == "horizon" || std::string(quasar_variant) == "2.0.1")) {
-            log_info(LogMetal, "Using variant: Horizon");
-            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
-        } else if (quasar_variant != nullptr && (std::string(quasar_variant) == "trinity" || std::string(quasar_variant) == "2.0.2")){
-            log_info(LogMetal, "Using variant: Trinity");
-            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.2/meta");
-        } else {
-            log_info(LogMetal, "Using variant: Quasar");
+        if (variant == IpVariant::GRENDEL) {
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
+        } else if (variant == IpVariant::HORIZON) {
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
+        } else if (variant == IpVariant::TRINITY) {
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.2/meta");
         }
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
@@ -482,7 +481,8 @@ public:
     }
 };
 
-void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq) {
+void Hal::initialize_qa(
+    std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq, IpVariant quasar_arch_variant) {
     using namespace quasar;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -492,11 +492,20 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     static_assert(
         static_cast<int>(HalProgrammableCoreType::DISPATCH) == static_cast<int>(ProgrammableCoreType::DISPATCH));
 
+    this->quasar_arch_variant_ = quasar_arch_variant;
     this->core_info_.push_back(quasar::create_tensix_mem_map());
     this->core_info_.push_back(quasar::create_active_eth_mem_map());
     this->core_info_.push_back(quasar::create_idle_eth_mem_map());
     ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] = quasar::create_dispatch_mem_map();
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::TENSIX)].num_physical_riscs_ =
+        static_cast<uint32_t>(TensixProcessorTypes::COUNT);
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::ACTIVE_ETH)].num_physical_riscs_ =
+        static_cast<uint32_t>(EthProcessorTypes::COUNT);
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::IDLE_ETH)].num_physical_riscs_ =
+        static_cast<uint32_t>(EthProcessorTypes::COUNT);
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)].num_physical_riscs_ =
+        static_cast<uint32_t>(DispatchEngineProcessorTypes::COUNT);
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
@@ -608,7 +617,12 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->noc_stream_remote_dest_buf_start_reg_index_ = 0;                   // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
+    this->noc_stream_remote_dest_words_free_width_ = 0;                      // TODO: add correct value
+    this->noc_stream_remote_src_reg_index_ = 0;                              // TODO: add correct value
     this->has_stream_registers_ = false;
+    this->risc_soft_reset_addr_ = 0;                                         // TODO: add correct value
+    this->wall_clock_low_addr_ = 0;                                          // TODO: add correct value
+    this->wall_clock_high_addr_ = 0;                                         // TODO: add correct value
     this->supports_fds_ = true;
     this->noc_topology_ = NoCTopologyType::MESH;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;

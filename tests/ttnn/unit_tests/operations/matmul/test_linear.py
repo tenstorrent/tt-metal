@@ -8,7 +8,7 @@ import ttnn
 from ttnn.operations.activations import get_golden_function_for_activation
 from loguru import logger
 
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     torch_random,
     is_blackhole,
     skip_for_blackhole,

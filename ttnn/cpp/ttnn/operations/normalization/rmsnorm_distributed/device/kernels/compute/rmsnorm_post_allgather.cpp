@@ -74,7 +74,7 @@ void kernel_main() {
     DataflowBuffer cb_x_normed(cb_x_normed_idx);
     DataflowBuffer cb_out(cb_out_idx);
     DataflowBuffer cb_gamma_out_tmp(cb_gamma_out_tmp_idx);
-    DataflowBuffer& cb_times_gamma_out = (do_gamma && do_beta) ? cb_gamma_out_tmp : cb_out;
+    auto& cb_times_gamma_out = (do_gamma && do_beta) ? cb_gamma_out_tmp : cb_out;
 
     compute_kernel_hw_startup(cb_inp, cb_inp, cb_var_idx);
 
@@ -103,7 +103,7 @@ void kernel_main() {
 
         // X * 1/sqrt(E[X**2] + eps), followed by optional gamma and beta.
         constexpr uint32_t normed_output_cb_idx = do_gamma ? cb_x_normed_idx : cb_out_idx;
-        DataflowBuffer& normed_output_cb = do_gamma ? cb_x_normed : cb_out;
+        auto& normed_output_cb = do_gamma ? cb_x_normed : cb_out;
 
         ckl::mul<
             ckl::input(

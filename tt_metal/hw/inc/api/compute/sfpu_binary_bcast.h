@@ -7,7 +7,7 @@
 #include "api/compute/common_globals.h"
 
 #if defined(TRISC_MATH) && (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE))
-#include "sfpu/ckernel_sfpu_binary_bcast.h"
+#include "ckernel_sfpu_binary_bcast.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 

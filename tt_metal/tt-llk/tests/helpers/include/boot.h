@@ -137,6 +137,7 @@ TT_ALWAYS_INLINE void device_setup()
     dvalid_cfg[SFPU_DEST_DVALID_CTRL_wait_mask_ADDR32]      = 0;
     dvalid_cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32]      = 0;
     TTI_SEMINIT(1, 0, 0, ckernel::trisc::semaphore::t6_sem(ckernel::trisc::semaphore::PACK_UNPACK));
+    TTI_SEMINIT(2, 0, 0, ckernel::trisc::semaphore::t6_sem(ckernel::trisc::semaphore::MATH_PACK));
 #endif
 
 // Enable CC stack
@@ -155,6 +156,8 @@ TT_ALWAYS_INLINE void device_setup()
     // Initialize tensix semaphores
     ckernel::t6_semaphore_init(ckernel::semaphore::UNPACK_TO_DEST, 0, 1);
     ckernel::t6_semaphore_init(ckernel::semaphore::MATH_DONE, 0, 1);
+    // A kernel that ends with a dest section still posted would otherwise stall the next math init.
+    ckernel::t6_semaphore_init(ckernel::semaphore::MATH_PACK, 0, 2);
 #if defined(LLK_BARRIER_ON_TRISC)
     // barrier.h is already in scope and has reserved the raw names, so go through its own.
     ckernel::t6_semaphore_init(llk_barrier::ARRIVE_SEM, 0, 1);

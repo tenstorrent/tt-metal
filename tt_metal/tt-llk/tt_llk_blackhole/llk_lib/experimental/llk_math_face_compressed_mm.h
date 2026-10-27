@@ -143,7 +143,7 @@ static constexpr auto _llk_math_face_compressed_mm_one_l2_table_ = ckernel::code
         switch ((hdr << 1) | face4)
         {
             case 0b000:
-                return TT_OP_ZEROACC_ADDRMOD_ONLY(ADDR_MOD_1); // endIncB zero face4 (i)
+                return TT_OP_ADDRMOD_ONLY(ADDR_MOD_1); // endIncB zero face4 (i)
             case 0b001:
                 return find("I"); // endIncB data face4 (I)
             case 0b010:
@@ -228,7 +228,7 @@ inline void _llk_math_face_compressed_mm_addrmod_config_(const std::uint32_t fac
 /**
  * @brief Record the math code sequence into the replay buffer and program the MOP that replays it.
  *
- * One instruction per character: lower case skips a face, advancing the counters with ZEROACC or SETRWC,
+ * One instruction per character: lower case skips a face, advancing the counters with SFPLOAD or SETRWC,
  * and upper case multiplies it in with MVMUL. ct_dim == 1 records the split-accumulation sequence, every
  * other width the multi-tile one.
  *
@@ -245,20 +245,20 @@ inline void _llk_math_face_compressed_mm_mop_config_(const std::uint32_t face_r_
     const std::uint32_t mvmul_single_row = (face_r_dim == 1) ? 1 : 0;
 
     // One instruction per code-sequence character. Lower case means no data for this face, so it is
-    // skipped: the counters advance via ZEROACC or SETRWC without multiplying. Upper case multiplies it
+    // skipped: the counters advance via SFPLOAD or SETRWC without multiplying. Upper case multiplies it
     // in. The ADDR_MOD then picks what advances afterwards -- see _llk_math_face_compressed_mm_addrmod_config_.
     auto instr_for_code = [mvmul_single_row](char code)
     {
         switch (code)
         {
             case 'n':
-                TTI_ZEROACC_ADDRMOD_ONLY(ADDR_MOD_0);
+                TTI_ADDRMOD_ONLY(ADDR_MOD_0);
                 break; // skip, noB
             case 'N':
                 TT_MVMUL(p_setrwc::CLR_A, mvmul_single_row, ADDR_MOD_0, 0);
                 break; // mul, noB
             case 'i':
-                TTI_ZEROACC_ADDRMOD_ONLY(ADDR_MOD_1);
+                TTI_ADDRMOD_ONLY(ADDR_MOD_1);
                 break; // skip, incB
             case 'I':
                 TT_MVMUL(p_setrwc::CLR_A, mvmul_single_row, ADDR_MOD_1, 0);
@@ -270,7 +270,7 @@ inline void _llk_math_face_compressed_mm_mop_config_(const std::uint32_t face_r_
                 TT_MVMUL(p_setrwc::CLR_AB, mvmul_single_row, ADDR_MOD_2, 0);
                 break; // mul, clrB
             case 'r':
-                TTI_ZEROACC_ADDRMOD_ONLY(ADDR_MOD_3);
+                TTI_ADDRMOD_ONLY(ADDR_MOD_3);
                 break; // skip, revB
             case 'R':
                 TT_MVMUL(p_setrwc::CLR_A, mvmul_single_row, ADDR_MOD_3, 0);

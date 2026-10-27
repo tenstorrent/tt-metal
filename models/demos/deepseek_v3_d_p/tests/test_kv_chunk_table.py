@@ -56,6 +56,8 @@ def test_kimi_k3_kda_config_names_match_decode(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(kv_chunk_table, "populate_kv_chunk_address_table_block_cyclic", lambda **kwargs: None)
     monkeypatch.setattr(kv_chunk_table, "populate_kv_chunk_address_table_kda", lambda **kwargs: None)
+    # The cache double has no topology; this test is about config names, not the KV layout.
+    monkeypatch.setattr(kv_chunk_table, "is_tp_deduped_kv_cache", lambda *_: False)
     monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: 0)
 
     path = kv_chunk_table._build_and_serialize_merged_kv_chunk_table(

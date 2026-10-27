@@ -78,6 +78,9 @@ void AutoContext::close_profiler() {
 }
 
 void AutoContext::close_device() {
+    // The CCL semaphores are L1 buffers of the mesh being closed; the next mesh allocates its own, and a set kept
+    // from this one would point at addresses the next mesh hands out to other buffers.
+    m_ccl_resources.reset();
     m_device = nullptr;
     // Drop the process-global fabric config that open_device_mesh may have
     // installed via enable_fabric(). Without this, fabric stays armed for

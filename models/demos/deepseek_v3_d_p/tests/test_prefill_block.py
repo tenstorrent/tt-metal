@@ -29,7 +29,7 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import pretrained_m
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.block import glm_decoder_layer_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -654,7 +654,7 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
                 worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
             ),
             2,

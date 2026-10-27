@@ -10,6 +10,8 @@
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "noc_address_backend.h"
 #include "api/lock.h"
 #include "internal/profiler/noc_debugging_profiler.hpp"
@@ -332,6 +334,54 @@ FORCE_INLINE void remote_cb_sender_barrier(uint32_t cb_id) {
     WAYPOINT("RCBD");
 }
 
+namespace detail {
+
+template <NocOptions opts, uint32_t max_page_size>
+FORCE_INLINE void write_rows_with_state(
+    const Noc& noc,
+    uint64_t dst_noc_addr,
+    uint32_t src_addr,
+    uint32_t num_rows,
+    uint32_t pages_per_row,
+    uint32_t page_size,
+    uint32_t src_row_stride) {
+    const PrecomposedUnicastEndpoint dst;
+    noc.set_async_write_state<opts, max_page_size>(dst, page_size, {.noc_addr = dst_noc_addr});
+    for (uint32_t h = 0; h < num_rows; ++h) {
+        uint32_t page_src_addr = src_addr;
+        for (uint32_t w = 0; w < pages_per_row; ++w) {
+            noc.async_write_with_state<opts, max_page_size>(
+                CoreLocalMem<uint32_t>(page_src_addr), dst, page_size, {}, {.noc_addr = dst_noc_addr});
+            page_src_addr += page_size;
+            dst_noc_addr += page_size;
+        }
+        src_addr += src_row_stride;
+    }
+}
+
+// One receiver's slice of a strided stage: num_rows rows of pages_per_row pages, src_row_stride apart at
+// src_addr, written back to back from dst_noc_addr. The receiver is fixed for the slice, so its NoC target
+// is programmed once; a page that fits in one burst is then a single packet that supplies only addresses.
+template <NocOptions opts>
+FORCE_INLINE void write_rows_to_receiver(
+    const Noc& noc,
+    uint64_t dst_noc_addr,
+    uint32_t src_addr,
+    uint32_t num_rows,
+    uint32_t pages_per_row,
+    uint32_t page_size,
+    uint32_t src_row_stride) {
+    if (page_size <= NOC_MAX_BURST_SIZE) {
+        write_rows_with_state<opts, NOC_MAX_BURST_SIZE>(
+            noc, dst_noc_addr, src_addr, num_rows, pages_per_row, page_size, src_row_stride);
+    } else {
+        write_rows_with_state<opts, NOC_MAX_BURST_SIZE + 1>(
+            noc, dst_noc_addr, src_addr, num_rows, pages_per_row, page_size, src_row_stride);
+    }
+}
+
+}  // namespace detail
+
 template <bool skip_ptr_update = true>
 FORCE_INLINE void remote_cb_push_back_and_write_pages(
     uint32_t cb_id,
@@ -357,8 +407,8 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
 
     uint32_t next_receiver_start_addr_stride = coalesced_num_pages_per_row * coalesced_page_size;
     uint32_t next_block_row_stride = next_receiver_start_addr_stride * num_receivers;
-
-    uint32_t dest_addr;
+    constexpr NocOptions write_opts = posted ? NocOptions::POSTED : NocOptions::DEFAULT;
+    const Noc write_noc(noc);
 
     uint32_t next_receiver_start_addr_offset = 0;
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
@@ -370,29 +420,18 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
     volatile tt_l1_ptr uint32_t* remote_noc_xy_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.receiver_noc_xy_ptr);
     for (uint32_t i = 0; i < num_receivers; ++i) {
-        uint32_t src_addr = local_cb_addr + next_receiver_start_addr_offset;
-        dest_addr = fifo_wr_ptr;
-
-        // Receiver base address; offsets are added below (offset arithmetic on a NoC
+        // Receiver base address; offsets are added to it (offset arithmetic on a NoC
         // address stays within the local-address bits, so it is backend-agnostic).
         const uint64_t receiver_base =
             noc_address_backend::worker_address(remote_noc_xy_ptr[0], remote_noc_xy_ptr[1], 0, noc);
-        uint64_t dest_noc_addr = receiver_base + dest_addr;
-
-        noc_async_write_one_packet_set_state<posted>(dest_noc_addr, coalesced_page_size, noc);
-
-        for (uint32_t h = 0; h < num_rows; ++h) {
-            uint32_t prev_src_addr = src_addr;
-            for (uint32_t w = 0; w < coalesced_num_pages_per_row; ++w) {
-                dest_noc_addr = receiver_base + dest_addr;
-
-                noc_async_write_one_packet_with_state<posted>(src_addr, dest_noc_addr, noc);
-
-                src_addr += coalesced_page_size;
-                dest_addr += coalesced_page_size;
-            }
-            src_addr = prev_src_addr + next_block_row_stride;
-        }
+        detail::write_rows_to_receiver<write_opts>(
+            write_noc,
+            receiver_base + fifo_wr_ptr,
+            local_cb_addr + next_receiver_start_addr_offset,
+            num_rows,
+            coalesced_num_pages_per_row,
+            coalesced_page_size,
+            next_block_row_stride);
         next_receiver_start_addr_offset += next_receiver_start_addr_stride;
         *pages_sent_ptr += pages_sent;
 
@@ -405,6 +444,7 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
         remote_noc_xy_ptr += 2;
     }
 
+    uint32_t dest_addr = fifo_wr_ptr + num_rows * next_receiver_start_addr_stride;
     if (dest_addr == fifo_limit_page_aligned) {
         dest_addr = fifo_start_addr;
     }

@@ -20,15 +20,17 @@ namespace tt::tt_metal::experimental {
 //      the NOC_MODE define (see kernel.cpp), so two kernels on a node with different modes are
 //      incoherent. Mirrors the KernelGroup-construction guard ("KernelGroup must have the same
 //      noc mode for all kernels"), surfaced here at spec-validation time with a clearer message.
-//   3. In DM_DEDICATED_NOC mode, distinct NOCs. Each DM kernel's NoC traffic is statically
-//      compiled to NOC_INDEX == config.noc (see kernel.cpp), so two dedicated-NOC kernels
-//      pinned to the same NOC deadlock the device. This enforces the NOC-distinctness invariant
-//      that KernelGroup finalize silently relies on (it writes brisc_noc_id = arg.noc for
-//      RISCV_0 vs 1 - arg.noc for RISCV_1, which agree only when the two NOCs differ -- "safe
-//      due to prior correctness validation"). The legacy CheckDataMovementConfig intended this
-//      check but did not reliably enforce it for the common reader+writer pair (it runs before
-//      the second DM kernel is registered). DM_DYNAMIC_NOC kernels are exempt: they may
-//      intentionally share a NOC, freeing the other NOC for fabric.
+//   3. In DM_DEDICATED_NOC mode, distinct NOCs unless both kernels opt in to sharing. Each DM
+//      kernel's NoC traffic is statically compiled to NOC_INDEX == config.noc (see kernel.cpp),
+//      and in dedicated mode the two RISCs use the same command-buffer indices and each counts
+//      its own transactions against the NOC's shared NIU counters. Two kernels on one NOC that
+//      issue the same kind of transaction therefore corrupt each other's command buffers and
+//      barriers. Kernels whose config_1xx->dedicated_noc_sharing is SHARED_DISJOINT_TRAFFIC
+//      promise no kind is issued by both; KernelGroup finalize then takes brisc_noc_id from BRISC's
+//      kernel. The legacy CheckDataMovementConfig intended this check but did not reliably enforce
+//      it for the common reader+writer pair (it runs before the second DM kernel is registered).
+//      DM_DYNAMIC_NOC kernels are exempt: they may intentionally share a NOC, freeing the other
+//      NOC for fabric.
 // (Each kernel's effective node set is derived from WorkUnitSpec membership.)
 void ValidateGen1DMPlacement(const ValidationContext& ctx, tt::ARCH arch) {
     const ProgramSpec& spec = ctx.spec;
@@ -41,8 +43,8 @@ void ValidateGen1DMPlacement(const ValidationContext& ctx, tt::ARCH arch) {
     std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed_processor;
     // node -> (noc mode, the kernel that first set it) — all DM kernels on a node must agree.
     std::map<NodeCoord, std::pair<NOC_MODE, KernelSpecName>> node_noc_mode;
-    // (node, noc) -> the kernel that already claimed it (dedicated-NOC kernels only).
-    std::map<std::pair<NodeCoord, NOC>, KernelSpecName> claimed_noc;
+    // (node, noc) -> the kernel that already claimed it and whether it shares (dedicated-NOC kernels only).
+    std::map<std::pair<NodeCoord, NOC>, std::pair<KernelSpecName, DedicatedNocSharing>> claimed_noc;
     for (const auto& kernel : spec.kernels) {
         if (!kernel.is_data_movement_kernel()) {
             continue;
@@ -82,15 +84,19 @@ void ValidateGen1DMPlacement(const ValidationContext& ctx, tt::ARCH arch) {
 
                 // NOC-distinctness applies only to statically-pinned (dedicated-NOC) kernels.
                 if (gen1.noc_mode == NOC_MODE::DM_DEDICATED_NOC) {
+                    const DedicatedNocSharing sharing = gen1.dedicated_noc_sharing;
                     auto [noc_it, noc_inserted] =
-                        claimed_noc.try_emplace(std::make_pair(node, gen1.noc), kernel.unique_id);
+                        claimed_noc.try_emplace(std::make_pair(node, gen1.noc), kernel.unique_id, sharing);
+                    constexpr auto kShared = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC;
                     TT_FATAL(
-                        noc_inserted,
+                        noc_inserted || (noc_it->second.second == kShared && sharing == kShared),
                         "KernelSpec '{}' conflicts with '{}' on node ({}, {}): both are dedicated-NOC data "
-                        "movement kernels pinned to NOC_{}, which hangs the device. Give them distinct NOCs, or "
-                        "use DM_DYNAMIC_NOC mode to intentionally share a NOC.",
+                        "movement kernels pinned to NOC_{}, which hangs the device. Give them distinct NOCs, use "
+                        "DM_DYNAMIC_NOC mode to intentionally share a NOC, or, if no kind of NoC transaction is "
+                        "issued by both kernels, set config_1xx->dedicated_noc_sharing = "
+                        "SHARED_DISJOINT_TRAFFIC on both.",
                         kernel.unique_id,
-                        noc_it->second,
+                        noc_it->second.first,
                         node.x,
                         node.y,
                         static_cast<int>(gen1.noc));

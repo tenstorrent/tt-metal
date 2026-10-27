@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 
 def _to_host_bytes(tensor, mesh_device):

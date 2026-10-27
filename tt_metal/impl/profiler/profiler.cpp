@@ -250,20 +250,6 @@ uint32_t risc_type_to_control_buffer_host_index_offset(tracy::RiscType risc_type
     return static_cast<uint32_t>(offset);
 }
 
-uint32_t risc_type_to_control_buffer_device_index_offset(tracy::RiscType risc_type) {
-    kernel_profiler::ControlBuffer offset;
-    switch (risc_type) {
-        case tracy::RiscType::BRISC: [[fallthrough]];
-        case tracy::RiscType::ERISC: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_BR_ER; break;
-        case tracy::RiscType::NCRISC: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_NC; break;
-        case tracy::RiscType::TRISC_0: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_T0; break;
-        case tracy::RiscType::TRISC_1: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_T1; break;
-        case tracy::RiscType::TRISC_2: offset = kernel_profiler::ControlBuffer::DEVICE_BUFFER_END_INDEX_T2; break;
-        default: TT_THROW("Invalid RISC type {}", risc_type);
-    }
-    return static_cast<uint32_t>(offset);
-}
-
 int get_processor_id(tracy::RiscType risc_type) {
     switch (risc_type) {
         case tracy::RiscType::BRISC: return 0;
@@ -1325,7 +1311,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(
     ZoneScoped;
     TT_ASSERT(ctx_.device_manager()->is_dispatch_firmware_active());
     const DeviceAddr profiler_addr = getProfilerDramBufferAddress(active_dram_buffer_index);
-    uint32_t profile_buffer_idx = 0;
+    std::size_t profile_buffer_idx = 0;
 
     const CoreCoord dram_grid_size = device->dram_grid_size();
     for (uint32_t x = 0; x < dram_grid_size.x; ++x) {
@@ -1352,7 +1338,7 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device, ui
     const DeviceAddr profiler_addr = getProfilerDramBufferAddress(active_dram_buffer_index);
     const uint32_t bank_size_bytes = getProfileBufferBankSizeBytes();
     const uint32_t bank_size_words = bank_size_bytes / sizeof(uint32_t);
-    uint32_t profile_buffer_idx = 0;
+    std::size_t profile_buffer_idx = 0;
 
     const int num_dram_channels = device->num_dram_channels();
     const auto& cluster = env_.get_cluster();
@@ -1504,6 +1490,7 @@ void DeviceProfiler::resetControlBuffers(
         core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_T1_0] = buffer_0_address;
         core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_T2_0] = buffer_0_address;
         this->active_dram_buffer_per_core_risc_map[virtual_core].clear();
+        this->dram_read_cursor_per_core_risc_map.erase(virtual_core);
     }
 
     for (const auto& [virtual_core, control_buffer_reset] : core_control_buffer_resets) {
@@ -1545,7 +1532,8 @@ void DeviceProfiler::readRiscProfilerResults(
     const CoreCoord& worker_core,
     const ProfilerDataBufferSource data_source,
     const std::optional<ProfilerOptionalMetadata>& metadata,
-    const std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>>& riscs_to_include) {
+    const std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>>& riscs_to_include,
+    const std::map<tracy::RiscType, uint32_t>* dram_parse_start) {
     ZoneScoped;
 
     if (data_source == ProfilerDataBufferSource::DRAM_AND_L1) {
@@ -1575,8 +1563,8 @@ void DeviceProfiler::readRiscProfilerResults(
     const uint32_t profiler_dram_bank_vector_size_per_risc = profiler_dram_bank_size_per_risc_bytes / sizeof(uint32_t);
 
     const uint32_t coreFlatID = env_.get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(worker_core);
-    const uint32_t startIndex =
-        coreFlatID * env_.get_hal().get_max_processors_per_core() * profiler_dram_bank_vector_size_per_risc;
+    const std::size_t startIndex = static_cast<std::size_t>(coreFlatID) * env_.get_hal().get_max_processors_per_core() *
+                                   profiler_dram_bank_vector_size_per_risc;
 
     // translate worker core virtual coord to phys coordinates
     const metal_SocDescriptor& soc_desc = env_.get_cluster().get_soc_desc(device_id);
@@ -1629,6 +1617,15 @@ void DeviceProfiler::readRiscProfilerResults(
             }
         }
 
+        // A parse start is always a chunk boundary (the device only publishes whole chunks, each beginning with the
+        // ID_HH/ID_HL run-start sentinel), so parsing from it is the same as parsing from the buffer start.
+        uint32_t bufferStartIndex = 0;
+        if (data_source == ProfilerDataBufferSource::DRAM && dram_parse_start != nullptr) {
+            if (auto it = dram_parse_start->find(riscType); it != dram_parse_start->end()) {
+                bufferStartIndex = it->second;
+            }
+        }
+
         {
             tracy::TTDeviceMarker lane;
             lane.chip_id = device_id;
@@ -1640,8 +1637,9 @@ void DeviceProfiler::readRiscProfilerResults(
             }
         }
 
-        if (bufferEndIndex > 0) {
-            uint32_t bufferRiscShift = (riscEndIndex * profiler_dram_bank_vector_size_per_risc) + startIndex;
+        if (bufferEndIndex > bufferStartIndex) {
+            std::size_t bufferRiscShift =
+                (static_cast<std::size_t>(riscEndIndex) * profiler_dram_bank_vector_size_per_risc) + startIndex;
             if (data_source == ProfilerDataBufferSource::L1) {
                 // Shift by L1 buffer size only
                 bufferRiscShift = riscEndIndex * kernel_profiler::PROFILER_L1_VECTOR_SIZE;
@@ -1685,7 +1683,7 @@ void DeviceProfiler::readRiscProfilerResults(
             };
             std::vector<PreSentinelMarker> pre_sentinel_markers;
 
-            for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
+            for (std::size_t index = bufferRiscShift + bufferStartIndex; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
                 if (!newRunStart && data_buffer.at(index) == 0 && data_buffer.at(index + 1) == 0) {
                     newRunStart = true;
@@ -1701,7 +1699,7 @@ void DeviceProfiler::readRiscProfilerResults(
                         kernel_profiler::PacketTypes pre_packet_type = get_packet_type(timer_id);
                         if (pre_packet_type == kernel_profiler::TS_DATA) {
                             uint32_t time_L = data_buffer.at(index + 1);
-                            int data_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                            std::size_t data_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
                             // Skip truncated TS_DATA at the end of this risc's region.
                             if (data_index + 1 < bufferRiscShift + bufferEndIndex) {
                                 uint64_t data_H = data_buffer.at(data_index);
@@ -2130,14 +2128,12 @@ void DeviceProfiler::readTsData16BMarkerData(
     }
 
 #if defined(TRACY_ENABLE)
-    // Emit the NOC-debug event exactly once per genuine device event. One read pass parses the same undrained buffer
-    // more than once -- the debug-dump poll reads each stalled core's active DRAM buffer, then processResults re-reads
-    // buffer 0 plus the L1 residual -- and the marker set (device_markers_per_core_risc_map) deduplicates those
-    // re-reads, so pushing only when the marker was newly inserted guarantees each event reaches the NOCDebugState
-    // once. The set only has to survive the pass, NOT the whole run: every read path calls resetControlBuffers when it
-    // is done and parsing is bounded by the control-buffer end index, so once a pass completes the device cannot
-    // reproduce that data. That is what lets the mid-run dump clear the set to keep host memory bounded. This mirrors
-    // how readDeviceMarkerData handles scoped-lock events (its push sits after the same new_marker_inserted early-out).
+    // Emit the NOC-debug event at most once per genuine device event: push only when the marker was newly inserted into
+    // the marker set (device_markers_per_core_risc_map). The set does not have to survive across passes, which is what
+    // lets the mid-run dump clear it to keep host memory bounded: the debug-dump poll parses each range of a risc's
+    // DRAM buffer only once (it starts where its read cursor left off, see dram_read_cursor_per_core_risc_map), so a
+    // later pass cannot reproduce the data. This mirrors how readDeviceMarkerData handles scoped-lock events (its push
+    // sits after the same new_marker_inserted early-out).
     if (noc_debug_event.has_value()) {
         ctx_.noc_debug_state()->push_event(device_id, timestamp, get_processor_id(risc_type), *noc_debug_event);
     }
@@ -2385,13 +2381,14 @@ uint32_t DeviceProfiler::getProfileBufferBankSizeBytes() const { return this->pr
 
 void DeviceProfiler::setProfileBufferBankSizeBytes(uint32_t size, uint32_t num_dram_banks) {
     this->profile_buffer_bank_size_bytes = size;
-    this->profile_buffer.resize(size * num_dram_banks / sizeof(uint32_t));
+    this->profile_buffer.resize(static_cast<std::size_t>(size) * num_dram_banks / sizeof(uint32_t));
 }
 
 void DeviceProfiler::clearStateForDeviceReinit() {
     this->core_control_buffers.clear();
     this->core_l1_data_buffers.clear();
     this->active_dram_buffer_per_core_risc_map.clear();
+    this->dram_read_cursor_per_core_risc_map.clear();
     this->device_markers_per_core_risc_map.clear();
 }
 
@@ -2896,32 +2893,31 @@ void DeviceProfiler::destroyTracyContexts() {
 #endif
 }
 
-void DeviceProfiler::pollDebugDumpResults(
+bool DeviceProfiler::pollDebugDumpResults(
     IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool is_final_poll) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     if (!getDeviceProfilerState(env_)) {
-        return;
+        return false;
     }
 
     TT_ASSERT(device_id == device->id());
 
     // Handle worker cores: use ping-pong DRAM buffer logic
     if (virtual_cores.empty()) {
-        return;
+        return false;
     }
 
     auto* mesh_device = device->get_mesh_device().get();
 
+    // Snapshot of every core's control buffer. Its end indices bound what this poll parses, and it is never written
+    // back: the device owns those indices, and a chunk it publishes between this read and such a write would be lost.
     readControlBuffers(mesh_device, device, virtual_cores, /*force_slow_dispatch=*/true);
 
-    // Not Stalled but have data
-    std::map<CoreCoord, std::vector<uint32_t>> temp_control_buffers;
-    std::map<CoreCoord, std::set<tracy::RiscType>> cores_with_data;
-
-    // Stalled because full
-    std::map<CoreCoord, std::vector<uint32_t>> temp_stalled_control_buffers;
-    std::map<CoreCoord, std::set<tracy::RiscType>> stalled_cores_with_data;
+    // Where to start parsing, per active DRAM buffer, core and risc. Parsing ends at the snapshot's end index.
+    std::map<uint8_t, std::map<CoreCoord, std::map<tracy::RiscType, uint32_t>>> parse_starts_per_buffer;
+    // Stalled riscs handed their other DRAM buffer by this poll
+    std::vector<std::pair<CoreCoord, tracy::RiscType>> swapped_riscs;
 
     {
         ZoneScopedN("pollDebugDumpResults-FindStalledCores");
@@ -2930,6 +2926,7 @@ void DeviceProfiler::pollDebugDumpResults(
             bool is_eth = cluster.is_ethernet_core(virtual_core, device->id());
             const std::vector<uint32_t>& control_buffer = core_control_buffers.at(virtual_core);
             auto& active_risc_map = this->active_dram_buffer_per_core_risc_map[virtual_core];
+            auto& cursor_risc_map = this->dram_read_cursor_per_core_risc_map[virtual_core];
 
             for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
                 if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
@@ -2957,33 +2954,33 @@ void DeviceProfiler::pollDebugDumpResults(
                     risc_type_to_control_buffer_host_index_offset(risc_type);
                 const DeviceAddr dram_buffer_address = control_buffer[control_buffer_dram_addr_index];
 
-                // Check if buffer has data by looking at HOST_BUFFER_END_INDEX
+                // Data the host has not parsed yet ends at HOST_BUFFER_END_INDEX and starts at the read cursor
                 const uint32_t buffer_end_index = control_buffer[control_buffer_host_index_index];
-                const bool buffer_has_data = buffer_end_index > 0;
+                const uint32_t cursor = cursor_risc_map[risc_type];
 
                 if (dram_buffer_address == kernel_profiler::DRAM_PROFILER_ADDRESS_STALLED) {
-                    auto [it, inserted] = temp_stalled_control_buffers.try_emplace(virtual_core, control_buffer);
-
-                    const uint8_t next_active_dram_buffer_index = 1 - active_dram_buffer_index;
-                    it->second[control_buffer_dram_addr_index] =
-                        this->getProfilerDramBufferAddress(next_active_dram_buffer_index);
-                    it->second[control_buffer_host_index_index] = 0;
-                    stalled_cores_with_data[virtual_core].insert(risc_type);
-
+                    // The risc is waiting for a new buffer, so its active one is full and frozen. Hand it the other
+                    // buffer right away and parse the rest of the full one below.
+                    const uint32_t next_dram_buffer_address =
+                        static_cast<uint32_t>(this->getProfilerDramBufferAddress(1 - active_dram_buffer_index));
                     // Note: Do not use the writeToCoreControlBuffer function as it will overwrite the entire control
                     // buffer. We only want to update the fields for the stalled riscs.
-                    const auto dram_profiler_address_offset = control_buffer_dram_addr_index;
                     const DeviceAddr addr = getControlVectorAddress(env_, device_id, virtual_core) +
-                                            (dram_profiler_address_offset * sizeof(uint32_t));
+                                            (control_buffer_dram_addr_index * sizeof(uint32_t));
                     // Need to use write_reg to guarantee a single write to the control buffer
                     // Host index will be updated by the risc once it receives the new dram address
-                    cluster.write_reg(
-                        &it->second[control_buffer_dram_addr_index], tt_cxy_pair(device->id(), virtual_core), addr);
-                } else if (buffer_has_data) {
-                    temp_control_buffers.try_emplace(virtual_core, control_buffer);
-                    cores_with_data[virtual_core].insert(risc_type);
+                    cluster.write_reg(&next_dram_buffer_address, tt_cxy_pair(device->id(), virtual_core), addr);
+                    swapped_riscs.emplace_back(virtual_core, risc_type);
+                    if (buffer_end_index > cursor) {
+                        parse_starts_per_buffer[active_dram_buffer_index][virtual_core][risc_type] = cursor;
+                    }
+                } else if (buffer_end_index > cursor) {
+                    // Not stalled but has new data: only a final poll takes it
+                    if (is_final_poll) {
+                        parse_starts_per_buffer[active_dram_buffer_index][virtual_core][risc_type] = cursor;
+                    }
                 } else {
-                    // Buffer has no data and is not stalled - nothing to do
+                    // No new data and not stalled - nothing to do
                     // This should match, otherwise it means something went out of sync with the host and device
                     TT_ASSERT(
                         dram_buffer_address == this->getProfilerDramBufferAddress(active_dram_buffer_index),
@@ -3001,124 +2998,48 @@ void DeviceProfiler::pollDebugDumpResults(
                 }
             }
         }
-        // For final poll, merge NOT STALLED cores with data into stalled cores
-        if (is_final_poll) {
-            for (const auto& [virtual_core, risc_types] : cores_with_data) {
-                for (const auto& risc_type : risc_types) {
-                    stalled_cores_with_data[virtual_core].insert(risc_type);
-                    if (!temp_control_buffers.contains(virtual_core)) {
-                        temp_control_buffers[virtual_core] = core_control_buffers.at(virtual_core);
-                    }
-                    const uint8_t control_buffer_host_index_index =
-                        risc_type_to_control_buffer_host_index_offset(risc_type);
-                    temp_control_buffers[virtual_core][control_buffer_host_index_index] = 0;
-                }
-            }
-        }
     }
 
-    // Figure out which DRAM profiler addresses need to be read
-    std::set<uint8_t> stalled_dram_buffer_indices;
-    std::vector<CoreCoord> virtual_cores_with_data;
-    virtual_cores_with_data.reserve(stalled_cores_with_data.size());
-    for (const auto& [virtual_core, risc_types] : stalled_cores_with_data) {
-        virtual_cores_with_data.push_back(virtual_core);
-        for (const auto& risc_type : risc_types) {
-            stalled_dram_buffer_indices.insert(this->active_dram_buffer_per_core_risc_map[virtual_core][risc_type]);
-        }
-    }
-
-    // Read DRAM
-    for (uint8_t buffer_index : stalled_dram_buffer_indices) {
+    // Read each DRAM buffer that has unparsed data once, and parse the riscs whose active buffer it is.
+    // L1 is not read: in debug dump mode the device never drops, so every finished run's L1 is pushed to DRAM (stalling
+    // for a fresh buffer if needed), and parsing that L1 copy would deliver the same events again after the cursor has
+    // moved past them. A running kernel's L1 is still being written.
+    for (const auto& [buffer_index, parse_starts_per_core] : parse_starts_per_buffer) {
         TT_ASSERT(buffer_index < 2, "DRAM Buffer Index can only be 0 or 1");
         readProfilerBuffer(mesh_device, device, buffer_index, /*force_slow_dispatch=*/true);
 
-        std::map<CoreCoord, std::set<tracy::RiscType>> cores_with_data_in_current_buffer;
-        for (const auto& [virtual_core, risc_types] : stalled_cores_with_data) {
-            for (const auto& risc_type : risc_types) {
-                if (this->active_dram_buffer_per_core_risc_map.at(virtual_core).at(risc_type) == buffer_index) {
-                    cores_with_data_in_current_buffer[virtual_core].insert(risc_type);
-                }
+        std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>> riscs_in_buffer(std::in_place);
+        for (const auto& [virtual_core, parse_starts] : parse_starts_per_core) {
+            for (const auto& [risc_type, start] : parse_starts) {
+                (*riscs_in_buffer)[virtual_core].insert(risc_type);
             }
         }
 
-        std::vector<CoreCoord> virtual_cores_for_current_buffer;
-        virtual_cores_for_current_buffer.reserve(cores_with_data_in_current_buffer.size());
-        for (const auto& [virtual_core, risc_types] : cores_with_data_in_current_buffer) {
-            virtual_cores_for_current_buffer.push_back(virtual_core);
-        }
-
-        for (const auto& virtual_core : virtual_cores_for_current_buffer) {
+        for (const auto& [virtual_core, parse_starts] : parse_starts_per_core) {
             readRiscProfilerResults(
-                device, virtual_core, ProfilerDataBufferSource::DRAM, {}, cores_with_data_in_current_buffer);
+                device, virtual_core, ProfilerDataBufferSource::DRAM, {}, riscs_in_buffer, &parse_starts);
         }
     }
 
-    // Remaining L1 data not flushed to DRAM yet
-    if (is_final_poll) {
-        std::vector<CoreCoord> cores_with_l1_data;
-        cores_with_l1_data.reserve(virtual_cores.size());
-        std::map<CoreCoord, std::set<tracy::RiscType>> riscs_with_l1_data;
-
-        for (const auto& virtual_core : virtual_cores) {
-            bool is_eth = env_.get_cluster().is_ethernet_core(virtual_core, device->id());
-            bool core_has_l1_data = false;
-
-            for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
-                if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
-                    (is_eth && risc_type != tracy::RiscType::ERISC) ||
-                    (!is_eth && risc_type == tracy::RiscType::ERISC) ||
-                    // WH/BH and Quasar RiscTypes occupy disjoint enum ranges, and the Quasar DRAM profiler
-                    // buffer is unsupported for now.
-                    (static_cast<uint8_t>(risc_type) >= static_cast<uint8_t>(tracy::RiscType::QUASAR_DM0) &&
-                     static_cast<uint8_t>(risc_type) <= static_cast<uint8_t>(tracy::RiscType::QUASAR_NEO3_TRISC3))) {
-                    continue;
-                }
-
-                // TODO: Intentionally skipping Quasar for now.
-                if (risc_type > tracy::RiscType::NONE) {
-                    continue;
-                }
-
-                const uint8_t control_buffer_device_index_index =
-                    risc_type_to_control_buffer_device_index_offset(risc_type);
-                const uint32_t device_buffer_end_index =
-                    core_control_buffers[virtual_core][control_buffer_device_index_index];
-
-                if (device_buffer_end_index > 0) {
-                    riscs_with_l1_data[virtual_core].insert(risc_type);
-                    core_has_l1_data = true;
-                }
-            }
-
-            if (core_has_l1_data) {
-                cores_with_l1_data.push_back(virtual_core);
-            }
-        }
-
-        // Read and process L1 buffers with unflushed data
-        if (!cores_with_l1_data.empty()) {
-            readL1DataBuffers(mesh_device, device, cores_with_l1_data, true);
-            for (const auto& virtual_core : cores_with_l1_data) {
-                readRiscProfilerResults(device, virtual_core, ProfilerDataBufferSource::L1, {}, riscs_with_l1_data);
+    // Everything up to the snapshot's end index is parsed now. A risc that got a fresh buffer continues at its start.
+    for (const auto& [buffer_index, parse_starts_per_core] : parse_starts_per_buffer) {
+        for (const auto& [virtual_core, parse_starts] : parse_starts_per_core) {
+            const std::vector<uint32_t>& control_buffer = core_control_buffers.at(virtual_core);
+            for (const auto& [risc_type, start] : parse_starts) {
+                this->dram_read_cursor_per_core_risc_map[virtual_core][risc_type] =
+                    control_buffer[risc_type_to_control_buffer_host_index_offset(risc_type)];
             }
         }
     }
-
-    // Commit the DeviceProfiler state updates on the host side
-    for (const auto& [virtual_core, risc_types] : stalled_cores_with_data) {
-        if (temp_stalled_control_buffers.contains(virtual_core)) {
-            this->core_control_buffers[virtual_core] = temp_stalled_control_buffers[virtual_core];
-            for (const auto& risc_type : risc_types) {
-                const uint8_t old_index = this->active_dram_buffer_per_core_risc_map[virtual_core][risc_type];
-                this->active_dram_buffer_per_core_risc_map[virtual_core][risc_type] = 1 - old_index;
-            }
-        } else if (temp_control_buffers.contains(virtual_core) && is_final_poll) {
-            // Non-stalled core that was merged into stalled_cores_with_data on final poll
-            // Update control buffer (with cleared host index) but don't switch buffer index
-            this->core_control_buffers[virtual_core] = temp_control_buffers[virtual_core];
-        }
+    for (const auto& [virtual_core, risc_type] : swapped_riscs) {
+        uint8_t& active_dram_buffer_index = this->active_dram_buffer_per_core_risc_map[virtual_core][risc_type];
+        active_dram_buffer_index = 1 - active_dram_buffer_index;
+        this->dram_read_cursor_per_core_risc_map[virtual_core][risc_type] = 0;
     }
+
+    return !parse_starts_per_buffer.empty() || !swapped_riscs.empty();
+#else
+    return false;
 #endif
 }
 

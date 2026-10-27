@@ -148,6 +148,10 @@ inline void _llk_math_eltwise_unary_datacopy_(
 
             // Disable zero flag to prevent mantissa flushing when exponent bits are 0.
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+
+            // UNPACK_TO_DEST covers only unpacker 0 and MOVD2B doesn't wait for SrcB valid, so wait for
+            // _llk_unpack_A_'s SrcB handoff (unpacker 1) before the broadcasts below write the bank.
+            math::srcb_bank_wait();
         }
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
@@ -163,7 +167,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
             //   4. Fp32_enabled=0 (BH HW bug: MOVB2D DEST_32B_LOW ignores writes when Fp32 is on)
             //      SrcA=Float32 + MOVB2D(DEST_32B_LOW, MOV_8_ROW_BRCST): broadcast lo16 from B to dest
             //   5. Fp32_enabled=1: restore FP32 dest mode
-            TTI_SETDVALID(0b10);
+            // _llk_unpack_A_ hands this thread the SrcB bank (SETDVALID is unsupported on Blackhole)
+            const std::uint32_t tile_base = dst_index * 64;
 
             // Both rows go to SrcB first, so each 16-bit half takes one switch set
             TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 0);
@@ -201,7 +206,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // every datum in every row of all 4 faces. Same hi16/lo16 split as ROW broadcast,
             // but uses MOV_8_ROW_BRCST_D0_BRCST which broadcasts both across rows AND across
             // all 16 datums within each row.
-            TTI_SETDVALID(0b10);
+            // _llk_unpack_A_ hands this thread the SrcB bank (SETDVALID is unsupported on Blackhole)
+            const std::uint32_t tile_base = dst_index * 64;
 
             // Extract source scalar from dest row 0 into B register
             TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 0);   // hi16 to B
@@ -245,7 +251,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // each pair, all 16 source rows are extracted in groups of 4, then broadcast
             // via MOV_4_ROWS_D0_BRCST to both the left face (rows 0-15) and the right
             // face (rows 16-31). Same hi16/lo16 split as ROW/SCALAR broadcasts.
-            TTI_SETDVALID(0b10);
+            // _llk_unpack_A_ hands this thread the SrcB bank (SETDVALID is unsupported on Blackhole)
+            const std::uint32_t tile_base = dst_index * 64;
 
             eltwise_unary_bcast_col_32b_face_pair<0 /*face_base*/>();
             eltwise_unary_bcast_col_32b_face_pair<2 * FACE_R_DIM /*face_base*/>();
