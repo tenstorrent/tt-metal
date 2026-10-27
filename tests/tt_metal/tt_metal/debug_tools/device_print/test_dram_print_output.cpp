@@ -14,6 +14,9 @@
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/program/program_impl.hpp"
+#include "impl/program/slow_dispatch.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 // DEVICE_PRINT tests for DRAM programmable cores (DRISC, Blackhole only).
@@ -41,7 +44,16 @@ public:
 
         SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
 
-        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        if (this->IsSlowDispatch()) {
+            DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        } else {
+            // Fast dispatch cannot launch DRAM-core kernels, so launch it the way resident DRAM-core kernels are. Its
+            // prints still go through the dispatch_s aggregator.
+            IDevice* device = mesh_device->impl().get_devices()[0];
+            program_.impl().compile(device, /*force_slow_dispatch=*/true);
+            slow_dispatch::LaunchProgramAsync(*device, program_, /*force_slow_dispatch=*/true);
+            slow_dispatch::WaitProgramDone(*device, program_);
+        }
         MetalContext::instance().dprint_server()->await();
     }
 
@@ -58,10 +70,6 @@ public:
 
 #define DRAM_SKIP_GUARDS()                                                                                  \
     do {                                                                                                    \
-        if (!this->IsSlowDispatch()) {                                                                      \
-            log_info(tt::LogTest, "DRAM cores only support Slow Dispatch (Fast Dispatch not yet supported).");  \
-            GTEST_SKIP();                                                                                   \
-        }                                                                                                   \
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();                                     \
         if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {                               \
             log_info(tt::LogTest, "Skipping: DRAM programmable cores not available on this architecture."); \
