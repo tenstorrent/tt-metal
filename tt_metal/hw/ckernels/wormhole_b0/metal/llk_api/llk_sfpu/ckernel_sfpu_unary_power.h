@@ -301,13 +301,10 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     // pow_lo*exp_f32 rides in z_lo, so no bit of the large integer term is lost.
     // Splitting only pow (not the full Dekker two-product on log2(base)) keeps the
     // simultaneously-live vector count within the SFPU register budget.
-    constexpr float VELTKAMP_SPLIT = 4097.0f;  // 2**12 + 1
-    sfpi::vFloat pc = pow * VELTKAMP_SPLIT;
-    sfpi::vFloat pow_hi = pc - (pc - pow);
-    sfpi::vFloat pow_lo = pow - pow_hi;
-
-    sfpi::vFloat z_hi = pow_hi * exp_f32;
-    sfpi::vFloat z_lo = pow_lo * exp_f32 + pow * (ln_m * vConst1Ln2);
+    // pow is the same scalar on every row, so _sfpu_unary_power_fp32_ computes the split
+    // once per call and parks pow_hi / pow_lo in vConstFloatPrgm1 / vConstFloatPrgm2.
+    sfpi::vFloat z_hi = sfpi::vConstFloatPrgm1 * exp_f32;
+    sfpi::vFloat z_lo = sfpi::vConstFloatPrgm2 * exp_f32 + pow * (ln_m * vConst1Ln2);
     sfpi::vFloat y = _sfpu_pow2_f32_accurate_hilo_(z_hi, z_lo);
 
     v_if(base < 0.0f) {  // negative base
@@ -324,7 +321,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
-            y = sfpi::vConstFloatPrgm2;
+            y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
     }
@@ -339,7 +336,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
         v_endif;
     } else {
         v_if(abs_base == 0.f) {
-            y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
+            y = std::numeric_limits<float>::quiet_NaN();  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
         }
         v_endif;
     }
@@ -375,6 +372,16 @@ inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
     // Convert exponent to float
     const float pow_scalar = Converter::as_float(exponent);
     const sfpi::vFloat pow = pow_scalar;
+
+    // Veltkamp split of the loop-invariant exponent, once per call instead of once per row.
+    // Holding pow_hi and pow_lo in LRegs across the loop exceeds the register budget, so
+    // they go to the programmable constants; the fp32 body reads neither -127 nor the NaN
+    // that sfpu_unary_pow_init leaves there (those are for the bf16 body).
+    constexpr float VELTKAMP_SPLIT = 4097.0f;  // 2**12 + 1
+    sfpi::vFloat pc = pow * VELTKAMP_SPLIT;
+    sfpi::vFloat pow_hi = pc - (pc - pow);
+    sfpi::vConstFloatPrgm1 = pow_hi;
+    sfpi::vConstFloatPrgm2 = pow - pow_hi;
 
     if (pow_scalar >= 0.0f) {
 #pragma GCC unroll 8
