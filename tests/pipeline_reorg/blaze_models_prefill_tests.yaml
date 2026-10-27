@@ -1408,7 +1408,8 @@
     exec bash models/demos/minimax_m3/scripts/prefill_matrix/ci/run_matrix_ci.sh
   test_type: minimax_prefill_matrix
   test_tags: [minimax_m3, runner]
-  test_group: disagg_prefill
+  # Runs on the weekly cron (Saturday 20:00 UTC), not daily.
+  test_group: weekly
   artifact_subdir: m3_prefill_matrix
   skus:
     bh_sc4:
