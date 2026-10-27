@@ -1181,3 +1181,8 @@ packets as the stacked stream), so the short-context README rows measured with t
 1 M residual over 256 K (75.7 unbound -> ~72 bound vs 70.3) is the attention/index capacity term. The stacked copy (9.41 GiB per
 chip) is no longer built in any configuration unless `GLM53_REGIONS_DECODE=off`. boundary65536_reuse_8x4_45L (the full-model
 reproducer of the served random-65536 decode hang) PASSED at 10:33: the hang stays unreproduced outside the served path.
+
+11:27 serve_smoke_glm53_r12_packed (tree = wt_frozen10 + `GLM53_DECODE_PACKED_INPUTS=1`): PASS a/b/c/d; first tokens exact (both
+prompts), determinism 4/4, 4 x 65 514-token needles 4/4 (TTFT 26.5 / 52.3 / 78.3 / 104.4 s, no cross-talk), bench 128 x 128 x 32:
+TPOT 174.6 ms = 5.7 tok/s per user (192 before packed inputs: the host share 41 -> ~26 ms per step), 32/32 completed. Packed inputs
+default on (mesh_model.packed_inputs_enabled). Next: r13 (+ sparse bound, tree17), r14 (+ stream decode, tree18).
