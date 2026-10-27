@@ -82,6 +82,12 @@ Main flags (`run_qwen38_chat_server.sh --help` lists all of them):
 [docs/SERVER.md](docs/SERVER.md) covers the request rules, `/health`, follow-up turns, lanes and MTP;
 [docs/PREFILL.md](docs/PREFILL.md) the prefill forms.
 
+To chat with a running server from a terminal (`/reset` clears the history, `/quit` exits):
+
+```bash
+python -m models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_cli --url http://127.0.0.1:8000/v1
+```
+
 ## Testing
 
 ```bash
