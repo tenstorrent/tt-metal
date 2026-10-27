@@ -18,6 +18,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
 #include <numeric>
+#include <bit>
 
 namespace ttnn::operations::data_movement {
 namespace {
@@ -79,9 +80,22 @@ Tensor pre_sort_transform_tensor(
     // sort dimension.  In practice the primary use case (position indices
     // bounded well below 65535) is not affected, but full-range UINT16 inputs
     // may see incorrect indices for tied values at the boundary.
+    // For FLOAT32: pad with the largest-magnitude NaN (0x7FFFFFFF ascending, 0xFFFFFFFF descending)
+    // rather than +/-inf. Under the device's sign-and-magnitude comparator, any NaN has a larger
+    // magnitude than +/-inf (e.g. +NaN 0x7FC00000 > +inf 0x7F800000), causing NaNs to sort past
+    // +/-inf padding into [n, padded_w) and leaking out-of-range padding indices (issue #60613).
+    // Using 0x7FFFFFFF (ascending) and 0xFFFFFFFF (descending) guarantees no input value can sort past
+    // the padding. Exact ties with this bit pattern are resolved by the index-aware comparator.
     const bool is_uint16_input = (input_tensor.dtype() == DataType::UINT16);
-    const float pad_ascending = is_uint16_input ? 65535.0f : std::numeric_limits<float>::infinity();
-    const float pad_descending = is_uint16_input ? 0.0f : -std::numeric_limits<float>::infinity();
+    const bool is_float32_input = (input_tensor.dtype() == DataType::FLOAT32);
+    const float pad_ascending = is_uint16_input
+                                    ? 65535.0f
+                                    : (is_float32_input ? std::bit_cast<float>(0x7FFFFFFFU)
+                                                        : std::numeric_limits<float>::infinity());
+    const float pad_descending = is_uint16_input
+                                     ? 0.0f
+                                     : (is_float32_input ? std::bit_cast<float>(0xFFFFFFFFU)
+                                                         : -std::numeric_limits<float>::infinity());
     const float pad_fill = descending ? pad_descending : pad_ascending;
 
     if (!is_row_major) {

@@ -347,7 +347,6 @@ def test_sort_pad_value_ties_index_range_every_factory(n, ttnn_dtype, descending
 # (descending). The NaN never ties with the padding, so the index-aware comparator never fires: the NaN
 # lands past the cut, and the slice back to n drops it and keeps a padding element instead.
 # (bfloat16 NaN reaches the comparator as ±inf, so it only leaks where ±inf does.)
-@pytest.mark.xfail(reason="fp32 NaN sorts past the ±inf padding on every factory #60613")
 @pytest.mark.parametrize("stable", [False, True], ids=["unstable", "stable"])
 @pytest.mark.parametrize(
     "descending, nan_bits",
@@ -370,6 +369,9 @@ def test_sort_fp32_nan_index_range_every_factory(n, descending, nan_bits, stable
     assert torch.equal(torch.sort(indices, dim=-1).values, torch.arange(n).unsqueeze(0)), "indices not a permutation"
     gathered = torch.gather(input, -1, indices)
     torch.testing.assert_close(ttnn.to_torch(ttnn_values), gathered, rtol=0, atol=0, equal_nan=True)
+
+    values = ttnn.to_torch(ttnn_values)
+    assert torch.isnan(values).sum().item() == num_nan, f"expected {num_nan} NaNs preserved, found {torch.isnan(values).sum().item()}"
 
 
 @pytest.mark.parametrize(
