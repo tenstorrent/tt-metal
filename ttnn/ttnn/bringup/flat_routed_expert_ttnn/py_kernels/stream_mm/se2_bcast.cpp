@@ -20,7 +20,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #ifdef SE_ZONES
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #define SE_MARK(name)            \
     {                            \
         DeviceZoneScopedN(name); \

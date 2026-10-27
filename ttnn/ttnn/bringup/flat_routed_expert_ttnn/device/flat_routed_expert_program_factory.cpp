@@ -80,17 +80,11 @@ MathFidelity expert_fidelity(uint32_t cfg_fidelity) {
 using namespace factory_detail;
 constexpr uint32_t KBLK = kKBlk, BF8_TILE = kBf8Tile;
 
-uint32_t flat_combine_overlap_walk_steps(uint32_t experts_per_chip) {
-    const uint32_t se_max_e = experts_per_chip <= 16 ? 16 : (experts_per_chip <= 32 ? 32 : 64);
-    TT_FATAL(2 * experts_per_chip <= 2 * se_max_e, "flat_combine_overlap: more schedule entries than SE_MAX_V");
-    return 2 * experts_per_chip;  // a schedule has at most E + (pinned chunks - 1) <= 2 E entries (se_dyn_pin)
-}
-
 std::vector<std::pair<std::string, std::string>> flat_schedule_defines(
     const FlatRoutedExpertConfig& cfg, const FlatRoutedExpertPlan& p) {
-    // Any plan, subgrids included: the plain program takes its schedule defines from here too. Only a consumer that
-    // rebuilds the schedule in another op (flat_combine_overlap) needs one subgrid: it checks that itself (the check
-    // used to sit here and refused every 2 / 3 subgrid plan in the plain op: deepseek_v41_flash_d_p FIX.2, DS41-63).
+    // Any plan, subgrids included: the plain program takes its schedule defines from here too. A consumer that
+    // rebuilds the schedule in another op needs one subgrid and checks that itself (the check used to sit here and
+    // refused every 2 / 3 subgrid plan in the plain op: deepseek_v41_flash_d_p FIX.2, DS41-63).
     const uint32_t se_max_e = p.E <= 16 ? 16 : (p.E <= 32 ? 32 : 64);
     std::vector<std::pair<std::string, std::string>> d{
         {"SE_RPS", std::to_string(p.mt * 32)},
@@ -298,7 +292,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     const std::string sbt = std::to_string(p.sbt);
 
     // ---- kernels + runtime args ----
-    // combine overlap (cfg.cmb_rt): a y writer's args padded to cmb_rt, then 4 report args the overlap fills
+    // flat_with_program (cfg.cmb_rt): a y writer's args padded to cmb_rt, then 4 report args the caller's op fills
     auto add_writer_rt = [&](KernelHandle k, const CoreCoord& c, Args args) {
         if (cfg.cmb_rt) {
             TT_FATAL(
@@ -321,12 +315,10 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (cfg.cmb_rt && std::getenv("MIMO_FL_CMB_EARLY")) {  // (perf probe: combine released at launch, garbage)
         cmb_def["SE_CMB_EARLY"] = "1";
     }
-    // the steps the writers report must be the order combine walks: flat_combine_overlap's completion order with
-    // row-major y, slot order with bfp8 tiles (combine's untilizers) or the MIMO_FL_CMB_SLOT_ORDER probe
-    if (cfg.cmb_rt && (!cfg.y_row_major || std::getenv("MIMO_FL_CMB_SLOT_ORDER"))) {
+    // the writers report local experts in slot order (flat_with_program; the schedule-entry order, SE_CMB_STEPS, was
+    // the removed flat_combine_overlap's)
+    if (cfg.cmb_rt) {
         cmb_def["SE_CMB_SLOT_ORDER"] = "1";
-    } else if (cfg.cmb_rt) {  // steps = schedule entries, at most 2 E (flat_combine_overlap_walk_steps)
-        cmb_def["SE_CMB_STEPS"] = std::to_string(flat_combine_overlap_walk_steps(E));
     }
     auto add_rt = [&](KernelHandle k, const CoreCoord& c, const Args& args) {
         SetRuntimeArgs(program, k, c, args.v);

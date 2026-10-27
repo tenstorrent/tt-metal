@@ -332,7 +332,7 @@ void kernel_main() {
 _SENDER = (
     _COMMON
     + r"""
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -520,7 +520,7 @@ def mesh_plan(mesh_device, num_links, torus=(False, False)):
                 peer = nb((r, c), d)
                 if peer is None:
                     continue
-                if not ttnn.get_neighbor_eth_directions(node((r, c)), node(peer)):
+                if not ttnn.get_neighbor_eth_directions(mesh_device, node((r, c)), node(peer)):
                     raise ValueError(f"sparse_all_gather_2d: {(r, c)} -> {peer} is not a direct link")
                 links = ttnn.get_forwarding_link_indices(node((r, c)), node(peer))
                 if len(links) < num_links:

@@ -20,7 +20,7 @@
 #include "api/compute/pack_untilize.h"
 #endif
 #if defined(SE_ZONES) || defined(SE_DZ)
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #endif
 
 // (perf probe SE_NO_MATH: no matmul - every CB handshake, unpack-side pops and pack stay; garbage outputs)

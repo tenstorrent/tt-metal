@@ -9,7 +9,6 @@
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/global_semaphore.hpp>
 
 #include "flat_routed_expert.hpp"
 #include "device/flat_drisc.hpp"
@@ -208,46 +207,6 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("weights_nk") = false,
         nb::arg("hidden") = 0);
 
-    ttnn::bind_function<"flat_combine_overlap", "ttnn.bringup.">(
-        mod,
-        R"doc(
-        The flat routed expert overlapped with combine_fabric2d in one program per chip (initial version): combine on
-        grid rows 0-1 takes each local expert as soon as every flat y writer reports its rows landed. The flat expert's
-        arguments as for flat_routed_expert (planned below rows 0-1: MIMO_FL_ROWS=2,9), combine's as for
-        hybrid_routed_expert_moe's overlap. Returns combine's output [1, 1, seq_len_per_chip, num_experts_per_tok, H]
-        bf16 ROW_MAJOR; y_out (optional, [rows, H]) receives the flat expert's output: bf16 ROW_MAJOR with y_row_major
-        (default: combine's readers read its rows directly, no untilizer cores; plan with MIMO_FL_ROWS=1,9), else bfp8
-        TILE (combine untilizes it on rows 0-1; MIMO_FL_ROWS=2,9).
-        )doc",
-        &fre::flat_combine_overlap,
-        nb::arg("dispatched_buffer").noconvert(),
-        nb::arg("expert_token_counts").noconvert(),
-        nb::arg("expert_region_offsets").noconvert(),
-        nb::arg("global_expert_ids").noconvert(),
-        nb::arg("gate_up_weights").noconvert(),
-        nb::arg("down_weights").noconvert(),
-        nb::arg("reader_down_weights") = nb::none(),
-        nb::arg("done_words").noconvert(),
-        nb::arg("intermediate"),
-        nb::arg("max_tokens_per_expert"),
-        nb::arg("dispatched_metadata").noconvert(),
-        nb::arg("expert_offsets").noconvert(),
-        nb::arg("replicated_global_expert_idx_table").noconvert(),
-        nb::kw_only(),
-        nb::arg("num_experts_per_tok"),
-        nb::arg("seq_len_per_chip"),
-        nb::arg("combine_axis") = 0,
-        nb::arg("combine_num_links") = 2,
-        nb::arg("fwd_arrived_semaphore"),
-        nb::arg("final_arrived_semaphore"),
-        nb::arg("expert_go_semaphore"),
-        nb::arg("activation") = 0,
-        nb::arg("pin") = 1,
-        nb::arg("down_fp32") = false,
-        nb::arg("x_bf16") = false,
-        nb::arg("h_bf16") = false,
-        nb::arg("y_row_major") = true,
-        nb::arg("y_out") = nb::none());
     ttnn::bind_function<"flat_routed_expert_with_program", "ttnn.bringup.">(
         mod,
         R"doc(

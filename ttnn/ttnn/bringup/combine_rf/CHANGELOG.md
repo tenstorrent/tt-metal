@@ -107,3 +107,11 @@ imported, unchanged.
   local / remote / random routing, 64-512 tokens) pass; the frozen test_c_*_experts pass with it.
 - Needed by: deepseek_v41_flash_d_p P.8 (tt/weighted_combine.py)
 - Files: sparse_combine_rf.py, combine_plan.py
+
+### Rebase onto llk_helper_library 6b80daf43e3: kernel API port (2026-10-27)
+- What: the four inline fabric kernels include `hostdev/fabric_edm_packet_header.hpp` (#60172); `_chip_maps` passes
+  `mesh_device` to `ttnn.cluster.get_chip_unique_id_from_fabric_node_id` (#60180). Host side, by the overseer:
+  `ttnn.get_neighbor_eth_directions` takes `mesh_device` first (#59551).
+- Why: kernel compile error (DeepSeek-V4.1's weighted combine included); TypeError in automatic core placement.
+- Needed by: rebase 2026-10-27
+- Files: `fabric_all_gather_py.py`, `sparse_all_gather_2d.py`, `sparse_combine_l1.py`, `sparse_combine_rf.py`

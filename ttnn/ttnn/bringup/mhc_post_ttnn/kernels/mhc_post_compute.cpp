@@ -171,7 +171,8 @@ ALWI void fit_packs(uint32_t out_tile0, Es... elts) {
     if constexpr (C == K) {
         eltwise_chain(IterationShape::one_tile(), elts...);
     } else {
-        fit_packs<K, C + 1>(out_tile0, elts..., PackOutput<data_slot(C, 0)>{out_tile0 + C});
+        DataflowBuffer out_dfb(cb_output_tiles);
+        fit_packs<K, C + 1>(out_tile0, elts..., PackOutput<data_slot(C, 0)>{out_dfb, out_tile0 + C});
     }
 }
 
@@ -188,7 +189,10 @@ ALWI void fit_sums(uint32_t out_tile0, Es... elts) {
 template <DataFormatReconfig First, uint32_t... Ps, class... Es>
 ALWI auto with_coefs(uint32_t j, std::integer_sequence<uint32_t, Ps...>, Es... elts) {
     return [=](auto next) {
-        next(elts..., CoefCopy<Ps, (Ps == 0 ? First : DataFormatReconfig::Enabled)>{j * coef_tiles_per_stream + Ps}...);
+        DataflowBuffer coef_dfb(cb_coef_bcast);
+        next(
+            elts...,
+            CoefCopy<Ps, (Ps == 0 ? First : DataFormatReconfig::Enabled)>{coef_dfb, j * coef_tiles_per_stream + Ps}...);
     };
 }
 
@@ -206,10 +210,13 @@ ALWI void data_copies(uint32_t col0, Next next, Es... elts) {
         constexpr uint32_t t = XFirst ? (ordinal + 1) % NUM_TERMS : ordinal;
         constexpr DataFormatReconfig R = Step == 0 ? First : DataFormatReconfig::Enabled;
         if constexpr (t == 0) {
-            data_copies<K, XFirst, First, Step + 1>(col0, next, elts..., SublayerCopy<data_slot(c, 0), R>{col0 + c});
-        } else {
+            DataflowBuffer sublayer_dfb(cb_sublayer_tiles);
             data_copies<K, XFirst, First, Step + 1>(
-                col0, next, elts..., ResidualCopy<data_slot(c, t), R>{residual_tile(t, col0 + c)});
+                col0, next, elts..., SublayerCopy<data_slot(c, 0), R>{sublayer_dfb, col0 + c});
+        } else {
+            DataflowBuffer residual_dfb(cb_residual_tiles);
+            data_copies<K, XFirst, First, Step + 1>(
+                col0, next, elts..., ResidualCopy<data_slot(c, t), R>{residual_dfb, residual_tile(t, col0 + c)});
         }
     }
 }
@@ -243,23 +250,28 @@ constexpr uint32_t group_slot0(uint32_t g) { return g == 0 ? DST_DATA0 : DST_DAT
 template <uint32_t G, uint32_t K, class... Es>
 ALWI void grouped_terms(uint32_t j, uint32_t col, Es... elts) {
     if constexpr (group_first(G) >= NUM_TERMS) {
-        eltwise_chain(IterationShape::one_tile(), elts..., PackOutput<DST_DATA0>{j * block_col_tiles + col});
+        DataflowBuffer out_dfb(cb_output_tiles);
+        eltwise_chain(IterationShape::one_tile(), elts..., PackOutput<DST_DATA0>{out_dfb, j * block_col_tiles + col});
     } else if constexpr (K == group_count(G)) {
         grouped_terms<G + 1, 0>(
             j, col, elts..., WeightedSum<group_count(G), group_first(G), group_slot0(G), DST_DATA0, (G > 0)>{});
     } else {
         constexpr uint32_t t = group_first(G) + K;
         if constexpr (t == 0) {
-            grouped_terms<G, K + 1>(j, col, elts..., SublayerCopy<group_slot0(G) + K>{col});
+            DataflowBuffer sublayer_dfb(cb_sublayer_tiles);
+            grouped_terms<G, K + 1>(j, col, elts..., SublayerCopy<group_slot0(G) + K>{sublayer_dfb, col});
         } else {
-            grouped_terms<G, K + 1>(j, col, elts..., ResidualCopy<group_slot0(G) + K>{residual_tile(t, col)});
+            DataflowBuffer residual_dfb(cb_residual_tiles);
+            grouped_terms<G, K + 1>(
+                j, col, elts..., ResidualCopy<group_slot0(G) + K>{residual_dfb, residual_tile(t, col)});
         }
     }
 }
 
 template <uint32_t... Ps>
 ALWI void grouped_window(uint32_t j, uint32_t col, std::integer_sequence<uint32_t, Ps...>) {
-    grouped_terms<0, 0>(j, col, CoefCopy<Ps>{j * coef_tiles_per_stream + Ps}...);
+    DataflowBuffer coef_dfb(cb_coef_bcast);
+    grouped_terms<0, 0>(j, col, CoefCopy<Ps>{coef_dfb, j * coef_tiles_per_stream + Ps}...);
 }
 
 // ======================= block schedule =======================

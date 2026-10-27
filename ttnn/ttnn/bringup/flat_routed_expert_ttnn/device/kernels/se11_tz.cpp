@@ -12,7 +12,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #ifdef SE_ZONES
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #endif
 
 void kernel_main() {

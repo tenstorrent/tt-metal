@@ -110,7 +110,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/reduce.h"
-// add_tiles / add_tiles_init with acc_to_dest -- the root's fused pairwise DEST fold
+// add_tiles / add_init with acc_to_dest -- the root's fused pairwise DEST fold
 // (Perf 2 / D22; justification at the fused chain in the COMBINE branch).
 #include "api/compute/eltwise_binary.h"
 // matmul_tiles / matmul_init -- the COMBINE's compact partial transpose (Perf 3 / D27;
@@ -538,7 +538,7 @@ ALWI void combine_fold() {
     // That was BUILT AND MEASURED during D28's integration and it LOST, on both sides:
     //     (1,1,32,2304) WIDTH 9c  (odd GROUP_SIZE, flat root)  4442 -> 4610 ns   0.964x
     //     (1,1,32,7168) WIDTH 28c (odd f1, slot tree)          5873 -> 5841 ns   1.005x
-    // i.e. the `copy_tile_init` + `add_tiles_init` pair inside the DEST window costs about
+    // i.e. the `copy_tile_init` + `add_init` pair inside the DEST window costs about
     // what the 314 ns boot zero it replaces costs, and MORE at the geometry where the pad was
     // the only thing being deleted.  So the even pad stays, and the reason is a number.
     constexpr uint32_t HALF = SLOTS / 2;
@@ -551,7 +551,7 @@ ALWI void combine_fold() {
     cb_wait_front(CB_IN, SLOTS);
     reconfig_data_format(CB_IN, CB_IN);
     pack_reconfig_data_format(CB_OUT);
-    add_tiles_init(CB_IN, CB_IN, /*acc_to_dest=*/true);
+    add_init(CB_IN, CB_IN, /*acc_to_dest=*/true);
     if constexpr (FINALIZE) {
         // MANDATORY, not decorative: rms_stat_rsqrt_body reads sfpi::vConstIntPrgm0 /
         // vConstFloatPrgm1..2, which sfpu::rsqrt_init programs -- persistent SFPU PROGRAM
@@ -1322,10 +1322,11 @@ void kernel_main() {
             return;
         } else {
             MaybeDeviceZoneScope("compute_residual_add");
+            DataflowBuffer x_dfb(cb_input_tiles), r_dfb(cb_residual_tiles), x_sum_dfb(cb_x_sum);
             ckl::eltwise_chain(
                 ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
-                ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{},
-                ckl::PackTile<X_SUM_OUT>{});
+                ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{x_dfb, r_dfb},
+                ckl::PackTile<X_SUM_OUT>{x_sum_dfb});
         }
     };
 #ifdef RMS_RESIDUAL_OUT
@@ -1347,11 +1348,12 @@ void kernel_main() {
         ckl::output(cb_residual_sum, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize);
     auto residual_add_emit_block = [&](uint32_t rows) {
         MaybeDeviceZoneScope("compute_residual_add");
+        DataflowBuffer x_dfb(cb_input_tiles), r_dfb(cb_residual_tiles), x_sum_dfb(cb_x_sum), t_sum_dfb(cb_residual_sum);
         ckl::eltwise_chain(
             ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
-            ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{},
-            ckl::PackTile<X_SUM_OUT>{},
-            ckl::PackTile<T_SUM_OUT>{});
+            ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{x_dfb, r_dfb},
+            ckl::PackTile<X_SUM_OUT>{x_sum_dfb},
+            ckl::PackTile<T_SUM_OUT>{t_sum_dfb});
     };
 #endif
 
@@ -1388,11 +1390,12 @@ void kernel_main() {
                 // The two activation CBs are still popped by the chain, so the push/pop
                 // balance is exactly the unfused pair's minus cb_x_sum's matched pair.
                 MaybeDeviceZoneScope("compute_res_square");
+                DataflowBuffer x_dfb(cb_input_tiles), r_dfb(cb_residual_tiles), x_sq_dfb(cb_x_squared);
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(rows, WT_CHUNK).block_size(SQ_BLK),
-                    ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{},
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{x_dfb, r_dfb},
                     ckl::Square<>{},
-                    ckl::PackTile<SQ_OUT>{});
+                    ckl::PackTile<SQ_OUT>{x_sq_dfb});
             } else {
                 // t = x + r, materialized into the CB the rest of the kernel reads.
 #ifdef RMS_RESIDUAL_OUT
@@ -1431,14 +1434,16 @@ void kernel_main() {
 #else
                     false;
 #endif
+                DataflowBuffer t_dfb(CB_T), x_sq_dfb(cb_x_squared);
                 if constexpr (SQ_STUB) {
-                    ckl::eltwise_chain(sq_shape, ckl::CopyTile<X_IN_A>{hold_base}, ckl::PackTile<SQ_OUT>{});
+                    ckl::eltwise_chain(
+                        sq_shape, ckl::CopyTile<X_IN_A>{t_dfb, hold_base}, ckl::PackTile<SQ_OUT>{x_sq_dfb});
                 } else {
                     ckl::eltwise_chain(
                         sq_shape,
                         ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, X_IN_A, X_IN_A, ckl::Dst::D0, SQ_OUT.dest_accumulation>{
-                            hold_base, hold_base},
-                        ckl::PackTile<SQ_OUT>{});
+                            t_dfb, t_dfb, hold_base, hold_base},
+                        ckl::PackTile<SQ_OUT>{x_sq_dfb});
                 }
             }
 
@@ -2045,10 +2050,12 @@ void kernel_main() {
                 // x * (1/rms) never leaves DEST, so y is rounded once, on the output pack.  PC_LANE slots per lane, so
                 // the DEST block is PASS_B_PC_BLK (<= DEST_AUTO_LIMIT / PC_LANE), not PASS_B_BLK.
                 MaybeDeviceZoneScope("compute_scale");
+                DataflowBuffer t_dfb(CB_T), stat_dfb(CB_STAT_B), gamma_dfb(cb_gamma_tiles), bias_dfb(cb_bias_tiles),
+                    out_dfb(cb_output_tiles);
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_PC_BLK),
 #ifdef RMS_ABLATE_COMPUTE
-                    ckl::CopyTile<X_IN_B>{hold_base},
+                    ckl::CopyTile<X_IN_B>{t_dfb, hold_base},
 #else
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
@@ -2058,12 +2065,13 @@ void kernel_main() {
                             ckl::BroadcastDim::Col,
                             ckl::WaitPolicy::Upfront,
                             ckl::PopPolicy::None,
-                            ckl::InputTileMapping::Col)>{hold_base},
+                            ckl::InputTileMapping::Col)>{t_dfb, stat_dfb, hold_base},
 #endif
-                    ckl::Optional<HAS_G, ckl::UnaryBcast<ckl::BroadcastDim::Row, G_IN, ckl::Dst::D1>>{pc_base},
-                    ckl::Optional<HAS_B, ckl::UnaryBcast<ckl::BroadcastDim::Row, B_IN, PC_B_SLOT>>{pc_base},
+                    ckl::Optional<HAS_G, ckl::UnaryBcast<ckl::BroadcastDim::Row, G_IN, ckl::Dst::D1>>{
+                        gamma_dfb, pc_base},
+                    ckl::Optional<HAS_B, ckl::UnaryBcast<ckl::BroadcastDim::Row, B_IN, PC_B_SLOT>>{bias_dfb, pc_base},
                     PcRowBcast<HAS_G, HAS_B, ckl::Dst::D0, ckl::Dst::D1, PC_B_SLOT>{},
-                    ckl::PackTile<PASS_B_OUT_GAMMA>{});
+                    ckl::PackTile<PASS_B_OUT_GAMMA>{out_dfb});
             } else if constexpr (!HAS_G || !CROSS_CORE) {
                 // ---- the shipped order: scale, then gamma ----
                 // x * (1/rms). The stat is a REDUCE_ROW result: column-shaped, so it
@@ -2072,11 +2080,12 @@ void kernel_main() {
                 // popped -- every width chunk of this block re-reads it.
                 {
                     MaybeDeviceZoneScope("compute_scale");
+                    DataflowBuffer t_dfb(CB_T), stat_dfb(CB_STAT_B), norm_out_dfb(NORM_OUT);
 #ifdef RMS_ABLATE_COMPUTE
                     ckl::eltwise_chain(
                         ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
-                        ckl::CopyTile<X_IN_B>{hold_base},
-                        ckl::PackTile<PASS_B_OUT_NORM>{});
+                        ckl::CopyTile<X_IN_B>{t_dfb, hold_base},
+                        ckl::PackTile<PASS_B_OUT_NORM>{norm_out_dfb});
 #else
                     ckl::eltwise_chain(
                         ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
@@ -2088,8 +2097,8 @@ void kernel_main() {
                                 ckl::BroadcastDim::Col,
                                 ckl::WaitPolicy::Upfront,
                                 ckl::PopPolicy::None,
-                                ckl::InputTileMapping::Col)>{hold_base},
-                        ckl::PackTile<PASS_B_OUT_NORM>{});
+                                ckl::InputTileMapping::Col)>{t_dfb, stat_dfb, hold_base},
+                        ckl::PackTile<PASS_B_OUT_NORM>{norm_out_dfb});
 #endif
                 }
 
@@ -2097,6 +2106,7 @@ void kernel_main() {
                     // gamma is row-shaped (1 x W, valid in row 0) -> broadcasts DOWN
                     // rows (BroadcastDim::Row), indexed by column (InputTileMapping::Row).
                     MaybeDeviceZoneScope("compute_gamma_mul");
+                    DataflowBuffer norm_dfb(cb_normalized), gamma_dfb(cb_gamma_tiles);
                     if constexpr (HAS_B) {
                         // A2: a bias FOLLOWS the scale, so the scale is not the last
                         // stage and must not write cb_output_tiles.  It transforms
@@ -2130,10 +2140,12 @@ void kernel_main() {
                                     ckl::WaitPolicy::PerBlockSize,
                                     ckl::PopPolicy::PerBlockSize,
                                     ckl::InputTileMapping::Block),
-                                ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
+                                ckl::input(G_IN, ckl::BroadcastDim::Row)>{norm_dfb, gamma_dfb, 0u, pc_base},
                             ckl::PackTile<ckl::output(
-                                cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                                cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{
+                                norm_dfb});
                     } else {
+                        DataflowBuffer out_dfb(cb_output_tiles);
                         ckl::eltwise_chain(
                             ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
                             ckl::BinaryFpu<
@@ -2143,19 +2155,20 @@ void kernel_main() {
                                     ckl::WaitPolicy::Upfront,
                                     ckl::PopPolicy::AtEnd,
                                     ckl::InputTileMapping::Block),
-                                ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
-                            ckl::PackTile<PASS_B_OUT_GAMMA>{});
+                                ckl::input(G_IN, ckl::BroadcastDim::Row)>{norm_dfb, gamma_dfb, 0u, pc_base},
+                            ckl::PackTile<PASS_B_OUT_GAMMA>{out_dfb});
                     }
                 }
             } else {
                 // ---- D44: the reordered order -- gamma FIRST, then the scale ----
                 {
                     MaybeDeviceZoneScope("compute_gamma_mul");
+                    DataflowBuffer t_dfb(CB_T), gamma_dfb(cb_gamma_tiles), norm_out_dfb(NORM_OUT);
                     ckl::eltwise_chain(
                         ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
                         ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, X_IN_B, ckl::input(G_IN, ckl::BroadcastDim::Row)>{
-                            hold_base, pc_base},
-                        ckl::PackTile<PASS_B_OUT_NORM>{});
+                            t_dfb, gamma_dfb, hold_base, pc_base},
+                        ckl::PackTile<PASS_B_OUT_NORM>{norm_out_dfb});
                 }
                 {
                     // The scale is now the SECOND stage, so it inherits the lifecycle the
@@ -2166,6 +2179,7 @@ void kernel_main() {
                     // never the aliased CB (chain.inl:82-85 forbids a Row/Col operand as
                     // an in-place target).
                     MaybeDeviceZoneScope("compute_scale");
+                    DataflowBuffer norm_dfb(cb_normalized), stat_dfb(CB_STAT_B);
                     if constexpr (HAS_B) {
                         ckl::eltwise_chain(
                             ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
@@ -2174,7 +2188,7 @@ void kernel_main() {
                                 cb_normalized,
                                 ckl::WaitPolicy::PerBlockSize,
                                 ckl::PopPolicy::PerBlockSize,
-                                ckl::InputTileMapping::Block)>{0u},
+                                ckl::InputTileMapping::Block)>{norm_dfb, 0u},
 #else
                             ckl::BinaryFpu<
                                 ckl::BinaryFpuOp::Mul,
@@ -2188,11 +2202,13 @@ void kernel_main() {
                                     ckl::BroadcastDim::Col,
                                     ckl::WaitPolicy::Upfront,
                                     ckl::PopPolicy::None,
-                                    ckl::InputTileMapping::Col)>{0u, 0u},
+                                    ckl::InputTileMapping::Col)>{norm_dfb, stat_dfb, 0u, 0u},
 #endif
                             ckl::PackTile<ckl::output(
-                                cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                                cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{
+                                norm_dfb});
                     } else {
+                        DataflowBuffer out_dfb(cb_output_tiles);
                         ckl::eltwise_chain(
                             ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
 #ifdef RMS_ABLATE_COMPUTE
@@ -2200,7 +2216,7 @@ void kernel_main() {
                                 cb_normalized,
                                 ckl::WaitPolicy::Upfront,
                                 ckl::PopPolicy::AtEnd,
-                                ckl::InputTileMapping::Block)>{0u},
+                                ckl::InputTileMapping::Block)>{norm_dfb, 0u},
 #else
                             ckl::BinaryFpu<
                                 ckl::BinaryFpuOp::Mul,
@@ -2214,9 +2230,9 @@ void kernel_main() {
                                     ckl::BroadcastDim::Col,
                                     ckl::WaitPolicy::Upfront,
                                     ckl::PopPolicy::None,
-                                    ckl::InputTileMapping::Col)>{0u, 0u},
+                                    ckl::InputTileMapping::Col)>{norm_dfb, stat_dfb, 0u, 0u},
 #endif
-                            ckl::PackTile<PASS_B_OUT_GAMMA>{});
+                            ckl::PackTile<PASS_B_OUT_GAMMA>{out_dfb});
                     }
                 }
             }
@@ -2234,6 +2250,7 @@ void kernel_main() {
                 // `(y * w) + b` with two Row broadcasts is inexpressible as one
                 // chain.  It is also why bias cannot be folded into the scale.
                 MaybeDeviceZoneScope("compute_bias_add");
+                DataflowBuffer norm_dfb(cb_normalized), bias_dfb(cb_bias_tiles), out_dfb(cb_output_tiles);
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
                     ckl::BinaryFpu<
@@ -2243,8 +2260,8 @@ void kernel_main() {
                             ckl::WaitPolicy::Upfront,
                             ckl::PopPolicy::AtEnd,
                             ckl::InputTileMapping::Block),
-                        ckl::input(B_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
-                    ckl::PackTile<PASS_B_OUT_GAMMA>{});
+                        ckl::input(B_IN, ckl::BroadcastDim::Row)>{norm_dfb, bias_dfb, 0u, pc_base},
+                    ckl::PackTile<PASS_B_OUT_GAMMA>{out_dfb});
             }
 
             if constexpr (RM) {
