@@ -172,9 +172,8 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
         .target_nodes = all_device_cores,
     };
 
-    // ---- Dataflow buffers (a sharded operand backs its DFB with the tensor's own L1 shard; the
-    // framework re-attaches that address on a cache hit. Capacities that depend on the input shape
-    // are safe in the cache because the default reflection hash keys on the full tensor specs.) ----
+    // ---- Dataflow buffers (shape-dependent capacities are safe in the program cache: the default
+    // reflection hash keys on the full tensor specs; a sharded operand's DFB borrows its L1 shard) ----
     const bool in0_is_sharded = a.is_sharded();
     const bool in1_is_sharded = b.is_sharded();
     const bool output_is_sharded = output.is_sharded();
@@ -233,16 +232,9 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
     }
 
     // ---- Compute hardware config ----
-    // The legacy descriptor applied only math_fidelity and fp32_dest_acc_en from the resolved compute
-    // kernel config; math_approx_mode and dst_full_sync_en were resolved but never set, so the kernel
-    // always ran with a precise SFPU and a double-buffered Dest, whatever the caller passed.
-    // packer_l1_acc has no Metal 2.0 counterpart. Reproduce exactly that.
     ComputeHardwareConfig compute_hw = to_compute_hardware_config(operation_attributes.compute_kernel_config);
     compute_hw.sfpu_precision_mode = Precision::Precise;
     compute_hw.double_buffer_dest = true;
-    // Metal 2.0 requires an explicit unpack mode for every Float32 DFB the compute kernel consumes
-    // while the Dest register is 32-bit; the legacy descriptor left unpack_to_dest_mode at its default
-    // (unpack to SrcA/B), so mirror that. The compute kernel consumes in0, in1 and intermed1.
     if (compute_hw.enable_32_bit_dest) {
         if (in0_data_format == tt::DataFormat::Float32) {
             compute_hw.unpack_modes.emplace(IN0, UnpackMode::UnpackToSrc);
@@ -348,8 +340,6 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
         .advanced_options = {.num_runtime_varargs = in1_mcast_sender_num_x + in1_mcast_sender_num_y},
     };
     if (in1_is_sharded) {
-        // The resident in1 shard is only read in place through its base address: the reader is
-        // the one kernel that touches it, so it holds both ends.
         reader.dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = IN2,
             .accessor_name = "in2",
