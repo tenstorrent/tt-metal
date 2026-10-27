@@ -1205,8 +1205,9 @@ protected:
         };
 
         // The compute load is the four-NEO chain of run_cluster() with no synchronization, so it touches no
-        // semaphore while it runs. Its tiles start after load_neos padding tiles. The allocator base is
-        // report_addr, so the padding covers the DM kernel's fixed area below kCrossLoadEnd.
+        // cluster register while the coordinator reaches the NEO register windows (#62126). Its tiles start after
+        // load_neos padding tiles. The allocator base is report_addr, so the padding covers the DM kernel's
+        // fixed area below kCrossLoadEnd.
         constexpr uint32_t load_neos = 4;
         constexpr uint32_t tile_bytes = kTileWords * sizeof(uint32_t);
         static_assert(load_neos * tile_bytes >= kCrossLoadEnd);
@@ -2487,7 +2488,7 @@ TEST_F(SemScopeFixture, TestClusterSemContentionL1Counters) {
 }
 
 // TestCrossClusterSemUnderLoad's TRISC L1-atomic loads with the home NEOs' L1 client event counters on (the
-// pack/unpack datacopy load is left out: with the counters on, it hung the emulator). The home DM coordinator
+// pack/unpack datacopy load is in TestCrossClusterSemTileCopyLoadCountersOn). The home DM coordinator
 // arms each NEO's counter before the clients start and reads it when they finish, so each run reports what the home
 // TRISC L1 ports did while one remote client ran its round trips. All four NEOs count the same subport and event
 // (section 6.5 of the Quasar performance counters overview; see TestClusterSemContentionL1Counters for the events):
@@ -2586,9 +2587,8 @@ TEST_F(SemScopeFixture, TestCrossClusterSemTileCopyLoadCountersOff) {
     run_tile_copy_load(/*counters_on=*/false);
 }
 
-// Known hang: the same run with the L1 client counters on hangs the emulator, which is why
-// TestCrossClusterSemLoadCounters leaves the tile-copy load out. Run with --gtest_also_run_disabled_tests.
-TEST_F(SemScopeFixture, DISABLED_TestCrossClusterSemTileCopyLoadCountersOn) {
+// The same run with the L1 client counters on.
+TEST_F(SemScopeFixture, TestCrossClusterSemTileCopyLoadCountersOn) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 clusters";
     }

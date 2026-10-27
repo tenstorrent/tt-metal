@@ -65,7 +65,7 @@ void kernel_main() {
 #endif
 #ifdef TRISC_PACK
     // NEO 0 sets every semaphore's start value: full in a closed ring, else empty.
-    if (neo == 0) {
+    if (!nosync && neo == 0) {
         for (std::uint32_t index = 0; index < num_neos; ++index) {
             ClusterSemaphore initial(index, depth);
             initial.set(closed_ring && index < active_neos ? depth : 0);
@@ -77,8 +77,11 @@ void kernel_main() {
 #ifdef TRISC_MATH
     tensix_sync();
 #endif
-    // No participant may use a ring until NEO 0 has initialized every semaphore.
-    sync_threads();
+    // No participant may use a ring until NEO 0 has initialized every semaphore. Without sync the kernel
+    // touches no cluster register, so it can run beside a DM that accesses the NEO register windows (#62126).
+    if constexpr (!nosync) {
+        sync_threads();
+    }
 #if defined(TRISC_UNPACK) || defined(TRISC_PACK)
     ClusterSemaphore sem(semaphore_index, depth);
 #endif
@@ -144,13 +147,15 @@ void kernel_main() {
         }
     }
     // All consumers must finish before PACK reports the final count of its outgoing semaphore.
-    sync_threads();
+    if constexpr (!nosync) {
+        sync_threads();
+    }
 #ifdef TRISC_PACK
     // Report how many iterations ran and the final semaphore count for the host to check.
     if (active) {
         auto* report = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(report_addr + MEM_L1_UNCACHED_BASE);
         report[neo] = num_iters;
-        if (produces_ring) {
+        if (!nosync && produces_ring) {
             report[num_neos + neo] = sem.value();
             // The report preserves the final count; leave hardware clean for the next kernel.
             sem.set(0);
