@@ -3262,9 +3262,11 @@ static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
     const std::vector<CoreCoord>& banks = bds->cores();
     const bool krow_major = weight_buffer->has_shard_spec() && bds->num_shards() < workers.size();
     const bool contiguous = krow_major || strategy == ShardDistributionStrategy::CONTIGUOUS_1D;
-    // CONTIGUOUS_1D weights hold the same number of shards in every bank, and a K-row-major weight's
-    // banks the same number of receivers.
-    const size_t shards_per_bank = (krow_major ? workers.size() : bds->num_shards()) / banks.size();
+    // A K-row-major weight's grid can name more banks than it has shards; only the first
+    // num_cores_with_data() hold one. Each bank holding data holds the same count: allocation requires
+    // CONTIGUOUS_1D shards to divide evenly over the grid, and tensor_prefetcher_block_count_for_matmul_1d
+    // gives every K-row-major bank the same number of receivers.
+    const size_t shards_per_bank = (krow_major ? workers.size() : bds->num_shards()) / bds->num_cores_with_data();
     for (size_t i = 0; i < workers.size(); ++i) {
         const size_t bank_index = contiguous ? i / shards_per_bank : i % banks.size();
         const auto bank_local_shard = static_cast<uint32_t>(contiguous ? i % shards_per_bank : i / banks.size());

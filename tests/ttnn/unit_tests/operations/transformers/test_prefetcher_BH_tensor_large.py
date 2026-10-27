@@ -977,19 +977,21 @@ def _mcast_in0_pipe_program_config(ring_cols, ring_rows, in0_block_w, per_core_N
     )
 
 
-def _mcast_in0_pipe_setup(device, weight_layout, per_core_N=1, dtype=ttnn.bfloat16, in0_block_w=1):
+def _mcast_in0_pipe_setup(device, weight_layout, per_core_N=1, dtype=ttnn.bfloat16, in0_block_w=1, num_pipe_banks=None):
     """Weight, activation, program config and bank pairing for the mcast-in0 pipe tests.
 
     block_count is K_tiles / in0_block_w, deliberately different from the receiver count, so a
     ring-derived block count would deliver the wrong pages rather than silently working. ``per_core_N``
     and ``in0_block_w`` together set how many tiles a delivered entry holds, which is one page of the
     in1 CB. A ``krow_major`` layout makes a legacy K-row-major weight, which needs one pipe per bank
-    (``single_sender``).
+    (``single_sender``). ``num_pipe_banks`` pairs only the first that many banks with receivers, and a
+    K-row-major weight puts its shards on just those banks.
     """
     num_dram_banks = device.dram_grid_size().x
+    num_pipe_banks = num_dram_banks if num_pipe_banks is None else num_pipe_banks
     recv_per_bank = 2
-    receiver_count = num_dram_banks * recv_per_bank
-    ring_cols = num_dram_banks
+    receiver_count = num_pipe_banks * recv_per_bank
+    ring_cols = num_pipe_banks
     ring_rows = recv_per_bank
     receiver_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
@@ -1006,7 +1008,7 @@ def _mcast_in0_pipe_setup(device, weight_layout, per_core_N=1, dtype=ttnn.bfloat
     distribution_strategy = _MCAST_IN0_LAYOUTS[weight_layout]
     krow_major = distribution_strategy is None
     if krow_major:
-        tt_weight = _make_krow_major_weight(device, pt_weight, num_dram_banks=num_dram_banks, dtype=dtype)
+        tt_weight = _make_krow_major_weight(device, pt_weight, num_dram_banks=num_pipe_banks, dtype=dtype)
     else:
         tt_weight = _make_recv_contig_weight(
             device,
@@ -1017,7 +1019,7 @@ def _mcast_in0_pipe_setup(device, weight_layout, per_core_N=1, dtype=ttnn.bfloat
             distribution_strategy=distribution_strategy,
         )
     bank_to_receivers = _bank_to_receivers(
-        distribution_strategy != ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, num_dram_banks, recv_per_bank, ring_cols
+        distribution_strategy != ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, num_pipe_banks, recv_per_bank, ring_cols
     )
 
     pt_act = torch.randn(1, 1, M, K)
@@ -1193,6 +1195,36 @@ def test_tensor_prefetcher_mcast_in0_pipes_rejects_bank_pairing_of_other_distrib
     _space, pipes = _make_tensor_prefetcher_pipes(device, contiguous_pairing, 2 * setup["entry_size"])
     with expect_error(RuntimeError, "Pair each bank with the workers whose shards it holds"):
         _linear_over_pipes(setup, pipes)
+
+
+def test_tensor_prefetcher_mcast_in0_pipes_pairs_krow_major_weight_on_wider_grid(device, expect_error):
+    """A K-row-major weight's DRAM grid can name more banks than it has shards, and only the first banks
+    hold one. The pairing check divides the workers among the 2 banks holding a shard, not the 7 or 8 the
+    grid names, and so rejects pipes that swap those two banks' receivers. The Tensor prefetcher serves
+    K-row-major pipes only when they cover every bank, so a correct pairing here would launch a matmul
+    nothing feeds."""
+    setup = _mcast_in0_pipe_setup(device, "krow_major", num_pipe_banks=2)
+    K, N = setup["pt_weight"].shape[-2:]
+    wide_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(setup["num_dram_banks"] - 1, 0))}
+    )
+    weight = ttnn.as_tensor(
+        setup["pt_weight"],
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(wide_grid, [K, N // 2], ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
+    (bank0, receivers0), (bank1, receivers1) = setup["bank_to_receivers"]
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, [(bank0, receivers1), (bank1, receivers0)], 2 * setup["entry_size"], single_sender=True
+    )
+    with expect_error(RuntimeError, "Pair each bank with the workers whose shards it holds"):
+        _linear_over_pipes(setup, pipes, weight=weight)
 
 
 def test_tensor_prefetcher_mcast_in0_pipes_rejects_non_1d_program_config(device, expect_error):
