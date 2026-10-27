@@ -125,7 +125,7 @@ bool codegen_cb_plan_fits_live_l1(const Tensor& input, const tt::tt_metal::Memor
     using tt::tt_metal::Layout;
     namespace plan = ttnn::prim::untilize_codegen_detail;
 
-    if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr) {
+    if (input.storage_type() != ttnn::StorageType::DEVICE || !input.is_allocated()) {
         return true;
     }
 

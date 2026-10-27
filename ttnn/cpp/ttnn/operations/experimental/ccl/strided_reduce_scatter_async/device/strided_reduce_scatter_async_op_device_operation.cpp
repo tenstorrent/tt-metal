@@ -25,7 +25,7 @@ void StridedReduceScatterAsyncDeviceOperation::validate_on_program_cache_hit(
     // Lightweight validation for cache hits
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must have a buffer");
 }
 
 void StridedReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(

@@ -34,8 +34,8 @@ tt::tt_metal::ProgramDescriptor build_broadcast_descriptor_at(
     const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::ProgramDescriptor desc;
-    TT_FATAL(input_tensor.buffer() != nullptr, "broadcast requires an allocated input buffer");
-    TT_FATAL(tensor_return_value.buffer() != nullptr, "broadcast requires an allocated output buffer");
+    TT_FATAL(input_tensor.is_allocated(), "broadcast requires an allocated input buffer");
+    TT_FATAL(tensor_return_value.is_allocated(), "broadcast requires an allocated output buffer");
 
     auto* mesh_device = input_tensor.device();
 

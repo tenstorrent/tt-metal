@@ -67,11 +67,11 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     constexpr uint32_t kWindowedCreditFromEnd = 2;
 
     TT_FATAL(output_tensor.size() == 3, "minimal_matmul_strided_reduce_scatter returns 3 tensors");
-    TT_FATAL(output_tensor[0].buffer() != nullptr, "matmul output must have a buffer");
-    TT_FATAL(output_tensor[1].buffer() != nullptr, "reduce-scatter intermediate must have a buffer");
-    TT_FATAL(output_tensor[2].buffer() != nullptr, "reduce-scatter output must have a buffer");
-    TT_FATAL(tensor_args.input_tensor.buffer() != nullptr, "matmul input must have a buffer");
-    TT_FATAL(tensor_args.weight_tensor.buffer() != nullptr, "matmul weight must have a buffer");
+    TT_FATAL(output_tensor[0].is_allocated(), "matmul output must have a buffer");
+    TT_FATAL(output_tensor[1].is_allocated(), "reduce-scatter intermediate must have a buffer");
+    TT_FATAL(output_tensor[2].is_allocated(), "reduce-scatter output must have a buffer");
+    TT_FATAL(tensor_args.input_tensor.is_allocated(), "matmul input must have a buffer");
+    TT_FATAL(tensor_args.weight_tensor.is_allocated(), "matmul weight must have a buffer");
     const uint32_t mm_output_addr = static_cast<uint32_t>(output_tensor[0].buffer()->address());
     const uint32_t rs_intermediate_addr = static_cast<uint32_t>(output_tensor[1].buffer()->address());
     const uint32_t rs_output_addr = static_cast<uint32_t>(output_tensor[2].buffer()->address());
@@ -79,12 +79,12 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     const uint32_t weight_addr = static_cast<uint32_t>(tensor_args.weight_tensor.buffer()->address());
     uint32_t bias_addr = 0;
     if (tensor_args.bias.has_value()) {
-        TT_FATAL(tensor_args.bias->buffer() != nullptr, "matmul bias must have a buffer");
+        TT_FATAL(tensor_args.bias->is_allocated(), "matmul bias must have a buffer");
         bias_addr = static_cast<uint32_t>(tensor_args.bias->buffer()->address());
     }
     uint32_t optional_input_addr = 0;
     if (tensor_args.mm_optional_input_tensor.has_value()) {
-        TT_FATAL(tensor_args.mm_optional_input_tensor->buffer() != nullptr, "optional matmul input must have a buffer");
+        TT_FATAL(tensor_args.mm_optional_input_tensor->is_allocated(), "optional matmul input must have a buffer");
         optional_input_addr = static_cast<uint32_t>(tensor_args.mm_optional_input_tensor->buffer()->address());
     }
     const bool fuse_addcmul =
@@ -92,8 +92,8 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     uint32_t addcmul_a_addr = 0;
     uint32_t addcmul_b_addr = 0;
     if (fuse_addcmul) {
-        TT_FATAL(tensor_args.addcmul_input_tensor1->buffer() != nullptr, "addcmul input A must have a buffer");
-        TT_FATAL(tensor_args.addcmul_input_tensor2->buffer() != nullptr, "addcmul input B must have a buffer");
+        TT_FATAL(tensor_args.addcmul_input_tensor1->is_allocated(), "addcmul input A must have a buffer");
+        TT_FATAL(tensor_args.addcmul_input_tensor2->is_allocated(), "addcmul input B must have a buffer");
         addcmul_a_addr = static_cast<uint32_t>(tensor_args.addcmul_input_tensor1->buffer()->address());
         addcmul_b_addr = static_cast<uint32_t>(tensor_args.addcmul_input_tensor2->buffer()->address());
     }
@@ -102,12 +102,12 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     const bool caller_credit = windowed && tensor_args.mm_credit_counters.has_value();
     uint32_t progress_addr = 0;
     if (caller_progress) {
-        TT_FATAL(tensor_args.mm_progress_counters->buffer() != nullptr, "mm_progress_counters must have a buffer");
+        TT_FATAL(tensor_args.mm_progress_counters->is_allocated(), "mm_progress_counters must have a buffer");
         progress_addr = static_cast<uint32_t>(tensor_args.mm_progress_counters->buffer()->address());
     }
     uint32_t credit_addr = 0;
     if (caller_credit) {
-        TT_FATAL(tensor_args.mm_credit_counters->buffer() != nullptr, "mm_credit_counters must have a buffer");
+        TT_FATAL(tensor_args.mm_credit_counters->is_allocated(), "mm_credit_counters must have a buffer");
         credit_addr = static_cast<uint32_t>(tensor_args.mm_credit_counters->buffer()->address());
     }
     uint32_t reader_progress_arg = kReaderArgPrefix;
