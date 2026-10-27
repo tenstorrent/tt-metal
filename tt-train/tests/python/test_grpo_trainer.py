@@ -626,6 +626,7 @@ def test_build_lr_scheduler_trajectory(lr_scheduler_type, warmup_steps, total_st
 _GENERATE_TIME_S = 1.0
 _SAVE_CHECKPOINT_TIME_S = 4.0
 _ON_SAVE_TIME_S = 2.0
+_WEIGHT_SYNC_TIME_S = 8.0
 _REWARDS = [0.0, 1.0, 0.0, 1.0]
 _BEHAVIOR_LOGPROB = -0.5
 _BASE_LR = 1.0
@@ -659,6 +660,7 @@ def _run_train_loop_on_host(monkeypatch, num_batches=1):
 
         def update_weights(self, model, step):
             run.update_weights_steps.append(step)
+            run.clock += _WEIGHT_SYNC_TIME_S
 
     class _Optimizer:
         lr = _BASE_LR
@@ -761,6 +763,13 @@ def test_train_loop_step_time_includes_checkpoint(monkeypatch):
     step_1, step_2 = _run_train_loop_on_host(monkeypatch).metrics_by_step.values()
     assert step_1["step_time_s"] == _GENERATE_TIME_S + _SAVE_CHECKPOINT_TIME_S + _ON_SAVE_TIME_S
     assert step_2["step_time_s"] == _SAVE_CHECKPOINT_TIME_S + _ON_SAVE_TIME_S
+
+
+def test_train_loop_counts_the_weight_push_in_the_next_step(monkeypatch):
+    step_1, step_2, step_3, step_4 = _run_train_loop_on_host(monkeypatch, num_batches=2).metrics_by_step.values()
+    assert step_1["weight_sync_time_s"] == step_2["weight_sync_time_s"] == step_4["weight_sync_time_s"] == 0.0
+    assert step_3["weight_sync_time_s"] == _WEIGHT_SYNC_TIME_S
+    assert step_3["step_time_s"] == step_1["step_time_s"] + _WEIGHT_SYNC_TIME_S
 
 
 def test_train_loop_checkpoint_records_step_lr(monkeypatch):

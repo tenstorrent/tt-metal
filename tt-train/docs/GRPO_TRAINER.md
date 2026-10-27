@@ -410,12 +410,14 @@ before the next step runs). The columns are a fixed base set —
 ```
 step, reward_mean, reward_std, mean_completion_len, min_completion_len,
 max_completion_len, lr, step_time_s, generation_time_s, reward_time_s,
-rollout_wait_s, rollout_weight_version
+rollout_wait_s, weight_sync_time_s, rollout_weight_version
 ```
 
 (`generation_time_s` times `generate()`, `reward_time_s` the reward functions,
-`rollout_wait_s` the trainer's wait for the batch; `rollout_weight_version` is
-the weight version that generated the step's batch.)
+`rollout_wait_s` the trainer's wait for the batch; `weight_sync_time_s` the
+weight push before the step's batch was generated (including the version-0 push
+before step 1), 0 when there was none; `rollout_weight_version` is the weight
+version that generated the step's batch.)
 
 — followed by one `<CallbackClassName>_time_s` column per callback present at
 `on_train_begin` (**excluding `GRPOMonitor` itself**), followed by every extra
@@ -432,7 +434,8 @@ callback's hook returns, so `GRPOMonitor` (which runs last, after
 `step_time_s` is sealed) sees current-step totals for every other callback
 when it writes the row.
 
-`step_time_s` is the **total per-step wall time** — it covers generation, host
+`step_time_s` is the **total per-step wall time** — it covers the weight push
+before the step's batch (`weight_sync_time_s`), generation, host
 post-generation work, the training loop, every
 non-monitor `on_step_end` callback, and any checkpoint save on this step (this
 matches TRL's `step_time`, which is also the full step wall time including

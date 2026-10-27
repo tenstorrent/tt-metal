@@ -420,6 +420,8 @@ _CSV_BASE_COLUMNS = (
     "generation_time_s",
     "reward_time_s",
     "rollout_wait_s",
+    "weight_sync_time_s",
+    "rollout_weight_version",
 )
 
 
@@ -1078,6 +1080,7 @@ class GRPOTrainer:
         # Transient timing state used to bracket ``step_time_s`` — written by
         # ``train()``, read by ``_publish_step_metrics``.
         self._step_start_time: float = 0.0
+        self._weight_sync_time_s: float = 0.0
 
         # Resolved-at-setup state. Pre-declared with ``None`` sentinels so the
         # full trainer lifecycle is visible in one place; populated by
@@ -1359,8 +1362,9 @@ class GRPOTrainer:
             scored = next(batches, None)
             if scored is None:
                 return
-            self.metrics = {}
-            self._step_start_time = start
+            self.metrics = {"weight_sync_time_s": self._weight_sync_time_s}
+            self._step_start_time = start - self._weight_sync_time_s
+            self._weight_sync_time_s = 0.0
             self._record_batch_metrics(scored, wait_s=time.perf_counter() - start)
             yield scored
 
@@ -1527,6 +1531,11 @@ class GRPOTrainer:
         if self._lr_scheduler is not None:
             self._lr_scheduler.step()
 
+    def _update_rollout_weights(self) -> None:
+        start = time.perf_counter()
+        self.rollout_batch_source.update_weights(self.model, self.global_step)
+        self._weight_sync_time_s = time.perf_counter() - start
+
     def _publish_step_metrics(self) -> None:
         """Fire ``on_step_end`` for every non-monitor callback (their timings
         fold into ``self.metrics`` via ``_time_callback``), save a checkpoint
@@ -1602,7 +1611,7 @@ class GRPOTrainer:
             for cb in self.callbacks:
                 cb.on_train_begin(self)
             if self.config.backend.weight_push_before_training:
-                self.rollout_batch_source.update_weights(self.model, 0)
+                self._update_rollout_weights()
             for batch_idx, scored in enumerate(self._iter_scored_batches()):
                 advantages_np = self._compute_advantages(scored.rewards)
                 batch_metrics = dict(self.metrics)
@@ -1614,6 +1623,7 @@ class GRPOTrainer:
                             "generation_time_s": 0.0,
                             "reward_time_s": 0.0,
                             "rollout_wait_s": 0.0,
+                            "weight_sync_time_s": 0.0,
                         }
                         self._step_start_time = time.perf_counter()
                     self._optimize(scored.rollout, advantages_np)
@@ -1621,7 +1631,7 @@ class GRPOTrainer:
                     self.global_step += 1
                     self._publish_step_metrics()
                 if batch_idx < self._num_generation_batches - 1:
-                    self.rollout_batch_source.update_weights(self.model, self.global_step)
+                    self._update_rollout_weights()
         finally:
             self.rollout_batch_source.close()
         for cb in self.callbacks:
