@@ -1467,23 +1467,44 @@ inline void calculate_reduce_max_min_uint16() {
 }
 
 /**
+ * @brief Address modifier for flip_sign_bits: the last store of every tile steps the dest RWC to the next tile.
+ *        SFPLOAD/SFPSTORE carry a 2-bit addr-mod field that selects ADDR_MOD_4..7 once the SFPU addr-mod base is
+ *        set, so the kernel reaches this slot as ADDR_MOD_2.
+ */
+inline void configure_addrmod_flip_sign_bits() {
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = ROWS_PER_TILE},
+    }
+        .set(ADDR_MOD_6);
+}
+
+/**
  * @brief XOR bit 31 of every datum in the first @p num_tiles 32x32 tiles at the current DEST base. This maps
  *        UInt32 order onto two's-complement order and back, so UInt32 MAX/MIN can run on the signed Int32
- *        path. Uses LREG0 and LREG7.
+ *        path. Uses two of LREG0-7 (sfpi-allocated).
+ *
+ * The 32 in-tile addresses are immediates (dst_reg[d] = rows 4*(d/2)..+3, even/odd columns), so each datum is a
+ * 3-instruction load/xor/store with no RISC-side address arithmetic. The tile base lives in the dest RWC: the
+ * last store of a tile advances it by ROWS_PER_TILE through ADDR_MOD_6 (see configure_addrmod_flip_sign_bits),
+ * and the RWC is reset once at the end so the reduce that follows sees address 0 again.
  */
 inline void flip_sign_bits(const std::uint32_t num_tiles) {
-    constexpr std::uint32_t ODD_COLUMNS = 2;
-    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0x8000);  // 0x80000000
+    constexpr int LOADS_PER_TILE = 32;  // 64 rows / 4 rows per load, x2 for even and odd columns
+    const sfpi::vUInt sign_bit = 0x80000000u;
     for (std::uint32_t tile = 0; tile < num_tiles; tile++) {
-        for (std::uint32_t row = 0; row < ROWS_PER_TILE; row += ROWS_PER_LOAD) {
-            for (std::uint32_t column = 0; column <= ODD_COLUMNS; column += ODD_COLUMNS) {
-                const std::uint32_t addr = tile * ROWS_PER_TILE + row + column;
-                TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, addr);
-                TTI_SFPXOR(0 /*imm12_math*/, p_sfpu::LREG7, p_sfpu::LREG0, 0 /*instr_mod1*/);
-                TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, addr);
+#pragma GCC unroll 32
+        for (int d = 0; d < LOADS_PER_TILE; d++) {
+            sfpi::vUInt value = sfpi::dst_reg[d];
+            if (d == LOADS_PER_TILE - 1) {
+                sfpi::dst_reg[d].mode(ADDR_MOD_2) = value ^ sign_bit;  // ADDR_MOD_6: dest RWC += ROWS_PER_TILE
+            } else {
+                sfpi::dst_reg[d] = value ^ sign_bit;
             }
         }
     }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);  // dest RWC back to 0
 }
 
 /**
@@ -1793,6 +1814,9 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {
         if constexpr (int32_max_min) {
             init_reduce_max_min_int32_signed<pool_type>();
+            if constexpr (format == DataFormat::UInt32) {
+                configure_addrmod_flip_sign_bits();
+            }
         } else if constexpr (clear_high_bits) {
             // UInt16 in 32-bit dest uses the manual (non-LOADMACRO) compare-and-swap path so the
             // garbage high bits can be masked before each swap. It records the manual 3-swap replay
