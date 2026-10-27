@@ -33,6 +33,17 @@ it from there, masks it to the chips of SP rank 0 (``sp0 @ partial``: a per-chip
 all-gather-and-sum of step 11 counts it once) and adds it to the local routed partial before step 11's TP
 reduce-scatter, which is what the 32-row tail does with it. That replaces the shared expert's own reduce-scatter
 (~16 us) and the final add with a one-hot matmul and an add (~4 us).
+
+With ``V41_DECODE_C1_SHARED=split`` the c1 path runs the shared expert itself on a 32-way
+split of its intermediate instead of the chip's TP slice: :class:`C1SharedSplit` holds, per chip, the SP rank's
+tile-aligned piece of the chip's TP shard of ``gate_proj`` / ``up_proj`` (columns) and ``down_proj`` (rows), cut on
+device at construction with one-hot matmuls (bit-exact: whole tiles keep their bfp8 blocks; +1.6 MB a chip a
+layer), and the layer runs three matmuls on ``[5120, 96]`` / ``[96, 5120]`` instead of ``[5120, 576]`` /
+``[576, 5120]``. Every chip's partial then holds a different piece, so no ``sp0`` mask: the TP reduce-scatter and
+the SP gather-sum of step 11 add all 32. The tile's row 0 is the only live row either way. The MoE's own shared
+expert is not called (``shared_fold`` reads ``split``; the tail's ``pending_shared`` stays empty). The chain is
+on every chip's critical path, so the saving (~35 us a layer: the 9-core and 12-core matmuls read 3.1 MB each at
+~19 GB/s a core) comes off the busiest chip's path as much as device 0's.
 """
 
 import os
@@ -41,6 +52,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import _fused_compute_config
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import clamped_silu_glu, get_program_configs
 from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import _cores
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp8_qdq
 from models.demos.deepseek_v3_d_p.tt.v41.routing import DecodeGate, router_select
@@ -52,6 +64,10 @@ _SENTINEL = 32  # the identity table's zero row
 # (unified_routed_expert_moe, today's prefill op: ~90 us an expert at one token)
 _FFN = os.environ.get("V41_DECODE_C1_FFN", "composite")
 assert _FFN in ("fused", "composite"), _FFN
+# the shared expert on the c1 path: ``fold`` (the MoE's own shared expert, its partial folded into the tail) or
+# ``split`` (C1SharedSplit)
+_SHARED = os.environ.get("V41_DECODE_C1_SHARED", "fold")
+assert _SHARED in ("fold", "split"), _SHARED
 _HIFI4 = ttnn.types.BlackholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False, math_approx_mode=False
 )
@@ -108,6 +124,68 @@ def c1_select(indices, weights, table, num_experts: int):
         [indices, weights, table, counts, w], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs)
     )
     return counts, w
+
+
+class C1SharedSplit:
+    """The shared expert's intermediate split over the 32 chips (``V41_DECODE_C1_SHARED=split``; the module
+    docstring). ``shared``: the layer's ``TtSharedExpert`` (its ``gate_proj`` / ``up_proj`` ``[hidden, inter/tp]``
+    and ``down_proj`` ``[inter/tp, hidden]`` per chip, TP-sharded, SP-replicated). The TP shard's ``inter/tp/32``
+    tiles go to the SP ranks in order, the first ranks one more when they do not divide (18 tiles over 8 ranks: 3,
+    3, 2, 2, 2, 2, 2, 2), every chip's piece padded to ``width`` (the largest) with zero columns / rows, which add
+    nothing (``silu(min(0, L)) * clamp(0) = 0``)."""
+
+    def __init__(self, shared, device):
+        two_d = lambda t: ttnn.reshape(t, tuple(t.shape)[-2:]) if len(t.shape) != 2 else t
+        gate, up, down = two_d(shared.gate_proj), two_d(shared.up_proj), two_d(shared.down_proj)
+        self.hidden, inter_tp = int(gate.shape[-2]), int(gate.shape[-1])
+        assert tuple(up.shape) == (self.hidden, inter_tp) and tuple(down.shape) == (inter_tp, self.hidden)
+        sp, tp = tuple(device.shape)
+        n_tiles = inter_tp // _TILE
+        base, extra = divmod(n_tiles, sp)
+        self.counts = [base + (1 if s < extra else 0) for s in range(sp)]
+        self.offsets = [sum(self.counts[:s]) for s in range(sp)]
+        self.width = max(self.counts) * _TILE
+        S = torch.zeros(sp, tp, inter_tp, self.width)
+        for s in range(sp):
+            for j in range(self.counts[s]):
+                for i in range(_TILE):
+                    S[s, :, _TILE * (self.offsets[s] + j) + i, _TILE * j + i] = 1.0
+        shard = lambda t: ttnn.reshape(
+            ttnn.from_torch(
+                t,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=device.shape, dims=(0, 1)),
+            ),
+            tuple(t.shape)[-2:],
+        )
+        S_dev, ST_dev = shard(S), shard(S.transpose(-1, -2).contiguous())
+        cut = lambda a, b, dtype: ttnn.matmul(
+            a, b, compute_kernel_config=_HIFI4, dtype=dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        self.gate = cut(gate, S_dev, gate.dtype)  # [hidden, width]
+        self.up = cut(up, S_dev, up.dtype)
+        self.down = cut(ST_dev, down, down.dtype)  # [width, hidden]
+        ttnn.deallocate(S_dev)
+        ttnn.deallocate(ST_dev)
+        self.limit = float(shared.clamped_silu_glu_limit)
+        self.compute = shared.compute_kernel_config
+        grid = device.compute_with_storage_grid_size()
+        w = self.width // _TILE
+        self.gu_cfg, _, self.d_cfg = get_program_configs(
+            grid, 1, self.hidden // _TILE, w, w, self.hidden // _TILE, False
+        )
+
+    def __call__(self, x):
+        """``x``: bf16 TILE ``[32, hidden]`` (the all-gathered row at row 0) -> this chip's partial of the shared
+        expert's output, bf16 TILE ``[32, hidden]``; ``x`` is not consumed."""
+        mm = lambda a, b, cfg: ttnn.matmul(a, b, program_config=cfg, compute_kernel_config=self.compute)
+        act = clamped_silu_glu(mm(x, self.gate, self.gu_cfg), mm(x, self.up, self.gu_cfg), self.limit)
+        out = mm(act, self.down, self.d_cfg)
+        ttnn.deallocate(act)
+        return out
 
 
 class C1Moe:
@@ -168,7 +246,12 @@ class C1Moe:
             mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=device.shape, dims=(0, 1)),
         )
         self.sp0 = ttnn.reshape(self.sp0, (1, 1, _TILE, _TILE))
-        self.shared_fold = None  # "pending" once the shared expert has parked a partial (tests read it)
+        self.shared_fold = None  # "pending" once the shared expert has parked a partial, "split" (tests read it)
+        self.shared_split = None
+        if _SHARED == "split":
+            shared = moe.shared_expert
+            shared = getattr(shared, "_shared", shared)  # DecodeSharedExpert wraps the MoE's TtSharedExpert
+            self.shared_split = C1SharedSplit(shared, device)
         self.debug = None  # a dict: the call keeps its ``counts`` and ``indices`` there (tests)
         # the FFN's program-cache entry for this shape is built here, on an empty L1: ``ttnn.reduce_scatter`` (the
         # decode tail's TP reduce-scatter) leaves a 512-byte L1 buffer at 914,176 after its first call, and the
@@ -331,8 +414,14 @@ class C1Moe:
         # [32, hidden/tp] output (added at step 12); ``DecodeSharedExpert`` (V41_SHARED_IN_FFN) returns None and
         # parks its [32, hidden] partial in the decode tail's reduce: taken here, folded into step 11's
         # reduce-scatter on SP rank 0 only (the module docstring)
-        shared = moe.shared_expert(ttnn.squeeze(x_full, dim=0))
-        if shared is None:
+        shared = None if self.shared_split is not None else moe.shared_expert(ttnn.squeeze(x_full, dim=0))
+        if self.shared_split is not None:
+            # 7': this chip's piece of the shared expert on the all-gathered row (C1SharedSplit); every chip's
+            # partial differs, so step 11's TP reduce-scatter and SP gather-sum add all 32 of them: no sp0 mask
+            shared = self.shared_split(ttnn.reshape(x_full, (_TILE, self.hidden)))
+            shared = ttnn.reshape(shared, (1, 1, _TILE, self.hidden))
+            self.shared_fold = "split"
+        elif shared is None:
             reduce = moe.reduce_module
             partial, reduce.pending_shared = reduce.pending_shared, None
             assert partial is not None, "the shared expert returned None and parked no partial"
@@ -343,7 +432,7 @@ class C1Moe:
         else:
             shared = ttnn.unsqueeze(shared, dim=0)
             self.shared_fold = "returned"
-        folded = self.shared_fold == "pending"
+        folded = self.shared_fold in ("pending", "split")
         # 8, 9: the row at the head of every local expert's region; the selected experts run in place
         x_in = ttnn.matmul(
             self.R, x_full, compute_kernel_config=_HIFI4, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG

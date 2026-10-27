@@ -100,7 +100,37 @@ def test_v41_moe_c1(mesh_device, device_params):
     hidden = C.EMB_SIZE
     torch.manual_seed(7)
     shared_in_ffn = os.environ.get("V41_SHARED_IN_FFN", "0")
-    result = {"layer": layer, "trials": [], "mesh": [sp, tp], "shared_in_ffn": shared_in_ffn}
+    shared_mode = os.environ.get("V41_DECODE_C1_SHARED", "fold")
+    result = {"layer": layer, "trials": [], "mesh": [sp, tp], "shared_in_ffn": shared_in_ffn, "c1_shared": shared_mode}
+    if shared_mode == "split":
+        # the split weights: every chip's piece bit for bit the host slice of its TP shard
+        split = c1.shared_split
+        shared = getattr(moe.moe.shared_expert, "_shared", moe.moe.shared_expert)
+        two_d = lambda t: t.reshape(*t.shape[-2:])
+        for name, full, piece, axis in (
+            ("gate", shared.gate_proj, split.gate, -1),
+            ("up", shared.up_proj, split.up, -1),
+            ("down", shared.down_proj, split.down, -2),
+        ):
+            full_chips, piece_chips = ttnn.get_device_tensors(full), ttnn.get_device_tensors(piece)
+            for i, (fc, pc) in enumerate(zip(full_chips, piece_chips)):
+                s_rank = i // tp
+                lo, n = ROWS * split.offsets[s_rank], ROWS * split.counts[s_rank]
+                want = torch.zeros((split.hidden, split.width) if axis == -1 else (split.width, split.hidden))
+                src = two_d(ttnn.to_torch(fc).float())
+                if axis == -1:
+                    want[:, :n] = src[:, lo : lo + n]
+                else:
+                    want[:n] = src[lo : lo + n]
+                got = two_d(ttnn.to_torch(pc).float())
+                assert torch.equal(want, got), f"{name} split on chip {i}: {int((want != got).sum())} words differ"
+        result["split"] = {
+            "width": split.width,
+            "counts": split.counts,
+            "offsets": split.offsets,
+            "exact": True,
+        }
+        logger.info(f"c1 shared split: width {split.width}, tiles per SP rank {split.counts}, bit-exact on 32 chips")
     worst = {"max_abs": 0.0, "pcc": 1.0, "rel": 0.0}
     coverage = {}
     for trial in range(trials):
@@ -124,7 +154,8 @@ def test_v41_moe_c1(mesh_device, device_params):
         assert moe.moe.reduce_module.pending_shared is None, "the 32-row path left a shared partial in the tail"
         out = c1(tt_h, sel, put)
         assert moe.moe.reduce_module.pending_shared is None, "the c1 path left a shared partial in the tail"
-        assert c1.shared_fold == ("pending" if shared_in_ffn != "0" else "returned"), c1.shared_fold
+        expect_fold = "split" if shared_mode == "split" else ("pending" if shared_in_ffn != "0" else "returned")
+        assert c1.shared_fold == expect_fold, (c1.shared_fold, expect_fold)
         result["shared_fold"] = c1.shared_fold
         if trial == trials - 1 and os.environ.get("V41_C1_PROFILE") == "1":
             # With device profiling enabled: one eager call of each path between signposts (the per-op kernel split)
