@@ -77,10 +77,9 @@ Verification of `afb78699c8b-5b6f9268-dd4fbc6` (results: `dsv4-logs/image_tests/
 | Bench B=4, 4 requests, ISL 1,024 / 8,192 | 1649 ms / 27.2 ms / 94.4 tok/s and 5342 ms / 28.2 ms / 56.2 tok/s |
 | GSM8K-prompt decode (c = 1 / 4, sampled and greedy, host .33, same-host v2.1) | +3.6 / +3.8 / +6.2 / +0.9 % |
 | Long-context decode, 768 forced tokens, high-acceptance prompts (host .33) | 64k 96.19 against 78.99 tok/s per user (+22 %), 128k 91.4 against 76.7 (+19 %); the low-acceptance prompts (forced tokens after EOS) depend on the text the model emits and are not a speed comparison |
-| Greedy completions, 8k / 32k / 64k prompts, 200 tokens | identical on three v3b servers on two hosts and across repeated requests; identical with `DSV41_PF_REPLAY`, `DSV41_CCL_LEAN`, `DSV41_IDX_FUSED`, `DSV41_ATTN_QKNORM` or `DSV41_SAMPLE_V2` set to 0; not identical to the v2.1 image (diverges at tokens 103 / 12 / 26 for 8k / 32k / 64k), which itself differed between its servers |
 | Replay in the server | active: the per-call prefill statistics carry `replays_a_only` (32 for a 16k-token window group, 8 for 4k) and `replay_per_chunk`. The log line `REPLAY: R=2560 ...` is printed by the demo only and does not appear in the server log |
 
-Not run: B=16 / 262,144, full eval workflows beyond GSM8K / GPQA / tau3.
+Not run: B=16 / 262,144, full eval workflows beyond GSM8K / GPQA / tau3. AgentX at B=4: TODO (run in progress, expected 13:00-13:45 UTC; fill from its results file, no number yet).
 
 <!-- sources: image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md, tables and "Server facts" -->
 
