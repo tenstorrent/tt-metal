@@ -99,6 +99,21 @@ constexpr uint32_t DISPATCH_HEADROOM_SIZE =
 constexpr int WALL_CLOCK_HIGH_INDEX = 1;
 constexpr int WALL_CLOCK_LOW_INDEX = 0;
 
+#if defined(ARCH_BLACKHOLE)
+inline __attribute__((always_inline)) uint64_t blackhole_read_wall_clock_64() {
+    volatile tt_reg_ptr uint32_t* clock = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    uint32_t high_before, low, high_after;
+    // Read the live high word on both sides of LOW. Besides rejecting rollover
+    // tears, this avoids another RISC replacing the shared latched-high sample.
+    do {
+        high_before = clock[WALL_CLOCK_HIGH_INDEX];
+        low = clock[WALL_CLOCK_LOW_INDEX];
+        high_after = clock[WALL_CLOCK_HIGH_INDEX];
+    } while (high_before != high_after);
+    return (static_cast<uint64_t>(high_after) << 32) | low;
+}
+#endif
+
 volatile tt_l1_ptr uint32_t* profiler_control_buffer =
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.control_vector));
 
@@ -232,8 +247,12 @@ inline __attribute__((always_inline)) uint64_t quasar_read_wall_clock_64() {
 #endif
 
 inline __attribute__((always_inline)) void mark_time_at_index_inlined(uint32_t index, uint32_t timer_id) {
+#if defined(ARCH_QUASAR) || defined(ARCH_BLACKHOLE)
 #if defined(ARCH_QUASAR)
     uint64_t wall_clock = quasar_read_wall_clock_64();
+#else
+    uint64_t wall_clock = blackhole_read_wall_clock_64();
+#endif
     uint32_t time_low = static_cast<uint32_t>(wall_clock);
     uint32_t time_high = static_cast<uint32_t>(wall_clock >> 32);
     profiler_data_buffer[myRiscID].data[index] =
@@ -403,10 +422,16 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
 
             // Guaranteed-marker slots are free in accumulate mode, so time the push (slots 1/2) and nested NOC flush
             // (slots 3/4) there.
+#if defined(ARCH_BLACKHOLE)
+            const uint64_t push_start = blackhole_read_wall_clock_64();
+            uint32_t push_start_h = static_cast<uint32_t>(push_start >> 32);
+            uint32_t push_start_l = static_cast<uint32_t>(push_start);
+#else
             volatile tt_reg_ptr uint32_t* push_clk =
                 reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
             uint32_t push_start_h = push_clk[WALL_CLOCK_HIGH_INDEX];
             uint32_t push_start_l = push_clk[WALL_CLOCK_LOW_INDEX];
+#endif
 
             NocRegisterStateSave noc_state;
             for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
@@ -470,11 +495,21 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
                 profiler_control_buffer[deviceIndex] = 0;
             }
 
+#if defined(ARCH_BLACKHOLE)
+            const uint64_t flush_start = blackhole_read_wall_clock_64();
+            uint32_t flush_start_h = static_cast<uint32_t>(flush_start >> 32);
+            uint32_t flush_start_l = static_cast<uint32_t>(flush_start);
+            profiler_noc_async_flush_posted_write();
+            const uint64_t flush_end = blackhole_read_wall_clock_64();
+            uint32_t flush_end_h = static_cast<uint32_t>(flush_end >> 32);
+            uint32_t flush_end_l = static_cast<uint32_t>(flush_end);
+#else
             uint32_t flush_start_h = push_clk[WALL_CLOCK_HIGH_INDEX];
             uint32_t flush_start_l = push_clk[WALL_CLOCK_LOW_INDEX];
             profiler_noc_async_flush_posted_write();
             uint32_t flush_end_h = push_clk[WALL_CLOCK_HIGH_INDEX];
             uint32_t flush_end_l = push_clk[WALL_CLOCK_LOW_INDEX];
+#endif
             // Host pairs guaranteed markers by timestamp, so inner NOC-FLUSH end must be strictly before outer
             // DRAM-PUSH end: emit flush first, sample push_end after.
             {
@@ -484,8 +519,14 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
                 mark_time_at_index_with_stamp(
                     GUARANTEED_MARKER_4_H, get_const_id(hash, ZONE_END), flush_end_h, flush_end_l);
             }
+#if defined(ARCH_BLACKHOLE)
+            const uint64_t push_end = blackhole_read_wall_clock_64();
+            uint32_t push_end_h = static_cast<uint32_t>(push_end >> 32);
+            uint32_t push_end_l = static_cast<uint32_t>(push_end);
+#else
             uint32_t push_end_h = push_clk[WALL_CLOCK_HIGH_INDEX];
             uint32_t push_end_l = push_clk[WALL_CLOCK_LOW_INDEX];
+#endif
             {
                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
                 mark_time_at_index_with_stamp(
@@ -881,6 +922,8 @@ struct profileScopeAccumulate {
     static inline __attribute__((always_inline)) uint64_t read_wall_clock_64() {
 #if defined(ARCH_QUASAR)
         return quasar_read_wall_clock_64();
+#elif defined(ARCH_BLACKHOLE)
+        return blackhole_read_wall_clock_64();
 #else
         volatile tt_reg_ptr uint32_t* p_reg =
             reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
