@@ -5,9 +5,13 @@
 #include "scatter_codegen_supported.hpp"
 
 #include <cstdint>
+#include <functional>
+#include <iterator>
+#include <numeric>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include "scatter_codegen_program_factory.hpp"
@@ -162,8 +166,7 @@ bool supported_by_codegen(
         src_tensor.logical_shape().volume() == 0) {
         return false;
     }
-    if (ttnn::prim::scatter_page_rank(input_tensor.logical_shape(), layout == Layout::TILE) >
-        ttnn::prim::kScatterMaxPageRank) {
+    if (ttnn::prim::scatter_page_rank(input_tensor.logical_shape()) > ttnn::prim::kScatterMaxPageRank) {
         return false;
     }
 
@@ -199,11 +202,11 @@ bool supported_by_codegen(
     // reduction is requested, plus the smallest NOC-alignment-safe index/src chunk) fits the device's
     // STATIC per-core L1 window.
     const uint32_t input_stick_elems = input_tensor.logical_shape()[axis];
-    // scatter_rm_stick_page_bytes() is the same formula the RM factories' CB/TensorAccessor sizing
+    // scatter_rm_aligned_stick_bytes() is the same formula the RM factories' CB/TensorAccessor sizing
     // uses once the post-transpose stick has a real buffer, not the raw unaligned byte width: the
     // minimum viable RM plan's resident footprint is exactly what that formula reports, and the two
     // must not compute it differently or this ceiling admits a call the factory cannot build.
-    const uint64_t input_page_bytes = ttnn::prim::scatter_rm_stick_page_bytes(input_tensor, input_stick_elems);
+    const uint64_t input_page_bytes = ttnn::prim::scatter_rm_aligned_stick_bytes(input_tensor, input_stick_elems);
     const bool bf16_reduce = reduction_mode == kReductionAdd || reduction_mode == kReductionMultiply;
     return ttnn::prim::scatter_rm_min_plan_fits_l1(
         ttnn::prim::scatter_static_l1(input_tensor),
@@ -281,10 +284,11 @@ bool prefers_row_major_strategy(
     // Ht on the transposed tensor, derived from the shape so it needs no transposed tensor to exist.
     const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
     const int32_t rank = static_cast<int32_t>(working_input.rank());
-    uint64_t Ht = (working_input[rank - 2] + tile_h - 1) / tile_h;
-    for (int32_t i = 0; i < rank - 2; ++i) {
-        Ht *= working_input[i];
-    }
+    const uint64_t Ht = std::accumulate(
+        working_input.cbegin(),
+        std::next(working_input.cbegin(), rank - 2),
+        static_cast<uint64_t>(tt::div_up(working_input[rank - 2], tile_h)),
+        std::multiplies<>());
     if (Ht > kRowMajorRerouteMaxHt) {
         return false;
     }
@@ -307,7 +311,7 @@ bool prefers_row_major_strategy(
     // the sticks would not fit. The untilized operands and the transposed copies they are cut from
     // have the same working shape, so one more charge per operand covers the copies when they are
     // still pending.
-    const uint64_t input_page_bytes = ttnn::prim::scatter_rm_stick_page_bytes(input_tensor, stick_elems);
+    const uint64_t input_page_bytes = ttnn::prim::scatter_rm_aligned_stick_bytes(input_tensor, stick_elems);
     const uint64_t operand_bytes =
         pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), input_tensor.memory_config()) +
         pending_l1_bytes(input_tensor, working_index, index_tensor.dtype(), index_tensor.memory_config()) +
@@ -337,7 +341,7 @@ bool codegen_plan_fits_live_l1(
     const int32_t axis = dim < 0 ? dim + rank : dim;
     const ttnn::Shape working_input = codegen_working_shape(input_tensor.logical_shape(), axis);
     const ttnn::Shape working_index = codegen_working_shape(index_tensor.logical_shape(), axis);
-    const uint64_t input_page_bytes = ttnn::prim::scatter_rm_stick_page_bytes(input_tensor, working_input[-1]);
+    const uint64_t input_page_bytes = ttnn::prim::scatter_rm_aligned_stick_bytes(input_tensor, working_input[-1]);
     const bool bf16_reduce = reduction_mode == kReductionAdd || reduction_mode == kReductionMultiply;
     // Still to be allocated before the factory runs: the output, and when the scatter axis is not
     // already last, the transposed copy of each operand (in that operand's own placement).
