@@ -29,11 +29,14 @@
 //   RMSNORM_BENCH_TP       comma separated TP sizes (default "2,4"); sizes above the system mesh are skipped
 //   RMSNORM_BENCH_B/S/C    shape of the sharded runs (default 1 x 8192 x 5120)
 //   RMSNORM_BENCH_SINGLE   0 skips the single-device sweep
-// Each mesh shape needs a matching mesh graph descriptor, so run one TP per process, e.g. on a Blackhole QuietBox:
+// Each mesh shape needs a matching mesh graph descriptor, so run one TP per process, e.g. on a Blackhole QuietBox 2:
 //   TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt-train/configs/mgd/bh_1_2_line_line.textproto RMSNORM_BENCH_TP=2 \
 //       rmsnorm_benchmark
-//   TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt-train/configs/mgd/bh_qb_1_4_ring_ring.textproto RMSNORM_BENCH_TP=4 \
+//   MGD=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors
+//   TT_MESH_GRAPH_DESC_PATH=$MGD/p300_x2_mesh_graph_descriptor.textproto RMSNORM_BENCH_TP=4 RMSNORM_BENCH_SINGLE=0 \
 //       rmsnorm_benchmark
+// The ring descriptor tt-train/configs/mgd/bh_qb_1_4_ring_ring.textproto needs a chip 0 <-> chip 3 link that not
+// every QuietBox 2 has; setting up its fabric then fails with "Expected 4 eth links from physical chip 0 to 3".
 // ============================================================================
 
 #include <fmt/format.h>

@@ -10,12 +10,15 @@
 #include <vector>
 
 #include "metal/common/program_utils.hpp"
+#include "rmsnorm_bw_kernel_args.hpp"
 
 namespace {
 
 using ttml::metal::ops::rmsnorm_bw::device::operation_attributes_t;
 using ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardMode;
 using ttml::metal::ops::rmsnorm_bw::device::tensor_args_t;
+namespace kernel_args = ttml::metal::ops::rmsnorm_bw::device::kernel_args;
+namespace cb = kernel_args::cb;
 
 constexpr auto kWriterKernelPath =
     "tt-train/sources/ttml/metal/ops/rmsnorm_bw/device/kernels/dataflow/writer_rmsnorm_bw_interleaved_start_id.cpp";
@@ -25,36 +28,6 @@ constexpr auto kReaderKernelPath =
 
 constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/rmsnorm_bw/device/kernels/compute/rmsnorm_bw_kernel.cpp";
-
-// Buffer indices
-constexpr uint32_t kInputBufferIdx = 0;
-constexpr uint32_t kGammaBufferIdx = 1U;
-constexpr uint32_t kRmsBufferIdx = 2U;
-constexpr uint32_t kDLdoutBufferIdx = 3U;
-constexpr uint32_t kExternalSumsBufferIdx = 6U;
-
-// Writer buffer indices
-constexpr uint32_t kDaBufferIdx = 0;
-constexpr uint32_t kDgammaComponentsBufferIdx = 1U;
-
-// CBs with input data
-constexpr auto kInputCbIndex = tt::CBIndex::c_0;
-constexpr auto kMaskWCbIndex = tt::CBIndex::c_1;
-constexpr auto kScalerCbIndex = tt::CBIndex::c_2;
-constexpr auto kGammaCbIndex = tt::CBIndex::c_3;
-constexpr auto kRmsACbIndex = tt::CBIndex::c_4;
-constexpr auto kDLoutCbIndex = tt::CBIndex::c_5;
-constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;
-constexpr auto kZeroCbIndex = tt::CBIndex::c_7;
-// CBs with output data
-constexpr auto kDLdaCbIndex = tt::CBIndex::c_8;
-constexpr auto kDLdgammaComponentsCbIndex = tt::CBIndex::c_9;
-// CBs with intermediate computations
-constexpr auto kRecipRmsACbIndex = tt::CBIndex::c_10;
-constexpr auto kScaleCbIndex = tt::CBIndex::c_11;
-constexpr auto kExternalSumsCbIndex = tt::CBIndex::c_12;
-constexpr auto kMaskHCbIndex = tt::CBIndex::c_13;
-constexpr auto kDgammaRowCbIndex = tt::CBIndex::c_14;
 
 // Some of the below constants are set to 2U because we might need to push a new value before popping the old one.
 constexpr uint32_t kNumMaskTiles = 1U;
@@ -128,38 +101,38 @@ std::vector<CbAllocation> cb_allocations(
     const uint32_t num_row_tiles = everything_fits_in_l1 ? geometry.Wt : twice_block_size;
 
     std::vector<CbAllocation> allocations{
-        {kInputCbIndex, data_format, num_row_tiles},
-        {kGammaCbIndex, data_format, num_row_tiles},
-        {kDLoutCbIndex, data_format, num_row_tiles},
-        {kScalerCbIndex, data_format, kNumScalerTiles},
-        {kMatMulReduceCbIndex, data_format, kNumMatMulReduceTiles},
-        {kZeroCbIndex, data_format, kNumZeroTiles},
-        {kScaleCbIndex, precise_data_format, kNumScaleTiles},
+        {cb::kInput, data_format, num_row_tiles},
+        {cb::kGamma, data_format, num_row_tiles},
+        {cb::kDLdout, data_format, num_row_tiles},
+        {cb::kScaler, data_format, kNumScalerTiles},
+        {cb::kMatMulReduce, data_format, kNumMatMulReduceTiles},
+        {cb::kZero, data_format, kNumZeroTiles},
+        {cb::kScale, precise_data_format, kNumScaleTiles},
     };
     if (geometry.mask_w != 0U) {
-        allocations.push_back({kMaskWCbIndex, data_format, kNumMaskTiles});
+        allocations.push_back({cb::kMaskW, data_format, kNumMaskTiles});
     }
     if (mode == RMSNormBackwardMode::LocalSum) {
         // One fp32 tile of row sums per row, written through the dL_da CB.
-        allocations.push_back({kDLdaCbIndex, precise_data_format, kNumLocalSumTiles});
+        allocations.push_back({cb::kDLda, precise_data_format, kNumLocalSumTiles});
         return allocations;
     }
 
-    allocations.push_back({kRmsACbIndex, data_format, kNumRmsATiles});
-    allocations.push_back({kRecipRmsACbIndex, data_format, kNumRecipRmsATiles});
-    allocations.push_back({kDLdaCbIndex, data_format, twice_block_size});
+    allocations.push_back({cb::kRms, data_format, kNumRmsATiles});
+    allocations.push_back({cb::kRecipRms, data_format, kNumRecipRmsATiles});
+    allocations.push_back({cb::kDLda, data_format, twice_block_size});
     if (dgamma_on_chip) {
         // fp32 accumulator over all rows of a core, then one column-reduced row per tile for the writer.
-        allocations.push_back({kDLdgammaComponentsCbIndex, precise_data_format, geometry.Wt});
-        allocations.push_back({kDgammaRowCbIndex, precise_data_format, kNumDgammaRowTiles});
+        allocations.push_back({cb::kDgammaComponents, precise_data_format, geometry.Wt});
+        allocations.push_back({cb::kDgammaRow, precise_data_format, kNumDgammaRowTiles});
         if (geometry.mask_h != 0U) {
-            allocations.push_back({kMaskHCbIndex, data_format, kNumMaskHTiles});
+            allocations.push_back({cb::kMaskH, data_format, kNumMaskHTiles});
         }
     } else {
-        allocations.push_back({kDLdgammaComponentsCbIndex, data_format, twice_block_size});
+        allocations.push_back({cb::kDgammaComponents, data_format, twice_block_size});
     }
     if (mode == RMSNormBackwardMode::ExternalScale) {
-        allocations.push_back({kExternalSumsCbIndex, precise_data_format, 2U * geometry.num_external_tiles});
+        allocations.push_back({cb::kExternalSums, precise_data_format, 2U * geometry.num_external_tiles});
     }
     return allocations;
 }
@@ -333,8 +306,13 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
         defines[kMaskHDefineKey] = "1";
     }
     RMSNormBackwardKernels kernels;
-    std::vector<uint32_t> reader_compile_time_args{
-        packed_scaler, block_size, geometry.mask_w, Wt, geometry.num_external_tiles, geometry.mask_h};
+    std::vector<uint32_t> reader_compile_time_args(kernel_args::reader_ct::kNumArgs);
+    reader_compile_time_args[kernel_args::reader_ct::kPackedScaler] = packed_scaler;
+    reader_compile_time_args[kernel_args::reader_ct::kBlockSize] = block_size;
+    reader_compile_time_args[kernel_args::reader_ct::kMaskW] = geometry.mask_w;
+    reader_compile_time_args[kernel_args::reader_ct::kWt] = Wt;
+    reader_compile_time_args[kernel_args::reader_ct::kNumExternalTiles] = geometry.num_external_tiles;
+    reader_compile_time_args[kernel_args::reader_ct::kMaskH] = geometry.mask_h;
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(rms_buffer).append_to(reader_compile_time_args);
@@ -342,7 +320,9 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(external_sums_buffer).append_to(reader_compile_time_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
-    std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
+    std::vector<uint32_t> writer_compile_time_args(kernel_args::writer_ct::kNumArgs);
+    writer_compile_time_args[kernel_args::writer_ct::kBlockSize] = block_size;
+    writer_compile_time_args[kernel_args::writer_ct::kWt] = Wt;
     tt::tt_metal::TensorAccessorArgs(dL_da_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dL_dgamma_components_buffer).append_to(writer_compile_time_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
@@ -354,17 +334,16 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (dgamma_on_chip) {
-        unpack_to_dest_mode[kDLdgammaComponentsCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[cb::kDgammaComponents] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     auto create_compute = [&](const tt::tt_metal::CoreRangeSet& cores, const uint32_t num_rows_per_core) {
-        const std::vector<uint32_t> compile_time_args = {
-            num_rows_per_core,            // per_core_block_cnt
-            block_size,                   // per_core_block_size
-            geometry.mask_w,              // mask_w
-            Wt,                           // num_inner / TILE_W
-            geometry.num_external_tiles,  // tiles of external sums per row
-            geometry.Ht                   // tile rows per sequence
-        };
+        std::vector<uint32_t> compile_time_args(kernel_args::compute_ct::kNumArgs);
+        compile_time_args[kernel_args::compute_ct::kNumRowsPerCore] = num_rows_per_core;
+        compile_time_args[kernel_args::compute_ct::kBlockSize] = block_size;
+        compile_time_args[kernel_args::compute_ct::kMaskW] = geometry.mask_w;
+        compile_time_args[kernel_args::compute_ct::kWt] = Wt;
+        compile_time_args[kernel_args::compute_ct::kNumExternalTiles] = geometry.num_external_tiles;
+        compile_time_args[kernel_args::compute_ct::kHt] = geometry.Ht;
         return tt::tt_metal::CreateKernel(
             program,
             kComputeKernelPath,
@@ -394,27 +373,27 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
         num_rows_per_core_group_2,
         [&](const CoreWork& work) {
             const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
-            // Reader kernel: (input_addr, gamma_addr, rms_addr, dLdout_addr, num_rows, offset, external_sums_addr)
-            SetRuntimeArgs(
-                program,
-                kernels.reader,
-                core,
-                {input_buffer->address(),
-                 gamma_buffer->address(),
-                 rms_buffer->address(),
-                 dLdout_buffer->address(),
-                 num_rows,
-                 start_row,
-                 external_sums_buffer->address()});
-            // Writer kernel: (da_addr, dgamma_addr, num_rows, offset, dgamma_row)
-            SetRuntimeArgs(
-                program,
-                kernels.writer,
-                core,
-                {dL_da_buffer->address(), dL_dgamma_components_buffer->address(), num_rows, start_row, core_index});
-            // Compute kernel: (offset)
-            SetRuntimeArgs(
-                program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {start_row});
+            std::vector<uint32_t> reader_args(kernel_args::reader_rt::kNumArgs);
+            reader_args[kernel_args::reader_rt::kInputAddr] = input_buffer->address();
+            reader_args[kernel_args::reader_rt::kGammaAddr] = gamma_buffer->address();
+            reader_args[kernel_args::reader_rt::kRmsAddr] = rms_buffer->address();
+            reader_args[kernel_args::reader_rt::kDLdoutAddr] = dLdout_buffer->address();
+            reader_args[kernel_args::reader_rt::kNumRows] = num_rows;
+            reader_args[kernel_args::reader_rt::kStartRow] = start_row;
+            reader_args[kernel_args::reader_rt::kExternalSumsAddr] = external_sums_buffer->address();
+            SetRuntimeArgs(program, kernels.reader, core, reader_args);
+
+            std::vector<uint32_t> writer_args(kernel_args::writer_rt::kNumArgs);
+            writer_args[kernel_args::writer_rt::kDLdaAddr] = dL_da_buffer->address();
+            writer_args[kernel_args::writer_rt::kDgammaAddr] = dL_dgamma_components_buffer->address();
+            writer_args[kernel_args::writer_rt::kNumRows] = num_rows;
+            writer_args[kernel_args::writer_rt::kStartRow] = start_row;
+            writer_args[kernel_args::writer_rt::kDgammaRow] = core_index;
+            SetRuntimeArgs(program, kernels.writer, core, writer_args);
+
+            std::vector<uint32_t> compute_args(kernel_args::compute_rt::kNumArgs);
+            compute_args[kernel_args::compute_rt::kStartRow] = start_row;
+            SetRuntimeArgs(program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, compute_args);
         });
 
     // -------------------------------------------------------------------------
@@ -463,18 +442,18 @@ void RMSNormBackwardProgramFactory::override_runtime_arguments(
         // Update input buffers for the reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[kInputBufferIdx] = input_buffer->address();
-            runtime_args[kGammaBufferIdx] = gamma_buffer->address();
-            runtime_args[kRmsBufferIdx] = rms_buffer->address();
-            runtime_args[kDLdoutBufferIdx] = dLdout_buffer->address();
-            runtime_args[kExternalSumsBufferIdx] = external_sums_buffer->address();
+            runtime_args[kernel_args::reader_rt::kInputAddr] = input_buffer->address();
+            runtime_args[kernel_args::reader_rt::kGammaAddr] = gamma_buffer->address();
+            runtime_args[kernel_args::reader_rt::kRmsAddr] = rms_buffer->address();
+            runtime_args[kernel_args::reader_rt::kDLdoutAddr] = dLdout_buffer->address();
+            runtime_args[kernel_args::reader_rt::kExternalSumsAddr] = external_sums_buffer->address();
         }
 
         // Update output buffers for the writer kernel
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kDaBufferIdx] = da_buffer->address();
-            runtime_args[kDgammaComponentsBufferIdx] = dgamma_buffer->address();
+            runtime_args[kernel_args::writer_rt::kDLdaAddr] = da_buffer->address();
+            runtime_args[kernel_args::writer_rt::kDgammaAddr] = dgamma_buffer->address();
         }
     });
 }

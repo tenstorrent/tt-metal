@@ -318,6 +318,23 @@ TEST_F(RMSNormBwShardedModesTest, ExternalScaleStreamingComponents) {
     run_sharded_modes(1, 64, 21760, 2, kStreamComponents, kStreamComponents);
 }
 
+// The kernels index 32x32 tiles and their faces, so another tile shape must be rejected before launch.
+TEST_F(RMSNormBwShardedModesTest, RejectsNon32x32Tiles) {
+    const ttnn::Shape shape({1U, 1U, 32U, 64U});
+    const tt::tt_metal::TensorSpec spec(
+        shape,
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(ttnn::Layout::TILE, tt::tt_metal::Tile({16U, 32U})),
+            ttnn::DRAM_MEMORY_CONFIG));
+    auto x =
+        ttnn::Tensor::from_vector(std::vector<float>(shape.volume(), 1.F), spec, &ttml::autograd::ctx().get_device());
+    ASSERT_EQ(x.tensor_spec().tile().get_height(), 16U);
+    auto gamma = filled_tensor({1U, 1U, 1U, 64U}, 1.F);
+    auto rms = filled_tensor({1U, 1U, 32U, 1U}, 1.F);
+    EXPECT_THROW(ttnn::prim::ttml_rmsnorm_bw(x, gamma, rms, x), std::runtime_error);
+}
+
 TEST_F(RMSNormBwShardedModesTest, RejectsRmsWiderThanOneTile) {
     auto x = filled_tensor({1U, 1U, 32U, 64U}, 1.F);
     auto gamma = filled_tensor({1U, 1U, 1U, 64U}, 1.F);

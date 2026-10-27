@@ -4,26 +4,17 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/ops/rmsnorm_bw/device/rmsnorm_bw_kernel_args.hpp"
 
-// CBs with input data
-constexpr uint32_t cb_input_idx = tt::CBIndex::c_0;
-constexpr uint32_t cb_mask_w_idx = tt::CBIndex::c_1;
-constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_2;
-constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_3;
-constexpr uint32_t cb_rms_a_idx = tt::CBIndex::c_4;
-constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;
-constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_6;
-constexpr uint32_t cb_zero_idx = tt::CBIndex::c_7;
+namespace kernel_args = ttml::metal::ops::rmsnorm_bw::device::kernel_args;
+
 // CBs with output data
-constexpr uint32_t cb_dL_da_idx = tt::CBIndex::c_8;
-constexpr uint32_t cb_dL_dgamma_components = tt::CBIndex::c_9;
-// CBs with intermediate computations
-constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_10;
-constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
-constexpr uint32_t cb_dgamma_row_idx = tt::CBIndex::c_14;
+constexpr uint32_t cb_dL_da_idx = kernel_args::cb::kDLda;
+constexpr uint32_t cb_dL_dgamma_components = kernel_args::cb::kDgammaComponents;
+constexpr uint32_t cb_dgamma_row_idx = kernel_args::cb::kDgammaRow;
 
-constexpr uint32_t block_size = get_compile_time_arg_val(0);
-constexpr uint32_t Wt = get_compile_time_arg_val(1);
+constexpr uint32_t block_size = get_compile_time_arg_val(kernel_args::writer_ct::kBlockSize);
+constexpr uint32_t Wt = get_compile_time_arg_val(kernel_args::writer_ct::kWt);
 
 #ifdef DGAMMA_ON_CHIP
 // Writes row 0 of each fp32 tile in cb_dgamma_row into row `dgamma_row` of the [num_cores, C] dgamma partials.
@@ -55,15 +46,14 @@ void write_dgamma_row(const AddrGen& dgamma_addr_generator, const uint32_t dgamm
 #endif
 
 void kernel_main() {
-    uint32_t runtime_args_counter = 0;
-    uint32_t da_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t dgamma_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
-    [[maybe_unused]] uint32_t dgamma_row = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t da_output_addr = get_arg_val<uint32_t>(kernel_args::writer_rt::kDLdaAddr);
+    const uint32_t dgamma_output_addr = get_arg_val<uint32_t>(kernel_args::writer_rt::kDgammaAddr);
+    const uint32_t num_rows_to_process = get_arg_val<uint32_t>(kernel_args::writer_rt::kNumRows);
+    const uint32_t start_row = get_arg_val<uint32_t>(kernel_args::writer_rt::kStartRow);
+    [[maybe_unused]] const uint32_t dgamma_row = get_arg_val<uint32_t>(kernel_args::writer_rt::kDgammaRow);
 
     const uint32_t tile_bytes = get_tile_size(cb_dL_da_idx);
-    constexpr auto da_args = TensorAccessorArgs<2>();
+    constexpr auto da_args = TensorAccessorArgs<kernel_args::writer_ct::kNumArgs>();
     constexpr auto dgamma_args = TensorAccessorArgs<da_args.next_compile_time_args_offset()>();
     const auto da_output_addr_generator = TensorAccessor(da_args, da_output_addr);
     [[maybe_unused]] const auto dgamma_output_addr_generator = TensorAccessor(dgamma_args, dgamma_output_addr);

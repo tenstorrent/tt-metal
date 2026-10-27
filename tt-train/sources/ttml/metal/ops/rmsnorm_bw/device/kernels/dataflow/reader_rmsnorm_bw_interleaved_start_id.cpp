@@ -4,31 +4,29 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/ops/rmsnorm_bw/device/rmsnorm_bw_kernel_args.hpp"
+
+namespace kernel_args = ttml::metal::ops::rmsnorm_bw::device::kernel_args;
 
 // CBs with input data
-constexpr uint32_t cb_input_idx = tt::CBIndex::c_0;
-constexpr uint32_t cb_mask_w_idx = tt::CBIndex::c_1;
-constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_2;
-constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_3;
-constexpr uint32_t cb_rms_a_idx = tt::CBIndex::c_4;
-constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;
-constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_6;
-constexpr uint32_t cb_zero_idx = tt::CBIndex::c_7;
-// CBs with output data
-constexpr uint32_t cb_dL_da_idx = tt::CBIndex::c_8;
-constexpr uint32_t cb_dL_dgamma_components = tt::CBIndex::c_9;
+constexpr uint32_t cb_input_idx = kernel_args::cb::kInput;
+constexpr uint32_t cb_mask_w_idx = kernel_args::cb::kMaskW;
+constexpr uint32_t cb_scaler_idx = kernel_args::cb::kScaler;
+constexpr uint32_t cb_gamma_idx = kernel_args::cb::kGamma;
+constexpr uint32_t cb_rms_a_idx = kernel_args::cb::kRms;
+constexpr uint32_t cb_dL_out_idx = kernel_args::cb::kDLdout;
+constexpr uint32_t cb_mat_mul_reduce = kernel_args::cb::kMatMulReduce;
+constexpr uint32_t cb_zero_idx = kernel_args::cb::kZero;
 // CBs with intermediate computations
-constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_10;
-constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
-constexpr uint32_t cb_external_sums_idx = tt::CBIndex::c_12;
-constexpr uint32_t cb_mask_h_idx = tt::CBIndex::c_13;
+constexpr uint32_t cb_external_sums_idx = kernel_args::cb::kExternalSums;
+constexpr uint32_t cb_mask_h_idx = kernel_args::cb::kMaskH;
 
-constexpr uint32_t packed_scaler = get_compile_time_arg_val(0);
-constexpr uint32_t block_size = get_compile_time_arg_val(1);
-constexpr uint32_t mask_w = get_compile_time_arg_val(2);
-constexpr uint32_t Wt = get_compile_time_arg_val(3);
-constexpr uint32_t num_external_tiles = get_compile_time_arg_val(4);
-constexpr uint32_t mask_h = get_compile_time_arg_val(5);
+constexpr uint32_t packed_scaler = get_compile_time_arg_val(kernel_args::reader_ct::kPackedScaler);
+constexpr uint32_t block_size = get_compile_time_arg_val(kernel_args::reader_ct::kBlockSize);
+constexpr uint32_t mask_w = get_compile_time_arg_val(kernel_args::reader_ct::kMaskW);
+constexpr uint32_t Wt = get_compile_time_arg_val(kernel_args::reader_ct::kWt);
+constexpr uint32_t num_external_tiles = get_compile_time_arg_val(kernel_args::reader_ct::kNumExternalTiles);
+constexpr uint32_t mask_h = get_compile_time_arg_val(kernel_args::reader_ct::kMaskH);
 
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
@@ -37,14 +35,14 @@ constexpr bool do_mask_w = false;
 #endif
 
 void kernel_main() {
-    uint32_t runtime_args_counter = 0U;
-    uint32_t input_address = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t gamma_address = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t rms_a_address = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t dL_out_address = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
-    [[maybe_unused]] uint32_t external_sums_address = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t input_address = get_arg_val<uint32_t>(kernel_args::reader_rt::kInputAddr);
+    const uint32_t gamma_address = get_arg_val<uint32_t>(kernel_args::reader_rt::kGammaAddr);
+    const uint32_t rms_a_address = get_arg_val<uint32_t>(kernel_args::reader_rt::kRmsAddr);
+    const uint32_t dL_out_address = get_arg_val<uint32_t>(kernel_args::reader_rt::kDLdoutAddr);
+    const uint32_t num_rows_to_process = get_arg_val<uint32_t>(kernel_args::reader_rt::kNumRows);
+    const uint32_t start_row = get_arg_val<uint32_t>(kernel_args::reader_rt::kStartRow);
+    [[maybe_unused]] const uint32_t external_sums_address =
+        get_arg_val<uint32_t>(kernel_args::reader_rt::kExternalSumsAddr);
 
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
@@ -64,7 +62,7 @@ void kernel_main() {
     generate_tile_with_bfloat16_value(cb_zero_idx, zero);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
-    constexpr auto input_args = TensorAccessorArgs<6>();
+    constexpr auto input_args = TensorAccessorArgs<kernel_args::reader_ct::kNumArgs>();
     constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto rms_a_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto dL_out_args = TensorAccessorArgs<rms_a_args.next_compile_time_args_offset()>();

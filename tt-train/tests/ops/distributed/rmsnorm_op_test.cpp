@@ -12,7 +12,6 @@
 #include <numeric>
 #include <optional>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/system_mesh.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -20,24 +19,15 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.hpp"
 #include "ops/rmsnorm_op.hpp"
+#include "test_utils/mesh_utils.hpp"
 #include "test_utils/random_data.hpp"
 #include "test_utils/rmsnorm_reference.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
 
 constexpr float kEpsilon = 1e-5F;
-
-// The system mesh is bounded by the mesh graph descriptor, not by the chip count: on a 4-chip box run
-// under a 1x2 descriptor only 2 devices are usable, and opening a bigger mesh is a hard failure.
-size_t system_mesh_size() {
-    return tt::tt_metal::distributed::SystemMesh::instance().shape().mesh_size();
-}
-
-bool has_at_least_devices(size_t num_devices) {
-    return system_mesh_size() >= num_devices;
-}
+constexpr uint32_t kSeed = 42U;
 
 // Outputs and dx are bf16 (relative step 2^-8); the row reductions behind them read fp32 operands through tf32.
 constexpr float kOutRtol = 1e-2F;
@@ -224,19 +214,9 @@ ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardLayout external_scale_layou
 
 }  // namespace
 
-class TwoDeviceDistributedRMSNormTest : public ::testing::Test {
+class TwoDeviceDistributedRMSNormTest : public ttml::test_utils::Mesh1x2Fixture {
 protected:
-    void SetUp() override {
-        if (!has_at_least_devices(2U)) {
-            GTEST_SKIP() << "Skipping test that needs 2 devices";
-        }
-        ttml::ttnn_fixed::distributed::enable_fabric(2U);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
-        ttml::autograd::ctx().set_seed(42);
-    }
-
-    void TearDown() override {
-        ttml::autograd::ctx().close_device();
+    TwoDeviceDistributedRMSNormTest() : Mesh1x2Fixture(kSeed) {
     }
 };
 
@@ -338,19 +318,9 @@ TEST_F(TwoDeviceDistributedRMSNormTest, RejectsUnshardedGamma) {
 }
 
 // Runs on a Blackhole QuietBox 2 (4 chips): TP=4 over a 1x4 line.
-class FourDeviceDistributedRMSNormTest : public ::testing::Test {
+class FourDeviceDistributedRMSNormTest : public ttml::test_utils::MeshFixture {
 protected:
-    void SetUp() override {
-        if (!has_at_least_devices(4U)) {
-            GTEST_SKIP() << "Skipping test that needs 4 devices";
-        }
-        ttml::ttnn_fixed::distributed::enable_fabric(4U);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 4));
-        ttml::autograd::ctx().set_seed(42);
-    }
-
-    void TearDown() override {
-        ttml::autograd::ctx().close_device();
+    FourDeviceDistributedRMSNormTest() : MeshFixture(tt::tt_metal::distributed::MeshShape(1, 4), kSeed) {
     }
 };
 
@@ -371,19 +341,9 @@ TEST_F(FourDeviceDistributedRMSNormTest, WanHidden) {
 }
 
 // Runs on a Blackhole QuietBox 2 as a 2x2 mesh: hidden is sharded over one axis and replicated over the other.
-class TwoByTwoMeshDistributedRMSNormTest : public ::testing::Test {
+class TwoByTwoMeshDistributedRMSNormTest : public ttml::test_utils::MeshFixture {
 protected:
-    void SetUp() override {
-        if (!has_at_least_devices(4U)) {
-            GTEST_SKIP() << "Skipping test that needs 4 devices";
-        }
-        ttml::ttnn_fixed::distributed::enable_fabric(4U);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(2, 2));
-        ttml::autograd::ctx().set_seed(42);
-    }
-
-    void TearDown() override {
-        ttml::autograd::ctx().close_device();
+    TwoByTwoMeshDistributedRMSNormTest() : MeshFixture(tt::tt_metal::distributed::MeshShape(2, 2), kSeed) {
     }
 };
 
@@ -403,53 +363,11 @@ TEST_F(TwoByTwoMeshDistributedRMSNormTest, RejectsMissingClusterAxis) {
     EXPECT_THROW(ttml::ops::distributed::rmsnorm(x, gamma, kEpsilon), std::invalid_argument);
 }
 
-// Runs on a T3K (2x4) or Galaxy (8x4): hidden is sharded over one mesh axis and replicated over the other.
-class MeshDistributedRMSNormTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        const auto num_devices = system_mesh_size();
-        if (num_devices == 32U) {
-            mesh_shape_ = tt::tt_metal::distributed::MeshShape(8, 4);
-        } else if (num_devices == 8U) {
-            mesh_shape_ = tt::tt_metal::distributed::MeshShape(2, 4);
-        } else {
-            GTEST_SKIP() << "Skipping test that needs an 8 or 32 device mesh";
-        }
-        ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
-        ttml::autograd::ctx().open_device(mesh_shape_.value());
-        ttml::autograd::ctx().set_seed(42);
-    }
-
-    void TearDown() override {
-        if (mesh_shape_.has_value()) {
-            ttml::autograd::ctx().close_device();
-        }
-    }
-
-    std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape_;
-};
-
-TEST_F(MeshDistributedRMSNormTest, ShardedAlongAxis1) {
-    SKIP_FOR_WATCHER();
-    run_distributed_rmsnorm(2, 64, 256, /* cluster_axis */ 1U);
-}
-
-TEST_F(MeshDistributedRMSNormTest, ShardedAlongAxis0) {
-    SKIP_FOR_WATCHER();
-    run_distributed_rmsnorm(2, 64, 256, /* cluster_axis */ 0U);
-}
-
-TEST_F(MeshDistributedRMSNormTest, RejectsMissingClusterAxis) {
-    auto x = ttml::autograd::create_tensor(shard_last_dim(xt::ones<float>({1U, 1U, 32U, 256U}), 1U));
-    auto gamma = ttml::autograd::create_tensor(shard_last_dim(xt::ones<float>({1U, 1U, 1U, 256U}), 1U));
-    EXPECT_THROW(ttml::ops::distributed::rmsnorm(x, gamma, kEpsilon), std::invalid_argument);
-}
-
 class SingleDeviceDistributedRMSNormTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
-        ttml::autograd::ctx().set_seed(42);
+        ttml::autograd::ctx().set_seed(kSeed);
     }
 
     void TearDown() override {

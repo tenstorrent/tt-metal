@@ -15,32 +15,35 @@
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/ops/rmsnorm_bw/device/rmsnorm_bw_kernel_args.hpp"
 
-constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
-constexpr uint32_t block_size = get_compile_time_arg_val(1);
-constexpr uint32_t mask_w = get_compile_time_arg_val(2);
-constexpr uint32_t Wt = get_compile_time_arg_val(3);
-constexpr uint32_t num_external_tiles = get_compile_time_arg_val(4);
-constexpr uint32_t Ht = get_compile_time_arg_val(5);
+namespace kernel_args = ttml::metal::ops::rmsnorm_bw::device::kernel_args;
+
+constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(kernel_args::compute_ct::kNumRowsPerCore);
+constexpr uint32_t block_size = get_compile_time_arg_val(kernel_args::compute_ct::kBlockSize);
+constexpr uint32_t mask_w = get_compile_time_arg_val(kernel_args::compute_ct::kMaskW);
+constexpr uint32_t Wt = get_compile_time_arg_val(kernel_args::compute_ct::kWt);
+constexpr uint32_t num_external_tiles = get_compile_time_arg_val(kernel_args::compute_ct::kNumExternalTiles);
+constexpr uint32_t Ht = get_compile_time_arg_val(kernel_args::compute_ct::kHt);
 
 // CBs with input data
-constexpr uint32_t cb_input_idx = tt::CBIndex::c_0;
-constexpr uint32_t cb_mask_w_idx = tt::CBIndex::c_1;
-constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_2;
-constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_3;
-constexpr uint32_t cb_rms_a_idx = tt::CBIndex::c_4;
-constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;
-constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_6;
-constexpr uint32_t cb_zero_idx = tt::CBIndex::c_7;
+constexpr uint32_t cb_input_idx = kernel_args::cb::kInput;
+constexpr uint32_t cb_mask_w_idx = kernel_args::cb::kMaskW;
+constexpr uint32_t cb_scaler_idx = kernel_args::cb::kScaler;
+constexpr uint32_t cb_gamma_idx = kernel_args::cb::kGamma;
+constexpr uint32_t cb_rms_a_idx = kernel_args::cb::kRms;
+constexpr uint32_t cb_dL_out_idx = kernel_args::cb::kDLdout;
+constexpr uint32_t cb_mat_mul_reduce = kernel_args::cb::kMatMulReduce;
+constexpr uint32_t cb_zero_idx = kernel_args::cb::kZero;
 // CBs with output data
-constexpr uint32_t cb_dL_da_idx = tt::CBIndex::c_8;
-constexpr uint32_t cb_dL_dgamma_components = tt::CBIndex::c_9;
+constexpr uint32_t cb_dL_da_idx = kernel_args::cb::kDLda;
+constexpr uint32_t cb_dL_dgamma_components = kernel_args::cb::kDgammaComponents;
 // CBs with intermediate computations
-constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_10;
-constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
-constexpr uint32_t cb_external_sums_idx = tt::CBIndex::c_12;
-constexpr uint32_t cb_mask_h_idx = tt::CBIndex::c_13;
-constexpr uint32_t cb_dgamma_row_idx = tt::CBIndex::c_14;
+constexpr uint32_t cb_recip_rms_a_bcasted_idx = kernel_args::cb::kRecipRms;
+constexpr uint32_t cb_scale_idx = kernel_args::cb::kScale;
+constexpr uint32_t cb_external_sums_idx = kernel_args::cb::kExternalSums;
+constexpr uint32_t cb_mask_h_idx = kernel_args::cb::kMaskH;
+constexpr uint32_t cb_dgamma_row_idx = kernel_args::cb::kDgammaRow;
 
 // LocalSum emits the reduced scale itself, through the dL_da output CB.
 #ifdef LOCAL_SUM
@@ -374,7 +377,7 @@ void kernel_main() {
     cb_wait_front(cb_mat_mul_reduce, onetile);
     cb_wait_front(cb_zero_idx, onetile);
 
-    [[maybe_unused]] const uint32_t start_row = get_arg_val<uint32_t>(0);
+    [[maybe_unused]] const uint32_t start_row = get_arg_val<uint32_t>(kernel_args::compute_rt::kStartRow);
     if constexpr (do_mask_h) {
         cb_wait_front(cb_mask_h_idx, onetile);
     }
