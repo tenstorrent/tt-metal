@@ -154,6 +154,9 @@ class NemotronReranker:
         rows = x.shape[-2] * x.shape[-3]
         if self.cfg.use_minimal_matmul:
             mb, kb, nb, sh, sw = mm_block_config(kind, rows)
+            if x.dtype == ttnn.bfloat16 and kb > 16:
+                # The table is swept with bfp8 activations; bf16 in0 blocks of 32 K tiles overflow L1.
+                kb = 16
             return ttnn.experimental.minimal_matmul(
                 x,
                 w,

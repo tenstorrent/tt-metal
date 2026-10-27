@@ -15,7 +15,7 @@ SEQ_BUCKETS = (128, 256, 512, 1024, 2048, 4096, 8192)
 
 # minimal_matmul block sizes (M_block, K_block, N_block, subblock_h, subblock_w) in tiles,
 # per weight kind and activation rows M = batch * seq_len, from perf_tools/sweep_mm.py on a P150
-# (HiFi2, fp32 accumulation, so subblock_h * subblock_w <= 4).
+# (fp32 accumulation, so subblock_h * subblock_w <= 4; 512 / 16384 rows re-swept with bfp8 activations).
 # A row count not listed uses the largest listed M that is <= it.
 MM_CONFIGS = {
     "qkv": {
@@ -23,7 +23,7 @@ MM_CONFIGS = {
         2048: (8, 8, 8, 1, 4),
         4096: (16, 8, 4, 1, 4),
         8192: (8, 16, 4, 1, 4),
-        16384: (8, 16, 4, 1, 4),
+        16384: (8, 32, 4, 1, 4),
     },
     "wo": {
         512: (4, 8, 8, 2, 2),
@@ -32,14 +32,14 @@ MM_CONFIGS = {
         8192: (4, 8, 8, 1, 4),
         16384: (8, 8, 8, 1, 4),
     },
-    "ff13s": {512: (4, 16, 8, 2, 2), 2048: (4, 16, 8, 1, 4), 4096: (4, 16, 8, 1, 4), 16384: (4, 16, 8, 1, 4)},
+    "ff13s": {512: (8, 16, 8, 1, 4), 2048: (4, 16, 8, 1, 4), 4096: (4, 16, 8, 1, 4), 16384: (4, 32, 8, 1, 4)},
     "ff13": {512: (4, 8, 8, 1, 4), 4096: (4, 16, 16, 1, 4), 16384: (8, 16, 8, 1, 4)},
     "ff2": {
-        512: (4, 8, 8, 2, 2),
+        512: (4, 16, 8, 2, 2),
         2048: (4, 8, 8, 2, 2),
         4096: (16, 8, 4, 1, 4),
         8192: (4, 16, 4, 1, 4),
-        16384: (8, 16, 4, 1, 4),
+        16384: (8, 16, 8, 1, 4),
     },
     "score": {512: (4, 8, 1, 4, 1)},
 }

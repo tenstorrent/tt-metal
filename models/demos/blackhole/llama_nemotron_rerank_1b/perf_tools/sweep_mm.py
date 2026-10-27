@@ -46,6 +46,7 @@ def main():
     ap.add_argument("--m", type=int, nargs="+", default=[512, 4096, 16384])
     ap.add_argument("--shapes", nargs="+", default=list(SHAPES))
     ap.add_argument("--wdtype", default="bfloat8_b")
+    ap.add_argument("--xdtype", default="bfloat16", help="activation (in0) dtype")
     ap.add_argument("--top", type=int, default=4)
     ap.add_argument("--fid", nargs="+", default=["HiFi2"])
     ap.add_argument("--acc", nargs="+", type=int, default=[1, 0])
@@ -68,7 +69,9 @@ def main():
         for M in args.m:
             for name in args.shapes:
                 K, N = SHAPES[name]
-                x = ttnn.from_torch(torch.randn(1, 1, M, K), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
+                x = ttnn.from_torch(
+                    torch.randn(1, 1, M, K), dtype=getattr(ttnn, args.xdtype), layout=ttnn.TILE_LAYOUT, device=dev
+                )
                 w = ttnn.from_torch(torch.randn(1, 1, K, N) * 0.02, dtype=wdt, layout=ttnn.TILE_LAYOUT, device=dev)
                 res = []
                 for (f, acc), c in ckc.items():

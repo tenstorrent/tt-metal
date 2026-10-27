@@ -557,6 +557,24 @@ void kernel_main() {
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_k_range.get_write_ptr());
                 k_range_ptr[0] = windowed_k_lo;
                 k_range_ptr[1] = windowed_k_hi;
+                // Leading processed K chunks flagged 2 (every key real): their mask tiles are zeros,
+                // which the streaming compute pops without applying.
+                uint32_t k_full_count = 0;
+                if constexpr (use_mask_block_map) {
+                    if (block_map != nullptr) {
+                        for (uint32_t k = 0; k < k_num_chunks; ++k) {
+                            const uint32_t v = block_map[k];
+                            if (use_row_map && v == 0) {
+                                continue;
+                            }
+                            if (v != 2) {
+                                break;
+                            }
+                            ++k_full_count;
+                        }
+                    }
+                }
+                k_range_ptr[2] = k_full_count;
                 cb_k_range.push_back(1);
             }
 
