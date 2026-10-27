@@ -12,6 +12,9 @@
 // earlier contributions of t) of the gather tiles G[j] (<= J per token), tells the compute how many slots are used
 // (mailbox) and writes its summed output tiles out[r, col0 ..]. The pass rows come from the table the gate|up op wrote
 // (uint16 rows [n, e, t_0 ..]).
+// The pass enumeration goes through the pass budget P_MAX (dispatch_common.hpp clamp_passes, the same truncation as
+// the gate|up op and the reader): the metadata page, the activation loop and the phase-2 table scan all count the
+// clamped passes, so an over-budget routing yields a truncated result instead of a deadlock (2026-10-27).
 //
 // Output row placement (compile-time OUT_TPR / RT_OUT, op.py `out_chunk`): dispatched row i (its token id in the
 // pass table) lands in output tile row i / OUT_TPR at row i % OUT_TPR, and RT_OUT tile rows are written. OUT_TPR = 32,
@@ -122,10 +125,11 @@ void kernel_main() {
         noc_async_read_barrier();
         read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);
     }
-    uint32_t n_pass = pass_bases<E>(n_tok, passes, base);
-    if (n_pass > P_MAX) {
-        n_pass = P_MAX;  // never with <= 8 routed experts per token (op.py's P_MAX); keeps the kernel from hanging
-    }
+    static_assert(
+        P_MAX == dispatch_max_passes(T, E), "the op's pass budget (op.py max_passes) is the kernels' formula");
+    pass_bases<E>(n_tok, passes, base);
+    bool clamped = false;  // the pass budget applied to passes[] / base[] / n_tok[] themselves (dispatch_common.hpp)
+    const uint32_t n_pass = clamp_passes<E>(n_tok, passes, base, P_MAX, clamped);
 
     // the pass table
     cb_reserve_back(cb_t, P_MAX);

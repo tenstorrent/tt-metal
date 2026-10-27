@@ -4,7 +4,9 @@
 // Down-projection weight streamer (NCRISC, NOC0) of the per-expert dispatch op (custom_ops/expert_stream/op.py,
 // ExpertDownDispatch): as reader_down.cpp (this core's `cols` output columns of every active expert, one
 // contiguous block per expert, triple-buffered), the active experts taken from the per-expert token counts; each
-// expert's block is streamed once and kept by the compute over the expert's passes.
+// expert's block is streamed once and kept by the compute over the expert's passes. The active set is the writer's:
+// the per-expert counts go through the same pass budget (dispatch_common.hpp clamp_passes), so an expert the
+// writer truncated away is not streamed either.
 //
 // runtime args: [w_addr, counts_addr (EP: idx_addr), bank_id, vc, c0, (EP) base_addr, (EP = 2) t_valid, idx_page]
 // REGIONS_SRC (regions_src.hpp, as reader_down.cpp): the regions lists' per-expert down tensors (common runtime
@@ -81,6 +83,10 @@ void kernel_main() {
         noc_async_read_barrier();
         read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);
     }
+    uint16_t passes[E], base[E];
+    pass_bases<E>(n_tok, passes, base);
+    bool clamped = false;  // the pass budget, the same truncation in every kernel of both ops (dispatch_common.hpp)
+    clamp_passes<E>(n_tok, passes, base, dispatch_max_passes(T, E), clamped);
 
 #ifdef REGIONS_SRC
     constexpr uint32_t C = bank_expert_stride / seg_bytes;  // output columns per bank

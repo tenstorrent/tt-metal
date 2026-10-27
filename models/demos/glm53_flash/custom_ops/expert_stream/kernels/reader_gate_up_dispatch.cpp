@@ -85,6 +85,8 @@ void kernel_main() {
         read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);
     }
     pass_bases<E>(n_tok, passes, base);
+    bool clamped = false;  // the pass budget, the same truncation in every kernel of both ops (dispatch_common.hpp)
+    clamp_passes<E>(n_tok, passes, base, dispatch_max_passes(T, E), clamped);
     const uint32_t n_mine = assign_group<E, 32>(passes, groups, group, mine);
 
 #ifdef REGIONS_SRC

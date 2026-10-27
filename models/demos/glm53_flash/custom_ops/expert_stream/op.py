@@ -97,6 +97,7 @@ MAX_PACKET_BYTES = 16384  # Blackhole NOC max burst
 SWIGLU_LIMIT = 10.0  # the fused clamped_silu_glu SFPU op's compile-time limit (GLM-5.3-Flash swiglu_limit)
 MAX_PICKS = 8  # routed experts per token (top-8): bounds the passes and the gather slots of the dispatch ops
 TABLE_WIDTH = 64  # uint16 entries per pass-table row: [n_rows, e, t_0 .. t_31, pad]
+TABLE_FLAG_WORD = 63  # pad word of every pass-table row: 1 when the kernels clamped the enumeration to the pass budget
 
 
 def _packet_bytes(tiles: int, tile_bytes: int = BFP8_TILE_BYTES, packet_tiles: int | None = None) -> int:
@@ -255,24 +256,64 @@ def expert_stream_golden(
     return act, y
 
 
-def dispatch_passes(routing: torch.Tensor) -> list[tuple[int, list[int]]]:
+def clamp_passes_host(counts, p_max: int) -> tuple[list[int], list[int], int, bool]:
+    """Host mirror of ``kernels/dispatch_common.hpp`` ``pass_bases`` + ``clamp_passes``: the per-expert token
+    ``counts`` -> (passes, base, total, clamped) with the enumeration truncated to ``p_max`` passes in expert order
+    (the expert crossing the budget keeps its first passes, later experts get none). The same function of the counts
+    in every kernel of both dispatch ops, so the readers' expert set (``passes[e] > 0``), the writers' loops and
+    the computes' metadata agree whatever the counts say."""
+    passes, base, k, clamped = [], [], 0, False
+    for n in counts:
+        p = -(-int(n) // TILE)
+        room = p_max - k
+        if p > room:
+            p, clamped = room, True
+        passes.append(p)
+        base.append(k)
+        k += p
+    return passes, base, k, clamped
+
+
+def dispatch_passes(routing: torch.Tensor, p_max: int | None = None) -> list[tuple[int, list[int]]]:
     """The dispatch ops' pass enumeration of a [T, E] routing matrix: (expert, token rows) per pass, experts
-    ascending, 32 rows per pass."""
+    ascending, 32 rows per pass. ``p_max``: the kernels' pass budget (``max_passes``): the enumeration truncated
+    the way ``clamp_passes_host`` truncates it (a well-formed top-k routing never reaches it)."""
+    counts = (routing != 0).sum(0).tolist()
+    passes_per_expert = clamp_passes_host(counts, p_max)[0] if p_max is not None else None
     passes = []
     for e in range(routing.shape[1]):
         rows = torch.nonzero(routing[:, e] != 0).flatten().tolist()
+        if passes_per_expert is not None:
+            rows = rows[: passes_per_expert[e] * TILE]
         for p in range(0, len(rows), TILE):
             passes.append((e, rows[p : p + TILE]))
     return passes
 
 
+def table_clamped(table: torch.Tensor) -> bool:
+    """The gate|up writer's clamp flag from a host copy of the pass table ([.., P, TABLE_WIDTH] uint16): row 0's
+    pad word ``TABLE_FLAG_WORD`` (meaningful when at least one pass was written, i.e. counts.sum() > 0)."""
+    return int(table.reshape(-1, TABLE_WIDTH)[0, TABLE_FLAG_WORD]) == 1
+
+
 def expert_dispatch_golden(
-    x: torch.Tensor, routing: torch.Tensor, w13: torch.Tensor, w2: torch.Tensor, limit=SWIGLU_LIMIT
+    x: torch.Tensor,
+    routing: torch.Tensor,
+    w13: torch.Tensor,
+    w2: torch.Tensor,
+    limit=SWIGLU_LIMIT,
+    p_max: int | None = None,
 ):
     """As ``expert_stream_golden`` for T tokens plus the per-pass activations the dispatch gate|up op writes:
-    (act_pass [P, 32, I] (rows past a pass's count zero), y [T, H], passes)."""
+    (act_pass [P, 32, I] (rows past a pass's count zero), y [T, H], passes). ``p_max``: the kernels' pass budget;
+    the golden then sums exactly the (expert, row) contributions the truncated enumeration dispatches."""
+    passes = dispatch_passes(routing, p_max)
+    if p_max is not None:
+        kept = torch.zeros(routing.shape, dtype=torch.bool)
+        for e, rows in passes:
+            kept[rows, e] = True
+        routing = torch.where(kept, routing, torch.zeros((), dtype=routing.dtype))  # a NaN entry stays NaN
     act, y = expert_stream_golden(x, routing, w13, w2, limit)
-    passes = dispatch_passes(routing)
     act_pass = torch.zeros(len(passes), TILE, act.shape[-1])
     for k, (e, rows) in enumerate(passes):
         act_pass[k, : len(rows)] = act[e, rows]
@@ -1026,7 +1067,10 @@ ExpertStreamFused.alloc = ExpertStream.alloc
 
 # ---------------------------------------------------------------------------------------------------- dispatch ops
 def max_passes(T: int, E: int) -> int:
-    """Upper bound of the pass count: sum_e ceil(n_e / 32) with sum_e n_e <= MAX_PICKS * T."""
+    """Upper bound of the pass count: sum_e ceil(n_e / 32) with sum_e n_e <= MAX_PICKS * T (every routing row at
+    most MAX_PICKS non-zeros). The kernels' ``dispatch_max_passes`` is the same formula and they truncate the
+    enumeration to it (``clamp_passes``), so a routing that breaks the top-k contract (NaN rows, stale rows past
+    seq_len) yields a flagged, truncated result rather than the 2026-10-27 deadlock."""
     return MAX_PICKS * T // TILE + E
 
 

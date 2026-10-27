@@ -161,3 +161,23 @@ reads single-tile gate|up packets; the pair-unit kernels are stacked-only. The p
 ::test_expert_stream_regions_src` the A/B on a chip. Model knob: `GLM53_REGIONS_DECODE=off | stream | regions`
 (`tt/moe.py`): `stream` serves decode (block op) and 33..256 gathered tokens (dispatch ops) from the regions lists --
 the one-copy configuration, no stacked upload; `regions` forces the regions kernel (A/B).
+
+## Pass budget (2026-10-27)
+
+`P = max_passes(T, E) = MAX_PICKS * T / 32 + E` bounds `sum_e ceil(n_e / 32)` only while every routing row has at most
+`MAX_PICKS` non-zeros. A row that breaks the top-k contract (a NaN / Inf in an unspecified prefill row past `seq_len`
+spreads over every selected column through the fp32 selector matmul: `NaN * 0 = NaN`, `ne(NaN, 0) = 1`) breaks the
+bound, and the (2,4) block hang of 2026-10-27 was that: the down writer clamped its own `n_pass` to `P_MAX` while its
+compute consumed the unclamped metadata page, so the op deadlocked (unpack waiting for pass `P + 1`, the resident
+`cb_h` full, the writer in phase 2). Now `kernels/dispatch_common.hpp` `clamp_passes` truncates the enumeration to the
+budget in expert order right after `pass_bases` in every count-deriving kernel of both ops (stacked and `REGIONS_SRC`
+twins, the `_units` twins; the computes take the clamped counts from the writers' metadata page / mailboxes), the down
+writer pins its `P_MAX` to the formula (`static_assert`), and the gate|up writer sets the pass table's pad word
+`TABLE_FLAG_WORD` (63) to 1 when it clamped (`op.table_clamped`): an over-budget routing yields a truncated, flagged
+result instead of a hang. Upstream, `tt/moe.py` masks the dense routing rows past `seq_len` before `routing_counts`
+(`GLM53_ROUTER_PAD_MASK`, default on: `TtMoE._mask_pad_rows`, an exact 0/1 matmul + `ttnn.where`, bit-identical for the
+valid rows; the traced prefill carries the mask as a per-length input refreshed per prompt) and an eager call reads the
+counts back and refuses an over-budget routing with the call site and the offending rows (`GLM53_DISPATCH_GUARD`,
+default on, never inside a capture). Host tests: `tests/test_dispatch_pass_budget_host.py` (the mirror, the C++ clamp
+built with the host g++, the kernel-source contract, the mask); device: `tests/custom_ops/test_expert_dispatch.py::
+test_expert_dispatch_over_budget_returns`.

@@ -21,6 +21,8 @@ from models.demos.glm53_flash.custom_ops.expert_stream.op import (
     ExpertDispatch,
     bfp4_round,
     bfp8_round,
+    clamp_passes_host,
+    dispatch_passes,
     down_stream_layout,
     ep_base_tensor,
     ep_index_tiles,
@@ -28,6 +30,7 @@ from models.demos.glm53_flash.custom_ops.expert_stream.op import (
     expert_dispatch_golden,
     expert_dispatch_golden_ep,
     gate_up_stream_layout,
+    table_clamped,
     upload_stream_weights,
 )
 from models.demos.glm53_flash.tests.utils import pcc
@@ -105,6 +108,60 @@ def test_expert_dispatch_vs_golden(mesh_device, T, I, E, picks, popular):
         f"(|y| max {y_ref.abs().max():.3f})"
     )
     assert p_act > 0.9999, p_act
+    assert p > 0.9999, p
+
+
+def over_budget_routing(T: int, E: int, kind: str, seed: int) -> torch.Tensor:
+    """A routing that breaks the top-k contract the way the 2026-10-27 (2,4) block hang did: a top-2 routing plus
+    33 rows routed to EVERY expert (``dense``: 72 non-zeros each, what a NaN row becomes after the selector matmul) or
+    33 NaN rows (``nan``: the raw hazard; ``routing_counts`` counts ``NaN != 0`` at every column and the kernels' row
+    scan picks the rows up with a NaN weight)."""
+    r = skewed_routing(T, E, 2, seed=seed).float()
+    r[T - 33 :, :] = 0.5 if kind == "dense" else float("nan")
+    return r.bfloat16()
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("kind", ["dense", "nan"])
+def test_expert_dispatch_over_budget_returns(mesh_device, kind):
+    """An over-budget routing (33 rows x 72 non-zeros at T = 128, E = 72, I = 1024: the block's shapes, P = 104 <
+    the 144+ passes of the raw enumeration) must RETURN: the kernels truncate the enumeration to the budget
+    (``clamp_passes``), flag it in the pass table, and the output of the rows the truncated enumeration still serves
+    equals the truncated golden (the NaN rows' own outputs are NaN by construction and excluded). On the kernels
+    before the budget this case hangs the chip (the triage signature: compute at ``cb_wait_front(cb_a)``, packer at
+    ``cb_reserve_back(cb_h)``, writer in phase 2): run it on the fixed kernels only."""
+    T, I, E = 128, 1024, 72
+    w13, w2, w13_q, w2_q = upload(mesh_device, E, I)
+    op = ExpertDispatch(mesh_device, E, K, I, H, T, groups=GROUPS, down_readers=DOWN_READERS)
+    x = torch.randn(T, K).bfloat16()
+    r = over_budget_routing(T, E, kind, seed=T + I)
+    counts_host = (r != 0).sum(0).tolist()
+    passes_e, _, total, clamped = clamp_passes_host(counts_host, op.P)
+    raw = sum(-(-c // 32) for c in counts_host)
+    assert clamped and total == op.P < raw, (total, raw, op.P)
+    xd, rd = inputs(mesh_device, x, r)
+    x_rm, counts = op.prepare(xd, rd)
+    dev_counts = ttnn.to_torch(counts).float().reshape(-1)[:E].tolist()
+    assert [int(c) for c in dev_counts] == counts_host, "routing_counts on device disagrees with the host (NaN != 0?)"
+    act, table, out = op.alloc(mesh_device)
+    t0 = time.perf_counter()
+    op.forward(x_rm, rd, counts, w13, w2, act, table, out)
+    tab = ttnn.to_torch(table).reshape(op.P, -1).to(torch.int64)  # the readback returns: no deadlock
+    logger.info(f"over-budget {kind}: {raw} raw passes clamped to {op.P} in {(time.perf_counter() - t0) * 1000:.0f} ms")
+    assert table_clamped(tab), "the gate|up writer did not flag the clamp"
+    passes = dispatch_passes(r, p_max=op.P)
+    assert len(passes) == op.P
+    for k, (e, rows) in enumerate(passes):
+        got = (int(tab[k, 0]), int(tab[k, 1]), tab[k, 2 : 2 + len(rows)].tolist())
+        assert got == (len(rows), e, rows), (k, got, (len(rows), e, rows[:8]))
+    _, y_ref, _ = expert_dispatch_golden(x, r, w13_q, w2_q, p_max=op.P)
+    y = ttnn.to_torch(out).float().reshape(T, H)
+    clean = torch.isfinite(y_ref).all(-1)
+    assert int(clean.sum()) >= T - 33
+    assert torch.isfinite(y[clean]).all(), "a clean token's row is not finite"
+    p = pcc(y_ref[clean], y[clean])
+    logger.info(f"over-budget {kind}: {int(clean.sum())} clean rows, out pcc {p:.6f} vs the truncated golden")
     assert p > 0.9999, p
 
 
