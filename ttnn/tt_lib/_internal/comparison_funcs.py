@@ -69,14 +69,14 @@ def get_atol_rtol_pcc(golden, calculated, rtol=1e-05, atol=1e-04):
             logger.warning("One or both tensors are constant (zero std dev). PCC undefined; falling back to allclose.")
             return float(torch.allclose(golden, calculated, rtol=rtol, atol=atol))
 
-        # Two-pass Pearson in float64, as np.ma.corrcoef computes it: the sums are divided by
-        # n - 1 before the variance product, so large float64 inputs overflow no sooner than
-        # there. copy=True keeps the in-place centering from writing into a float64 input.
+        # Two-pass Pearson in float64, as np.ma.corrcoef computes it: each sum is divided by n
+        # before the variance product, so float64 inputs overflow and underflow where they did
+        # with np.ma. copy=True keeps the in-place centering from writing into a float64 input.
         g = golden.detach().flatten().to(torch.float64, copy=True)
         c = calculated.detach().flatten().to(torch.float64, copy=True)
         g -= g.mean()
         c -= c.mean()
-        n = g.numel() - 1
+        n = g.numel()
         covariance = torch.dot(g, c) / n
         cal_pcc = (covariance / torch.sqrt((torch.dot(g, g) / n) * (torch.dot(c, c) / n))).item()
         del g, c
