@@ -92,16 +92,13 @@ void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_c
     if (!is_integer_dtype(input_dtype)) {
         return;
     }
-    // A TYPECAST in a multi-op chain changes the dtype for later ops; this checker only
-    // sees the original tensor dtype, so skip rather than reject a valid post-cast float op.
-    if (op_chain.size() > 1) {
-        for (const auto& op : op_chain) {
-            if (op.type() == UnaryOpType::TYPECAST) {
-                return;
-            }
-        }
-    }
+    // A TYPECAST changes the dtype for the ops after it; this checker only knows the original
+    // tensor dtype, so it stops there rather than reject a valid post-cast float op. The ops
+    // before the cast still run on the integer input and are checked.
     for (const auto& op : op_chain) {
+        if (op.type() == UnaryOpType::TYPECAST) {
+            break;
+        }
         TT_FATAL(
             unary_op_supports_integer_dtype(op.type(), input_dtype),
             "Unary: {} does not support integer input dtype {}",
