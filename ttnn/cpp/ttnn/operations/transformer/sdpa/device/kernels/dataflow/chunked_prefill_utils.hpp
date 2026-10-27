@@ -32,7 +32,7 @@ struct KVPadRotationContext {
  */
 struct ChunkedContext {
     uint32_t q_start_idx_t = 0;  // absolute Q-tile offset of this chunk's Q slab
-    uint32_t ring_index = 0;     // logical ring rotation index for absolute-Q-tile compute
+    uint32_t ring_index = 0;     // Q-slab rank (tensor rank / kv_stripe_split) for absolute-Q-tile compute
     KVPadRotationContext kv_pad_rotation = {};
 };
 
@@ -70,7 +70,7 @@ constexpr uint32_t kRotatedHandoffSemCount = 1;
 constexpr uint32_t kRotatedNoRemainder = ~0u;
 constexpr uint32_t kRotatedReaderIterWords = 2;   // [remainder_start, group_has_remainder]
 constexpr uint32_t kRotatedWriterIterWords = 2;   // [remainder_start, float_dest]
-constexpr uint32_t kRotatedComputeIterWords = 1;  // [remainder_start]
+constexpr uint32_t kRotatedComputeIterWords = 2;  // [remainder_start, group_has_remainder]
 
 struct RotatedQSlots {
     uint32_t base_start = 0;
@@ -85,6 +85,19 @@ struct RotatedQSlots {
         return slot < base_count ? base_start + slot : remainder_start + slot - base_count;
     }
 };
+
+// Flat Q chunk that padded multicast slot `q_iter` (>= owned_count) stands for. The reader decodes it so
+// causal skips match the multicast group; compute decodes the same chunk to drain exactly the K/V entries
+// the reader pushed. Rotated: a member of the last owned unit. Static: the next flat chunk.
+template <bool Rotated>
+constexpr uint32_t padded_slot_flat_q(
+    const RotatedQSlots& slots, uint32_t flat_start, uint32_t owned_count, uint32_t q_iter, uint32_t unit_chunks) {
+    if constexpr (Rotated) {
+        return slots.at(owned_count - unit_chunks + q_iter % unit_chunks);
+    } else {
+        return flat_start + q_iter;
+    }
+}
 
 constexpr uint32_t rotated_iter_base(uint32_t args_base, uint32_t iter_stride, uint32_t ordinal) {
     return args_base + ordinal * iter_stride;
@@ -147,29 +160,24 @@ constexpr uint32_t dummy_kv_chunks_for_phase_alignment(uint32_t processed_chunks
 /**
  * Map a device-local K tile index to its global attention K position. Used by the
  * logical_n skip predicate and the diagonal-stamp mask coords. Under chunked-prefill
- * the local cache packs the per-chunk K region for each chunk back-to-back; each
- * region is q_local_padded_Nt tiles (= Q's per-device extent, since one chunk's Q
- * is one such region), so adjacent local slabs have gaps in global position space.
+ * the local cache packs this source's K region for each chunk back-to-back, so
+ * adjacent local slabs have gaps in global position space. A region is Q's per-device
+ * extent when Q and KV share the ring, and Q's extent / kv_stripe_split under split KV.
  */
 inline uint32_t chunked_kv_global_tile_for_local(
-    uint32_t ring_id, uint32_t local_tile_idx, uint32_t chunk_size_t, uint32_t q_local_padded_Nt) {
-    return (local_tile_idx / q_local_padded_Nt) * chunk_size_t + ring_id * q_local_padded_Nt +
-           (local_tile_idx % q_local_padded_Nt);
+    uint32_t ring_id, uint32_t local_tile_idx, uint32_t chunk_size_t, uint32_t kv_region_Nt) {
+    return (local_tile_idx / kv_region_Nt) * chunk_size_t + ring_id * kv_region_Nt + (local_tile_idx % kv_region_Nt);
 }
 
-template <uint32_t chunk_size_t, uint32_t q_local_padded_Nt>
+template <uint32_t chunk_size_t, uint32_t kv_region_Nt>
 inline uint32_t chunked_kv_global_tile_for_local(uint32_t ring_id, uint32_t local_tile_idx) {
-    return chunked_kv_global_tile_for_local(ring_id, local_tile_idx, chunk_size_t, q_local_padded_Nt);
+    return chunked_kv_global_tile_for_local(ring_id, local_tile_idx, chunk_size_t, kv_region_Nt);
 }
 
-template <
-    bool chunked_enabled,
-    uint32_t kv_local_padded_Nt = 0,
-    uint32_t chunk_size_t = 0,
-    uint32_t q_local_padded_Nt = 0>
+template <bool chunked_enabled, uint32_t kv_local_padded_Nt = 0, uint32_t chunk_size_t = 0, uint32_t kv_region_Nt = 0>
 inline uint32_t kv_global_tile_for_local(uint32_t ring_id, uint32_t local_tile_idx) {
     if constexpr (chunked_enabled) {
-        return chunked_kv_global_tile_for_local<chunk_size_t, q_local_padded_Nt>(ring_id, local_tile_idx);
+        return chunked_kv_global_tile_for_local<chunk_size_t, kv_region_Nt>(ring_id, local_tile_idx);
     } else {
         return ring_id * kv_local_padded_Nt + local_tile_idx;
     }
@@ -180,7 +188,7 @@ template <
     bool chunked_enabled,
     uint32_t kv_local_padded_Nt,
     uint32_t chunk_size_t = 0,
-    uint32_t q_local_padded_Nt = 0>
+    uint32_t kv_region_Nt = 0>
 inline bool kv_chunk_starts_before_logical_end(
     uint32_t ring_id, uint32_t local_k_chunk_start_tile, uint32_t logical_tile_count) {
     if (local_k_chunk_start_tile >= kv_local_padded_Nt) {
@@ -188,12 +196,53 @@ inline bool kv_chunk_starts_before_logical_end(
     }
     // A partial trailing K chunk still returns true here; mask logic handles invalid columns inside it.
     if constexpr (kv_pad_rotation_enabled) {
-        return chunked_kv_global_tile_for_local<chunk_size_t, q_local_padded_Nt>(ring_id, local_k_chunk_start_tile) <
+        return chunked_kv_global_tile_for_local<chunk_size_t, kv_region_Nt>(ring_id, local_k_chunk_start_tile) <
                logical_tile_count;
     } else {
-        return kv_global_tile_for_local<chunked_enabled, kv_local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
+        return kv_global_tile_for_local<chunked_enabled, kv_local_padded_Nt, chunk_size_t, kv_region_Nt>(
                    ring_id, local_k_chunk_start_tile) < logical_tile_count;
     }
+}
+
+// One past the last global tile of this device's Q rows in the current chunk. A K chunk starting at or past it is
+// fully masked for all of them. KV-pad rotation maps the Q slab through pre-/post-wrap segments.
+// Assumes one Q slab per transport rank: split KV (kv_stripe_split > 1) indexes Q slabs by
+// ring_index / kv_stripe_split, so the host keeps dense_causal_skip and K split off for it.
+template <bool kv_pad_rotation_enabled, uint32_t q_local_padded_Nt>
+inline uint32_t chunked_q_global_end_tile(
+    uint32_t logical_nt,
+    uint32_t ring_index,
+    uint32_t ring_size,
+    uint32_t q_pre_wrap_start_tile,
+    uint32_t q_pre_wrap_tile_count,
+    uint32_t q_post_wrap_start_tile,
+    uint32_t q_valid_tile_count) {
+    if constexpr (kv_pad_rotation_enabled) {
+        if (q_valid_tile_count > q_pre_wrap_tile_count) {
+            return q_post_wrap_start_tile + (q_valid_tile_count - q_pre_wrap_tile_count);
+        }
+        return q_pre_wrap_start_tile + q_pre_wrap_tile_count;
+    } else {
+        return logical_nt - q_local_padded_Nt * ring_size + (ring_index + 1) * q_local_padded_Nt;
+    }
+}
+
+// Whether a dense chunked K chunk has any visible key for this device's Q rows. The causal skip never drops chunk 0,
+// so every ring iteration processes a chunk and the last one still normalizes.
+template <
+    bool kv_pad_rotation_enabled,
+    bool chunked_enabled,
+    uint32_t kv_local_padded_Nt,
+    uint32_t chunk_size_t,
+    uint32_t q_local_padded_Nt>
+inline bool chunked_kv_chunk_is_live(
+    uint32_t ring_id, uint32_t k_chunk, uint32_t k_chunk_tiles, uint32_t logical_nt, uint32_t causal_end_nt) {
+    return kv_chunk_starts_before_logical_end<
+        kv_pad_rotation_enabled,
+        chunked_enabled,
+        kv_local_padded_Nt,
+        chunk_size_t,
+        q_local_padded_Nt>(ring_id, k_chunk * k_chunk_tiles, k_chunk == 0 ? logical_nt : causal_end_nt);
 }
 
 constexpr uint32_t KV_PAD_ROTATION_INVALID_TILE = 0xFFFFFFFFu;

@@ -141,9 +141,10 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         v_shape[2],
         N_global);
 
+    // The gather buffer may be oversized; rows past N_local * ring_size are never touched.
     TT_FATAL(
-        N_global == N_local * args.ring_size,
-        "Global sequence length must be equal to local sequence length times ring size. Got global sequence length: "
+        N_global >= N_local * args.ring_size,
+        "Gathered K seq length must be >= local sequence length times ring size. Got global sequence length: "
         "{}, local sequence length: {}, ring size: {}",
         N_global,
         N_local,
@@ -179,13 +180,6 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // Live-value range is a caller contract, unverifiable on host: live logical_n must be >= 1.
     }
 
-    // Check shapes based on ring
-    TT_FATAL(
-        q_shape[2] * args.ring_size == k_shape[2],
-        "Q sequence length times ring size must be equal to K sequence length. Got Q: {}, K: {}, ring_size: {}",
-        q_shape[2],
-        k_shape[2],
-        args.ring_size);
     TT_FATAL(
         k_shape[2] == v_shape[2],
         "K sequence length must be equal to V sequence length. Got K: {}, V: {}",

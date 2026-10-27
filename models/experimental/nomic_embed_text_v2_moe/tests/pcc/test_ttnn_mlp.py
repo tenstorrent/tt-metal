@@ -55,13 +55,12 @@ def test_mlp(device, config, reference, tt_mlp, batch, seqlen):
 
 
 def test_gelu_stays_accurate(device, config, reference, tt_mlp, tt_config, state_dict):
-    """The approximate GELU is a worse fit than bfloat16 itself, so the module must not use it.
+    """The LUT GELU is a worse fit than bfloat16 itself, so the module must not use it.
 
-    ttnn.gelu defaults to the accurate variant, which matches nn.GELU(approximate="none"). The
-    LUT variant measures 2.34e-2 max-abs against exact erf, above the 1.58e-2 bfloat16 noise
-    floor, so it is not swamped by the dtype. The repo's BERT idiom
-    fused_activation=(ttnn.UnaryOpType.GELU, True) selects that LUT; this is the guard against
-    reaching for it later.
+    The module runs the tanh GELU, within 4.7e-4 of exact erf. The LUT variant measures 2.34e-2
+    max-abs against exact erf, above the 1.58e-2 bfloat16 noise floor, so it is not swamped by
+    the dtype. The repo's BERT idiom fused_activation=(ttnn.UnaryOpType.GELU, True) selects that
+    LUT; this is the guard against reaching for it later.
     """
     x = hidden_states(2, 128, config.hidden_size)
     x_tt = to_device(to_block_layout(x), device)

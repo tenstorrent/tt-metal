@@ -8,12 +8,14 @@ from loguru import logger
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.minimax_m3.config import MeshConfig
+from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.substate import substate
 from models.tt_transformers.tt.common import rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
+from .moe import shared_overlap
 from .parallel_embedding import TtParallelEmbedding, cache_name_for, embed_shard_2d
 from .residual import norm_mode, use_sharded_residual
 from .rms_norm import RMSNorm
@@ -116,6 +118,7 @@ class Model:
         layer_indices=None,
         is_first_rank=True,
         is_last_rank=True,
+        overlap_shared_expert=True,
     ):
         """
         Initialize MiniMax-M3 model
@@ -229,6 +232,7 @@ class Model:
                 expert_weight_dtype=expert_weight_dtype,
                 sequence_parallel=sequence_parallel,
                 cache_layer_idx=local_idx,
+                overlap_shared_expert=overlap_shared_expert,
             )
             for local_idx, global_idx in enumerate(self.global_layer_indices)
         ]
@@ -286,6 +290,7 @@ class Model:
             cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_padded_pow2.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
+            cache_dump_mode=CACHE_DUMP_MODE,
         )
 
         # Initialize on-device sampling (supported when padded per-device vocab fits in 64K)
@@ -335,21 +340,24 @@ class Model:
         args.use_topk_logprobs = True
         return args
 
+    def release_sub_device_managers(self):
+        """Remove the MoE overlap sub-device manager (tt/moe/shared_overlap.py). Call before closing the
+        mesh: a manager left registered at close can segfault the teardown. Idempotent; a later forward
+        re-creates it."""
+        shared_overlap.release(self.mesh_device)
+
     def _forward_layers_and_head(
         self,
         hidden_states,
         rope_mats,
         current_pos,
         get_last_token=-1,
-        user_id=0,
         sampling_on_device=False,
-        batch_size=1,
         skip_lm_head=False,
         on_layer_complete=None,
         kv_cache=None,
-        cached_len=0,
         indexed_rope=False,
-        actual_isl=None,
+        chunks=None,
     ):
         """
         Prefill forward pass through decoder layers and final projection.
@@ -364,7 +372,7 @@ class Model:
             rope_mats: RoPE rotation matrices [cos, sin]
             current_pos: Current position (for decode) or None (for prefill)
             kv_cache: Externally-owned MiniMaxKVCache (packed K/V/index_k), shared across layers.
-            cached_len: valid prefix length already in the cache before this chunk (0 = first/only chunk).
+            chunks: the forward's PrefillChunks (tt/prefill_chunk.py); None = one chunk in slot 0 at position 0.
 
         Returns:
             logits: Output logits
@@ -376,11 +384,8 @@ class Model:
                 position_embeddings=rope_mats,
                 position_idx=current_pos,
                 kv_cache=kv_cache,
-                user_id=user_id,
-                batch_size=batch_size,
-                cached_len=cached_len,
                 indexed_rope=indexed_rope,
-                actual_isl=actual_isl,
+                chunks=chunks,
             )
             # Per-layer migration seam (no-op unless a pipeline supplies a callback).
             if on_layer_complete is not None:
@@ -395,24 +400,9 @@ class Model:
         if get_last_token != -1:
             if len(logits.shape) == 3:
                 logits = ttnn.unsqueeze(logits, dim=1)
-            if batch_size > 1:
-                # Batch>1: tokens are concatenated [1,1,B*S,H]. Extract each user's 32-token tile.
-                per_user_seq = logits.shape[2] // batch_size
-                tiles = []
-                for b in range(batch_size):
-                    start = b * per_user_seq + get_last_token
-                    tile = ttnn.slice(logits, (0, 0, start, 0), (1, 1, start + 32, logits.shape[-1]))
-                    tiles.append(tile)
-                logits.deallocate(True)
-                logits = ttnn.concat(tiles, dim=2)  # [1, 1, B*32, H]
-                for t in tiles:
-                    t.deallocate(True)
-            else:
-                logits_sliced = ttnn.slice(
-                    logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1])
-                )
-                logits.deallocate(True)
-                logits = logits_sliced
+            logits_sliced = ttnn.slice(logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1]))
+            logits.deallocate(True)
+            logits = logits_sliced
             hidden_states = logits
 
         if skip_lm_head:
@@ -442,20 +432,18 @@ class Model:
         x,
         rot_mats_global=None,
         rot_mats_local=None,
-        user_id=0,
         get_last_token=-1,
         kv_cache=None,
-        batch_size=1,
         skip_lm_head=False,
         on_layer_complete=None,
-        cached_len=0,
         indexed_rope=False,
-        actual_isl=None,
+        chunks=None,
     ):
         """Prefill forward pass - processes full sequences.
 
-        actual_isl: real (non-pad) tokens in this chunk across the SP axis, or None for a full chunk.
-        Only the MoE layers read it, to bound the gate/dispatch padding config (tt/topk.py).
+        chunks: the forward's PrefillChunks (tt/prefill_chunk.py), one equal block of rows each, or None for
+        one full chunk in slot 0 at position 0. Attention runs per chunk against its slot_id; the MoE layers
+        mask the chunks' pad rows (tt/topk.py).
         """
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
         seq_len = x.shape[-2]
@@ -475,13 +463,10 @@ class Model:
             current_pos=None,  # No current_pos for prefill
             kv_cache=kv_cache,
             get_last_token=get_last_token,
-            user_id=user_id,
-            batch_size=batch_size,
             skip_lm_head=skip_lm_head,
             on_layer_complete=on_layer_complete,
-            cached_len=cached_len,
             indexed_rope=indexed_rope,
-            actual_isl=actual_isl,
+            chunks=chunks,
         )
 
         return logits

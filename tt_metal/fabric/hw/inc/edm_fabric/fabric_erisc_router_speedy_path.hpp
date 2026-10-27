@@ -96,7 +96,8 @@ template <
     typename WorkerInterfaceT,
     typename ReceiverPointersT,
     typename ReceiverChannelT,
-    typename LocalTelemetryT>
+    typename LocalTelemetryT,
+    typename SenderChannelFromReceiverCreditsT>
 FORCE_INLINE bool run_sender_channel_step_speedy(
     SenderChannelT& local_sender_channel,
     WorkerInterfaceT& local_sender_channel_worker_interface,
@@ -104,7 +105,7 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     ReceiverChannelT& remote_receiver_channel,
     bool& channel_connection_established,
     uint32_t sender_channel_free_slots_stream_id,
-    SenderChannelFromReceiverCredits& sender_channel_from_receiver_credits,
+    SenderChannelFromReceiverCreditsT& sender_channel_from_receiver_credits,
     PerfTelemetryRecorder& perf_telemetry_recorder,
     LocalTelemetryT& local_fabric_telemetry,
     SpeedySenderState& sender_state) {
@@ -116,7 +117,7 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
+        can_send = can_send && !SenderLinkTransport::is_busy();
     }
 
     if (can_send) {
@@ -130,24 +131,33 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             uint32_t src_addr = local_sender_channel.get_cached_next_buffer_slot_addr();
 
             const size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
+            record_sender_channel_usage(sender_channel_index, payload_size_bytes);
 
-            bool busy = internal_::eth_txq_is_busy(sender_txq_id);
+            // The far end is not necessarily a speedy receiver: channel trimming can pair this
+            // sender with a normal receiver (an inter-mesh terminal, or a forwarding router), and
+            // that receiver returns credits to the channel named in the header. Workers never
+            // write this byte, so it holds whatever the header pool last held.
+            if constexpr (!skip_src_ch_id_update) {
+                pkt_header->src_ch_id = sender_channel_index;
+            }
+
+            bool busy = SenderLinkTransport::is_busy();
 
             const auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
 
             if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
                 while (busy) {
-                    busy = internal_::eth_txq_is_busy(sender_txq_id);
+                    busy = SenderLinkTransport::is_busy();
                 }
             }
-            internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
+            SenderLinkTransport::send_packet(src_addr, dest_addr, payload_size_bytes);
 
             // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload
             // and sync messages)
             local_sender_channel_worker_interface.template update_write_counter_for_send<false /*SKIP_LIVENESS*/>();
 
             // Advance receiver buffer pointers
-            busy = internal_::eth_txq_is_busy(sender_txq_id);
+            busy = SenderLinkTransport::is_busy();
             outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_pointer();
             local_sender_channel.advance_to_next_cached_buffer_slot_addr();
             remote_receiver_num_free_slots--;
@@ -155,9 +165,9 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
             while (busy) {
-                busy = internal_::eth_txq_is_busy(sender_txq_id);
+                busy = SenderLinkTransport::is_busy();
             };
-            remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+            SenderLinkTransport::remote_update_ptr_val<to_receiver_pkts_sent_id>(1U);
         }
         sender_state.sender_amort_counter++;
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -235,14 +245,15 @@ template <
     typename ReceiverChannelPointersT,
     typename LocalRelayInterfaceT,
     typename LocalTelemetryT,
-    size_t VC_ID>
+    size_t VC_ID,
+    typename ReceiverChannelResponseCreditSenderT>
 FORCE_INLINE bool run_receiver_channel_step_speedy(
     ReceiverChannelBufferT& local_receiver_channel,
     LocalRelayInterfaceT& local_relay_interface,
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
-    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
+    ReceiverChannelResponseCreditSenderT& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry,
     SpeedyReceiverState<VC_ID>& receiver_state) {

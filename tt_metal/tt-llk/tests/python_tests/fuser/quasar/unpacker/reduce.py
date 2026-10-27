@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.unpack import unpack_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource, bfd_current
+from fuser.operand import BfdResource
 
 
 class ReduceUnpacker(Unpacker):
@@ -62,18 +62,20 @@ class ReduceUnpacker(Unpacker):
         block: BlockData,
     ) -> str:
         bfd_program = compute_unit.src_a.bfd_alloc_and_program(
-            BfdResource.UNP0
-        ) + compute_unit.src_b.bfd_alloc_and_program(BfdResource.UNP1)
-        id_a = bfd_current(BfdResource.UNP0)
-        id_b = bfd_current(BfdResource.UNP1)
+            BfdResource.UNP0, result_name="bfd_a"
+        ) + compute_unit.src_b.bfd_alloc_and_program(
+            BfdResource.UNP1, result_name="bfd_b"
+        )
         reduce_dim = self.reduce_dim.cpp_enum_value
         reduce_pool = self.reduce_pool.cpp_enum_value
 
         return (
-            bfd_program + f"_llk_unpack_reduce_init_<{reduce_pool}, {reduce_dim}>"
-            f"({id_a}, {id_b}, "
+            "{\n"
+            + bfd_program
+            + f"_llk_unpack_reduce_init_<{reduce_pool}, {reduce_dim}>"
+            "(bfd_a, bfd_b, "
             f"{compute_unit.src_a.tile_shape.cpp_value}, "
-            f"1);\n"
+            "1);\n}\n"
         )
 
     def unpack(

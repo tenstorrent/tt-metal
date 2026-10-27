@@ -6,6 +6,7 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -30,6 +31,16 @@
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
+namespace {
+// Quasar has one NOC and no torus: a multicast rectangle always runs low corner to high (see #48552).
+void quasar_ascending_mcast_rect(tt::tt_metal::CoreCoord& start, tt::tt_metal::CoreCoord& end) {
+    const tt::tt_metal::CoreCoord lo{std::min(start.x, end.x), std::min(start.y, end.y)};
+    const tt::tt_metal::CoreCoord hi{std::max(start.x, end.x), std::max(start.y, end.y)};
+    start = lo;
+    end = hi;
+}
+}  // namespace
+
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
@@ -51,8 +62,8 @@ namespace reuse_mcast_optimized_helpers {
 // create_program_artifacts port (the Metal 2.0 builder in the anonymous namespace below replaces it).
 // [[maybe_unused]] suppresses -Wunused-function pending removal in a follow-up.
 [[maybe_unused]] static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
-    tt::tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    const tt::tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -111,11 +122,9 @@ namespace reuse_mcast_optimized_helpers {
 
     uint32_t num_blocks = K / in0_block_w;
 
-    // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
-    // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
-    // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
-    // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_mesh.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -148,7 +157,10 @@ namespace reuse_mcast_optimized_helpers {
     uint32_t in1_aligned_tile_size =
         in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -275,7 +287,7 @@ namespace reuse_mcast_optimized_helpers {
     CoreRange all_cores(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
-    const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
+    const auto& cores = tt::tt_metal::grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
     //////////////////////////////////////////////////////////////////////////////////////////
     //       IN0 SENDER (interleaved only) and IN1 SENDER (both interleaved and sharded)
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -1197,6 +1209,10 @@ namespace reuse_mcast_optimized_helpers {
             std::swap(in0_mcast_start, in1_mcast_end);
             std::swap(in0_mcast_end, in1_mcast_start);
         }
+        if (device.arch() == tt::ARCH::QUASAR) {
+            quasar_ascending_mcast_rect(in0_mcast_start, in0_mcast_end);
+            quasar_ascending_mcast_rect(in1_mcast_start, in1_mcast_end);
+        }
 
         // in0 sender
         if (in0_block_sharded) {
@@ -1551,8 +1567,8 @@ namespace reuse_mcast_optimized_helpers {
 ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>
 create_program_mcast_in0_in1(
     tt::tt_metal::Program& program,
-    tt::tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    const tt::tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -1611,11 +1627,9 @@ create_program_mcast_in0_in1(
 
     uint32_t num_blocks = K / in0_block_w;
 
-    // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
-    // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
-    // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
-    // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_mesh.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -1644,7 +1658,10 @@ create_program_mcast_in0_in1(
         B,
         per_core_M * per_core_N,
         B * per_core_M * per_core_N);
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -1782,7 +1799,7 @@ create_program_mcast_in0_in1(
     CoreRange all_cores(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
-    const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
+    const auto& cores = tt::tt_metal::grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
     //////////////////////////////////////////////////////////////////////////////////////////
     //       IN0 SENDER (interleaved only) and IN1 SENDER (both interleaved and sharded)
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -2610,13 +2627,13 @@ create_program_mcast_in0_in1(
 
     uint32_t in0_end_idx = num_blocks_y - 1;
     uint32_t in1_end_idx = num_blocks_x - 1;
-    const auto& in0_sender_interleaved_cores = grid_to_cores(
+    const auto& in0_sender_interleaved_cores = tt::tt_metal::grid_to_cores(
         in0_sender_interleaved.start_coord, in0_sender_interleaved.end_coord, true);  // Only used for interleaved in0
-    const auto& in1_sender_cores = grid_to_cores(in1_sender.start_coord, in1_sender.end_coord, true);
+    const auto& in1_sender_cores = tt::tt_metal::grid_to_cores(in1_sender.start_coord, in1_sender.end_coord, true);
     const auto& in1_receiver_cores = corerange_to_cores(in1_receiver, std::nullopt, true);
     std::vector<CoreCoord> in1_receiver_other_cores;
     if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
-        in1_receiver_other_cores = grid_to_cores(
+        in1_receiver_other_cores = tt::tt_metal::grid_to_cores(
             in0_receiver_in1_receiver_interleaved_other_cores.value().start_coord,
             in0_receiver_in1_receiver_interleaved_other_cores.value().end_coord,
             true);
@@ -2669,6 +2686,10 @@ create_program_mcast_in0_in1(
             std::swap(in0_mcast_sender, in1_mcast_sender);
             std::swap(in0_mcast_start, in1_mcast_end);
             std::swap(in0_mcast_end, in1_mcast_start);
+        }
+        if (device.arch() == tt::ARCH::QUASAR) {
+            quasar_ascending_mcast_rect(in0_mcast_start, in0_mcast_end);
+            quasar_ascending_mcast_rect(in1_mcast_start, in1_mcast_end);
         }
 
         // in0 sender
@@ -3286,8 +3307,8 @@ m2::KernelSpec make_compute_kernel(
 // ---------------------------------------------------------------------------------------------------
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     const ttnn::Tensor& a,
-    tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -3341,7 +3362,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
 
     uint32_t num_blocks = K / in0_block_w;
 
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_tensor.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
@@ -3367,7 +3390,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     uint32_t in1_aligned_tile_size =
         in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -3485,7 +3511,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
     CoreRangeSet all_cores_set(all_cores);
-    const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
+    const auto& cores = tt::tt_metal::grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
 
     //////////////////////////////////////////////////////////////////////////////////////////
     //       IN0 SENDER (interleaved only) and IN1 SENDER (both interleaved and sharded)
@@ -3657,6 +3683,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         }
     }
     if (output_is_sharded) {
+        // The in1 writer pops batch * out_shard_tiles tiles in one wait_front/pop_front call, which takes a uint16_t.
+        TT_FATAL(
+            B * out_shard_tiles <= std::numeric_limits<uint16_t>::max(),
+            "matmul_multicore_reuse_mcast_2d: a sharded output of {} tiles per core exceeds the maximum of {} "
+            "supported by this program factory",
+            B * out_shard_tiles,
+            std::numeric_limits<uint16_t>::max());
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
@@ -4041,6 +4074,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             {"in1_mcast_num_cores", num_blocks_y - 1},
             {"KtNt", K * N},
             {"batch", B},
+            {"out_block_num_tiles", out_block_tiles},
             {"bcast_B", (uint32_t)bcast_batch},
             {"batchB", 0u},
             {"sparsity_pagesize", 0u},
@@ -4149,6 +4183,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             {"num_blocks_w_dim", out_num_blocks_x},
             {"num_blocks_h_dim", out_num_blocks_y},
             {"batch", B},
+            {"out_block_num_tiles", out_block_tiles},
             {"out_tensor_stride_w", 1u},
             {"out_tensor_stride_h", N},
             {"out_tensor_next_subblock_stride_w", out_subblock_w},
@@ -4453,6 +4488,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             std::swap(in0_mcast_sender, in1_mcast_sender);
             std::swap(in0_mcast_start, in1_mcast_end);
             std::swap(in0_mcast_end, in1_mcast_start);
+        }
+        if (device.arch() == tt::ARCH::QUASAR) {
+            quasar_ascending_mcast_rect(in0_mcast_start, in0_mcast_end);
+            quasar_ascending_mcast_rect(in1_mcast_start, in1_mcast_end);
         }
 
         // in0 sender / receiver
@@ -4848,7 +4887,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::distributed::MeshDevice* device = a.device();
+    const tt_metal::distributed::MeshDevice& device = a.mesh_tensor().device();
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -4891,7 +4930,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
         in1_tile.get_width());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -4934,7 +4973,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     CoreCoord sub_device_start_core = {0, 0};
     if (operation_attributes.sub_device_id.has_value()) {
-        auto sub_device_cores = device->worker_cores(
+        auto sub_device_cores = device.worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
         auto bbox = sub_device_cores.bounding_box();
         sub_device_start_core = bbox.start_coord;
@@ -4945,7 +4984,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
         program,
-        *device,
+        device,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode,
@@ -5069,7 +5108,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::distributed::MeshDevice& device = in0_tensor.mutable_device();
+    const tt_metal::distributed::MeshDevice& device = in0_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device.arch(), compute_kernel_config);

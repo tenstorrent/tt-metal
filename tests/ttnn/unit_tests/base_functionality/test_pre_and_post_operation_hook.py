@@ -8,8 +8,8 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_wormhole_b0, is_blackhole
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0, is_blackhole
+from tt_py_test_utils_common.utility_functions import torch_random
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")

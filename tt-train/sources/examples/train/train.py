@@ -174,6 +174,16 @@ class CausalLMDataset:
         }
 
 
+def _report_fsdp_replicated(model: Any, patterns: list[str]) -> None:
+    """Print how many params `fsdp_replicate_params` kept replicated, and any pattern that matched nothing."""
+    replicated = ttml.fsdp.replicated_parameters(model)
+    if replicated:
+        print(f"FSDP: {len(replicated)} parameter(s) kept replicated", flush=True)
+    unmatched = ttml.fsdp.unmatched_replicate_patterns(model, patterns)
+    if unmatched:
+        print(f"WARNING: fsdp_replicate_params: no parameter matches {unmatched}", flush=True)
+
+
 def build_dataset(data_path: str, seq_len: int, vocab_size: int) -> tuple[CausalLMDataset, CharTokenizer | None]:
     """Build (dataset, tokenizer). `.yaml`/`.yml` paths = pre-tokenized; otherwise plain text + char tokenizer."""
     is_pretokenized = data_path.endswith((".yaml", ".yml"))
@@ -204,6 +214,15 @@ def build_dataset(data_path: str, seq_len: int, vocab_size: int) -> tuple[Causal
         )
     tokens = np.array(tokenizer.encode(text), dtype=np.uint32)
     return CausalLMDataset(tokens, seq_len), tokenizer
+
+
+# ── Data parallelism ──────────────────────────────────────────────────────────
+
+
+def resolve_data_parallel_axes(mesh: Any) -> tuple[list[str], int]:
+    """Return the mesh axes the batch is sharded over and the total data-parallel size."""
+    data_axes = [a for a in ("dp", "fsdp") if mesh.has_axis(a) and mesh.axis_size(a) > 1]
+    return data_axes, int(np.prod([mesh.axis_size(a) for a in data_axes]))
 
 
 # ── LR schedule ───────────────────────────────────────────────────────────────
@@ -328,7 +347,7 @@ def generate(
     prompt: str,
     max_new_tokens: int,
     sequence_length: int,
-    mask: ttml.autograd.Tensor,
+    mask: ttml.autograd.Tensor | None,
     temperature: float = 1.0,
     top_k: int = 0,
 ) -> tuple[str, float, float]:
@@ -369,7 +388,9 @@ def generate(
     for step in range(max_new_tokens):
         model_input = ttml.autograd.create_tensor(input_ttnn, requires_grad=False)
         # Clone the mask each step; the autograd graph reset below invalidates prior tensors.
-        mask_for_model = ttml.autograd.create_tensor(ttnn.clone(mask.get_value()), requires_grad=False)
+        mask_for_model = (
+            None if mask is None else ttml.autograd.create_tensor(ttnn.clone(mask.get_value()), requires_grad=False)
+        )
         logits = model(model_input, mask_for_model)
 
         last_logits = _extract_last_step_logits(logits)
@@ -472,9 +493,11 @@ def run_training(
     # owns sharding, not the trainer).
     if device_cfg.enable_fsdp:
         print("Sharding model...", flush=True)
+        replicate = device_cfg.fsdp_replicate_params
         for block in model.blocks:
-            ttml.fsdp.fully_shard(block)
-        ttml.fsdp.fully_shard(model)
+            ttml.fsdp.fully_shard(block, replicate=replicate)
+        ttml.fsdp.fully_shard(model, replicate=replicate)
+        _report_fsdp_replicated(model, replicate)
 
     # Materialize after fully_shard rewrote the mappers, so weights allocate already-sharded.
     if lazy_init:
@@ -502,17 +525,16 @@ def run_training(
     mesh = ttml.mesh()
     # Shard the batch across the data-parallel axes (dp and/or fsdp): one axis → shard along it;
     # HSDP (both) → each device gets a unique B/(D*F) slice; HSDP+TP is unsupported.
-    data_axes = [a for a in ("dp", "fsdp") if mesh.has_axis(a) and mesh.axis_size(a) > 1]
+    data_axes, data_parallel_size = resolve_data_parallel_axes(mesh)
     if len(data_axes) == 1:
         mapper = mesh.axis_mapper(data_axes[0], tdim=0)
     elif len(data_axes) >= 2:
         if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
             raise NotImplementedError("HSDP + TP batch sharding is not supported.")
-        flat_size = int(np.prod([mesh.axis_size(a) for a in data_axes]))
-        if training_cfg.batch_size % flat_size != 0:
+        if training_cfg.batch_size % data_parallel_size != 0:
             raise ValueError(
                 f"HSDP batch sharding requires batch_size ({training_cfg.batch_size}) to be "
-                f"divisible by D*F ({flat_size}); got data_axes={data_axes}."
+                f"divisible by D*F ({data_parallel_size}); got data_axes={data_axes}."
             )
         device = ttml.autograd.AutoContext.get_instance().get_device()
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, None)
@@ -542,7 +564,7 @@ def run_training(
         callbacks.append(MoECallback(args.log_expert_activations))
 
     # Metrics.
-    callbacks.append(ThroughputCallback(flops_per_token, peak_tflops, log_interval=1))
+    callbacks.append(ThroughputCallback(flops_per_token, peak_tflops, data_parallel_size, log_interval=1))
     if steps_per_epoch > 0:
         callbacks.append(EpochCallback(steps_per_epoch))
     avg_loss_cb = AverageLossCallback()
@@ -721,9 +743,12 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
     model, tokenizer, model_cfg, loaded_step = load_for_inference(args.model_path)
     seq_len = model_cfg.max_sequence_length
 
-    causal_mask = ttml.autograd.Tensor.from_numpy(
-        build_causal_mask(seq_len), layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-    )
+    # As in training: only DeepSeek's composite SDPA needs the mask; the fused SDPA applies it itself.
+    causal_mask = None
+    if model_cfg.model_type == "deepseek":
+        causal_mask = ttml.autograd.Tensor.from_numpy(
+            build_causal_mask(seq_len), layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
+        )
 
     total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
     padded_vocab = round_up_to_tile(model_cfg.vocab_size, 32)

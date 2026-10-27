@@ -56,6 +56,7 @@ class TtMiniMaxReduce(LightweightModule):
         weights: Optional[ttnn.Tensor] = None,
         indices: Optional[ttnn.Tensor] = None,
         expert_dispatch_table: Optional[ttnn.Tensor] = None,
+        addend: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -66,6 +67,10 @@ class TtMiniMaxReduce(LightweightModule):
             expert_dispatch_table: expert id -> chip id, INT32, sharded per dispatch group. Together
                 with `indices` this is what lets the kernel SKIP the ~3 of 4 slots belonging to other
                 dispatch groups, so the untouched slots are never read.
+            addend: optional per-device partial [.., seq_len, emb_dim] added to the weighted sum before
+                the reduce-scatter (the shared expert's un-reduced down projection). Mathematically
+                equivalent (the reduce-scatter is linear); not bit-identical, the added bf16 add rounds
+                before the collective. The caller keeps ownership.
 
         Returns:
             [seq_len, emb_dim / num_chips_in_cluster_axis]
@@ -91,6 +96,9 @@ class TtMiniMaxReduce(LightweightModule):
             logger.warning("TtMiniMaxReduce: weights not provided, using unweighted sum")
             summed = ttnn.sum(combine_output, dim=self.topk_dim)
 
+        if addend is not None:
+            summed = _add_partial(summed, addend)
+
         if self.mesh_device.shape[self.cluster_axis] <= 1:
             return summed
 
@@ -103,3 +111,14 @@ class TtMiniMaxReduce(LightweightModule):
             num_links=self.num_links,
             topology=self.topology,
         )
+
+
+def _add_partial(summed, addend):
+    """summed + addend in summed's shape, dtype and DRAM layout; frees summed."""
+    assert addend.layout == ttnn.TILE_LAYOUT, f"addend must be TILE, got {addend.layout}"
+    if tuple(addend.shape) != tuple(summed.shape):
+        assert tuple(addend.shape)[-2:] == tuple(summed.shape)[-2:], f"addend {addend.shape} vs summed {summed.shape}"
+        addend = ttnn.reshape(addend, summed.shape)
+    out = ttnn.add(summed, addend, dtype=summed.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(summed)
+    return out

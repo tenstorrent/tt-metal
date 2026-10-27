@@ -410,7 +410,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeTransposeWHDest) {
     unit_tests::compute::transpose::run_single_core_transpose(*this->devices_.at(0), test_config);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat32) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat32) {
     // Tests SyncHalf and SyncFull
     for (const bool dst_full_sync_en : {false, true}) {
         SCOPED_TRACE(dst_full_sync_en ? "dst_full_sync_en=true (SyncFull)" : "dst_full_sync_en=false (SyncHalf)");
@@ -428,7 +428,41 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat32) {
     }
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat16b) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarTransposeWHFloat32) {
+    for (const bool dst_full_sync_en : {false, true}) {
+        SCOPED_TRACE(dst_full_sync_en ? "dst_full_sync_en=true (SyncFull)" : "dst_full_sync_en=false (SyncHalf)");
+        unit_tests::compute::transpose::TransposeConfig test_config = {
+            .short_init = false,
+            .transpose_dest = false,
+            .single_tile_size = constants::TILE_HW * sizeof(std::uint32_t),
+            .shape = {1, 1, 64, 64},
+            .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
+            .data_format = tt::DataFormat::Float32,
+            .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest = true,
+        };
+        unit_tests::compute::transpose::run_single_core_transpose(this->device(), test_config);
+    }
+}
+
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarTransposeWHInt32) {
+    for (const bool dst_full_sync_en : {false, true}) {
+        SCOPED_TRACE(dst_full_sync_en ? "dst_full_sync_en=true (SyncFull)" : "dst_full_sync_en=false (SyncHalf)");
+        unit_tests::compute::transpose::TransposeConfig test_config = {
+            .short_init = false,
+            .transpose_dest = false,
+            .single_tile_size = constants::TILE_HW * sizeof(std::uint32_t),
+            .shape = {1, 1, 64, 64},
+            .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
+            .data_format = tt::DataFormat::Int32,
+            .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest = true,
+        };
+        unit_tests::compute::transpose::run_single_core_transpose(this->device(), test_config);
+    }
+}
+
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat16b) {
     // 16-bit dest (EN_32BIT_DEST=false): exercises the implied-math-format-disabled config path.
     // Tests SyncHalf and SyncFull
     for (const bool dst_full_sync_en : {false, true}) {

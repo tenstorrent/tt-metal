@@ -55,7 +55,13 @@ def _head_sha():
 @torch.no_grad()
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("config_name", ["nuscenes_base"])
-@pytest.mark.parametrize("bev_size", [(100, 100)])
+@pytest.mark.parametrize(
+    "bev_size",
+    [
+        pytest.param((100, 100), id="bev_100x100"),
+        pytest.param((200, 200), id="bev_200x200"),
+    ],
+)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("expected_pcc", [0.997])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
@@ -167,7 +173,7 @@ def test_bevformer_layer_perf(
         camera_features.permute(2, 0, 1, 3), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
     tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    rebatch_plan = build_rebatch_plan(tt_points_cam, tt_bev_mask, embed_dims, device)
+    rebatch_plan = build_rebatch_plan(tt_points_cam, tt_bev_mask, device)
 
     def op_fn():
         return tt_model(

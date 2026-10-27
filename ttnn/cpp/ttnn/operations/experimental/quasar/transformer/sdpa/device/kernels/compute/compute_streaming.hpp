@@ -27,7 +27,7 @@
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 // reduce_trigger uses a packer->unpacker semaphore handshake to start the reduce early and skip the
 // input DFB wait. Quasar has no such handshake, so it stays disabled there and the normal DFB
@@ -2532,19 +2532,23 @@ void sdpa_ring_v2(
             continue;
         }
 
-        ttnn::operations::transformer::sdpa::ring_joint::SlidingQWorkPlan sliding_q_plan;
+        constexpr uint32_t sliding_max_source_ranges =
+            ttnn::operations::transformer::sdpa::ring_joint::sliding_q_work_plan_source_ranges(
+                ttnn::operations::transformer::sdpa::ring_joint::sliding_max_halo_hops, 1);
+        ttnn::operations::transformer::sdpa::ring_joint::SlidingQWorkPlan<sliding_max_source_ranges> sliding_q_plan;
         if constexpr (has_sliding_window) {
-            sliding_q_plan = ttnn::operations::transformer::sdpa::ring_joint::build_sliding_q_work_plan(
-                q_chunk * Sq_chunk_t,
-                Sq_chunk_t,
-                chunked.ring_index,
-                q_local_padded_Nt,
-                ring_size,
-                sliding_window_size,
-                TILE_HEIGHT,
-                local_padded_Nt,
-                Sk_chunk_t,
-                logical_nt);
+            sliding_q_plan =
+                ttnn::operations::transformer::sdpa::ring_joint::build_sliding_q_work_plan<sliding_max_source_ranges>(
+                    q_chunk * Sq_chunk_t,
+                    Sq_chunk_t,
+                    chunked.ring_index,
+                    q_local_padded_Nt,
+                    ring_size,
+                    sliding_window_size,
+                    TILE_HEIGHT,
+                    local_padded_Nt,
+                    Sk_chunk_t,
+                    logical_nt);
             ASSERT(sliding_q_plan.is_valid);
             ASSERT(sliding_q_plan.total_k_chunk_count > 0);
         }

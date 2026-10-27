@@ -16,6 +16,7 @@ struct AdamWConfig {
     float epsilon{1e-8F};
     float weight_decay{1e-2F};
     bool amsgrad{false};
+    // Applies to bf16 parameters only: an fp32 parameter keeps the low bits that rounding would lose.
     bool stochastic_rounding{false};
     // Skip weight decay on 1-D params (RMSNorm gains, biases); standard decoupled-AdamW behavior.
     bool weight_decay_skip_1d{false};

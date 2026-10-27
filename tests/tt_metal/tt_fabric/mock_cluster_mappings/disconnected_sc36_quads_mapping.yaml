@@ -1,0 +1,11 @@
+# Synthetic disconnected cluster (#56762): one revC subtorus quad each from SC36 aisle D and SC24 virtu, same
+# revision (so both match the PGD) but different systems, so they share no ethernet links.
+rank_to_cluster_mock_cluster_desc:
+  0: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_cluster_desc/SC36_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-120-d03u02_rank_32.yaml"
+  1: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_cluster_desc/SC36_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-120-d03u08_rank_33.yaml"
+  2: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_cluster_desc/SC36_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-120-d03u14_rank_34.yaml"
+  3: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_cluster_desc/SC36_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-120-d03u20_rank_35.yaml"
+  4: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_virtu/SC24_32x4_revC_subtorus_virtu_cluster_desc/SC24_32x4_revC_subtorus_virtu_cluster_desc_bg-ale22-r01u08-1_rank_0.yaml"
+  5: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_virtu/SC24_32x4_revC_subtorus_virtu_cluster_desc/SC24_32x4_revC_subtorus_virtu_cluster_desc_bg-ale22-r02u08-2_rank_1.yaml"
+  6: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_virtu/SC24_32x4_revC_subtorus_virtu_cluster_desc/SC24_32x4_revC_subtorus_virtu_cluster_desc_bg-ale22-r03u08-3_rank_2.yaml"
+  7: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_virtu/SC24_32x4_revC_subtorus_virtu_cluster_desc/SC24_32x4_revC_subtorus_virtu_cluster_desc_bg-ale22-r04u08-4_rank_3.yaml"

@@ -13,6 +13,7 @@ import ttnn
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
+    _paged_fill_cache,
     apply_allreduce,
     apply_output_projection,
     apply_per_head_norm,
@@ -34,6 +35,16 @@ from .weights import AttentionWeights
 # Populated on the first (un-traced compile) call; inside trace capture the
 # probe is skipped entirely.
 _Q_SHARDED_MEM_CACHE: dict = {}
+
+
+def _sdpa_max_cores_per_head_kwargs() -> dict:
+    """GEMMA4_SDPA_MAX_CORES_PER_HEAD=N pins the decode SDPA per-(row, head) core count. The op
+    splits its cores per padded row, so each decode graph (bucket) reduces a row in a different
+    order; pinning N to the widest graph's split (grid / (32 * kv heads per device)) makes every
+    graph reduce identically, at the cost of a lone row's attention speed at long context.
+    Unset (default) keeps the op's own cap (tenstorrent/tt-metal#59300)."""
+    v = os.environ.get("GEMMA4_SDPA_MAX_CORES_PER_HEAD", "")
+    return {"max_cores_per_head_batch": int(v)} if v else {}
 
 
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
@@ -139,12 +150,18 @@ def decode_forward(
         # q*cos + rotate_half(q)*sin (numerically equivalent — isolation PCC
         # ~0.99999 vs the fused op and the HF reference — but a few ops costlier).
         batch = tt_q.shape[1]
-        if batch > 1:
+        # The fused op and the elementwise form agree to PCC ~0.99999, not bitwise. With decode
+        # graphs per batch size (GEMMA4_DECODE_WARMUP_BATCHES) a request decoded in the batch-1
+        # graph then sees different Q/K than the same request in a wider graph, which breaks
+        # seeded reproducibility (tt-metal#59300). GEMMA4_ROPE_PERUSER_B1=1 keeps every graph on
+        # the elementwise form; off by default until measured.
+        peruser_at_b1 = os.environ.get("GEMMA4_ROPE_PERUSER_B1", "0") == "1"
+        if batch > 1 or peruser_at_b1:
             cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
             sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
 
         def _rope(t):
-            if batch == 1:
+            if batch == 1 and not peruser_at_b1:
                 return apply_rope(t, cos_pos, sin_pos, token_index=0)
             return apply_rope_decode_peruser(t, cos_b, sin_b)
 
@@ -298,6 +315,7 @@ def decode_forward(
         q_chunk_size=32,
         k_chunk_size=64,
         exp_approx_mode=False,
+        **_sdpa_max_cores_per_head_kwargs(),
     )
 
     if page_table is not None:
@@ -574,7 +592,7 @@ def _packed_fill_kv_loopfree_embed(cache, staging, new_seq, embed_idx, hot_pt):
 
     # ② persist updated hot blocks for next step, then ③ one fill launch.
     ttnn.assign(merged, staging)
-    ttnn.experimental.paged_fill_cache(cache, merged, hot_pt, batch_idx=0)
+    _paged_fill_cache(cache, merged, hot_pt, batch_idx=0)
     ttnn.deallocate(merged)
 
 

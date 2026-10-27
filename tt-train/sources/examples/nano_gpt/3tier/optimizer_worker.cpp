@@ -82,13 +82,13 @@ int main(int argc, char **argv) {
     ttml::autograd::ctx().initialize_socket_manager(config.socket_type);
     auto &socket_manager = ttml::autograd::ctx().get_socket_manager();
 
-    auto [steps_per_dataset, vocab_size] = three_tier_arch::get_steps_per_dataset_and_vocab_size(config);
+    auto [effective_max_steps, vocab_size] = three_tier_arch::get_effective_max_steps_and_vocab_size(config);
     fmt::println(
-        "[optimizer] Rank {}: Epochs {}: Steps per dataset: {} max steps: {}",
+        "[optimizer] Rank {}: Effective max steps {} (max_steps {}, num_epochs {})",
         distributed_ctx->rank(),
-        config.num_epochs,
-        steps_per_dataset,
-        config.max_steps);
+        effective_max_steps,
+        config.max_steps,
+        config.num_epochs);
 
     auto *device = &ctx.get_device();
 
@@ -135,20 +135,10 @@ int main(int argc, char **argv) {
     auto aggregator_and_optimizer_ctx = distributed_ctx->create_sub_context(aggregator_and_optimizer_ranks);
     send_weights_to_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
 
-    uint32_t global_step = 0;
-    for (uint32_t epoch = 0; config.num_epochs == 0 || epoch < config.num_epochs; ++epoch) {
-        for (uint32_t step = 0; step < steps_per_dataset; ++step, ++global_step) {
-            receive_gradients_from_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
-            optimizer->step();
-            send_weights_to_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
-            if (global_step >= config.max_steps) {
-                break;
-            }
-        }
-        if (global_step >= config.max_steps) {
-            break;
-        }
-        fmt::print("[aggregator] Rank {}: Training epoch {} finished\n", distributed_ctx->rank(), epoch);
+    for (uint32_t step = 0; step < effective_max_steps; ++step) {
+        receive_gradients_from_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
+        optimizer->step();
+        send_weights_to_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
     }
 
     fmt::print("[aggregator] Rank {}: Training finished\n", distributed_ctx->rank());

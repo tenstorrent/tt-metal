@@ -225,7 +225,8 @@ tt::tt_metal::TensorSpec GridSampleOperation::compute_output_specs(
                 grid_points_per_shard = grid_shard_spec.shape[0];
             } else {
                 // Case 2: Grid is not sharded - create sharding based on grid dimensions
-                const uint32_t total_grid_points = grid_padded_shape[1] * grid_padded_shape[2];  // H * W
+                const uint32_t total_grid_points =
+                    grid_padded_shape[0] * grid_padded_shape[1] * grid_padded_shape[2];  // N * H * W
 
                 // Get device compute grid for sharding
                 tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();

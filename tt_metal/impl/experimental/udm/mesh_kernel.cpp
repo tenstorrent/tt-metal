@@ -5,7 +5,6 @@
 #include <tt-metalium/experimental/udm/mesh_kernel.hpp>
 #include <tt-metalium/experimental/udm/mesh_builder.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <umd/device/types/arch.hpp>
@@ -33,7 +32,7 @@ MeshKernelHandle CreateMeshKernel(
     auto grid_to_cores = builder.get_grid_core_range_set_from_gcores(gcores);
 
     // Check for Wormhole 2-RISC UDM restriction before creating any kernels
-    auto arch = tt::tt_metal::hal::get_arch();
+    auto arch = builder.mesh_device()->arch();
     bool is_wormhole = (arch == tt::ARCH::WORMHOLE_B0);
     bool is_dm_kernel = std::holds_alternative<tt::tt_metal::DataMovementConfig>(config);
 

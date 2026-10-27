@@ -6,21 +6,22 @@ from typing import Union
 
 
 import ttnn
+from ttnn.operations.golden_common import golden_to_output_dtype
 
 
-def _golden_function(input_tensor: ttnn.Tensor, **_):
+def _golden_function(tensor: ttnn.Tensor, dtype=None, *_, **__):
     import torch
 
-    return torch.zeros_like(input_tensor)
+    return golden_to_output_dtype(torch.zeros_like(tensor), dtype)
 
 
 ttnn.attach_golden_function(ttnn.zeros_like, golden_function=_golden_function)
 
 
-def _golden_function(input_tensor: ttnn.Tensor, **_):
+def _golden_function(tensor: ttnn.Tensor, dtype=None, *_, **__):
     import torch
 
-    return torch.ones_like(input_tensor)
+    return golden_to_output_dtype(torch.ones_like(tensor), dtype)
 
 
 ttnn.attach_golden_function(ttnn.ones_like, golden_function=_golden_function)
@@ -69,10 +70,13 @@ def _golden_function(shape: ttnn.Shape, dtype=None, *_, **__):
 ttnn.attach_golden_function(ttnn.ones, golden_function=_golden_function)
 
 
-def _golden_function_full(input_shape: ttnn.Shape, fill_value: float, **_):
+def _golden_function_full(shape: ttnn.Shape, fill_value: float, dtype=None, *_, **__):
     import torch
 
-    return torch.full(input_shape, fill_value=fill_value)
+    # TTNN creates BFLOAT16 tensors when dtype is omitted, unlike Torch's float32 default.
+    return golden_to_output_dtype(
+        torch.full(tuple(shape), fill_value=fill_value), dtype if dtype is not None else ttnn.bfloat16
+    )
 
 
 ttnn.attach_golden_function(ttnn.full, golden_function=_golden_function_full)

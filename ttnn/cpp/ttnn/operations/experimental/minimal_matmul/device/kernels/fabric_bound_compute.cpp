@@ -110,7 +110,7 @@ void add_bias_block_split(
     uint32_t split_rows) {
     CircularBuffer cb_out_a(out_cb_a);
     CircularBuffer cb_out_b(out_cb_b);
-    add_bcast_rows_init_short(in_cb, bias_cb);
+    add_bcast_rows_init(in_cb, bias_cb);
     reconfig_data_format(in_cb, bias_cb);
     pack_reconfig_data_format(out_cb_a);
     uint32_t fused_act_dst_id = 0;
@@ -172,7 +172,7 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
 
             tile_regs_acquire();
 #ifdef FUSE_BIAS
-            add_bcast_rows_init_short(in_cb, bias_cb);
+            add_bcast_rows_init(in_cb, bias_cb);
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, GATE_DST);
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, up_tile_id, up_n, UP_DST);
 #else
@@ -206,7 +206,7 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
  */
 void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     CircularBuffer cb_out(out_cb);
-    add_bcast_rows_init_short(in_cb, bias_cb);
+    add_bcast_rows_init(in_cb, bias_cb);
     reconfig_data_format(in_cb, bias_cb);
     pack_reconfig_data_format(out_cb);
     uint32_t fused_act_dst_id = 0;
@@ -253,7 +253,7 @@ void add_bias_and_addcmul_block(
 #ifdef FUSE_BIAS
     // ============================================ STEP 1: Add bias block Read from intermediate_cb and write back
 
-    add_bcast_rows_init_short(intermediate_cb, bias_cb);
+    add_bcast_rows_init(intermediate_cb, bias_cb);
     reconfig_data_format(intermediate_cb, bias_cb);
     pack_reconfig_data_format(intermediate_cb);
 
@@ -298,7 +298,7 @@ void add_bias_and_addcmul_block(
         cb_ternary_b.wait_front(N_block_tiles);
 
 #ifndef TERNARY_B_IS_FLOAT32
-        mul_bcast_rows_init_short(intermediate_cb, ternary_b_cb);
+        mul_bcast_rows_init(intermediate_cb, ternary_b_cb);
 #else
         unary_bcast_init<BroadcastType::ROW>(ternary_b_cb);
 #endif  // TERNARY_B_IS_FLOAT32
@@ -340,7 +340,7 @@ void add_bias_and_addcmul_block(
     } else {
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
 #ifndef TERNARY_B_IS_FLOAT32
-        mul_tiles_init(intermediate_cb, ternary_b_cb);
+        mul_init(intermediate_cb, ternary_b_cb);
 #endif
         binop_with_scalar_tile_init();
         reconfig_data_format(intermediate_cb, ternary_b_cb);
@@ -386,7 +386,7 @@ void add_bias_and_addcmul_block(
 
     cb_intermediate.wait_front(out_block_num_tiles);
 
-    add_tiles_init(intermediate_cb, ternary_a_cb);
+    add_init(intermediate_cb, ternary_a_cb);
     reconfig_data_format(intermediate_cb, ternary_a_cb);
     pack_reconfig_data_format(out_cb);
 

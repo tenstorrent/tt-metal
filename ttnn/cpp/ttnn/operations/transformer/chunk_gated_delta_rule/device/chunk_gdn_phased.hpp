@@ -19,6 +19,8 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule_config.hpp"
+#include "chunk_gdn_compute_config.hpp"
 
 namespace ttnn::prim {
 
@@ -49,6 +51,8 @@ struct ChunkGdnPrepParams {
     // ChunkGdnPhasedProgramConfig::prep_serial: BH cores (one per head) instead of fanning the BH*NC
     // work-items over the whole grid. Measurement only. Hashed, like every field here.
     bool prep_serial = false;
+    // WY-inverse method (GdnTinv, chunk_gdn_compute_config.hpp).
+    GdnTinv tinv = GdnTinv::HORNER;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -57,8 +61,8 @@ struct ChunkGdnPrepInputs {
     Tensor q;        // [BH, NC, C, K] bf16
     Tensor k;        // [BH, NC, C, K] bf16
     Tensor v;        // [BH, NC, C, V] bf16  (or FLAT [B, T, HV*V] bf16 when params.v_flat)
-    Tensor g;        // [BH, NC, C, 1] fp32 (column)
-    Tensor beta;     // [BH, NC, C, 1] fp32 (column)
+    Tensor g;        // [B, T, HV] fp32 or bf16, token-major as the model produces it (B * HV == BH)
+    Tensor beta;     // [B, T, HV] fp32 or bf16, as g
     Tensor eye_c;    // [1,1,C,C] fp32
     Tensor tril_c;   // [1,1,C,C] fp32
     Tensor ones_c;   // [1,1,C,C] fp32
@@ -105,7 +109,8 @@ std::vector<Tensor> chunk_gdn_prep(
     float scale = 1.0f,
     bool qk_flat = false,
     uint32_t Hk = 0,
-    bool prep_serial = false);
+    bool prep_serial = false,
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse = ttnn::transformer::ChunkGdnWyInverse::AUTO);
 
 // ---------------------------------------------------------------------------
 // SCAN

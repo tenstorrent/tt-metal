@@ -22,7 +22,7 @@ enum class PaddingMode : uint8_t {
 };
 
 struct ParallelConfig {
-    CoreRangeSet grid;
+    tt::tt_metal::CoreRangeSet grid;
     tt::tt_metal::TensorMemoryLayout shard_scheme{0};
     tt::tt_metal::ShardOrientation shard_orientation{0};
 
@@ -61,9 +61,10 @@ struct SlidingWindowConfig {
     uint32_t scale_w = 1;
 
     // parallel configuration
-    uint32_t num_cores_nhw = 1;                                             // num cores along collapsed height nhw
-    uint32_t num_cores_c = 1;                                               // num cores along width c
-    CoreRangeSet core_range_set = CoreRangeSet(CoreRange({0, 0}, {0, 0}));  // active cores
+    uint32_t num_cores_nhw = 1;  // num cores along collapsed height nhw
+    uint32_t num_cores_c = 1;    // num cores along width c
+    tt::tt_metal::CoreRangeSet core_range_set =
+        tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {0, 0}));  // active cores
 
     bool snap_to_tile = false;
     bool is_bilinear = false;
@@ -151,6 +152,17 @@ struct HaloGatherKernelConfig {
     std::vector<uint16_t> number_of_blocks_per_core;
 };
 
+// Stride of the origin-anchored row walk halo and pool use to address shard i.
+// Bounding-box width for height/width sharding, ranges()[0].end.x + 1 for block sharding.
+uint32_t sliding_window_shard_row_width(const tt::tt_metal::CoreRangeSet& grid, bool is_block_sharded);
+
+// Fatal unless shard i of `grid` is the core the origin-anchored row walk addresses.
+// Height/width sharding uses `orientation` for the shard order. Block sharding keeps the
+// row-wise order: column-major there is the supported transpose_mcast rectangle.
+// Any other grid hangs max_pool2d/avg_pool2d or silently returns wrong conv2d results (#60513).
+void validate_sliding_window_shard_grid(
+    const tt::tt_metal::CoreRangeSet& grid, bool is_block_sharded, tt::tt_metal::ShardOrientation orientation);
+
 HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
@@ -158,9 +170,10 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool transpose_mcast,
     bool remote_read,
     const tt::tt_metal::distributed::MeshDevice& device,
-    uint32_t num_cores_x,
     bool is_in_tiled,
-    int block_size);
+    int block_size,
+    const tt::tt_metal::CoreRangeSet& shard_grid,
+    tt::tt_metal::ShardOrientation shard_orientation);
 
 void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config);
 

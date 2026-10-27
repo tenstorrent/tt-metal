@@ -18,7 +18,7 @@ import pytest
 
 import ttnn
 from conftest import reset_fabric, set_fabric
-from models.common.utility_functions import skip_for_n_or_less_dev, skip_for_wormhole_b0
+from tt_py_test_utils_common.utility_functions import skip_for_n_or_less_dev, skip_for_wormhole_b0
 from tests.nightly.t3000.ccl.test_reduce_scatter_minimal_direct import (
     PERSISTENT_MODES,
     RS_DIRECT_DRAM_MEM_CONFIG,

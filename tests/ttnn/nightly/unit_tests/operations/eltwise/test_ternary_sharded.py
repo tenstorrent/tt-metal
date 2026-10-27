@@ -1596,7 +1596,7 @@ def test_ternary_ttt_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, dev
     input1_config = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
     # DRAM sharded config for true tensor
-    from models.common.utility_functions import divup
+    from tt_py_test_utils_common.utility_functions import divup
 
     dram_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet(

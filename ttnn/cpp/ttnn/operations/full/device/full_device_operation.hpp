@@ -40,5 +40,6 @@ ttnn::operations::full::FullDeviceOperation::tensor_return_value_t full(
     ttnn::MeshDevice* mesh_device,
     const DataType& dtype,
     const Layout& layout,
-    const MemoryConfig& memory_config);
+    const MemoryConfig& memory_config,
+    std::optional<tt::tt_metal::TensorTopology> tensor_topology = std::nullopt);
 }  // namespace ttnn::prim

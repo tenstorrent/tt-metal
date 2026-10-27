@@ -143,34 +143,48 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
     def capture_trace(self, kv_cache) -> None:
         """OPTIONAL — implement only if your model supports segmented trace capture/replay. The
         engine calls this via `getattr(runtime, "capture_trace", None)`, once, after `compile()`
-        and only when `config.use_trace` is set; a model that never traces can omit it entirely.
+        and only when `config.use_trace` is set; a model that never traces can omit it entirely, and
+        the runner then refuses PREFILL_USE_TRACE=1 instead of running eagerly.
         Must be idempotent (no-op if already captured) since the engine does not track capture
         state itself."""
 
-    # --- OPTIONAL hooks — implement only if your model supports cache migration; the serving loop
-    #     never calls them. Keep the heavy table logic in your model's own module (a thin forwarder on
-    #     the runtime), not inline here. ---
-    def build_kv_chunk_table(self, kv_cache, path: str) -> str:
+    # --- REQUIRED KV-table hooks: `build_kv_chunk_table` and `kv_migration_stages`. The engine builds a
+    #     chunk table on every run, so a runtime missing them fails at bringup. Keep the heavy table logic
+    #     in your model's own module (a thin forwarder on the runtime), not inline here. ---
+    def build_kv_chunk_table(
+        self, kv_cache, path: str, *, first_layer_idx=0, num_my_layers=None, stage_layouts=None
+    ) -> str:
         """Build + serialize the KV-chunk address table for `kv_cache` (your model's block-cyclic layout)
         to `path` and return it; issue no comms (the engine publishes it). Use the shared
         `serialize_kv_chunk_table` helper (common/prefill/runners/migration.py) for the config-population +
         protobuf-serialize boilerplate; supply only your model's table builder + chunk geometry."""
 
-    def kv_migration_base_address(self, kv_cache) -> int:
-        """This rank's KV base DRAM address — the anchor the engine all-gathers to merge every pipeline
-        stage into one table. Return `int(<your base tensor>.buffer_address())`; you pick which of your
-        cache tensors is the migratable base, since the engine treats `kv_cache` as opaque and cannot.
-        Enough for a model with ONE migratable cache; otherwise implement `kv_migration_stages`."""
-
     def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
         """One `KvCacheStage` (common/prefill/runners/migration.py) per config of your merged table, in
-        config order — the engine gathers a layout for each, on every rank, and hands them to
-        `build_kv_chunk_table`. Implement it instead of `kv_migration_base_address` when your model
-        migrates SEVERAL caches, or one whose layer numbering is not the model's global numbering."""
+        config order — the engine gathers a layout for each, on every rank, and hands them back to
+        `build_kv_chunk_table` as `stage_layouts`. A single-cache model returns a one-element list
+        anchored on whichever tensor it migrates, since the engine treats `kv_cache` as opaque and
+        cannot pick for you. Number a stage in its own space when that is not the model's global layer
+        numbering (a cache only some layers write), and map it back to model layers in your
+        `build_kv_chunk_table` (see DeepSeek's `kv_table_layer_rows`).
+
+        Return `[]` only for a cache layout with no table yet (GPT-OSS's bounded sliding cache): the
+        engine then serves without a table, which it allows single-rank with both
+        `PREFILL_ENABLE_MIGRATION` and `PREFILL_MIGRATION_EXPORT_TO_FILE` off, and rejects otherwise."""
+
+    # If your merged table's second config is NOT a DSA index cache, override `cache_kind(config_id)`
+    # on the ADAPTER (default: 0 = "kvpe", 1 = "index", else "other") so the producer and the
+    # migration driver do not infer an index cache from the config count. Kimi-K3 publishes its KDA
+    # state as configs 1 and 2 this way (models/demos/deepseek_v3_d_p/tt/kda/KDA_STATE_MIGRATION.md).
+    # If a layer's cache is not on the token axis, also override `layer_position_range(layer_idx,
+    # real_len)` (default `(0, real_len)`): the driver issues one /migrate per run of consecutive layers
+    # with equal ranges and byte-verifies that range. Kimi-K3 returns the KDA version window there.
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register the per-layer completion sink. Required at any rank count, unless the runner runs
-        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead.
+        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead. That mode needs
+        `set_d2h_ack_service(service)` on the runtime; without it the runner refuses
+        PREFILL_LAYER_ACK_D2H=1 right after building the runtime.
 
         Call `sink(layer_idx, request_id)` once per layer, where `request_id` is the one
         `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the
@@ -258,15 +272,17 @@ PREFILL_PRODUCER_CHUNKS=11 \
 ```
 
 **KV PCC** — validate prefill writes correct KV. The producer reads the KV back device-lessly and PCCs
-vs the golden trace, which requires the runner to publish its KV chunk table + device map: run the runner
-with `PREFILL_MOCK_MIGRATION=1` and the producer with `PREFILL_PRODUCER_CHECK_PCC=1`. Full two-terminal
+vs the golden trace, which reads the KV chunk table + device map the runner always publishes: run the
+runner with `PREFILL_ENABLE_MIGRATION=0` (the default, so the table stays on disk) and the producer with
+`PREFILL_PRODUCER_CHECK_PCC=1`. Full two-terminal
 recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. The runner PCCs nothing on any path — it publishes
 the table and the device map, and every read-back runs in the reader's own process. The producer's reader
 knows two cache layouts — merged MLA (DeepSeek / Kimi) and MiniMax-M3's triple cache; a third
 layout needs a branch in `_read_slot_kv_and_check_pcc`, since that read-back is not adapter-dispatched.
 
-**Single-rank migration** — `PREFILL_ENABLE_MIGRATION=1` on the runner (requires the
-migration endpoint up; see `deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).
+**Live migration** — `PREFILL_ENABLE_MIGRATION=1` hands the same table to a migration worker instead
+and blocks on its ready, so the endpoint must be up (see
+`deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).
 
 ## Checklist
 
@@ -277,4 +293,4 @@ migration endpoint up; see `deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).
 - [ ] No reference-modeling / heavy imports at module load (lazy inside methods).
 - [ ] Registered in `ADAPTER_PATHS` (`models/demos/common/prefill/adapter.py`).
 - [ ] Weight cache populated; golden trace staged.
-- [ ] Request-mode producer PCC run passes (`PREFILL_PRODUCER_CHECK_PCC=1`); request + (if applicable) migration paths exercised.
+- [ ] Request-mode producer PCC run passes (`PREFILL_PRODUCER_CHECK_PCC=1`), which reads back the KV chunk table the runner always builds; the live-migration publish exercised too if your model uses it.

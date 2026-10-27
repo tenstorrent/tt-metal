@@ -30,7 +30,7 @@ add_custom_command(
     DEPENDS
         ${DEV_MSGS_CODEGEN_PY}
         ${DEV_MSGS_CODEGEN_SH}
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h
+        ${PROJECT_SOURCE_DIR}/tt_metal/hostdevcommon/api/hostdevcommon/fabric_telemetry_msgs.h
 )
 
 # 3) realtime_profiler_msgs

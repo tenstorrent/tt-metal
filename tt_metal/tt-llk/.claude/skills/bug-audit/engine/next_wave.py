@@ -79,10 +79,6 @@ else:
 extra = {}
 if os.path.isdir(os.path.join(out, "known")):
     extra["known_dir"] = os.path.join(out, "known")
-if (st.get("execution") or {}).get("enabled") and os.path.isdir(
-    os.path.join(out, "exec", "signals")
-):
-    extra["exec_signals_dir"] = os.path.join(out, "exec", "signals")
 print(
     json.dumps(
         {

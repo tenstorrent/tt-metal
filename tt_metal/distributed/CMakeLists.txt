@@ -46,6 +46,15 @@ elseif(ENABLE_DISTRIBUTED)
     find_package(MPI QUIET COMPONENTS C)
     if(MPI_FOUND)
         message(STATUS "ULFM MPI not found, using system MPI")
+        # OpenMPI < 5 (and MPICH) pull their deprecated C++ bindings into <mpi.h> for C++
+        # translation units, which then need libmpi_cxx at link time. Only the C API is used
+        # here, so opt out instead of linking the C++ bindings library.
+        target_compile_definitions(
+            MPI::MPI_C
+            INTERFACE
+                OMPI_SKIP_MPICXX=1
+                MPICH_SKIP_MPICXX=1
+        )
         add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
         set(USE_MPI TRUE)
         list(APPEND DISTRIBUTED_SRC multihost/mpi_distributed_context.cpp)
@@ -59,6 +68,18 @@ else()
     message(STATUS "Multihost compute with MPI disabled, using single host context.")
     set(USE_MPI FALSE)
     list(APPEND DISTRIBUTED_SRC multihost/single_host_context.cpp)
+endif()
+
+# The host-to-host hop is MPI one-sided RMA and there is no version of it without one, so
+# these two follow USE_MPI while the device legs build unconditionally.
+if(USE_MPI)
+    list(
+        APPEND
+        DISTRIBUTED_SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_rdma_window.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_h2h_socket.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/d2h2h2d_socket.cpp
+    )
 endif()
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})

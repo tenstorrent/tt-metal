@@ -49,6 +49,13 @@ public:
     // behaviour be unit-tested with synthetic segments.
     static memory from_segments(const std::vector<ElfFile::Segment>& segments, Loading loading);
 
+    // Build a memory from an ALREADY-OPEN ELF (the caller owns the ElfFile). Runs the same XIP transform
+    // + segment packing as the (path, loading) constructor. This lets a loader open the ELF once and reuse
+    // it both for the device image and for host-side metadata harvesting (see ll_api::parse_binary_metadata),
+    // instead of re-opening the same file. May transform `elf` in place (XIP), so harvest any pristine-ELF
+    // metadata BEFORE calling this. `path` is used only for the optional XIP disassembly dump / diagnostics.
+    static memory from_elf(ElfFile& elf, const std::string& path, Loading loading);
+
     // These can be large objects, so ban copying ...
     memory(const memory&) = delete;
     memory& operator=(const memory&) = delete;

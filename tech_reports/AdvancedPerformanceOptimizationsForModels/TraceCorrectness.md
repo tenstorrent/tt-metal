@@ -37,7 +37,7 @@ Metal Trace is a performance optimization feature that minimizes host overhead f
 When capturing, the operation dispatching commands are saved into a DRAM buffer allocated for this purpose.
 The commands contain the addresses of the operands, input/output shapes etc.
 
-When replaying, the same chain of operations is executed again. Whichever addresses were read from and written to during capture will be read from and written to again. No allocator operations or checks are performed. Importantly, the operation's program factory (#TODO link to explanation of what this is) doesn't run again.
+When replaying, the same chain of operations is executed again. Whichever addresses were read from and written to during capture will be read from and written to again. No allocator operations or checks are performed. Importantly, the operation's [program factory](../../docs/source/ttnn/ttnn/adding_new_ttnn_operation.rst#programdescriptor-pattern-recommended) does not run again during replay.
 
 # Requirements and important details
 
@@ -50,8 +50,8 @@ Make sure to replicate the conditions faithfully in warmup. If a program cache m
 
 ## Unsafe allocations
 
-The captured chain of operations may include allocations and deallocations of temporary tensors. After capture, these will no longer be visible to the allocator. If you allocate a new buffer after capturing a trace, it may include addresses that will be overwritten when that trace gets executed again.
-As a consequence, all allocations made after some trace has been captured, and not released before it is executed, are unsafe.
+The captured chain of operations may include allocations and deallocations of temporary tensors. After capture, these will no longer be visible to the allocator, even though replay will use those locations. If you allocate a new buffer after capturing a trace, it may include addresses that will be overwritten when that trace gets executed again.
+As a consequence, a buffer allocated after capture is potentially unsafe if it remains allocated when replay happens.
 
 You can use the trace allocation tracker tool to check a program for potentially unsafe allocations.
 
@@ -60,6 +60,19 @@ If we capture multiple traces, we may want to persist the input tensors as place
 Buffer allocations may not be explicit!
 For example `ttnn.reshape`, when first executed with a new shape, may allocate a lookup table to speed up future executions. If this happens after some trace has already been captured, executing that trace may corrupt this table. This will lead to undefined behavior, including data corruption and hangs.
 When a new program is compiled, the compilation result is saved in program cache. Program cache buffers share the address space with regular buffers - they may also be corrupted, if not allocated before all trace capture.
+
+### Concurrent execution
+
+Additional potentially unsafe scenarios arise when executing operations concurrently on different subdevices, as both have access to the entirety of DRAM and can issue NoC transfers to another subdevice's cores.
+
+The trace allocation tracker accounts for allocations from all subdevices, but it only performs its check when trace replay starts. It is possible for subdevice B conflicting work to be dispatched and execute while subdevice A replay continues.
+
+Two example scenarios:
+
+- **Concurrent traces:** Traces captured at different times can use the same physical addresses for temporary memory. If they are executed concurrently on different subdevices, they can corrupt each other's work.
+- **Concurrent traced and untraced work:** While a trace runs, work on another subdevice can allocate and use a buffer that overlaps the trace's temporary memory. Either execution can corrupt the other's data. This can happen even if no unsafe buffer was allocated when replay was submitted. These buffers will be reported at the next replay check if they remain allocated. If released before that check, they will not be reported, even if corruption already occurred.
+
+The checker cannot account for these scenarios, as the host doesn't know whether a previously dispatched replay is still ongoing on device. When using tracing with concurrent work on different subdevices, careful code analysis needs to be performed to establish that no overlap is possible.
 
 ### Using the trace allocation checker
 
@@ -74,6 +87,10 @@ The environment variables are read once while TT-NN starts up, so they must be s
 Once a trace has been captured, the checker accounts for subsequent device-buffer allocations for that trace. Immediately before `ttnn.execute_trace`, it checks whether any buffers unsafe for the requested trace are still alive. If it finds candidates, it runs Python garbage collection and checks again. If unsafe buffers remain, `ttnn.execute_trace` raises a `RuntimeError` instead of replaying the trace and potentially corrupting them. Buffers that have already been released are removed from the accounting automatically.
 
 Accounting is kept separately for each `(sub-device manager, trace ID)` pair. Trace IDs are interpreted under the currently active sub-device manager, so the manager used to capture a trace must also be active when the trace is ended, executed, or released. For example, given `capture(trace_a)`, `allocate(x)`, then `capture(trace_b)` under one manager, `x` is unsafe when executing `trace_a` but safe when executing `trace_b`, because it was already present in the allocator when `trace_b` was captured. An allocation made after both captures is unsafe for both traces.
+
+Accounting includes the global allocator and all subdevice allocators of the capture manager. It is not restricted to the subdevices used by the trace. For example, a tracked, non-exempt buffer allocated on subdevice 1 after capture of a trace on subdevice 2 is recorded as potentially unsafe for that trace. If the buffer remains allocated at that trace's pre-replay check, the checker rejects replay.
+
+> **Warning: limits of the pre-replay check.** Accounting across subdevices does not establish all the memory-safety requirements for [concurrent execution](#concurrent-execution).
 
 Trace storage itself is excluded from accounting. Buffers in the reserved `BufferType::TRACE` region cannot overlap ordinary buffers. With `trace_region_size=0`, trace storage is instead allocated top-down in DRAM; capture validates its address against the current capture's DRAM high-water marks and the maximum high-water mark of every live trace. Capture fails rather than retaining a dynamic trace buffer that could be corrupted by replay.
 
@@ -207,3 +224,105 @@ class FunGen:
         # This can be a host copy, or a copy to some other safe tensor.
         result = ttnn.from_device(trace_output, blocking=True)
         return result
+```
+
+## LLM trace allocation tests in CI
+
+Issue [#55039](https://github.com/tenstorrent/tt-metal/issues/55039) adds allocation checks to
+the model sweeps and a monthly audit. These jobs cover LLM inference, including vision-language
+variants. They exclude CNNs, diffusion models (including Qwen Image), audio models, embedding
+models and training tests.
+
+The focused sweeps use the existing e2e commands from
+[`models_e2e_tests.yaml`](../../tests/pipeline_reorg/models_e2e_tests.yaml). The configuration in
+[`models_trace_config.yaml`](../../tests/pipeline_reorg/models_trace_config.yaml) selects model
+IDs and SKUs. A shared runner generates standard entries in
+[`models_sweep_tests.yaml`](../../tests/pipeline_reorg/models_sweep_tests.yaml), preserving each
+source test's model tier, SKU and owner:
+
+| Model | Tier 1: Wednesday and Saturday | Tier 2: Saturday |
+| --- | --- | --- |
+| Llama 3.1-8B | WH N150, BH P150 | WH T3K |
+| Qwen 3.6-27B | BH QuietBox 2 | |
+| Gemma 4-26B-A4B | BH QuietBox 2 | WH T3K |
+| GPT-OSS 120B | WH Galaxy, BH QuietBox 2, BH Galaxy | |
+
+The **LLM Trace Allocation Audit** workflow runs on the first day of each month at 06:00 UTC.
+It reads the same e2e registry and selects entries in the four focused families:
+Llama, Qwen, Gemma and GPT-OSS, except Qwen Image. Other families, including DeepSeek,
+are excluded. It retains the selected entries' registered SKUs and tiers, including multihost
+jobs when present. New models and SKUs within these families enter the audit automatically.
+Coordinate added hardware time with the model owners before expanding the family list.
+For a new LLM family, add its `model_family` value to
+`families` in `models_trace_config.yaml`. Use `exclude_models` for non-LLM models that share
+an LLM family. Neither change needs Python code.
+
+To add a focused sweep, first register the model's traced inference command in the e2e registry.
+Then add its model ID and selected single-host SKUs under `sweeps` in `models_trace_config.yaml`, for example:
+
+```yaml
+sweeps:
+  new-llm: [wh_n150, bh_p150]
+```
+
+Generate the CI entries and check the time budgets:
+
+```bash
+python .github/scripts/utils/model_trace_tests.py sync-sweeps
+python .github/scripts/utils/verify_time_budget.py
+```
+
+Commit both the configuration and generated sweep entries. Adjust `.github/time_budget.yaml`
+if the added work exceeds an existing budget. The generator inherits the e2e metadata and
+resolves separate e2e entries for the same model across SKUs. It rejects unknown selections.
+CI checks that the generated section is current, including when an e2e tier or timeout changes.
+The sweep workflows accept model filters as text, so new models do not require dropdown edits.
+
+`models_trace_config.yaml` is configuration, not a test registry. The changed-test gate skips
+it through `NON_MATRIX_YAMLS`. The time-budget checker skips its mapping format. Both gates
+still process the generated entries in `models_sweep_tests.yaml`.
+
+Both paths set the following variables before the model command starts:
+
+```bash
+export TT_METAL_TRACE_ALLOC_TRACKING=1
+export TT_METAL_TRACE_ALLOC_TRACEBACKS=1
+export TT_METAL_TRACE_ALLOC_REFERRER_DEPTH=10
+export TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0
+```
+
+The check includes program-cache allocations. The flags are also inherited by `tt-run`,
+which forwards `TT_` variables to its ranks. The sweeps do not add allocation acknowledgements,
+retry failures, increase trace reservations or change model assertions. An allocation error
+fails the job. Logs and pytest reports use the existing CI artifact and dashboard paths.
+
+Run a focused check from the repository root on the matching CI hardware:
+
+```bash
+python .github/scripts/utils/model_trace_tests.py run \
+  --test-name 'Llama 3.1-8B e2e tests' --sku wh_n150
+```
+
+Add `--dry-run` to print the command without opening a device. The SKU selects the registered
+CI configuration; it does not turn a larger machine into that SKU. A local Galaxy submesh
+requires the model's normal submesh setting and is not a physical N150 or T3K CI validation.
+The model checkpoint and tensor cache must be available at the paths in the source command.
+For shared CI caches, use the workflow's write-access option when a cache must be created.
+
+Use **Run workflow** on `llm-trace-allocation.yaml` to run the audit manually. The `model` and
+`skus` inputs accept `all` or comma-separated exact identifiers. A selection with no matching
+LLM tests fails during matrix preparation. To inspect the matrix locally:
+
+```bash
+python .github/scripts/utils/model_trace_tests.py matrix \
+  --model gpt-oss-120b --skus wh_galaxy_perf
+python -m pytest --noconftest .github/scripts/utils/test_model_trace_tests.py -q
+```
+
+Allocation diagnostics add host overhead. `DIAGNOSTIC_TIMEOUT_MULTIPLIER` in
+`model_trace_tests.py` controls the extra job time for both schedules. Its current value is 2;
+this estimate needs measurements on each CI SKU. Individual test timeouts and performance
+assertions remain unchanged, so a timeout or performance failure must be distinguished from
+an unsafe-allocation report. The tracker checks trace replays that the source test actually
+executes. Passing an eager-only or skipped test does not establish trace correctness. The audit
+does not replace output-accuracy tests or prove that every serving shape has been warmed up.

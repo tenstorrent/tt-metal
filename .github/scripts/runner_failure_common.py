@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -22,8 +23,12 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-09-21-v1"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-10-05-v3"
 UNKNOWN_RUNNER = "(unknown runner)"
+ACTIVE_JOB_STATUSES = {"queued", "in_progress", "waiting", "pending", "requested"}
+NON_FAILED_CONCLUSIONS = {"success", "skipped", "cancelled"}
+LOG_SCAN_CHUNK_SIZE = 4 * 1024 * 1024
+LOG_SCAN_OVERLAP = 16 * 1024
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
 CSI_SEQUENCE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -87,8 +92,10 @@ class RecentJob:
 
 @dataclass(frozen=True)
 class LogLookupResult:
-    log_text: str | None
+    log_path: Path | None
     status: str
+    unavailable: bool = False
+    signature_labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -98,6 +105,7 @@ class JobScanResult:
     log_checked: bool
     signature_labels: tuple[str, ...]
     fabric_missing_links: str
+    log_unavailable: bool = False
 
 
 ERROR_SIGNATURES = (
@@ -123,7 +131,16 @@ ERROR_SIGNATURES = (
     ErrorSignature(
         key="FABRIC_LINK_DOWN_MGD_TOPOLOGY_FOUND",
         label="Fabric link down (MGD topology)",
-        needle="Graph specified in MGD could not fit in the discovered physical topology",
+        pattern=r"Graph\s+specified\s+in\s+MGD\s+could\s+not\s+fit\s+in\s+the\s+discovered\s+physical\s+topology",
+        case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="WRONG_MESH_SHAPE_FOUND",
+        label="Wrong mesh shape",
+        pattern=(
+            r"Requested\s+mesh\s+is\s+too\s+big\s+and\s+is\s+not\s+rotatable:\s*"
+            r"MeshShape\(\[[^\]]+\]\)\s+and\s+SystemMesh\s+MeshShape\(\[[^\]]+\]\)"
+        ),
         case_sensitive=False,
     ),
     ErrorSignature(
@@ -163,6 +180,12 @@ ERROR_SIGNATURES = (
     ErrorSignature(
         key="SETUP_RUNNER_FAILURE_FOUND",
         label="Set up runner failure",
+    ),
+    ErrorSignature(
+        key="RUNNER_DISCONNECTED_FOUND",
+        label="Runner disconnected",
+        needle="The self-hosted runner lost communication with the server",
+        case_sensitive=False,
     ),
 )
 
@@ -513,17 +536,21 @@ def out_of_disk_signature_found(log_text: str) -> bool:
     plain_log_text = strip_terminal_sequences(log_text)
     if OUT_OF_DISK_HARD_RE.search(plain_log_text):
         return True
+    return latest_disk_pressure(plain_log_text) is True
 
-    disk_pressure_signals: list[tuple[int, bool]] = []
-    for match in DISK_USAGE_RE.finditer(plain_log_text):
-        percent = int(match.group("percent"))
-        disk_pressure_signals.append((match.start(), percent >= 90))
 
-    disk_pressure_signals.extend((match.start(), True) for match in DISK_USAGE_HIGH_RE.finditer(plain_log_text))
-    if not disk_pressure_signals:
-        return False
+def latest_disk_pressure(log_text: str) -> bool | None:
+    last_position = -1
+    high_pressure = None
+    for match in DISK_USAGE_RE.finditer(log_text):
+        last_position = match.start()
+        high_pressure = int(match.group("percent")) >= 90
 
-    return max(disk_pressure_signals, key=lambda signal: signal[0])[1]
+    for match in DISK_USAGE_HIGH_RE.finditer(log_text):
+        if match.start() > last_position:
+            last_position = match.start()
+            high_pressure = True
+    return high_pressure
 
 
 def format_fabric_node(mesh: str, device: str) -> str:
@@ -549,8 +576,44 @@ def matching_signature_labels(log_text: str) -> list[str]:
     return [signature.label for signature in ERROR_SIGNATURES if signature_found(plain_log_text, signature)]
 
 
+def scan_log_file(log_path: Path) -> tuple[list[str], str]:
+    labels: set[str] = set()
+    links: dict[str, None] = {}
+    tail = ""
+    hard_disk_failure = False
+    disk_pressure = None
+    with log_path.open("r", encoding="utf-8", errors="replace") as log_file:
+        while chunk := log_file.read(LOG_SCAN_CHUNK_SIZE):
+            raw_window = tail + chunk
+            plain_window = strip_terminal_sequences(raw_window)
+            # Keep 16 KiB of context for signatures and formatting split across reads.
+            tail = raw_window[-LOG_SCAN_OVERLAP:]
+            for signature in ERROR_SIGNATURES:
+                if signature.key != "OUT_OF_DISK_FOUND" and signature.label not in labels:
+                    if signature_found(plain_window, signature):
+                        labels.add(signature.label)
+            hard_disk_failure |= OUT_OF_DISK_HARD_RE.search(plain_window) is not None
+            pressure = latest_disk_pressure(plain_window)
+            if pressure is not None:
+                disk_pressure = pressure
+            for match in FABRIC_LINK_MISMATCH_RE.finditer(plain_window):
+                source = format_fabric_node(match.group("src_mesh"), match.group("src_device"))
+                destination = format_fabric_node(match.group("dst_mesh"), match.group("dst_device"))
+                links[f"{source}>{destination}"] = None
+    if hard_disk_failure or disk_pressure is True:
+        labels.add("Out of disk")
+    ordered_labels = [signature.label for signature in ERROR_SIGNATURES if signature.label in labels]
+    missing_links = "; ".join(links) if "Fabric link down (MGD topology)" in labels else ""
+    return ordered_labels, missing_links
+
+
 def setup_runner_step_failed(job: RecentJob) -> bool:
     return job.setup_runner_conclusion.casefold() == "failure"
+
+
+def is_failed_job(job: RecentJob) -> bool:
+    conclusion = job.conclusion.casefold()
+    return job.status.casefold() == "completed" and bool(conclusion) and conclusion not in NON_FAILED_CONCLUSIONS
 
 
 def matching_job_metadata_signature_labels(job: RecentJob) -> list[str]:
@@ -565,75 +628,158 @@ def combine_signature_labels(*label_groups: list[str]) -> list[str]:
     return [signature.label for signature in ERROR_SIGNATURES if signature.label in labels_by_name]
 
 
-def fetch_github_job_log(job: RecentJob, timeout: int) -> LogLookupResult:
-    endpoint = f"repos/{job.owner_repo}/actions/jobs/{job.job_id}/logs"
-    try:
-        # Logs stay in captured memory for signature matching and are never printed
-        # verbatim, so embedded terminal formatting cannot control this process's terminal.
-        result = subprocess.run(
-            ["gh", "api", "--allow-escape-sequences", endpoint],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            check=False,
-            env=gh_env(),
+def runner_disconnection_signature_labels(job: RecentJob, payload: dict[str, Any], timeout: int) -> list[str]:
+    check_path = urlparse(str(payload.get("check_run_url") or "")).path
+    expected_prefix = f"/repos/{job.owner_repo}/check-runs/"
+    if not check_path.startswith(expected_prefix) or not check_path.removeprefix(expected_prefix).isdigit():
+        return []
+    annotations = gh_api_json(f"{check_path.lstrip('/')}/annotations?per_page=100", paginate=True, timeout=timeout)
+    for page in annotations if isinstance(annotations, list) else []:
+        for annotation in page if isinstance(page, list) else [page]:
+            if (
+                isinstance(annotation, dict)
+                and "self-hosted runner lost communication" in str(annotation.get("message") or "").casefold()
+            ):
+                return ["Runner disconnected"]
+    return []
+
+
+def missing_job_log_result(
+    job: RecentJob, timeout: int, *, runner_disconnected: bool = False
+) -> LogLookupResult | None:
+    labels = ["Runner disconnected"] if runner_disconnected else []
+    if not labels:
+        try:
+            payload = gh_api_json(f"repos/{job.owner_repo}/actions/jobs/{job.job_id}", timeout=timeout)
+            if not isinstance(payload, dict):
+                return None
+            status = str(payload.get("status") or "").casefold()
+            if status in ACTIVE_JOB_STATUSES:
+                return LogLookupResult(
+                    log_path=None, status=f"not available: job is {status} (HTTP 404)", unavailable=True
+                )
+            labels = runner_disconnection_signature_labels(job, payload, timeout)
+        except (json.JSONDecodeError, OSError, RuntimeError, subprocess.TimeoutExpired):
+            return None
+
+    if labels:
+        return LogLookupResult(
+            log_path=None,
+            status="not available: runner lost communication with GitHub (HTTP 404)",
+            unavailable=True,
+            signature_labels=tuple(labels),
         )
-    except subprocess.TimeoutExpired:
-        return LogLookupResult(log_text=None, status=f"gh api timed out after {timeout}s")
+    return None
+
+
+def fetch_github_job_log(
+    job: RecentJob, timeout: int, log_path: Path, *, runner_disconnected: bool = False
+) -> LogLookupResult:
+    if job.status.casefold() in ACTIVE_JOB_STATUSES:
+        return LogLookupResult(log_path=None, status=f"not available: job is {job.status}", unavailable=True)
+
+    endpoint = f"repos/{job.owner_repo}/actions/jobs/{job.job_id}/logs"
+    with log_path.open("wb") as output, tempfile.TemporaryFile() as errors:
+        try:
+            # Logs go directly to a file and are never printed verbatim. Embedded
+            # terminal formatting cannot control this process's terminal.
+            result = subprocess.run(
+                ["gh", "api", "--allow-escape-sequences", endpoint],
+                stdout=output,
+                stderr=errors,
+                timeout=timeout,
+                check=False,
+                env=gh_env(),
+            )
+        except subprocess.TimeoutExpired:
+            return LogLookupResult(log_path=None, status=f"gh api timed out after {timeout}s")
+        errors.seek(0)
+        error_text = errors.read(16384).decode("utf-8", errors="replace")
 
     if result.returncode != 0:
-        details = " ".join((result.stderr or result.stdout or "unknown gh api error").split())
-        return LogLookupResult(log_text=None, status=f"gh api failed: {details}")
+        if not error_text:
+            with log_path.open("rb") as output:
+                error_text = output.read(16384).decode("utf-8", errors="replace")
+        safe_error_text = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", strip_terminal_sequences(error_text))
+        details = " ".join((safe_error_text or "unknown gh api error").split())
+        if re.search(r"\bHTTP 404\b", details):
+            # GitHub can close a disconnected runner's job without publishing its logs.
+            missing_log_result = missing_job_log_result(job, timeout=timeout, runner_disconnected=runner_disconnected)
+            if missing_log_result is not None:
+                return missing_log_result
+        return LogLookupResult(log_path=None, status=f"gh api failed: {details}")
 
-    return LogLookupResult(log_text=result.stdout, status="fetched")
+    log_size = log_path.stat().st_size
+    if log_size >= 100 * 1024 * 1024:
+        print(f"Large job log: {job.html_url}, {log_size / 1024 / 1024:.1f} MiB (scanning from disk).", flush=True)
+    return LogLookupResult(log_path=log_path, status="fetched")
 
 
 def should_fetch_setup_runner_metadata(job: RecentJob) -> bool:
     return bool(
-        job.owner_repo and job.job_id and not job.setup_runner_conclusion and job.conclusion.casefold() == "failure"
+        job.owner_repo
+        and job.job_id
+        and not job.setup_runner_conclusion
+        and job.status.casefold() == "completed"
+        and job.conclusion.casefold() == "failure"
     )
 
 
-def enrich_setup_runner_metadata(job: RecentJob, timeout: int) -> RecentJob:
-    if not should_fetch_setup_runner_metadata(job):
-        return job
+def enrich_failure_metadata(job: RecentJob, timeout: int) -> tuple[RecentJob, list[str]]:
+    fetch_setup = should_fetch_setup_runner_metadata(job)
+    check_annotations = is_failed_job(job) and bool(job.owner_repo and job.job_id)
+    if not fetch_setup and not check_annotations:
+        return job, []
 
     try:
         payload = gh_api_json(f"repos/{job.owner_repo}/actions/jobs/{job.job_id}", timeout=timeout)
     except (json.JSONDecodeError, OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         print(f"warning: could not fetch job metadata for {job.html_url}: {exc}", file=sys.stderr)
-        return job
+        return job, []
 
     if not isinstance(payload, dict):
-        return job
+        return job, []
 
-    setup_runner_conclusion = step_conclusion(payload, "Set up runner")
-    if not setup_runner_conclusion:
-        return job
-    return replace(job, setup_runner_conclusion=setup_runner_conclusion)
+    if fetch_setup:
+        setup_runner_conclusion = step_conclusion(payload, "Set up runner")
+        if setup_runner_conclusion:
+            job = replace(job, setup_runner_conclusion=setup_runner_conclusion)
+    labels = []
+    if check_annotations:
+        try:
+            labels = runner_disconnection_signature_labels(job, payload, timeout)
+        except (json.JSONDecodeError, OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            print(f"warning: could not fetch failure annotations for {job.html_url}: {exc}", file=sys.stderr)
+    return job, labels
 
 
 def scan_job(job: RecentJob, timeout: int) -> JobScanResult:
-    job = enrich_setup_runner_metadata(job, timeout=timeout)
-    metadata_signature_labels = matching_job_metadata_signature_labels(job)
-    log_result = fetch_github_job_log(job, timeout=timeout)
-    if log_result.log_text is None:
+    job, annotation_signature_labels = enrich_failure_metadata(job, timeout=timeout)
+    metadata_signature_labels = combine_signature_labels(
+        matching_job_metadata_signature_labels(job), annotation_signature_labels
+    )
+    with tempfile.TemporaryDirectory(prefix="runner-failure-log-") as log_dir:
+        log_result = fetch_github_job_log(
+            job,
+            timeout=timeout,
+            log_path=Path(log_dir) / "job.log",
+            runner_disconnected="Runner disconnected" in metadata_signature_labels,
+        )
+        log_signature_labels, fabric_missing_links = (
+            scan_log_file(log_result.log_path) if log_result.log_path is not None else ([], "")
+        )
+    metadata_signature_labels = combine_signature_labels(metadata_signature_labels, list(log_result.signature_labels))
+    if log_result.log_path is None:
         return JobScanResult(
             job=job,
             log_status=log_result.status,
             log_checked=False,
             signature_labels=tuple(metadata_signature_labels),
             fabric_missing_links="",
+            log_unavailable=log_result.unavailable,
         )
 
-    signature_labels = combine_signature_labels(
-        metadata_signature_labels, matching_signature_labels(log_result.log_text)
-    )
-    fabric_missing_links = ""
-    if "Fabric link down (MGD topology)" in signature_labels:
-        fabric_missing_links = extract_fabric_missing_links(log_result.log_text)
+    signature_labels = combine_signature_labels(metadata_signature_labels, log_signature_labels)
 
     return JobScanResult(
         job=job,
@@ -660,12 +806,14 @@ def scan_jobs(jobs: list[RecentJob], *, gh_timeout: int, log_workers: int) -> li
                 print(f"warning: job scan failed: {exc}", file=sys.stderr)
                 continue
             results.append(result)
-            if not result.log_checked:
+            if result.log_unavailable:
+                print(f"Log unavailable for {result.job.html_url}: {result.log_status}.")
+            elif not result.log_checked:
                 print(
                     f"warning: could not check {result.job.html_url}: " f"{result.log_status}",
                     file=sys.stderr,
                 )
-            elif result.signature_labels:
+            if result.signature_labels:
                 print(f"runner failure {result.job.html_url}")
     return sorted(
         results,
@@ -702,6 +850,7 @@ def result_to_dict(result: JobScanResult) -> dict[str, Any]:
             "log_status": result.log_status,
             "signatures": list(result.signature_labels),
             "fabric_missing_links": result.fabric_missing_links,
+            "log_unavailable": result.log_unavailable,
         }
     )
     return value
@@ -738,6 +887,7 @@ def scan_result_from_dict(value: dict[str, Any]) -> JobScanResult:
         log_checked=bool(value.get("log_checked")),
         signature_labels=signatures,
         fabric_missing_links=str(value.get("fabric_missing_links") or ""),
+        log_unavailable=bool(value.get("log_unavailable")),
     )
 
 
