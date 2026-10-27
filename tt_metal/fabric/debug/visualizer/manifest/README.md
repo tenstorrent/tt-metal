@@ -193,7 +193,7 @@ names what to update. By kind of change:
 | Removed argument | The collector: "missing fabric router named compile-time argument ..." | Delete its table entry. An unrecorded entry for it is not detected; delete it by hand |
 | Collector code reads a new argument | `get_named_arg`: "the collector reads ..., which no field table reads" | Add it to `k_collector_args` |
 | New struct in L1 | The build, when a field's content names a struct with no `StructLayout`; the writer, when its schema does not resolve | A `StructLayout<T>` and an entry in `DescribedStructs` (`fabric_struct_layouts.hpp`) |
-| New enum | The writer, when a schema names it | An entry in `DescribedEnums` (`fabric_struct_layouts.hpp`) |
+| New enum | The writer, when a schema names it | An entry in `DescribedEnums` (`fabric_manifest_type_catalog.hpp`) |
 | New enum value | Nothing for enums enchantum reads; the build for `EDMStatus` | `FABRIC_MANIFEST_EDM_STATUSES` for `EDMStatus` |
 | New or renamed field category, field kind or Z port role | The schema check, on the name in `vocabulary` | Its list in `fabric_manifest_schema.json` (`category`, `kind` or `z_port_role`) |
 | New computed fact | Nothing | The model, the collector or chip pass, the writer, the tests, a paragraph above, and the schema |
