@@ -76,7 +76,7 @@ def resolve_server_default(chunk, max_ctx):
     why = None
     if os.environ.get("DSV41_PF_PAGED", "read") != "read":
         why = f"DSV41_PF_PAGED={os.environ.get('DSV41_PF_PAGED')} (the single trace needs read mode)"
-    elif os.environ.get("DSV41_PF_PAGED_FP8", "0") == "1":
+    elif os.environ.get("DSV41_PF_PAGED_FP8", "0") == "1" and os.environ.get("DSV41_FP8_SERVING", "0") != "1":
         why = "DSV41_PF_PAGED_FP8=1 (fp8 pool)"
     elif os.environ.get("DSV41_PREFILL_DYN", "1") == "0":
         why = "DSV41_PREFILL_DYN=0"
@@ -92,7 +92,9 @@ def resolve_server_default(chunk, max_ctx):
     os.environ["DSV41_PF_SINGLE"] = "1"
     # (DSV41_KEY_EXPORT_FILL_MAX: the default of tt/dsv41_model.py key_export_fill_max, max(524288, slab rows), keeps the whole decode key-slab export in place; the single chunk trace gave wrong, run-to-run
     # different logits when the old fixed 524288 sent the warm-up export through slice_write)
-    return True, "read mode + bf16 pool + kv_len_tensor op available"
+    return True, "read mode + %s pool + kv_len_tensor op available" % (
+        "fp8 (DSV41_FP8_SERVING)" if os.environ.get("DSV41_PF_PAGED_FP8", "0") == "1" else "bf16"
+    )
 
 
 def use_kv_tensor():

@@ -103,7 +103,9 @@ def _apc_on():
 def _apc_needs_bf16_pool_but_fp8():
     """read mode + fp8 pool (DSV41_PF_PAGED_FP8=1 with DSV41_POOL_DTYPE=fp8): ``read_pool_latents`` (tt/prefix_cache.py) asserts a bf16 pool at the first snapshot, so APC must be off."""
     return (
-        os.environ.get("DSV41_PF_PAGED", "read") == "read"
+        os.environ.get("DSV41_FP8_SERVING", "0")
+        != "1"  # (an fp8 pool is an APC format with it: snapshots use paged_gather_rows)
+        and os.environ.get("DSV41_PF_PAGED", "read") == "read"
         and os.environ.get("DSV41_PF_PAGED_FP8", "0") == "1"
         and os.environ.get("DSV41_POOL_DTYPE", "bf16") == "fp8"
     )

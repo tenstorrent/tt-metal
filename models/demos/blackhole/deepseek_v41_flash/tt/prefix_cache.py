@@ -291,11 +291,30 @@ class ApcUnsupported(RuntimeError):
     """the model build has no carried state the snapshot code knows (dense prefill path, fp8 kv table): prefix caching stays off"""
 
 
+def fp8_pool_ok():
+    """DSV41_FP8_SERVING=1: an fp8 KV pool is a supported APC format (snapshots read it with ``paged_gather_rows``; the restore writes through ``paged_scatter_rows``, which converts: an e4m3 value read back
+    as bf16 converts back to the same byte, so a restored prefix equals the cold one)."""
+    return os.environ.get("DSV41_FP8_SERVING", "0") == "1"
+
+
+def _check_pool(pool):
+    assert pool.dtype == ttnn.bfloat16 or (
+        pool.dtype == ttnn.fp8_e4m3 and fp8_pool_ok()
+    ), "APC on the paged prefill needs the bf16 pool (an fp8 pool with DSV41_FP8_SERVING=1)"
+
+
+def _gather_pool(pool, d_ids):
+    """pool rows ``d_ids`` ([1,1,1,m] uint32 per device) -> bf16 [1,1,m,512]: the embedding lookup for a bf16 pool (as shipped), the gather kernel for an fp8 pool (embedding needs a bf16 table)."""
+    if pool.dtype == ttnn.bfloat16:
+        return ttnn.embedding(d_ids, pool.pool, layout=ttnn.ROW_MAJOR_LAYOUT)
+    return P.paged_gather_rows(pool.pool, ttnn.reshape(d_ids, [1, int(d_ids.shape[-1])]))
+
+
 def read_pool_latents(model, b, src, n):
     """Paged prefill: entries [0, n) of kv-source layer ``src`` of user ``b`` -> torch bf16 [n, 512], gathered ON the device from the user's pool pages (``ttnn.embedding`` over the
     bf16 pool, row ids of the user's mesh row; pieces of 16384 rows) and read from one device of the mesh row."""
     pool, md, rows, cols = model.pool, model.md, model.rows, model.cols
-    assert pool.dtype == ttnn.bfloat16, "APC on the paged prefill needs the bf16 pool"
+    _check_pool(pool)
     r = b // model.U
     phys = pool.phys_rows(b, src, torch.arange(n)).long()
     shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
@@ -312,7 +331,7 @@ def read_pool_latents(model, b, src, n):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=shard,
         )
-        g = ttnn.embedding(d_ids, pool.pool, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, 1, m, 512] per device
+        g = _gather_pool(pool, d_ids)  # [1, 1, m, 512] bf16 per device
         out.append(ttnn.to_torch(ttnn.get_device_tensors(g)[r * cols]).reshape(m, 512).clone())
         ttnn.deallocate(g)
         ttnn.deallocate(d_ids)
@@ -322,7 +341,7 @@ def read_pool_latents(model, b, src, n):
 def read_pool_latents_begin(model, b, src, n):
     """``read_pool_latents`` without waiting: [(rows m, host tensor handle)] of the gathers (pieces of 16384 rows), enqueued on CQ 0 and freed right after their reads (see ``snapshot_begin``)."""
     pool, md, rows, cols = model.pool, model.md, model.rows, model.cols
-    assert pool.dtype == ttnn.bfloat16, "APC on the paged prefill needs the bf16 pool"
+    _check_pool(pool)
     r = b // model.U
     phys = pool.phys_rows(b, src, torch.arange(n)).long()
     shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
@@ -339,7 +358,7 @@ def read_pool_latents_begin(model, b, src, n):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=shard,
         )
-        g = ttnn.embedding(d_ids, pool.pool, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, 1, m, 512] per device
+        g = _gather_pool(pool, d_ids)  # [1, 1, m, 512] bf16 per device
         out.append((m, ttnn.from_device(ttnn.get_device_tensors(g)[r * cols], blocking=False)))
         ttnn.deallocate(g)
         ttnn.deallocate(d_ids)

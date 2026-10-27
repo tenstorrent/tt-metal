@@ -364,3 +364,42 @@ def paged_scatter_rows(pool, src, row_ids, n_cores=16, base_offset=0):
     prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[cb])
     prog.custom_program_hash = (0x9A7 << 40) | (hash(tuple(ct)) & ((1 << 40) - 1))
     return ttnn.generic_op([src, row_ids, pool], prog)
+
+
+def paged_gather_rows(pool, row_ids, out=None, n_cores=16):
+    """out[i] = bf16(pool[row_ids[i]]) (``paged_kernels/row_gather.cpp``): the read path of an APC snapshot for ANY pool dtype (``ttnn.embedding`` needs a bf16 table; the fp8 -> bf16 conversion here is exact,
+    subnormals included). row_ids: uint32 ROW_MAJOR [1, N] per device (0xFFFFFFFF = leave the output row untouched); out: bf16 ROW_MAJOR [1, 1, N, 512] (allocated when None). -> out.
+    """
+    md = pool.device()
+    N = int(row_ids.shape[-1])
+    if out is None:
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, N, HEAD_DIM]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+        )
+    assert row_ids.dtype == ttnn.uint32 and out.dtype == ttnn.bfloat16 and out.layout == ttnn.ROW_MAJOR_LAYOUT
+    n_cores = min(n_cores, N)
+    cores = [ttnn.CoreCoord(i % 8, i // 8) for i in range(n_cores)]
+    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+    total = ((N * 4 + 63) // 64) * 64 + 16 * 1024  # ids + 8 raw rows + 8 bf16 rows
+    cb = ttnn.CBDescriptor(
+        total_size=total,
+        core_ranges=core_set,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.int32, page_size=total)],
+    )
+    ct = [N, n_cores, 0, int(pool.dtype == ttnn.fp8_e4m3)] + _acc(row_ids) + _acc(pool) + _acc(out)
+    rt = ttnn.RuntimeArgs()
+    for i, c in enumerate(cores):
+        rt[c.x][c.y] = [i]
+    k = ttnn.KernelDescriptor(
+        kernel_source=f"{KDIR}/row_gather.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_set,
+        compile_time_args=ct,
+        runtime_args=rt,
+        common_runtime_args=[row_ids.buffer_address(), pool.buffer_address(), out.buffer_address()],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[cb])
+    prog.custom_program_hash = (0x9A9 << 40) | (hash(tuple(ct)) & ((1 << 40) - 1))
+    ttnn.generic_op([row_ids, pool, out], prog)
+    return out

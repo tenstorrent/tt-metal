@@ -90,11 +90,20 @@ class PrefillKV:
     ``[U, 1, LAT + WIN, 512]`` bf16, rows [0, LAT): compressed latents (entry j at row j), rows [LAT, LAT + WIN): window scratch (WIN = 128 + c_max rows:
     the 128 positions before the chunk, then the chunk), rewritten by every layer for every chunk."""
 
-    def __init__(self, md, users, lat_cap, c_max):
+    def __init__(self, md, users, lat_cap, c_max, alloc=True):
         self.md, self.U = md, users
         self.lat_cap, self.c_max = lat_cap, c_max
         self.LAT = ceil32(lat_cap)
         self.WIN = WINDOW + c_max
+        if (
+            not alloc
+        ):  # DSV41_BUILD_LAZY_PF: sizes only (the table of the single-trace server is never used: the latents are the pool pages)
+            self.dt = ttnn.fp8_e4m3 if pf_tune.SP_FP8 else ttnn.bfloat16
+            self.fmt = (
+                ttnn.transformer.SparseKVFormat.FP8_E4M3 if pf_tune.SP_FP8 else ttnn.transformer.SparseKVFormat.BF16
+            )
+            self.t = None
+            return
         self.dt = (
             ttnn.fp8_e4m3 if pf_tune.SP_FP8 else ttnn.bfloat16
         )  # env DSV41_PFA_SP_FP8=1: fp8_e4m3 kv table (halves the sparse_sdpa gather bytes)
@@ -114,7 +123,8 @@ class PrefillKV:
         return x if x.dtype == self.dt else ttnn.typecast(x, self.dt)
 
     def free(self):
-        ttnn.deallocate(self.t)
+        if self.t is not None:
+            ttnn.deallocate(self.t)
 
     def write_latents(self, lat, j0):
         """lat [U,1,Cc,512] tile bf16 (RoPE'd)."""
@@ -273,7 +283,18 @@ class DSV41PrefillIndexer:
     """
 
     def __init__(
-        self, md, users, ratio, lmax, dec=None, w_idx=None, freqs_cis=None, key_owner=None, fp4_q=True, fp4_k=True
+        self,
+        md,
+        users,
+        ratio,
+        lmax,
+        dec=None,
+        w_idx=None,
+        freqs_cis=None,
+        key_owner=None,
+        fp4_q=True,
+        fp4_k=True,
+        alloc_keys=True,
     ):
         self.md, self.U, self.ratio = md, users, ratio
         if dec is None:
@@ -287,7 +308,7 @@ class DSV41PrefillIndexer:
         self.key_owner = key_owner
         self.KL = ceil32(lmax)
         self.keys = None
-        if key_owner is None:
+        if key_owner is None and alloc_keys:
             self.keys = ttnn.zeros([users, 1, self.KL, IDIM], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=md)
         self.cfg = ttnn.IndexerScoreProgramConfig(
             q_chunk_size=int(os.environ.get("DSV41_PIDX_QC", "32")),
@@ -1319,6 +1340,14 @@ class DSV41PrefillSparse:
         return outs[0] if U == 1 else ttnn.concat(outs, dim=0)
 
 
+def lazy_tables_on():
+    """DSV41_BUILD_LAZY_PF=1 (default 0): ``attach_prefill_sparse`` allocates NO eager-sized kv tables / key slabs at model build when the single chunk trace serves the prefill (DSV41_PF_SINGLE=1,
+    decided before the build): they are never read there (the latents are the pool pages, the key slab is ``alloc_single``) and the server released them before the first request anyway (~401 MiB/bank at
+    1,048,576 tokens, Up=1). Without them the build never holds that peak (the spec runner build / verify compile no longer needs the early teardown).
+    """
+    return os.environ.get("DSV41_BUILD_LAZY_PF", "0") == "1" and os.environ.get("DSV41_PF_SINGLE", "0") == "1"
+
+
 def attach_prefill_sparse(
     pas,
     idx_weights,
@@ -1331,6 +1360,7 @@ def attach_prefill_sparse(
     fp4_k=True,
     decode_indexers=None,
     enable=False,
+    lazy=None,
 ):
     """Attach the sparse path to the ``DSV41PrefillAttention`` objects ``pas`` {layer id: pa} of a model (compressed layers only).
     idx_weights {layer: {wq_b, weights_proj, [wk, k_norm]}} of the index-source layers (``loader.load_layer(..., with_indexer=True)['indexer']``);
@@ -1340,6 +1370,8 @@ def attach_prefill_sparse(
         not enable and os.environ.get("DSV41_PF_SPARSE", "0") != "1"
     ):  # env-gated, default OFF (dense prefill attention, exact up to 512 compressed entries)
         return {}
+    if lazy is None:
+        lazy = lazy_tables_on()
     out, kvts, idx_of = {}, {}, {}
     last_idx_src, last_key_owner = None, None
     for L in sorted(pas):
@@ -1349,7 +1381,7 @@ def attach_prefill_sparse(
         a = pa.a
         owner = a if a.source is None else a.source
         if id(owner) not in kvts:
-            kvts[id(owner)] = PrefillKV(pa.md, users, max_tokens // pa.ratio + 32, c_max)
+            kvts[id(owner)] = PrefillKV(pa.md, users, max_tokens // pa.ratio + 32, c_max, alloc=not lazy)
         indexer = None
         if L in idx_weights:
             w = idx_weights[L]
@@ -1365,6 +1397,7 @@ def attach_prefill_sparse(
                     freqs_cis=a.freqs_cis if hasattr(a, "freqs_cis") else None,
                     fp4_q=fp4_q,
                     fp4_k=fp4_k,
+                    alloc_keys=not lazy,
                 )
                 last_key_owner = indexer
             else:
@@ -1382,6 +1415,10 @@ def attach_prefill_sparse(
                 )
         sp = DSV41PrefillSparse(pa, kvts[id(owner)], indexer=indexer, idx_src=last_idx_src, force=force)
         sp.set_sink(attn_sinks[L])
+        if (
+            lazy
+        ):  # the state ``free_dyn`` leaves: ``ensure_eager`` (eager path only) allocates the tables at the sizes recorded above
+            sp.kvt = None
         if indexer is not None:
             last_idx_src = sp
         pa.sparse = sp

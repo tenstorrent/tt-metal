@@ -22,6 +22,15 @@ def default_page_params(max_seq_len, users_per_row):
     }
 
 
+def fp8_serving():
+    """DSV41_FP8_SERVING=1 (default 0): the fp8 KV pool is a serving format of the interleaved server: the paged read prefill + single chunk trace (tt/prefill_single.resolve_server_default) and APC
+    (tt/prefix_cache.py, snapshots of an fp8 pool through ``paged_gather_rows``) work with DSV41_POOL_DTYPE=fp8 + DSV41_PF_PAGED_FP8=1. Halves the pool: 160 vs 320 MiB/bank per user and 1M tokens (B=8 at 1M).
+    """
+    import os
+
+    return os.environ.get("DSV41_FP8_SERVING", "0") == "1"
+
+
 def _env_setup(kv_dtype, batch=None, max_seq_len=None, mesh_rows=4):
     """Build-time environment. The spec default of this batch size (tt/spec_policy.py, the same resolution the demo and ``Generator.enable_spec`` use) decides DSV41_RING_ROWS=288
     (read by the pool at build / reconfigure time; only when spec decode will run) and DSV41_SPEC_ROWS (B >= 64 opt-in).
@@ -34,6 +43,8 @@ def _env_setup(kv_dtype, batch=None, max_seq_len=None, mesh_rows=4):
         spec_policy.resolve_apply(batch, mesh_rows, max_seq_len)
     if os.environ.get("DSV41_POOL_DTYPE", "bf16") == "fp8":  # fp8_e4m3 KV pool (halves the pool: batch 128 at 64k)
         kv_dtype = ttnn.fp8_e4m3
+        if fp8_serving():  # the server keeps the fp8 pool in read mode too (APC and the single trace support it)
+            os.environ.setdefault("DSV41_PF_PAGED_FP8", "1")
         if os.environ.get("DSV41_PF_PAGED", "read") == "read" and os.environ.get("DSV41_PF_PAGED_FP8", "0") != "1":
             # paged prefill reads the pool: the pool dtype is the prefill's KV precision. fp8 (P2a) costs the prefill logits PCC 0.93-0.96 at 32k / 40 layers; a bf16 pool costs +0.8 % decode step
             # at 262,144 (110.6 vs 109.7 ms) and +46 MiB per bank (PAGED_PREFILL_APC_DESIGN.md 3.5). DSV41_PF_PAGED_FP8 defaults to 0 (bf16 pool, shipped default: APC on the paged prefill needs it, prefix_cache.read_pool_latents); DSV41_PF_PAGED_FP8=1 keeps the fp8 pool (then APC is turned off).
