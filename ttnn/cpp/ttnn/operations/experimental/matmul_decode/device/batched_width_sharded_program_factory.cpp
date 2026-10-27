@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace ttnn::operations::experimental::matmul_decode {
@@ -101,12 +102,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     const uint32_t inA_K_tiles_per_core = inputA_shard_shape[1] / tt::constants::TILE_WIDTH;
 
     const bool use_global_cb = operation_attributes.global_cb.has_value();
+    // The reader loads this core's slab of a DRAM ND-sharded weight itself.
+    const bool in1_from_dram = operation_attributes.dram_weight_grid.has_value();
     // A packed weight is a region of a fused height-sharded tensor: its [Bc*K, Nc] slab shape
     // and its grid come from the spec, since the fused tensor's shard spec describes the whole
-    // pack. A prefetcher-fed weight is ND-sharded in DRAM: it has no legacy shard spec, so both
-    // come from the ND shard spec and the GCB.
+    // pack. A DRAM ND-sharded weight has no legacy shard spec, so both come from the ND shard
+    // spec and the GCB or dram_weight_grid.
     const auto& packed = operation_attributes.packed_weight;
-    const uint32_t b_shard_height = use_global_cb
+    const uint32_t b_shard_height = use_global_cb || in1_from_dram
                                         ? static_cast<uint32_t>(input_tensor_b.nd_shard_spec()->shard_shape[-2])
                                     : packed.has_value() ? Bc * static_cast<uint32_t>(operation_attributes.K)
                                                          : input_tensor_b.memory_config().shard_spec().value().shape[0];
@@ -114,6 +117,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
 
     const auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
     const auto inputB_core_range_set = use_global_cb        ? operation_attributes.global_cb->receiver_cores()
+                                       : in1_from_dram      ? *operation_attributes.dram_weight_grid
                                        : packed.has_value() ? packed->cores
                                                             : input_tensor_b.memory_config().shard_spec().value().grid;
     const bool in0_rm_hs = operation_attributes.in0_row_major_height_sharded;
@@ -321,6 +325,18 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
                 .page_size = sync_cb_page_bytes,
             }}},
         });
+    } else if (in1_from_dram) {
+        // The reader fills this with the core's whole DRAM slab before publishing full_in0.
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in1_slab_bytes,
+            .core_ranges = inputB_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = in1_cb_index,
+                .data_format = in1_data_format,
+                .page_size = in1_tile_size,
+                .tile = in1_tile_desc,
+            }}},
+        });
     } else {
         // Globally allocated over the resident weight. For a packed weight the buffer is the
         // fused tensor's, and the region's byte offset into every core's shard re-bases the CB
@@ -414,6 +430,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         Bc,
         inA_K_tiles_per_core,
     };
+    if (in1_from_dram) {
+        TensorAccessorArgs(input_tensor_b.buffer()).append_to(reader_kernel_desc.compile_time_args);
+    }
     // Every CB index travels as a named "cb_*" arg: op fusion pool-allocates hardware CB slots
     // across the phases it merges and rewrites exactly these args, so positional or hard-coded
     // indices would leave the kernels pointing at pre-remap slots.
@@ -436,6 +455,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     if (use_global_cb) {
         reader_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
     }
+    if (in1_from_dram) {
+        reader_kernel_desc.defines.emplace_back("IN1_FROM_DRAM", "1");
+    }
     if (use_custom_mm) {
         reader_kernel_desc.defines.emplace_back("USE_CUSTOM_MM", "1");
     }
@@ -445,6 +467,15 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     reader_kernel_desc.runtime_args.reserve(b_cores.size());
     for (uint32_t idx = 0; idx < b_cores.size(); idx++) {
         const uint32_t b_idx = idx / n_blocks;
+        if (in1_from_dram) {
+            // [b_idx, weight address, weight shard, sender coords...]: shard idx is this core's slab.
+            std::vector<std::variant<uint32_t, Buffer*>> args = {b_idx, input_tensor_b.buffer(), idx};
+            if (!in0_rm_hs) {
+                args.insert(args.end(), sender_phys_coords.begin(), sender_phys_coords.end());
+            }
+            reader_kernel_desc.emplace_runtime_args(b_cores[idx], args);
+            continue;
+        }
         KernelDescriptor::CoreRuntimeArgs args;
         args.push_back(b_idx);
         if (!in0_rm_hs) {

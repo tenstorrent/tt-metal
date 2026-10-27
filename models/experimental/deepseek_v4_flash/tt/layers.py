@@ -495,7 +495,9 @@ class LinearDecode(DeepSeekV4Module):
     matmul's in1 circular buffer through a ``GlobalCircularBuffer``, off the command queue.
     With ``use_prefetcher=False`` (a projection whose receiver count the shared GCB cannot
     serve) the weight stays DRAM-interleaved and ``forward`` copies it into L1 width-sharded
-    form for the call, freeing it again afterwards.
+    form for the call, freeing it again afterwards -- unless ``dram_sharded_weight=True``, which
+    stores it in the prefetcher's DRAM ND-sharded layout and has ``matmul_decode`` read each B
+    core's slab from DRAM itself, so there is no separate interleaved-to-sharded copy.
 
     ``fetch_weights`` stages this layer's weights ahead of the call that needs them: on the
     prefetched path it queues the prefetch request rather than copying into L1, so the transfer
@@ -530,6 +532,7 @@ class LinearDecode(DeepSeekV4Module):
         tile_height: int = ttnn.TILE_SIZE,
         rectangle_b_grid: bool = False,
         use_rm_hs: bool = False,
+        dram_sharded_weight: bool = False,
     ):
         """Build the per-core weight for ``K``-wide in / ``N``-wide out (both per rank).
 
@@ -544,7 +547,8 @@ class LinearDecode(DeepSeekV4Module):
         :func:`make_shared_decode_gcb` / :func:`decode_gcb_page_bytes`;
         ``num_prefetch_slabs`` (default from the active system config) is the ring depth in
         pages. Otherwise the weight is ``[K, N]`` TILE DRAM and is copied into
-        ``weights_memory_config`` (WIDTH_SHARDED L1) per call.
+        ``weights_memory_config`` (WIDTH_SHARDED L1) per call, or with ``dram_sharded_weight``
+        stored like the prefetched weight and read from DRAM by the matmul onto the same B cores.
 
         ``tile_height`` is the activation's tile height (1 for the single-user 1x32 tile) and
         is used to pad ``M`` for the output shard. On the L1 path, ``rectangle_b_grid`` lays the
@@ -570,6 +574,8 @@ class LinearDecode(DeepSeekV4Module):
         self.fused_rms_norm_group_size = 0
         self.output_core_grid = None
         self.cache_file_name = cache_file_name
+        self.dram_sharded_weight = dram_sharded_weight and not use_prefetcher
+        self.dram_weight_grid = None
 
         assert K != -1 and N != -1, "K and N must be set"
         self.K = K
@@ -615,6 +621,13 @@ class LinearDecode(DeepSeekV4Module):
             b_core_range_set = ttnn.num_cores_to_corerangeset(
                 num_inputB_cores, self.device.compute_with_storage_grid_size(), row_wise=True
             )
+        if self.dram_sharded_weight:
+            # matmul_decode hands slab p to the p-th core of this grid in row-major order, the same
+            # core the L1 width shard would have put it on.
+            self.dram_weight_grid = b_core_range_set
+            self._store_dram_sharded_weight(weight, cache_file_name, dtype, shard_shape, device.dram_grid_size().x)
+            self._check_use_rm_hs()
+            return
         self.weights_memory_config = ttnn.create_sharded_memory_config(
             shard_shape,
             core_grid=b_core_range_set,
@@ -669,10 +682,13 @@ class LinearDecode(DeepSeekV4Module):
     def b_core_grid(self) -> ttnn.CoreRangeSet:
         """The ``num_inputB_cores`` cores holding one ``[Kc, Nc]`` weight slab each.
 
-        The GCB's receivers on the prefetched path, else the L1 width-shard grid.
+        The GCB's receivers on the prefetched path, the grid the matmul reads the DRAM slabs onto
+        with ``dram_sharded_weight``, else the L1 width-shard grid.
         """
         if self.global_cb is not None:
             return self.global_cb.receiver_cores()
+        if self.dram_weight_grid is not None:
+            return self.dram_weight_grid
         return self.weights_memory_config.shard_spec.grid
 
     def _can_matmul_decode_rm_hs(self) -> bool:
@@ -939,6 +955,31 @@ class LinearDecode(DeepSeekV4Module):
                     f"whole {page_bytes} B page(s) -- it was almost certainly sized for a different page size"
                 )
 
+        self._store_dram_sharded_weight(weight, cache_file_name, dtype, slab_shape, num_dram_banks)
+        if shared_cb is not None:
+            self.global_cb = shared_cb
+        else:
+            ring_cols = _receiver_ring_cols(num_inputB_cores, self.device, preferred_width)
+            self.global_cb = make_matmul_decode_gcb(
+                self.device,
+                self.weight,
+                _bank_to_receivers(num_inputB_cores, self.device, ring_cols),
+                slab_shape=slab_shape,
+                num_pages=num_slabs,
+            )
+        # The op requires the output to live on the receiver cores (full mode asserts the two
+        # grids are equal; partial mode reduces onto the first n_blocks of them in row-major
+        # order), so keep them to build the output config from. Read back from the GCB so this
+        # is the device's own slab-to-core order rather than a second guess at it.
+        self.receiver_cores = _receiver_cores_in_order(self.global_cb.receiver_cores())
+
+    def _store_dram_sharded_weight(self, weight, cache_file_name, dtype, slab_shape, num_dram_banks):
+        """Store the weight as ``[1, 1, K, N]`` TILE, DRAM ND-sharded one ``slab_shape`` slab per B core.
+
+        Slabs are distributed ROUND_ROBIN_1D over ``num_dram_banks`` banks. The partial layout
+        is not K-block-folded: the ND shard already enumerates the ``(k_blocks x n_blocks)`` grid
+        row-major, which is the order ``matmul_decode`` assigns slabs to B cores.
+        """
         dram_memory_config = ttnn.MemoryConfig(
             ttnn.BufferType.DRAM,
             ttnn.NdShardSpec(
@@ -969,22 +1010,6 @@ class LinearDecode(DeepSeekV4Module):
         # Tile-cache hits drop NdShardSpec. Re-apply so a full-width 8-core weight stays
         # one [K, N/cores] slab per receiver rather than a 64-shard DRAM tensor.
         self.weight = ttnn.to_memory_config(self.weight, dram_memory_config)
-        if shared_cb is not None:
-            self.global_cb = shared_cb
-        else:
-            ring_cols = _receiver_ring_cols(num_inputB_cores, self.device, preferred_width)
-            self.global_cb = make_matmul_decode_gcb(
-                self.device,
-                self.weight,
-                _bank_to_receivers(num_inputB_cores, self.device, ring_cols),
-                slab_shape=slab_shape,
-                num_pages=num_slabs,
-            )
-        # The op requires the output to live on the receiver cores (full mode asserts the two
-        # grids are equal; partial mode reduces onto the first n_blocks of them in row-major
-        # order), so keep them to build the output config from. Read back from the GCB so this
-        # is the device's own slab-to-core order rather than a second guess at it.
-        self.receiver_cores = _receiver_cores_in_order(self.global_cb.receiver_cores())
 
     def _prefetch_output_memory_config(self, m_padded: int) -> ttnn.MemoryConfig:
         """Width-sharded L1 output over the GCB's receiver cores: shard ``[m_padded, Nc]``.
@@ -1039,12 +1064,15 @@ class LinearDecode(DeepSeekV4Module):
     def fetch_weights(self):
         """Stage this layer's weight ahead of the matmul that needs it.
 
-        On the prefetched path it queues the DRISC request. Otherwise it copies the ``[K, N]``
-        DRAM weight into ``l1_weights`` (WIDTH_SHARDED L1), which ``forward`` then reuses and
-        frees.
+        On the prefetched path it queues the DRISC request. With ``dram_sharded_weight`` it does
+        nothing, since the matmul reads the weight from DRAM itself. Otherwise it copies the
+        ``[K, N]`` DRAM weight into ``l1_weights`` (WIDTH_SHARDED L1), which ``forward`` then
+        reuses and frees.
         """
         if self.use_prefetcher:
             self._queue_prefetch()
+            return
+        if self.dram_sharded_weight:
             return
         print(f"Blocking fetch weights for {self.cache_file_name}")
         self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
@@ -1113,7 +1141,7 @@ class LinearDecode(DeepSeekV4Module):
                 # prefetcher is running, so the caller's own stop still behaves.
                 ttnn.experimental.stop_tensor_prefetcher(self.device, force=True)
                 raise
-        if self.l1_weights is None or not self.l1_weights.is_allocated():
+        if not self.dram_sharded_weight and (self.l1_weights is None or not self.l1_weights.is_allocated()):
             self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         # Single-user decode uses a 1x32 tile. The width-sharded output must
         # use the same physical height as the matmul output, not a full-tile
@@ -1147,6 +1175,15 @@ class LinearDecode(DeepSeekV4Module):
                     [m_out, self.N // self.num_inputB_cores],
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
+            )
+        if self.dram_sharded_weight:
+            return ttnn.experimental.matmul_decode(
+                x,
+                self.weight,
+                partial_width_sharded=self.partial_width_sharded,
+                mesh_coords=mesh_coords,
+                weight_core_grid=self.dram_weight_grid,
+                **self._epilogue_kwargs(output_memory_config),
             )
         result = ttnn.experimental.matmul_decode(
             x,
@@ -1285,6 +1322,10 @@ class BatchedLinearDecode(DeepSeekV4Module):
     DRAM-interleaved output regardless of the weight's source, so this needs no output-side
     sharding. See :class:`LinearDecode`'s docstring for the ``global_cb`` / session details,
     which carry over unchanged.
+
+    ``dram_sharded_weight=True`` (without the prefetcher) stores the weight in that same DRAM
+    ND-sharded layout and has ``matmul_decode`` read each B core's slab from DRAM itself,
+    instead of ``forward`` copying the whole weight into L1 width-sharded form first.
     """
 
     def __init__(
@@ -1307,6 +1348,7 @@ class BatchedLinearDecode(DeepSeekV4Module):
         global_cb_page_bytes: Optional[int] = None,
         mesh_mapper=None,
         global_batch: Optional[int] = None,
+        dram_sharded_weight: bool = False,
     ):
         """Build the batch-and-N-folded per-core weight for ``batch`` users over ``K`` -> ``N``.
 
@@ -1319,7 +1361,7 @@ class BatchedLinearDecode(DeepSeekV4Module):
         is the un-sharded batch when ``mesh_mapper`` splits the batch across ranks: it must be a
         multiple of ``batch`` and is folded before the mesh shard.
         ``use_prefetcher`` / ``num_prefetch_slabs`` / ``global_cb`` / ``global_cb_page_bytes``
-        behave as in :class:`LinearDecode`.
+        / ``dram_sharded_weight`` behave as in :class:`LinearDecode`.
         """
         self.device = device
         self.dtype = dtype
@@ -1334,6 +1376,8 @@ class BatchedLinearDecode(DeepSeekV4Module):
         self.gcb_k_blocks = 1
         self.prefetch_queued = False
         self.output_core_grid = None
+        self.dram_sharded_weight = dram_sharded_weight and not use_prefetcher
+        self.dram_weight_grid = None
 
         # One batch per core row (Bc = 1) by default; widen N across as many cores as the grid
         # allows while keeping each N-shard tile-aligned.
@@ -1393,6 +1437,12 @@ class BatchedLinearDecode(DeepSeekV4Module):
         b_core_range_set = ttnn.num_cores_to_corerangeset(
             self.b_blocks * self.n_blocks, device.compute_with_storage_grid_size(), row_wise=True
         )
+        if self.dram_sharded_weight:
+            self.dram_weight_grid = b_core_range_set
+            self._store_dram_sharded_weight(
+                weight, cache_file_name, dtype, preprocess, fold, (self.bc * K, self.nc), device.dram_grid_size().x
+            )
+            return
         self.weights_memory_config = ttnn.create_sharded_memory_config(
             (self.bc * K, self.nc),
             core_grid=b_core_range_set,
@@ -1440,10 +1490,13 @@ class BatchedLinearDecode(DeepSeekV4Module):
     def b_core_grid(self) -> ttnn.CoreRangeSet:
         """The ``b_blocks * n_blocks`` cores holding one ``[Bc*K, Nc]`` weight block each.
 
-        The GCB's receivers on the prefetched path, else the L1 width-shard grid.
+        The GCB's receivers on the prefetched path, the grid the matmul reads the DRAM slabs onto
+        with ``dram_sharded_weight``, else the L1 width-shard grid.
         """
         if self.global_cb is not None:
             return self.global_cb.receiver_cores()
+        if self.dram_weight_grid is not None:
+            return self.dram_weight_grid
         return self.weights_memory_config.shard_spec.grid
 
     def _init_prefetched_weight(
@@ -1485,6 +1538,26 @@ class BatchedLinearDecode(DeepSeekV4Module):
                     f"whole {page_bytes} B page(s) -- it was almost certainly sized for a different page size"
                 )
 
+        self._store_dram_sharded_weight(weight, cache_file_name, dtype, preprocess, fold, slab_shape, num_dram_banks)
+        if shared_cb is not None:
+            self.global_cb = shared_cb
+        else:
+            ring_cols = _receiver_ring_cols(num_b_cores, self.device, preferred_width=self.n_blocks)
+            self.global_cb = make_matmul_decode_gcb(
+                self.device,
+                self.weight,
+                _bank_to_receivers(num_b_cores, self.device, ring_cols),
+                slab_shape=slab_shape,
+                num_pages=num_slabs,
+            )
+        self.receiver_cores = _receiver_cores_in_order(self.global_cb.receiver_cores())
+
+    def _store_dram_sharded_weight(self, weight, cache_file_name, dtype, preprocess, fold, slab_shape, num_dram_banks):
+        """Store the folded ``[1, 1, Bc*K, b_blocks*N]`` weight DRAM ND-sharded, one ``slab_shape`` slab per B core.
+
+        Slabs are distributed ROUND_ROBIN_1D over ``num_dram_banks`` banks; slab ``p`` is the
+        block the L1 path would width-shard onto B core ``p``.
+        """
         dram_memory_config = ttnn.MemoryConfig(
             ttnn.BufferType.DRAM,
             ttnn.NdShardSpec(
@@ -1510,18 +1583,8 @@ class BatchedLinearDecode(DeepSeekV4Module):
             cache_file_name=cache_file_name,
             mesh_mapper=self.mesh_mapper,
         )
-        if shared_cb is not None:
-            self.global_cb = shared_cb
-        else:
-            ring_cols = _receiver_ring_cols(num_b_cores, self.device, preferred_width=self.n_blocks)
-            self.global_cb = make_matmul_decode_gcb(
-                self.device,
-                self.weight,
-                _bank_to_receivers(num_b_cores, self.device, ring_cols),
-                slab_shape=slab_shape,
-                num_pages=num_slabs,
-            )
-        self.receiver_cores = _receiver_cores_in_order(self.global_cb.receiver_cores())
+        # Tile-cache hits drop NdShardSpec. Re-apply so each B core keeps one [Bc*K, Nc] slab.
+        self.weight = ttnn.to_memory_config(self.weight, dram_memory_config)
 
     def _queue_prefetch(self):
         """Ask the DRISC senders to push this weight's ``[Bc*K, Nc]`` slabs into the GCB.
@@ -1536,7 +1599,8 @@ class BatchedLinearDecode(DeepSeekV4Module):
     def fetch_weights(self):
         """Queue the DRISC prefetch of the folded ``[1, 1, Bc*K, b_blocks*N]`` weight; else no-op.
 
-        The non-prefetched batched path copies the weight into L1 inside ``forward`` instead.
+        The non-prefetched batched path copies the weight into L1 inside ``forward`` instead, or
+        with ``dram_sharded_weight`` lets the matmul read it from DRAM.
         """
         if self.use_prefetcher:
             self._queue_prefetch()
@@ -1606,6 +1670,10 @@ class BatchedLinearDecode(DeepSeekV4Module):
                 # rejected call must force-stop rather than leave slabs nothing will ever drain.
                 ttnn.experimental.stop_tensor_prefetcher(self.device, force=True)
                 raise
+        if self.dram_sharded_weight:
+            return ttnn.experimental.matmul_decode(
+                x, self.weight, weight_core_grid=self.dram_weight_grid, **self._epilogue_kwargs()
+            )
         l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         y = ttnn.experimental.matmul_decode(x, l1_weights, **self._epilogue_kwargs())
         l1_weights.deallocate()

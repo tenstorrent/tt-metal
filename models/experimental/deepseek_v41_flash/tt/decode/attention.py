@@ -153,6 +153,7 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
             **DECODE_LAYOUTS["indexer.wq_b"],
             rectangle_b_grid=True,
             use_rm_hs=True,
+            dram_sharded_weight=True,
         )
         self.weights_proj = LinearDecode(
             _scale_linear_weight(weights["indexer.weights_proj.weight"], folded),
@@ -162,6 +163,7 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
             **DECODE_LAYOUTS["indexer.weights_proj"],
             rectangle_b_grid=True,
             use_rm_hs=True,
+            dram_sharded_weight=True,
         )
 
     def select_kv(
@@ -430,6 +432,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             **ring_prefetch(rings, "q_a_proj", prefetch_buffers, device, weight_dtype),
             rectangle_b_grid=True,
             use_rm_hs=True,
+            dram_sharded_weight=True,
         )
         self.kv_proj = LinearDecode(
             weights["kv_proj.weight"],
@@ -440,6 +443,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             **DECODE_LAYOUTS["kv_proj"],
             **ring_prefetch(rings, "kv_proj", prefetch_buffers, device, weight_dtype),
             use_rm_hs=True,
+            dram_sharded_weight=True,
         )
         # One replica of kv on core (0,0): the writer unicasts producer slices into that dest bbox.
         self.kv_proj.set_output_core_grid(
@@ -455,6 +459,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             **ring_prefetch(rings, "q_b_proj", prefetch_buffers, device, weight_dtype),
             rectangle_b_grid=True,
             use_rm_hs=True,
+            dram_sharded_weight=True,
         )
         self.o_b_proj = LinearDecode(
             weights["o_b_proj.weight"],
@@ -466,6 +471,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             **ring_prefetch(rings, "o_b_proj", prefetch_buffers, device, weight_dtype),
             rectangle_b_grid=True,
             use_rm_hs=True,
+            dram_sharded_weight=True,
         )
         # q_a's and kv's RMSNorms ride their matmul epilogues; q_a's mcasts a ROW_MAJOR
         # HEIGHT_SHARDED replica onto every q_b B core, which q_b reads as A.
@@ -493,6 +499,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             mesh_mapper=ttnn.ShardTensorToMesh(device, dim=3) if tp_size > 1 else None,
             preprocess=lambda w: w.reshape(self.o_groups, self.o_lora_rank, in_per_group).transpose(1, 2).contiguous(),
             **ring_prefetch(rings, "o_a_proj", prefetch_buffers, device, weight_dtype),
+            dram_sharded_weight=True,
         )
         # o_b reads o_a's result as replicated ROW_MAJOR HEIGHT_SHARDED A; NOC mcast needs a filled rectangle.
         self.o_a_proj.set_output_core_grid(ttnn.CoreRangeSet({self.o_b_proj.b_core_grid().bounding_box()}))
@@ -528,6 +535,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 dtype=ttnn.bfloat16,
                 **DECODE_LAYOUTS["compressor.wkv"],
                 use_rm_hs=True,
+                dram_sharded_weight=True,
             )
             self.comp_gate_proj = (
                 LinearDecode(
@@ -537,6 +545,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                     dtype=ttnn.bfloat16,
                     **DECODE_LAYOUTS["compressor.wgate"],
                     use_rm_hs=True,
+                    dram_sharded_weight=True,
                 )
                 if self.compress_ratio > 1
                 else None

@@ -15,9 +15,12 @@
 // IN0_REPLICATED: A is ROW_MAJOR HEIGHT_SHARDED and already holds the full [batch * M, K] on this
 // core. Copy the [Bc, M, K] slice at b_idx instead of the width-sharded gather.
 //
-// in1 (weights) arrive one of two ways:
+// in1 (weights) arrive one of three ways:
 //   - default: the in1 CB is globally allocated over the L1-resident weight shard, so the
 //     reader only has to declare its tiles available.
+//   - IN1_FROM_DRAM: the weight is DRAM ND-sharded, one [Bc*K, Nc] slab per core. The reader
+//     issues the slab's read before the gather so the two overlap, and waits for it before
+//     publishing full_in0: compute takes in1 only after full_in0, so that gates it.
 //   - ENABLE_GLOBAL_CB: the weights are pushed into a DRAM-sender GlobalCircularBuffer by the
 //     tensor prefetcher. This receiver's [Bc*K, Nc] slab arrives as num_k_blocks remote pages,
 //     each a whole number of rows (num_k_blocks == 1 is the whole slab in one page). The reader
@@ -47,6 +50,14 @@ void kernel_main() {
 #endif
 
     const uint32_t b_idx = get_arg_val<uint32_t>(0);
+#ifdef IN1_FROM_DRAM
+    // Runtime args: [b_idx, weight address, weight shard, sender (x, y)...].
+    constexpr auto in1_args = TensorAccessorArgs<7>();
+    constexpr uint32_t sender_arg_base = 3;
+#else
+    // Runtime args: [b_idx, sender (x, y)...].
+    constexpr uint32_t sender_arg_base = 1;
+#endif
 
     const uint32_t block_slice_bytes = block_slice_tiles * tile_size_bytes;
 
@@ -61,6 +72,10 @@ void kernel_main() {
     in1_cb.reserve_back(in1_page_tiles);
     experimental::remote_cb_wait_front(remote_cb_index, 1);
     in1_cb.push_back(in1_page_tiles);
+#elif defined(IN1_FROM_DRAM)
+    const auto in1 = TensorAccessor(in1_args, get_arg_val<uint32_t>(1), in1_cb.get_tile_size());
+    in1_cb.reserve_back(in1_page_tiles);
+    noc_async_read_shard(get_arg_val<uint32_t>(2), in1, in1_cb.get_write_ptr());
 #else
     in1_cb.reserve_back(in1_page_tiles);
     in1_cb.push_back(in1_page_tiles);
@@ -78,8 +93,8 @@ void kernel_main() {
     // Restripe sender-major [sender][bc][k_local] into [bc][k_global] so custom_mm sees
     // kt_dim consecutive K tiles per batch.
     for (uint32_t s = 0; s < num_senders; ++s) {
-        const uint32_t sender_x = get_arg_val<uint32_t>(1 + 2 * s);
-        const uint32_t sender_y = get_arg_val<uint32_t>(2 + 2 * s);
+        const uint32_t sender_x = get_arg_val<uint32_t>(sender_arg_base + 2 * s);
+        const uint32_t sender_y = get_arg_val<uint32_t>(sender_arg_base + 1 + 2 * s);
         for (uint32_t bc_i = 0; bc_i < Bc; ++bc_i) {
             noc.async_read(
                 sender,
@@ -91,8 +106,8 @@ void kernel_main() {
     }
 #else
     for (uint32_t s = 0; s < num_senders; ++s) {
-        const uint32_t sender_x = get_arg_val<uint32_t>(1 + 2 * s);
-        const uint32_t sender_y = get_arg_val<uint32_t>(2 + 2 * s);
+        const uint32_t sender_x = get_arg_val<uint32_t>(sender_arg_base + 2 * s);
+        const uint32_t sender_y = get_arg_val<uint32_t>(sender_arg_base + 1 + 2 * s);
         noc.async_read(
             sender,
             full_in0_cb,
@@ -103,8 +118,12 @@ void kernel_main() {
 #endif
 #ifdef IN0_REPLICATED
     noc.async_write_barrier();
-#else
+#endif
+#if !defined(IN0_REPLICATED) || defined(IN1_FROM_DRAM)
     noc.async_read_barrier();
+#endif
+#ifdef IN1_FROM_DRAM
+    in1_cb.push_back(in1_page_tiles);
 #endif
 
     full_in0_cb.push_back(num_senders * block_slice_tiles);

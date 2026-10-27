@@ -145,6 +145,7 @@ class DeepSeekV41Engram(DeepSeekV4Module):
             mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-2) if tp_size > 1 else None,
             **ring_prefetch(prefetch_rings(tp_size), "engram.wkv", prefetch_buffers, device, weight_dtype),
             use_rm_hs=True,
+            dram_sharded_weight=True,
         )
         # engram_gate takes the gate weight as one fp32 tile row: row i is the weight of copy i % hc.
         # The cache file keeps the memory config it was written with, so the name records the placement.

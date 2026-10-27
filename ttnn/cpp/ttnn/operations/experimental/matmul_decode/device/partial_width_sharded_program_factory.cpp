@@ -151,15 +151,18 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     const uint32_t inA_K_tiles_per_core = inputA_shard_shape[1] / tt::constants::TILE_WIDTH;
 
     const bool use_global_cb = operation_attributes.global_cb.has_value();
+    // The reader loads this core's slab of a DRAM ND-sharded weight itself.
+    const bool in1_from_dram = operation_attributes.dram_weight_grid.has_value();
+    const bool b_nd_sharded = use_global_cb || in1_from_dram;
     // A packed weight is a region of a fused height-sharded tensor: its [Kc, Nc] slab shape and
     // its grid come from the spec, since the fused tensor's shard spec describes the whole pack.
     const auto& packed = operation_attributes.packed_weight;
-    // A prefetcher-fed weight is ND-sharded in DRAM: it has no legacy shard spec, so both the
-    // [Kc, Nc] slab shape and the receiver grid come from the ND shard spec and the GCB.
-    const uint32_t Kc = use_global_cb        ? static_cast<uint32_t>(input_tensor_b.nd_shard_spec()->shard_shape[-2])
+    // A DRAM ND-sharded weight has no legacy shard spec, so the [Kc, Nc] slab shape comes from
+    // the ND shard spec and the weight grid from the GCB or dram_weight_grid.
+    const uint32_t Kc = b_nd_sharded         ? static_cast<uint32_t>(input_tensor_b.nd_shard_spec()->shard_shape[-2])
                         : packed.has_value() ? packed->K / packed->k_blocks
                                              : input_tensor_b.memory_config().shard_spec().value().shape[0];
-    const uint32_t Nc = use_global_cb        ? static_cast<uint32_t>(input_tensor_b.nd_shard_spec()->shard_shape[-1])
+    const uint32_t Nc = b_nd_sharded         ? static_cast<uint32_t>(input_tensor_b.nd_shard_spec()->shard_shape[-1])
                         : packed.has_value() ? packed->N / packed->n_blocks()
                                              : input_tensor_b.memory_config().shard_spec().value().shape[1];
     const uint32_t Kc_tiles = Kc / tt::constants::TILE_HEIGHT;
@@ -167,6 +170,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
 
     const auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
     const auto inputB_core_range_set = use_global_cb        ? operation_attributes.global_cb->receiver_cores()
+                                       : in1_from_dram      ? *operation_attributes.dram_weight_grid
                                        : packed.has_value() ? packed->cores
                                                             : input_tensor_b.memory_config().shard_spec().value().grid;
     const auto output_core_range_set = output_tensor.memory_config().shard_spec().value().grid;
@@ -348,6 +352,18 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
                 .page_size = sync_cb_page_bytes,
             }}},
         });
+    } else if (in1_from_dram) {
+        // The reader fills this with the core's whole DRAM slab before publishing full_in0.
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in1_slab_bytes,
+            .core_ranges = inputB_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = in1_cb_index,
+                .data_format = in1_data_format,
+                .page_size = in1_tile_size,
+                .tile = in1_tile_desc,
+            }}},
+        });
     } else {
         // Globally allocated over the resident weight. For a packed weight the buffer is the
         // fused tensor's, and the region's byte offset into every core's shard re-bases the CB
@@ -433,7 +449,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         num_receivers >= 2 && hub0_logical != hub1_logical,
         "partial_width_sharded matmul_decode two-hub broadcast requires a compute rectangle of at least 2 cores");
 
-    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
         shard_num_tiles,
         in0_tile_size,
         num_senders,
@@ -452,6 +468,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         in1_page_num_tiles,
         num_k_blocks,
     };
+    if (in1_from_dram) {
+        TensorAccessorArgs(input_tensor_b.buffer()).append_to(reader_compile_time_args);
+    }
 
     // Every CB index travels as a named "cb_*" arg: op fusion pool-allocates hardware CB slots
     // across the phases it merges and rewrites exactly these args, so positional or hard-coded
@@ -487,6 +506,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     // matmul has otherwise finished. This costs the two-hub gather its NOC split in the GCB
     // path only.
     auto reader_noc_of = [&](NOC noc) { return use_global_cb ? NOC::NOC_0 : noc; };
+    // Weight slab p belongs to the p-th B core in this order (k_idx = p / N_blocks, n_idx = p % N_blocks).
+    const std::vector<CoreCoord> weight_cores = corerange_to_cores(inputB_core_range_set, std::nullopt, true);
 
     auto build_reader_kernel = [&](const std::vector<CoreCoord>& cores, NOC noc) {
         std::vector<CoreRange> ranges;
@@ -509,6 +530,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         if (use_global_cb) {
             reader_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
         }
+        if (in1_from_dram) {
+            reader_kernel_desc.defines.emplace_back("IN1_FROM_DRAM", "1");
+        }
         reader_kernel_desc.runtime_args.reserve(cores.size());
         for (const auto& core : cores) {
             const auto it = sender_id_by_core.find(core);
@@ -517,6 +541,20 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             // The reader runs on the merged A/B/output bounding box, but only B cores are GCB
             // receivers and only they have the in1 / sync CBs configured.
             const bool is_in1_receiver = inputB_core_range_set.contains(core);
+            if (in1_from_dram) {
+                const auto weight_it = std::find(weight_cores.begin(), weight_cores.end(), core);
+                const uint32_t in1_shard_id =
+                    is_in1_receiver ? static_cast<uint32_t>(weight_it - weight_cores.begin()) : 0;
+                reader_kernel_desc.emplace_runtime_args(
+                    core,
+                    {static_cast<uint32_t>(is_sender),
+                     sender_id,
+                     static_cast<uint32_t>(role_of(core)),
+                     static_cast<uint32_t>(is_in1_receiver),
+                     input_tensor_b.buffer(),
+                     in1_shard_id});
+                continue;
+            }
             reader_kernel_desc.runtime_args.emplace_back(
                 core,
                 KernelDescriptor::CoreRuntimeArgs{

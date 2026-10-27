@@ -26,7 +26,8 @@ Tensor matmul_decode(
     bool rms_norm,
     const std::optional<std::variant<float, Tensor>>& rms_norm_gamma,
     float rms_norm_epsilon,
-    uint32_t rms_norm_group_size) {
+    uint32_t rms_norm_group_size,
+    const std::optional<tt::tt_metal::CoreRangeSet>& weight_core_grid) {
     return ttnn::prim::matmul_decode(
         input_tensor_a,
         input_tensor_b,
@@ -44,7 +45,8 @@ Tensor matmul_decode(
         rms_norm,
         rms_norm_gamma,
         rms_norm_epsilon,
-        rms_norm_group_size);
+        rms_norm_group_size,
+        weight_core_grid);
 }
 
 Tensor matmul_decode_large_k(

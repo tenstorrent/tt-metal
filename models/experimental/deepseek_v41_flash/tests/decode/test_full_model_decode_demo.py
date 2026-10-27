@@ -244,11 +244,19 @@ def _assert_prefetch_rings(model: DeepSeekV41Model) -> None:
         assert q_a_ring is not None, "q_a must stream through the prefetcher"
         assert not hasattr(layer.attn_hc.fn, "global_cb"), "attention hyper-connection fn must not use a GCB"
         assert not hasattr(layer.ffn_hc.fn, "global_cb"), "FFN hyper-connection fn must not use a GCB"
+        proj = getattr(layer.mlp.gate, "gate", None)
+        if proj is not None and hasattr(proj, "dram_sharded_weight"):
+            assert (
+                not proj.use_prefetcher and proj.dram_sharded_weight
+            ), "the router gate has no ring and must read its DRAM ND-sharded weight inside matmul_decode"
         if model.tp_size > 1 and layer.mlp.shared_experts is not None:
             shared = layer.mlp.shared_experts
             assert (
                 not shared.gate_proj.use_prefetcher and not shared.up_proj.use_prefetcher
-            ), "the per-rank shared-expert gate/up cut matches no ring and must copy DRAM -> L1"
+            ), "the per-rank shared-expert gate/up cut matches no ring"
+            assert (
+                shared.gate_proj.dram_sharded_weight and shared.up_proj.dram_sharded_weight
+            ), "shared-expert gate/up must read their DRAM ND-sharded weights inside matmul_decode"
     logger.info(
         f"prefetch rings: {len(model._prefetch_buffers_by_device)} device(s), hyper-connection fn off the rings"
     )
