@@ -1099,6 +1099,12 @@ Starting serve profile (matches the validated demo): ONE sequence at a time (--m
 and generated tokens bounded by the pipeline KV capacity (--max-model-len @KV@), host-side sampling
 (logits are returned to vLLM). Concurrent users / long context / on-device sampling are model work; see
 the TODOs below.
+
+Decode is traced whenever vLLM asks for it (enable_trace): one step of the pipeline's decode_trace_step is
+captured and replayed for every token, with vLLM's sampled token written into the resident tok_u32 buffer
+before each replay -- the speed the demo was optimized for. Prefill stays eager (its length follows the
+prompt). A prefill at a length not seen before compiles new programs whose buffers may overlap the
+captured trace, so the trace is released then and captured again at the next decode.
 """
 from __future__ import annotations
 
@@ -1127,14 +1133,20 @@ class @TTARCH@:
     # Read by the plugin off the CLASS before the model exists.
     model_capabilities = {"supports_sample_on_device": False}
 
-    def __init__(self, pipe, max_batch_size, max_seq_len):
+    def __init__(self, pipe, max_batch_size, max_seq_len, mesh_device=None):
         self.pipe = pipe
+        self.mesh_device = mesh_device
         self.max_batch_size = int(max_batch_size)
         self.max_seq_len = int(max_seq_len)
         self.vocab_size = int(getattr(pipe.config, "vocab_size", 0)) or None
         self._state = None
         self._active = False
         self.already_warmed_up_prefill = False
+        self._traceable = mesh_device is not None and callable(getattr(pipe, "decode_trace_step", None))
+        self._trace_id = None
+        self._trace_logits = None
+        self._decode_compiled = False
+        self._prefill_lens = set()
 
     @classmethod
     def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len=None, n_layers=None, **_ignored):
@@ -1153,7 +1165,7 @@ class @TTARCH@:
             raise RuntimeError("pipeline module @PMOD@ not importable; run inside the serving image")
         pipe = _build_pipeline(mesh_device, layers=n_layers)
         log.info("built @SLUG@ pipeline (device rows=%s, KV=%s)", getattr(pipe, "batch", "?"), _KV_CAPACITY)
-        return cls(pipe, max_batch_size, msl)
+        return cls(pipe, max_batch_size, msl, mesh_device)
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         return [None for _ in per_layer_specs]  # the pipeline owns its cache
@@ -1166,6 +1178,42 @@ class @TTARCH@:
         v = self.vocab_size or host.numel()
         return host[:v].float().reshape(1, 1, v)
 
+    def _capture_decode_trace(self):
+        """Record one decode step (recording runs nothing on the device). False when it cannot be traced."""
+        tid = None
+        try:
+            tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            out = self.pipe.decode_trace_step()
+            ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+        except Exception as e:  # noqa: BLE001
+            if tid is not None:
+                try:
+                    ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    ttnn.release_trace(self.mesh_device, tid)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._traceable = False
+            log.warning("@SLUG@: decode trace capture failed (%s); decoding eagerly from here, which is much slower", e)
+            return False
+        if isinstance(out, dict):
+            out = out["logits"]
+        elif isinstance(out, (tuple, list)):
+            out = out[0]
+        self._trace_id, self._trace_logits = tid, out
+        log.info("@SLUG@: decode trace captured; every decode token replays it")
+        return True
+
+    def _release_trace(self):
+        if self._trace_id is not None:
+            try:
+                ttnn.release_trace(self.mesh_device, self._trace_id)
+            except Exception:  # noqa: BLE001
+                pass
+            self._trace_id = self._trace_logits = None
+
     def prefill_forward(self, tokens, page_table=None, *, prompt_lens=None, start_pos=None, **_compat):
         if tokens.shape[0] != 1:
             raise ValueError("one sequence at a time: got a prefill batch of %d" % tokens.shape[0])
@@ -1177,9 +1225,13 @@ class @TTARCH@:
         ids = tokens[0, :T].to(torch.int64).tolist()
         self._state = self.pipe.decode_prefill([ids])  # seeds the resident caches for every device row
         self._active = True
+        plen = int(getattr(self.pipe, "prefill_len", T) or T)
+        if plen not in self._prefill_lens:
+            self._prefill_lens.add(plen)
+            self._release_trace()
         return self._host_logits_row0(self._state["logits"])
 
-    def decode_forward(self, tokens, start_pos=None, page_table=None, **_compat):
+    def decode_forward(self, tokens, start_pos=None, page_table=None, *, enable_trace=False, **_compat):
         if not self._active:
             raise RuntimeError("decode_forward before prefill_forward")
         # Honor vLLM's host-sampled token: the demo pipeline commits its OWN device-sampled token, so
@@ -1197,24 +1249,43 @@ class @TTARCH@:
                 )
         except Exception:  # noqa: BLE001
             pass
+        # Capturing before the decode programs have run once would compile them mid-capture.
+        if (
+            enable_trace
+            and self._traceable
+            and self._decode_compiled
+            and (self._trace_id is not None or self._capture_decode_trace())
+        ):
+            ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
+            return self._host_logits_row0(self._trace_logits)
         self._state = self.pipe.decode_step(self._state)
+        self._decode_compiled = True
         return self._host_logits_row0(self._state["logits"])
 
     def warmup_model_prefill(self, *, kv_cache=None, can_sample_on_device=False, enable_trace=False):
         if enable_trace:
-            return  # eager generator; trace warmup is a no-op
+            return  # prefill stays eager: its length follows the prompt
         bos = int(getattr(self.pipe.config, "bos_token_id", 1) or 1)
         self.prefill_forward(torch.full((1, 8), bos, dtype=torch.int64), None, prompt_lens=[8])
         self.already_warmed_up_prefill = True
 
     def warmup_model_decode(self, *, kv_cache=None, max_batch_size=1, num_blocks=0, can_sample_on_device=False, enable_trace=False):
-        if enable_trace or not self._active:
+        if enable_trace:
+            if not self._traceable:
+                log.warning(
+                    "@SLUG@: vLLM asked for traced decode but @PMOD@ has no decode_trace_step; "
+                    "decoding eagerly, which is much slower"
+                )
+            elif self._trace_id is None and self._decode_compiled:
+                self._capture_decode_trace()
+            return
+        if not self._active:
             return
         self.decode_forward(torch.zeros((1, 1), dtype=torch.int64), None, None)
         self._active = False  # warmup sequence done; next prefill reseeds
 
     def cleanup(self):
-        pass
+        self._release_trace()
 '''
 
 
@@ -1638,6 +1709,32 @@ def _adapter_is_working(bundle_dir) -> bool:
     return "TODO(author)" not in src
 
 
+_EAGER_PIPELINE_ADAPTER_MARK = "return  # eager generator; trace warmup is a no-op"
+
+
+def _refresh_eager_pipeline_adapter(checkout, slug, bundle_dir) -> bool:
+    """Re-render an adapter.py written by an earlier _PIPELINE_ADAPTER_TMPL, which ignored vLLM's
+    enable_trace and decoded every token eagerly: a package published with it serves several times
+    slower than the traced speed its card reports (kolibri_1: ~8 tok/s served vs 39.5 traced). Only the
+    tool's own rendering is replaced, never a hand-written adapter. True when the file was rewritten."""
+    ap = Path(bundle_dir) / "adapter.py"
+    try:
+        src = ap.read_text()
+        meta = json.loads((Path(bundle_dir) / "vllm_metadata.json").read_text())
+    except Exception:  # noqa: BLE001
+        return False
+    if _EAGER_PIPELINE_ADAPTER_MARK not in src:
+        return False
+    pipeline_mod = _demo_pipeline_module(checkout, slug)
+    arch = meta.get("arch")
+    tt_arch = str(meta.get("main_class") or "").partition(":")[2]
+    if not (pipeline_mod and arch and tt_arch):
+        return False
+    kv, _mesh = _pipeline_serve_profile(checkout, slug)
+    ap.write_text(_pipeline_adapter_src(slug, arch, tt_arch, pipeline_mod, kv))
+    return True
+
+
 def _git_info(path):
     """(commit_sha, origin_url) for a git checkout, or (None, None). Never raises."""
     import subprocess
@@ -2004,6 +2101,11 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
     # labeling below — the tool never claims a stub package can serve.
     bundle_dir = Path(checkout) / extra / slug
     adapter_ready = _adapter_is_working(bundle_dir)
+    if adapter_ready and _refresh_eager_pipeline_adapter(checkout, slug, bundle_dir):
+        print(
+            f"  [publish-hf] re-rendered {bundle_dir / 'adapter.py'}: it was an earlier copy of the tool's "
+            "pipeline adapter, which decoded every token eagerly; decode is now traced when vLLM asks"
+        )
     servable = True
     if not adapter_ready:
         if arch_det:
