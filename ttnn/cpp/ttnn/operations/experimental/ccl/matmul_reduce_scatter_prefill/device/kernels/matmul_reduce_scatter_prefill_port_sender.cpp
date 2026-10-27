@@ -20,7 +20,6 @@
 // count with a classic step schedule; the measured raw sender of fabric_reduce_scatter is the reference.
 
 #include <cstdint>
-#include "api/debug/kernel_profiler.hpp"  // permanent stage zones (free when the profiler is off)
 #include "api/dataflow/dataflow_api.h"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -132,7 +131,6 @@ void kernel_main() {
         conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
     }
     if (num_units > 0) {
-        DeviceZoneScopedN("READY_WAIT");
         volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
         noc_semaphore_wait_min(ready, 1);
         noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
@@ -149,11 +147,9 @@ void kernel_main() {
         lim = group - rpos % group;
     };
     for (uint32_t ug = 0; ug < num_chunks * num_units; ++ug) {
-        DeviceZoneScopedN("SEND_UNIT");
         const uint32_t un = ug % num_units;
         const uint32_t chunk = ug / num_units;
         if (un == 0 && chunk >= zone_sets) {
-            DeviceZoneScopedN("CREDIT_WAIT");
             invalidate_l1_cache();
             while (*credits < chunk - zone_sets + 1) {  // the downstream consumed chunk - zone_sets
                 forward_poll();
@@ -183,7 +179,7 @@ void kernel_main() {
             const uint32_t dst_base = zone_base + (ordinal % ring_slots) * slot_bytes;
             const uint64_t ctr = get_noc_addr(x, y, arrival_addr);
             for (uint32_t ci = 0; ci < chunks_per_core; ++ci) {
-                cb_wait_front(cb_port_chunks, chunk_tiles * (u + 1));  // per-chunk: no zone (marker budget)
+                cb_wait_front(cb_port_chunks, chunk_tiles * (u + 1));
                 const uint32_t src = get_read_ptr(cb_port_chunks) + u * chunk_bytes;
                 const uint32_t n = (tiles - ci * chunk_tiles) < chunk_tiles ? (tiles - ci * chunk_tiles) : chunk_tiles;
                 const uint32_t bytes = n * tile_bytes;

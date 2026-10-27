@@ -14,7 +14,6 @@
 // Raw-API note (design "Helpers considered and rejected"): a pull with per-producer acks; no helper expresses it.
 
 #include <cstdint>
-#include "api/debug/kernel_profiler.hpp"  // permanent stage zones (free when the profiler is off)
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_prefill/device/kernels/matmul_reduce_scatter_prefill_args.hpp"
 
@@ -71,7 +70,6 @@ void kernel_main() {
     };
 
     for (uint32_t ug = 0; ug < num_chunks * num_units; ++ug) {
-        DeviceZoneScopedN("PORT_GATHER_UNIT");  // gather of one unit: mailbox waits + chunk reads (occupancy)
         const uint32_t u = ug % num_units;
         const uint32_t unit = get_arg_val<uint32_t>(units_idx + u);
         const uint32_t entry = unit & 0xFF;
@@ -96,7 +94,7 @@ void kernel_main() {
             if (*mbox < target && c > 0) {
                 flush();  // never hold reads / acks while blocking on a producer
             }
-            noc_semaphore_wait_min(mbox, target);  // per-core wait: no zone here (marker budget, see header)
+            noc_semaphore_wait_min(mbox, target);
             const uint64_t src = get_noc_addr(cw & 0xFF, (cw >> 8) & 0xFF, finished_base + slot_off);
             for (uint32_t ci = 0; ci < chunks_per_core; ++ci) {
                 if (c == 0) {

@@ -56,7 +56,6 @@
 // 119.0-119.1 -> 116.6-117.2 us, GLM 185.7 -> 182.1, MiMo 205.3 -> 204.4-205.0.
 
 #include <cstdint>
-#include "api/debug/kernel_profiler.hpp"  // permanent stage zones (free when the profiler is off)
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
@@ -90,7 +89,6 @@ struct FinishBuffers {
 
 template <uint32_t cb_hold, uint32_t cb_finished, uint32_t cb_arr_fwd, uint32_t cb_arr_bwd, uint32_t P>
 ALWI void finish_block(uint32_t role, const FinishBuffers& buf) {
-    DeviceZoneScopedN("FIN");
     using namespace ckl;
     constexpr auto shape = IterationShape::tiles(P);
     // FPU adds into fp32 DEST; the hold reaches DEST through srcA (no UnpackToDestFp32). This separate finish runs only
@@ -213,7 +211,6 @@ void kernel_main() {
     // One entry's matmul. fusable: its finish folds into the last super-block (an arrival entry: only if the
     // arrival landed by the end of that super-block's first subblock). Returns whether the finish is complete.
     auto matmul_entry = [&](uint32_t e, bool fill, bool fusable, uint32_t role) -> bool {
-        DeviceZoneScopedN("MM");
         const uint32_t wave = get_arg_val<uint32_t>(e % num_waves);
         const uint32_t rows = wave & 0xFF, cols = (wave >> 8) & 0xFF;
         const uint32_t sb_h = (wave >> 16) & 0xFF, sb_w = wave >> 24;
