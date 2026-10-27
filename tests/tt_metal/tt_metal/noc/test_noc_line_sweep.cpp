@@ -474,17 +474,54 @@ protected:
         return out;
     }
 
-    // Cap the transfer so that every core of the sink line can hold one slot per source core.
-    uint32_t effective_transfer(const Line& sources, const Line& sinks, uint32_t requested) const {
+    // Cap the transfer so that every core of the sink line can hold `num_slots` slots next to its payload.
+    uint32_t effective_transfer(const Line& sources, const Line& sinks, uint32_t num_slots, uint32_t requested) const {
         uint32_t t = requested;
         for (const Line* l : {&sources, &sinks}) {
             const Region r = unreserved_region(l->prog_type);
-            // payload + num_sources slots must fit; payload area is rounded up to 1 KB.
-            const uint32_t need_slots = l == &sinks ? static_cast<uint32_t>(sources.cores.size()) : 0;
+            // payload + slots must fit; payload area is rounded up to 1 KB.
+            const uint32_t need_slots = l == &sinks ? num_slots : 0;
             const uint32_t max_t = (r.size - 1024) / (need_slots + 1);
             t = std::min(t, max_t - (max_t % kFlitPairBytes));
         }
         return std::max<uint32_t>(t, kFlitPairBytes);
+    }
+
+    // One transfer of a step: the payload of source core `src` lands in slot `slot` of sink core `dst` (indices
+    // into the source and sink lines).
+    struct Pair {
+        uint32_t src;
+        uint32_t dst;
+        uint32_t slot;
+    };
+
+    // The (source, sink) pairs a step exercises:
+    //  * A line against itself: every core against every other core of the line, never against itself. All the
+    //    traffic stays inside the line.
+    //  * Two tensix lines of the same kind (row -> row, column -> column): only the cores with the same index. Every
+    //    packet then travels perpendicular to both lines, so neither line carries traffic along itself.
+    //  * Everything else (an Ethernet group against the other group or against a tensix line): every core against
+    //    every core, since an Ethernet group has no geometry to align with.
+    static std::vector<Pair> step_pairs(const Line& sources, const Line& sinks) {
+        std::vector<Pair> pairs;
+        const bool same_line = sources.kind == sinks.kind && sources.name == sinks.name;
+        const bool aligned =
+            !same_line && sources.kind == sinks.kind && !sources.is_eth() && sources.cores.size() == sinks.cores.size();
+        if (aligned) {
+            for (uint32_t i = 0; i < sources.cores.size(); i++) {
+                pairs.push_back({i, i, 0});
+            }
+            return pairs;
+        }
+        for (uint32_t s = 0; s < sources.cores.size(); s++) {
+            for (uint32_t d = 0; d < sinks.cores.size(); d++) {
+                if (same_line && s == d) {
+                    continue;
+                }
+                pairs.push_back({s, d, s});
+            }
+        }
+        return pairs;
     }
 
     // Runs one step and returns the number of bad pairs. `pull` selects read (active reads from passive) instead
@@ -501,7 +538,12 @@ protected:
         const ChipId dev_id = device->id();
         const Line& sources = pull ? passive : active;
         const Line& sinks = pull ? active : passive;
-        const uint32_t transfer = effective_transfer(sources, sinks, requested_transfer);
+        const std::vector<Pair> pairs = step_pairs(sources, sinks);
+        uint32_t num_slots = 0;
+        for (const Pair& p : pairs) {
+            num_slots = std::max(num_slots, p.slot + 1);
+        }
+        const uint32_t transfer = effective_transfer(sources, sinks, num_slots, requested_transfer);
         if (transfer != requested_transfer &&
             warned_caps_.insert(fmt::format("{}->{}@{}", sources.name, sinks.name, requested_transfer)).second) {
             log_warning(
@@ -511,7 +553,7 @@ protected:
                 sources.name,
                 sinks.name,
                 transfer,
-                sources.cores.size(),
+                num_slots,
                 sinks.name);
         }
         const uint32_t words = transfer / 4;
@@ -557,14 +599,14 @@ protected:
             }
         }
         // 2. Poison every slot on every sink core.
-        std::vector<uint32_t> poison(words * sources.cores.size(), kPoison);
+        std::vector<uint32_t> poison(words * num_slots, kPoison);
         for (const auto& c : sinks.cores) {
             detail::WriteToDeviceL1(device, c, sink_slots, poison, sinks.host_type);
         }
 
         t_write_ += lap();
 
-        // 3. One kernel on every active core.
+        // 3. One kernel on every active core, with its own peer list (noc_x, noc_y, slot).
         Program program = CreateProgram();
         std::set<CoreRange> ranges;
         for (const auto& c : active.cores) {
@@ -585,36 +627,23 @@ protected:
             kernel =
                 CreateKernel(program, kKernelPath, active_set, DataMovementConfig{.processor = rn.proc, .noc = rn.noc});
         }
-        std::vector<uint32_t> peer_args;
-        for (const auto& c : passive.cores) {
-            const CoreCoord v = device->virtual_core_from_logical_core(c, passive.host_type);
-            peer_args.push_back(v.x);
-            peer_args.push_back(v.y);
+        std::vector<std::vector<uint32_t>> peer_args(active.cores.size());
+        for (const Pair& p : pairs) {
+            const uint32_t a = pull ? p.dst : p.src;  // index into the active line
+            const uint32_t q = pull ? p.src : p.dst;  // index into the passive line
+            const CoreCoord v = device->virtual_core_from_logical_core(passive.cores[q], passive.host_type);
+            peer_args[a].insert(peer_args[a].end(), {static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), p.slot});
         }
         for (uint32_t i = 0; i < active.cores.size(); i++) {
-            std::vector<uint32_t> rt;
-            if (pull) {
-                // read every passive payload into my slot p
-                rt = {
-                    1u,
-                    sink_slots,
-                    src_payload,
-                    transfer,
-                    cfg_.chunk_bytes,
-                    cfg_.num_iters,
-                    static_cast<uint32_t>(passive.cores.size())};
-            } else {
-                // write my payload into slot i on every passive core
-                rt = {
-                    0u,
-                    src_payload,
-                    sink_slots + i * transfer,
-                    transfer,
-                    cfg_.chunk_bytes,
-                    cfg_.num_iters,
-                    static_cast<uint32_t>(passive.cores.size())};
-            }
-            rt.insert(rt.end(), peer_args.begin(), peer_args.end());
+            std::vector<uint32_t> rt = {
+                pull ? 1u : 0u,
+                pull ? sink_slots : src_payload,
+                pull ? src_payload : sink_slots,
+                transfer,
+                cfg_.chunk_bytes,
+                cfg_.num_iters,
+                static_cast<uint32_t>(peer_args[i].size() / 3)};
+            rt.insert(rt.end(), peer_args[i].begin(), peer_args[i].end());
             SetRuntimeArgs(program, kernel, active.cores[i], rt);
         }
         distributed::MeshWorkload workload;
@@ -622,35 +651,37 @@ protected:
         RunProgram(mesh_device, workload);
         t_run_ += lap();
 
-        // 4. Read every slot back and compare.
+        // 4. Read the slots of every sink back and compare each pair's slot.
+        std::vector<std::vector<uint32_t>> readback(sinks.cores.size());
+        for (uint32_t d = 0; d < sinks.cores.size(); d++) {
+            detail::ReadFromDeviceL1(
+                device, sinks.cores[d], sink_slots, poison.size() * 4, readback[d], sinks.host_type);
+        }
         uint32_t bad_pairs = 0;
         uint32_t reported = 0;
-        std::vector<uint32_t> readback;
-        for (const auto& sink : sinks.cores) {
-            detail::ReadFromDeviceL1(device, sink, sink_slots, poison.size() * 4, readback, sinks.host_type);
-            for (uint32_t s = 0; s < sources.cores.size(); s++) {
-                pairs_checked_++;
-                PairResult r = compare_slot(sources.cores[s], sink, readback.data() + s * words, payloads[s]);
-                if (r.bad_words == 0) {
-                    continue;
-                }
-                bad_pairs++;
-                const std::string msg = fmt::format(
-                    "[dev {}] {} {} -> {} {} over noc{} ({}, {}, {} B): {}",
-                    dev_id,
-                    sources.name,
-                    core_desc(device, r.src, sources.host_type),
-                    sinks.name,
-                    core_desc(device, r.dst, sinks.host_type),
-                    static_cast<int>(rn.noc),
-                    pull ? "PULL/read" : "PUSH/write",
-                    active.is_eth() ? "erisc kernel" : "tensix kernel",
-                    transfer,
-                    pair_signature(r));
-                suite_failures_.push_back(msg);
-                if (reported++ < cfg_.max_report) {
-                    log_error(tt::LogTest, "{}", msg);
-                }
+        for (const Pair& p : pairs) {
+            pairs_checked_++;
+            PairResult r = compare_slot(
+                sources.cores[p.src], sinks.cores[p.dst], readback[p.dst].data() + p.slot * words, payloads[p.src]);
+            if (r.bad_words == 0) {
+                continue;
+            }
+            bad_pairs++;
+            const std::string msg = fmt::format(
+                "[dev {}] {} {} -> {} {} over noc{} ({}, {}, {} B): {}",
+                dev_id,
+                sources.name,
+                core_desc(device, r.src, sources.host_type),
+                sinks.name,
+                core_desc(device, r.dst, sinks.host_type),
+                static_cast<int>(rn.noc),
+                pull ? "PULL/read" : "PUSH/write",
+                active.is_eth() ? "erisc kernel" : "tensix kernel",
+                transfer,
+                pair_signature(r));
+            suite_failures_.push_back(msg);
+            if (reported++ < cfg_.max_report) {
+                log_error(tt::LogTest, "{}", msg);
             }
         }
         t_read_ += lap();
@@ -666,14 +697,14 @@ protected:
                 passive.name,
                 static_cast<int>(rn.noc),
                 static_cast<int>(rn.proc),
-                sources.cores.size() * sinks.cores.size(),
+                pairs.size(),
                 transfer,
                 bad_pairs);
         }
         return bad_pairs;
     }
 
-    // Full sweep: every active line against every passive line (skipping identical lines), every NOC combo.
+    // Full sweep: every active line against every passive line, itself included, every NOC combo.
     void run_sweep(
         const std::string& sweep_name,
         const std::function<std::vector<Line>(IDevice*)>& active_lines_fn,
@@ -729,9 +760,6 @@ protected:
                         continue;
                     }
                     for (const auto& passive : passive_lines) {
-                        if (passive.kind == active.kind && passive.name == active.name) {
-                            continue;
-                        }
                         for (const RiscNoc& rn : risc_noc_combos(active, cfg_.nocs)) {
                             plan.push_back({&active, &passive, rn, transfer});
                         }
@@ -816,10 +844,11 @@ protected:
 // ---------------------------------------------------------------------------------------------------------------
 // Tensix <-> tensix
 
-// Every tensix row writes into every other tensix row (row-major sweep).
+// Every tensix row writes within itself (every core to every other core of the row) and into every other row
+// (each core to the core in the same column), so each step carries either row-only or column-only traffic.
 TEST_F(NocLineSweepFixture, TensixRowMajorPush) { run_sweep("tensix row-major push", tensix_rows, tensix_rows, false); }
 
-// Every tensix column writes into every other tensix column (column-major sweep).
+// Same for columns: within itself, and into every other column one row at a time.
 TEST_F(NocLineSweepFixture, TensixColMajorPush) { run_sweep("tensix col-major push", tensix_cols, tensix_cols, false); }
 
 // Same sweeps with NOC reads instead of writes (exercises the read request / read response path).
@@ -872,7 +901,7 @@ TEST_F(NocLineSweepFixture, TensixToEthPush) {
         false);
 }
 
-// Active Ethernet cores <-> idle Ethernet cores.
+// Every Ethernet core writes into every other Ethernet core, within its own group and across groups.
 TEST_F(NocLineSweepFixture, EthToEthPush) { run_sweep("eth -> eth push", eth_lines, eth_lines, false); }
 
 }  // namespace

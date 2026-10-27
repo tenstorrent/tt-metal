@@ -28,13 +28,22 @@ Faults it is designed to expose:
 
 * A **line** is an ordered set of cores: a logical tensix row, a logical tensix column, the active-Ethernet cores,
   or the idle-Ethernet cores of a chip.
-* A **step** takes an active line and a passive line.
+* A **step** takes an active line and a passive line and moves data between a set of (source, destination) pairs.
   * PUSH: every core of the active line runs the kernel and writes its own host-generated payload into a dedicated
-    slot on every core of the passive line.
-  * PULL: every core of the active line reads every passive core's payload into a dedicated local slot.
-* A **sweep** iterates: for each transfer size, for each active line, for each other passive line, for each NOC
-  (and RISC) combination. The default sizes are 1, 2, 4 and 8 KB per (source, destination) pair, each sent as a
-  single NOC transaction, so every path carries packets of 16, 32, 64 and 128 flits.
+    slot on its destination cores in the passive line.
+  * PULL: every core of the active line reads its source cores' payloads into dedicated local slots.
+* Which pairs a step uses depends on the two lines:
+  * A line against **itself**: every core to every other core of the line (never to itself). All traffic stays
+    inside the line.
+  * A tensix row against **another row**, or a column against another column: only the cores with the same
+    index, i.e. the core in column x of row a to the core in column x of row b. Every packet then travels
+    perpendicular to both lines, so neither line carries traffic along itself and the step isolates the links
+    between the two lines.
+  * An Ethernet group against anything, or anything against an Ethernet group: every core to every core, since an
+    Ethernet group has no geometry to align with.
+* A **sweep** iterates: for each transfer size, for each active line, for each passive line (itself included), for
+  each NOC (and RISC) combination. The default sizes are 1, 2, 4 and 8 KB per (source, destination) pair, each
+  sent as a single NOC transaction, so every path carries packets of 16, 32, 64 and 128 flits.
 * After every step the host reads every slot back and compares it word for word with the expected payload.
 * Payloads are random flits, each followed by its bitwise complement. Every bit at every position inside a 64-byte
   flit is therefore sent as both 0 and 1 in every 128 bytes, so a stuck-at in either direction cannot hide behind
@@ -46,14 +55,14 @@ corruption.
 
 | Test | Active (runs kernel) | Passive | Direction |
 |---|---|---|---|
-| `TensixRowMajorPush` | each tensix row | every other row | write |
-| `TensixColMajorPush` | each tensix column | every other column | write |
-| `TensixRowMajorPull` | each tensix row | every other row | read |
-| `TensixColMajorPull` | each tensix column | every other column | read |
+| `TensixRowMajorPush` | each tensix row | itself, then every other row (same column only) | write |
+| `TensixColMajorPush` | each tensix column | itself, then every other column (same row only) | write |
+| `TensixRowMajorPull` | each tensix row | itself, then every other row (same column only) | read |
+| `TensixColMajorPull` | each tensix column | itself, then every other column (same row only) | read |
 | `EthToTensixPush` | active-eth, idle-eth | every row and column | write |
 | `EthFromTensixPull` | active-eth, idle-eth | every row and column | read |
 | `TensixToEthPush` | every row and column | active-eth, idle-eth | write |
-| `EthToEthPush` | active-eth, idle-eth | the other Ethernet group | write |
+| `EthToEthPush` | active-eth, idle-eth | both Ethernet groups, its own included | write |
 
 The Ethernet-to-tensix write direction is the one used by fabric routers to deliver packets into local L1, so
 `EthToTensixPush` covers the same path with the same RISC and NOC selection a router would use.
@@ -82,13 +91,15 @@ Output is deliberately compact. Each sweep logs one header line and one summary 
 every 10 s while it runs, and the bad pairs of any failing step (capped by `TT_NOC_SWEEP_MAX_REPORT`):
 
 ```
-[dev 0] sweep 'tensix row-major push': 8 active x 8 passive lines x 4 sizes, 448 steps, grid 8x8, harvesting mask 0x204
-[dev 0] sweep 'tensix row-major push': step 230/448 (row4 -> row0 noc1 4096 B), 0 bad so far, 10.0 s elapsed
-[dev 0] sweep 'tensix row-major push': 448 steps, 28672 pairs, 0 bad, 1.8 s (4.1 ms/step: host-write 0.2, build+run 1.0, readback+check 2.8)
+[dev 0] sweep 'tensix row-major push': 8 active x 8 passive lines x 4 sizes, 512 steps, grid 8x8, harvesting mask 0x204
+[dev 0] sweep 'tensix row-major push': 512 steps, 7168 pairs, 0 bad, 2.0 s (4.0 ms/step: host-write 0.1, build+run 1.1, readback+check 2.8)
 ```
 
-The summary splits the per-step time into host L1 writes (payload and poison), program build + launch + wait for completion, and L1 readback + compare, which shows directly which part is slow on a given platform. The progress line only appears for sweeps that run longer than 10 s. A progress line that stops advancing means
-a kernel on the active line never finished; the step named in the last progress line brackets where to look.
+The summary splits the per-step time into host L1 writes (payload and poison), program build + launch + wait for
+completion, and L1 readback + compare, which shows directly which part is slow on a given platform. The progress
+line (`step k/n (<active> -> <passive> noc<i> <bytes> B), <bad> bad so far, <elapsed> s elapsed`) only appears
+for sweeps that run longer than 10 s. A progress line that stops advancing means a kernel on the active line never
+finished; the step named in the last progress line brackets where to look.
 `TT_NOC_SWEEP_VERBOSE=1` logs every step and the cores of every line.
 
 | Variable | Default | Meaning |
@@ -105,13 +116,13 @@ a kernel on the active line never finished; the step named in the last progress 
 | `TT_NOC_SWEEP_INJECT_MODE` | `set` | self-test fault type: `set` (stuck-at-1), `clear` (stuck-at-0), `flip` (inverted) |
 | `TT_NOC_SWEEP_INJECT_FLIT_WORD` | 15 | checker self-test, see below |
 
-The transfer size is capped automatically when a sink line cannot hold one slot per source core (small Ethernet L1
+The transfer size is capped automatically when a sink line cannot hold the slots a step needs (small Ethernet L1
 on some architectures); a warning says so.
 
 Cost: about 10 s per chip on Wormhole N300 with the default four sizes (about 4 ms per step, independent of size
-there). On Blackhole the per-step cost grows with the transfer size because host L1 readback dominates; a single
-1 KB size measured 10-21 ms per step and about 15-20 s per chip, so budget several times that for the default
-sizes, or set `TT_NOC_SWEEP_TRANSFER_BYTES=1024` for a quick pass. Send the output to a file: on a slow terminal
+there). On Blackhole host L1 readback dominates and the per-step cost grows with the transfer size; set
+`TT_NOC_SWEEP_TRANSFER_BYTES=1024` for a quick first pass and read the per-step split in the summary line before
+budgeting the default sizes. Send the output to a file: on a slow terminal
 the log writes themselves can take several times longer than the test.
 
 ## Reading a failure
@@ -141,10 +152,13 @@ fixture prints a summary at the end:
 * `UNDELIVERED` means the slot still holds the poison pattern: the write never arrived (or the read never
   completed), which points at routing or completion rather than data corruption.
 
-To localise a fault, compare rows against columns and NOC0 against NOC1. A destination that is bad from one source
-line over one NOC but clean from every other line and NOC isolates the fault to that source's output on that NOC,
-or to a router on the route between them. A destination that is bad from everything isolates it to the
-destination's inbound side.
+To localise a fault, use the step structure. A bad pair in a line's own step (row a -> row a) sits on the links
+along that line; a bad pair in a cross step (row a -> row b, column x) sits on the vertical links of column x
+between rows a and b, and the column sweeps give the same segment the other way round. Compare NOC0 against NOC1:
+they are separate networks routed in opposite directions, so a fault on one NOC only is in that NOC's router or
+link, while a fault on both points at the core's L1 side. A destination that is bad from one source line over one NOC but clean from every other
+line and NOC isolates the fault to that source's output on that NOC or to a router on the route between them. A
+destination that is bad from everything isolates it to the destination's inbound side.
 
 ## Checker self-test
 
