@@ -163,8 +163,22 @@ struct SeYRmWriter {
                 return false;
             }
             const uint32_t stage = words + 512 + (uiss % rows) * 32 * 32;  // trailers in flight (column-0 writer)
+            if (col_off == 0) {
+                for (uint32_t i = part; i < i1; ++i) {
+                    volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + i * 32);
+                    tr[0] = ent[2 * i + 1];    // the row's header word
+                    tr[1] = ent[2 * i] >> 16;  // the row's gate weight (bf16 bits)
+                    tr[2] = tr[4] = tr[5] = tr[6] = 0;
+                    tr[3] = 1;
+                    tr[7] = 1;
+                }
+                // (the NoC reads the stage straight from L1: these stores must land first, or a trailer write can
+                // carry the stage's previous words - e.g. a zeroed tr[7] (the stage is zeroed every call), and the
+                // row is never taken at its home: the combine hangs)
+                asm volatile("fence" ::: "memory");
+            }
             for (uint32_t i = part; i < i1; ++i) {
-                const uint32_t d = ent[2 * i] & 0xFF, hdr = ent[2 * i + 1], wbits = ent[2 * i] >> 16;
+                const uint32_t d = ent[2 * i] & 0xFF;
                 const uint32_t slot = dbase[d] + (cnt[d] % dq[d]) * islot;
                 ++cnt[d];
                 noc_async_write_one_packet_with_trid(
@@ -175,13 +189,7 @@ struct SeYRmWriter {
                     write_cmd_buf,
                     ynoc,
                     yvc);
-                if (col_off == 0) {
-                    volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + i * 32);
-                    tr[0] = hdr;
-                    tr[1] = wbits;  // the row's gate weight (bf16 bits)
-                    tr[2] = tr[4] = tr[5] = tr[6] = 0;
-                    tr[3] = 1;
-                    tr[7] = 1;
+                if (col_off == 0) {  // (its trailer, staged above)
                     noc_async_write_one_packet_with_trid(
                         stage + i * 32,
                         get_noc_addr(dx[d], dy[d], slot + ht * 64, ynoc),
