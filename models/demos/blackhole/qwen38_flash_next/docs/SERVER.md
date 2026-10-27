@@ -579,6 +579,20 @@ Greedy-only steps do not run it.  Measured (2026-10-27, `vllm bench serve` rando
 c8 144 -> 174 tok/s, TPOT 54.8 -> 45.1 ms.  Per B = 32 step: candidates 0.44 ms, host draw 2.05 ms, against 28.6-30.0 ms for the
 full gather and draw.
 
+Top-k-off sampled rows (`QWEN38_BATCH_NORMALIZER`, default on; `0` sends them to the full-logits path as in the paragraph above; only
+meaningful with the candidate rows on): a client that sends no `top_k` arrives with `top_k` = the vocabulary size.  On a step with
+such a row (temperature > 0, `top_p` < 1, no penalty) the candidate trace is replaced by a variant that also computes, per lane and
+vocabulary shard, `logsumexp(logits / T)` over the real vocabulary in fp32 (padding columns masked, accurate exp; per-lane `1 / T` is a
+persistent input written before the replay).  The host combines the four shard values and draws over the candidates with
+`probs = exp(value / T - LSE)`; the exactness guard requires every kept candidate to lie strictly above the shard floor, else the
+row counts a `nucleus` fallback and draws over the full logits.  Top-k-off rows with a penalty (`penalty`) or `top_p` = 1 (`top_k`) still
+fall back.  The normalizer adds about 1.2 ms to the candidate replay (1.66 ms against 0.44 ms at B = 32) and 8 MB of DRAM per device for
+the mask; its error against a float64 host `logsumexp` is at most 1.2e-5 relative on exp(LSE).  Measured (2026-10-27): on GPQA
+text (thinking, top_k off, T 1.0, top_p 0.95, c32, 64 questions, 4096 tokens) 3.9% of the sampled rows are `nucleus` fallbacks,
+but 59% of the steps hold at least one and pay the full gather (about 1.6 rows each).  `vllm bench serve` random 128/1024,
+top_k off: B = 32 c32 190 -> 221 tok/s (TPOT 166.7 -> 143.4 ms), B = 8 c8 118 -> 127 tok/s (TPOT 67.0 -> 62.1 ms); top_k 20 is
+unchanged (360 tok/s, TPOT 87.1 ms).  Random prompts give flat rows: about 72% of the B = 32 steps there hold a fallback row.
+
 Multi-user prefill pack (on by default with 8 or more lanes since 2026-10-26; `QWEN38_PREFILL_PACK=0` turns it off, `=1` turns it
 on with fewer lanes): the adapter plans each prefill call into packs (1..16 users
 of up to 128 / 256 / 512 / 1024 prompt tokens in one 0.65 s replay of the 2048-row slab) and single-path rows, and lands each packed

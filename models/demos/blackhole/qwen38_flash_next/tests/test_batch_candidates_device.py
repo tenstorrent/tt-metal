@@ -18,6 +18,7 @@ Env as test_vllm_batch_contract_device.py.
 """
 
 import json
+import math
 import os
 import random
 from pathlib import Path
@@ -150,17 +151,22 @@ def make_prompts(count: int, seed: int) -> list[list[int]]:
     return [[rng.randrange(1000, 20000) for _ in range(PROMPT_LEN)] for _ in range(count)]
 
 
-def open_model(mesh_device, lanes: int, monkeypatch):
+def open_model(mesh_device, lanes: int, monkeypatch, normalizer: bool = False):
+    """The batch adapter on the real chain.  The P3g-1 ids run with the P3g-2 normalizer off (their counters are P3g-1's: a
+    top-k-off row is a ``top_k`` fallback); the P3g-2 ids turn it on."""
+
     if not os.environ.get("MODEL_WEIGHTS_DIR") or not os.environ.get("QWEN38_CACHE_ROOT"):
         pytest.fail("set MODEL_WEIGHTS_DIR and QWEN38_CACHE_ROOT")
     monkeypatch.setenv("QWEN38_PREFILL_PACK", "0")
     monkeypatch.delenv("QWEN38_BATCH_CANDIDATES", raising=False)  # unset = on
+    monkeypatch.setenv("QWEN38_BATCH_NORMALIZER", "1" if normalizer else "0")
     mesh_device.enable_program_cache()
     num_blocks = 1 + 2 * lanes + 4
     model = initialize(mesh_device, Path(os.environ["MODEL_WEIGHTS_DIR"]), lanes)
     model.allocate_kv_cache((num_blocks, 1, BLOCK, 128), ttnn_bf16(), 12)
     plugin_warmups(model, lanes, BLOCK, num_blocks)
     assert model.batch_candidates and model.decoder.has_candidates
+    assert model.batch_normalizer is normalizer and model.decoder.has_normalizer is normalizer
     return model
 
 
@@ -209,6 +215,10 @@ def candidate_rows_equal_the_topk_of_the_full_logits(mesh_device, lanes: int, mo
         pytest.param("rows", 32, id="cand_rows_b32", marks=pytest.mark.timeout(5400)),
         pytest.param("seeded", 8, id="seeded_b8", marks=pytest.mark.timeout(5400)),
         pytest.param("mixed", 8, id="mixed_b8", marks=pytest.mark.timeout(5400)),
+        pytest.param("norm_lse", 8, id="norm_lse_b8", marks=pytest.mark.timeout(5400)),
+        pytest.param("norm_lse", 32, id="norm_lse_b32", marks=pytest.mark.timeout(5400)),
+        pytest.param("norm_mixed", 8, id="norm_mixed_b8", marks=pytest.mark.timeout(5400)),
+        pytest.param("norm_seeded", 8, id="norm_seeded_b8", marks=pytest.mark.timeout(5400)),
     ],
 )
 def test_batch_candidates(mesh_device, kind, lanes, monkeypatch, record_property):
@@ -216,13 +226,21 @@ def test_batch_candidates(mesh_device, kind, lanes, monkeypatch, record_property
         candidate_rows_equal_the_topk_of_the_full_logits(mesh_device, lanes, monkeypatch)
     elif kind == "seeded":
         seeded_request_is_the_same_alone_and_in_a_batch(mesh_device, lanes, monkeypatch)
-    else:
+    elif kind == "mixed":
         mixed_step(mesh_device, lanes, monkeypatch)
+    elif kind == "norm_lse":
+        normalizer_equals_the_host_logsumexp(mesh_device, lanes, monkeypatch)
+    elif kind == "norm_mixed":
+        normalizer_mixed_step(mesh_device, lanes, monkeypatch)
+    else:
+        seeded_request_is_the_same_alone_and_in_a_batch(mesh_device, lanes, monkeypatch, normalizer=True)
 
 
-def seeded_request_is_the_same_alone_and_in_a_batch(mesh_device, lanes: int, monkeypatch) -> None:
+def seeded_request_is_the_same_alone_and_in_a_batch(
+    mesh_device, lanes: int, monkeypatch, normalizer: bool = False
+) -> None:
     prompts = make_prompts(lanes, 2)
-    model = open_model(mesh_device, lanes, monkeypatch)
+    model = open_model(mesh_device, lanes, monkeypatch, normalizer)
     try:
         # alone: slot 0 only (the other lanes idle), seeded, sampled
         alone_params = sampling(lanes, temperature=[1.0], top_k=[20], top_p=[0.95], seed=[1234])
@@ -248,7 +266,14 @@ def seeded_request_is_the_same_alone_and_in_a_batch(mesh_device, lanes: int, mon
         batch = list(driver.outputs[0])
         counters = dict(model.candidate_counters)
         logger.info(f"alone {alone}\nbatch {batch}\ncounters {counters}")
-        assert counters["fallback_top_k"] >= 2 * STEPS and counters["fallback_steps"] >= STEPS
+        if normalizer:  # row 4 (top-k off, top_p 0.95) uses the normalizer or, on a flat row, the nucleus fallback
+            assert (
+                counters["normalizer_steps"] >= STEPS
+                and counters["normalizer_rows"] + counters["fallback_nucleus"] >= STEPS
+            )
+            assert counters["fallback_top_k"] >= STEPS  # row 5: top_k 50
+        else:
+            assert counters["fallback_top_k"] >= 2 * STEPS and counters["fallback_steps"] >= STEPS
         assert alone == batch, "a seeded request must draw the same tokens alone and among other requests"
     finally:
         model.release_persistent_capture()
@@ -311,5 +336,129 @@ def mixed_step(mesh_device, lanes: int, monkeypatch) -> None:
             f"counters {json.dumps(model.candidate_counters)}"
         )
         assert equal >= 0.97 * checked
+    finally:
+        model.release_persistent_capture()
+
+
+# -- P3g-2: the device normalizer ---------------------------------------------------------------------------------------
+
+LSE_REL_BOUND = 3e-5  # on exp(device LSE) / exp(host LSE) - 1; see normalizer_equals_the_host_logsumexp
+
+
+def normalizer_equals_the_host_logsumexp(mesh_device, lanes: int, monkeypatch) -> None:
+    """The per-lane device LSE equals the host's logsumexp of the lane's gathered bf16 logits / T over the real vocabulary
+    (float64 reference), with a different temperature per lane.
+
+    Bound: the device runs fp32 throughout (bf16 -> fp32 is exact; x * fl32(1 / T) differs from the host's x / T by at most
+    one fp32 rounding of 1 / T, a relative 6e-8 of |x| <= ~60 / T, so <= 4e-6 in the LSE; exp and log add a few fp32 ulps; the
+    62080-term fp32 sum a relative ~1e-7).  Measured: 4e-6 on random logits (T 0.6 .. 1.4), 8.8e-6 on the real model's logits
+    (B=8 8.8e-6, B=32 1.2e-5, T 0.5 .. 1.5: |x| / T reaches ~60).  The asserted bound, 3e-5 on exp(LSE) / exp(host) - 1,
+    is ~2.4x above the largest measurement and two orders below the bf16 rounding (4e-3) a bf16 normalizer would carry.
+    """
+
+    model = open_model(mesh_device, lanes, monkeypatch, normalizer=True)
+    try:
+        driver = Lanes(model, lanes)
+        driver.admit(list(range(lanes)), make_prompts(lanes, 4))
+        temperatures = [0.5 + i / max(lanes - 1, 1) for i in range(lanes)]  # 0.5 .. 1.5
+        params = sampling(
+            lanes,
+            temperature=temperatures,
+            top_k=[VOCAB_SIZE] * lanes,
+            top_p=[0.95] * lanes,
+            seed=list(range(11, 11 + lanes)),
+        )
+        decoder = model.decoder
+        inverse = [1.0 / t for t in temperatures]
+        worst_shard = worst_combined = 0.0
+        padding_over_real = []
+        for step in range(4):
+            driver.step(params)  # a top-k-off step: the lane replay, then the candidate + normalizer trace
+            assert model.candidate_counters["normalizer_steps"] == step + 1
+            rows, shard = decoder.read_candidates_normalized(inverse)  # replay again over the same logits
+            assert tuple(shard.shape) == (lanes, 4) and bool(torch.isfinite(shard).all())
+            full = decoder.read_full_logits().double()
+            padding_over_real.append(
+                float((full[:, TOKENIZER_SIZE:].max(dim=1).values - full[:, :TOKENIZER_SIZE].max(dim=1).values).max())
+            )
+            real = full[:, :TOKENIZER_SIZE]
+            for lane in range(lanes):
+                scaled = torch.full((VOCAB_SIZE,), float("-inf"), dtype=torch.float64)
+                scaled[:TOKENIZER_SIZE] = real[lane] / temperatures[lane]
+                per_shard = torch.stack([torch.logsumexp(scaled[d * 62080 : (d + 1) * 62080], 0) for d in range(4)])
+                err = (torch.exp(shard[lane].double() - per_shard) - 1).abs().max()
+                worst_shard = max(worst_shard, float(err))
+                combined = float(torch.logsumexp(shard[lane].double(), 0))
+                worst_combined = max(worst_combined, abs(math.exp(combined - float(torch.logsumexp(per_shard, 0))) - 1))
+            candidates = Qwen38CandidateRow
+            for lane in range(lanes):  # the variant's candidate rows are the plain trace's
+                agreement = candidates.from_host_row(rows[lane].reshape(1, 1, 1, 256)).agreement(
+                    candidates.emulate(full[lane].float().to(torch.bfloat16))
+                )
+                assert all(agreement["values_bitwise"]), (step, lane)
+        logger.info(
+            f"B={lanes}: max relative error of exp(shard LSE) {worst_shard:.3e}, of exp(combined LSE) {worst_combined:.3e}; "
+            f"largest padded-column logit minus largest real logit: {max(padding_over_real):.2f}"
+        )
+        assert worst_shard < LSE_REL_BOUND and worst_combined < LSE_REL_BOUND
+    finally:
+        model.release_persistent_capture()
+
+
+def normalizer_mixed_step(mesh_device, lanes: int, monkeypatch) -> None:
+    """A step with top-k-off rows (different T, top_p), a top_k 20 row, a greedy row and fallback rows: the tokens against the
+    host full-row path on the same gathered logits.  Mismatches are expected only where the nucleus boundary lies inside a
+    rounding of the probabilities."""
+
+    prompts = make_prompts(lanes, 5)
+    model = open_model(mesh_device, lanes, monkeypatch, normalizer=True)
+    try:
+        driver = Lanes(model, lanes)
+        driver.admit(list(range(lanes)), prompts)
+        # 0 greedy, 1 top_k 20, 2..4 top-k off (normalizer), 5 top-k off top_p 1 (top_k), 6 top-k off + presence penalty
+        # (penalty), 7 top_k 50 (top_k)
+        params = sampling(
+            lanes,
+            temperature=[0.0, 1.0, 0.6, 0.8, 1.0, 1.0, 0.9, 1.0],
+            top_k=[1, 20, VOCAB_SIZE, VOCAB_SIZE, VOCAB_SIZE, VOCAB_SIZE, VOCAB_SIZE, 50],
+            top_p=[0.0, 0.95, 0.9, 0.8, 0.6, 1.0, 0.9, 0.9],
+            seed=[None, 11, 22, 33, 44, 55, 66, 77],
+            presence_penalty=[0.0] * 6 + [1.5, 0.0],
+        )
+        equal = checked = 0
+        mismatched_rows: list[tuple[int, int]] = []
+        for step in range(STEPS):
+            histories = {6: (prompts[6], driver.outputs[6])}
+            before = dict(model.candidate_counters)
+            positions = list(driver.positions)
+            out = driver.step(params, histories)
+            full = model.decoder.read_full_logits()
+            delta = {k: model.candidate_counters[k] - before[k] for k in before}
+            assert delta["normalizer_steps"] == 1 and delta["candidate_steps"] == 1, delta
+            assert delta["normalizer_rows"] + delta["fallback_nucleus"] == 3, delta  # rows 2, 3, 4
+            assert delta["fallback_top_k"] == 2 and delta["fallback_penalty"] == 1, delta  # rows 5 and 7, row 6
+            assert delta["fallback_guard"] == 0 and delta["fallback_nonfinite"] == 0, delta
+            for row in range(1, lanes):
+                policy = Qwen38HostSamplingPolicy.from_contract(params, row)
+                masked = full[row].clone()
+                masked[TOKENIZER_SIZE:] = float("-inf")
+                if policy.penalized:
+                    history = (
+                        torch.tensor(prompts[row], dtype=torch.long),
+                        torch.tensor(driver.outputs[row][:-1], dtype=torch.long),
+                    )
+                    apply_penalties(masked, *history, policy)
+                expected = sample_from_row(masked.clone(), policy, position_generator(policy.seed, positions[row]))
+                checked += 1
+                equal += int(out[row, 0]) == expected
+                if int(out[row, 0]) != expected:
+                    mismatched_rows.append((step, row))
+        counters = dict(model.candidate_counters)
+        logger.info(
+            f"norm mixed: {STEPS} steps, token equal to the host full-row draw in {equal} of {checked} rows, mismatches "
+            f"{mismatched_rows}; counters {json.dumps(counters)}"
+        )
+        assert counters["normalizer_rows"] >= STEPS, "the normalizer never drew a row: the test proves nothing"
+        assert equal >= 0.98 * checked
     finally:
         model.release_persistent_capture()

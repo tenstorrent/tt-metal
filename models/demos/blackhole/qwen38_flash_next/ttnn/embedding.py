@@ -149,6 +149,11 @@ ZERO_EMBEDDING_TOKEN = -1
 # halves the readback.  The host samples on this row; the greedy token row is untouched.
 SAMPLING_CANDIDATES_PER_DEVICE = 32
 SAMPLING_CANDIDATE_ROW_SHAPE = (1, 1, 1, 2 * TP_SIZE * SAMPLING_CANDIDATES_PER_DEVICE)
+# P3g-2: the full-row normalizer of the sampled lanes.  The LM head's padded columns (global ids >= the tokenizer's size, the
+# same ids the host masks to -inf) are left out of the sum; a masked column holds this large negative number, which the
+# multiply-add keeps finite (exp underflows to exactly 0 against any real row maximum).
+TOKENIZER_VOCAB_SIZE = 248_077  # equals chat.TOKENIZER_SIZE (a no-device test pins it)
+SAMPLING_NORMALIZER_MASK_VALUE = -1.0e30
 
 
 def _shape(tensor) -> tuple[int, ...]:
@@ -2219,6 +2224,80 @@ class Qwen38TTNNLMHead:
         require(row, row_shape, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, "sampling candidate row")
         self.mesh_contract.validate_tensor(row, placement=TensorPlacement.REPLICATED)
         ttnn.copy(row, target)
+        return row
+
+    def sampling_normalizer_mask(self):
+        """The padding mask of :meth:`sampling_normalizer`: vocab-sharded FP32 TILE ``[1,1,1,VOCAB_SIZE]`` (``[1,1,1,62080]``
+        per shard) holding 0 for a real column and ``SAMPLING_NORMALIZER_MASK_VALUE`` for a padded one (global id >=
+        ``TOKENIZER_VOCAB_SIZE``).  Persistent; built before any capture."""
+
+        mask = torch.zeros(1, 1, 1, VOCAB_SIZE, dtype=torch.float32)
+        mask[..., TOKENIZER_VOCAB_SIZE:] = SAMPLING_NORMALIZER_MASK_VALUE
+        return ttnn.from_torch(
+            mask,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 3)),
+        )
+
+    def sampling_normalizer(self, logits: Qwen38ShardedLogits, inv_temperature, mask, *, into):
+        """P3g-2: per lane the full-row softmax normalizer, ``log sum_j exp(logit_j / T)`` over the real vocabulary, as one
+        FP32 per lane and vocabulary shard (the host adds the four with a logsumexp).
+
+        Per shard: the bf16 logits to FP32, times the lane's ``1 / T`` (``inv_temperature``: replicated FP32 TILE
+        ``[1,1,rows,1]``, a persistent input the host writes before the replay), plus ``mask`` (padded columns), the row
+        maximum, ``exp(x - max)`` in the accurate mode (not the fast approximate one), the FP32 sum (HiFi4, FP32
+        accumulation), ``log`` and ``+ max``.  The four per-shard values of a lane are all-gathered into ``into``
+        (replicated FP32 ROW_MAJOR ``[1,1,rows,4]``).  No id is involved; a lane's row is independent of the others.
+        Measured on QB2 against a float64 ``torch.logsumexp`` of the same bf16 logits (real model logits, T 0.5 .. 1.5):
+        max error 8.8e-6 at 8 rows, 1.2e-5 at 32 rows in the LSE."""
+
+        rows = self._validate_logits(logits)
+        if not 1 <= rows <= TILE_SIZE:
+            raise TypeError(f"sampling normalizer requires 1..{TILE_SIZE}-row logits, got {rows} rows")
+        if self.collective_topology != ttnn.Topology.Linear:
+            raise RuntimeError("sampling normalizer requires Linear topology")
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        if _shape(inv_temperature) != (1, 1, rows, 1) or inv_temperature.dtype != ttnn.float32:
+            raise RuntimeError(f"inverse temperatures must be FP32 [1,1,{rows},1], got {_metadata(inv_temperature)}")
+        if _shape(into) != (1, 1, rows, TP_SIZE) or into.dtype != ttnn.float32 or into.layout != ttnn.ROW_MAJOR_LAYOUT:
+            raise RuntimeError(
+                f"normalizer readback must be FP32 ROW_MAJOR [1,1,{rows},{TP_SIZE}], got {_metadata(into)}"
+            )
+        config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            math_approx_mode=False,
+        )
+        wide = ttnn.typecast(logits.tensor, ttnn.float32, memory_config=dram)
+        scaled = ttnn.multiply(wide, inv_temperature, memory_config=dram)
+        _deallocate(wide)
+        masked = ttnn.add(scaled, mask, memory_config=dram)
+        _deallocate(scaled)
+        peak = ttnn.max(masked, dim=-1, keepdim=True, memory_config=dram, compute_kernel_config=config)
+        shifted = ttnn.subtract(masked, peak, memory_config=dram)
+        _deallocate(masked)
+        weights = ttnn.exp(shifted, fast_and_approximate_mode=False, memory_config=dram)
+        _deallocate(shifted)
+        total = ttnn.sum(weights, dim=-1, keepdim=True, memory_config=dram, compute_kernel_config=config)
+        _deallocate(weights)
+        logged = ttnn.log(total, memory_config=dram)
+        _deallocate(total)
+        lse = ttnn.add(logged, peak, memory_config=dram)
+        _deallocate(logged, peak)
+        column = ttnn.to_layout(lse, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+        _deallocate(lse)
+        if _shape(column) != (1, 1, rows, 1) or column.dtype != ttnn.float32:
+            raise RuntimeError(f"shard normalizer must be FP32 [1,1,{rows},1], got {_metadata(column)}")
+        row = ttnn.all_gather(column, dim=3, cluster_axis=TP_AXIS, memory_config=dram)
+        _deallocate(column)
+        self.mesh_contract.validate_tensor(row, placement=TensorPlacement.REPLICATED)
+        if _shape(row) != (1, 1, rows, TP_SIZE):
+            raise RuntimeError(f"normalizer gather returned {_shape(row)}, expected [1,1,{rows},{TP_SIZE}]")
+        ttnn.copy(row, into)
         return row
 
     def resolve_greedy_rows_on_device(self, candidates: Qwen38GreedyCandidates):

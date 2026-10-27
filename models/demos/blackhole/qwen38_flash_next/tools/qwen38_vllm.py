@@ -50,6 +50,7 @@ here and ``sys.argv`` is not read.
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from collections import deque
@@ -117,7 +118,10 @@ PREFILL_SLAB_OFF = ("0", "off")
 BATCH_MAX_LANES = 32  # batch mode: max_num_seqs 2..32 (one 32-row tile)
 MAX_TOKENS_ALL_USERS_VARIABLE = "QWEN38_MAX_TOKENS_ALL_USERS"  # the KV token pool the plugin sizes its blocks from
 BATCH_CANDIDATES_VARIABLE = "QWEN38_BATCH_CANDIDATES"  # "1" (default) / "0": candidate rows for the sampled lanes
-CANDIDATE_FALLBACK_REASONS = ("top_k", "penalty", "guard", "nonfinite")
+BATCH_NORMALIZER_VARIABLE = (
+    "QWEN38_BATCH_NORMALIZER"  # "1" (default) / "0": the device normalizer for top-k-off sampled rows
+)
+CANDIDATE_FALLBACK_REASONS = ("top_k", "penalty", "guard", "nonfinite", "nucleus")
 DECODE_LOG_INTERVAL = 256  # batch mode: one adapter log line per this many decode calls
 BATCH_LANE_INDEXER_FORM = "wide"
 KV_BYTES_PER_TOKEN = 12 * 512 * 2  # 12 QSA layers x one 512-wide bf16 row, per device
@@ -311,6 +315,19 @@ def batch_candidates_enabled(environ: Mapping[str, str] | None = None) -> bool:
     return value == "1"
 
 
+def batch_normalizer_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """``QWEN38_BATCH_NORMALIZER``: "1" or unset = a sampled row with top-k off draws from the candidate rows with the device
+    normalizer (P3g-2), "0" = such rows read the full gathered logits (the P3g-1 path); anything else is refused.  It only
+    matters while ``QWEN38_BATCH_CANDIDATES`` is on."""
+
+    value = (os.environ if environ is None else environ).get(BATCH_NORMALIZER_VARIABLE)
+    if value is None:
+        return True
+    if value not in ("0", "1"):
+        raise ValueError(f"{BATCH_NORMALIZER_VARIABLE} must be 0 or 1, got {value!r}")
+    return value == "1"
+
+
 class CandidateFallback(Exception):
     """A lane's candidate row cannot give :func:`sample_from_row`'s law exactly: the row draws over the full logits.
     ``reason`` is one of ``CANDIDATE_FALLBACK_REASONS``; raised before any draw, so the generator is untouched."""
@@ -320,16 +337,35 @@ class CandidateFallback(Exception):
         self.reason = reason
 
 
-def candidate_route(policy: Qwen38HostSamplingPolicy) -> str | None:
+def top_k_is_off(policy: Qwen38HostSamplingPolicy) -> bool:
+    """``sample_from_row``'s top-k-off test: ``top_k`` <= 0 or at least the vocabulary size (the plugin sends the size)."""
+
+    return not 0 < policy.top_k < VOCAB_SIZE
+
+
+def candidate_route(policy: Qwen38HostSamplingPolicy, normalizer: bool = False) -> str | None:
     """The fallback reason fixed by the policy alone, else ``None`` (the row may draw from candidates): ``top_k`` outside
     1 .. 32 (the plugin turns top_k <= 0 into the vocabulary size), or a penalty that raises logits (unread tokens would
-    become unbounded)."""
+    become unbounded).  ``normalizer``: the device normalizer is available, so a sampled row with top-k off may draw from the
+    candidates (:func:`normalizer_law`) unless it is penalized (the penalties change the normalizer: reason ``penalty``) or
+    has ``top_p`` >= 1 (the whole row is the nucleus: reason ``top_k``)."""
 
     if not 0 < policy.top_k <= SAMPLING_CANDIDATES_PER_DEVICE:
-        return "top_k"
+        if not (normalizer and top_k_is_off(policy) and not policy.greedy):
+            return "top_k"
+        if policy.penalized:
+            return "penalty"
+        return "top_k" if policy.top_p >= 1.0 else None
     if policy.presence_penalty < 0 or policy.frequency_penalty < 0 or policy.repetition_penalty < 1.0:
         return "penalty"
     return None
+
+
+def needs_normalizer(policy: Qwen38HostSamplingPolicy) -> bool:
+    """True for a row :func:`candidate_route` (with the normalizer) lets through with top-k off: it needs the full-row
+    normalizer of its lane."""
+
+    return candidate_route(policy, normalizer=True) is None and not 0 < policy.top_k <= SAMPLING_CANDIDATES_PER_DEVICE
 
 
 def parse_candidate_rows(rows: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -356,6 +392,7 @@ def candidate_law(
     ids: torch.Tensor,
     policy: Qwen38HostSamplingPolicy,
     history: tuple[torch.Tensor, torch.Tensor] | None = None,
+    lse: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """:func:`sample_from_row`'s law for one lane from its candidate row (``values`` fp32 ``[4, 32]``, ``ids`` int64
     ``[4, 32]``, each shard descending): ``(probabilities, token ids)`` of the kept set in the order the noise argmax
@@ -365,9 +402,14 @@ def candidate_law(
     Raises :class:`CandidateFallback` (before any draw) where the row cannot be exact: ``top_k`` outside 1 .. 32 or a
     penalty that raises logits (:func:`candidate_route`), a non-finite candidate, or the guard: the k-th kept score must
     exceed the shard floor (the largest of the shards' 32nd values), else an unread token could belong to the kept set.
-    A penalty only lowers a score here, so every unread token stays at or under the floor."""
+    A penalty only lowers a score here, so every unread token stays at or under the floor.
 
-    reason = candidate_route(policy)
+    ``lse`` (the lane's full-row ``logsumexp(row / T)``, the device normalizer's four shard values combined): a top-k-off
+    row (:func:`normalizer_law`) is drawn with it; without it such a row raises ``top_k``."""
+
+    reason = candidate_route(policy, normalizer=lse is not None)
+    if reason is None and lse is not None and not 0 < policy.top_k <= SAMPLING_CANDIDATES_PER_DEVICE:
+        return normalizer_law(values, ids, policy, lse)
     if reason is not None:
         raise CandidateFallback(reason, f"top_k {policy.top_k}" if reason == "top_k" else "penalty raises logits")
     flat_values, flat_ids = values.reshape(-1), ids.reshape(-1)
@@ -413,19 +455,58 @@ def candidate_law(
     return probs, indices
 
 
+def combine_shard_normalizers(shard_lse: torch.Tensor) -> float:
+    """The lane's full-row ``logsumexp(row / T)`` from the device's four shard values (fp32 ``[4]``): their logsumexp."""
+
+    return float(torch.logsumexp(shard_lse.to(torch.float32), 0))
+
+
+def normalizer_law(
+    values: torch.Tensor, ids: torch.Tensor, policy: Qwen38HostSamplingPolicy, lse: float
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """:func:`sample_from_row`'s top-k-off law for one lane from its candidate row and the full-row normalizer: the same
+    kept set (every token whose probability mass ranked above it is below ``top_p``, the first always) and the same
+    probabilities ``exp(value / T - lse)`` over the full row, in the order the noise argmax reads them.
+
+    Exactness guard: every kept candidate must lie strictly above the shard floor (the largest of the four shards' 32nd
+    values).  A token missing from the candidates is at or under its shard's 32nd value, so every token above the last kept
+    one is then in the candidates, with the full row's cumulative mass; otherwise (``CandidateFallback("nucleus")``) the
+    nucleus may reach unread tokens, and the row draws over the full logits.  Requires 0 < ``top_p`` < 1 and no penalty
+    (:func:`candidate_route`).  Raises ``nonfinite`` for a non-finite candidate or normalizer."""
+
+    flat_values, flat_ids = values.reshape(-1), ids.reshape(-1)
+    if not bool(torch.isfinite(flat_values).all()) or not math.isfinite(lse):
+        raise CandidateFallback("nonfinite", "candidate row or normalizer holds a non-finite value")
+    floor = values[:, -1].max()
+    scores = flat_values.clone()
+    scores[flat_ids >= TOKENIZER_SIZE] = float("-inf")  # the LM head's padding columns, left out of the normalizer too
+    order = torch.argsort(scores, descending=True, stable=True)
+    scores, indices = scores[order], flat_ids[order]
+    probs = torch.exp(scores / policy.temperature - lse)
+    keep = torch.cumsum(probs, 0) - probs < policy.top_p
+    keep[0] = True
+    last = int(keep.nonzero().max())
+    if not bool(scores[last] > floor):
+        raise CandidateFallback(
+            "nucleus", f"the nucleus reaches {float(scores[last])}, not above the shard floor {float(floor)}"
+        )
+    return probs[keep], indices[keep]
+
+
 def sample_from_candidates(
     values: torch.Tensor,
     ids: torch.Tensor,
     policy: Qwen38HostSamplingPolicy,
     generator: torch.Generator | None,
     history: tuple[torch.Tensor, torch.Tensor] | None = None,
+    lse: float | None = None,
 ) -> int:
     """One lane's token from its candidate row: :func:`candidate_law`, then the exponential-noise argmax of
     :func:`sample_from_row` with the same generator, so a seeded row draws the token the full-row path draws for the same
     logits (up to the order of exactly tied values).  A greedy row reaches here only with a penalty (its penalized
     argmax)."""
 
-    probs, indices = candidate_law(values, ids, policy, history)
+    probs, indices = candidate_law(values, ids, policy, history, lse)
     noise = torch.empty_like(probs).exponential_(generator=generator)
     return int(indices[(probs / noise).argmax()])
 
@@ -643,12 +724,18 @@ class Qwen38ForCausalLM:
         self.decode_calls = 0  # batch mode: decode calls so far (the periodic log line)
         # P3g-1: sampled lanes draw from the device candidate rows (QWEN38_BATCH_CANDIDATES, default on); refused at start
         self.batch_candidates = batch_candidates_enabled() if batch_lanes > 1 else False
+        # P3g-2: top-k-off sampled rows draw from the candidate rows with the device normalizer (QWEN38_BATCH_NORMALIZER,
+        # default on; refused at start when bad); only with the candidate rows on
+        batch_normalizer = batch_normalizer_enabled() if batch_lanes > 1 else False
+        self.batch_normalizer = bool(self.batch_candidates and batch_normalizer)
         # candidate-path counters: rows drawn from candidates, rows sent to the full-logits path per reason, the steps
         # that paid the full gather for them
         self.candidate_counters: dict[str, int] = {
             "candidate_steps": 0,
             "candidate_rows": 0,
             "fallback_steps": 0,
+            "normalizer_steps": 0,  # steps that replayed the candidate + normalizer trace
+            "normalizer_rows": 0,  # rows drawn with the device normalizer (top-k off)
             **{f"fallback_{reason}": 0 for reason in CANDIDATE_FALLBACK_REASONS},
         }
         self.decode_stats: deque[dict[str, float]] = deque(maxlen=4096)  # per decode call: total/step/gather seconds
@@ -1173,6 +1260,7 @@ class Qwen38ForCausalLM:
             indexer_form=BATCH_LANE_INDEXER_FORM,
             pack=prefill_pack_enabled(lanes=self.lanes),  # on with >= 8 lanes (P3e); QWEN38_PREFILL_PACK wins
             candidates=self.batch_candidates,
+            normalizer=self.batch_normalizer,
         )
         decoder.warm_logits_gather = True  # host-sampled rows and host logits read the lane logits under the miss guard
         self.decoder, self.block_size, self.num_blocks = decoder, block_size, num_blocks
@@ -1523,7 +1611,7 @@ class Qwen38ForCausalLM:
             raise
         gather_started = time.perf_counter()
         logits = None
-        candidates_s = draw_s = fallback_s = 0.0
+        candidates_s = draw_s = fallback_s = normalizer_s = 0.0
         drawn: dict[int, int] = {}
         use_candidates = (
             self.batch_candidates
@@ -1532,7 +1620,7 @@ class Qwen38ForCausalLM:
             and getattr(decoder, "has_candidates", False)
         )
         if use_candidates:
-            drawn, fallback_rows, candidates_s, draw_s = self._draw_candidate_rows(
+            drawn, fallback_rows, candidates_s, draw_s, normalizer_s = self._draw_candidate_rows(
                 decoder, host_rows, policies, row_lanes, positions, histories
             )
             if fallback_rows:
@@ -1585,6 +1673,7 @@ class Qwen38ForCausalLM:
                 "overhead_s": (now - started) - step_s,
                 "candidates_s": candidates_s,
                 "draw_s": draw_s,
+                "normalizer_s": normalizer_s,
                 "fallback_s": fallback_s if use_candidates else (now - gather_started if host_rows else 0.0),
                 "sampled_rows": len(host_rows),
             }
@@ -1594,6 +1683,7 @@ class Qwen38ForCausalLM:
             recent = list(self.decode_stats)[-DECODE_LOG_INTERVAL:]
             mean = lambda key: sum(entry[key] for entry in recent) / len(recent)  # noqa: E731
             counters = self.candidate_counters
+            norm_steps = [entry["normalizer_s"] for entry in recent if entry["normalizer_s"] > 0.0]
             logger.info(
                 f"batch decode: {self.decode_calls} calls, last {len(recent)}: mean rows {mean('rows'):.2f}, "
                 f"total {mean('total_s') * 1e3:.2f} ms, replay {mean('step_s') * 1e3:.2f} ms, "
@@ -1603,7 +1693,11 @@ class Qwen38ForCausalLM:
                 f"candidates {'on' if self.batch_candidates else 'off'}: {counters['candidate_rows']} rows drawn in "
                 f"{counters['candidate_steps']} steps, fallback steps {counters['fallback_steps']} (rows: top_k "
                 f"{counters['fallback_top_k']}, penalty {counters['fallback_penalty']}, guard "
-                f"{counters['fallback_guard']}, nonfinite {counters['fallback_nonfinite']})"
+                f"{counters['fallback_guard']}, nonfinite {counters['fallback_nonfinite']}, nucleus "
+                f"{counters['fallback_nucleus']}); normalizer {'on' if self.batch_normalizer else 'off'}: "
+                f"{counters['normalizer_rows']} rows in {counters['normalizer_steps']} steps, device+readback "
+                f"{(sum(norm_steps) / len(norm_steps) * 1e3) if norm_steps else 0.0:.2f} ms per normalizer step "
+                f"({len(norm_steps)} of the last {len(recent)})"
             )
         return out
 
@@ -1615,17 +1709,28 @@ class Qwen38ForCausalLM:
         row_lanes: dict[int, int],
         positions: list[int],
         histories: dict[int, tuple[torch.Tensor, torch.Tensor]],
-    ) -> tuple[dict[int, int], list[int], float, float]:
+    ) -> tuple[dict[int, int], list[int], float, float, float]:
         """The step's sampled rows from the device candidate rows: one trace replay and a ``[lanes, 256]`` readback, then
-        per row the candidate law and the same generator as the full-row path (:func:`sample_from_candidates`).  Returns
-        ``(tokens by row, rows that need the full logits, candidate seconds, host draw seconds)``; a row whose policy or
-        candidates cannot be exact (:class:`CandidateFallback`) is counted per reason and left to the full-logits path.
+        per row the candidate law and the same generator as the full-row path (:func:`sample_from_candidates`).  A step with
+        a top-k-off row (the normalizer on, :func:`needs_normalizer`) replays the candidate + normalizer trace instead and
+        also reads the lanes' shard normalizers.  Returns ``(tokens by row, rows that need the full logits, candidate
+        seconds, host draw seconds, normalizer-step seconds)``; a row whose policy or candidates cannot be exact
+        (:class:`CandidateFallback`) is counted per reason and left to the full-logits path.
         """
 
         counters = self.candidate_counters
+        use_normalizer = self.batch_normalizer and getattr(decoder, "has_normalizer", False)
+        norm_rows = [row for row in host_rows if use_normalizer and needs_normalizer(policies[row])]
         started = time.perf_counter()
+        shard_lse = None
         try:
-            rows = decoder.read_candidates()
+            if norm_rows:
+                inverse = [1.0] * self.lanes
+                for row in norm_rows:
+                    inverse[row_lanes[row]] = 1.0 / policies[row].temperature
+                rows, shard_lse = decoder.read_candidates_normalized(inverse)
+            else:
+                rows = decoder.read_candidates()
         except BaseException:
             self.batch_failed = True
             raise
@@ -1640,14 +1745,31 @@ class Qwen38ForCausalLM:
             try:
                 if not bool(valid[lane]):
                     raise CandidateFallback("nonfinite", f"lane {lane}'s candidate row is malformed")
+                reason = candidate_route(
+                    policy, normalizer=use_normalizer
+                )  # the reason a top-k-off row is counted under
+                if reason is not None:
+                    raise CandidateFallback(reason)
+                lse = combine_shard_normalizers(shard_lse[lane]) if row in norm_rows else None
                 generator = position_generator(policy.seed, positions[row])
-                drawn[row] = sample_from_candidates(values[lane], ids[lane], policy, generator, histories.get(row))
+                drawn[row] = sample_from_candidates(
+                    values[lane], ids[lane], policy, generator, histories.get(row), lse=lse
+                )
+                if lse is not None:
+                    counters["normalizer_rows"] += 1
             except CandidateFallback as fallback:
                 counters[f"fallback_{fallback.reason}"] += 1
                 fallback_rows.append(row)
         counters["candidate_steps"] += 1
         counters["candidate_rows"] += len(drawn)
-        return drawn, fallback_rows, candidates_s, time.perf_counter() - drawn_started
+        counters["normalizer_steps"] += 1 if norm_rows else 0
+        return (
+            drawn,
+            fallback_rows,
+            candidates_s,
+            time.perf_counter() - drawn_started,
+            candidates_s if norm_rows else 0.0,
+        )
 
     def _read_lane_logits(self) -> torch.Tensor:
         """The last replay's logits of every lane, fp32 ``[lanes, VOCAB_SIZE]``, the LM head's padding masked."""
@@ -1707,6 +1829,8 @@ class Qwen38ForCausalLM:
         )
         if self.batch_candidates and getattr(self.decoder, "has_candidates", False):
             self.decoder.read_candidates()  # one candidate replay and readback under the closed miss guard
+            if self.batch_normalizer and getattr(self.decoder, "has_normalizer", False):
+                self.decoder.read_candidates_normalized([1.0] * self.lanes)  # and one candidate + normalizer replay
         self.release_request(0)
         self.lane_of_slot = list(range(self.lanes))
         self.lane_slots = [Qwen38VLLMSlot() for _ in range(self.lanes)]

@@ -54,7 +54,7 @@ from models.demos.blackhole.qwen38_flash_next.tools import qwen38_pack_plan as p
 from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import Qwen38TracedChain
 from models.demos.blackhole.qwen38_flash_next.ttnn import pack as pack_module
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import replicate_tensor_2d_mesh_mapper
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TP_SIZE, replicate_tensor_2d_mesh_mapper
 from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import SAMPLING_CANDIDATE_ROW_SHAPE
 from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import (
     Qwen38LaneHostPool,
@@ -216,6 +216,7 @@ class Qwen38PlainLaneDecoder:
         indexer_form: str | None = None,
         pack: bool | None = None,
         candidates: bool = False,
+        normalizer: bool = False,
     ) -> None:
         self.lanes = lanes
         # QSA lane indexer form, "wide" or "per_lane"; the argument beats QWEN38_LANE_INDEXER_FORM (default "wide")
@@ -255,6 +256,15 @@ class Qwen38PlainLaneDecoder:
         self.candidate_buffer = None
         self.candidate_trace_id: int | None = None
         self._candidate_scratch = None
+        # P3g-2: the full-row normalizer of the sampled lanes (per shard LSE of logits / T over the real vocabulary, one fp32 per
+        # lane and shard), for top-k-off rows.  Its trace is the candidate trace plus the normalizer ops (one replay, two
+        # buffers), chosen per step; the inverse temperatures are a persistent input the host writes before the replay.
+        self.normalizer = bool(candidates and normalizer)
+        self.normalizer_inv_temperature = None
+        self.normalizer_mask = None
+        self.normalizer_buffer = None
+        self.normalizer_trace_id: int | None = None
+        self._normalizer_scratch: tuple | None = None
         self.pack_state = None
         self.pack_traces: dict[int, tuple[int, Any]] = {}
         self.lander: Qwen38TTNNPackLander | None = None
@@ -348,16 +358,43 @@ class Qwen38PlainLaneDecoder:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh),
         )
-        row = self.model.model_io.lm_head.sampling_candidates(
-            logits, chain.sampling.constants, into=self.candidate_buffer
-        )
+        lm_head = self.model.model_io.lm_head
+        row = lm_head.sampling_candidates(logits, chain.sampling.constants, into=self.candidate_buffer)
         ttnn.synchronize_device(mesh)
         ttnn.deallocate(row)
         self._read_candidate_buffer()
+        if self.normalizer:
+            self.normalizer_inv_temperature = ttnn.from_torch(
+                torch.ones(1, 1, lanes, 1, dtype=torch.float32),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh),
+            )
+            self.normalizer_mask = lm_head.sampling_normalizer_mask()
+            self.normalizer_buffer = ttnn.from_torch(
+                torch.zeros(1, 1, lanes, TP_SIZE, dtype=torch.float32),
+                dtype=ttnn.float32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh),
+            )
+            lse = lm_head.sampling_normalizer(
+                logits, self.normalizer_inv_temperature, self.normalizer_mask, into=self.normalizer_buffer
+            )
+            ttnn.synchronize_device(mesh)
+            ttnn.deallocate(lse)
+            self._read_normalizer_buffer()
 
     def _read_candidate_buffer(self) -> torch.Tensor:
         host = ttnn.to_torch(ttnn.get_device_tensors(self.candidate_buffer)[0])
         return host.reshape(self.lanes, SAMPLING_CANDIDATE_ROW_SHAPE[3]).to(torch.float32)
+
+    def _read_normalizer_buffer(self) -> torch.Tensor:
+        host = ttnn.to_torch(ttnn.get_device_tensors(self.normalizer_buffer)[0])
+        return host.reshape(self.lanes, TP_SIZE).to(torch.float32)
 
     def capture_candidates(self) -> None:
         """The candidate trace, after the lane capture: ``sampling_candidates`` over the lane trace's persistent logits
@@ -384,10 +421,56 @@ class Qwen38PlainLaneDecoder:
         acknowledge_corruptible(row)
         self.timing["candidates_capture_s"] = time.perf_counter() - started
         self.timing["candidates_trace_bytes"] = before - self._dram_free()
+        if self.normalizer:
+            started, before = time.perf_counter(), self._dram_free()
+            with corruptible_allocation_scope(mesh):
+                trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+                with guard("normalizer capture"):
+                    row = model.model_io.lm_head.sampling_candidates(
+                        logits, chain.sampling.constants, into=self.candidate_buffer
+                    )
+                    lse = model.model_io.lm_head.sampling_normalizer(
+                        logits, self.normalizer_inv_temperature, self.normalizer_mask, into=self.normalizer_buffer
+                    )
+                ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+            ttnn.synchronize_device(mesh)
+            self.normalizer_trace_id, self._normalizer_scratch = trace_id, (row, lse)
+            for tensor in (self.normalizer_buffer, self.normalizer_inv_temperature, self.normalizer_mask, row, lse):
+                acknowledge_corruptible(tensor)
+            self.timing["normalizer_capture_s"] = time.perf_counter() - started
+            self.timing["normalizer_trace_bytes"] = before - self._dram_free()
 
     @property
     def has_candidates(self) -> bool:
         return self.candidate_trace_id is not None
+
+    @property
+    def has_normalizer(self) -> bool:
+        return self.normalizer_trace_id is not None
+
+    def read_candidates_normalized(self, inv_temperatures: Sequence[float]) -> tuple[torch.Tensor, torch.Tensor]:
+        """:meth:`read_candidates` plus the full-row normalizer: writes the lanes' inverse temperatures (one per lane; 1.0
+        for a lane that needs no normalizer), replays the candidate + normalizer trace and reads both buffers.  Returns
+        ``(candidate rows fp32 [lanes, 256], shard LSEs fp32 [lanes, 4])``: entry (u, d) = logsumexp over shard d's real
+        vocabulary columns of lane u's logits x ``inv_temperatures[u]``."""
+
+        if self.normalizer_trace_id is None:
+            raise RuntimeError("the normalizer trace is not captured")
+        if len(inv_temperatures) != self.lanes:
+            raise ValueError(
+                f"need one inverse temperature per lane: got {len(inv_temperatures)}, expected {self.lanes}"
+            )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.tensor([float(v) for v in inv_temperatures], dtype=torch.float32).reshape(1, 1, self.lanes, 1),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh),
+            ),
+            self.normalizer_inv_temperature,
+        )
+        ttnn._ttnn_execute_trace(self.mesh, self.normalizer_trace_id, cq_id=0, blocking=True)
+        return self._read_candidate_buffer(), self._read_normalizer_buffer()
 
     def read_candidates(self) -> torch.Tensor:
         """Replay the candidate trace over the last lane replay's logits and read the buffer: fp32 ``[lanes, 256]``,
@@ -487,7 +570,7 @@ class Qwen38PlainLaneDecoder:
             self.capture_candidates()
         if self.pack_enabled:
             self.capture_pack()
-        candidate_ids = [] if self.candidate_trace_id is None else [self.candidate_trace_id]
+        candidate_ids = [i for i in (self.candidate_trace_id, self.normalizer_trace_id) if i is not None]
         for trace_id in (*chain.trace_ids(), *self.trace_ids, *candidate_ids, *self.pack_trace_ids()):
             TraceAllocationTracker.verify_before_replay(mesh, trace_id)
         entries = resident_decode.program_cache_count(mesh)
@@ -818,13 +901,22 @@ class Qwen38PlainLaneDecoder:
             for trace_id in (*self.trace_ids, *self.pack_trace_ids()):
                 ttnn.release_trace(mesh, trace_id)
             self.trace_ids.clear()
-            if self.candidate_trace_id is not None:
-                ttnn.release_trace(mesh, self.candidate_trace_id)
-                self.candidate_trace_id = None
-            for tensor in (self._candidate_scratch, self.candidate_buffer):
+            for attribute in ("candidate_trace_id", "normalizer_trace_id"):
+                if getattr(self, attribute) is not None:
+                    ttnn.release_trace(mesh, getattr(self, attribute))
+                    setattr(self, attribute, None)
+            for tensor in (
+                self._candidate_scratch,
+                *(self._normalizer_scratch or ()),
+                self.candidate_buffer,
+                self.normalizer_buffer,
+                self.normalizer_inv_temperature,
+                self.normalizer_mask,
+            ):
                 if tensor is not None:
                     ttnn.deallocate(tensor)
-            self._candidate_scratch = self.candidate_buffer = None
+            self._candidate_scratch = self._normalizer_scratch = self.candidate_buffer = None
+            self.normalizer_buffer = self.normalizer_inv_temperature = self.normalizer_mask = None
             for _trace_id, output in self.pack_traces.values():
                 output.release_tensors()
             self.pack_traces.clear()
