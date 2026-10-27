@@ -55,3 +55,13 @@
   173 kernel dirs. Raised chain511b4.sh to 5 e2e passes (root commit 3f4364097af); relaunched as `ttp detach chain511e`
   (run dir 2152), it adopted 310/325/334 and submitted e2e.4 = job 340 at 01:12 PDT.
   Probe: ttp detach --check /home/smarton/fasth3/tt-metal/tt-project/state/runs/2152/chain511e.rc
+- 2026-10-27 02:10 PDT (run 2153): chain511e done rc=0. blx04 jobs: e2e.4 340 exit 124 (ended 01:23 PDT), e2e.5 347 exit 0
+  (01:37 PDT, = the standard e2e on 3f3ce168ce8), off 349 exit 0 (01:46 PDT), on 351 exit 0 (01:59 PDT). No drops.
+  noise_seed=20000 lines: off 0, on 6. md5 differ: off ceab14a7..., on fd4ea228... (e2e 1340be4d...).
+  Stills ~/fasth3/data/t511/q/ltx_av_fast_1920x1088_1_cmp_f{000,072,144}.png: both arms clean, same scene/subject,
+  only pose/motion detail differs; "on" not visibly worse.
+  ltx_eval needs python_env + PYTHONPATH .venv-eval site-packages (vbench there, av/numpy in python_env).
+  Eval detached as eval511 (run dir 2153, script ~/fasth3/data/t511/q/eval511.sh, log q/eval.log).
+- Next: read PCC/PSNR + VBench (cand=on vs ref=off; no dim down >0.01) from q/eval.log. If ok: in branch
+  ttp/t511-ltxrt-land (3f3ce168ce8), check origin/ltx-rt is still 522ef26916b (else re-cherry-pick + CPU test),
+  then ttp push --detach (ff onto origin ltx-rt), note to sulphur not needed (not an HF change).
