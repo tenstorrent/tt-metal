@@ -22,6 +22,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.fused_add_rmsnorm import fused_add_rmsnorm
+from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.fused_heads_rope import fused_heads_rope
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.model_config import (
     PAD_TOKEN_ID,
     SEQ_BUCKETS,
@@ -227,19 +228,32 @@ class NemotronReranker:
         cfg = self.cfg
         qc, kc = sdpa_chunks(B, S)
         qkv = self._linear(xn, layer.wqkv, "qkv")
-        qkv = ttnn.reshape(qkv, [B, 1, S, qkv.shape[-1]])
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            qkv,
-            num_heads=cfg.n_heads,
-            num_kv_heads=cfg.n_kv_heads,
-            transpose_k_heads=False,
-            memory_config=self._mem(B * S, qkv.shape[-1]),
-        )
-        ttnn.deallocate(qkv)
-        q_r = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.trans_mat, is_decode_mode=False)
-        k_r = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.trans_mat, is_decode_mode=False)
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
+        if cfg.fuse_heads_rope:
+            q_r, k_r, v = fused_heads_rope(
+                qkv,
+                cos,
+                sin,
+                self.trans_mat,
+                n_heads=cfg.n_heads,
+                n_kv_heads=cfg.n_kv_heads,
+                batch=B,
+                memory_config=self._mem(B * S, qkv.shape[-1]),
+            )
+            ttnn.deallocate(qkv)
+        else:
+            qkv = ttnn.reshape(qkv, [B, 1, S, qkv.shape[-1]])
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                qkv,
+                num_heads=cfg.n_heads,
+                num_kv_heads=cfg.n_kv_heads,
+                transpose_k_heads=False,
+                memory_config=self._mem(B * S, qkv.shape[-1]),
+            )
+            ttnn.deallocate(qkv)
+            q_r = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.trans_mat, is_decode_mode=False)
+            k_r = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.trans_mat, is_decode_mode=False)
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
         attn = ttnn.transformer.scaled_dot_product_attention(
             q_r,
             k_r,
