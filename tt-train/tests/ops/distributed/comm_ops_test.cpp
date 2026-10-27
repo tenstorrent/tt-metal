@@ -404,9 +404,7 @@ TEST_F(Mesh1x2CommOpsTest, TestScatterFullyTiled) {
     EXPECT_TRUE(xt::allclose(grad_data, grad_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 }
 
-// synchronize_gradients decides per mesh axis whether a gradient is reduced by reading the parameter's label through
-// is_sharded_on_axis, and trusts the all_reduce result's own label afterwards. On the 1x2 mesh axis 1 is the only axis
-// with more than one device.
+// On the 1x2 mesh, axis 1 is the only axis with more than one device.
 namespace {
 
 using MeshMapperConfig = ttnn::distributed::MeshMapperConfig;

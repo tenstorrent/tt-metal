@@ -2,26 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Gradient synchronisation trusts TensorTopology placements: this module pins what it reads.
+"""What ``is_sharded_on_axis`` and ``synchronize_gradients`` read from TP, DDP and FSDP labels on ``[1, 2]`` meshes.
 
-``synchronize_gradients`` decides per (parameter, mesh axis) whether to all-reduce the gradient along that axis by
-reading the parameter's label through ``is_sharded_on_axis``: sharded there (TP, FSDP) means the gradient is already
-per-shard-correct, replicated means it must be averaged. The reader takes an N-D label as is, expands the default
-mappers' collapsed 1-D label per axis, and refuses a label it cannot read.
+After one backward of a tiny model: every label has one placement per mesh axis, ``is_sharded_on_axis`` reports the
+axes the module structure implies, and after ``synchronize_gradients`` each gradient reads Replicate on the reduced
+axis, keeps its Shard elsewhere and holds the mean of the per-device gradients. The ParallelismContext overload is a
+one-shot singleton, so the tests call the explicit-axes overload, which runs the same loop.
 
-For tiny TP / DDP / FSDP models after one backward, the tests assert that every parameter label has one
-placement per mesh axis, which axes ``is_sharded_on_axis`` reports per parameter, and that after
-``synchronize_gradients`` each gradient reads Replicate on the reduced axis, keeps its Shard on the other axis and
-holds the mean of the per-device gradients. Negative controls: a collapsed Shard label reads as Shard on the
-non-trivial axis, and a label that does not cover the mesh raises instead of being guessed.
-
-The ParallelismContext overload of ``synchronize_gradients`` cannot be exercised for several layouts in one process
-(the context is a one-shot singleton); it only picks the axes and runs the explicit-axes overload's loop, which the
-tests call.
-
-Meshes: the conftest's ``tp_mesh`` / ``fsdp_mesh`` ``[1, 2]`` fixtures and a local ``[1, 2]`` with the data-parallel
-axis on axis 1. Every fixture is module-scoped and reopens the device, so each mesh has its own class, in fixture
-order. DP x TP and HSDP on a ``[2, 2]`` are in test_sync_gradients_placements_2x2.py.
+Each mesh fixture is module-scoped and reopens the device, so each mesh has its own class, in fixture order. DP x TP
+and HSDP on a ``[2, 2]`` are in test_sync_gradients_placements_2x2.py.
 """
 
 from __future__ import annotations
@@ -128,12 +117,9 @@ class TestTP:
                 )
 
     def test_synchronize_over_tp_leaves_the_tp_shards_alone(self, tp_mesh):
-        """``synchronize_gradients(params, [tp])`` averages only the gradients of parameters replicated on tp. A
-        TP-sharded parameter holds a different piece of the weight on each tp device, so averaging along tp would add
-        those pieces together; its gradient comes back unchanged, bit for bit.
-
-        Negative control: without the per-parameter filter, this call averaged each TP-sharded gradient with the
-        other device's piece."""
+        """``synchronize_gradients(params, [tp])`` averages only the gradients of parameters replicated on tp; a
+        TP-sharded gradient holds a different piece on each device and comes back bit for bit. Negative control:
+        without the per-parameter filter, each TP shard was averaged with the other device's."""
         tp = tp_mesh.axis_index("tp")
         model = TPBlock()
         params = model.parameters()
@@ -254,12 +240,9 @@ class TestDDP:
             _assert_mean_over_axis(before[name], _shards(grad), ddp_mesh.shape, dp, name)
 
     def test_collapsed_grad_label_is_read_reduced_and_relabelled(self, ddp_mesh):
-        """Negative control. A gradient carrying the collapsed ``{2}, [Shard(0)]`` label (what a whole-mesh
-        ShardTensorToMesh batch hands every downstream gradient) reads as Shard on the dp axis and comes back from the
-        reduction as Replicate on every axis with the averaged bytes, labelled by the collective itself. On this line
-        mesh the all_reduce keeps the collapsed spelling, so the result is ``{2}, [Replicate]``
-        with ONE placement (on a 2-D mesh it would be the N-D ``[Replicate, ...]``); hence no ``len == 2`` assertion
-        here, by design."""
+        """Negative control. A gradient labelled with the whole-mesh mapper's collapsed ``{2}, [Shard(0)]`` reads as
+        Shard on the dp axis and comes back from the reduction averaged and Replicate everywhere. On this line mesh the
+        all_reduce keeps the collapsed spelling, ``{2}, [Replicate]``, so the placement count is not checked."""
         dp = ddp_mesh.axis_index("dp")
         model = Model()
         params = model.parameters()

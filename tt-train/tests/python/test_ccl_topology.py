@@ -11,7 +11,8 @@ output tensor's placement matches the op's semantics:
   * **all_reduce** — output is replicated on the collective axis.
   * **reduce_scatter** — output is sharded on the collective axis.
   * **all_gather** — output is replicated on the collective axis.
-  * **mesh_partition** — output is sharded on the collective axis (no collective runs).
+  * **mesh_partition**, reached through ``ttml.ops.distributed.all_gather``'s backward — output is sharded on the
+    collective axis (no collective runs).
 
 In all cases, placements on mesh axes *other* than ``cluster_axis`` must
 be preserved unchanged.

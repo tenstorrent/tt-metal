@@ -84,17 +84,12 @@ class TestDPxTP:
 
 class TestHSDP:
     def _batch_mapper(self, mesh):
-        """The HSDP batch mapper train.py builds: a whole-mesh Shard(0). Its collapsed label ``{D*F}, [Shard(0)]`` is
-        the exact description of a batch dim split hierarchically over both data axes, and the readers expand it to
-        Shard on every mesh axis (right here: both axes are data axes)."""
+        """train.py's HSDP batch mapper: a whole-mesh Shard(0), read as Shard on both data axes."""
         return ttml.core.distributed.shard_tensor_to_mesh_mapper(_device(), 0, None)
 
     def test_managed_params_are_reduced_on_dp_only(self, hsdp_mesh):
-        """The batch is [D*F, 1, DIM, DIM] sharded on dim 0 over the whole mesh (one sample per device, the collapsed
-        label {D*F}, [Shard(0)] read as Shard on both axes). FSDP-managed parameters are Shard on "fsdp", so they are
-        reduced on "dp" only;
-        the unmanaged head on both. After the dp reduction a managed gradient reads Replicate on "dp" and Shard on
-        "fsdp" (the parameter's own label), the head's still Shard on "fsdp" until it is reduced there too."""
+        """One sample per device under the whole-mesh batch mapper. FSDP-managed parameters are Shard on "fsdp", so
+        they are reduced on "dp" only and keep their "fsdp" Shard; the unmanaged head is averaged on both axes."""
         dp, fsdp = hsdp_mesh.axis_index("dp"), hsdp_mesh.axis_index("fsdp")
         D, F = hsdp_mesh.axis_size("dp"), hsdp_mesh.axis_size("fsdp")
         model = _build_fsdp_model("eager")
