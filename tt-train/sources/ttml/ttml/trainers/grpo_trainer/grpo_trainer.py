@@ -194,8 +194,8 @@ class GRPOConfig:
     gradient_accumulation_steps: int
     # Metrics are accumulated every step and emitted every ``logging_steps``
     # steps as an interval-mean (except ``min_completion_len``,
-    # ``max_completion_len``, ``lr`` where minimum, maximum, last value is
-    # emitted respectively).
+    # ``max_completion_len`` and ``logprob_mismatch_max``, ``lr`` where minimum,
+    # maximum, last value is emitted respectively).
     logging_steps: int
     output_dir: str
     checkpointing: bool
@@ -422,6 +422,9 @@ _CSV_BASE_COLUMNS = (
     "rollout_wait_s",
     "weight_sync_time_s",
     "rollout_weight_version",
+    "logprob_mismatch_mean",
+    "logprob_mismatch_max",
+    "clip_frac",
 )
 
 
@@ -459,6 +462,7 @@ _AGG_POLICY: dict[str, str] = {
     "min_completion_len": "min",
     "max_completion_len": "max",
     "lr": "last",
+    "logprob_mismatch_max": "max",
 }
 
 
@@ -941,6 +945,21 @@ def place_old_nlog_probs(
     return old
 
 
+def clipping_stats(
+    old_np: np.ndarray, new_np: np.ndarray, mask_np: np.ndarray, adv_np: np.ndarray, eps: float
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Per completion token: ``|log pi - log pi_old|``, and whether the clipped term is the minimum (zero gradient).
+
+    ``old_np`` / ``new_np`` are ``[B, Tp]`` negative log-probs, ``mask_np`` the completion mask, ``adv_np`` ``[B]``.
+    """
+    log_ratio = old_np - new_np
+    ratio = np.exp(log_ratio)
+    adv = adv_np[:, None]
+    clipped = ((ratio > 1.0 + eps) & (adv > 0)) | ((ratio < 1.0 - eps) & (adv < 0))
+    tokens = mask_np > 0
+    return np.abs(log_ratio[tokens]), clipped[tokens]
+
+
 def save_checkpoint(
     model: Any,
     step: int,
@@ -1395,6 +1414,20 @@ class GRPOTrainer:
             ]
             self.metrics["rewards"] = rewards[:k].tolist()
 
+    def _record_clipping_stats(
+        self, micro_batch_logprobs: List[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]
+    ) -> None:
+        """Write ``logprob_mismatch_{mean,max}`` and ``clip_frac`` over every completion token of the step.
+
+        Each entry is one micro-batch's ``(old_np, new_np, mask_np, adv_np)``, as :func:`clipping_stats` takes them.
+        """
+        stats = [clipping_stats(*mb, self.config.epsilon) for mb in micro_batch_logprobs]
+        mismatch = np.concatenate([m for m, _ in stats])
+        clipped = np.concatenate([c for _, c in stats])
+        self.metrics["logprob_mismatch_mean"] = float(mismatch.mean()) if mismatch.size else 0.0
+        self.metrics["logprob_mismatch_max"] = float(mismatch.max()) if mismatch.size else 0.0
+        self.metrics["clip_frac"] = float(clipped.mean()) if clipped.size else 0.0
+
     def _compute_advantages(self, rewards_np: np.ndarray) -> np.ndarray:
         """Group-relative advantages on host (per-prompt mean subtracted)."""
         return compute_advantages_host(rewards_np, self.config.num_generations)
@@ -1414,11 +1447,17 @@ class GRPOTrainer:
         self._optimizer.zero_grad()
         mb = self._completions_per_microbatch
         global_len = len(batch.completions)
+        micro_batch_logprobs = []
         for i, (p, c) in enumerate(iter_micro_batch(batch.prompts, batch.completions, mb)):
             rows = slice(i * mb, i * mb + len(c))
             inputs, targets, mask_np, Tp = layout_microbatch(p, c, self._pad_token)
             old_np = place_old_nlog_probs(p, c, batch.logprobs[rows], Tp)
-            self._compute_loss_and_backward(inputs, targets, mask_np, old_np, advantages_np[rows], global_len)
+            nlog_new = self._compute_policy_nlog_probs(inputs, targets)
+            self._compute_loss_and_backward(nlog_new, mask_np, old_np, advantages_np[rows], global_len)
+            new_np = nlog_new.to_numpy(ttnn.DataType.FLOAT32, composer=self._batch_layout.composer)
+            deallocate_tensors([nlog_new])
+            micro_batch_logprobs.append((old_np, new_np, mask_np, advantages_np[rows]))
+        self._record_clipping_stats(micro_batch_logprobs)
 
     def _compute_policy_nlog_probs(self, inputs: np.ndarray, targets: np.ndarray) -> ttml.autograd.Tensor:
         """Teacher-forced forward with grad over the :func:`layout_microbatch`
@@ -1439,16 +1478,15 @@ class GRPOTrainer:
 
     def _compute_loss_and_backward(
         self,
-        inputs: np.ndarray,
-        targets: np.ndarray,
+        nlog_new: ttml.autograd.Tensor,
         mask_np: np.ndarray,
         old_np: np.ndarray,
         adv_slice: np.ndarray,
         global_len: int,
     ) -> None:
         """One autograd transaction: upload advantages, ``pi_old`` and the
-        completion mask, run the current-policy forward pass with grad, build
-        the clipped GRPO surrogate, backward, and free the intermediates.
+        completion mask, build the clipped GRPO surrogate on ``nlog_new``,
+        backward, and free the intermediates.
 
         ``global_len`` is the completion count across the whole generation
         batch (all ``grad_accum`` micro-batches); the loss normalization uses
@@ -1465,7 +1503,6 @@ class GRPOTrainer:
         )
         mask.set_requires_grad(False)
 
-        nlog_new = self._compute_policy_nlog_probs(inputs, targets)
         new_val = nlog_new.get_value()
         nlog_old = ttml.autograd.Tensor.from_numpy(old_np, new_val.layout, new_val.dtype, self._batch_layout.mapper)
         nlog_old.set_requires_grad(False)
@@ -1484,7 +1521,7 @@ class GRPOTrainer:
         )
         loss.backward(retain_graph=False)
         ttml.autograd.AutoContext.get_instance().reset_graph()
-        deallocate_tensors([nlog_old, nlog_new, mask, adv_ttml, loss])
+        deallocate_tensors([nlog_old, mask, adv_ttml, loss])
 
     def _apply_gradients(self) -> None:
         """Grad sync + ``on_before_optimizer_step`` + optional grad clip +
