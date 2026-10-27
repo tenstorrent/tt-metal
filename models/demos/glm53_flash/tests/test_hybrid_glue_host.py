@@ -203,7 +203,10 @@ def test_stream_serves_and_list_gathers(monkeypatch):
     assert not serves(blk, 32)
     one_copy = _RE()
     one_copy.w13, one_copy._dispatch, one_copy._regions_src = None, object(), object()
-    assert not serves(one_copy, 32)  # off: today's fallback
+    monkeypatch.setenv("GLM53_REGIONS_DECODE", "off")
+    assert not serves(one_copy, 32)  # off: the earlier fallback
+    monkeypatch.delenv("GLM53_REGIONS_DECODE")
+    assert serves(one_copy, 32)  # the default (stream) since 2026-10-27
     monkeypatch.setenv("GLM53_REGIONS_DECODE", "stream")
     assert serves(one_copy, 32) and serves(one_copy, 256) and not serves(one_copy, 288)
     assert not serves(dropped, 32)  # stream without the lists (not bank-local / no regions path): no redirect
