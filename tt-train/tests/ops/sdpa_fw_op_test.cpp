@@ -1507,9 +1507,17 @@ void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sw
         config.program_config = {
             .q_chunk_size = knobs.q_chunk_size,
             .k_chunk_size = knobs.k_chunk_size,
-            .heads_per_item = knobs.heads_per_item};
-        config.test_name =
-            fmt::format("{}_q{}_k{}_h{}", base.test_name, knobs.q_chunk_size, knobs.k_chunk_size, knobs.heads_per_item);
+            .heads_per_item = knobs.heads_per_item,
+            .max_pieces = knobs.max_pieces,
+            .num_cores = knobs.num_cores};
+        config.test_name = fmt::format(
+            "{}_q{}_k{}_h{}_p{}_c{}",
+            base.test_name,
+            knobs.q_chunk_size,
+            knobs.k_chunk_size,
+            knobs.heads_per_item,
+            knobs.max_pieces,
+            knobs.num_cores);
         SCOPED_TRACE(config.test_name);
         xt::xarray<float> output;
         run_sdpa_test(config, &output);
