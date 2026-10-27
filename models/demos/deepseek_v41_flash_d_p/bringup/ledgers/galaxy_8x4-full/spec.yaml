@@ -275,8 +275,8 @@ checkpoint:
 contract:
   adapter: deepseek_v41_flash_d_p
 serving:
-  server_repo: /localdev/$USER/tt-d-gen
-  require_engine: false
+  server_repo: /scratch/$USER/tt-d-gen
+  require_engine: true
   owner_answers:
   - '1 decode-side cache: bf16 row-major per position, lossless, the contract''s five config names and order'
   - '2 window KV: TP-dedup (1.25 GiB per chip per slot at 512K on galaxy_4x4); fp8 rows only with server tooling support'
@@ -284,7 +284,8 @@ serving:
   - '4 prefix reuse: on, kv_block_size 64'
   - '5 d2p: off (a pulled prefix has no token ids for the engram hash)'
   - '6 server tooling: our tests decode with explicit geometry; tt-d-gen needs a DeepSeek-V4 entry before a launch run'
-  - '7 runner smoke: needs all 40 layers; not required in this partial run (F66), run on the deployment Galaxy'
+  - '7 runner smoke: needs all 40 layers; runs in this full run on the deployment Galaxy (owner, 2026-10-27), fed by tt-d-gen''s
+    engine at its latest commit'
 agents:
   rules:
   - 'Always use 2D fabric: the mesh opens with the spec''s device_params; never FABRIC_1D or FABRIC_1D_RING.'
