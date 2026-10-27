@@ -110,3 +110,14 @@ def test_eager_pad_length_buckets():
     except ValueError:
         raised = True
     assert raised
+
+
+def test_fill_rows_clips_bucket_padding_to_the_slot():
+    """A prompt's last chunk is padded to a warmed bucket (16 K at the 1 M chunk) while the harness sizes the slot
+    to prompt + gen + 256: the paged fill writes only the rows the slot has from the chunk's first block."""
+    from models.demos.glm53_flash.tt.dsa import fill_rows
+
+    assert fill_rows(16384, 32256, 32748, 32) == 492 * 32  # the 2026-10-27 1 M run (ISL 1 047 612, gen 64)
+    assert fill_rows(16384, 32256, 32768, 32) == 16384  # a 16 K-aligned slot (the served 1 M) takes the whole bucket
+    assert fill_rows(256, 64, 69, 32) == 160  # the (2,4) block check: 2175 tokens in a 2200-position slot
+    assert fill_rows(256, 0, 8, 32) == 256

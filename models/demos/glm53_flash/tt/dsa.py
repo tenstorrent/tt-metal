@@ -493,6 +493,18 @@ class SparseDecodeMeta:
         put(cur, ttnn.int32, self.cur_pos)
 
 
+def fill_rows(t_pad: int, first_block: int, blocks_per_seq: int, block_size: int) -> int:
+    """Rows of a ``t_pad``-row prefill chunk that the paged fill writes from block ``first_block`` of a slot of
+    ``blocks_per_seq`` blocks: the chunk's rows past the slot end are bucket padding (``mesh_model.eager_pad_length``
+    raises a prompt's last chunk to a warmed length), never positions (the real tokens end inside the slot by
+    construction). The 2026-10-27 1 M harness run: slot 32748 blocks (prompt + gen + 256), last 16 K chunk from
+    block 32256 -> 492 blocks = 15744 rows written, the 640 padding rows dropped."""
+    avail = (int(blocks_per_seq) - int(first_block)) * int(block_size)
+    if avail <= 0:
+        raise ValueError(f"fill from block {first_block} of a {blocks_per_seq}-block slot: nothing to write")
+    return min(int(t_pad), avail)
+
+
 class TtLatentCache:
     """Paged latent cache for one DSA layer (and its page table) plus the pooled-key index, device-owned."""
 
@@ -644,26 +656,37 @@ class TtLatentCache:
         ``slot`` (a ``trace_prefill.PrefillSlot``, start == 0 only): the slot index comes from its
         device tensors (``batch_idx_tensor``: the same op, the user chosen on device), so the fill is
         trace-replayable for any user; partitioned caches fill the scratch slot as well."""
-        src = latent if latent.dtype == self.dtype else ttnn.typecast(latent, self.dtype)
-        if slot is not None:
-            if start:
-                raise ValueError("a device-slot fill starts a new prompt (start == 0)")
-            pt = self.page_table_full
-            ttnn.experimental.paged_fill_cache(self.cache, src, pt, batch_idx_tensor=slot.cache_idx)
-            if self.scratch is not None:
-                ttnn.experimental.paged_fill_cache(self.cache, src, pt, batch_idx_tensor=slot.scratch_idx)
-            return
-        if start == 0 and not self.partition:
-            ttnn.experimental.paged_fill_cache(self.cache, src, self.page_table, batch_idx=user)
-            return
         if start % self.block_size:
             raise ValueError(f"fill start {start} must be a multiple of the block size {self.block_size}")
+        if slot is not None and start:
+            raise ValueError("a device-slot fill starts a new prompt (start == 0)")
+        src = latent if latent.dtype == self.dtype else ttnn.typecast(latent, self.dtype)
         b0 = start // self.block_size
-        for full in self._prefill_views_for(user):
-            view = full if b0 == 0 else ttnn.slice(full, [0, b0], [1, self.blocks_per_seq])  # device slice, no upload
-            ttnn.experimental.paged_fill_cache(self.cache, src, view, batch_idx=0)
-            if view is not full:
-                ttnn.deallocate(view)
+        rows = fill_rows(src.shape[-2], b0, self.blocks_per_seq, self.block_size)
+        clipped = None
+        if rows < src.shape[-2]:  # bucket padding past the slot end: not written (see fill_rows)
+            clipped = ttnn.slice(src, [0, 0, 0, 0], [1, 1, rows, src.shape[-1]])
+            src = clipped
+        try:
+            if slot is not None:
+                pt = self.page_table_full
+                ttnn.experimental.paged_fill_cache(self.cache, src, pt, batch_idx_tensor=slot.cache_idx)
+                if self.scratch is not None:
+                    ttnn.experimental.paged_fill_cache(self.cache, src, pt, batch_idx_tensor=slot.scratch_idx)
+                return
+            if start == 0 and not self.partition:
+                ttnn.experimental.paged_fill_cache(self.cache, src, self.page_table, batch_idx=user)
+                return
+            for full in self._prefill_views_for(user):
+                view = (
+                    full if b0 == 0 else ttnn.slice(full, [0, b0], [1, self.blocks_per_seq])
+                )  # device slice, no upload
+                ttnn.experimental.paged_fill_cache(self.cache, src, view, batch_idx=0)
+                if view is not full:
+                    ttnn.deallocate(view)
+        finally:
+            if clipped is not None:
+                ttnn.deallocate(clipped)
 
     def update(self, latent_rows: ttnn.Tensor, positions: ttnn.Tensor):
         """latent_rows [1, B, 1, 512] (one token per user), positions [B] int32 row-major."""
