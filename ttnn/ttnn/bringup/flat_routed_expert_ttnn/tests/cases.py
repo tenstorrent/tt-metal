@@ -54,8 +54,9 @@ CASES = [
         **_DS41,
         "id": "deepseek_v41_flash_d_p-2x2-routed-weighted-combine-s1024-e96-top6-i2304-bfp4-lofi",
         # F179 stable sig (extra_key, an id()-derived program-cache key, left out; DS41-110). Same call as the
-        # pre-F179 sigs 284a4a9ead / 31755c8401, which differ only in extra_key.
-        "sig": "3fc158f72b",
+        # pre-F179 sigs 284a4a9ead / 31755c8401, which differ only in extra_key, and as 3fc158f72b before the rebase
+        # onto llk_helper_library 6b80daf43e3, whose l1_args list the same cores in another order.
+        "sig": "2aefb66a5a",
         "op": "flat_routed_expert_with_program",
         "I": 2304,
         "epc": 24,
