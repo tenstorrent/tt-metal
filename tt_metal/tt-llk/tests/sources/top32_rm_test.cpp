@@ -206,9 +206,9 @@ inline void unpack_chunk(std::uint32_t operand, std::uint32_t chunk, std::uint32
 // One operand of one chunk. Re-initialising per call mirrors the consumer, which has to
 // because it reconfigures srcA between the value and index operands.
 //
-// Two branches, picked exactly as llk_unpack_A_top32_rm_api.h picks them (there on the src
-// format being Int32, here on the harness's unpack_to_dest, which is the same question asked
-// of the whole variant):
+// Two branches. llk_unpack_A_top32_rm_api.h keys its choice on the src format being Int32 and
+// sends every other format, Float32 included, through SrcA; here unpack_to_dest = is_32bit sends
+// Float32 to Dest as well (see above), so the two agree only for Int32:
 //
 //   16-bit  the unpacker does the within-face 16x16 transpose itself and clears SrcA to
 //           -infinity first, so unfed faces lose every comparison.
