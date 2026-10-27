@@ -388,9 +388,11 @@ PRECOMPILE_PLUGIN_DIR="$REPO_DIR"
 #   attach   - a warm process for this checkout was up; the call ran there (no flock here)
 #   spawn    - this call took the lock, started the warm process and ran there
 #   fallback - the warm process refused or was gone; the call ran cold
+#   yield    - eligible, but a warm process just made way for another runner; ran cold so that
+#              runner is not starved by a new warm process (see WARM_YIELD below)
 #   off      - not eligible: simulator, --dev, --profile, SAFE_PYTEST_WARM=0, device reuse off
-# The runtime reads the dispatch-timeout command once per process, so warm calls share a fixed
-# triage log path instead of a per-call one.
+# While a warm process serves a call it, not this script, sets and clears the dirty flag: it is
+# the one holding the lock.
 WARM=off
 WARM_ELIGIBLE=false
 if [[ "$SIM_MODE" == false && "$DEV_MODE" == false && "$PROFILE_MODE" == false \
@@ -400,7 +402,12 @@ if [[ "$SIM_MODE" == false && "$DEV_MODE" == false && "$PROFILE_MODE" == false \
     WARM_KEY=$(printf %s "$REPO_DIR" | sha1sum | cut -c1-12)
     WARM_LOG="/tmp/safe-pytest-warm-${WARM_KEY}.log"
     WARM_PID_FILE="/tmp/safe-pytest-warm-${WARM_KEY}.pid"
-    TRIAGE_LOG="/tmp/safe-pytest-triage-warm-${WARM_KEY}.log"
+    # Written by a warm process that closed the device because another runner wanted it. That
+    # runner may still be queued on the lock, and flock is not FIFO: a call that wins the lock
+    # within this many seconds runs cold instead of starting a new warm process, so the lock is
+    # free again right after it.
+    WARM_YIELD=/tmp/tt-device.warm-yield
+    WARM_YIELD_S=120
 fi
 
 
@@ -501,6 +508,19 @@ _lock_device() {
     fi
 }
 
+# --- Check if device needs reset from previous hang (only while holding the lock) ---
+_reset_if_dirty() {
+    if [[ -f "$DIRTY_FLAG" ]]; then
+        echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..."
+        if ! tt-smi -r; then
+            echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed"
+            exit 3
+        fi
+        rm -f "$DIRTY_FLAG"
+        echo "SAFE_PYTEST: Device reset complete"
+    fi
+}
+
 _warm_up() {
     [[ "$WARM_ELIGIBLE" == true ]] && python3 "$WARM_PY" ping --repo "$REPO_DIR" 2>/dev/null
 }
@@ -512,16 +532,15 @@ if [[ "$SIM_MODE" == false ]] && _warm_up; then
     echo "SAFE_PYTEST: warm process holds the device; running there"
 elif [[ "$SIM_MODE" == false ]]; then
     _lock_device
-
-    # --- Check if device needs reset from previous hang ---
-    if [[ -f "$DIRTY_FLAG" ]]; then
-        echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..."
-        if ! tt-smi -r; then
-            echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed"
-            exit 3
+    _reset_if_dirty
+    if [[ "$WARM_ELIGIBLE" == true ]]; then
+        _yield_age=$(( $(date +%s) - $(stat -c %Y "$WARM_YIELD" 2>/dev/null || echo 0) ))
+        if [[ "$_yield_age" -lt "$WARM_YIELD_S" ]]; then
+            WARM=yield
+            echo "SAFE_PYTEST: a warm process made way for another runner ${_yield_age}s ago; running cold"
+        else
+            WARM=spawn
         fi
-        rm -f "$DIRTY_FLAG"
-        echo "SAFE_PYTEST: Device reset complete"
     fi
 else
     # Simulator: no device lock to acquire, so start the total-run clock here (the
@@ -647,7 +666,11 @@ if [[ "$SIM_MODE" == false ]]; then
         MISSING_TTEXALENS=true
     fi
     mkdir -p "${TRIAGE_OUT_DIR}"
-    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1"
+    # The runtime reads this command once per process; a warm process serves many calls. So the
+    # log path is not baked in: the shell that runs the command expands $SAFE_PYTEST_TRIAGE_LOG
+    # from the process environment at that moment, which the warm process sets per call.
+    export SAFE_PYTEST_TRIAGE_LOG="$TRIAGE_LOG"
+    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} > \"\$SAFE_PYTEST_TRIAGE_LOG\" 2>&1"
 fi
 
 emit_missing_ttexalens_warning() {
@@ -748,8 +771,9 @@ echo "========================================"
 # --- Mark device dirty before running tests (hardware only) ---
 # Pessimistic: assume the device will get corrupted. If the script is killed at any
 # point (SIGKILL, OOM, etc.), the flag persists and the next runner will reset.
-# Cleared on clean exit or after a successful inline reset.
-if [[ "$SIM_MODE" == false ]]; then
+# Cleared on clean exit or after a successful inline reset. A warm process sets and clears it
+# itself around each session it runs (it holds the lock; this script may not).
+if [[ "$SIM_MODE" == false && "$WARM" != attach && "$WARM" != spawn ]]; then
     touch "$DIRTY_FLAG"
 fi
 
@@ -797,9 +821,54 @@ _run_logged() {
     CHILD_PID=
 }
 
+# --- Warm process helpers ---
+# The checkout's warm process: its pid file, else its command line. A zombie counts as gone (a
+# container's pid 1 may never reap the double-forked process).
+_warm_pid() {
+    local pid
+    pid=$(cat "$WARM_PID_FILE" 2>/dev/null)
+    if [[ -z "$pid" ]] || ! tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q "safe_pytest_warm.py worker"; then
+        pid=$(pgrep -f -- "safe_pytest_warm.py worker --repo $REPO_DIR" | head -1)
+    fi
+    echo "$pid"
+}
+_alive() {
+    [[ -n "$1" && -d /proc/$1 ]] && [[ "$(ps -o stat= -p "$1" 2>/dev/null)" != Z* ]]
+}
+# Ask the warm process to close the device and exit, then wait until it is gone. After 60 s
+# (a device close stuck after a hang) it is killed; the device is then dirty and gets reset.
+_stop_warm() {
+    python3 "$WARM_PY" stop --repo "$REPO_DIR" >/dev/null 2>&1 || true
+    local pid _i
+    pid=$(_warm_pid)
+    for _i in $(seq 600); do
+        _alive "$pid" || return 0
+        sleep 0.1
+    done
+    echo "SAFE_PYTEST: warm process did not exit in 60 s; killing it"
+    WARM_KILLED=true
+    kill -KILL "$pid" 2>/dev/null
+    while _alive "$pid"; do sleep 0.1; done
+}
+# Before this call touches the dirty flag or resets the device, it must hold the lock and the
+# warm process must be gone. A call that started the warm process shares its lock already.
+_own_device() {
+    [[ "$WARM" == attach || "$WARM" == spawn ]] || return 0
+    [[ "${WARM_OWNED:-false}" == true ]] && return 0
+    _stop_warm
+    [[ "$WARM" == attach ]] && _lock_device
+    # The warm process closed the device; teardown messages went to its log, not to this call.
+    if tail -n 400 "$WARM_LOG" 2>/dev/null | grep -aqE \
+        "Skipping RISC reset on device [0-9]+ during teardown|Timed out while waiting for active ethernet core"; then
+        WARM_ETH_STUCK=true
+    fi
+    [[ "${WARM_KILLED:-false}" == true ]] && touch "$DIRTY_FLAG"
+    WARM_OWNED=true
+}
+
 TT_TIMING_PYTEST_LAUNCH_MS=$(date +%s%3N)
 export SAFE_PYTEST_LAUNCH_MS="$TT_TIMING_PYTEST_LAUNCH_MS"
-if [[ "$WARM_ELIGIBLE" == true ]]; then
+if [[ "$WARM" == attach || "$WARM" == spawn ]]; then
     # The same command with the warm client in place of `pytest`; env assignments before it stay
     # and reach the warm session through the client's environment.
     WARM_CMD=()
@@ -807,27 +876,33 @@ if [[ "$WARM_ELIGIBLE" == true ]]; then
     for _a in "${PYTEST_CMD[@]}"; do
         if [[ "$_spliced" == false && "$_a" == pytest ]]; then
             WARM_CMD+=(python3 "$WARM_PY" run --repo "$REPO_DIR")
-            [[ "$WARM" == off ]] && WARM_CMD+=(--wait-start 180 "$WARM_PID_FILE")
+            [[ "$WARM" == spawn ]] && WARM_CMD+=(--wait-start 180 "$WARM_PID_FILE")
             WARM_CMD+=(--)
             _spliced=true
         else
             WARM_CMD+=("$_a")
         fi
     done
-    if [[ "$WARM" == off ]]; then
+    if [[ "$WARM" == spawn ]]; then
         # This call holds the lock: start the warm process. It inherits fd 9, so the lock stays
         # held after this script exits, for as long as the warm process keeps the device.
         rm -f "$WARM_PID_FILE"
         setsid -f bash -c 'echo $$ > "$1"; exec python3 "$2" worker --repo "$3" --lock-fd 9' _ \
             "$WARM_PID_FILE" "$WARM_PY" "$REPO_DIR" </dev/null >>"$WARM_LOG" 2>&1
-        WARM=spawn
     fi
     _run_logged "${WARM_CMD[@]}"
     if [[ $EXIT_CODE -eq 75 ]]; then
-        # Nothing ran in the warm process (refused, or gone). Run cold, holding the lock.
+        # Nothing of this call ran in the warm process (refused, gone, or never came up). Make
+        # sure it is gone, take the lock, and run cold like a plain call.
         echo "SAFE_PYTEST: warm process unavailable; running cold"
-        [[ "$WARM" == attach ]] && _lock_device
+        if [[ "$WARM" == spawn ]]; then
+            _stop_warm
+        else
+            _lock_device
+        fi
+        _reset_if_dirty
         WARM=fallback
+        touch "$DIRTY_FLAG"
         _run_logged "${PYTEST_CMD[@]}"
     fi
 else
@@ -835,29 +910,15 @@ else
 fi
 TT_TIMING_PYTEST_END_MS=$(date +%s%3N)
 
-# Before any reset this call must hold the lock and the warm process must have closed the
-# device. After a session that did not pass, the warm process exits on its own; otherwise it is
-# asked to stop. A call that started it shares its lock and waits for the process to be gone.
-_own_device() {
-    [[ "$WARM" == attach || "$WARM" == spawn ]] || return 0
-    python3 "$WARM_PY" stop --repo "$REPO_DIR" >/dev/null 2>&1 || true
-    if [[ "$WARM" == attach ]]; then
-        _lock_device
-    else
-        local pid _i
-        pid=$(cat "$WARM_PID_FILE" 2>/dev/null)
-        for _i in $(seq 600); do
-            [[ -n "$pid" && -d /proc/$pid ]] || break
-            sleep 0.1
-        done
-    fi
-    WARM_OWNED=true
-}
+# A warm session that did not pass ends its warm process; take the device over now, so the
+# result handling below (dirty flag, resets) runs exactly as for a cold call.
+if [[ ($WARM == attach || $WARM == spawn) && $EXIT_CODE -ne 0 ]]; then
+    _own_device
+fi
 
 # The warm process died during the session: the device may be in any state. Reset it now.
 if [[ ($WARM == attach || $WARM == spawn) && $EXIT_CODE -eq 70 ]]; then
     echo "SAFE_PYTEST: warm process died during the run; resetting device..."
-    _own_device
     if tt-smi -r; then
         sleep 2
         rm -f "$DIRTY_FLAG"
@@ -916,12 +977,13 @@ if [[ "$SIM_MODE" == false ]] && grep -aqE \
     "$PYTEST_STDOUT_LOG" 2>/dev/null; then
     ETH_STUCK=true
 fi
+[[ "${WARM_ETH_STUCK:-false}" == true ]] && ETH_STUCK=true
 
 # Clear the dirty flag, resetting first if the run left Ethernet cores stuck.
 _clear_dirty_flag() {
     if [[ "$ETH_STUCK" == true ]]; then
         echo "SAFE_PYTEST: Active Ethernet cores stuck after the run, resetting device..."
-        [[ "${WARM_OWNED:-false}" == true ]] || _own_device
+        _own_device
         if tt-smi -r; then
             sleep 2
             rm -f "$DIRTY_FLAG"
@@ -929,6 +991,8 @@ _clear_dirty_flag() {
         else
             echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty"
         fi
+    elif [[ ($WARM == attach || $WARM == spawn) && "${WARM_OWNED:-false}" != true ]]; then
+        :  # a passing session in a warm process that still holds the lock: it cleared the flag
     else
         rm -f "$DIRTY_FLAG"
     fi

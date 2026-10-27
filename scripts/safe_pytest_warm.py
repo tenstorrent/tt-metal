@@ -61,8 +61,11 @@ import time
 EX_NOT_RUN = 75  # the session did not start; run it cold
 EX_WORKER_DIED = 70  # the worker died mid-session; the device may be dirty
 
-LOCK_FILE = "/tmp/tt-device.lock"
-IDLE_S = float(os.environ.get("SAFE_PYTEST_WARM_IDLE_S", "300"))
+# Same paths as run_safe_pytest.sh; overridable for tests that must not touch the real ones.
+DIRTY_FLAG = os.environ.get("SAFE_PYTEST_DIRTY_FLAG", "/tmp/tt-device.dirty")
+YIELD_MARK = os.environ.get("SAFE_PYTEST_WARM_YIELD", "/tmp/tt-device.warm-yield")
+# 60 s covers ~94% of the gaps between consecutive calls in a tilize eval run (median 0.05 s).
+IDLE_S = float(os.environ.get("SAFE_PYTEST_WARM_IDLE_S", "60"))
 MAX_RUNS = int(os.environ.get("SAFE_PYTEST_WARM_MAX_RUNS", "200"))
 MAX_AGE_S = float(os.environ.get("SAFE_PYTEST_WARM_MAX_AGE_S", "7200"))
 MAX_RSS_GB = float(os.environ.get("SAFE_PYTEST_WARM_MAX_RSS_GB", "16"))
@@ -117,7 +120,7 @@ def _recv(sock: socket.socket, want_fds: int = 0):
 
 
 def _alive(pid_file: str | None) -> bool:
-    """False once the worker named in pid_file has died (True while unknown)."""
+    """False once the worker named in pid_file has died or is a zombie (True while unknown)."""
     if not pid_file:
         return True
     try:
@@ -125,7 +128,11 @@ def _alive(pid_file: str | None) -> bool:
             pid = int(f.read().strip())
     except (OSError, ValueError):
         return True
-    return os.path.exists(f"/proc/{pid}")
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rpartition(")")[2].split()[0] != "Z"
+    except (OSError, IndexError):
+        return False
 
 
 def _connect(repo: str, wait_s: float = 0.0, pid_file: str | None = None):
@@ -146,16 +153,24 @@ def client(op: str, repo: str, args: list[str], wait_s: float, pid_file: str | N
     sock = _connect(repo, wait_s, pid_file)
     if sock is None:
         return EX_NOT_RUN
-    with sock:
-        if op == "run":
-            req = {"op": "run", "args": args, "env": dict(os.environ), "cwd": os.getcwd()}
-            _send(sock, req, fds=(1, 2))
-        else:
-            _send(sock, {"op": op})
-        reply, _ = _recv(sock)
+    started = False
+    try:
+        with sock:
+            if op == "run":
+                req = {"op": "run", "args": args, "env": dict(os.environ), "cwd": os.getcwd()}
+                _send(sock, req, fds=(1, 2))
+            else:
+                _send(sock, {"op": op})
+            reply, _ = _recv(sock)
+            if reply is not None and reply.get("status") == "started":
+                started = True
+                reply, _ = _recv(sock)
+    except OSError:
+        # The worker went away (it may exit with this connection still queued).
+        reply = None
     if reply is None:
-        # Connection dropped: before a run started, nothing ran; after, the worker died mid-run.
-        return EX_NOT_RUN if op != "run" else EX_WORKER_DIED
+        # Before the session started nothing ran; after, the worker died mid-session.
+        return EX_WORKER_DIED if started else EX_NOT_RUN
     if reply.get("status") == "refused":
         print(f"SAFE_PYTEST: warm process refused the run ({reply.get('reason')}); running cold", file=sys.stderr)
         return EX_NOT_RUN
@@ -175,6 +190,8 @@ class Worker:
         # Children (pytest subprocesses, the dispatch-timeout triage command) must not inherit the
         # lock: one that outlived the worker would keep the device locked.
         os.set_inheritable(lock_fd, False)
+        # Watch before the slow imports: a runner that opens the lock file meanwhile is seen too.
+        self.lock_watch = self._watch_lock_file()
 
         os.environ["SAFE_PYTEST_KEEP_DEVICE_OPEN"] = "1"
         if self.repo not in sys.path:
@@ -219,6 +236,9 @@ class Worker:
         self.snapshot = set(sys.modules)
         self.fingerprint = self._fingerprint()
         self.env0 = dict(os.environ)
+        # pytest's prepend import mode adds each test directory to sys.path; a directory left
+        # there from an earlier session can shadow a same-named test module of another op.
+        self.sys_path0 = list(sys.path)
         self.rng0 = (torch.get_rng_state(), numpy.random.get_state(), random.getstate())
 
         # Everything imported so far lives as long as the worker. Freezing it keeps every later
@@ -288,6 +308,7 @@ class Worker:
         os.environ.clear()
         os.environ.update(req["env"])
         os.environ["SAFE_PYTEST_KEEP_DEVICE_OPEN"] = "1"
+        sys.path[:] = self.sys_path0
         for entry in reversed([p for p in req["env"].get("PYTHONPATH", "").split(os.pathsep) if p]):
             if entry not in sys.path:
                 sys.path.insert(0, entry)
@@ -313,6 +334,7 @@ class Worker:
         wrappers on the device entry points."""
         for (module_name, name), fn in self.patch_points.items():
             setattr(sys.modules[module_name], name, fn)
+        sys.path[:] = self.sys_path0
         for name in list(sys.modules):
             if name in self.snapshot:
                 continue
@@ -433,7 +455,7 @@ class Worker:
     def serve(self) -> None:
         import select
 
-        lock_watch = self._watch_lock_file()
+        lock_watch = self.lock_watch
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             listener.bind(_address(self.repo))
@@ -448,8 +470,14 @@ class Worker:
                 ready, _, _ = select.select([lock_watch, listener], [], [], 0.5)
                 if lock_watch in ready:
                     # Checked first: a waiter that queued during the last session goes ahead of
-                    # this checkout's next call.
+                    # this checkout's next call. The mark keeps the next lock winner from
+                    # starting a new warm process before that waiter got its turn.
                     print("warm worker: another process wants the device, exiting", flush=True)
+                    try:
+                        with open(YIELD_MARK, "a"):
+                            os.utime(YIELD_MARK)
+                    except OSError:
+                        pass
                     return
                 if not ready:
                     if time.time() - last > IDLE_S:
@@ -491,8 +519,19 @@ class Worker:
             _send(conn, {"status": "refused", "reason": reason})
             print(f"warm worker: refused ({reason}), exiting", flush=True)
             return False
+        _send(conn, {"status": "started"})
+        # This process holds the lock, so it owns the dirty flag: set while a session runs, so a
+        # runner that comes after a crash resets the device; cleared after a session that passed.
+        # After any other result the caller takes the device over and decides (reset or clear).
+        with open(DIRTY_FLAG, "a"):
+            pass
         code = self._run_session(conn, req, fds)
         self.runs += 1
+        if code == 0:
+            try:
+                os.unlink(DIRTY_FLAG)
+            except FileNotFoundError:
+                pass
         keep = code == 0 and self._rss_gb() < MAX_RSS_GB
         _send(conn, {"status": "done", "exit": code, "exiting": not keep})
         if not keep:
