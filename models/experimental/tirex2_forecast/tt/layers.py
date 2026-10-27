@@ -267,9 +267,9 @@ def mlstm_chunkwise(device, q, k, v, g, consts: DeviceConsts, eps: float = df.ML
     a_row = ttnn.add(u_row, g_last)  # g - b_s + i_s: log weight of token s at the chunk end
     free(u_row)
     amax = ttnn.max(a_row, dim=-1, keepdim=True)  # [N, 1, 1, 1]
-    a_rel = ttnn.subtract(a_row, amax)
-    wa = ttnn.exp(a_rel)
-    free(a_row, a_rel)
+    _act = _Acts(ttnn)
+    wa = ttnn.subtract(a_row, amax, activations=[_act.EXP])
+    free(a_row)
     kT = ttnn.transpose(kc, -2, -1)  # [N, 1, DK, L]
     kw = ttnn.multiply(kT, wa, dtype=f32)
     free(kT, wa)
@@ -294,8 +294,8 @@ def mlstm_chunkwise(device, q, k, v, g, consts: DeviceConsts, eps: float = df.ML
         gk, ak = sl(g4, 1, 1), sl(a4, 1, 1)
         gm = ttnn.add(gk, m)
         m_next = ttnn.maximum(gm, ak)
-        decay = ttnn.exp(ttnn.subtract(gm, m_next))
-        scale = ttnn.exp(ttnn.subtract(ak, m_next))
+        decay = ttnn.subtract(gm, m_next, activations=[_act.EXP])
+        scale = ttnn.subtract(ak, m_next, activations=[_act.EXP])
         dCk, dnk = sl(dC4, DK, DV), sl(dn4, DK, 1)
         C = ttnn.add(ttnn.multiply(C, decay), ttnn.multiply(dCk, scale))
         n = ttnn.add(ttnn.multiply(n, decay), ttnn.multiply(dnk, scale))
@@ -317,9 +317,9 @@ def mlstm_chunkwise(device, q, k, v, g, consts: DeviceConsts, eps: float = df.ML
     free(b_col, rmax)
     Dm = ttnn.subtract(D_masked, m_t)
     free(D_masked)
-    W = ttnn.multiply(ttnn.exp(Dm), S)
+    W = ttnn.multiply(Dm, S, input_tensor_a_activations=[_act.EXP])
     free(Dm, S)
-    inter = ttnn.exp(ttnn.subtract(mb, m_t))  # [N, 1, L, 1]
+    inter = ttnn.subtract(mb, m_t, activations=[_act.EXP])  # [N, 1, L, 1]
     free(mb)
     qC = bmm(device, qc, C_all)
     WV = bmm(device, W, vc)
