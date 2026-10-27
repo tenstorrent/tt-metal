@@ -62,6 +62,24 @@ def _ltx_checkpoint_cached(filename: str) -> bool:
     return False
 
 
+# (lower, upper) seconds per stage of the traced steady-state pass (gen #2) of Fast T2V, keyed by
+# (mesh shape, height, width, frames): 0.7x the fastest / 1.3x the slowest observation (encoder and
+# latent upsample, tiny and noisy: 0.5x / 2x). PROVISIONAL: from 7 standard-pool bh_sc1 runs
+# (2026-10-19..27), which split into ~6.5 s and ~8.0 s host clusters; the CI leg now runs on
+# bh_sc1_high_power and these get re-derived from those runs.
+FAST_T2V_TIMING_LIMITS = {
+    ((4, 8), 1088, 1920, 153): {
+        "Encoder": (0.23, 0.96),
+        "Stage 1 denoise": (1.47, 3.2),
+        "Latent upsample": (0.05, 0.26),
+        "Stage 2 denoise": (1.8, 4.9),
+        "VAE decode": (0.61, 1.4),
+        "Audio decode": (0.23, 0.52),
+        "Total": (4.5, 10.6),
+    },
+}
+
+
 # Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one.
 @pytest.mark.skipif(
     not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
@@ -307,6 +325,21 @@ def test_pipeline_distilled(
             f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
         )
 
+    def check_steady_state_timing(timings):
+        # Rank 0 generates, so only it has timings; I2V and uncalibrated configs are not gated.
+        limits = None if image_path else FAST_T2V_TIMING_LIMITS.get((mesh_shape, height, width, num_frames))
+        if not timings or limits is None:
+            logger.info("No steady-state timing limits for this config; skipping the timing check")
+            return
+        measured = dict(timings)
+        measured["Total"] = sum(measured.values())
+        failures = [
+            f"{stage} = {measured.get(stage, float('nan')):.2f}s outside [{lower}, {upper}]s"
+            for stage, (lower, upper) in limits.items()
+            if not lower <= measured.get(stage, float("nan")) <= upper
+        ]
+        assert not failures, "Steady-state timing out of range:\n" + "\n".join(failures)
+
     if no_prompt:
         seed = int(os.environ.get("SEED", "10"))
         run(prompt=prompt, number=0, seed=seed)
@@ -319,10 +352,13 @@ def test_pipeline_distilled(
             run(prompt=steady_state_prompt, number=1, seed=seed)
             logger.info("=== traced steady-state pass (gen #2, pure replay) ===")
             run(prompt=replay_prompt, number=2, seed=seed)
+            # The VBench seed replays overwrite last_timings, so keep gen #2's now.
+            steady_state_timings = list(getattr(pipeline, "last_timings", None) or [])
             # Gate gen #2: a corrupted full-replay pass is the failure this structure exists to
             # catch, and gen #1 still has a capture in it.
             check_output_with_clip(replay_prompt, 2)
             check_output_with_vbench(replay_prompt, 2, seed, num_seeds=int(os.environ.get("VBENCH_SEEDS", "5")))
+            check_steady_state_timing(steady_state_timings)
         else:
             check_output_with_clip(prompt, 0)
             check_output_with_vbench(prompt, 0, seed)
