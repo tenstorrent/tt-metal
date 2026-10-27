@@ -37,10 +37,10 @@ heavyweight/
 │   ├── l1_support.py           L1Support — format set, checks, L1 read/write
 │   ├── storage.py              the precision rules, as pure functions
 │   ├── l1_codec.py             bytes ↔ values
-│   ├── pack_effects.py         ReLU, edge masking, stochastic rounding
 │   └── units/                  one module per hardware stage
 │       ├── unpack.py · fpu.py · pack.py
-│       └── fidelity.py         the multiplier's phases, split and flush
+│       ├── fidelity.py         the multiplier's phases, split and flush
+│       └── pack_effects.py     ReLU, edge masking, stochastic rounding
 │
 └── mismatch.py                 failure reporting (lands with the test wiring)
 ```
