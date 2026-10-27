@@ -13,9 +13,9 @@ groups). The engine-owned cache (``GlmKvCaches``) holds:
 Served layers: ``PREFILL_GLM_LAYERS`` (e.g. "0-4"), else the bring-up spec (BRINGUP_SPEC) when it is this model's,
 else every layer of the rank; a contiguous run from the rank's first layer. Never the MTP layer (45).
 
-Acks: only the DSA layers own KV, so the runtime acks one per served DSA layer per chunk, with the layer's KV-slot
-index (the address table's layer; ``kv_slot_layer_ids`` maps it to the global layer, ``acks_in_kv_slot_space``
-tells the runner so), after the layer's contract copy is on the device (event sync).
+Acks: only the DSA layers own KV, so the runtime acks one per served DSA layer per chunk, with the layer's GLOBAL
+index (``sink.layers_completed(i, i + 1, slot, actual_start, actual_end)``; the address table's layer is its KV slot,
+``kv_slot_layer_ids`` maps slot to global layer), after the layer's contract copy is on the device (event sync).
 
 Engine input: uint32 ROW_MAJOR [sp, 1, chunk / sp] with sp = mesh rows = 2, sharded over axis 0, replicated over the
 columns, tail 0xFFFFFFFF past actual_end. On the device: ``ttnn.minimum`` clamps the pad ids into the vocab
@@ -266,14 +266,14 @@ class Glm53FlashPrefillRuntime:
             )
         self._kda_copy(kv_cache.snaps[slot], kv_cache.slots[slot])
 
-    def _run(self, ids, kv_cache, slot, start, end, request_id, acks: bool):
+    def _run(self, ids, kv_cache, slot, start, end, acks: bool):
         ttnn = self._ttnn
         sink = self._sink if acks else None
         mesh, c = self.mesh_device, self.config.chunk_size
         state = kv_cache.slots[slot]
         self._position(kv_cache, slot, start)
 
-        def on_layer(i, request_id=request_id):
+        def on_layer(i):
             k = self.slot_of.get(i)
             if k is None:
                 return  # KDA: fixed-size state only, no KV slab and no ack
@@ -282,7 +282,7 @@ class Glm53FlashPrefillRuntime:
                 return
             # The ack promises the layer's KV is in the migratable cache: wait until the device has finished it.
             ttnn.event_synchronize(ttnn.record_event(mesh, 0))
-            sink(k, request_id)
+            sink.layers_completed(i, i + 1, slot, start, end)  # i: the global layer of KV slot k
 
         self._bind(kv_cache, slot)
         clean = self._device_ids(ids)
@@ -310,7 +310,7 @@ class Glm53FlashPrefillRuntime:
         c = self.config.chunk_size
         for start in range(0, self.config.max_seq_len, c):
             ids = self.make_chunk_input([0] * c)
-            self._run(ids, kv_cache, 0, start, start + c, 0, acks=False)
+            self._run(ids, kv_cache, 0, start, start + c, acks=False)
             ttnn.deallocate(ids)
         ttnn.synchronize_device(self.mesh_device)
 
@@ -331,7 +331,7 @@ class Glm53FlashPrefillRuntime:
         assert actual_start < actual_end <= actual_start + c, (actual_start, actual_end, c)
         assert actual_start + c <= self.config.max_seq_len, "chunk overruns the user slot"
         assert tuple(input_tensor.shape)[-1] * self.config.mesh_shape[0] == c, input_tensor.shape
-        self._run(input_tensor, kv_cache, slot_id, actual_start, actual_end, request_id, acks=True)
+        self._run(input_tensor, kv_cache, slot_id, actual_start, actual_end, acks=True)
         return None  # last/single rank: the populated cache is the output
 
     # --- migration hooks ---
@@ -367,7 +367,6 @@ class Glm53FlashPrefillAdapter(PrefillModelAdapter):
     default_gate_mode = "DEVICE_FP32"
     l1_small_size = 24576
     hf_repo_id = Glm53FlashConfig.HF_ID
-    acks_in_kv_slot_space = True  # the runtime acks with the KV-slot index (see prefill_runner)
 
     def load_hf_config(self):
         return _hf_config()

@@ -10,10 +10,11 @@ table the way the runner's migration path does, and gets the server's chunks as 
 over mesh axis 0). Plan: server_rules.interleave(ACK_TURNS): slot 0 1000, then 3000 over its 960 resident prefix;
 slot 1 cold 3000 over two chunks: (0, 0, 1000), (1, 0, 2048), (0, 960, 3000), (1, 2048, 3000).
 
-Inside every ack (the host layer-completion sink, prefill_runner.build_layer_completion_sink's callback) the test reads
-that layer's records of the chunk through the table over UMD, as the KV Manager does. Pass:
-  - acks: one per served layer per chunk, in layer order, request_id passed through (prefill_reader.cpp:121-160:
-    the k-th ack of a chunk migrates layer k)
+Inside every ack (the host layer-completion sink: sink.layers_completed(layer_start, layer_end, slot_id, pos_start,
+pos_end), what prefill_runner's LayerCompletionRingWriter receives) the test reads that layer's records of the chunk
+through the table over UMD, as the KV Manager does. Pass:
+  - acks: one per served layer per chunk, in layer order, naming the chunk (slot_id, actual_start, actual_end) the
+    engine passed (prefill_reader.cpp:121-160: the k-th ack of a chunk migrates layer k)
   - at each ack: the chunk's rows of every cache the layer owns vs the golden (server per-channel PCC >= 0.97), the pad
     rows of the last record zero; the same records re-read after the chunk returns and the mesh syncs hold the same
     bytes (an ack before the KV is in DRAM ships stale KV: K-71)
@@ -25,6 +26,7 @@ that layer's records of the chunk through the table over UMD, as the KV Manager 
 import pytest
 
 from models.demos.common.bringup.testing.harness import device_timeout, mesh_parametrize, spec
+from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionSink
 from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import caches as C
 from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import server_rules as R
 
@@ -58,8 +60,8 @@ def test_adapter_acks(mesh_device, tmp_path):
     acks, cur, fails = [], {}, []
     shipped = {}  # (slot, turn) -> {config: {(layer, pos): bytes}} what the acks of that turn shipped
 
-    def sink(layer_idx, request_id):
-        acks.append((int(layer_idx), int(request_id)))
+    def on_layer(layer_idx, chunk):
+        acks.append((int(layer_idx), chunk))
         s, lo, hi = cur["slot"], cur["start"], cur["end"]
         for cfg in cfgs:
             if layer_idx not in cfg["layers"]:
@@ -73,7 +75,12 @@ def test_adapter_acks(mesh_device, tmp_path):
             if pad.size and not (pad == 0).all():
                 cur["fails"].append(f"ack slot {s} {cfg['name']} layer {layer_idx}: pad rows after {hi} not zero")
 
-    runtime.set_layer_completion_sink(sink)
+    class Sink(LayerCompletionSink):
+        def layers_completed(self, layer_start, layer_end, slot_id, pos_start, pos_end):
+            for layer_idx in range(layer_start, layer_end):
+                on_layer(layer_idx, (int(slot_id), int(pos_start), int(pos_end)))
+
+    runtime.set_layer_completion_sink(Sink())
     ends = {}
     for k, p in enumerate(R.interleave(R.ACK_TURNS)):
         cur.update(slot=p.slot, start=p.start, end=p.end, turn=p.turn, fails=[], reads={})
@@ -93,7 +100,7 @@ def test_adapter_acks(mesh_device, tmp_path):
         except Exception as err:
             pytest.fail(f"not built: chunk {k} slot {p.slot} [{p.start}, {p.end}) rejected: {err}", pytrace=False)
         ttnn.synchronize_device(mesh_device)
-        want = [(i, k) for i in range(len(layers))]
+        want = [(i, (p.slot, p.start, p.end)) for i in range(len(layers))]
         if acks[n0:] != want:
             fails.append(f"chunk {k} [{p.start}, {p.end}): acks {acks[n0:]}, want one per layer in order {want}")
         fails += [f"chunk {k}: {x}" for x in cur["fails"]]

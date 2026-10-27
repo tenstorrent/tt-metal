@@ -13,7 +13,8 @@ ring_sdpa_reshuffle by actual_start, [sp, 1, chunk / sp] uint32 sharded over axi
 
 Inside every ack (the host layer-completion sink, the shipped single-rank transport) the test reads that layer's
 records for the chunk through the table over UMD, as the KV Manager does, and checks them. Pass:
-  - acks: one per layer per chunk, in layer order, global layer ids, the request_id passed through
+  - acks: one per layer per chunk, in layer order, global layer ids, naming the chunk (slot_id, actual_start,
+    actual_end) the engine passed (sink.layers_completed(layer_start, layer_end, slot_id, pos_start, pos_end))
   - at each ack: [actual_start, actual_end) of that layer vs the golden (kv_dump_compare per-channel PCC >= 0.97),
     the pad rows of the last record zero, every chip of the record's device group holding the same bytes
   - at the end: each slot's [0, end) vs the golden; slot 0's reused prefix [0, resident) byte-identical to what turn
@@ -27,6 +28,7 @@ import numpy as np
 import pytest
 
 from models.demos.common.bringup.testing.harness import device_timeout, mesh_parametrize, spec
+from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionSink
 from models.demos.xing40_a4b_d_p.tests.bringup.contract import engine as E
 from models.demos.xing40_a4b_d_p.tests.bringup.contract import server_rules as R
 
@@ -59,8 +61,8 @@ def test_adapter_acks(mesh_device, tmp_path):
     acks, cur = [], {}
     snap = tmp_path / "snap_slot0_turn0"
 
-    def sink(layer_idx, request_id):
-        acks.append((int(layer_idx), int(request_id)))
+    def on_layer(layer_idx, chunk):
+        acks.append((int(layer_idx), chunk))
         s, lo, hi = cur["slot"], cur["start"], cur["end"]
         rows = []
         for pos in range(R.align_down(lo, 32), R.ceil_to(hi, 32), 32):
@@ -77,7 +79,12 @@ def test_adapter_acks(mesh_device, tmp_path):
         if pad.size and not np.all(pad == 0):
             cur["fails"].append(f"ack slot {s} layer {layer_idx}: pad rows [{hi}, {R.ceil_to(hi, 32)}) not zero")
 
-    runtime.set_layer_completion_sink(sink)
+    class Sink(LayerCompletionSink):
+        def layers_completed(self, layer_start, layer_end, slot_id, pos_start, pos_end):
+            for layer_idx in range(layer_start, layer_end):
+                on_layer(layer_idx, (int(slot_id), int(pos_start), int(pos_end)))
+
+    runtime.set_layer_completion_sink(Sink())
     pushes = R.interleave(TURNS)
     ends = {}
     for k, p in enumerate(pushes):
@@ -90,9 +97,9 @@ def test_adapter_acks(mesh_device, tmp_path):
             )
         except Exception as err:
             pytest.fail(f"not built: chunk {k} slot {p.slot} [{p.start}, {p.end}) rejected: {err}", pytrace=False)
-        got = acks[n0:]
-        if got != [(i, k) for i in range(N_LAYERS)]:
-            fails.append(f"chunk {k}: acks {got}, want one per layer in order {[(i, k) for i in range(N_LAYERS)]}")
+        got, want = acks[n0:], [(i, (p.slot, p.start, p.end)) for i in range(N_LAYERS)]
+        if got != want:
+            fails.append(f"chunk {k}: acks {got}, want one per layer in order {want}")
         fails += [f"chunk {k}: {x}" for x in cur["fails"]]
         ends[p.slot] = p.end
 

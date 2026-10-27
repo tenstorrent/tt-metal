@@ -8,8 +8,10 @@ Checks (each failure is listed in ``contract_failures``; metric ``contract_check
   engine input      every chunk's input is the H2D shape: uint32 ROW_MAJOR [sp, 1, chunk/sp], tail padded with
                     ``contract.pad_token`` (default 0xFFFFFFFF, what the Blaze engine sends) past actual_end; the last
                     chunk ends ``tests.contract_tail_pad`` tokens early (default 32)
-  acks              one ack per (layer, chunk), in layer order within each chunk; with an adapter that has
-                    ``kv_slot_layer_ids`` (hybrids: only the layers that own a KV slab ack), one per slab layer
+  acks              one ack per (layer, chunk), in layer order within each chunk, through the engine's sink
+                    (``sink.layers_completed(layer_start, layer_end, slot_id, pos_start, pos_end)``: GLOBAL layers,
+                    the chunk's slot and [actual_start, actual_end)); with an adapter that has ``kv_slot_layer_ids``
+                    (hybrids: only the layers that own a KV slab ack), one per slab layer
   ack timing        at each ack, the table's blocks for that layer and chunk already hold their final bytes
                     (re-read after a full sync must be byte-identical); ``acks_early`` counts violations
   table             build_kv_chunk_table round-trips through protobuf; the migration base address is entry 0
@@ -149,7 +151,7 @@ def device_map(mesh) -> dict:
         for c in range(cols):
             fid = mesh.get_fabric_node_id(ttnn.MeshCoordinate(r, c))
             out[(int(fid.mesh_id), int(fid.chip_id))] = int(
-                ttnn.cluster.get_chip_unique_id_from_fabric_node_id(int(fid.mesh_id), int(fid.chip_id))
+                ttnn.cluster.get_chip_unique_id_from_fabric_node_id(mesh, int(fid.mesh_id), int(fid.chip_id))
             )
     return out
 
@@ -191,6 +193,7 @@ def run_contract_test(s, mesh) -> list[str]:
     import ttnn
     from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
     from models.demos.common.prefill.runners import prefill_producer as producer
+    from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionSink
 
     D = ttnn.experimental.disaggregation
     rung = s.rung(contract_rung(s))
@@ -241,17 +244,25 @@ def run_contract_test(s, mesh) -> list[str]:
             failed.append("table protobuf round-trip changed the table")
 
     early_reads, acks, cur = {}, [], {"chunk": None, "start": 0, "end": 0}
+    slab_layers = getattr(adapter, "kv_slot_layer_ids", lambda n: None)(L)
+    # the table's layer of an acked global layer: its KV slot on a hybrid, else the layer itself
+    table_row = {g: k for k, g in enumerate(slab_layers)} if slab_layers is not None else None
 
-    def sink(layer, rid):
-        acks.append((layer, rid))
-        # Read the blocks this ack claims are ready: first and last 32-token block of the chunk, every config.
-        for pos in {cur["start"], ((cur["end"] - 1) // BLOCK) * BLOCK}:
-            for cid in range(n_cfg):
-                early_reads[(layer, rid, pos, cid)] = bytes(
-                    table.read_device_chunk(layer=layer, position=pos, slot=slot, config_id=cid)
-                )
+    class Sink(LayerCompletionSink):
+        def layers_completed(self, layer_start, layer_end, slot_id, pos_start, pos_end):
+            for layer in range(layer_start, layer_end):
+                acks.append((layer, cur["chunk"], (slot_id, pos_start, pos_end)))
+                row = layer if table_row is None else table_row.get(layer)
+                if row is None:
+                    continue  # not a slab layer: the ack list check reports it
+                # Read the blocks this ack claims are ready: first and last 32-token block of the chunk, every config.
+                for pos in {cur["start"], ((cur["end"] - 1) // BLOCK) * BLOCK}:
+                    for cid in range(n_cfg):
+                        early_reads[(row, cur["chunk"], pos, cid)] = bytes(
+                            table.read_device_chunk(layer=row, position=pos, slot=slot, config_id=cid)
+                        )
 
-    rt.set_layer_completion_sink(sink)
+    rt.set_layer_completion_sink(Sink())
     rt.compile(kv)
     acks.clear()
     early_reads.clear()
@@ -264,14 +275,13 @@ def run_contract_test(s, mesh) -> list[str]:
         rt.prefill_chunk(inp, kv, slot_id=slot, actual_start=a, actual_end=b, request_id=c)
     ttnn.synchronize_device(mesh)
 
-    slab_layers = getattr(adapter, "kv_slot_layer_ids", lambda n: None)(L)
-    n_acks = L if slab_layers is None else len(slab_layers)
-    want = [(layer, c) for c in range(n_chunks) for layer in range(n_acks)]
+    acked = list(range(first, first + L)) if slab_layers is None else list(slab_layers)
+    want = [(layer, c, (slot, c * chunk, min((c + 1) * chunk, actual_len))) for c in range(n_chunks) for layer in acked]
     if acks != want:
         failed.append(f"acks {acks[:6]}... != one per layer in order per chunk ({len(acks)} vs {len(want)})")
     early = sum(
         bytes(table.read_device_chunk(layer=l_, position=p, slot=slot, config_id=cid)) != data
-        for (l_, _rid, p, cid), data in early_reads.items()
+        for (l_, _chunk, p, cid), data in early_reads.items()
     )
     metrics.record("acks_early", early)
     metrics.record("ack_blocks_checked", len(early_reads))
