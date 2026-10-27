@@ -1936,24 +1936,12 @@
   budget_type: e2e
 
 # ── TT-Train (Blackhole Galaxy) ───────────────────────────────────
-# Since mpirun runs in an environment separate from the CI, we cannot
-# pipe the summary data directly to $GITHUB_STEP_SUMMARY. Instead, we use
-# a shared NFS ($PIPELINE_DIR) to hold the markdown file, then pipe that to
-# $GITHUB_STEP_SUMMARY once mpirun exits.
+# run_galaxy_e2e.sh runs one run_models.py galaxy.yaml entry under mpirun and
+# appends its summary (staged on the shared $PIPELINE_DIR) to $GITHUB_STEP_SUMMARY.
 
 - name: Galaxy TinyLlama 1.1B DDP=32 train e2e tests
   cmd: |
-    export HF_HOME=/mnt/models/huggingface
-    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
-    rc=0
-    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
-      ./tt-train/scripts/setup_pth.sh
-      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames tinyllama_1_1b_ddp32_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
-    " || rc=$?
-    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
-    fi
-    exit $rc
+    tt-train/scripts/ci/run_galaxy_e2e.sh tinyllama_1_1b_ddp32_shakespeare
   model: "[tt-train] tinyllama_1_1b_ddp32"
   skus:
     bh_sc1_high_power:
@@ -1966,17 +1954,7 @@
 
 - name: Galaxy Qwen 3 1.7B DDP=32 train e2e tests
   cmd: |
-    export HF_HOME=/mnt/models/huggingface
-    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
-    rc=0
-    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
-      ./tt-train/scripts/setup_pth.sh
-      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames qwen3_1_7b_ddp32_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
-    " || rc=$?
-    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
-    fi
-    exit $rc
+    tt-train/scripts/ci/run_galaxy_e2e.sh qwen3_1_7b_ddp32_shakespeare
   model: "[tt-train] qwen3_1_7b_ddp32_shakespeare"
   skus:
     bh_sc1_high_power:
@@ -1989,17 +1967,21 @@
 
 - name: Galaxy Tiny Deepseek v3 DDP=32 train e2e tests
   cmd: |
-    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
-    rc=0
-    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
-      ./tt-train/scripts/setup_pth.sh
-      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames tiny_deepseek_v3_ddp32_char_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
-    " || rc=$?
-    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
-    fi
-    exit $rc
+    tt-train/scripts/ci/run_galaxy_e2e.sh tiny_deepseek_v3_ddp32_char_shakespeare
   model: "[tt-train] tiny_deepseek_v3_ddp32_char"
+  skus:
+    bh_sc1_high_power:
+      timeout: 75
+      tier: 3
+      release_ready: false
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: e2e
+
+- name: Galaxy Deepseek MoE 16B TP=8 DP=4 train e2e tests
+  cmd: |
+    tt-train/scripts/ci/run_galaxy_e2e.sh deepseek_moe_16b_tp8_dp4
+  model: "[tt-train] deepseek_moe_16b_tp8_dp4"
   skus:
     bh_sc1_high_power:
       timeout: 75
@@ -2011,17 +1993,7 @@
 
 - name: Galaxy Llama 8B TP=8 DDP=4 train e2e tests
   cmd: |
-    export HF_HOME=/mnt/models/huggingface
-    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
-    rc=0
-    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
-      ./tt-train/scripts/setup_pth.sh
-      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames llama_8b_tp8_ddp4_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
-    " || rc=$?
-    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
-    fi
-    exit $rc
+    tt-train/scripts/ci/run_galaxy_e2e.sh llama_8b_tp8_ddp4_shakespeare
   model: "[tt-train] llama_8b_tp8_ddp4"
   skus:
     bh_sc1_high_power:
@@ -2034,17 +2006,7 @@
 
 - name: Galaxy Llama 8B TP=4 DDP=8 train e2e tests
   cmd: |
-    export HF_HOME=/mnt/models/huggingface
-    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
-    rc=0
-    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
-      ./tt-train/scripts/setup_pth.sh
-      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames llama_8b_tp4_ddp8_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
-    " || rc=$?
-    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
-    fi
-    exit $rc
+    tt-train/scripts/ci/run_galaxy_e2e.sh llama_8b_tp4_ddp8_shakespeare
   model: "[tt-train] llama_8b_tp4_ddp8"
   skus:
     bh_sc1_high_power:
@@ -2058,17 +2020,7 @@
 - name: Galaxy Llama 70B TP=8 FSDP=4 train e2e tests
   cmd: |
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
-    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
-    rc=0
-    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
-      ./tt-train/scripts/setup_pth.sh
-      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames llama_70b_tp8_fsdp4_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
-    " || rc=$?
-    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
-    fi
-    exit $rc
+    tt-train/scripts/ci/run_galaxy_e2e.sh llama_70b_tp8_fsdp4_shakespeare
   model: "[tt-train] llama_70b_tp8_fsdp4"
   skus:
     bh_sc1_high_power:
