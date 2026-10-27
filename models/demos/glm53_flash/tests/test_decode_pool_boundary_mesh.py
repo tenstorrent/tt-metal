@@ -34,6 +34,7 @@ TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 LEN = int(os.environ.get("GLM53_BOUNDARY_LEN", "2176"))
 MAX_SEQ_LEN = int(os.environ.get("GLM53_BOUNDARY_MAX_SEQ_LEN", str(LEN + 256)))
 PREFILL_CHUNK = int(os.environ.get("GLM53_BOUNDARY_CHUNK", str(512 * MESH[0])))
+N_REPLAYS = int(os.environ.get("GLM53_BOUNDARY_REPLAYS", "3"))  # 25+ crosses the next pool boundary incrementally
 _DT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 EXPERT_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp8")]
 EXPERT_DOWN_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp8")]
@@ -83,7 +84,7 @@ def test_decode_after_pool_boundary_prompt(mesh_device):
     model.warmup_decode(ids, pos)  # the eager step at the boundary position (the served hang site)
     logger.info(f"BOUNDARY eager decode step at position {LEN} done in {time.perf_counter() - t0:.1f} s")
     trace_id, outs = model.capture(ids, [p + 1 if p else 0 for p in pos])
-    for k in range(3):
+    for k in range(N_REPLAYS):
         model.load_ids(ids)
         model.set_positions([p + 2 + k if p else 0 for p in pos])
         t0 = time.perf_counter()
