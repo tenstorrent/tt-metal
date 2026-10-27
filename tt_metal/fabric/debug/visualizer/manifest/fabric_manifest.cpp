@@ -11,30 +11,22 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
-#include <llrt/tt_cluster.hpp>
 
 #include "impl/context/metal_context.hpp"
-#include "impl/context/metal_env_accessor.hpp"
-#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_describe.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_chip_pass.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_catalog.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
-#include <ctime>
 #include <exception>
 #include <filesystem>
 #include <fstream>
-#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -57,90 +49,68 @@ using manifest::lower_enum_name;
 using manifest::mesh_key;
 using manifest::router_key;
 
-// Returns the current UTC time in ISO 8601 format.
-std::string utc_now_iso8601() {
-    const auto now = std::chrono::system_clock::now();
-    const std::time_t now_time = std::chrono::system_clock::to_time_t(now);
-    std::tm utc{};
-    gmtime_r(&now_time, &utc);
-    char buffer[32];
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &utc);
-    return buffer;
-}
-
 // This process and the build it runs: ranks, when the manifest was written, and the commit built from.
-json make_run_json(const ControlPlane& control_plane) {
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    json run;
-    run["host_rank"] = *control_plane.get_local_host_rank_id_binding();
-    run["mpi_rank"] = *distributed_context->rank();
-    run["world_size"] = *distributed_context->size();
-    run["written_at"] = utc_now_iso8601();
-    const auto build_identity = manifest::get_build_identity();
+json make_run_json(const manifest::RunInfo& run) {
+    json out;
+    out["host_rank"] = run.host_rank;
+    out["mpi_rank"] = run.mpi_rank;
+    out["world_size"] = run.world_size;
+    out["written_at"] = run.written_at;
     json build;
-    build["git_sha"] = std::string(build_identity.git_sha);
-    build["git_dirty"] = build_identity.git_dirty;
-    run["build"] = std::move(build);
-    return run;
+    build["git_sha"] = std::string(run.build.git_sha);
+    build["git_dirty"] = run.build.git_dirty;
+    out["build"] = std::move(build);
+    return out;
 }
 
 // This run's fabric: the settings it was set up with (config, SetFabricConfig's arguments), and what FabricContext
 // derived from them.
-json make_fabric_json(const ControlPlane& control_plane, const FabricContext& fabric_context) {
+json make_fabric_json(const manifest::FabricInfo& fabric) {
     json block;
     json config;
-    config["fabric_config"] = lower_enum_name(control_plane.get_fabric_config());
-    config["reliability_mode"] = lower_enum_name(control_plane.get_fabric_reliability_mode());
-    // The most routing planes fabric opens per link, or null when it opens all of them. The environment keeps the
-    // largest count any SetFabricConfig call asked for, with no limit stored as the uint8_t maximum.
-    const uint8_t num_routing_planes = tt::tt_metal::MetalEnvAccessor(tt::tt_metal::MetalContext::instance().get_env())
-                                           .impl()
-                                           .get_num_fabric_active_routing_planes();
+    config["fabric_config"] = lower_enum_name(fabric.config.fabric_config);
+    config["reliability_mode"] = lower_enum_name(fabric.config.reliability_mode);
     config["num_routing_planes"] =
-        num_routing_planes == std::numeric_limits<uint8_t>::max() ? json(nullptr) : json(num_routing_planes);
-    config["tensix_config"] = lower_enum_name(control_plane.get_fabric_tensix_config());
-    config["udm_mode"] = lower_enum_name(control_plane.get_fabric_udm_mode());
-    config["fabric_manager"] = lower_enum_name(control_plane.get_fabric_manager_mode());
-    const auto& max_payload = control_plane.get_fabric_router_config().max_packet_payload_size_bytes;
+        fabric.config.num_routing_planes.has_value() ? json(*fabric.config.num_routing_planes) : json(nullptr);
+    config["tensix_config"] = lower_enum_name(fabric.config.tensix_config);
+    config["udm_mode"] = lower_enum_name(fabric.config.udm_mode);
+    config["fabric_manager"] = lower_enum_name(fabric.config.fabric_manager);
+    const auto& max_payload = fabric.config.router_config.max_packet_payload_size_bytes;
     json router_config;
     router_config["max_packet_payload_size_bytes"] = max_payload.has_value() ? json(*max_payload) : json(nullptr);
     config["router_config"] = std::move(router_config);
     block["config"] = std::move(config);
-    block["topology"] = lower_enum_name(fabric_context.get_fabric_topology());
-    block["is_2d_routing"] = fabric_context.is_2D_routing_enabled();
-    block["packet_header_size_bytes"] = fabric_context.get_fabric_packet_header_size_bytes();
-    block["max_payload_size_bytes"] = fabric_context.get_fabric_max_payload_size_bytes();
-    block["channel_buffer_size_bytes"] = fabric_context.get_fabric_channel_buffer_size_bytes();
-    if (fabric_context.is_2D_routing_enabled()) {
-        block["routing_2d_route_buffer_size"] = fabric_context.get_2d_pkt_hdr_route_buffer_size();
-    } else {
-        block["routing_1d_extension_words"] = fabric_context.get_1d_pkt_hdr_extension_words();
+    block["topology"] = lower_enum_name(fabric.topology);
+    block["is_2d_routing"] = fabric.is_2d_routing;
+    block["packet_header_size_bytes"] = fabric.packet_header_size_bytes;
+    block["max_payload_size_bytes"] = fabric.max_payload_size_bytes;
+    block["channel_buffer_size_bytes"] = fabric.channel_buffer_size_bytes;
+    if (fabric.routing_2d_route_buffer_size.has_value()) {
+        block["routing_2d_route_buffer_size"] = *fabric.routing_2d_route_buffer_size;
     }
-    block["multi_txq"] = fabric_context.get_builder_context().get_fabric_router_config().multi_txq_enabled();
+    if (fabric.routing_1d_extension_words.has_value()) {
+        block["routing_1d_extension_words"] = *fabric.routing_1d_extension_words;
+    }
+    block["multi_txq"] = fabric.multi_txq;
     return block;
 }
 
 // ============ Credit transport ============
 
-// Each fabric VC's credit transport backing on the mesh. VCs no router in the fabric has senders on are left out.
-json make_credit_transport_json(const FabricBuilderContext& builder_context, MeshId mesh_id) {
-    const auto& plan = builder_context.get_stream_assignment(mesh_id).plan();
-    json transport = json::object();
-    for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        if (builder_context.get_max_sender_channels_per_vc()[vc] == 0) {
-            continue;
-        }
+// Each fabric VC's credit transport backing on the mesh.
+json make_credit_transport_json(const std::vector<manifest::VcCreditTransport>& transport) {
+    json out = json::object();
+    for (const auto& vc_transport : transport) {
         json reasons = json::array();
-        for (const auto reason : plan.get_l1_counters_reasons(vc)) {
+        for (const auto reason : vc_transport.l1_counter_reasons) {
             reasons.push_back(lower_enum_name(reason));
         }
         json entry;
-        entry["backing"] = lower_enum_name(
-            plan.vc_uses_counters(vc) ? manifest::CreditBacking::L1_COUNTER : manifest::CreditBacking::STREAM_REGISTER);
+        entry["backing"] = lower_enum_name(vc_transport.backing);
         entry["reasons"] = std::move(reasons);
-        transport[fmt::format("vc{}", vc)] = std::move(entry);
+        out[fmt::format("vc{}", vc_transport.vc)] = std::move(entry);
     }
-    return transport;
+    return out;
 }
 
 // ============ Contents ============
@@ -267,9 +237,9 @@ json make_arch_json(const manifest::Arch& arch) {
 // ============ Enums and schemas ============
 
 // Each enum by name, with its values by their lower_name.
-json make_enums_json() {
+json make_enums_json(const std::vector<manifest::EnumType>& types) {
     json out = json::object();
-    for (const manifest::EnumType& type : manifest::described_enum_types()) {
+    for (const auto& type : types) {
         const std::string name(type.name);
         TT_FATAL(!out.contains(name), "Fabric manifest: two enums are named {}, so its schema is ambiguous", name);
         json values = json::object();
@@ -282,11 +252,11 @@ json make_enums_json() {
 }
 
 // The type catalog: every struct and enum a schema names (struct:<Name>, enum:<Name>).
-json make_types_json(const manifest::Arch& arch) {
-    json types;
-    types["structs"] = structs_json(arch.types);
-    types["enums"] = make_enums_json();
-    return types;
+json make_types_json(const manifest::TypeCatalog& types) {
+    json out;
+    out["structs"] = structs_json(types.structs);
+    out["enums"] = make_enums_json(types.enums);
+    return out;
 }
 
 // Every struct and enum schema in `node` names a type in `structs` or `enums` (types.structs, types.enums), so decode
@@ -611,124 +581,92 @@ json local_sync_json(const manifest::LocalSync& local_sync) {
 }
 
 // The chip's routers keyed <direction><routing_plane>.
-json make_chip_routers_json(const manifest::Chip& chip, FabricNodeId node) {
+json make_chip_routers_json(const manifest::Chip& chip) {
     json routers = json::object();
     for (const auto& router : chip.routers) {
-        routers[router_key(router.identity.direction, router.identity.routing_plane)] = make_router_json(router, node);
+        routers[router_key(router.identity.direction, router.identity.routing_plane)] =
+            make_router_json(router, chip.fabric_node_id);
     }
     return routers;
 }
 
-// Every chip in the mesh graph appears, local or not, so the viewer can draw the whole mesh and show the host
-// boundary. Only local chips have routers.
-json make_chip_json(
-    const ControlPlane& control_plane,
-    const tt::Cluster& cluster,
-    const FabricBuilderContext& builder_context,
-    FabricType fabric_type,
-    FabricNodeId node) {
-    const MeshCoordinate mesh_coord = control_plane.get_mesh_graph().chip_to_coordinate(node.mesh_id, node.chip_id);
-    const auto physical_chip_id = control_plane.try_get_physical_chip_id_from_fabric_node_id(node);
-    // A chip this rank cannot map to a physical device is a chip it cannot peek, so resolvability is the
-    // practical definition of locality.
-    const bool is_local = physical_chip_id.has_value();
-
-    json chip;
-    json coord = json::array();
-    for (size_t dim = 0; dim < mesh_coord.dims(); ++dim) {
-        coord.push_back(mesh_coord[dim]);
+// A remote chip has only its coordinates, and nulls for the ids this rank cannot read.
+json make_chip_json(const manifest::Chip& chip) {
+    json out;
+    out["mesh_coord"] = chip.mesh_coord;
+    if (!chip.physical_chip_id.has_value()) {
+        out["physical_chip_id"] = json(nullptr);
+        out["asic_id"] = json(nullptr);
+        out["is_local"] = false;
+        return out;
     }
-    chip["mesh_coord"] = std::move(coord);
-    if (!is_local) {
-        chip["physical_chip_id"] = json(nullptr);
-        chip["asic_id"] = json(nullptr);
-        chip["is_local"] = false;
-        return chip;
-    }
-
-    // A chip that built no routers publishes nothing.
-    static const manifest::Chip no_routers{};
-    const manifest::Chip& collected = builder_context.has_manifest_chip(*physical_chip_id)
-                                          ? builder_context.get_manifest_chip(*physical_chip_id)
-                                          : no_routers;
-    const manifest::Chip joined = join_chip(collected, control_plane, cluster, fabric_type, node, *physical_chip_id);
-    chip["physical_chip_id"] = *physical_chip_id;
+    TT_FATAL(chip.asic_id.has_value(), "Fabric manifest: local chip {} has no asic_id", chip.fabric_node_id);
+    out["physical_chip_id"] = *chip.physical_chip_id;
     // Hex string: the value exceeds what JSON numbers represent exactly.
-    chip["asic_id"] = fmt::format("0x{:016x}", *control_plane.get_asic_id_from_fabric_node_id(node));
-    chip["is_local"] = true;
-    chip["z_port_role"] = lower_enum_name(joined.z_port_role);
-    chip["local_sync"] = joined.local_sync ? local_sync_json(*joined.local_sync) : json(nullptr);
-    chip["routers"] = make_chip_routers_json(joined, node);
-    return chip;
+    out["asic_id"] = fmt::format("0x{:016x}", *chip.asic_id);
+    out["is_local"] = true;
+    out["z_port_role"] = lower_enum_name(chip.z_port_role);
+    out["local_sync"] = chip.local_sync ? local_sync_json(*chip.local_sync) : json(nullptr);
+    out["routers"] = make_chip_routers_json(chip);
+    return out;
 }
 
-json make_mesh_json(
-    const ControlPlane& control_plane,
-    const tt::Cluster& cluster,
-    const FabricBuilderContext& builder_context,
-    FabricType fabric_type,
-    MeshId mesh_id) {
-    const auto& mesh_graph = control_plane.get_mesh_graph();
-    const MeshShape mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
-
-    json mesh;
-    json shape = json::array();
-    for (size_t dim = 0; dim < mesh_shape.dims(); ++dim) {
-        shape.push_back(mesh_shape[dim]);
-    }
-    mesh["shape"] = std::move(shape);
-    // has_genuine_torus_axis() is defined only for a 2D shape, and deliberately reports false for a declared
-    // torus axis whose extent is too small to realize a distinct wrap edge.
-    if (mesh_shape.dims() == 2) {
+json make_mesh_json(const manifest::Mesh& mesh) {
+    json out;
+    out["shape"] = mesh.shape;
+    if (mesh.torus.has_value()) {
         json torus;
-        torus["y"] = has_genuine_torus_axis(fabric_type, mesh_shape, 0);
-        torus["x"] = has_genuine_torus_axis(fabric_type, mesh_shape, 1);
-        mesh["torus"] = std::move(torus);
+        torus["y"] = mesh.torus->y;
+        torus["x"] = mesh.torus->x;
+        out["torus"] = std::move(torus);
     }
-    mesh["express_routing"] = control_plane.express_routing_enabled(mesh_id);
-    // The builder context plans credits only for the meshes on this host.
-    const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
-    if (std::ranges::find(local_mesh_ids, mesh_id) != local_mesh_ids.end()) {
-        mesh["credit_transport"] = make_credit_transport_json(builder_context, mesh_id);
+    out["express_routing"] = mesh.express_routing;
+    if (mesh.credit_transport.has_value()) {
+        out["credit_transport"] = make_credit_transport_json(*mesh.credit_transport);
     }
-
     json chips = json::object();
-    for (const auto& [_, fabric_chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
-        chips[chip_key(fabric_chip_id)] =
-            make_chip_json(control_plane, cluster, builder_context, fabric_type, FabricNodeId(mesh_id, fabric_chip_id));
+    for (const auto& chip : mesh.chips) {
+        chips[chip_key(chip.fabric_node_id.chip_id)] = make_chip_json(chip);
     }
-    mesh["chips"] = std::move(chips);
-    return mesh;
+    out["chips"] = std::move(chips);
+    return out;
+}
+
+json make_manifest_json(const manifest::Manifest& manifest) {
+    json out;
+    out["manifest_version"] = FABRIC_MANIFEST_VERSION;
+    out["file_kind"] = "fabric_manifest";
+    out["run"] = make_run_json(manifest.run);
+    out["fabric"] = make_fabric_json(manifest.fabric);
+    out["arch"] = make_arch_json(manifest.arch);
+    out["types"] = make_types_json(manifest.types);
+    out["vocabulary"] = make_vocabulary_json();
+    json meshes = json::object();
+    for (const auto& mesh : manifest.meshes) {
+        meshes[mesh_key(mesh.mesh_id)] = make_mesh_json(mesh);
+    }
+    out["meshes"] = std::move(meshes);
+    return out;
 }
 
 // Writes the manifest to a temporary name and renames it into place, so a reader never sees a partial manifest.
 void serialize_fabric_manifest_to_file(
     const ControlPlane& control_plane, const std::filesystem::path& output_file_path) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const FabricType fabric_type = get_fabric_type(control_plane.get_fabric_config(), cluster.is_ubb_galaxy());
     const auto& fabric_context = control_plane.get_fabric_context();
     TT_FATAL(
         fabric_context.has_builder_context(), "Fabric manifest: must be written after the fabric routers are compiled");
-    const auto& builder_context = fabric_context.get_builder_context();
-
-    json manifest;
-    manifest["manifest_version"] = FABRIC_MANIFEST_VERSION;
-    manifest["file_kind"] = "fabric_manifest";
-    manifest["run"] = make_run_json(control_plane);
-    manifest["fabric"] = make_fabric_json(control_plane, fabric_context);
-    const manifest::Arch arch = describe_arch(tt::tt_metal::MetalContext::instance().hal());
-    manifest["arch"] = make_arch_json(arch);
-    manifest["types"] = make_types_json(arch);
-    manifest["vocabulary"] = make_vocabulary_json();
-
-    auto mesh_ids = control_plane.get_mesh_graph().get_all_mesh_ids();
-    std::ranges::sort(mesh_ids, {}, [](const MeshId& mesh_id) { return *mesh_id; });
-    json meshes = json::object();
-    for (const auto& mesh_id : mesh_ids) {
-        meshes[mesh_key(mesh_id)] = make_mesh_json(control_plane, cluster, builder_context, fabric_type, mesh_id);
-    }
-    manifest["meshes"] = std::move(meshes);
-    check_schemas_resolve(manifest, manifest.at("types").at("structs"), manifest.at("types").at("enums"));
+    const auto& metal_context = tt::tt_metal::MetalContext::instance();
+    const manifest::Manifest manifest{
+        .run = manifest::describe_run(control_plane),
+        .fabric = manifest::describe_fabric(control_plane),
+        .arch = manifest::describe_arch(metal_context.hal()),
+        .types = manifest::describe_types(),
+        .meshes =
+            manifest::describe_meshes(control_plane, metal_context.get_cluster(), fabric_context.get_builder_context()),
+    };
+    const json manifest_json = make_manifest_json(manifest);
+    check_schemas_resolve(
+        manifest_json, manifest_json.at("types").at("structs"), manifest_json.at("types").at("enums"));
 
     std::filesystem::create_directories(output_file_path.parent_path());
     const std::filesystem::path temporary_path =
@@ -737,7 +675,7 @@ void serialize_fabric_manifest_to_file(
         std::ofstream out_file;
         out_file.exceptions(std::ios::badbit | std::ios::failbit);
         out_file.open(temporary_path);
-        out_file << manifest.dump(2) << '\n';
+        out_file << manifest_json.dump(2) << '\n';
         out_file.close();
         std::filesystem::rename(temporary_path, output_file_path);
     } catch (...) {
