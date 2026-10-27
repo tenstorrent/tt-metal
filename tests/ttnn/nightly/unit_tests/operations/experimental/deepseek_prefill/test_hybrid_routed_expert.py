@@ -48,6 +48,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test
     _SITU_BETA_UP,
     _TORCH_ACTIVATION,
     _isl_params,
+    expert_weights,
 )
 
 pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
@@ -116,12 +117,7 @@ def run_hybrid_routed_expert(
     if torch_activation is None:
         raise ValueError(f"no torch reference for {activation}; supported: {list(_TORCH_ACTIVATION)}")
 
-    torch.manual_seed(42)
-    weights = {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * weight_scale,
-    }
+    weights = expert_weights(hidden_dim, emb_dim, weight_scale)
 
     torch_active = torch.randn(active_tokens, emb_dim, dtype=torch.float32)
     torch_input = torch.zeros(allocated_tokens, emb_dim, dtype=torch.float32)

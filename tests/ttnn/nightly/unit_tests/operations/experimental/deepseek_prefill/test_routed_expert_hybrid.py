@@ -43,6 +43,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test
     _ISL_EXHAUSTIVE_SWEEP,
     _ISL_FUNCTIONAL_SWEEP,
     SINGLE_EXPERT_MODELS,
+    expert_weights,
 )
 
 SINGLE_CHIP_MESH_PARAMS = [
@@ -114,13 +115,7 @@ def run_routed_expert_hybrid(
         f"{threshold=} {owner=} {weights_dram_sharded=} {activation=}"
     )
 
-    torch.manual_seed(42)
-    # torch.nn.Linear convention (out_features, in_features), which is what TorchExpert reads.
-    weights = {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * weight_scale,
-    }
+    weights = expert_weights(hidden_dim, emb_dim, weight_scale)
 
     torch_active = torch.randn(active_tokens, emb_dim, dtype=torch.float32)
     torch_input = torch.zeros(allocated_tokens, emb_dim, dtype=torch.float32)

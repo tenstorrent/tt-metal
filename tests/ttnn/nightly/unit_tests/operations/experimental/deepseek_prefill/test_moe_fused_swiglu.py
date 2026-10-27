@@ -32,6 +32,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     SINGLE_EXPERT_MODELS,
+    expert_weights,
     to_dram_nd_sharded,
 )
 
@@ -128,13 +129,7 @@ def run_moe_fused_swiglu(
 
     signpost(f"MoeFusedSwiGlu {allocated_tokens=} {active_tokens=} {emb_dim=} {hidden_dim=} {activation=}")
 
-    torch.manual_seed(42)
-    # torch.nn.Linear convention (out_features, in_features), which is what TorchExpert reads.
-    weights = {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * weight_scale,
-    }
+    weights = expert_weights(hidden_dim, emb_dim, weight_scale)
 
     torch_active = torch.randn(active_tokens, emb_dim, dtype=torch.float32)
     torch_input = torch.zeros(allocated_tokens, emb_dim, dtype=torch.float32)

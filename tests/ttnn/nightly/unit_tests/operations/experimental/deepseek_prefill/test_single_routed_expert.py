@@ -8,6 +8,8 @@ Minimal single-device, single-expert test for TtRoutedExpert profiling.
 The simplest scenario: 1 chip, 1 expert, minimal dimensions.
 """
 
+import functools
+
 import pytest
 import torch
 from loguru import logger
@@ -63,6 +65,42 @@ _TORCH_ACTIVATION = {
 # or the reference silently grades against a different activation.
 _SITU_BETA_GATE = KimiK3Config.ACTIVATION_SITU_BETA
 _SITU_BETA_UP = KimiK3Config.ACTIVATION_SITU_LINEAR_BETA
+
+
+@functools.lru_cache(maxsize=1)
+def _cached_expert_weights(hidden_dim, emb_dim, weight_scale):
+    """The three projection weights for one expert, plus the RNG state left behind by drawing them.
+
+    Every run_* helper in this directory seeds 42, draws these three tensors, and then draws its
+    activations from the same stream. The weights are therefore a pure function of the dims and
+    the scale, while the activations depend on where the stream has been left -- so the state is
+    returned alongside and restored by the caller, keeping every drawn value bit-identical to
+    drawing the weights inline.
+
+    maxsize=1 because the sweeps hold a model fixed while they vary the active-token count, so
+    consecutive calls share dims for 89% of the cases; a larger cache holds hundreds of MB of
+    fp32 weights to catch the rest, and the goldens these feed have already overflowed a CI
+    runner once.
+    """
+    torch.manual_seed(42)
+    weights = {
+        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
+        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
+        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * weight_scale,
+    }
+    return weights, torch.get_rng_state()
+
+
+def expert_weights(hidden_dim, emb_dim, weight_scale):
+    """Expert weights in torch.nn.Linear convention (out_features, in_features), as TorchExpert reads them.
+
+    Leaves the global RNG exactly where drawing the weights inline would have, so the caller's
+    next draw is unchanged. The returned tensors are shared between callers: read them, and copy
+    before any in-place write.
+    """
+    weights, rng_state = _cached_expert_weights(hidden_dim, emb_dim, weight_scale)
+    torch.set_rng_state(rng_state)
+    return dict(weights)
 
 
 def run_single_routed_expert(
@@ -127,13 +165,7 @@ def run_single_routed_expert(
     logger.debug(f"Testing single routed expert: {allocated_tokens=}, {active_tokens=}, {emb_dim=}, {hidden_dim=}")
     logger.debug(f"Mesh: {device.shape}, num_devices={device.get_num_devices()}")
 
-    # Create random weights
-    torch.manual_seed(42)
-    weights = {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * weight_scale,
-    }
+    weights = expert_weights(hidden_dim, emb_dim, weight_scale)
 
     # Create torch reference
     torch_expert = TorchExpert(
