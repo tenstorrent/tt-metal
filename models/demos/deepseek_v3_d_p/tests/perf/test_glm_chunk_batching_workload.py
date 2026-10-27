@@ -13,7 +13,8 @@ Workload: USERS users, each with history tokens of KV already prefilled (filled 
 same runtime), then one new request each (PRODUCTION_REQUEST_LENGTHS). The timed phase prefills every
 new request, traced, in the configuration's forwards (cK-fF: K-token chunks, F chunks per forward).
 
-  galaxy 8x4   c5120-f1 (today's production shape), c2560-f1 / f2 / f4 (smaller chunk on the same mesh)
+  galaxy 8x4   c5120-f1 (today's production shape), c2048-f1 / f2 / f4 (smaller chunk on the same mesh; 2,560
+               would be 80 rows per TP rank, not whole tiles, which the indexer refuses)
   galaxy 4x4   c2560-f1 / f2 / f4 (the proposed stage: 640 rows/chip, 16 experts/chip). Needs the
                subtorus carve: TT_VISIBLE_DEVICES and TT_MESH_GRAPH_DESC_PATH as test_prefill_block_perf's
                _SUBTORUS_XY4_ENV, set before pytest starts.
@@ -80,7 +81,7 @@ def _workload(scale):
 
 
 _MESHES = {
-    "galaxy-8x4": ((8, 4), torus_xy_device_params, "mesh-8x4", 2, 1, [(5120, 1), (2560, 1), (2560, 2), (2560, 4)]),
+    "galaxy-8x4": ((8, 4), torus_xy_device_params, "mesh-8x4", 2, 1, [(5120, 1), (2048, 1), (2048, 2), (2048, 4)]),
     "galaxy-4x4": ((4, 4), torus_xy_device_params, "mesh-4x4", 2, 1, [(2560, 1), (2560, 2), (2560, 4)]),
     "loudbox-fabric2d-2x4": (
         (2, 4),
@@ -162,7 +163,8 @@ def test_glm_chunk_batching_workload(
     big_chunk = 5120 // scale  # the largest chunk any config of this scale uses
     assert history_len % big_chunk == 0, f"history {history_len} must be whole {big_chunk}-token chunks"
     assert max(request_lengths) <= big_chunk
-    seq_cache = history_len + big_chunk  # room for the longest request, whole chunks of either size
+    # Room for the longest request, and whole chunks of every size (2 x 5,120 is a multiple of 2,048 too).
+    seq_cache = history_len + 2 * big_chunk
     config = copy.deepcopy(config_only)
     config.max_seq_len = seq_cache
     rt_config = TtPrefillRuntimeConfig(
@@ -302,7 +304,7 @@ def test_glm_chunk_batching_workload(
 # choices under the synthetic router would. A different chunk size should be no further off: attention sees
 # the same tokens. (On the LoudBox c2560-f1 is: 0.89 at layer 7, 0.69 at layer 9. Unexplained.)
 _KV_PCC = 0.98
-_KV_REFERENCE = {"galaxy-8x4": (2560, 1), "galaxy-4x4": (2560, 1), "loudbox-fabric2d-2x4": (1280, 1)}
+_KV_REFERENCE = {"galaxy-8x4": (2048, 1), "galaxy-4x4": (2560, 1), "loudbox-fabric2d-2x4": (1280, 1)}
 
 
 @pytest.mark.parametrize(
