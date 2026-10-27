@@ -20,6 +20,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 constexpr uint32_t cb_stage = get_named_compile_time_arg_val("cb_stage");
@@ -81,15 +82,15 @@ void kernel_main() {
     const auto policy = TensorAccessor(policy_args, get_arg_val<uint32_t>(2));
     const auto uniforms = TensorAccessor(uniforms_args, get_arg_val<uint32_t>(3));
     const auto table = TensorAccessor(table_args, get_arg_val<uint32_t>(4));
-    volatile tt_l1_ptr uint32_t* history = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(5));
+    CoreLocalMem<volatile uint32_t> history(get_arg_val<uint32_t>(5));
     const auto token = TensorAccessor(token_args, get_arg_val<uint32_t>(6));
     const auto guard = TensorAccessor(guard_args, get_arg_val<uint32_t>(7));
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer stage(cb_stage);
     stage.reserve_back(1);
     const uint32_t base = stage.get_write_ptr();
-    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
+    CoreLocalMem<volatile uint32_t> words(base);
     {
         for (uint32_t r = 0; r < rows; ++r) {
             noc.async_read(
@@ -101,13 +102,13 @@ void kernel_main() {
         noc.async_read_barrier();
     }
 
-    volatile tt_l1_ptr uint32_t* policy_words = words + stage_policy / 4;
+    CoreLocalMem<volatile uint32_t> policy_words = words + stage_policy / 4;
     const uint32_t top_k = static_cast<uint32_t>(as_float(policy_words[0]));  // an exact small integer
     const float top_p = as_float(policy_words[1]);
     const float min_weight = as_float(policy_words[2]);
     const bool greedy_flag = as_float(policy_words[3]) != 0.0f;
     const float presence = as_float(policy_words[4]);
-    volatile tt_l1_ptr uint32_t* guard_words = words + stage_guard / 4;
+    CoreLocalMem<volatile uint32_t> guard_words = words + stage_guard / 4;
     for (uint32_t i = 0; i < grain_bytes / 4; ++i) {
         guard_words[i] = 0;
     }
@@ -123,22 +124,22 @@ void kernel_main() {
         return;
     }
 
-    volatile tt_l1_ptr uint32_t* tile = words + stage_tile / 4;
+    CoreLocalMem<volatile uint32_t> tile = words + stage_tile / 4;
     for (uint32_t i = 0; i < fp32_tile_bytes / 4; ++i) {
         tile[i] = 0;
     }
-    volatile tt_l1_ptr uint32_t* values = words + work_values;
-    volatile tt_l1_ptr uint32_t* ids = words + work_ids;
-    volatile tt_l1_ptr uint32_t* keys = words + work_keys;
-    volatile tt_l1_ptr uint32_t* sorted_ids = words + work_sorted_ids;
-    volatile tt_l1_ptr uint32_t* sorted_values = words + work_sorted_values;  // fp32 bits
-    volatile tt_l1_ptr uint32_t* weights = words + work_weights;
-    volatile tt_l1_ptr uint32_t* inclusive = words + work_inclusive;
-    volatile tt_l1_ptr uint32_t* chunk_offset = words + work_chunk;
+    CoreLocalMem<volatile uint32_t> values = words + work_values;
+    CoreLocalMem<volatile uint32_t> ids = words + work_ids;
+    CoreLocalMem<volatile uint32_t> keys = words + work_keys;
+    CoreLocalMem<volatile uint32_t> sorted_ids = words + work_sorted_ids;
+    CoreLocalMem<volatile uint32_t> sorted_values = words + work_sorted_values;  // fp32 bits
+    CoreLocalMem<volatile uint32_t> weights = words + work_weights;
+    CoreLocalMem<volatile uint32_t> inclusive = words + work_inclusive;
+    CoreLocalMem<volatile uint32_t> chunk_offset = words + work_chunk;
     uint32_t guard_mask = 0;
     for (uint32_t r = 0; r < rows; ++r) {
-        volatile tt_l1_ptr uint32_t* row_lanes = words + (stage_rows + r * row_bytes) / 4;
-        volatile tt_l1_ptr uint32_t* row_history = history + r * history_words;
+        CoreLocalMem<volatile uint32_t> row_lanes = words + (stage_rows + r * row_bytes) / 4;
+        CoreLocalMem<volatile uint32_t> row_history = history + r * history_words;
         uint32_t floor_key = 0;  // the shard floor: an unread token is at most its shard's smallest raw value
         for (uint32_t d = 0; d < lanes / shard_lanes; ++d) {
             uint32_t shard_min_key = 0xFFFFFFFFu;
@@ -234,7 +235,7 @@ void kernel_main() {
             guard_mask |= 1u << r;
         }
         const uint32_t total_kept = inclusive[kept - 1];
-        volatile tt_l1_ptr uint32_t* uniform_words = words + stage_uniforms / 4;
+        CoreLocalMem<volatile uint32_t> uniform_words = words + stage_uniforms / 4;
         const float theta = as_float(uniform_words[r]) * static_cast<float>(total_kept);  // RNE site 2
         uint32_t below = 0;
         for (uint32_t j = 0; j < lanes; ++j) {
