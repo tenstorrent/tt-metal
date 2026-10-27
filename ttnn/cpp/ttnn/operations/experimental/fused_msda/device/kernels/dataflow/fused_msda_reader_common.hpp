@@ -2,9 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared reader body. V1 and V2 differ only in which pair a sampling
-// position is built from. Staging, the SFPU hand-off, the gather and the
-// input-tile contract live here.
+// Shared reader body. V1 (reader_msda_v1.cpp) and V2 (reader_msda_v2.cpp)
+// differ in which bf16 operands a (row, level, point) sampling position is
+// built from, and only V2 can take the tiled geometry (see below), which also
+// needs its source to stage offsets into a block and fill the reference tile.
+// Everything else — staging, the hand-off of the geometry to compute, the NoC
+// gather of the four bilinear neighbours, the tile scatter and the input-tile
+// contract with the compute kernel — lives here and is compiled once per
+// reader.
 //
 // No float arithmetic happens here. The dataflow RISC has no FPU, so every
 // float operation would cost ~140 cycles of soft-float emulation. This file
@@ -28,19 +33,35 @@
 // for j+1's tiles and holds at most one point ahead, so the CB depths in
 // fused_msda_program_factory.cpp cover both orders.
 //
-// Tile face layout is documented in ../msda_tile_layout.hpp. bf16 tiles are
-// 2048 B; geom_x/geom_y are 4096 B when REF_FP32 is set.
+// Tiled geometry (TILED_GEOMETRY, msda_tiled_geometry.hpp) moves the hand-off
+// from points to blocks. The reader NoC-reads a block's offsets and attn rows
+// into a row-major page and writes the reference tile only when the query
+// block changes; compute tilizes them, solves every point at once and returns
+// one x0 and one y0 tile per block, x0_j in column 16 + j. Block t+1 is staged
+// as soon as block t's x0/y0 arrive and published after the first gather
+// barrier of block t, so compute can solve it early in block t.
 //
-// Contract with compute_msda.cpp:
-//   * geom/offset/attn tiles: column 0 is written for all 32 rows on every
-//     emission; rows >= v_rows get 0 in that tile's format (float32 for
-//     geom_x/geom_y when REF_FP32 is set, bf16 otherwise). Columns 1..31 are
-//     zeroed once per CB slot at startup so an uninitialised L1 bit pattern
-//     never reaches the SFPU as a NaN.
-//   * input tile: rows that are in range and in bounds hold the gathered value
+// Tile face layout is documented in ../msda_tile_layout.hpp. bf16 tiles are
+// 2048 B; geom_x/geom_y are 4096 B when REF_FP32 is set (per-point path only).
+//
+// Contract with compute_msda.cpp
+//   * geom/attn tiles: column 0 (and on V2 the offset in column 16 of the geom
+//     tiles) is written for all 32 rows on every emission; rows >= v_rows get
+//     0 in that tile's format (float32 for geom_x/geom_y when REF_FP32 is set,
+//     bf16 otherwise). The other columns are zeroed
+//     once per CB slot at startup so an uninitialised L1 bit pattern never
+//     reaches the SFPU as a NaN.
+//   * x0/y0 tiles come back with floor(px) in column 16 (msda_geometry.hpp).
+//   * tiled geometry instead: rows < v_rows of the staged page are NoC-read,
+//     the reference tile is rewritten for rows < v_rows when the query block
+//     changes, and every other row keeps a previous block's values (zero at
+//     startup), so those rows' scalars are not zero. That is harmless: rows
+//     never mix, and the writer emits only rows < v_rows.
+//   * input tile: rows that are in range AND in bounds hold the gathered value
 //     stick; every other row is explicitly zeroed. The scalar is built by the
-//     compute kernel, which has no bounds information, so nothing downstream
-//     can annihilate a stale row.
+//     compute kernel, which has no bounds information, so nothing downstream can
+//     annihilate a stale row, and on the tiled geometry rows >= v_rows carry a
+//     live scalar.
 //   * with RM_STAGING the four corners of a point go over as one row-major
 //     block (row r = [NW | NE | SW | SE], D bf16 each) that compute tilizes;
 //     the same rule applies per corner slot. With SPLIT_GATHER the writer
@@ -53,7 +74,9 @@
 //   [3]                 reference_points address (V2; 0 for V1)
 //   [4]                 num_output_tiles
 //   [5 .. 5+3L)         per level l: H_l, W_l, level_start_index_l
-//   [5+3L ...]          per output tile: b, head, q_start, v_rows
+//   [5+3L .. 5+9L)      TILED_GEOMETRY only: per level l, the fp32 bit patterns
+//                       of (primary, secondary, bias) for x, then for y
+//   [...]               per output tile: b, head, q_start, v_rows
 
 // NOTE: kernels are JIT-compiled as C++17. No abbreviated function templates
 // (`const auto&` parameters), no concepts — spell template parameters out.
@@ -70,6 +93,7 @@
 #include "api/semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_tile_layout.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_tiled_geometry.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/msda_gather_rows.hpp"
 
 // ---------------------------------------------------------------------------
@@ -114,19 +138,21 @@ struct ReaderGatherCfg {
 // Reader <-> compute tile pipes.
 constexpr uint32_t geom_x_cb_index = get_compile_time_arg_val(22);
 constexpr uint32_t geom_y_cb_index = get_compile_time_arg_val(23);
-constexpr uint32_t offset_x_cb_index = get_compile_time_arg_val(24);
-constexpr uint32_t offset_y_cb_index = get_compile_time_arg_val(25);
-constexpr uint32_t attn_tile_cb_index = get_compile_time_arg_val(26);
-constexpr uint32_t x0_cb_index = get_compile_time_arg_val(27);
-constexpr uint32_t y0_cb_index = get_compile_time_arg_val(28);
-constexpr uint32_t geom_cb_pages = get_compile_time_arg_val(29);
-constexpr bool RM_STAGING = get_compile_time_arg_val(30) != 0;
-constexpr bool SPLIT_GATHER = get_compile_time_arg_val(31) != 0;
-constexpr uint32_t gather_ready_sem_id = get_compile_time_arg_val(32);
-constexpr uint32_t gather_done_sem_id = get_compile_time_arg_val(33);
-constexpr uint32_t gather_mailbox_cb_index = get_compile_time_arg_val(34);
-constexpr uint32_t gather_mailbox_nbytes = get_compile_time_arg_val(35);  // allocated page; 0 without SPLIT_GATHER
-constexpr uint32_t MSDA_LAST_SCALAR_CT_ARG = 35;
+constexpr uint32_t attn_tile_cb_index = get_compile_time_arg_val(24);
+constexpr uint32_t x0_cb_index = get_compile_time_arg_val(25);
+constexpr uint32_t y0_cb_index = get_compile_time_arg_val(26);
+constexpr uint32_t geom_cb_pages = get_compile_time_arg_val(27);
+constexpr bool RM_STAGING = get_compile_time_arg_val(28) != 0;
+constexpr bool SPLIT_GATHER = get_compile_time_arg_val(29) != 0;
+constexpr uint32_t gather_ready_sem_id = get_compile_time_arg_val(30);
+constexpr uint32_t gather_done_sem_id = get_compile_time_arg_val(31);
+constexpr uint32_t gather_mailbox_cb_index = get_compile_time_arg_val(32);
+constexpr uint32_t gather_mailbox_nbytes = get_compile_time_arg_val(33);  // allocated page; 0 without SPLIT_GATHER
+constexpr bool TILED_GEOMETRY = get_compile_time_arg_val(34) != 0;
+constexpr uint32_t geom_rm_cb_index = get_compile_time_arg_val(35);
+constexpr uint32_t ref_tile_cb_index = get_compile_time_arg_val(36);
+constexpr uint32_t const_cb_index = get_compile_time_arg_val(37);
+constexpr uint32_t MSDA_LAST_SCALAR_CT_ARG = 37;
 constexpr uint32_t MSDA_TENSOR_ACCESSOR_ARG_BASE = MSDA_LAST_SCALAR_CT_ARG + 1;
 
 // ---------------------------------------------------------------------------
@@ -152,6 +178,14 @@ constexpr uint32_t LOC_STICKS_PER_ROW = LOC_PACKED ? 1u : (NUM_LEVELS * NUM_POIN
 
 // Sampling points per output block: the reduction runs over (level, point).
 constexpr uint32_t POINTS_PER_BLOCK = NUM_LEVELS * NUM_POINTS;
+
+static_assert(
+    !TILED_GEOMETRY ||
+        (FROM_OFFSETS && LOC_PACKED && ATTN_PACKED && POINTS_PER_BLOCK == fused_msda_tiled_geometry::POINTS &&
+         NUM_REFS <= fused_msda_tiled_geometry::MAX_REFS &&
+         loc_stick_nbytes == fused_msda_tiled_geometry::RM_ATTN_OFFSET &&
+         attn_stick_nbytes <= fused_msda_tiled_geometry::RM_ROW_NBYTES - fused_msda_tiled_geometry::RM_ATTN_OFFSET),
+    "tiled geometry needs packed V2 operands with L * P == 16 that fit the row-major block");
 
 // Cap on the per-level geometry table held in the reader's stack frame. Must
 // match MAX_LEVELS in fused_msda_device_operation.cpp, which validates against it.
@@ -196,8 +230,9 @@ inline uint32_t staged_loc_addr(uint32_t loc_arena_l1, uint32_t r, uint32_t l, u
     }
 }
 
-// Issues the NoC reads that stage attention_weights for one output block. No
-// barrier: the caller batches it with the location source's own staging.
+// Issues the NoC reads that stage attention_weights for one output block, row
+// r at attn_arena_l1 + r * row_nbytes. No barrier: the caller batches it with
+// the location source's own staging.
 template <typename AttnAccessor>
 inline void stage_attention_weights(
     Noc& noc,
@@ -206,20 +241,22 @@ inline void stage_attention_weights(
     uint32_t b,
     uint32_t q_start,
     uint32_t head,
-    uint32_t v_rows) {
+    uint32_t v_rows,
+    uint32_t row_nbytes = ATTN_STICKS_PER_ROW * attn_stick_nbytes) {
     for (uint32_t r = 0; r < v_rows; ++r) {
         const uint32_t q = q_start + r;
         const uint32_t bqh = (b * Q + q) * NUM_HEADS + head;
         for (uint32_t s = 0; s < ATTN_STICKS_PER_ROW; ++s) {
             const uint32_t page = ATTN_PACKED ? bqh : (bqh * NUM_LEVELS + s);
-            CoreLocalMem<uint32_t> dst(attn_arena_l1 + (r * ATTN_STICKS_PER_ROW + s) * attn_stick_nbytes);
+            CoreLocalMem<uint32_t> dst(attn_arena_l1 + r * row_nbytes + s * attn_stick_nbytes);
             noc.async_read(attn_acc, dst, attn_stick_nbytes, {.page_id = page}, {.offset_bytes = 0});
         }
     }
 }
 
 // Issues the NoC reads that stage a (B, Q, H, L, P, 2)- or (B, Q, H, L*P*2)-shaped
-// location-like tensor (V1 locations, V2 offsets) for one output block.
+// location-like tensor (V1 locations, V2 offsets) for one output block, row r
+// at loc_arena_l1 + r * row_nbytes.
 template <typename LocAccessor>
 inline void stage_location_tensor(
     Noc& noc,
@@ -228,13 +265,14 @@ inline void stage_location_tensor(
     uint32_t b,
     uint32_t q_start,
     uint32_t head,
-    uint32_t v_rows) {
+    uint32_t v_rows,
+    uint32_t row_nbytes = LOC_STICKS_PER_ROW * loc_stick_nbytes) {
     for (uint32_t r = 0; r < v_rows; ++r) {
         const uint32_t q = q_start + r;
         const uint32_t bqh = (b * Q + q) * NUM_HEADS + head;
         for (uint32_t s = 0; s < LOC_STICKS_PER_ROW; ++s) {
             const uint32_t page = LOC_PACKED ? bqh : (bqh * NUM_LEVELS * NUM_POINTS + s);
-            CoreLocalMem<uint32_t> dst(loc_arena_l1 + (r * LOC_STICKS_PER_ROW + s) * loc_stick_nbytes);
+            CoreLocalMem<uint32_t> dst(loc_arena_l1 + r * row_nbytes + s * loc_stick_nbytes);
             noc.async_read(loc_acc, dst, loc_stick_nbytes, {.page_id = page}, {.offset_bytes = 0});
         }
     }
@@ -242,9 +280,9 @@ inline void stage_location_tensor(
 
 // Zeroes every page of a reader-produced tile CB, once, before the block loop.
 //
-// Only column 0 of these tiles carries a query; the other 31 columns are never
-// written again and would otherwise reach the SFPU as whatever bit pattern L1
-// happened to hold, which decodes to NaN often enough to matter. The CB is
+// Only column 0 of these tiles (and column 16 of geom_x / geom_y on V2) carries
+// a query; the other columns are never written again and would otherwise reach
+// the SFPU as whatever bit pattern L1 happened to hold, which decodes to NaN often enough to matter. The CB is
 // reserved but not pushed, so this is a plain write over its L1 extent.
 //
 // `pages` must be that CB's own depth, and this must run before the first
@@ -272,6 +310,76 @@ inline void write_col0(uint32_t tile_l1, uint32_t r, uint16_t value) {
 inline void write_col0_fp32(uint32_t tile_l1, uint32_t r, uint32_t value) {
     CoreLocalMem<volatile uint32_t> lane(tile_l1 + fused_msda_tile_layout::tile_col0_offset_fp32(r));
     lane[0] = value;
+}
+
+// Column 16 of tile row `r`, the SFPU lane of column 0 one face to the right.
+inline void write_col16(uint32_t tile_l1, uint32_t r, uint16_t value) {
+    CoreLocalMem<volatile uint16_t> lane(tile_l1 + fused_msda_tile_layout::tile_col16_offset(r));
+    lane[0] = value;
+}
+
+inline void write_col16_fp32(uint32_t tile_l1, uint32_t r, uint32_t value) {
+    CoreLocalMem<volatile uint32_t> lane(tile_l1 + fused_msda_tile_layout::tile_col16_offset_fp32(r));
+    lane[0] = value;
+}
+
+// Writes bf16 `value` into element (r, c) of a tile.
+inline void write_tile_elem(uint32_t tile_l1, uint32_t r, uint32_t c, uint16_t value) {
+    CoreLocalMem<volatile uint16_t> elem(tile_l1 + fused_msda_tile_layout::tile_elem_offset(r, c));
+    elem[0] = value;
+}
+
+constexpr uint16_t BF16_ONE = 0x3F80;
+
+// The reference point r(l, p) that sampling point (l, p) offsets from; see
+// reader_msda_v2.cpp.
+inline uint32_t ref_index(uint32_t l, uint32_t p) { return (REF_MODE == 0) ? l : (p % NUM_REFS); }
+
+// Readies everything the tiled geometry keeps across blocks: writes and pushes
+// the constants CB (M_off, M_ref, E_j; see msda_tiled_geometry.hpp), and zeroes
+// the reference tile, setting its bias column, and the row-major staging page.
+// Staging writes only rows < v_rows, so the rest must hold finite values from
+// the start: their weights multiply the zeroed input rows past v_rows, and
+// 0 * NaN is NaN. `arg` is the first per-level constant runtime arg, fp32 bit
+// patterns whose low halves the factory has checked to be zero.
+inline void init_tiled_geometry(Noc& noc, uint32_t arg) {
+    namespace tg = fused_msda_tiled_geometry;
+    CircularBuffer const_cb(const_cb_index);
+    CircularBuffer ref_tile_cb(ref_tile_cb_index);
+    CircularBuffer geom_rm_cb(geom_rm_cb_index);
+    const_cb.reserve_back(tg::CONST_TILES);
+    ref_tile_cb.reserve_back(1);
+    // The row-major CB has never been pushed, so the write pointer is at page
+    // 0 and this covers all of it.
+    geom_rm_cb.reserve_back(tg::RM_CB_PAGES);
+    noc.async_write_zeros(const_cb, tg::CONST_TILES * TILE_NBYTES);
+    noc.async_write_zeros(ref_tile_cb, TILE_NBYTES);
+    noc.async_write_zeros(geom_rm_cb, tg::RM_CB_PAGES * TILE_NBYTES);
+    noc.write_zeros_l1_barrier();
+
+    const uint32_t m_off = const_cb.get_write_ptr() + tg::CONST_M_OFF * TILE_NBYTES;
+    const uint32_t m_ref = const_cb.get_write_ptr() + tg::CONST_M_REF * TILE_NBYTES;
+    for (uint32_t j = 0; j < POINTS_PER_BLOCK; ++j) {
+        const uint32_t l = j / NUM_POINTS;
+        const uint32_t p = j - l * NUM_POINTS;
+        const uint32_t k = ref_index(l, p);
+        auto level_bf16 = [&](uint32_t i) {
+            return static_cast<uint16_t>(get_arg_val<uint32_t>(arg + tg::CONSTANTS_PER_LEVEL * l + i) >> 16);
+        };
+        // (primary, secondary, bias) for x, then for y.
+        write_tile_elem(m_ref, k, j, level_bf16(0));
+        write_tile_elem(m_off, 2 * j, j, level_bf16(1));
+        write_tile_elem(m_ref, tg::BIAS_COL, j, level_bf16(2));
+        write_tile_elem(m_ref, 16 + k, 16 + j, level_bf16(3));
+        write_tile_elem(m_off, 2 * j + 1, 16 + j, level_bf16(4));
+        write_tile_elem(m_ref, tg::BIAS_COL, 16 + j, level_bf16(5));
+        write_tile_elem(const_cb.get_write_ptr() + (tg::CONST_E_FIRST + j) * TILE_NBYTES, j, 0, BF16_ONE);
+    }
+    const_cb.push_back(tg::CONST_TILES);
+
+    for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
+        write_tile_elem(ref_tile_cb.get_write_ptr(), r, tg::BIAS_COL, BF16_ONE);
+    }
 }
 
 // Row-major staging: the four corners of a point share one input-CB block of
@@ -346,6 +454,12 @@ inline void scatter_stick(uint32_t tile_l1, uint32_t r, uint32_t src_l1) {
 // everything the block needs. A source owns its arenas and may skip reads whose
 // data they already hold from the previous tile, so nothing here may write to
 // them.
+//
+// With TILED_GEOMETRY the source also provides (and `stage` goes unused):
+//     bool stage_tiled(Noc&, b, q_start, head, v_rows, uint32_t off_l1, uint32_t off_row_nbytes);
+//         stages the offsets at off_l1 and the reference points into its
+//         arena; true when the reference points were re-read
+//     void fill_ref_tile(uint32_t tile_l1, uint32_t v_rows) const;
 // ---------------------------------------------------------------------------
 template <typename ValueAccessor, typename AttnAccessor, typename LocSrc>
 inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn_acc, LocSrc& loc_src) {
@@ -364,8 +478,6 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
     CircularBuffer input_tile_cb(input_tile_cb_index);
     CircularBuffer geom_x_cb(geom_x_cb_index);
     CircularBuffer geom_y_cb(geom_y_cb_index);
-    CircularBuffer offset_x_cb(offset_x_cb_index);
-    CircularBuffer offset_y_cb(offset_y_cb_index);
     CircularBuffer attn_tile_cb(attn_tile_cb_index);
     CircularBuffer x0_cb(x0_cb_index);
     CircularBuffer y0_cb(y0_cb_index);
@@ -374,22 +486,25 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
     // are never pushed, so nothing downstream waits on them.
     value_scratch_cb.reserve_back(TILE_MAX_ROWS);
     const uint32_t value_arena_l1 = value_scratch_cb.get_write_ptr();
-    attn_scratch_cb.reserve_back(TILE_MAX_ROWS * ATTN_STICKS_PER_ROW);
-    const uint32_t attn_arena_l1 = attn_scratch_cb.get_write_ptr();
+    [[maybe_unused]] uint32_t attn_arena_l1 = 0;
 
-    // All five operand pipes are allocated kGeomCbPages deep by the factory,
-    // which is what geom_cb_pages carries.
+    uint32_t arg_idx = 5 + 3 * NUM_LEVELS;
+    if constexpr (TILED_GEOMETRY) {
+        init_tiled_geometry(noc, arg_idx);
+        arg_idx += fused_msda_tiled_geometry::CONSTANTS_PER_LEVEL * NUM_LEVELS;
+    } else {
+        attn_scratch_cb.reserve_back(TILE_MAX_ROWS * ATTN_STICKS_PER_ROW);
+        attn_arena_l1 = attn_scratch_cb.get_write_ptr();
+        // All three operand pipes are allocated kGeomCbPages deep by the
+        // factory, which is what geom_cb_pages carries.
 #ifdef REF_FP32
-    zero_tile_cb(geom_x_cb_index, geom_cb_pages, fused_msda_tile_layout::FP32_TILE_NBYTES);
-    zero_tile_cb(geom_y_cb_index, geom_cb_pages, fused_msda_tile_layout::FP32_TILE_NBYTES);
+        zero_tile_cb(geom_x_cb_index, geom_cb_pages, fused_msda_tile_layout::FP32_TILE_NBYTES);
+        zero_tile_cb(geom_y_cb_index, geom_cb_pages, fused_msda_tile_layout::FP32_TILE_NBYTES);
 #else
-    zero_tile_cb(geom_x_cb_index, geom_cb_pages);
-    zero_tile_cb(geom_y_cb_index, geom_cb_pages);
+        zero_tile_cb(geom_x_cb_index, geom_cb_pages);
+        zero_tile_cb(geom_y_cb_index, geom_cb_pages);
 #endif
-    zero_tile_cb(attn_tile_cb_index, geom_cb_pages);
-    if constexpr (FROM_OFFSETS) {
-        zero_tile_cb(offset_x_cb_index, geom_cb_pages);
-        zero_tile_cb(offset_y_cb_index, geom_cb_pages);
+        zero_tile_cb(attn_tile_cb_index, geom_cb_pages);
     }
 
     RowGeometry geom;
@@ -403,21 +518,97 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
     [[maybe_unused]] Semaphore<> gather_done(gather_done_sem_id);
     [[maybe_unused]] uint32_t gather_seq = 0;
 
-    uint32_t arg_idx = 5 + 3 * NUM_LEVELS;
-    for (uint32_t t = 0; t < num_output_tiles; ++t) {
-        const uint32_t b = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t head = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t q_start = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t v_rows = get_arg_val<uint32_t>(arg_idx++);
+    struct Unit {
+        uint32_t b;
+        uint32_t head;
+        uint32_t q_start;
+        uint32_t v_rows;
+    };
+    const uint32_t unit_args = arg_idx;
+    auto unit = [&](uint32_t t) {
+        const uint32_t base = unit_args + 4 * t;
+        return Unit{
+            get_arg_val<uint32_t>(base),
+            get_arg_val<uint32_t>(base + 1),
+            get_arg_val<uint32_t>(base + 2),
+            get_arg_val<uint32_t>(base + 3)};
+    };
 
-        stage_attention_weights(noc, attn_acc, attn_arena_l1, b, q_start, head, v_rows);
-        loc_src.stage(noc, b, q_start, head, v_rows);
-        noc.async_read_barrier();
+    // Tiled geometry: block t's offsets and attn rows go into one row-major
+    // page, its reference points into the source's arena. Nothing is pushed
+    // until a barrier has covered the reads (publish_block). With
+    // TILED_GEOMETRY off, `if constexpr` drops these bodies, so a source need
+    // not define stage_tiled / fill_ref_tile.
+    [[maybe_unused]] CircularBuffer geom_rm_cb(geom_rm_cb_index);
+    [[maybe_unused]] CircularBuffer ref_tile_cb(ref_tile_cb_index);
+    [[maybe_unused]] auto stage_block = [&](uint32_t t) {
+        if constexpr (TILED_GEOMETRY) {
+            namespace tg = fused_msda_tiled_geometry;
+            geom_rm_cb.reserve_back(tg::RM_TILES);
+            const uint32_t rm_l1 = geom_rm_cb.get_write_ptr();
+            const Unit u = unit(t);
+            stage_attention_weights(
+                noc, attn_acc, rm_l1 + tg::RM_ATTN_OFFSET, u.b, u.q_start, u.head, u.v_rows, tg::RM_ROW_NBYTES);
+            return loc_src.stage_tiled(noc, u.b, u.q_start, u.head, u.v_rows, rm_l1, tg::RM_ROW_NBYTES);
+        } else {
+            return false;
+        }
+    };
+    // The reference tile is one page, so a block whose reference points did
+    // not change pushes the same bytes again.
+    [[maybe_unused]] auto publish_block = [&](uint32_t t, bool refs_restaged) {
+        if constexpr (TILED_GEOMETRY) {
+            ref_tile_cb.reserve_back(1);
+            if (refs_restaged) {
+                loc_src.fill_ref_tile(ref_tile_cb.get_write_ptr(), unit(t).v_rows);
+            }
+            ref_tile_cb.push_back(1);
+            geom_rm_cb.push_back(fused_msda_tiled_geometry::RM_TILES);
+        }
+    };
+    if constexpr (TILED_GEOMETRY) {
+        if (num_output_tiles > 0) {
+            const bool refs_restaged = stage_block(0);
+            noc.async_read_barrier();
+            publish_block(0, refs_restaged);
+        }
+    }
+
+    for (uint32_t t = 0; t < num_output_tiles; ++t) {
+        const Unit u = unit(t);
+        const uint32_t b = u.b;
+        const uint32_t head = u.head;
+        const uint32_t q_start = u.q_start;
+        const uint32_t v_rows = u.v_rows;
+
+        [[maybe_unused]] uint32_t block_x0_l1 = 0;
+        [[maybe_unused]] uint32_t block_y0_l1 = 0;
+        [[maybe_unused]] bool next_staged = false;
+        [[maybe_unused]] bool next_refs_restaged = false;
+        if constexpr (TILED_GEOMETRY) {
+            x0_cb.wait_front(1);
+            y0_cb.wait_front(1);
+            // Read across the whole block, and wait_front does not invalidate
+            // the RISC L1 data cache, which may hold this page from two blocks
+            // ago.
+            invalidate_l1_cache();
+            block_x0_l1 = x0_cb.get_read_ptr();
+            block_y0_l1 = y0_cb.get_read_ptr();
+            if (t + 1 < num_output_tiles) {
+                next_refs_restaged = stage_block(t + 1);
+                next_staged = true;
+            }
+        } else {
+            stage_attention_weights(noc, attn_acc, attn_arena_l1, b, q_start, head, v_rows);
+            loc_src.stage(noc, b, q_start, head, v_rows);
+            noc.async_read_barrier();
+        }
 
         // Base page of this (batch, head) pair in the (B, S, H, D) value tensor.
         const uint32_t value_batch_base = b * NUM_KEYS;
 
-        // Hands one sampling point's operands to the SFPU as column-0 tiles.
+        // Hands one sampling point's operands to the SFPU: column 0, and on V2 the
+        // offset in column 16.
         auto push_point_geometry = [&](uint32_t j) {
             const uint32_t l = j / NUM_POINTS;
             const uint32_t p = j - l * NUM_POINTS;
@@ -428,14 +619,6 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
             const uint32_t gx_l1 = geom_x_cb.get_write_ptr();
             const uint32_t gy_l1 = geom_y_cb.get_write_ptr();
             const uint32_t at_l1 = attn_tile_cb.get_write_ptr();
-            uint32_t ox_l1 = 0;
-            uint32_t oy_l1 = 0;
-            if constexpr (FROM_OFFSETS) {
-                offset_x_cb.reserve_back(1);
-                offset_y_cb.reserve_back(1);
-                ox_l1 = offset_x_cb.get_write_ptr();
-                oy_l1 = offset_y_cb.get_write_ptr();
-            }
 
             for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
                 // Rows past v_rows go out as zero, so their attn lane, and with
@@ -466,30 +649,44 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
 #endif
                 write_col0(at_l1, r, av);
                 if constexpr (FROM_OFFSETS) {
-                    write_col0(ox_l1, r, ox);
-                    write_col0(oy_l1, r, oy);
+                    // The offset rides next to the primary operand, in the geom
+                    // tile's format; bf16 -> float32 is exact.
+#ifdef REF_FP32
+                    write_col16_fp32(gx_l1, r, static_cast<uint32_t>(ox) << 16);
+                    write_col16_fp32(gy_l1, r, static_cast<uint32_t>(oy) << 16);
+#else
+                    write_col16(gx_l1, r, ox);
+                    write_col16(gy_l1, r, oy);
+#endif
                 }
             }
 
             geom_x_cb.push_back(1);
             geom_y_cb.push_back(1);
             attn_tile_cb.push_back(1);
-            if constexpr (FROM_OFFSETS) {
-                offset_x_cb.push_back(1);
-                offset_y_cb.push_back(1);
+        };
+
+        // x0/y0 of a tiled block stay at the front until its last point.
+        auto release_corners = [&](uint32_t j) {
+            if (!TILED_GEOMETRY || j + 1 == POINTS_PER_BLOCK) {
+                x0_cb.pop_front(1);
+                y0_cb.pop_front(1);
             }
         };
 
         // One point of lookahead, matching the compute kernel's (see the
         // pipelining note at the top of this file). Iteration j pushes j+1, so
         // point 0 goes out here.
-        push_point_geometry(0);
+        if constexpr (!TILED_GEOMETRY) {
+            push_point_geometry(0);
+        }
 
         for (uint32_t j = 0; j < POINTS_PER_BLOCK; ++j) {
-            // Exactly one push of point j+1 per iteration: here without the
-            // split gather, after the post with it. SPLIT_GATHER implies
-            // RM_STAGING (static_assert above), so the second site always exists.
-            if constexpr (!SPLIT_GATHER) {
+            // Exactly one push of point j+1 per iteration, none with the tiled
+            // geometry: here without the split gather, after the post with it.
+            // SPLIT_GATHER implies RM_STAGING (static_assert above), so the
+            // second site always exists.
+            if constexpr (!SPLIT_GATHER && !TILED_GEOMETRY) {
                 if (j + 1 < POINTS_PER_BLOCK) {
                     push_point_geometry(j + 1);
                 }
@@ -498,11 +695,20 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
             const uint32_t l = j / NUM_POINTS;
             const LevelGeom& g = levels[l];
             // Corners solved on the SFPU; only integer decode, bounds tests and
-            // page indices are left to the data-movement RISCs.
-            x0_cb.wait_front(1);
-            y0_cb.wait_front(1);
-            const uint32_t x0_l1 = x0_cb.get_read_ptr();
-            const uint32_t y0_l1 = y0_cb.get_read_ptr();
+            // page indices are left to the data-movement RISCs. The gathers
+            // read x0 at x0_l1 + tile_col16_offset(r), so a tiled block's
+            // point j is its tile shifted by j columns.
+            uint32_t x0_l1;
+            uint32_t y0_l1;
+            if constexpr (TILED_GEOMETRY) {
+                x0_l1 = block_x0_l1 + j * sizeof(uint16_t);
+                y0_l1 = block_y0_l1 + j * sizeof(uint16_t);
+            } else {
+                x0_cb.wait_front(1);
+                y0_cb.wait_front(1);
+                x0_l1 = x0_cb.get_read_ptr();
+                y0_l1 = y0_cb.get_read_ptr();
+            }
 
             if constexpr (RM_STAGING) {
                 input_tile_cb.reserve_back(4 * N_D_TILES);
@@ -520,7 +726,7 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                 if constexpr (SPLIT_GATHER) {
                     fused_msda_gather::post_point(gather_mailbox_l1, pt);
                     gather_ready.set(++gather_seq);
-                    if (j + 1 < POINTS_PER_BLOCK) {
+                    if (!TILED_GEOMETRY && j + 1 < POINTS_PER_BLOCK) {
                         push_point_geometry(j + 1);
                     }
                     fused_msda_gather::gather_rows<ReaderGatherCfg>(
@@ -535,16 +741,15 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                 }
                 // Plain zero stores above; keep them ahead of the push.
                 asm volatile("" ::: "memory");
-                x0_cb.pop_front(1);
-                y0_cb.pop_front(1);
+                release_corners(j);
                 input_tile_cb.push_back(4 * N_D_TILES);
             } else {
                 const int32_t w_i = static_cast<int32_t>(g.width);
                 const int32_t h_i = static_cast<int32_t>(g.height);
                 for (uint32_t r = 0; r < v_rows; ++r) {
-                    const uint32_t col0 = fused_msda_tile_layout::tile_col0_offset(r);
-                    CoreLocalMem<volatile uint16_t> x0_src(x0_l1 + col0);
-                    CoreLocalMem<volatile uint16_t> y0_src(y0_l1 + col0);
+                    const uint32_t col16 = fused_msda_tile_layout::tile_col16_offset(r);
+                    CoreLocalMem<volatile uint16_t> x0_src(x0_l1 + col16);
+                    CoreLocalMem<volatile uint16_t> y0_src(y0_l1 + col16);
                     const int32_t x0 = bf16_exact_int(x0_src[0]);
                     const int32_t y0 = bf16_exact_int(y0_src[0]);
                     geom.x0[r] = x0;
@@ -554,15 +759,14 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                     geom.y0_valid[r] = (y0 >= 0) && (y0 < h_i);
                     geom.y1_valid[r] = (y0 + 1 >= 0) && (y0 + 1 < h_i);
                 }
-                x0_cb.pop_front(1);
-                y0_cb.pop_front(1);
+                release_corners(j);
 
                 for (uint32_t c = 0; c < 4; ++c) {
                     // Hoist the row-invariant selectors: c picks the (dy, dx) step to
                     // the corner and which validity arrays gate it.
                     //
                     // c = 0, 1, 2, 3 is NW, NE, SW, SE, and must stay in lockstep
-                    // with the four corner_weight calls in msda_geometry.hpp::point
+                    // with the four scalar packs in msda_geometry.hpp::point
                     // that build the matching scalar tiles.
                     const int32_t dy_off = (c < 2) ? 0 : 1;
                     const int32_t dx_off = (c & 1) ? 1 : 0;
@@ -624,6 +828,14 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                     // the push that hands the tiles to compute.
                     asm volatile("" ::: "memory");
                     input_tile_cb.push_back(N_D_TILES);
+                }
+            }
+
+            // Every path above has barriered its reads by now, which covers
+            // the next block's staging too.
+            if constexpr (TILED_GEOMETRY) {
+                if (j == 0 && next_staged) {
+                    publish_block(t + 1, next_refs_restaged);
                 }
             }
         }

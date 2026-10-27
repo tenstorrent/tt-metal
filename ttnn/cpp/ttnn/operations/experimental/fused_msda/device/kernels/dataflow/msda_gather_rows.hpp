@@ -59,7 +59,7 @@ inline int32_t bf16_exact_int(uint16_t v) {
 // Everything one point's gather needs, as the reader hands it to the writer
 // through the mailbox. Plain uint32 words so the mailbox is a flat L1 copy.
 struct PointArgs {
-    uint32_t x0_l1;  // compute's floored-x tile for this point
+    uint32_t x0_l1;  // x0 at x0_l1 + tile_col16_offset(r): a tile, or a tiled block shifted by j columns
     uint32_t y0_l1;
     uint32_t block_l1;  // the input-CB block being staged
     uint32_t v_rows;
@@ -85,9 +85,10 @@ static_assert(SPLIT_ROW > 0 && SPLIT_ROW < fused_msda_tile_layout::TILE_MAX_ROWS
 
 // Split-gather handshake. Per point, in the same (tile, level, point) order on
 // both RISCs:
-//   reader: post_point(pt); ready = ++seq; push the next point's geometry;
-//           gather rows [0, SPLIT_ROW); barrier; wait done == seq; pop x0/y0;
-//           push the block.
+//   reader: post_point(pt); ready = ++seq; push the next point's geometry
+//           (per-point hand-off only); gather rows [0, SPLIT_ROW); barrier;
+//           wait done == seq; pop x0/y0 (tiled geometry: after the block's
+//           last point); push the block.
 //   writer: wait ready == ++seq; fetch_point; gather rows [SPLIT_ROW, 32);
 //           barrier; done = seq.
 // Both sides must post or consume exactly NUM_LEVELS * NUM_POINTS points per
@@ -152,14 +153,14 @@ inline void gather_rows(
             zero_words(row_l1, ROW_WORDS);
             continue;
         }
-        const uint32_t col0 = fused_msda_tile_layout::tile_col0_offset(r);
-        const int32_t x0 = bf16_exact_int(CoreLocalMem<volatile uint16_t>(a.x0_l1 + col0)[0]);
-        const int32_t y0 = bf16_exact_int(CoreLocalMem<volatile uint16_t>(a.y0_l1 + col0)[0]);
+        const uint32_t col16 = fused_msda_tile_layout::tile_col16_offset(r);
+        const int32_t x0 = bf16_exact_int(CoreLocalMem<volatile uint16_t>(a.x0_l1 + col16)[0]);
+        const int32_t y0 = bf16_exact_int(CoreLocalMem<volatile uint16_t>(a.y0_l1 + col16)[0]);
         const bool xv[2] = {(x0 >= 0) && (x0 < w_i), (x0 + 1 >= 0) && (x0 + 1 < w_i)};
         const bool yv[2] = {(y0 >= 0) && (y0 < h_i), (y0 + 1 >= 0) && (y0 + 1 < h_i)};
 
         // c = 0, 1, 2, 3 is NW, NE, SW, SE, in lockstep with the four
-        // corner_weight calls in msda_geometry.hpp::point.
+        // scalar packs in msda_geometry.hpp::point.
         for (uint32_t dy = 0; dy < 2; ++dy) {
             const uint32_t pair_l1 = row_l1 + 2u * dy * STICK;
             if (!yv[dy]) {

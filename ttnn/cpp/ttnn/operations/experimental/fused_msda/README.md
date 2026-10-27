@@ -253,9 +253,9 @@ All runtime args, buffer addresses included, are plain values that
 is what lets `num_valid_queries` stay out of the program hash.
 
 A partial block is supported wherever a batch's rows end: at `Q % 32`, or at
-`num_valid_queries[b] % 32`. That tile carries `v_rows` below 32, the reader
-zeroes the scalar lanes of rows `>= v_rows`, so they contribute nothing, and the
-writer emits only `v_rows` sticks.
+`num_valid_queries[b] % 32`. That tile carries `v_rows` below 32. Rows `>= v_rows`
+are never gathered and never emitted: rows never mix, and the writer emits only
+`v_rows` sticks.
 
 `split_work_to_cores` is used rather than the spec's suggested
 `core.x -> query blocks, core.y -> heads` because `B * H * ceil(Q/32)` rarely
@@ -358,15 +358,18 @@ nearest-neighbour.
 32 queries are packed vertically into a tile; `D` spans `n_d_tiles` tiles side by
 side. `msda_tile_layout.hpp` maps row `r` to its `(lo, hi)` face-half byte
 offsets. The compute kernel uses `mul_tiles_bcast<COL>`, which reads only column
-0 of the `TL`/`BL` faces of the scalar tile, and the geometry only ever produces
-a meaningful column 0 — so a query occupies one lane of a 32x32 tile throughout.
+0 of the `TL`/`BL` faces of the scalar tile. A query occupies one SFPU lane of a
+32x32 tile throughout: column 0, with column 16 (the same lane, one face to the
+right) carrying a second operand: the V2 offset, or the corner word. The tiled
+geometry puts point `j` of a block in column `j` and `16 + j`.
 
 ### Zero-fill contract
 
-* **geometry tiles** (reader → compute): column 0 is written for all 32 rows on
-  every emission; rows `>= v_rows` get `0` in that tile's format. A zero attn lane is what makes
-  a tail row's scalar zero. Columns 1..31 are zeroed once per CB slot at reader
-  startup, so an uninitialised L1 bit pattern never reaches the SFPU as a NaN.
+* **geometry tiles** (reader → compute, per-point geometry): column 0, and on
+  V2 the offset in column 16 of `geom_x` / `geom_y`, are written for all 32 rows
+  on every emission; rows `>= v_rows` get `0` in that tile's format. Every other
+  column is zeroed once per CB slot at reader startup, so an uninitialised L1
+  bit pattern never reaches the SFPU as a NaN.
 * **input tile** (reader → compute; reader + writer with the split gather, each
   for its own rows): rows that are in range **and** in bounds
   hold the gathered value stick; every other row is explicitly zeroed. In the
