@@ -147,7 +147,7 @@ jobs:
         shell: bash
         run: echo "path=$GITHUB_WORKSPACE" >> "$GITHUB_OUTPUT"
 
-      # Installs <root>/sim/libttsim.so + soc_descriptor.yaml and exports TT_METAL_SIMULATOR.
+      # Installs <root>/sim/libttsim.so (+ soc_descriptor.yaml for Quasar) and exports TT_METAL_SIMULATOR.
       # run_ttsim_regression.sh trusts a pre-exported TT_METAL_SIMULATOR and skips its own
       # download; both read the same tt_metal/ttsim-version pin.
       - name: ⬇️  Setup TTSim
@@ -156,6 +156,20 @@ jobs:
         with:
           sku: ${{ matrix.test-group.sku }}
           root: ${{ steps.workspace.outputs.path }}
+
+      # setup-ttsim installs no soc descriptor for wh/bh, which tt-metal no longer needs, but the
+      # LLK suite attaches through tt-exalens, whose UMD still reads one beside the simulator.
+      - name: Install wh/bh soc descriptor for tt-exalens
+        if: steps.arch.outputs.name != 'quasar'
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${{ steps.workspace.outputs.path }}"
+          case "${{ steps.arch.outputs.name }}" in
+            wormhole)  soc=wormhole_b0_80_arch.yaml ;;
+            blackhole) soc=blackhole_140_arch.yaml ;;
+          esac
+          cp "$root/tt_metal/soc_descriptors/$soc" "$root/sim/soc_descriptor.yaml"
 
       # continue-on-error: ttsim is WIP and many tests are expected to fail; the HTML report is
       # the deliverable, not a green check.
