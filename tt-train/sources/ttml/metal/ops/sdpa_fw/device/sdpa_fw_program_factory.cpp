@@ -338,7 +338,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.output);
 
     // Split units: the partials travel through DRAM scratch, one slot per sender, fp32, and the merger
-    // waits on one of its core's semaphores until every sender has bumped it.
+    // waits on one of its core's semaphores until every sender has bumped it. The scratch is owned by the
+    // cached program, so it lives as long as the cache entry: num_slots * rows * (vWt + 2) fp32 tiles, e.g.
+    // 64 slots of 4 rows at D=128 are 6 MiB; shapes with enough items per core cut nothing and own none.
     std::optional<ttnn::Tensor> scratch;
     if (split_units) {
         [[maybe_unused]] auto cb_partial_in = create_circular_buffer(
