@@ -48,8 +48,8 @@ constexpr uint32_t stage_bytes = work_end * 4;
 static_assert(rows >= 1 && rows <= 16, "rows fit the token tile's first face row");
 
 union Bits {
-    float f;
-    uint32_t u;
+    float value;
+    uint32_t word;
 };
 
 FORCE_INLINE uint32_t key_of(uint32_t bits) {
@@ -58,15 +58,15 @@ FORCE_INLINE uint32_t key_of(uint32_t bits) {
 }
 
 FORCE_INLINE float as_float(uint32_t bits) {
-    Bits b;
-    b.u = bits;
-    return b.f;
+    Bits pun;
+    pun.word = bits;
+    return pun.value;
 }
 
-FORCE_INLINE uint32_t as_bits(float f) {
-    Bits b;
-    b.f = f;
-    return b.u;
+FORCE_INLINE uint32_t as_bits(float value) {
+    Bits pun;
+    pun.value = value;
+    return pun.word;
 }
 
 void kernel_main() {
