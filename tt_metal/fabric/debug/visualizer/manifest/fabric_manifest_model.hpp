@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -351,6 +352,25 @@ struct CoreRegisters {
     uint32_t wall_clock_high = 0;
 };
 
+// A struct the manifest describes: its name, size and members in order, which cover every byte of it.
+struct StructType {
+    std::string_view name;
+    uint32_t size = 0;
+    std::span<const layout::Member> members;
+};
+
+// One named value of an enum.
+struct Enumerator {
+    std::string_view name;
+    uint32_t value = 0;
+};
+
+// An enum the manifest describes: its name and every value it names.
+struct EnumType {
+    std::string_view name;
+    std::vector<Enumerator> enumerators;
+};
+
 // What the manifest describes of the architecture the routers run on.
 struct Arch {
     tt::ARCH arch = tt::ARCH::Invalid;
@@ -358,7 +378,7 @@ struct Arch {
     StreamRegisters stream_registers;
     CoreRegisters core_registers;
     // Every struct a schema names, as laid out on this architecture.
-    std::vector<layout::StructType> types;
+    std::vector<StructType> types;
 };
 
 }  // namespace tt::tt_fabric::manifest
