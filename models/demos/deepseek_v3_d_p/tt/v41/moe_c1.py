@@ -23,6 +23,16 @@ bfp4 weights), the shared expert 72, the two SP all-gathers 44 each, the gate 45
 The one-hot tiles ``sel`` (row 0 = e_u on the live rank) and ``put`` (row u = e_0 on the live rank) come from
 two integer rows of the step's host inputs (:meth:`C1Moe.host_rows`) through :meth:`C1Moe.onehots` (two
 ``ttnn.embedding`` lookups of an identity table), once a step.
+
+The shared expert enters exactly once, by either of two contracts. With
+the MoE's own ``TtSharedExpert`` it returns its TP-reduce-scattered ``[32, hidden/tp]`` output and the c1 path
+adds it after the 32-chip sum (step 12). With ``V41_SHARED_IN_FFN=rs`` (the served catalog)
+``DecodeSharedExpert`` returns ``None`` and parks its ``[32, hidden]`` partial (this chip's TP slice of the
+intermediate, not yet summed over TP) in the decode tail's ``DecodeReduce.pending_shared``; the c1 path takes
+it from there, masks it to the chips of SP rank 0 (``sp0 @ partial``: a per-chip one-hot constant, so the SP
+all-gather-and-sum of step 11 counts it once) and adds it to the local routed partial before step 11's TP
+reduce-scatter, which is what the 32-row tail does with it. That replaces the shared expert's own reduce-scatter
+(~16 us) and the final add with a one-hot matmul and an add (~4 us).
 """
 
 import os
@@ -143,6 +153,22 @@ class C1Moe:
         sum8 = torch.zeros(_TILE, _TILE * pool.sp)
         sum8[0] = 1.0
         self.sum8 = self._replicated(sum8.view(1, 1, _TILE, _TILE * pool.sp), ttnn.bfloat16)
+        # sp0[0, 0] = 1 on the chips of SP rank 0 (mesh row 0), zero elsewhere: ``sp0 @ partial`` keeps a
+        # replicated row-0 partial on one SP rank only, so the SP all-gather-and-sum of step 11 counts it once
+        # (the shared expert's partial under V41_SHARED_IN_FFN, the module docstring)
+        sp, tp = tuple(device.shape)
+        sp0 = torch.zeros(sp, tp, _TILE, _TILE)
+        sp0[0, :, 0, 0] = 1.0
+        self.sp0 = ttnn.from_torch(
+            sp0,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=device.shape, dims=(0, 1)),
+        )
+        self.sp0 = ttnn.reshape(self.sp0, (1, 1, _TILE, _TILE))
+        self.shared_fold = None  # "pending" once the shared expert has parked a partial (tests read it)
         self.debug = None  # a dict: the call keeps its ``counts`` and ``indices`` there (tests)
         # the FFN's program-cache entry for this shape is built here, on an empty L1: ``ttnn.reduce_scatter`` (the
         # decode tail's TP reduce-scatter) leaves a 512-byte L1 buffer at 914,176 after its first call, and the
@@ -301,9 +327,23 @@ class C1Moe:
         ttnn.deallocate(xs)
         x_full = self.ccl.tp_all_gather(xq, dim=3)
         ttnn.deallocate(xq)
-        # 7: the shared expert (rows 1..31 zero in, zero out)
+        # 7: the shared expert (rows 1..31 zero in, zero out). ``TtSharedExpert`` returns its reduce-scattered
+        # [32, hidden/tp] output (added at step 12); ``DecodeSharedExpert`` (V41_SHARED_IN_FFN) returns None and
+        # parks its [32, hidden] partial in the decode tail's reduce: taken here, folded into step 11's
+        # reduce-scatter on SP rank 0 only (the module docstring)
         shared = moe.shared_expert(ttnn.squeeze(x_full, dim=0))
-        shared = ttnn.unsqueeze(shared, dim=0)
+        if shared is None:
+            reduce = moe.reduce_module
+            partial, reduce.pending_shared = reduce.pending_shared, None
+            assert partial is not None, "the shared expert returned None and parked no partial"
+            partial = ttnn.reshape(partial, (1, 1, _TILE, self.hidden))
+            shared = ttnn.matmul(self.sp0, partial, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(partial)
+            self.shared_fold = "pending"
+        else:
+            shared = ttnn.unsqueeze(shared, dim=0)
+            self.shared_fold = "returned"
+        folded = self.shared_fold == "pending"
         # 8, 9: the row at the head of every local expert's region; the selected experts run in place
         x_in = ttnn.matmul(
             self.R, x_full, compute_kernel_config=_HIFI4, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -318,15 +358,25 @@ class C1Moe:
         part = ttnn.matmul(W, y, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(y)
         ttnn.deallocate(W)
+        if folded:
+            # the shared partial (SP rank 0 only) joins the local routed partial before the TP reduce-scatter,
+            # as the 32-row tail does (moe_tail.DecodeReduce)
+            total = ttnn.add(part, shared, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(part)
+            ttnn.deallocate(shared)
+            part = total
         # 11: the sum over the 32 chips, this chip's TP slice
         tp_part = self.ccl.tp_reduce_scatter(part, dim=3)
         ttnn.deallocate(part)
         summed = self._sp_all_reduce(tp_part)
         ttnn.deallocate(tp_part)
-        # 12: + the shared expert, placed at the live row
-        full = ttnn.add(summed, shared, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(summed)
-        ttnn.deallocate(shared)
+        # 12: + the shared expert (unless folded above), placed at the live row
+        if folded:
+            full = summed
+        else:
+            full = ttnn.add(summed, shared, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(summed)
+            ttnn.deallocate(shared)
         out = ttnn.matmul(put, full, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(full)
         return out

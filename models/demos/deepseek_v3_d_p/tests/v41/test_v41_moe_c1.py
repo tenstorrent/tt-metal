@@ -13,7 +13,10 @@ per-chip expert counts of every trial are read back so the run covers chips with
 experts. Then both paths under trace (``V41_C1_REPLAYS``, default 20): the per-layer device time.
 
 Run with ``V41_DECODE_ROUTING=1 V41_DECODE_TAIL=1 V41_DECODE_C1_MOE=1 TT_V41_EXPERT_DTYPE=bfp4`` (the served
-expert dtype)."""
+expert dtype); with the served catalog's ``V41_SHARED_IN_FFN=rs`` the 32-row path folds the
+shared expert's partial into its tail and the c1 path takes that partial from the tail's ``pending_shared``
+(``C1Moe.shared_fold`` reads ``pending``; ``returned`` with the MoE's own shared expert), and the test checks the
+tail holds nothing after either path."""
 
 import json
 import os
@@ -96,7 +99,8 @@ def test_v41_moe_c1(mesh_device, device_params):
     moe, c1 = decoder.moes[0], decoder.c1_moes[0]
     hidden = C.EMB_SIZE
     torch.manual_seed(7)
-    result = {"layer": layer, "trials": [], "mesh": [sp, tp]}
+    shared_in_ffn = os.environ.get("V41_SHARED_IN_FFN", "0")
+    result = {"layer": layer, "trials": [], "mesh": [sp, tp], "shared_in_ffn": shared_in_ffn}
     worst = {"max_abs": 0.0, "pcc": 1.0, "rel": 0.0}
     coverage = {}
     for trial in range(trials):
@@ -117,7 +121,11 @@ def test_v41_moe_c1(mesh_device, device_params):
         sel, put = C1Moe.onehots(rows["c1sel"], rows["c1put"], decoder.c1_table)
         c1.debug = {}
         ref = decoder._ffn(moe, tt_h)
+        assert moe.moe.reduce_module.pending_shared is None, "the 32-row path left a shared partial in the tail"
         out = c1(tt_h, sel, put)
+        assert moe.moe.reduce_module.pending_shared is None, "the c1 path left a shared partial in the tail"
+        assert c1.shared_fold == ("pending" if shared_in_ffn != "0" else "returned"), c1.shared_fold
+        result["shared_fold"] = c1.shared_fold
         if trial == trials - 1 and os.environ.get("V41_C1_PROFILE") == "1":
             # With device profiling enabled: one eager call of each path between signposts (the per-op kernel split)
             ttnn.synchronize_device(mesh_device)
