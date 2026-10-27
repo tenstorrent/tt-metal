@@ -78,11 +78,11 @@ _EXPONENTS = (
     -2.0,  # negative even integer
     0.5,  # positive non-integer
     -1.5,  # negative non-integer
-    32768.0,  # even integer above 32767
+    32768.0,
     -32768.0,
-    32769.0,  # odd integer above 32767
+    32769.0,
     -32769.0,
-    16777215.0,  # largest odd integer in float32
+    16777215.0,
     -16777215.0,
     SMALLEST_NORMAL,
     -SMALLEST_NORMAL,

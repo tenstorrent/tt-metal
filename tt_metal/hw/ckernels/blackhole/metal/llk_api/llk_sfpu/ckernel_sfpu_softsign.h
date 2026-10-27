@@ -10,7 +10,6 @@
 
 namespace ckernel::sfpu {
 
-// float32: |x| clamped at 2**26; x * 0 + 1 in the residual turns inf and NaN inputs into NaN.
 template <int ITERATIONS>
 inline void calculate_softsign_fp32() {
     constexpr uint32_t kZero = p_sfpu::LCONST_0, kOne = p_sfpu::LCONST_1, kClamp = 13;
@@ -49,7 +48,6 @@ inline void calculate_softsign_fp32() {
     }
 }
 
-// bfloat16 and approximate: (1 + |x|) * 2**-64 keeps SFPARECIP in range for every finite x; undone after the multiply.
 template <int ITERATIONS>
 inline void calculate_softsign_bf16() {
     constexpr uint32_t kZero = p_sfpu::LCONST_0, kTwo = 12, kScale = 13;
@@ -117,7 +115,7 @@ void init_softsign() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
     if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) {
-        sfpi::vConstFloatPrgm0 = 2.0f + 0x1.0p-10f;  // biased up so the bfloat16 store does not truncate below 1
+        sfpi::vConstFloatPrgm0 = 2.0f + 0x1.0p-10f;
     }
     sfpi::vConstFloatPrgm1 = (!APPROXIMATION_MODE && is_fp32_dest_acc_en) ? 0x1.0p26f : 0x1.0p-64f;
 }

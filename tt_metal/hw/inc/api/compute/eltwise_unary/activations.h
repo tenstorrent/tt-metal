@@ -64,10 +64,11 @@ ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sf
 *
 * Return value: None
 *
-* | Argument            | Description                                                                | Type     | Valid Range                                           | Required |
-* |---------------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
-* | idst                | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
-* | is_fp32_dest_acc_en | Template: whether DEST is in fp32 mode; defaults to DST_ACCUM_MODE         | bool     | true / false                                          | False    |
+* | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+* |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+* | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+*
+* is_fp32_dest_acc_en: template argument, defaults to DST_ACCUM_MODE.
 */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>

@@ -188,7 +188,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
  * - base = +/-0, pow < 0: Returns +/-inf for finite pow, preserving the base sign only for odd integer pow; -inf
  * returns +inf
  * - base = +/-0, pow = +/-0: Returns 1
- * - pow = +/-NaN: Returns NaN for every base
+ * - base = +/-0, pow = +/-NaN: Returns NaN
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits

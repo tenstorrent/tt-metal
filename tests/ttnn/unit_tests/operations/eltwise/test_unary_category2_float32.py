@@ -343,7 +343,6 @@ def test_softsign(device):
     assert near_max.any(), "expected the sweep to reach the near-bf16_max magnitudes"
     saturated = torch.sign(input_tensor[near_max]).to(result.dtype)
     if is_wormhole_b0():
-        # Wormhole lands within 1 ULP of ±1 here, as it does for 2**24 <= |x| < 2**126.
         assert_with_ulp(expected_result=saturated, actual_result=result[near_max], ulp_threshold=1)
     else:
         assert torch.equal(result[near_max], saturated), "softsign must saturate to exactly ±1 near bf16_max"

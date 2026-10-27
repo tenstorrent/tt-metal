@@ -187,7 +187,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
  * - base = +/-0, pow < 0: Returns +/-inf for finite pow, preserving the base sign only for odd integer pow; -inf
  * returns +inf
  * - base = +/-0, pow = +/-0: Returns 1
- * - pow = +/-NaN: Returns NaN for every base
+ * - base = +/-0, pow = +/-NaN: Returns NaN
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
@@ -300,8 +300,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 
     sfpi::vFloat abs_pow = sfpi::abs(sfpi::setsgn(pow, 1));
 
-    // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
-    // Check valid base range
     sfpi::vFloat pow_x = sfpi::min(sfpi::max(sfpi::vFloat(0.5f), abs_pow), 16777216.0f);
     sfpi::vInt pow_bits = sfpi::exman(pow_x, sfpi::MantissaMode::ImplicitOne);
     pow_bits = sfpi::shft(pow_bits, sfpi::exexp(pow_x) + 7, sfpi::ShiftMode::Logical);

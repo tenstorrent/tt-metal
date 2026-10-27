@@ -17,7 +17,6 @@ inline void calculate_softsign() {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat va = sfpi::setsgn(v, 0);
         sfpi::vFloat in = va + 1.0f;
-        // Inlined sfpu_reciprocal_iter; 2**(127 - in.Exp) goes on |v| (doubled) and 0.5 on y, so nothing underflows.
         sfpi::vFloat negative_x = sfpi::copyman(-1.0f, in);
         sfpi::vFloat y = sfpi::vConstFloatPrgm1 + sfpi::vConstFloatPrgm0 * negative_x;
         sfpi::vUInt scale_bits = ~sfpi::as<sfpi::vUInt>(in);
@@ -30,8 +29,6 @@ inline void calculate_softsign() {
             y = y + y * t;
         }
         sfpi::vFloat r = (va * scale) * (y * 0.5f);
-        // scale is negative (~ flips the sign bit) and 0 for inf / NaN; copysgn restores the sign of v.
-        // ADDR_MOD_2 here is ADDR_MOD_6 once the SFPU address-mode base is applied.
         sfpi::dst_reg[0].mode(ADDR_MOD_2) = sfpi::copysgn(r, v);
     }
 }
