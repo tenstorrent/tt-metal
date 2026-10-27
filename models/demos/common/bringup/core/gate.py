@@ -372,8 +372,11 @@ def outputs_in(results: Path, task: dict) -> list[Path]:
     out += sorted(results.glob(f"{tid}_*.json.gz"))  # F148: a profile's gzipped per-op rows
     if task.get("step") == "optests":
         out.append(results / "fork_calls.json")
-        if "fork_calls_scaled.json" in (task.get("gate") or {}).get("cmd", ""):  # F64: the scaled run's calls
-            out.append(results / "fork_calls_scaled.json")
+        # F64 / F201: every other capture file the gate writes (the scaled run's, a settings variant's)
+        import re
+
+        for name in sorted(set(re.findall(r"\b(fork_calls_[\w-]+\.json)", (task.get("gate") or {}).get("cmd", "")))):
+            out.append(results / name)
     return out
 
 
