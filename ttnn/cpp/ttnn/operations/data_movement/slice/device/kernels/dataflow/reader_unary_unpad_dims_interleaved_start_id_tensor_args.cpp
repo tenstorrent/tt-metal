@@ -103,6 +103,11 @@ void kernel_main() {
     // the host's starting position for this core (the per-core vararg block) and then mutated in
     // place, so it needs writable storage of its own; vararg values are read-only.
     Scratchpad<uint32_t> id_per_dim(scratch::id_per_dim);
+    // Keep every CPU access to the odometer inside a scoped_lock. On Quasar DM the scratchpad is reached
+    // through the DM caches: the lock drops any old lines on entry and writes the counters back on exit, so
+    // no dirty line outlives this program (a later program's flush or an eviction would otherwise write it
+    // over whatever buffer then sits at this address). No-op on WH/BH.
+    const auto id_per_dim_lock = id_per_dim.scoped_lock(0, num_dims);
     for (uint32_t j = 0; j < num_dims; ++j) {
         id_per_dim[j] = get_vararg(j);
     }
