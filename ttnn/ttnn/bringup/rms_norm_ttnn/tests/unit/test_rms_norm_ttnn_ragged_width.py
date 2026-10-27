@@ -230,15 +230,22 @@ def test_a_partial_last_tile_refuses_the_pad(device, W, layout, builder):
 # --------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("W", PRIME_W)
-@pytest.mark.parametrize("rows", [32, 3104], ids=["1row", "97row"])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "rm"])
-@pytest.mark.parametrize("mode", ["no_gamma", "gamma", "residual", "gamma_bias_residual"])
+# One wide row-count per width is enough (the pad geometry is per-core), so 97 rows at
+# W = 2848 is generated for gamma_bias_residual only.
+_PRIME_CASES = [
+    pytest.param(mode, layout, rows, W, id=f"{mode}-{lid}-{rid}-{W}")
+    for mode in ["no_gamma", "gamma", "residual", "gamma_bias_residual"]
+    for layout, lid in [(ttnn.TILE_LAYOUT, "tile"), (ttnn.ROW_MAJOR_LAYOUT, "rm")]
+    for rows, rid in [(32, "1row"), (3104, "97row")]
+    for W in PRIME_W
+    if not (rows == 3104 and W == 2848 and mode != "gamma_bias_residual")
+]
+
+
+@pytest.mark.parametrize("mode, layout, rows, W", _PRIME_CASES)
 def test_prime_width_is_correct_on_device(device, W, rows, layout, mode):
     """A pad tile that is not exactly zero inflates sum(t^2) by its own energy, which
     shows up as a uniform under-scale of the whole row -- so PCC is the right probe."""
-    if rows == 3104 and W == 2848 and mode != "gamma_bias_residual":
-        pytest.skip("one wide row-count per width is enough; the pad geometry is per-core")
     shape = (1, 1, rows, W)
     torch.manual_seed(0)
     t = torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)

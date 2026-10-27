@@ -244,3 +244,14 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
     - Needed by: deepseek_v41_flash_d_p O.1
     - Files: `tests/xing_cases.py`, `tests/cases.py` (engram mode -> op mhc_pre_xing_pack), `tests/reference.py`,
       `tests/test_mhc_pre_xing.py`.
+
+13. Tests: `tests/unit/test_mhc_pre_perf_inproc.py` reads device time from the real-time profiler (2026-10-27). It
+    read DEVICE KERNEL DURATION through `ttnn.ReadDeviceProfiler` and so skipped unless the run set
+    TT_METAL_DEVICE_PROFILER=1, i.e. in every suite run. It now measures each call with
+    `profile_realtime_program_merged` (on in every run), the same knob A/B over the same shapes, dtypes and env
+    selections, printed and never asserted. What it adds over `test_mhc_pre_perf.py` (the C++ op, default knobs, one
+    call, numbers only under `--profile`) and `test_mhc_pre_perf_sweep.py` (the same knob calls, numbers only under
+    `--profile`): the per-knob device ns in the ordinary run. Measured 2026-10-27, BH p150, bf16 X / fp32 W, default
+    knobs: 640x1792 43.9 us, 640x7168 124.9 us, 1280x4096 139.6 us (README: 43.0 / 123.8 / 137.8). No op change.
+    - Needed by: fork test hygiene (owner, 2026-10-27: no skip that hides a dead test)
+    - Files: `tests/unit/test_mhc_pre_perf_inproc.py`

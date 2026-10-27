@@ -403,8 +403,16 @@ def test_compact_combine_with_operands(device, shape, shard, memory_layout, mode
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("operand_dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("operand_layout", LAYOUTS)
+# bfloat8_b has no ROW_MAJOR form (a block-compressed format), so that pair is not generated.
+_MIXED_FORMATS = [
+    pytest.param(layout, dtype, id=f"{layout}-{dtype}")
+    for layout in LAYOUTS
+    for dtype in (ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b)
+    if not (dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT)
+]
+
+
+@pytest.mark.parametrize("operand_layout, operand_dtype", _MIXED_FORMATS)
 def test_mixed_per_channel_format(device, operand_dtype, operand_layout):
     """bf16 activations with an fp32 / bf16 / bf8b weight AND bias.
 
@@ -412,8 +420,6 @@ def test_mixed_per_channel_format(device, operand_dtype, operand_layout):
     declares its own data format and the chain's reconfig fold must not elide the
     second switch.
     """
-    if operand_dtype == ttnn.bfloat8_b and operand_layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("a block-compressed format has no row-major physical form")
     _run(
         device,
         (1, 1, 64, 128),
@@ -723,9 +729,6 @@ def test_refuses_sharded_config_against_an_interleaved_input(sharded_input, inte
         rms_norm_ttnn(interleaved_input, program_config=sharded_config_for(sharded_input))
 
 
-@pytest.mark.skip(
-    reason="C++ host path does not refuse memory_config != input placement under inplace (the Python path does); fix in rms_norm_ttnn.cpp validate() pending, see CHANGELOG"
-)
 def test_refuses_memory_config_disagreeing_under_inplace(sharded_input, expect_error):
     """Under `inplace` the output IS the input, so a placement the op would have
     to discard is refused rather than accepted."""

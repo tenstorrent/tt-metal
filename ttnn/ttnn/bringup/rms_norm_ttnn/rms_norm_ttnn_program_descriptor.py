@@ -2602,6 +2602,16 @@ def _same_placement(memory_config, tensor) -> bool:
     return tuple(a.shape) == tuple(b.shape) and a.grid == b.grid and a.orientation == b.orientation
 
 
+def _inplace_placement_agrees(memory_config, tensor) -> bool:
+    tc = tensor.memory_config()
+    if memory_config.memory_layout != tc.memory_layout or memory_config.buffer_type != tc.buffer_type:
+        return False
+    a, b = memory_config.shard_spec, tc.shard_spec
+    if a is None:
+        return True
+    return b is not None and tuple(a.shape) == tuple(b.shape) and a.grid == b.grid and a.orientation == b.orientation
+
+
 def resolve_program_config(input_tensor, *, program_config, memory_config, dest_limit: int) -> ResolvedProgramConfig:
     """Validate a caller's `program_config` and reduce it to what it decides.
 
@@ -2700,11 +2710,15 @@ def resolve_program_config(input_tensor, *, program_config, memory_config, dest_
         )
 
     inplace = bool(getattr(program_config, "inplace", False))
-    # X-03, corrected 2026-09-08: under `inplace` the output IS the input, so a
-    # requested output placement describes an allocation that never happens.
-    # The entry asked to ADOPT that aliasing and STATE it -- not to refuse the
-    # call.  Refusing narrowed the op against the target for every caller that
-    # passes both (120 reference cases).  So: accept, ignore, and say so here.
+    # X-03: under `inplace` the output IS the input.  A memory_config naming the input's
+    # own placement is accepted (a sharded one may omit the shard spec); any other would be
+    # dropped, so it is refused (as in rms_norm_ttnn.cpp check_inplace_placement).
+    if inplace and memory_config is not None and not _inplace_placement_agrees(memory_config, input_tensor):
+        raise ValueError(
+            f"rms_norm_ttnn: program_config.inplace=True writes the output into the input, so memory_config must "
+            f"name the input's placement (shard spec included); got {memory_config!r} for an input placed "
+            f"{input_tensor.memory_config()!r}. Drop memory_config or unset inplace"
+        )
     return ResolvedProgramConfig(subblock_w=subblock_w, inplace=inplace)
 
 
