@@ -5,6 +5,7 @@
 // expert e (routing weights are already in x_e; m = 32-row token tile), then packs the CPC * Mt output tiles.
 
 #include <cstdint>
+#include "api/compute/reg_api.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/cb_api.h"

@@ -5,6 +5,8 @@
 // the row; column 0 of the packed tile holds row r's max, exact for bf16) -> cb_max, one tile per input tile.
 
 #include <cstdint>
+#include "api/compute/pack.h"
+#include "api/compute/reg_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/reduce.h"

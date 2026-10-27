@@ -5,6 +5,8 @@
 // out_j = attn_j * gsp (column broadcast) for the 4 head_dim tiles.
 
 #include <cstdint>
+#include "api/compute/pack.h"
+#include "api/compute/reg_api.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/cb_api.h"

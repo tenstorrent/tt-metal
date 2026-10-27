@@ -5,6 +5,8 @@
 // no active expert -> a zero tile (0 * first-free tile is avoided: DST 0 is zeroed by a self-subtract of a copy).
 
 #include <cstdint>
+#include "api/compute/pack.h"
+#include "api/compute/reg_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"

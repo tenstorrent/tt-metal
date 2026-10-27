@@ -6,6 +6,7 @@
 // DST in fp32: exact sums), applies the sigmoid and packs the scores to cb_out.
 
 #include <cstdint>
+#include "api/compute/reg_api.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/cb_api.h"

@@ -5,6 +5,8 @@
 // then the residual) in fp32 DEST; packed bf16. The add is elementwise, so the blocks' row-major order survives.
 
 #include <cstdint>
+#include "api/compute/pack.h"
+#include "api/compute/reg_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"

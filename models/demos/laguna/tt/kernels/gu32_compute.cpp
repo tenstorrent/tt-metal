@@ -10,6 +10,7 @@
 // the CB's end (into cb 7, the writer's routing rows).
 
 #include <cstdint>
+#include "api/compute/reg_api.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/cb_api.h"

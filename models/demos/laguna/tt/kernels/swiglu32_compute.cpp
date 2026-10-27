@@ -5,6 +5,8 @@
 // DST 0 = gate, then DST 0 = silu(DST 0) * DST 1, packed as one bf16 tile.
 
 #include <cstdint>
+#include "api/compute/pack.h"
+#include "api/compute/reg_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/bcast.h"

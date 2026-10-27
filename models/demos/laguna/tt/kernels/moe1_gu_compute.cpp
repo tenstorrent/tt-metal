@@ -5,6 +5,8 @@
 // up = x @ Wu[:, nt] into DST 1, then DST 0 = silu(gate) * up * routing weight, packed as one bf16 tile.
 
 #include <cstdint>
+#include "api/compute/pack.h"
+#include "api/compute/reg_api.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/cb_api.h"

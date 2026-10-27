@@ -7,6 +7,8 @@
 // out_j = y_j * cos_j -/+ y_partner * sin_j (partner = j +/- rd_tiles/2, minus for the first half); the rest pass.
 
 #include <cstdint>
+#include "api/compute/pack.h"
+#include "api/compute/reg_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"
