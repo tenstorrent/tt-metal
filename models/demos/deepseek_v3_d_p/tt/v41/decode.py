@@ -123,7 +123,8 @@ class TtV41Decoder:
         if routed_expert_weights_dtype is None:
             routed_expert_weights_dtype = model.routed_expert_weights_dtype  # the decode MoEs share its experts
         self.sp, self.tp = tuple(self.mesh_device.shape)
-        assert model.dspark is None, "DSpark (speculative decoding) is out of scope for decode"
+        # a model with DSpark seeding decodes as any other: the drafter (tt/v41/dspark_drafter.py) is a separate
+        # module with its own ring writes; the step itself reads nothing of it
         pre = torch.zeros(1, 1, ROWS, self.config.HC_MULT)
         pre[..., 0] = 1.0
         self.pre_mix = self._replicated(pre, ttnn.float32)
