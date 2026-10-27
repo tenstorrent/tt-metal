@@ -23,7 +23,7 @@ namespace {
 using tt::constants::TILE_HEIGHT;
 using tt::constants::TILE_WIDTH;
 
-// A block-sharded output cannot be produced from an unfused batched A: the output CB is backed by the shard buffer,
+// A sharded output cannot be produced from an unfused batched A: the output CB is backed by the shard buffer,
 // which holds a single batch's worth of tiles, and the output shard grid is sized from the fused M. Batch can only
 // be fused when input B is unbatched.
 void validate_block_sharded_output_batch_fusion(
@@ -32,7 +32,7 @@ void validate_block_sharded_output_batch_fusion(
     const uint32_t batch_b = ttnn::get_batch_size(b_shape_padded);
     TT_FATAL(
         fuse_batch || batch_a == 1,
-        "Block-sharded output is incompatible with batch > 1 (batch_A={}, batch_B={}) when batch fusion is "
+        "Sharded output is incompatible with batch > 1 (batch_A={}, batch_B={}) when batch fusion is "
         "disabled. Batch can only be fused when input B has batch size 1; use an interleaved output or "
         "fuse_batch=True.",
         batch_a,
@@ -1439,6 +1439,13 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
                         "Error: Operand B must be interleaved.");
+                }
+                // With a sharded output, the in0 and in1 multicast programs (mcast_in0 true or false) use the core's
+                // output shard as the output buffer, which holds the output of one batch. gather_in0 uses different
+                // kernels, which this check does not cover.
+                if (!program_config.gather_in0 && attributes.output_mem_config.is_sharded()) {
+                    validate_block_sharded_output_batch_fusion(
+                        program_config.fuse_batch, a_shape_padded, b_shape_padded);
                 }
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,

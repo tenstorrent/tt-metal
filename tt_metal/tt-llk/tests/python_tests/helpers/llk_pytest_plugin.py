@@ -242,29 +242,23 @@ def pytest_addoption(parser):
         "--ulp-measure",
         default=None,
         metavar="PATH",
-        help="Append a JSON row (test, variant, measured max ULP and lane counts) to "
-        "PATH for each comparison made right after exactly one accuracy_contract "
-        "lookup in the same test, on a variant that ran with the dest_acc it names. "
-        "The exhaustive sweep records every cell it measures, gated or not and under "
-        "--ulp-emit too, plus a non-finite lane count for a tolerance cell it cannot "
-        "measure. PATH is created and truncated at session start; one that cannot be "
-        "is a usage error. Reporting only, except that the sweep's records are "
-        "required: a sweep cell whose record is not written fails.",
+        help="Append one JSON record per recorded comparison to PATH (created and "
+        "truncated at session start; one that cannot be is a usage error). Reporting "
+        "only, except that the sweep's records are required: a sweep cell whose record "
+        "is not written fails.",
     )
     parser.addoption(
         "--ulp-emit",
         action="store_true",
-        help="Re-measure rather than gate: the exhaustive unary sweep records what it "
-        "measures and folds it back into helpers/sfpu_accuracy_budget.yaml at the end "
-        "of the session, replacing the rows of each (op, in, out) it measured and "
-        "keeping hand-maintained rows. Writes the table; use it deliberately.",
+        help="Re-measure rather than gate: the exhaustive unary sweep writes what it "
+        "measured into helpers/sfpu_accuracy_budget.yaml at the end of the session. "
+        "Writes the table; use it deliberately.",
     )
     parser.addoption(
         "--ulp-report",
         action="store_true",
-        help="Log the measured ULP distance for every comparison on a ULP-capable "
-        "format, on a pass as well as a failure, and including ops that carry no step "
-        "budget yet. Reporting only: it cannot change a verdict.",
+        help="Log the measured ULP distance of every comparison on a ULP-capable "
+        "format, pass or fail, enrolled or not. Reporting only.",
     )
 
     parser.addoption(
@@ -556,7 +550,7 @@ def pytest_configure(config):
             utils_module.prepare_ulp_measure_file()
         except OSError as exc:
             raise pytest.UsageError(
-                f"--ulp-measure: cannot prepare {config.getoption('--ulp-measure')}: {exc}"
+                f"--ulp-measure: cannot prepare the file: {exc}"
             ) from exc
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
@@ -1196,42 +1190,30 @@ def pytest_testnodedown(node, error):
 
 
 def _finish_ulp_emit(session):
-    """Under ``--ulp-emit``, write the whole session's measurements into the table once,
-    after every cell of an op has been seen. A refusal fails the session."""
+    """Under ``--ulp-emit``, write the session's measurements into the table once; a
+    refusal fails a clean session and leaves an interrupted one's status alone."""
     from . import ulp_sweep
+    from .ulp_table import TABLE_PATH
 
     if not ulp_sweep.EMIT:
         return
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE or session.config.option.collectonly:
-        # The producer only compiles -- TestConfig.run() skips before the device -- so it
-        # can never measure. It collects the same op set with or without --ulp-emit,
-        # and failing it would fail the documented emit workflow.
-        # `--collect-only --ulp-emit` previews that set, and runs nothing either.
+        # The producer only compiles, and --collect-only runs nothing: neither measures.
         _ulp_emit_line(
             session, "--ulp-emit: nothing runs in this session; nothing to write"
         )
         return
     try:
         if not ulp_sweep.MEASURED:
-            # Silence here read as a successful rewrite: a `-k` that matched nothing, a
-            # mode that deselects the sweep.
             raise RuntimeError("nothing was measured, so the table was not touched")
-        # pytest runs this hook after a Ctrl-C as well, with INTERRUPTED already in
-        # `exitstatus`; the failure count and the grid check cannot tell that apart from
-        # a run that ended on its own. Passed through as pytest set it, enum or int.
-        message = ulp_sweep.finish_emit(
-            get_chip_architecture(),
-            session.testsfailed,
-            exitstatus=session.exitstatus,
-        ).summary()
+        # The hook also runs after a Ctrl-C, with INTERRUPTED already in `exitstatus`.
+        clean = session.testsfailed == 0 and session.exitstatus == pytest.ExitCode.OK
+        written = ulp_sweep.finish_emit(get_chip_architecture(), clean, TABLE_PATH)
+        message = f"--ulp-emit: rewrote {len(written)} op(s) in {TABLE_PATH.name}"
     except (RuntimeError, ValueError) as exc:
-        # A ValueError is a `TableError`: the table on disk does not load, or the
-        # rewrite would not (`write_table_file` reads its dump back before writing).
-        # Either way nothing was written.
+        # A ValueError is a TableError: the table on disk does not load, or the rewrite
+        # would not (`write_table_file` reads its dump back first); nothing was written.
         message = f"--ulp-emit: {exc}"
-        # Escalate only a clean session: a refusal *because* the run was interrupted, hit
-        # an internal error or called pytest.exit(returncode=N) keeps that status, which a
-        # calling script would otherwise read as an ordinary test failure.
         if session.exitstatus == pytest.ExitCode.OK:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
     _ulp_emit_line(session, message)

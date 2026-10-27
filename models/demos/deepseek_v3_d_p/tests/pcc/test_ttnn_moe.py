@@ -166,7 +166,7 @@ def run_model(
     the clamp; it is part of the weight-cache key. ``score_func`` is the gate's router affinity,
     None keeping the gate config's default. ``skip_upstream_reference`` drops the vendored-model
     cross-check. ``overlap_routed_expert_with_combine`` goes straight to TtMoe: off unless the caller passes
-    routed_expert_combine_overlap_arg for a model that opts in (Kimi K2.7, GLM 5.3).
+    routed_expert_combine_overlap_arg for a model that opts in (Kimi K2.7, GLM 5.3, Mistral Small 4).
 
     A HASH_HOST / HASH_DEVICE ``gate_fallback_mode`` selects hash routing: the tid2eid table and
     per-token ids are built here and handed to both sides, and the torch reference takes the

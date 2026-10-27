@@ -432,7 +432,7 @@ def _assert_attention_readiness(mesh_device, attention, cache, cache_dtype):
             for neighbor_sp in ((sp_coord - 1) % SP, (sp_coord + 1) % SP):
                 dst_coord = ttnn.MeshCoordinate([neighbor_sp, tp_coord])
                 dst_node = mesh_device.get_fabric_node_id(dst_coord)
-                links = tuple(ttnn.get_forwarding_link_indices(src_node, dst_node))
+                links = tuple(ttnn.get_forwarding_link_indices(mesh_device, src_node, dst_node))
                 assert 0 in links
                 edges.append((src_coord, dst_coord, links))
     assert len(edges) == 64

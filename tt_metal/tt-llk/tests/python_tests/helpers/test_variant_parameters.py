@@ -17,6 +17,7 @@ from .llk_params import (
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     BroadcastType,
+    CustomMmDestLayout,
     DataCopyType,
     DestSync,
     DstRoundingMode,
@@ -33,7 +34,7 @@ from .llk_params import (
     ReducePool,
     SdpaFwOp,
     SdpaOp,
-    SfpuSrcsImpl,
+    SfpuImpl,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -536,11 +537,15 @@ class APPROX_MODE(TemplateParameter):
 
 
 @dataclass
-class SFPU_SRCS_IMPL(TemplateParameter):
-    sfpu_srcs_impl: SfpuSrcsImpl
+class SFPU_IMPL(TemplateParameter):
+    """Emitted as a bool: ckernel::sfpu::SfpuImpl exists only in the Quasar tree, while this
+    header is generated for every architecture. The kernel maps it back to SfpuImpl."""
+
+    sfpu_impl: SfpuImpl
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool SFPU_SRCS_LOADMACRO = {self.sfpu_srcs_impl.cpp_enum_value};"
+        load_macro = str(self.sfpu_impl == SfpuImpl.LoadMacro).lower()
+        return f"constexpr bool SFPU_IMPL_LOADMACRO = {load_macro};"
 
 
 @dataclass
@@ -590,6 +595,9 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
                                the run-0 init (W-stride -> 32 rows) and the uninit
                                (W-stride -> 64 rows). The two must agree: a block packed
                                dense and torn down non-dense is not a supported call.
+    ``UNINIT_COMPACT_PACKING`` the ``compact_packing`` template argument, likewise applied
+                               to both: Z-stride -> 8 rows and W-stride -> 16 rows, then
+                               back to 16 and 64. Excludes ``dense_packing``.
     ``UNINIT_RESTORE_MOP``     the ``restore_tile_pack_mop`` template argument, i.e.
                                whether the uninit reinstalls the Default tile-pack MOP.
     ``UNINIT_SKIP``            negative control -- drop the uninit entirely. Not a
@@ -605,6 +613,7 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
     """
 
     dense_packing: bool = False
+    compact_packing: bool = False
     restore_mop: bool = False
     skip: bool = False
     block_mop_num_faces: int = 2
@@ -613,10 +622,24 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
         return "\n".join(
             [
                 f"constexpr bool UNINIT_DENSE_PACKING = {str(self.dense_packing).lower()};",
+                f"constexpr bool UNINIT_COMPACT_PACKING = {str(self.compact_packing).lower()};",
                 f"constexpr bool UNINIT_RESTORE_MOP = {str(self.restore_mop).lower()};",
                 f"constexpr bool UNINIT_SKIP = {str(self.skip).lower()};",
                 f"constexpr std::uint32_t BLOCK_MOP_NUM_FACES = {self.block_mop_num_faces}u;",
             ]
+        )
+
+
+@dataclass
+class CUSTOM_MM_LAYOUT(TemplateParameter):
+    """``CUSTOM_MM_LAYOUT``: the ckernel::CustomMmDestLayout a custom_mm test kernel runs, as its underlying value."""
+
+    dest_layout: CustomMmDestLayout = CustomMmDestLayout.Dense
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint8_t CUSTOM_MM_LAYOUT = {self.dest_layout.value}u; "
+            f"// CustomMmDestLayout::{self.dest_layout.name}"
         )
 
 
@@ -2242,7 +2265,7 @@ class CUSTOM_MM_REUSE_CFG(TemplateParameter):
     """Compile-time chain geometry for the custom_mm_reuse_dest_srcb test.
 
     The reuse LLK is the second matmul of a fused chain: its in0 operand is moved
-    out of DEST (where a preceding custom_mm<dense_packing> left its output) into
+    out of DEST (where a preceding Dense-layout custom_mm left its output) into
     SrcB via MOVD2B; only the weights are unpacked into SrcA. The C++ driver runs
     the whole chain, so these four constants size both the producer custom_mm and
     the reuse consumer:

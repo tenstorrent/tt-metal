@@ -254,6 +254,15 @@ private:
     // Non-blocking write. Returns false immediately if the FIFO can't fit `num_pages`
     // without spinning. Accessible only via tt::tt_metal::experimental::detail::try_write.
     bool try_write_impl(void* data, uint32_t num_pages);
+    // Writes as many of the `num_pages` pages at `pages` (one pointer per page, each get_page_size() bytes)
+    // as the FIFO has room for, in order, without store fences or a receiver notification, and returns how
+    // many it wrote. Only the pages it writes are read. They are counted as sent and reach the receiver only
+    // through publish_staged. Accessible only via tt::tt_metal::experimental::detail::try_stage /
+    // publish_staged.
+    uint32_t try_stage_impl(const uint8_t* const* pages, uint32_t num_pages);
+    // Publishes bytes_sent to the receiver without a store fence after it. Accessible only via
+    // tt::tt_metal::experimental::detail::publish_staged.
+    void notify_receiver_unfenced();
 
     friend struct tt::tt_metal::experimental::detail::H2DSocketTryWriteAccess;
     friend struct tt::tt_metal::experimental::detail::H2DSocketDramRecvAccess;

@@ -524,13 +524,11 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
-class SfpuSrcsImpl(Enum):
-    LoadMacro = True
-    Sfpi = False
+class SfpuImpl(Enum):
+    """Which implementation runs an SFPU op (ckernel::sfpu::SfpuImpl); never changes the math."""
 
-    @property
-    def cpp_enum_value(self):
-        return str(self.value).lower()
+    Sfpi = "Sfpi"
+    LoadMacro = "LoadMacro"
 
 
 class DstRoundingMode(Enum):
@@ -572,6 +570,30 @@ class DestSync(Enum):
     @property
     def cpp_enum_value(self):
         return f"DstSync::{self.value}"
+
+
+class CustomMmDestLayout(Enum):
+    """Where custom_mm puts its output tiles in DEST; the values of ckernel::CustomMmDestLayout."""
+
+    Default = 0
+    DefaultSplitAcc = 1
+    Dense = 2
+    DenseSplitAcc = 3
+    Compact = 4
+
+    @property
+    def split_acc(self):
+        return self in (
+            CustomMmDestLayout.DefaultSplitAcc,
+            CustomMmDestLayout.DenseSplitAcc,
+        )
+
+    @property
+    def tile_rows(self):
+        """DEST rows from one output tile to the next, as custom_mm_tile_rows."""
+        if self in (CustomMmDestLayout.Dense, CustomMmDestLayout.DenseSplitAcc):
+            return 32
+        return 16 if self == CustomMmDestLayout.Compact else 64
 
 
 class NarrowTile(Enum):
@@ -895,6 +917,7 @@ class TopKXLSortMode(Enum):
     Dispatch = 0
     Generic = 1
     EarlyExitK64 = 2
+    Columns = 3
 
 
 class VectorMode(Enum):

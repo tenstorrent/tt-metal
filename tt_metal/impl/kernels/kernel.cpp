@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <ranges>
 #include <set>
 #include <string_view>
 #include <type_traits>
@@ -112,6 +113,15 @@ fs::path resolve_compiler_include_dir(const fs::path& given) {
             fs::current_path().string());
     }
     return resolved;
+}
+
+// The HAL decides which compute processors get RVV flags (Hal::get_supports_rvv). A kernel that opts
+// in where none do (e.g. Wormhole) would otherwise silently build scalar code.
+void validate_rvv_opt_in(const JitBuildSettings& kernel, bool any_processor_supports_rvv) {
+    TT_FATAL(
+        !kernel.get_rvv_enabled() || any_processor_supports_rvv,
+        "Kernel {} enables RVV code generation, but no compute processor on this architecture supports it",
+        kernel.get_full_kernel_name());
 }
 }  // namespace
 
@@ -667,8 +677,11 @@ std::string ComputeKernel::config_hash() const {
 
 uint64_t Kernel::compute_hash() const {
     tt::StableHasher hasher;
+    hasher.update(static_cast<uint64_t>(this->defines_.size()));
     for (const auto& [define, value] : this->defines_) {
+        hasher.update(static_cast<uint64_t>(define.size()));
         hasher.update(define);
+        hasher.update(static_cast<uint64_t>(value.size()));
         hasher.update(value);
     }
 
@@ -733,7 +746,8 @@ uint64_t Kernel::compute_hash() const {
     // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
     // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time
     // inputs (size_bytes is baked into the generated header, so it MUST be in the cache key).
-    // allocated_address is a per-execution allocation, not part of the binary, so it is omitted.
+    // Details regarding the allocation (allocated_address and shared_allocation_identifier) is omitted,
+    // as it does not affect the generated build artifact.
     hasher.update(static_cast<uint64_t>(this->scratchpad_binding_handles_.size()));
     for (const auto& handle : this->scratchpad_binding_handles_) {
         hasher.update(handle.accessor_name);
@@ -765,10 +779,12 @@ uint64_t Kernel::compute_hash() const {
     // Otherwise, RTAs ["a", "b"] could hash the same as ["ab"].
     hasher.update(static_cast<uint64_t>(this->runtime_arg_names_.size()));
     for (const auto& name : this->runtime_arg_names_) {
+        hasher.update(static_cast<uint64_t>(name.size()));
         hasher.update(name);
     }
     hasher.update(static_cast<uint64_t>(this->common_runtime_arg_names_.size()));
     for (const auto& name : this->common_runtime_arg_names_) {
+        hasher.update(static_cast<uint64_t>(name.size()));
         hasher.update(name);
     }
     ////////////////////////////////////////////////////////////
@@ -820,6 +836,21 @@ uint64_t Kernel::compute_hash() const {
     return hasher.digest();
 }
 
+std::size_t Kernel::logical_runtime_arg_count(const CoreCoord& logical_core) const {
+    TT_FATAL(
+        logical_core.x < this->core_to_runtime_args_.size() &&
+            logical_core.y < this->core_to_runtime_args_[logical_core.x].size(),
+        "Cannot get runtime args for kernel {} that is not placed on core {}",
+        this->name(),
+        logical_core.str());
+    const auto& stored = this->core_to_runtime_args_[logical_core.x][logical_core.y];
+    // Absent storage and a watcher count word with no user args are both a logical zero.
+    if (stored.size() <= this->watcher_count_word_offset_) {
+        return 0;
+    }
+    return stored.size() - this->watcher_count_word_offset_;
+}
+
 std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord& logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     TT_FATAL(
@@ -847,6 +878,13 @@ std::vector<std::vector<std::vector<uint32_t>>>& Kernel::runtime_args() { return
 std::vector<std::vector<RuntimeArgsData>>& Kernel::runtime_args_data() { return this->core_to_runtime_args_data_; }
 
 std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runtime_args_; }
+
+std::size_t Kernel::logical_common_runtime_arg_count() const {
+    if (this->common_runtime_args_.size() <= this->watcher_count_word_offset_) {
+        return 0;
+    }
+    return this->common_runtime_args_.size() - this->watcher_count_word_offset_;
+}
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
@@ -1128,12 +1166,16 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env,
         *this,
         this->kernel_src_);
-    uint32_t tensix_core_type = MetalContext::instance(this->get_context_id())
-                                    .hal()
-                                    .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const auto& hal = MetalContext::instance(this->get_context_id()).hal();
+    const auto core_type = this->get_kernel_programmable_core_type();
+    uint32_t tensix_core_type = hal.get_programmable_core_type_index(core_type);
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     auto build_states = BuildEnvManager::get_instance(extract_context_id(device))
                             .get_kernel_build_states(device->build_id(), tensix_core_type, compute_class_idx);
+    validate_rvv_opt_in(
+        *this, std::ranges::any_of(std::views::iota(0u, static_cast<uint32_t>(build_states.size())), [&](uint32_t id) {
+            return hal.get_supports_rvv(core_type, HalProcessorClassType::COMPUTE, id);
+        }));
     jit_build_subset(build_states, this);
 }
 
@@ -1645,17 +1687,24 @@ void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) c
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env,
         *this,
         this->kernel_src_);
-    const uint32_t tensix_core_type = MetalContext::instance(this->get_context_id())
-                                          .hal()
-                                          .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const auto& hal = MetalContext::instance(this->get_context_id()).hal();
+    const auto core_type = this->get_kernel_programmable_core_type();
+    const uint32_t tensix_core_type = hal.get_programmable_core_type_index(core_type);
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
 
     // One compile/link per TRISC slot (UNPACK/MATH/PACK/ISOLATE_SFPU), shared across all NEOs using that slot.
+    std::vector<const JitBuildState*> build_states;
+    build_states.reserve(this->trisc_binary_groups_.size());
     for (const auto& group : this->trisc_binary_groups_) {
         const int processor_id = static_cast<int>(enchantum::to_underlying(group[0]));
-        const JitBuildState& build_state = BuildEnvManager::get_instance(extract_context_id(device)).get_kernel_build_state(
-            device->build_id(), tensix_core_type, compute_class_idx, processor_id);
-        jit_build(build_state, this);
+        build_states.push_back(&BuildEnvManager::get_instance(extract_context_id(device))
+                                    .get_kernel_build_state(device->build_id(), tensix_core_type, compute_class_idx, processor_id));
+    }
+    validate_rvv_opt_in(*this, std::ranges::any_of(this->trisc_binary_groups_, [&](const auto& group) {
+        return hal.get_supports_rvv(core_type, HalProcessorClassType::COMPUTE, enchantum::to_underlying(group[0]));
+    }));
+    for (const JitBuildState* build_state : build_states) {
+        jit_build(*build_state, this);
     }
 }
 
@@ -1739,7 +1788,7 @@ std::string QuasarComputeKernel::config_hash() const {
         unpack_mode_descriptor = fmt::format("{}", fmt::join(unpack_modes, "."));
     }
 
-    return fmt::format(
+    std::string hash = fmt::format(
         "{}_{}_{}_{}_{}_{}_{}",
         fmt::join(compute_processors_, "_"),
         enchantum::to_string(config_.math_fidelity),
@@ -1748,6 +1797,12 @@ std::string QuasarComputeKernel::config_hash() const {
         config_.dst_full_sync_en,
         config_.bfp8_pack_precise,
         unpack_mode_descriptor);
+    // Appended only when opted in, so hashes of kernels that don't use
+    // the RVV knob are unchanged.
+    if (config_.enable_trisc0_rvv) {
+        hash += "_rvv";
+    }
+    return hash;
 }
 
 uint8_t QuasarComputeKernel::expected_num_binaries() const {

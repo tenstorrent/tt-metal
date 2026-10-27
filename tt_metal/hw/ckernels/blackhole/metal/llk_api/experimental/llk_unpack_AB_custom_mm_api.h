@@ -14,7 +14,7 @@
  * in0 tile shape: [{1, 2, 4, 8}, 32]
  * in1 tile shape: [32, 32]
  * rt_dim: 1
- * ct_dim: any integer from 1 to 16
+ * ct_dim: any integer from 1 to 34 (DEST capacity also bounds it, see llk_math_custom_mm_api.h)
  * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
@@ -29,7 +29,7 @@
  * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>
  * @param operand0: CB of the activations, whose face_r_dim this reads. Its data goes to SrcB.
  * @param operand1: CB of the weights, whose unpack format selects the instruction tuning. Its data goes to SrcA.
- * @param ct_dim: Output width in tiles, 1 to 16.
+ * @param ct_dim: Output width in tiles, 1 to 34.
  * @note Call this before @ref llk_unpack_AB_custom_mm, and again after any other op has run, in particular one
  *       that writes SrcB.
  * @note On the math thread, pair with @ref llk_math_custom_mm_init.
@@ -57,7 +57,7 @@ inline void llk_unpack_AB_custom_mm_init(
  * @param tile_index_0: First activation tile, relative to operand0's read pointer.
  * @param tile_index_1: First weight tile, relative to operand1's read pointer.
  * @param kt_dim: Inner dimension in tiles, 1 to 256.
- * @param ct_dim: Output width in tiles, 1 to 16.
+ * @param ct_dim: Output width in tiles, 1 to 34.
  * @note Call @ref llk_unpack_AB_custom_mm_init first.
  * @note On the math thread, pair with @ref llk_math_custom_mm.
  */

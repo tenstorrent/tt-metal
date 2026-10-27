@@ -15,6 +15,7 @@ on:
           - gemma4-26b-a4b-qb2
           - gemma4-31b-qb2
           - qwen38-27b-qb2
+          - granite42-30b-qb2
           - qwen-image-2.1-p150
       sku:
         description: Hardware to test
