@@ -62,8 +62,8 @@ constexpr uint32_t v_tiles = Sk_chunk_t * vWt;            // V tiles of one step
 
 static_assert(rows % qk_block_h == 0U && Sk_chunk_t % qk_block_w == 0U, "QK^T block must tile the item rows");
 
-// Per-row state passes (max, alpha, sums, finalize) batch up to kRowsPerPass rows into one DST pass.
-constexpr uint32_t kRowsPerPass = 4U;
+// Per-row state passes (max, alpha, sums, finalize) batch up to a DST's worth of rows into one pass.
+constexpr uint32_t kRowsPerPass = sm_block_size;
 constexpr uint32_t rows_in_pass(uint32_t row0, uint32_t per_pass) {
     return (rows - row0 < per_pass) ? (rows - row0) : per_pass;
 }
