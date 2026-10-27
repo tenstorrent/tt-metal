@@ -278,7 +278,6 @@ void kernel_main() {
     auto w_moves = [&](uint32_t step) { return !resident_w || reloads(step); };
     // DRAM reads of the parts this core sends, into window `dst`
     auto issue_a = [&](uint32_t step, uint32_t dst) {
-#ifndef MRS_SKIP_DRAM  // perf ablation only
         DeviceZoneScopedN("RD_DRAM");
         const uint32_t wave = wave_of(step);
         const uint32_t row_off = wave & 0xFF;
@@ -305,10 +304,8 @@ void kernel_main() {
                 }
             }
         }
-#endif
     };
     auto issue_w = [&](uint32_t step, uint32_t dst) {
-#ifndef MRS_SKIP_DRAM  // perf ablation only
         DeviceZoneScopedN("RD_DRAM");
         const uint32_t wave = wave_of(step);
         const uint32_t col_off = (wave >> 8) & 0xFF;
@@ -334,7 +331,6 @@ void kernel_main() {
                 }
             }
         }
-#endif
     };
 
     // load_operand_block, software-pipelined over the flat (entry, K-block) step sequence. A sender keeps up to
@@ -494,7 +490,6 @@ void kernel_main() {
             const uint32_t w_dst = w_base + w_slot * w_win_bytes;
             // CallerManaged: send() returns once the multicast is issued; the source slot is protected by the flush at
             // the start of the next step (no read targets it before then).
-#ifndef MRS_SKIP_MCAST  // perf ablation only
             if (a_moves(s)) {
                 if (a_tx) {
                     a_tx->template send<SourceL1Guard::CallerManaged>(
@@ -529,7 +524,6 @@ void kernel_main() {
                     }
                 }
             }
-#endif
         }
         cb_push_back(cb_act_k_window, a_window_tiles);
         cb_push_back(cb_weight_k_window, w_window_tiles);

@@ -287,14 +287,12 @@ void kernel_main() {
                         }));
                         uint32_t in0_index = sr * sb_h * kb;
                         uint32_t in1_index = sc * sb_w;
-#ifndef SKIP_COMPUTE  // perf ablation (define SKIP_COMPUTE): stub the math, keep every CB wait / pop / pack
                         for (uint32_t kk = 0; kk < kb; ++kk) {
                             ckernel::matmul_block(
                                 cb_act_k_window, cb_weight_k_window, in0_index, in1_index, 0, false, sb_w, sb_h, kb);
                             ++in0_index;
                             in1_index += win_n;
                         }
-#endif
                         if (last_sb) {  // frees each window as soon as it is consumed (fifo_rd_ptr is exact here)
                             act_buf.pop_front(a_win);
                             weight_buf.pop_front(w_win);
