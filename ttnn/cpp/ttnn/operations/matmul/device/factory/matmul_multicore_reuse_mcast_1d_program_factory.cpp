@@ -2205,6 +2205,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
+// ttnn/cpp/ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_gather_in0.cpp is the ProgramDescriptor
+// form of this builder (llama_reduce_scatter_matmul). A fix here (CB indices, formats, work split) belongs there too.
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0_program_and_create_override_variables(
     tt_metal::Program& program,
     const ttnn::Tensor& a,

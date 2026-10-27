@@ -25,13 +25,10 @@ struct AffineExclusiveScanOperation {
 };
 
 Tensor affine_exclusive_scan(
-    const Tensor&,
-    const Tensor&,
-    const Tensor&,
+    const Tensor& summaries,
+    const Tensor& initial_state,
     uint32_t,
-    const Tensor&,
-    const Tensor&,
-    const Tensor&,
+    const std::optional<Tensor>& tail_entry_states,
     const tt::tt_metal::MemoryConfig&,
     const DeviceComputeKernelConfig&,
     const Tensor&,
