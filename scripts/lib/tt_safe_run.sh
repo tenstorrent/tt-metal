@@ -287,7 +287,36 @@ _ttrun_warn_missing_ttexalens() {
 }
 
 ttrun_mark_dirty()  { [[ "$SIM_MODE" == false ]] && ttpool_mark_dirty; return 0; }
-ttrun_clear_dirty() { [[ "$SIM_MODE" == false ]] && ttpool_clear_dirty; return 0; }
+# ttrun_detect_eth_stuck <log>: active Ethernet cores that did not return to base firmware (upstream #60891). On
+# Blackhole, a process built with kernel asserts (--dev) leaves ERISC0 halted at teardown; Metal logs it and exits 0,
+# and every later fabric mesh open times out on those cores until a board reset. Sets ETH_STUCK for ttrun_clear_dirty.
+ETH_STUCK=false
+ttrun_detect_eth_stuck() {
+    ETH_STUCK=false
+    if [[ "$SIM_MODE" == false ]] && grep -aqE \
+        "Skipping RISC reset on device [0-9]+ during teardown|Timed out while waiting for active ethernet core" \
+        "$1" 2>/dev/null; then
+        ETH_STUCK=true
+    fi
+}
+
+# ttrun_clear_dirty: mark the held cards clean; after stuck Ethernet cores, reset them first (every exit path).
+ttrun_clear_dirty() {
+    [[ "$SIM_MODE" == false ]] || return 0
+    if [[ "$ETH_STUCK" == true ]]; then
+        _ttrun_say "Active Ethernet cores stuck after the run, resetting card(s) ${TTPOOL_CARDS}..."
+        if ttpool_reset; then
+            sleep 2
+            ttpool_clear_dirty
+            _ttrun_say "Device reset complete"
+        else
+            _ttrun_say "Device reset FAILED; leaving card(s) ${TTPOOL_CARDS} marked dirty"
+        fi
+        return 0
+    fi
+    ttpool_clear_dirty
+    return 0
+}
 
 # ---------------------------------------------------------------------------
 # Signal forwarding: if this script is killed (parent SIGTERM, watchdog, ...)
