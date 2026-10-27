@@ -2078,3 +2078,13 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   orchestrator.iommu_mismatch / iommu_problem read sysfs; `run|resume` prints `PREFLIGHT (warning): ...`; a task with
   step perf or a test_profile.py gate stops ("not started: ...") while the box is mixed. Stamp-skipped file.
   Selftest test_host_iommu.py.
+
+## F195: the device smoke decodes the CPU smoke's token budget (DeepSeek-V4.1 galaxy_8x4 L.smoke, 2026-10-27)
+- Symptom: L.smoke FAIL, device greedy 'We need answer one word. Capital of' (8 tokens, coherent), no 'Paris'; a
+  fix agent started for a model that was right. Cause: testing/smoke.py run_smoke decoded a fixed max_new=8, the CPU
+  smoke (intake/check_hf_sanity.py, R.1) 24; a thinking model reasons first (CPU: '...Capital of France =
+  Paris...</think>Paris'). Fix: one budget, check_hf_sanity.SMOKE_TOKENS (24) or spec `intake.smoke.max_new`, via
+  smoke_tokens(spec) in both; the device loop still stops as soon as the answer appears.
+- Selftest: selftest/test_smoke_budget.py (fails without the fix).
+- Not done: R.1 does not record the CPU's greedy token ids, so the device smoke cannot report its matching prefix
+  with the CPU (would tell a budget miss from a divergence); needs an R.1 CPU re-run (~13 min decode), next model.
