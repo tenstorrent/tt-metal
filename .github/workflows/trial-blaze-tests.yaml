@@ -13,6 +13,14 @@ on:
         required: false
         default: main
         type: string
+      selected-buckets:
+        description: >-
+          Comma-separated tt-blaze BH Loudbox bucket ids, e.g. "router,infra-cb".
+          Empty runs tt-blaze's full merge gate (ci.yaml). Set, it runs tt-blaze's
+          BH Loudbox Intermittent workflow with only these buckets.
+        required: false
+        default: ""
+        type: string
   schedule:
     - cron: "0 4,8,16,20 * * *"
 
@@ -62,3 +70,5 @@ jobs:
       dev-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       # Scheduled runs use blaze main with metal main.
       blaze-ref: ${{ inputs.blaze-ref || 'main' }}
+      # Scheduled runs have no inputs, so they always run the full merge gate.
+      selected-buckets: ${{ inputs.selected-buckets || '' }}
