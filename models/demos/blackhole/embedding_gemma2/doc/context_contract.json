@@ -23,5 +23,26 @@
     "reference_bytes": "HF fp32 CPU reference at 32768 peaked at 24.0 GB RSS (/usr/bin/time -v, Maximum resident set size 23982524 kB); 65536 would need about 4x, above the 61 GB host RAM, so no reference could validate it",
     "sdpa_note": "models/demos/gemma4/tt/attention/operations.py documents a 32768-token Q limit for the non-chunked SDPA path",
     "path_to_close_gap": "E5 optimize: native sliding_window_size for no-padding batches, attn_mask_block_map / bfp4 masks, or chunked Q with per-chunk masks; a CPU reference that streams attention (or stored goldens) for > 32768"
+  },
+  "vision": {
+    "component": "vision tower (Gemma4VisionModel) + embed_vision (RMSNorm no scale + Linear 768->512)",
+    "input_contract": "processor output: pixel_values [B, N, 768] pre-patchified, position_ids [B, N, 2] (x, y; -1 = padding)",
+    "hf_max_patches_per_image": 2520,
+    "hf_max_soft_tokens_per_image": 280,
+    "hf_max_patches_per_video_frame": 1260,
+    "hf_max_soft_tokens_per_video_frame": 140,
+    "hf_max_video_frames": 32,
+    "position_embedding_size": 10240,
+    "physical_patch_buckets": [1280, 2560],
+    "pooled_rows_per_bucket": {"1280": 160, "2560": 288},
+    "supported_max_patches_per_image": 2520,
+    "largest_tested_patches_per_image": 2520,
+    "largest_tested_evidence": "tests/pcc/vision/test_vision_model.py::test_soft_tokens (5 images at N=2520, 8 video frames at N=1260; soft-token PCC 0.9977-0.9997 vs HF fp32)",
+    "valid_patches_tested": [1080, 2304, 2340, 2376, 2430],
+    "largest_tested_batch": {"images_2560": 4, "video_frames_1280": 8},
+    "video_frames_tested": 8,
+    "reduction": "none: the processor fixes the patch count, and both buckets run at their maximum",
+    "untested": "videos longer than 8 frames (32-frame video = batch 32 x 1280, not probed); non-default max_soft_tokens (70/140 for images)",
+    "decode": "not applicable: one-pass bidirectional encoder per image / frame"
   }
 }

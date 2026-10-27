@@ -6,8 +6,9 @@ token embedding, projection-only per-layer inputs (PLE), 24 bidirectional encode
 norm, 512->768 projection, masked mean pooling and L2 normalization. The output matches
 `SentenceTransformer("google/embeddinggemma-2").encode(text)` (`[Transformer, Pooling(mean), Normalize]`).
 
-Status: stage E1 (functional text encoder). The vision and audio towers (`tt/vision`, `tt/audio`)
-and the multimodal merge come in later stages.
+Status: stage E1 (functional text encoder) and stage E2 (functional vision tower, see
+[Vision tower](#vision-tower)). The audio tower (`tt/audio`) and the multimodal merge come in
+later stages.
 
 ## Setup
 
@@ -82,13 +83,66 @@ pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -k traced -s
 pytest models/demos/blackhole/embedding_gemma2/demo/demo.py -s
 ```
 
+## Vision tower
+
+`tt/vision/` implements HF `Gemma4VisionModel` + `embed_vision`: patch embedder with the learned
+2D position table, 16 bidirectional encoder layers (q/k/v norms, 2D axial RoPE, key-padding mask,
+sandwich norms, gated gelu-tanh MLP), 3x3 position pooling x sqrt(768), and the scale-free RMSNorm
++ Linear 768->512 that maps soft tokens into the text hidden size. Images use 2520 patches (280
+soft tokens at most) and run in the 2560-row bucket. Video frames use 1260 patches (140 at most)
+and run in the 1280-row bucket.
+
+```python
+from transformers import AutoProcessor
+from models.demos.blackhole.embedding_gemma2.tt.vision.vision_encoder import VisionEncoder
+
+proc = AutoProcessor.from_pretrained("google/embeddinggemma-2")
+venc = VisionEncoder.from_pretrained(device, "google/embeddinggemma-2")
+px = proc.image_processor(images=[image], return_tensors="pt")
+soft = venc.encode(px["pixel_values"], px["image_position_ids"])        # list of [n_i, 512], eager
+
+venc.capture_all([(1, 2560), (8, 1280)])     # every (batch, bucket) the session will replay
+soft = venc.encode(px["pixel_values"], px["image_position_ids"], traced=True)
+vid = proc.video_processor(videos=[frames], return_tensors="pt")     # frames: [F, H, W, 3] uint8
+soft = venc.encode(vid["pixel_values_videos"], vid["video_position_ids"])  # one entry per frame
+```
+
+| path | content |
+|---|---|
+| `tt/vision/config.py` | `VisionConfig` from the HF vision config; patch buckets |
+| `tt/vision/weights.py` | vision / embed_vision tensor loading (`.linear.weight` folded) |
+| `tt/vision/patch_embedder.py` | `VisionPatchEmbedder` (input projection + 2D position table) |
+| `tt/vision/rope.py` | host `axial_cos_sin`; device `AxialRope` |
+| `tt/vision/attention.py` | `VisionAttention` (12 x 64 MHA, q/k/v norms, scaling 1.0) |
+| `tt/vision/encoder_layer.py` | `VisionEncoderLayer` (sandwich norms; E1 `MLP`) |
+| `tt/vision/pooler.py` | host `pooling_matrix`; device `VisionPooler` (one batched matmul) |
+| `tt/vision/embedder.py` | `VisionEmbedder` (`embed_vision`) |
+| `tt/vision/vision_model.py` | `VisionModel` (device-only forward) |
+| `tt/vision/vision_encoder.py` | `VisionEncoder` (host: inputs, upload, trace capture/replay, readback) |
+| `reference/hf_vision_reference.py` | HF fp32 vision reference + activation hooks |
+| `tests/pcc/vision/` | PCC per module, full stack, soft tokens, trace, determinism, audit, perf |
+| `doc/functional_vision/` | stage report, work log, tt-perf-report artifacts |
+
+```bash
+pytest models/demos/blackhole/embedding_gemma2/tests/pcc/vision -q                      # PCC + trace + audit + perf
+pytest models/demos/blackhole/embedding_gemma2/tests/pcc/vision/test_vision_perf.py -k traced -s
+```
+
+Measured on real images and an 8-frame video: per-module PCC >= 0.99995 and soft-token PCC
+0.9977-0.9997 per image vs the HF fp32 reference. HF's own bf16 run scores 0.9970-0.9998 against
+the same reference. Traced latency is 55.6 ms for 1 image and 294.5 ms for a batch of 4. Details
+and limitations are in `doc/functional_vision/README.md`.
+
 ## Out of scope (decoder-only items of the bring-up skill)
 
 This model is an encoder that returns one embedding per input. It has no paged KV cache, decode
 step, page table, current-position tensor or sampling, so none is built. Chunked prefill is not
-needed either: the whole sequence runs in one pass per bucket, up to 32768 tokens.
+needed either: the whole sequence runs in one pass per bucket, up to 32768 tokens. The vision
+tower is also a one-pass bidirectional encoder per image (or video frame); the same items do not
+apply to it.
 
 ## Limitations
 
 See `doc/functional_text/README.md` (dense O(S^2) masks, power-of-two buckets, supported context
-32768 of the advertised 262144).
+32768 of the advertised 262144) and `doc/functional_vision/README.md` (dense key-padding mask,
+batch scaling, video tested up to 8 frames).

@@ -1,0 +1,13 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 130
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_VISION'.
+Using operations until 'PERF_VISION_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/demos/blackhole/embedding_gemma2/doc/functional_vision/tracy/b1_s2560/forward_perf_report.csv
+Overall DRAM roofline (modeled ops): 6.7% (34 GB/s)
+Warning: Unclassified operation 'UntilizeCodegenDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RepeatCodegenDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/demos/blackhole/embedding_gemma2/doc/functional_vision/tracy/b1_s2560/forward_perf_report_stacked.csv
+Plotting PNG stacked report to models/demos/blackhole/embedding_gemma2/doc/functional_vision/tracy/b1_s2560/forward_perf_report_stacked.png
