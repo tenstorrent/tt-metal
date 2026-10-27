@@ -42,8 +42,10 @@ from models.demos.blackhole.qwen38_flash_next.tests.test_vllm_batch_contract_dev
     ttnn_bf16,
 )
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import (
+    CandidateFallback,
     Qwen38HostSamplingPolicy,
     apply_penalties,
+    candidate_law,
     greedy_batch_sampling_params,
     position_generator,
     sample_from_row,
@@ -304,6 +306,7 @@ def mixed_step(mesh_device, lanes: int, monkeypatch) -> None:
             repetition_penalty=[1.0] * 7 + [1.2],
         )
         equal = checked = 0
+        guard_total = 0
         for step in range(STEPS):
             histories = {
                 5: (prompts[5], driver.outputs[5]),
@@ -315,7 +318,30 @@ def mixed_step(mesh_device, lanes: int, monkeypatch) -> None:
             out = driver.step(params, histories)
             full = model.decoder.read_full_logits()
             delta = {k: model.candidate_counters[k] - before[k] for k in before}
-            assert delta["candidate_steps"] == 1 and delta["candidate_rows"] == 4, delta  # rows 1, 2, 6, 7
+            # Rows 1, 2, 6, 7 draw from their candidate rows, except a row whose guard the step's own logits trip (the
+            # k-th kept score does not clear the shard floor): that row draws over the full row.
+            guard_rows = []
+            for row in (1, 2, 6, 7):
+                policy = Qwen38HostSamplingPolicy.from_contract(params, row)
+                history = None
+                if policy.penalized:  # the step's own token is not history yet
+                    history = (
+                        torch.tensor(prompts[row], dtype=torch.long),
+                        torch.tensor(driver.outputs[row][:-1], dtype=torch.long),
+                    )
+                emulated = Qwen38CandidateRow.emulate(full[row].to(torch.bfloat16))
+                try:
+                    candidate_law(emulated.values, emulated.ids, policy, history)
+                except CandidateFallback as error:
+                    assert error.reason == "guard", (step, row, str(error))
+                    guard_rows.append(row)
+            assert delta["candidate_steps"] == 1, delta
+            assert delta["candidate_rows"] == 4 - len(guard_rows) and delta["fallback_guard"] == len(guard_rows), (
+                step,
+                guard_rows,
+                delta,
+            )
+            guard_total += len(guard_rows)
             assert (
                 delta["fallback_steps"] == 1 and delta["fallback_top_k"] == 2 and delta["fallback_penalty"] == 1
             ), delta
@@ -340,6 +366,7 @@ def mixed_step(mesh_device, lanes: int, monkeypatch) -> None:
                     assert token in support, (step, row, token)
         logger.info(
             f"mixed step: {STEPS} steps, drawn token equal to today's full-row draw in {equal} of {checked} rows; "
+            f"guard fallbacks {guard_total}; "
             f"counters {json.dumps(model.candidate_counters)}"
         )
         assert equal >= 0.97 * checked
