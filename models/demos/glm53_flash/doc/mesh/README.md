@@ -1214,3 +1214,11 @@ token under the stream (= stacked) numerics that the row-level ulp noise flips o
 8/8) decoded on the regions-fallback numerics (chain pcc 0.9497 vs 0.8615) where the tie sat elsewhere. Not a corruption signature
 (coherent text, no cross-talk, exact first tokens served); the natural-text logits gates (`logits_8x4_all`) remain the arbiter.
 README 32-slot 1 M row refreshed.
+
+13:50 128 K profile boot OOM (`serve_bench_glm53_128k_r1`, 32 users per row): the 32 K warm-up prompt's second 16 K chunk failed a 287 MB
+(16384 x 4384 x 4 B: an mHC-width fp32 buffer) allocation with 613 MB free but fragmented; the planner had left 0.55 GiB after the
+caches. `reserve_bytes` now takes a 16 K chunk's dense working set (four such buffers, 1.15 GB) as the floor of the prefill transient
+(max with the whole-prefix copy and the regions buffers: the observed 1 M points are unchanged), which puts the 128 K profile at
+28 users per row (7 slots per chip; 29-31 cost the same 8th slot). Catalog (dev + prod) set to 28 (TIS 08bd78693). The branch carried
+two pushes with a failing memory-plan test while the term was being calibrated (d19071b2769, e536042d715); green again at d8b60d56ff2.
+Re-queued: `serve_bench_glm53_128k_r3` (128/128 c1 + c28) and `_r4` (65536/128 c28) after the 1 M-profile bench.

@@ -77,7 +77,8 @@ Stack: stock vLLM 0.30.0 + `vllm-tt-plugin` main (the model is registered in the
 `TT_MODEL_CLASS_OVERRIDES=Glm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForCausalLM`),
 transformers 5.20.2 (`glm5_next` exists from 5.16: `requirements.txt`). tt-inference-server catalog (branch `arg/glm53_flash_galaxy`):
 BLACKHOLE_GALAXY only; profiles `glm53_flash` = 1 M context x 4 distinct requests (users per row: the 32 slots are 8 replicas of 4
-prompts until per-row prefill ownership lands) and `glm53_flash_128k` = 128 K x 32; `TT_METAL_OPERATION_TIMEOUT_SECONDS=120` (the
+prompts until per-row prefill ownership lands) and `glm53_flash_128k` = 128 K x 28 (7 slots per chip: 32 ran out of DRAM in the
+prefill warm-up; `tt/memory_plan.py` reserves a 16 K chunk's dense working set); `TT_METAL_OPERATION_TIMEOUT_SECONDS=120` (the
 launcher's 5 s watchdog trips on 16 K prefill chunks at 64 K+ positions).
 
 Validated 2026-10-27 on the 8x4 (serving smoke, warm cache, boot 15 min): exact first tokens on the 1 M profile (both reference
@@ -95,7 +96,7 @@ for a 128-token prompt (`GLM53_MODEL_MAX_SEQ_LEN=1048576 GLM53_PARTITION_USERS=1
 The gap is a threshold, not capacity scaling: 256 K per user replays in 70.9 ms, 512 K and 1 M in ~152 ms. Above ~256 K x 4 users
 the memory planner drops the second, DRAM-bank-sharded expert copy that the decode streaming op reads (it does not fit beside the
 caches: `GLM53_REGIONS_KEEP_STACKED`), and decode falls back to the prefill regions lists (per-expert matmuls): ~+80 ms per step
-over the 42 MoE layers (confirmed: 256 K with the copy forced off replays in 148.9 ms with the 1 M numerics). The 128 K x 32-users profile runs the same fallback. Fixed by the regions-sourced streaming decode (`GLM53_REGIONS_DECODE=stream`,
+over the 42 MoE layers (confirmed: 256 K with the copy forced off replays in 148.9 ms with the 1 M numerics). The 128 K profile ran the same fallback. Fixed by the regions-sourced streaming decode (`GLM53_REGIONS_DECODE=stream`,
 the default since 2026-10-27; `custom_ops/expert_stream/regions.py`): the per-expert regions tensors already sit in the bank-local
 column layout the stream kernels read, so one expert copy serves prefill and decode and the stacked copy is never built. Bit-identical
 to the stacked path (one chip, the (2,4) block, and the 45-layer chain pcc 0.861457 = the stacked value); 1 M x 4 users per row
