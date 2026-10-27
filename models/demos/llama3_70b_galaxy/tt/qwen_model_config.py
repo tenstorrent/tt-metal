@@ -26,6 +26,7 @@ from typing import Tuple
 from models.common.utility_functions import nearest_32, is_blackhole
 from pathlib import Path
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
+    check_checkpoint_index,
     load_hf_state_dict,
     convert_hf_to_meta,
     standardize_hf_keys,
@@ -1977,6 +1978,7 @@ class TtQwenModelArgs(TtModelArgs):
         elif self.from_hf_url:
             from transformers import AutoModelForCausalLM
 
+            check_checkpoint_index(self.CKPT_DIR)
             model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
             state_dict = model.state_dict()
         else:

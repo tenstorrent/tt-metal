@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_builder.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "impl/context/context_types.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/program/program_impl.hpp"
@@ -24,7 +25,8 @@ namespace tt::tt_fabric {
 
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(
     FabricContext& fabric_context, CoreType dispatch_core_type, tt::tt_metal::IDevice* device) {
-    auto fabric_program_ptr = std::make_unique<tt::tt_metal::Program>();
+    auto fabric_program_ptr = std::make_unique<tt::tt_metal::Program>(
+        std::make_shared<tt::tt_metal::detail::ProgramImpl>(tt::tt_metal::extract_context_id(device)));
 
     // Use FabricBuilder to coordinate the build phases
     FabricBuilder builder(device, *fabric_program_ptr, fabric_context, dispatch_core_type);

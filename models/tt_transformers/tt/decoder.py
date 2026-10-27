@@ -114,6 +114,7 @@ class TransformerBlock(LightweightModule):
             in (
                 "Qwen2.5-7B",
                 "Qwen2.5-VL-7B",
+                "olmOCR-2-7B",
             )
             or use_galaxy_row_submesh_rmsnorm_l1_workaround
         ):

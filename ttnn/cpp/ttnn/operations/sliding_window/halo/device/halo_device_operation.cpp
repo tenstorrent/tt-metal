@@ -40,6 +40,10 @@ void HaloDeviceOperation::validate_on_program_cache_miss(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Only height, width or block sharded tensors are supported.");
     TT_FATAL(input_tensor.shard_spec().has_value(), "Shard spec should not be empty");
+    const auto& shard_spec = input_tensor.shard_spec().value();
+    const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    ttnn::operations::sliding_window::validate_sliding_window_shard_grid(
+        shard_spec.grid, is_block_sharded, shard_spec.orientation);
 }
 
 HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_specs(

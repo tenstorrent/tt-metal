@@ -4,10 +4,10 @@
 
 #include "moe_ungroup_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 
+#include "metal/common/tensor_validation.hpp"
 #include "moe_ungroup_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -15,38 +15,26 @@ namespace ttml::metal::ops::moe_ungroup::device {
 
 void MoeUngroupDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
-    auto check =
-        [](const ttnn::Tensor& t, const char* name, tt::tt_metal::Layout layout, tt::tt_metal::DataType dtype) {
-            TT_FATAL(t.storage_type() == ttnn::StorageType::DEVICE, "moe_ungroup: {} must be on device", name);
-            TT_FATAL(t.buffer() != nullptr, "moe_ungroup: {} buffer is null", name);
-            TT_FATAL(
-                t.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-                "moe_ungroup: {} must be in DRAM, got {}",
-                name,
-                enchantum::to_string(t.buffer()->buffer_type()));
-            TT_FATAL(
-                t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-                "moe_ungroup: {} must be INTERLEAVED, got {}",
-                name,
-                enchantum::to_string(t.memory_config().memory_layout()));
-            TT_FATAL(
-                t.layout() == layout,
-                "moe_ungroup: {} must be {} layout, got {}",
-                name,
-                enchantum::to_string(layout),
-                enchantum::to_string(t.layout()));
-            TT_FATAL(
-                t.dtype() == dtype,
-                "moe_ungroup: {} must be {}, got {}",
-                name,
-                enchantum::to_string(dtype),
-                enchantum::to_string(t.dtype()));
-        };
-
-    check(args.expert_out, "expert_out", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
-    check(args.plan, "plan", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
-    check(args.offsets, "offsets", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
-    check(args.grouped_scores, "grouped_scores", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
+    check_device_tensor(args.expert_out, "moe_ungroup", "expert_out", {.buffer_type = tt::tt_metal::BufferType::DRAM});
+    check_device_tensor(
+        args.plan,
+        "moe_ungroup",
+        "plan",
+        {.dtypes = {tt::tt_metal::DataType::UINT32},
+         .layout = tt::tt_metal::Layout::ROW_MAJOR,
+         .buffer_type = tt::tt_metal::BufferType::DRAM});
+    check_device_tensor(
+        args.offsets,
+        "moe_ungroup",
+        "offsets",
+        {.dtypes = {tt::tt_metal::DataType::UINT32},
+         .layout = tt::tt_metal::Layout::ROW_MAJOR,
+         .buffer_type = tt::tt_metal::BufferType::DRAM});
+    check_device_tensor(
+        args.grouped_scores,
+        "moe_ungroup",
+        "grouped_scores",
+        {.layout = tt::tt_metal::Layout::ROW_MAJOR, .buffer_type = tt::tt_metal::BufferType::DRAM});
 
     const auto& es = args.expert_out.logical_shape();
     TT_FATAL(es.rank() == 4U, "moe_ungroup: expert_out must be 4D [1,1,T_cap,H]");

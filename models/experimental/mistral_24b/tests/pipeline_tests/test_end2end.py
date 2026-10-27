@@ -3,11 +3,15 @@
 
 """Test for Mistral-24B End-to-End Vision-Text Pipeline"""
 
+import time
+
 import torch
 import pytest
 from loguru import logger
 import os
 import ttnn
+
+from models.demos.utils.common_demo_utils import report_e2e_metrics
 
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import (
@@ -257,6 +261,7 @@ def run_generation_exactly_like_test_end2end(
     input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
     logger.info("Running prefill...")
+    prefill_start = time.perf_counter()
     logits = generator.prefill_forward_text(
         input_tokens_prefill_pt,
         page_table=page_table,
@@ -265,6 +270,7 @@ def run_generation_exactly_like_test_end2end(
         vision_model=vision_model,
         processed_inputs=processed_inputs,
     )
+    prefill_elapsed_s = time.perf_counter() - prefill_start
 
     prefilled_token = torch.argmax(logits, dim=-1)
     prefilled_token_decoded_res = model_args.tokenizer.decode(prefilled_token[0].item())
@@ -300,6 +306,8 @@ def run_generation_exactly_like_test_end2end(
     results = []
 
     logger.info("Starting decode loop...")
+    decode_tokens = 0
+    decode_start = time.perf_counter()
     for iteration in range(generation_length):
         logger.info(f"[Text] Decoding token {iteration}, current_pos: {current_pos.item()}")
 
@@ -348,6 +356,7 @@ def run_generation_exactly_like_test_end2end(
         result = type("TokenResult", (), {"token": token_id, "text": decoded_token})()
 
         results.append(result)
+        decode_tokens += 1
 
         all_outputs[0].append(token_id)
         current_pos += 1
@@ -366,6 +375,10 @@ def run_generation_exactly_like_test_end2end(
 
         logger.info(f" Each iteration Generated {len(results)} tokens successfully")
 
+    # Stop the decode timer the moment generation ends, before the final tokenizer
+    # decode / chat parsing / logging below, so decode_t/s reflects only the decode loop.
+    decode_elapsed_s = time.perf_counter() - decode_start
+
     # Final response (exactly like test_end2end.py)
     response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
     logger.info(f"Final Generated Response:\n{response}")
@@ -374,6 +387,26 @@ def run_generation_exactly_like_test_end2end(
     display_chat(logger, chat)
 
     logger.info(f"Generated {len(results)} tokens successfully")
+
+    # Report-only perf for the CI dashboard (#58596): single-user prefill/decode rate from
+    # this e2e run. No-op outside CI; device is still open for the SKU lookup.
+    metrics = {}
+    if prefill_lens[0] > 0 and prefill_elapsed_s > 0:
+        metrics["prefill_t/s"] = prefill_lens[0] / prefill_elapsed_s
+        metrics["prefill_time_to_first_token"] = prefill_elapsed_s
+    if decode_tokens > 0 and decode_elapsed_s > 0:
+        decode_tps_u = decode_tokens / decode_elapsed_s
+        metrics["decode_t/s"] = decode_tps_u
+        metrics["decode_t/s/u"] = decode_tps_u
+    if metrics:
+        report_e2e_metrics(
+            "mistral-small-3.1-24b",
+            metrics,
+            batch_size=batch_size,
+            seq_len=int(prefill_lens[0]),
+            model_type="vlm",
+        )
+
     return results
 
 

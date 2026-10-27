@@ -30,19 +30,29 @@ void kernel_main() {
     constexpr uint32_t dfb_x_id = tt::CBIndex::c_0;
     constexpr uint32_t dfb_one_id = tt::CBIndex::c_1;
     DataflowBuffer dfb_one_obj(dfb_one_id);
-    constexpr uint32_t dfb_decimal_id = tt::CBIndex::c_2;
+    static constexpr uint32_t dfb_decimal_id = tt::CBIndex::c_2;
     DataflowBuffer dfb_decimal_obj(dfb_decimal_id);
-    constexpr uint32_t dfb_recip_p_decimal_id = tt::CBIndex::c_3;  // recip_p_decimal
+    static constexpr uint32_t dfb_recip_p_decimal_id = tt::CBIndex::c_3;  // recip_p_decimal
     DataflowBuffer dfb_recip_p_decimal_obj(dfb_recip_p_decimal_id);
 
-    constexpr uint32_t dfb_y_id = tt::CBIndex::c_16;
+    static constexpr uint32_t dfb_y_id = tt::CBIndex::c_16;
 
-    constexpr uint32_t dfb_xabs_id = tt::CBIndex::c_24;          // |x|
-    constexpr uint32_t dfb_xpow_id = tt::CBIndex::c_25;          // |x|^p
-    constexpr uint32_t dfb_logx_id = tt::CBIndex::c_26;          // log(|x|)
-    constexpr uint32_t dfb_exp_lxmd_id = tt::CBIndex::c_27;      // exp(log(|x|) * decimal)
-    constexpr uint32_t dfb_correct_xpow_id = tt::CBIndex::c_28;  // |x|^p * exp(log(|x|) * decimal)(==|x + decimal|^p)
-    constexpr uint32_t dfb_xpowadd_id = tt::CBIndex::c_29;       // Add(|x + decimal|^p)
+    static constexpr uint32_t dfb_xabs_id = tt::CBIndex::c_24;      // |x|
+    static constexpr uint32_t dfb_xpow_id = tt::CBIndex::c_25;      // |x|^p
+    static constexpr uint32_t dfb_logx_id = tt::CBIndex::c_26;      // log(|x|)
+    static constexpr uint32_t dfb_exp_lxmd_id = tt::CBIndex::c_27;  // exp(log(|x|) * decimal)
+    static constexpr uint32_t dfb_correct_xpow_id =
+        tt::CBIndex::c_28;                                         // |x|^p * exp(log(|x|) * decimal)(==|x + decimal|^p)
+    static constexpr uint32_t dfb_xpowadd_id = tt::CBIndex::c_29;  // Add(|x + decimal|^p)
+
+    DataflowBuffer dfb_x_obj(dfb_x_id);
+    DataflowBuffer dfb_y_obj(dfb_y_id);
+    DataflowBuffer dfb_xabs_obj(dfb_xabs_id);
+    DataflowBuffer dfb_xpow_obj(dfb_xpow_id);
+    DataflowBuffer dfb_logx_obj(dfb_logx_id);
+    DataflowBuffer dfb_exp_lxmd_obj(dfb_exp_lxmd_id);
+    DataflowBuffer dfb_correct_xpow_obj(dfb_correct_xpow_id);
+    DataflowBuffer dfb_xpowadd_obj(dfb_xpowadd_id);
 
     constexpr uint32_t onetile = 1;
 
@@ -59,10 +69,11 @@ void kernel_main() {
                 ckl::IterationShape::one_tile(),
                 ckl::CopyTile<
                     ckl::input(dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
-                    ckl::Dst::D0>{},
+                    ckl::Dst::D0>{dfb_x_obj},
                 ckl::Abs<ckl::Dst::D0>{},
                 ckl::PackTile<ckl::output(
-                    dfb_xabs_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                    dfb_xabs_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{
+                    dfb_xabs_obj});
 
             power_tile_to_dfb<
                 dfb_xabs_id,
@@ -70,19 +81,35 @@ void kernel_main() {
                 dfb_logx_id,
                 dfb_decimal_id,
                 dfb_exp_lxmd_id,
-                dfb_correct_xpow_id>(p, p_is_negative);
+                dfb_correct_xpow_id>(
+                dfb_xabs_obj,
+                dfb_xpow_obj,
+                dfb_logx_obj,
+                dfb_decimal_obj,
+                dfb_exp_lxmd_obj,
+                dfb_correct_xpow_obj,
+                p,
+                p_is_negative);
 
             // Add(|x|^p)
             if (inner_idx == 0) {
-                copy_tile_to_dfb<dfb_correct_xpow_id, dfb_xpowadd_id>();
+                copy_tile_to_dfb<dfb_correct_xpow_id, dfb_xpowadd_id>(dfb_correct_xpow_obj, dfb_xpowadd_obj);
             } else {
-                add_tiles_to_dfb<dfb_correct_xpow_id, dfb_xpowadd_id, dfb_xpowadd_id>();
+                add_tiles_to_dfb<dfb_correct_xpow_id, dfb_xpowadd_id, dfb_xpowadd_id>(
+                    dfb_correct_xpow_obj, dfb_xpowadd_obj, dfb_xpowadd_obj);
             }
         }
 
         // Compute dfb_y_id
         power_tile_to_dfb<dfb_xpowadd_id, dfb_xabs_id, dfb_xpow_id, dfb_recip_p_decimal_id, dfb_logx_id, dfb_y_id>(
-            recip_p, recip_p_is_negative);
+            dfb_xpowadd_obj,
+            dfb_xabs_obj,
+            dfb_xpow_obj,
+            dfb_recip_p_decimal_obj,
+            dfb_logx_obj,
+            dfb_y_obj,
+            recip_p,
+            recip_p_is_negative);
     }
     dfb_one_obj.pop_front(onetile);
     dfb_decimal_obj.pop_front(onetile);

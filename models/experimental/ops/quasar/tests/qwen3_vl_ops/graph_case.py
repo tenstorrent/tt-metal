@@ -89,6 +89,15 @@ DTYPE = {
 
 LAYOUT = {"TILE": ttnn.TILE_LAYOUT, "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT}
 
+# Quasar has no Bfp formats, so a captured bfloat8_b / bfloat4_b case is rejected before the op
+# runs. With ``TTNN_GRAPH_OPS_BF8_AS_BF16=1`` those tensors are materialized and checked as bfloat16
+# instead (and judged on the bfloat16 PCC floor, see ``_PCC_BY_DTYPE`` below).
+BF8_AS_BF16 = os.environ.get("TTNN_GRAPH_OPS_BF8_AS_BF16", "") not in ("", "0", "false", "False")
+if BF8_AS_BF16:
+    DTYPE["BFLOAT8_B"] = ttnn.bfloat16
+    DTYPE["BFLOAT4_B"] = ttnn.bfloat16
+
+
 MEM_LAYOUT = {
     "INTERLEAVED": ttnn.TensorMemoryLayout.INTERLEAVED,
     "HEIGHT_SHARDED": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -127,6 +136,11 @@ _INT_DTYPES = {"UINT32", "INT32", "UINT16", "UINT8"}
 # reduction-heavy ops listed here.
 _DEFAULT_PCC = 0.999
 _PCC_BY_DTYPE = {"BFLOAT8_B": 0.97, "BFLOAT4_B": 0.90}
+# Under ``TTNN_GRAPH_OPS_BF8_AS_BF16`` the block-float cases run and are checked as bfloat16, so no
+# per-face quantization happens and the block-float floors would only hide real errors: judge those
+# cases on the dtype that actually ran (the 0.999 bar, or the op's own floor).
+if BF8_AS_BF16:
+    _PCC_BY_DTYPE = {}
 _PCC_BY_OP = {
     "ttnn.linear": 0.99,
     "ttnn.experimental.minimal_matmul": 0.99,
@@ -1192,6 +1206,37 @@ def _aliased_arg(name, spec, case, args):
     return args[0] if case["args"][0] == spec else None
 
 
+def _is_quasar(mesh_device=None):
+    """True when running on the Quasar architecture (`"quasar" in ttnn.get_arch_name()`); the arch is
+    process-global, so `mesh_device` is accepted only for call-site symmetry."""
+    try:
+        return "quasar" in ttnn.get_arch_name()
+    except Exception:
+        return False
+
+
+_BFP_DTYPES = ("BFLOAT8_B", "BFLOAT4_B")
+
+
+def _bfp_specs(case):
+    """The capture's tensor specs (args, kwargs, outs) whose dtype is a Bfp format, as "where:dtype"."""
+    found = []
+
+    def visit(node, where):
+        if isinstance(node, dict):
+            if node.get("dtype") in _BFP_DTYPES:
+                found.append(f"{where}:{node['dtype']}")
+            for key, value in node.items():
+                visit(value, f"{where}.{key}")
+        elif isinstance(node, (list, tuple)):
+            for i, value in enumerate(node):
+                visit(value, f"{where}[{i}]")
+
+    for key in ("args", "kwargs", "outs"):
+        visit(case.get(key), key)
+    return found
+
+
 def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     """Materialize one captured call, run it, and check the result.
 
@@ -1199,6 +1244,17 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     ``Tensor.__getitem__``); ``case`` is one entry of a generated ``CASES`` list.
     """
     op_name = op_name or case["op"]
+
+    # Quasar has no Bfp formats (bfloat8_b / bfloat4_b): skip such a capture pre-flight rather than fail it,
+    # unless TTNN_GRAPH_OPS_BF8_AS_BF16=1 runs it as bfloat16 (see DTYPE above).
+    if not BF8_AS_BF16 and _is_quasar(mesh_device):
+        bfp = _bfp_specs(case)
+        if bfp:
+            pytest.skip(
+                f"Quasar has no Bfp formats; this capture uses {', '.join(bfp)} "
+                "(TTNN_GRAPH_OPS_BF8_AS_BF16=1 runs it as bfloat16)"
+            )
+
     torch_inputs: dict[str, torch.Tensor] = {}
 
     args = [_build_value(spec, mesh_device, case, op_name, str(i), torch_inputs) for i, spec in enumerate(case["args"])]

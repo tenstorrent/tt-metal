@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Conv shared by the ResNet101-DCN backbone and the FPN.
+"""Blocks shared across the port: the LayerNorm helper that passes the module's eps, used by the
+encoder and the decoder, and the conv the ResNet101-DCN backbone and the FPN share.
 
-Weights are prepared once, in the constructor, for one interleaved DRAM input dtype
+The conv's weights are prepared once, in the constructor, for one interleaved DRAM input dtype
 and layout. A later call with a different input fails. A 1x1 stride-1 conv whose
 activation lives in DRAM runs as a matmul; a spatial conv there runs in a fixed
 number of width slices.
@@ -13,6 +14,17 @@ number of width slices.
 import math
 
 import ttnn
+
+
+def layer_norm(x, params, residual=None):
+    """``ttnn.layer_norm(x + residual)`` with the eps of the module ``params`` were preprocessed from.
+
+    ttnn defaults to epsilon=1e-12; ``preprocess_layer_norm_parameters`` records the
+    module's own (1e-5 for nn.LayerNorm). The residual add runs inside the norm's kernel.
+    """
+    return ttnn.layer_norm(
+        x, weight=params.weight, bias=params.bias, epsilon=params.eps, residual_input_tensor=residual
+    )
 
 
 class TtnnConv2D:
@@ -66,6 +78,8 @@ class TtnnConv2D:
         self.kernel_size = conv.kernel_size
         self.padding = conv.padding
         self.stride = conv.stride
+        # conv2d gets no dilation, nor does the slice count below account for one.
+        assert tuple(conv.dilation) == (1, 1), f"TtnnConv2D supports dilation (1, 1) only, got {conv.dilation}"
         self.groups = conv.groups
         math_fidelity = ttnn.MathFidelity.HiFi2 if ttnn.get_arch_name() == "blackhole" else ttnn.MathFidelity.LoFi
         self.compute_config = ttnn.init_device_compute_kernel_config(

@@ -18,6 +18,7 @@ file(
     device/kernels/*.cpp
     device/kernels/*.hpp
     device/kernels_ng/*.cpp
+    device/kernels_ng/*.hpp
 )
 target_sources(
     ttnn_op_eltwise_binary_ng

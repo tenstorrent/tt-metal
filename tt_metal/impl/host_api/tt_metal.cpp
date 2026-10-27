@@ -218,6 +218,11 @@ inline void SetRuntimeArgsImpl(
 
 namespace detail {
 
+bool DispatchStateCheck(bool isFastDispatch) {
+    MetalContext::instance().device_manager()->check_dispatch_mode(isFastDispatch);
+    return isFastDispatch;
+}
+
 bool WriteToDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, std::span<const std::uint8_t> host_buffer) {
     return slow_dispatch::WriteToDeviceDRAMChannel(*device, dram_channel, address, host_buffer);
@@ -598,6 +603,10 @@ void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_roo
 
 Program CreateProgram() { return Program(); }
 
+Program CreateProgram(distributed::MeshDevice& mesh_device) {
+    return Program(std::make_shared<detail::ProgramImpl>(extract_context_id(&mesh_device)));
+}
+
 KernelHandle CreateDataMovementKernel(
     Program& program,
     const KernelSource& kernel_src,
@@ -974,8 +983,8 @@ GlobalSemaphore CreateGlobalSemaphore(
 }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
-    const MetalContext& metal_ctx = MetalContext::instance(program.impl().get_context_id());
-    detail::DispatchStateCheck(metal_ctx.rtoptions().get_fast_dispatch());
+    MetalContext& metal_ctx = MetalContext::instance(program.impl().get_context_id());
+    metal_ctx.device_manager()->check_dispatch_mode(metal_ctx.rtoptions().get_fast_dispatch());
     program.impl().add_buffer(buffer);
 }
 

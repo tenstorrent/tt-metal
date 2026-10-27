@@ -66,6 +66,14 @@ NpHaloMeshWorkloadFactory::cached_mesh_workload_t NpHaloMeshWorkloadFactory::cre
 
 namespace {
 
+uint32_t np_num_dram_banks(tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    return mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+}
+
+std::map<std::string, std::string> np_bank_defines(tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    return {{"NP_DRAM_BANKS", std::to_string(np_num_dram_banks(mesh_device))}};
+}
+
 // Cores already claimed by the fabric senders, which the interior scatter must not land on.
 struct NpHaloOccupiedCores {
     CoreRangeSet np_workers;
@@ -338,7 +346,7 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
     if (use_w_mux) {
         using tt::tt_fabric::FabricMuxChannelType;
         const uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-        const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
         // num_buffers per channel: 4 (np_num_buffers) is the measured 2x4 sweet spot (+~3pp)
         auto mux_cfg = tt::tt_fabric::FabricMuxConfig(
             /*num_full_size_channels=*/static_cast<uint8_t>(num_w_workers),
@@ -360,6 +368,7 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
         mux_reader_ct.push_back(1);  // W_MUX_MODE: coalesce for edge devices too
         auto mux_reader_cfg = ReaderDataMovementConfig{};
         mux_reader_cfg.compile_args = mux_reader_ct;
+        mux_reader_cfg.defines = np_bank_defines(mesh_device);
 
         std::vector<uint32_t> mux_writer_ct = {sender_cb_index, page_size};
         TensorAccessorArgs(*halo_buffer).append_to(mux_writer_ct);
@@ -368,6 +377,7 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
             num_w_workers, FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_cfg, mux_writer_ct);
         auto mux_writer_cfg = WriterDataMovementConfig{};
         mux_writer_cfg.compile_args = mux_writer_ct;
+        mux_writer_cfg.defines = np_bank_defines(mesh_device);
 
         const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/";
         // Reuse the hoisted core lists (flat: [link*2+dir][worker] for workers, [link*2+dir] for mux).
@@ -445,8 +455,8 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
                 // Split this (link,dir)'s W rows across workers.
                 const uint32_t rows_this_link = w_rows_per_link + (w_link < w_extra_rows ? 1 : 0);
                 const uint32_t base_link_start = (w_link * w_rows_per_link) + std::min(w_link, w_extra_rows);
-                // 8-aligned per-worker split: each worker's start is a whole number of 8-row
-                constexpr uint32_t BANKS = 8;
+                // Bank-aligned per-worker split: each worker's start is a whole number of bank-count rows
+                const uint32_t BANKS = np_num_dram_banks(mesh_device);
                 const uint32_t units = rows_this_link / BANKS;
                 const uint32_t units_per_wk = units / num_w_workers;
                 const uint32_t pw = w_dir ? op.np_pad2_right : op.np_pad2_left;
@@ -514,6 +524,7 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
     } else {
         // W reader kernel — fused-owned copy: always fabric-only, always per-batch progress-sem signalling
         auto w_reader_kernel_config = ReaderDataMovementConfig{};
+        w_reader_kernel_config.defines = np_bank_defines(mesh_device);
         w_reader_kernel_config.compile_args = {sender_cb_index, is_padding_zeros, page_size};
         TensorAccessorArgs(*halo_buffer).append_to(w_reader_kernel_config.compile_args);
         TensorAccessorArgs(*input_buffer).append_to(w_reader_kernel_config.compile_args);
@@ -540,6 +551,7 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
 
         // W writer kernel
         auto w_writer_kernel_config = WriterDataMovementConfig{};
+        w_writer_kernel_config.defines = np_bank_defines(mesh_device);
         w_writer_kernel_config.compile_args = {sender_cb_index, is_padding_zeros, page_size};
         TensorAccessorArgs(*halo_buffer).append_to(w_writer_kernel_config.compile_args);
         w_writer_kernel_config.compile_args.push_back(0);            // use_l1_intermediate
@@ -836,8 +848,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         if (is_padding_zeros) {
             num_w_workers = heuristic;
         }
-        // Clamp to available 8-row bank-units per link so no worker gets 0 rows
-        const uint32_t w_units_per_link = (pad2_num_links > 0) ? (w_rows_est / pad2_num_links / 8u) : 0u;
+        // Clamp to available bank-count-row units per link so no worker gets 0 rows
+        const uint32_t w_units_per_link =
+            (pad2_num_links > 0) ? (w_rows_est / pad2_num_links / np_num_dram_banks(mesh_device)) : 0u;
         num_w_workers = std::max(1u, std::min<uint32_t>(num_w_workers, std::max(1u, w_units_per_link)));
         log_debug(
             tt::LogOp,
@@ -952,7 +965,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         w_rows_per_link = w_outer_dim_size / pad2_num_links;
         w_extra_rows = w_outer_dim_size % pad2_num_links;
 
-        // W-send bank-major coalescing (BH: 8 interleaved DRAM banks)
+        // W-send bank-major coalescing across the interleaved DRAM banks
         const bool w_coalesce_ok =
             (progress_t_batch_size == 0) && (op.np_pad2_left == 1) && (op.np_pad2_right == 1) && is_padding_zeros;
         if (w_coalesce_ok) {
@@ -1031,6 +1044,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     if (!use_h_mux) {
         // ------------------------------------------------------------------------- NP H-fabric reader kernel
         auto h_reader_kernel_config = ReaderDataMovementConfig{};
+        h_reader_kernel_config.defines = np_bank_defines(mesh_device);
         h_reader_kernel_config.compile_args = {
             sender_cb_index,   // cb_output_id
             is_padding_zeros,  // is_padding_zeros
@@ -1054,6 +1068,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
 
         // ------------------------------------------------------------------------- NP H-fabric writer kernel
         auto h_writer_kernel_config = WriterDataMovementConfig{};
+        h_writer_kernel_config.defines = np_bank_defines(mesh_device);
         h_writer_kernel_config.compile_args = {
             sender_cb_index,   // cb_output_id
             is_padding_zeros,  // is_padding_zeros
@@ -1222,7 +1237,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     if (use_h_mux) {
         using tt::tt_fabric::FabricMuxChannelType;
         const uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-        const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
         auto hmux_cfg = tt::tt_fabric::FabricMuxConfig(
             static_cast<uint8_t>(num_h_workers), 0, np_num_buffers, 0, mux_buf_size, l1_base);
 
@@ -1264,6 +1279,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         hr_ct.push_back(1);  // H_SIGNAL_W_RECV: this reader signals the H->W barrier after its recv drains
         auto hr_cfg = ReaderDataMovementConfig{};
         hr_cfg.compile_args = hr_ct;
+        hr_cfg.defines = np_bank_defines(mesh_device);
         h_reader_kernel_id = CreateKernel(program, kdir + "np_h_reader.cpp", hw_crset, hr_cfg);
         SetCommonRuntimeArgs(
             program,
@@ -1281,6 +1297,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             num_h_workers, FabricMuxChannelType::FULL_SIZE_CHANNEL, hmux_cfg, hw_ct);
         auto hw_cfg = WriterDataMovementConfig{};
         hw_cfg.compile_args = hw_ct;
+        hw_cfg.defines = np_bank_defines(mesh_device);
         h_writer_kernel_id = CreateKernel(program, kdir + "np_h_mux_writer.cpp", hw_crset, hw_cfg);
         SetCommonRuntimeArgs(
             program,

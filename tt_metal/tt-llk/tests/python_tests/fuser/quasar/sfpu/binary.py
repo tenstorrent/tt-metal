@@ -29,6 +29,7 @@ class BinarySfpu(Sfpu):
         approx_mode: ApproximationMode = ApproximationMode.No,
         iterations: int = 8,
         dst_rounding_mode: DstRoundingMode = DstRoundingMode.Default,
+        sign_magnitude: bool = False,
     ):
         if not operation in MathOperation.get_sfpu_binary_operations():
             raise ValueError(
@@ -38,6 +39,7 @@ class BinarySfpu(Sfpu):
         self.approx_mode = approx_mode
         self.iterations = iterations
         self.dst_rounding_mode = dst_rounding_mode
+        self.sign_magnitude = sign_magnitude
 
     def get_headers(self) -> List[str]:
         return [
@@ -57,12 +59,13 @@ class BinarySfpu(Sfpu):
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
         en_32bit_dest = config.dest_acc.cpp_enum_value
         approx_mode = self.approx_mode.cpp_enum_value
+        sign_magnitude = str(self.sign_magnitude).lower()
 
         return (
             f"    // Operation {stage}: Binary {self.operation.cpp_enum_value} SFPU\n"
             f"    _llk_math_eltwise_sfpu_init_();\n"
             f"    test_utils::init_binary_sfpu_operation_quasar<"
-            f"{op}, {en_32bit_dest}, false, {approx_mode}>();\n"
+            f"{op}, {en_32bit_dest}, {sign_magnitude}, {approx_mode}>();\n"
         )
 
     def calculate(
@@ -77,6 +80,7 @@ class BinarySfpu(Sfpu):
         en_32bit_dest = config.dest_acc.cpp_enum_value
         approx_mode = self.approx_mode.cpp_enum_value
         quasar_iterations = self.iterations // 4
+        sign_magnitude = str(self.sign_magnitude).lower()
         src1 = block.dest_src0
         src2 = block.dest_src1
         dst = block.tile_id_dest
@@ -86,7 +90,7 @@ class BinarySfpu(Sfpu):
         return (
             f"test_utils::call_binary_sfpu_operation_quasar<"
             f"{op}, {dest_sync}, {en_32bit_dest}, {dst_rounding_mode}, "
-            f"{quasar_iterations}, false, {approx_mode}"
+            f"{quasar_iterations}, {sign_magnitude}, {approx_mode}"
             f">({src1} /* src0_tile */, {src2} /* src1_tile */, {dst} /* dst_tile */, {data_format});\n"
         )
 

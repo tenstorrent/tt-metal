@@ -465,7 +465,7 @@ def get_label(image_path):
 
 def get_batch(data_loader, resolution=224):
     loaded_images = next(data_loader)
-    images = None
+    images = []
     labels = []
     transform = transforms.Compose(
         [
@@ -483,12 +483,8 @@ def get_batch(data_loader, resolution=224):
         if img.mode == "L":
             img = img.convert(mode="RGB")
         img = transform(img)
-        img = torch.unsqueeze(img, 0)
-
-        if images is None:
-            images = img
-        else:
-            images = torch.cat((images, img), dim=0)
+        images.append(img)
+    images = torch.stack(images, dim=0)
     return images, labels
 
 
@@ -575,6 +571,105 @@ def load_imagenet_dataset(model_location_generator=None, model_version="ImageNet
     else:
         dataset_path = model_version
     return str(dataset_path)
+
+
+# Canonical metric name -> (benchmark step, measurement name). Keep in sync with
+# METRIC_NAME_MAP in .github/scripts/utils/validate_perf_targets.py. fps stays on
+# report_vision_fps; this map is for the other e2e metrics the validator understands.
+_E2E_METRIC_MEASUREMENTS = {
+    "prefill_t/s": ("inference_prefill", "tokens/s"),
+    "prefill_time_to_first_token": ("inference_prefill", "time_to_token"),
+    "prefill_time_to_token": ("inference_prefill", "time_to_token"),
+    "decode_t/s": ("inference_decode", "tokens/s"),
+    "decode_t/s/u": ("inference_decode", "tokens/s/user"),
+    "prefill_decode_t/s/u": ("inference_prefill_decode", "tokens/s/user"),
+    "rtf": ("inference", "rtf"),
+}
+
+
+def report_e2e_metrics(
+    model_name: str,
+    metrics: dict,
+    *,
+    batch_size: int | None = None,
+    seq_len: int | None = None,
+    model_type: str = "llm",
+):
+    """Emit known e2e perf measurements so the CI validate step can print them.
+
+    `model_name` must be the registry `model:` id (or a string whose CI normalization
+    matches an alias). `prefill_time_to_first_token` is passed in seconds, matching
+    the benchmark `time_to_token` measurement; the YAML target stays in milliseconds.
+    No-op outside CI. Throughput in samples or frames per second goes through
+    report_vision_fps instead.
+    """
+    from models.demos.utils.device_sku import get_current_device_sku_name
+    from models.perf.benchmarking_utils import IS_CI_ENV, BenchmarkData, BenchmarkProfiler
+
+    if not IS_CI_ENV or not metrics:
+        return
+
+    unknown = [name for name in metrics if name not in _E2E_METRIC_MEASUREMENTS]
+    if unknown:
+        raise ValueError(f"Unknown e2e metric(s) {unknown}; known: {sorted(_E2E_METRIC_MEASUREMENTS)}")
+
+    benchmark_profiler = BenchmarkProfiler()
+    benchmark_profiler.start("run")
+    opened_steps: list[str] = []
+    measurements: list[tuple[str, str, float]] = []
+    seen_values: dict[tuple[str, str], float] = {}
+    for name, value in metrics.items():
+        step_name, measurement_name = _E2E_METRIC_MEASUREMENTS[name]
+        pair = (step_name, measurement_name)
+        fvalue = float(value)
+        if pair in seen_values:
+            # Multiple metric names can alias to the same (step, measurement) pair. Deduping is fine
+            # when they agree, but silently dropping a conflicting value would publish the wrong
+            # number, so surface it instead.
+            if fvalue != seen_values[pair]:
+                raise ValueError(
+                    f"Conflicting values for metric alias '{name}' -> {pair}: " f"{seen_values[pair]} vs {fvalue}"
+                )
+            continue
+        seen_values[pair] = fvalue
+        if step_name not in opened_steps:
+            benchmark_profiler.start(step_name)
+            opened_steps.append(step_name)
+        measurements.append((step_name, measurement_name, fvalue))
+    for step_name in reversed(opened_steps):
+        benchmark_profiler.end(step_name)
+    benchmark_profiler.end("run")
+
+    benchmark_data = BenchmarkData()
+    for step_name, measurement_name, value in measurements:
+        benchmark_data.add_measurement(benchmark_profiler, 0, step_name, measurement_name, value)
+    benchmark_data.save_partial_run_json(
+        benchmark_profiler,
+        run_type="end_to_end_perf",
+        ml_model_name=model_name,
+        ml_model_type=model_type,
+        device_name=get_current_device_sku_name(),
+        batch_size=batch_size,
+        input_sequence_length=seq_len,
+    )
+
+
+def report_generation_rate(
+    model_name: str, elapsed_s: float, count: float = 1.0, batch_size: int | None = None
+) -> None:
+    """Publish count/elapsed_s as the fps measurement (images, frames, or samples per second).
+
+    `count` is the numerator of the rate (e.g. generated frames/images/samples), which may be
+    fractional. `batch_size` is the workload batch dimension recorded on the dashboard and used
+    by validate_perf_targets.resolve_target_entry to match a target. They coincide only when one
+    sample is produced per element of the batch; pass `batch_size` explicitly whenever `count`
+    is not the batch size (e.g. num_frames for video models, or batch_size * iterations for
+    classifiers). When omitted, batch_size falls back to `count` for backwards compatibility.
+    """
+    if elapsed_s <= 0 or count <= 0:
+        return
+    resolved_batch_size = batch_size if batch_size is not None else max(int(count), 1)
+    report_vision_fps(model_name, float(count) / float(elapsed_s), resolved_batch_size)
 
 
 def report_vision_fps(model_name: str, fps: float, batch_size: int):

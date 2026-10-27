@@ -629,6 +629,23 @@ def test_repeat_all_ones_shortcut_sharded_output(shape, repeat_shape, input_fact
     )
 
 
+def _nd_shard_config(shard_shape, num_cores=2, buffer_type=ttnn.BufferType.L1):
+    """ND-sharded MemoryConfig: only nd_shard_spec is set, the legacy shard_spec is empty."""
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))])
+    return ttnn.MemoryConfig(buffer_type, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
+
+
+def _assert_nd_output(result, output_mem_config):
+    # Not a full MemoryConfig comparison: an ND spec that fits a 2D shard comes back with memory_layout
+    # normalized to HEIGHT/WIDTH_SHARDED. Buffer type plus nd_shard_spec pin the requested placement.
+    actual = result.memory_config()
+    expected = (output_mem_config.buffer_type, output_mem_config.nd_shard_spec)
+    got = (actual.buffer_type, actual.nd_shard_spec)
+    assert (
+        got == expected
+    ), f"Expected output buffer_type/nd_shard_spec {expected}, got {got} (output memory_config: {actual})"
+
+
 # All-1 repeat vector with an explicit ND-sharded output: the caller's nd_shard_spec is honored.
 @pytest.mark.parametrize(
     "input_shard_shape",
@@ -638,25 +655,171 @@ def test_repeat_all_ones_shortcut_sharded_output(shape, repeat_shape, input_fact
     ],
 )
 def test_repeat_all_ones_shortcut_nd_sharded_output(input_shard_shape, device):
-    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
-
-    def nd_config(shard_shape):
-        return ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape(shard_shape), grid))
-
     torch.manual_seed(12345)
     x = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
-    input_mem_config = L1_INTERLEAVED if input_shard_shape is None else nd_config(input_shard_shape)
-    output_mem_config = nd_config((1, 1, 64, 32))
+    input_mem_config = L1_INTERLEAVED if input_shard_shape is None else _nd_shard_config(input_shard_shape)
+    output_mem_config = _nd_shard_config((1, 1, 64, 32))
     ttnn_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_mem_config)
 
     result = ttnn.repeat(ttnn_input, [1, 1, 1, 1], memory_config=output_mem_config)
 
-    actual = result.memory_config()
-    assert actual.nd_shard_spec == output_mem_config.nd_shard_spec, (
-        f"Expected output nd_shard_spec {output_mem_config.nd_shard_spec}, got {actual.nd_shard_spec} "
-        f"(output memory_config: {actual})"
-    )
+    _assert_nd_output(result, output_mem_config)
     assert_equal(x, ttnn.to_torch(result))
+
+
+# Repeat with an explicit ND-sharded output: the caller's nd_shard_spec is honored, not dropped to interleaved.
+@pytest.mark.parametrize(
+    "shape, repeat_shape, layout, input_factory, output_factory",
+    [
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 1, 2),
+            ttnn.TILE_LAYOUT,
+            lambda: L1_INTERLEAVED,
+            lambda: _nd_shard_config((1, 1, 64, 64)),
+            id="interleaved_to_nd_last_dim",
+        ),
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 2, 1),
+            ttnn.TILE_LAYOUT,
+            lambda: L1_INTERLEAVED,
+            lambda: _nd_shard_config((1, 1, 64, 64)),
+            id="interleaved_to_nd_height",
+        ),
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 1, 2),
+            ttnn.TILE_LAYOUT,
+            lambda: _nd_shard_config((1, 1, 32, 64)),
+            lambda: _nd_shard_config((1, 1, 64, 64)),
+            id="nd_to_nd_last_dim",
+        ),
+        pytest.param(
+            (1, 2, 64, 64),
+            (1, 2, 1, 1),
+            ttnn.TILE_LAYOUT,
+            lambda: L1_INTERLEAVED,
+            lambda: _nd_shard_config((1, 1, 32, 64), num_cores=4),
+            id="interleaved_to_nd_round_robin",
+        ),
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 1, 2),
+            ttnn.ROW_MAJOR_LAYOUT,
+            lambda: L1_INTERLEAVED,
+            lambda: _nd_shard_config((1, 1, 16, 128), num_cores=4),
+            id="rm_interleaved_to_nd",
+        ),
+        pytest.param(
+            (1, 1, 64, 64),
+            (1, 1, 2, 1),
+            ttnn.TILE_LAYOUT,
+            lambda: L1_INTERLEAVED,
+            lambda: _nd_shard_config((1, 1, 64, 64), buffer_type=ttnn.BufferType.DRAM),
+            id="interleaved_to_nd_dram",
+        ),
+    ],
+)
+def test_repeat_nd_sharded_output(shape, repeat_shape, layout, input_factory, output_factory, device):
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    output_mem_config = output_factory()
+    ttnn_input = ttnn.from_torch(x, layout=layout, device=device, memory_config=input_factory())
+
+    result = ttnn.repeat(ttnn_input, list(repeat_shape), memory_config=output_mem_config)
+
+    _assert_nd_output(result, output_mem_config)
+    assert_equal(x.repeat(*repeat_shape), ttnn.to_torch(result))
+
+
+# The preallocated tensor's memory config is what repeat places into. One that fits a 2D shard is normalized
+# to a legacy shard_spec (interleaved_to_sharded path); a round-robin one stays ND-only (to_memory_config path).
+@pytest.mark.parametrize(
+    "shape, repeat_shape, shard_shape",
+    [
+        pytest.param((1, 1, 64, 64), (1, 1, 1, 2), (1, 1, 64, 32), id="fits_2d"),
+        pytest.param((1, 2, 64, 64), (1, 2, 1, 1), (1, 1, 32, 64), id="round_robin"),
+    ],
+)
+# The same ND config may also be passed as memory_config, either as built or read back from the preallocated
+# tensor: both must be accepted even though the tensor's memory_layout was normalized away from ND_SHARDED.
+@pytest.mark.parametrize(
+    "memory_config_source",
+    [None, "nd_config", "tensor"],
+    ids=["prealloc_only", "with_memory_config", "with_tensor_memory_config"],
+)
+def test_repeat_nd_sharded_preallocated_output(shape, repeat_shape, shard_shape, memory_config_source, device):
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    expected = x.repeat(*repeat_shape)
+    output_mem_config = _nd_shard_config(shard_shape, num_cores=4)
+    ttnn_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=L1_INTERLEAVED)
+    out = ttnn.from_torch(
+        torch.zeros(expected.shape, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=output_mem_config,
+    )
+
+    result = ttnn.repeat(
+        ttnn_input,
+        list(repeat_shape),
+        memory_config={None: None, "nd_config": output_mem_config, "tensor": out.memory_config()}[memory_config_source],
+        optional_output_tensor=out,
+    )
+
+    _assert_nd_output(result, output_mem_config)
+    assert_equal(expected, ttnn.to_torch(out))
+
+
+def test_repeat_nd_memory_config_conflicts_with_preallocated_output_raises(device, expect_error):
+    """An explicit ND memory_config whose nd_shard_spec differs from the prealloc's must be rejected."""
+    x = torch.rand((1, 2, 64, 64), dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=L1_INTERLEAVED)
+    out = ttnn.from_torch(
+        torch.zeros((1, 4, 64, 64), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_nd_shard_config((1, 1, 64, 64), num_cores=3),
+    )
+
+    with expect_error(RuntimeError, "nd_shard_spec must match"):
+        ttnn.repeat(
+            ttnn_input,
+            [1, 2, 1, 1],
+            memory_config=_nd_shard_config((1, 1, 32, 64), num_cores=4),
+            optional_output_tensor=out,
+        )
+
+
+# tensor_derived reads the requested config back from a tensor: the ND spec fits a 2D shard, so it is
+# normalized to WIDTH_SHARDED and carries a legacy shard_spec as well as the nd_shard_spec.
+@pytest.mark.parametrize("request_source", ["nd_config", "tensor_derived"])
+def test_repeat_nd_memory_config_allocation_mode_mismatch_raises(request_source, device, expect_error):
+    """Same nd_shard_spec as the prealloc but a different allocation mode must be rejected."""
+    x = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+    out_shape = (1, 1, 64, 128)
+    ttnn_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=L1_INTERLEAVED)
+    requested = _nd_shard_config((1, 1, 64, 32), num_cores=4)
+    if request_source == "tensor_derived":
+        requested = ttnn.from_torch(
+            torch.zeros(out_shape, dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=requested,
+        ).memory_config()
+    prealloc_mem_config = _nd_shard_config((1, 1, 64, 32), num_cores=4)
+    prealloc_mem_config.experimental_set_range_lockstep_allocation(True)
+    out = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=prealloc_mem_config,
+    )
+
+    with expect_error(RuntimeError, "allocation mode must match"):
+        ttnn.repeat(ttnn_input, [1, 1, 1, 2], memory_config=requested, optional_output_tensor=out)
 
 
 # TILE universal-I/O matrix: essential input × output routing paths.

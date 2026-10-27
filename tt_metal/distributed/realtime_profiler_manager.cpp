@@ -38,8 +38,8 @@
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt_metal.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include <common/TracySystem.hpp>
 #include <common/TracyTTDeviceData.hpp>
@@ -708,7 +708,7 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
         // Compile and launch RT-profiler kernels (BRISC reader + NCRISC pusher); Program owned by dev_state so its
         // kernel metadata outlives this scope for tt-inspector.
         {
-            dev_state.realtime_profiler_program = std::make_unique<Program>();
+            dev_state.realtime_profiler_program = std::make_unique<Program>(CreateProgram(*mesh_device));
             auto& realtime_profiler_program = *dev_state.realtime_profiler_program;
 
             uint32_t dispatch_core_noc_x = 0;

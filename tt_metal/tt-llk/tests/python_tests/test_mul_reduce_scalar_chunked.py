@@ -35,8 +35,9 @@ is also covered by ``test_rmsnorm_clear_product_tile.py``.
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
+from helpers.llk_params import MathFidelity, format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -67,15 +68,6 @@ TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16]]
 CHUNK_SIZE = 4
 
 
-def _dest_acc(output_format):
-    """Native fp32 DEST is required whenever the output is Float32."""
-    return (
-        DestAccumulation.Yes
-        if output_format == DataFormat.Float32
-        else DestAccumulation.No
-    )
-
-
 def _num_tiles_for_format(formats):
     """Tile-stream lengths that span more than one chunk (CHUNK_SIZE=4), so the
     chunked driver's between-chunk accumulation is actually exercised. fp32 DEST
@@ -89,9 +81,10 @@ def _num_tiles_for_format(formats):
         "Legacy standalone chunk loop does not use the corrected compute-API "
         "mul_reduce_scalar_chunked_tile sequence (targeted product clears, "
         "separate accumulator, and per-chunk reinitialization). The compute-API "
-        "fix is covered by test_rmsnorm_chunked.cpp; this driver remains unfixed."
+        "fix is covered by test_rmsnorm_chunked.cpp; this driver remains unfixed. "
+        "Not run: the loop hangs the TRISCs and leaves the core dirty for the next test."
     ),
-    strict=False,
+    run=False,
 )
 @parametrize(
     formats=FORMATS,
@@ -105,7 +98,7 @@ def test_mul_reduce_scalar_chunked(formats, math_fidelity, num_tiles, tile_dimen
 
     tile_shape = construct_tile_shape(tile_dimensions)
     elements_per_tile = tile_shape.total_tile_size()
-    dest_acc = _dest_acc(formats.output_format)
+    dest_acc = dest_acc_for(formats.output_format)
     input_dimensions = [num_tiles * tile_dimensions[0], tile_dimensions[1]]
 
     # A ~ U[0, 1] mirrors the on-silicon gtest and keeps the accumulated sum well
