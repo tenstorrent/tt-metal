@@ -397,7 +397,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
 
                     // Let PACK0 overwrite the tiles (next loop's group 0) only once PACK1 is done.
-                    t6_semaphore_post<p_stall::PACK1>(EPILOGUE_DONE_SEM);
+                    // PACK0 waits for this only before a following loop.
+                    if (loop + 1 < LOOP_FACTOR)
+                    {
+                        t6_semaphore_post<p_stall::PACK1>(EPILOGUE_DONE_SEM);
+                    }
                 }
             }
         }
