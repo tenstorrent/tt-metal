@@ -100,13 +100,27 @@ class StepPacker:
     FLOATS = "floats"
     ROPE = "rope"
     VISIBLE = "visible"
+    ONE = "one"
 
-    def __init__(self, pool, sp: int):
-        self.pool, self.sp = pool, sp
+    def __init__(self, pool, sp: int, mode: str = "packed"):
+        """``mode`` ``packed``: the three host tensors above (four when the step masks); ``one``
+        (``V41_DECODE_HOST_INPUTS=one``): the integer rows, the sampler's rows and the RoPE
+        rows in one uint32 row-major tensor of one row per rank (``[sp, 1, 1, (ints + floats) * ROWS + ROWS * 6 *
+        rope_dim]``, one page; a bf16 value travels as its fp32 bit pattern, ``bits << 16``) built from per-chip
+        host shards (``ttnn.from_host_shards``) and uploaded once: a ``from_torch`` with a mesh mapper costs 0.4 to
+        0.5 ms a call for 32 chips whatever the size, and a ``copy_host_to_device_tensor`` pays per page (the
+        14-row integer tensor 1.66 ms against 0.2 for the one-row ones). ``unpack`` then
+        bitcasts the bf16 rows (``ttnn.bitcast`` to fp32, ``typecast`` to bf16: exact, the low half is zero) and
+        reshapes and tilizes the RoPE block on device, a dozen tiny ops inside the capture as before plus ten. The
+        visible counts (the masks' input, not served) stay a tensor of their own."""
+        assert mode in ("packed", "one"), mode
+        self.pool, self.sp, self.mode = pool, sp, mode
         self.int_rows: list[str] = []
         self.float_rows: list[str] = []
         self.rope_cols: list[str] = []
         self.visible_cols: list[str] = []
+        self.rope_width = 0
+        self.one_host: torch.Tensor | None = None  # the "one" mode's host rows, reused every step
 
     @staticmethod
     def _order(have: list[str], keys) -> list[str]:
@@ -121,6 +135,15 @@ class StepPacker:
         bf16 ``[sp * ROWS, rope_dim]``; ``visible`` name -> fp32 ``[sp, ROWS]`` -> the host tensors (per rank)."""
         sp, pool = self.sp, self.pool
         out = {}
+        if self.mode == "one":
+            out[self.ONE] = self._pack_one(ints, floats, rope)
+            if visible:
+                cols = self._order(self.visible_cols, visible)
+                packed = torch.zeros(sp, 1, ROWS, 32, dtype=torch.float32)
+                for j, k in enumerate(cols):
+                    packed[:, 0, :, j] = visible[k].float()
+                out[self.VISIBLE] = pool.per_rank(packed, ttnn.float32, ttnn.TILE_LAYOUT, device=False)
+            return out
         rows = self._order(self.int_rows, ints)
         packed = torch.stack([ints[k].to(torch.int32) for k in rows], dim=1).view(sp, 1, len(rows), ROWS)
         out[self.INTS] = pool.per_rank(packed.contiguous(), ttnn.uint32, device=False)
@@ -139,10 +162,73 @@ class StepPacker:
             out[self.VISIBLE] = pool.per_rank(packed, ttnn.float32, ttnn.TILE_LAYOUT, device=False)
         return out
 
+    @staticmethod
+    def _bf16_bits(t: torch.Tensor) -> torch.Tensor:
+        """bf16 values -> their fp32 bit patterns as int32 (the bf16 bits in the high half)."""
+        return t.to(torch.bfloat16).contiguous().view(torch.int16).to(torch.int32) << 16
+
+    def _pack_one(self, ints: dict, floats: dict, rope: dict) -> ttnn.Tensor:
+        """The "one" mode's host tensor, one row (one page) per rank: int row i at columns ``[i * ROWS, (i + 1) *
+        ROWS)``, then the float rows (bf16 bits << 16), then the RoPE block (``[ROWS, 2 * len(rope) * rope_dim]``
+        bf16 flattened row-major, bits << 16)."""
+        sp, tp = self.sp, self.pool.tp
+        rows_i = self._order(self.int_rows, ints)
+        rows_f = self._order(self.float_rows, floats)
+        cols = self._order(self.rope_cols, rope)
+        cat = torch.cat([t for k in cols for t in rope[k]], dim=1)  # [sp * ROWS, 2 * len(cols) * rope_dim] bf16
+        width = cat.shape[1]
+        if self.rope_width == 0:
+            self.rope_width = width
+        assert width == self.rope_width, (width, self.rope_width)
+        ni, nf = len(rows_i), len(rows_f)
+        base = (ni + nf) * ROWS
+        if self.one_host is None:
+            self.one_host = torch.zeros(sp, 1, 1, base + ROWS * width, dtype=torch.int32)
+        host = self.one_host
+        assert host.shape[3] == base + ROWS * width, (host.shape, ni, nf, width)
+        host[:, 0, 0, : ni * ROWS] = torch.stack([ints[k].to(torch.int32) for k in rows_i], dim=1).view(sp, -1)
+        for j, k in enumerate(rows_f):
+            host[:, 0, 0, (ni + j) * ROWS : (ni + j + 1) * ROWS] = self._bf16_bits(floats[k]).view(sp, ROWS)
+        host[:, 0, 0, base:] = self._bf16_bits(cat).view(sp, ROWS * width)
+        parts = []
+        for r in range(sp):
+            shard = ttnn.Tensor(host[r : r + 1], ttnn.uint32)  # [1, 1, 1, L]: this rank's, on every TP chip
+            parts.extend([shard] * tp)
+        return ttnn.from_host_shards(parts, ttnn.MeshShape(sp, tp))
+
+    def _unpack_one(self, buffers: dict) -> dict:
+        """The "one" mode's device buffer -> the graph's tensors (as ``unpack`` keys them): the int rows sliced,
+        the float rows sliced, bitcast to fp32 and typecast to bf16 (exact: the low half is zero), the RoPE block
+        sliced, reshaped, bitcast, typecast and tilized, then its pairs sliced."""
+        out = {}
+        one = buffers[self.ONE]
+        ni, nf, width = len(self.int_rows), len(self.float_rows), self.rope_width
+        for i, k in enumerate(self.int_rows):
+            t = ttnn.slice(one, [0, 0, 0, i * ROWS], [1, 1, 1, (i + 1) * ROWS])
+            out[k] = ttnn.reshape(t, (ROWS,)) if k == "k" else t
+        for j, k in enumerate(self.float_rows):
+            t = ttnn.slice(one, [0, 0, 0, (ni + j) * ROWS], [1, 1, 1, (ni + j + 1) * ROWS])
+            out[k] = ttnn.reshape(ttnn.typecast(ttnn.bitcast(t, ttnn.float32), ttnn.bfloat16), (ROWS,))
+        base = (ni + nf) * ROWS
+        rope = ttnn.reshape(ttnn.slice(one, [0, 0, 0, base], [1, 1, 1, base + ROWS * width]), (1, 1, ROWS, width))
+        rope = ttnn.tilize(ttnn.typecast(ttnn.bitcast(rope, ttnn.float32), ttnn.bfloat16))
+        pair = width // (2 * len(self.rope_cols))
+        for i, k in enumerate(self.rope_cols):
+            out[k] = tuple(
+                ttnn.slice(rope, [0, 0, 0, (2 * i + j) * pair], [1, 1, ROWS, (2 * i + j + 1) * pair]) for j in range(2)
+            )
+        if self.visible_cols:
+            visible = buffers[self.VISIBLE]
+            for j, k in enumerate(self.visible_cols):
+                out[k] = ttnn.slice(visible, [0, 0, 0, j], [1, 1, ROWS, j + 1])
+        return out
+
     def unpack(self, buffers: dict) -> dict:
         """The device buffers of ``pack`` -> the graph's tensors by name: the int and float rows as ``[1, 1, 1,
         ROWS]`` (the sampler's as ``[ROWS]``), the RoPE pairs as tiled ``[1, 1, ROWS, rope_dim]``, the visible
         counts as tiled ``[1, 1, ROWS, 1]``."""
+        if self.mode == "one":
+            return self._unpack_one(buffers)
         out = {}
         ints = buffers[self.INTS]
         for i, k in enumerate(self.int_rows):
@@ -353,8 +439,12 @@ class TtV41BatchDecoder(TtV41Decoder):
         # Engram rows gathered for the chips that hold a live row only, the small inputs packed into four
         # uploads (StepPacker) and sliced apart in the graph; the default builds and uploads every input apart
         self.host_inputs_mode = os.environ.get("V41_DECODE_HOST_INPUTS", "")
-        assert self.host_inputs_mode in ("", "packed"), self.host_inputs_mode
-        self.packer = StepPacker(self.pool, self.sp) if self.host_inputs_mode == "packed" else None
+        assert self.host_inputs_mode in ("", "packed", "one"), self.host_inputs_mode
+        self.packer = StepPacker(self.pool, self.sp, self.host_inputs_mode) if self.host_inputs_mode else None
+        # V41_DECODE_REPLAY_SYNC=0: no device sync between the staging and the replay (the
+        # same command queue orders them; the sync was a round trip for the timing split's sake)
+        self.replay_sync = os.environ.get("V41_DECODE_REPLAY_SYNC", "1") == "1"
+        self.next_histories: dict[int, torch.Tensor] = {}  # slot -> its Engram history after this step's token
         self.rope_tables = RopeTables(self.config, self.pool.max_seq_len) if self.packer else None
         self.inputs = self.buffers  # what the graph reads: the buffers, or their unpacked slices (``_forward``)
         # a join's compressed index is as wide as the prompt's bucket, not the pool: at a 1M pool
@@ -590,10 +680,11 @@ class TtV41BatchDecoder(TtV41Decoder):
             hash_ = self.model.engram_hash
             order = list(tokens)
             if order:
-                ids_batch, _ = hash_.step(
+                ids_batch, histories = hash_.step(
                     torch.tensor([tokens[s] for s in order]),
                     torch.stack([self.slots[s].engram_history for s in order]),
-                )  # [U, n_layers, cols]
+                )  # [U, n_layers, cols]; the histories after these tokens (``decode`` keeps them once the step ran)
+                self.next_histories = {slot: histories[k] for k, slot in enumerate(order)}
             tick("engram_hash")
             inputs["engram"] = {}
             # packed: the rows of the chips that hold a live row only; the others read the all-zero shard (their
@@ -644,7 +735,8 @@ class TtV41BatchDecoder(TtV41Decoder):
             if mode == "capture":
                 self.captures[variant] = self._capture_step(c1=c1)
             capture = self.captures[variant]
-            ttnn.synchronize_device(self.mesh_device)
+            if self.replay_sync:
+                ttnn.synchronize_device(self.mesh_device)
             t3 = time.time()
             capture.controller.replay(blocking=False)
             t4 = time.time()
@@ -661,12 +753,11 @@ class TtV41BatchDecoder(TtV41Decoder):
             ttnn.deallocate(logits)
         self.last["read_s"] = round(time.time() - t6, 4)
         if self.model.engram and tokens:
-            order = list(tokens)
-            _, histories = self.model.engram_hash.step(
-                torch.tensor([tokens[s] for s in order]), torch.stack([self.slots[s].engram_history for s in order])
-            )
-            for k, slot in enumerate(order):
-                self.slots[slot].engram_history = histories[k]
+            # the histories ``_host_inputs`` computed with the step's ids (one hash a step, not two)
+            assert set(self.next_histories) == set(tokens), (set(self.next_histories), set(tokens))
+            for slot, history in self.next_histories.items():
+                self.slots[slot].engram_history = history
+            self.next_histories = {}
         for slot in tokens:
             self.slots[slot].position += 1
         self.pool.step += 1

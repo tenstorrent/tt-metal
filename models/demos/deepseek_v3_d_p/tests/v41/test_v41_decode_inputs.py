@@ -58,9 +58,13 @@ def _chips(t) -> list[torch.Tensor]:
     return [ttnn.to_torch(d) for d in ttnn.get_device_tensors(t)]
 
 
+@pytest.mark.parametrize("mode", ["packed", "one"])
 @pytest.mark.parametrize("mesh_device, device_params", galaxy_meshes(), indirect=True)
-def test_v41_step_packer(mesh_device, device_params):
-    """pack -> upload -> unpack on the mesh against the per-input path (``from_torch`` of each value)."""
+def test_v41_step_packer(mesh_device, device_params, mode):
+    """pack -> upload -> unpack on the mesh against the per-input path (``from_torch`` of each value); ``mode``
+    ``packed`` (the three or four host tensors) or ``one`` (one uint32 tensor with the bf16
+    rows as fp32 bit patterns, bitcast and tilized on device). A second pack of other values
+    into the same packer must read back those values (the host rows are reused)."""
     pool = _Pool(mesh_device)
     sp, tp = pool.sp, pool.tp
     g = torch.Generator().manual_seed(59)
@@ -82,11 +86,17 @@ def test_v41_step_packer(mesh_device, device_params):
     visible = {"visible1": torch.randint(0, 1000, (sp, ROWS), generator=g).float()}
     visible["visible2"] = (visible["visible1"] + 1) // 2
 
-    packer = StepPacker(pool, sp)
-    host = packer.pack(ints, floats, rope, visible)
-    assert set(host) == {StepPacker.INTS, StepPacker.FLOATS, StepPacker.ROPE, StepPacker.VISIBLE}
+    packer = StepPacker(pool, sp, mode)
+    # the first pack holds other values (its upload allocates the buffers); the second, of the values above, must
+    # land in the same rows and columns (the capture reads fixed slices) and replace the first's
+    other_ints = {k: v + 1 for k, v in ints.items()}
+    other_rope = {k: tuple(t + 1 for t in v) for k, v in rope.items()}
+    host = packer.pack(other_ints, floats, other_rope, visible)
+    if mode == "one":
+        assert set(host) == {StepPacker.ONE, StepPacker.VISIBLE}
+    else:
+        assert set(host) == {StepPacker.INTS, StepPacker.FLOATS, StepPacker.ROPE, StepPacker.VISIBLE}
     buffers = {k: ttnn.to_device(v, mesh_device) for k, v in host.items()}
-    # a second pack of the same keys lands in the same rows and columns (the capture reads fixed slices)
     host2 = packer.pack(ints, floats, rope, visible)
     for k, v in host2.items():
         ttnn.copy_host_to_device_tensor(v, buffers[k])
