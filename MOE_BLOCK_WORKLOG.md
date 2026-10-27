@@ -2026,3 +2026,31 @@ expert is built for small-M, DRAM-bound experts. Levers stay inside the engine (
   39%, down at 64%. GUWAIT (the unpacker's waits inside gate / up, a core): x 66 us median (26-112), W 62 (15-92) -
   ~130 of gate / up's 238 us is waiting for data, x and W about evenly; edge columns (logical 0, 7, 10) wait most on x
   (81-101), the others more on W (60-77). Flat expert at the same shape (above): 322 us.
+
+### SE engine bottom-up (2026-10-27, engine alone, K3 640 rows, MT 2, KB 16, slowest chip)
+Why: rebuild the engine from math only, one ingredient at a time, to see where utilization breaks. New timing probes
+(se_engine3 _probes): NOXR / NOWR - no x / W rounds at all (the CB pushed as if the round landed); SE_WPF=n - the W
+prefetch window; SE_WNOC=0 - the W DRAM reads on NOC0 (A/B, results checked).
+| stage | probes | us | gate / up end (median / max core) |
+| s0 math only | NOXR,NOWR,NOWL | 227 | 131 / 161 |
+| s1 + W column multicast from L1 (credits) | NOXR,NOWL | 245 | 139 / 169 |
+| s2 + W from DRAM | NOXR | 304 | 210 / 227 |
+| s3 + x round handshake (16 B) | NOX | 310 | 232 / 234 |
+| s4 + x payload = the engine | - | 312 (317 checked) | 234 / 236 |
+| a1 x rounds only (no W rounds) | NOWR,NOWL | 232 | 159 / 166 |
+- x is cheap here (+5-8 us); the full run's x waits (GUWAIT 66 us) are x owners blocked by receivers waiting on W.
+- Math only is already 227 vs 139 ideal: gate / up waits ~19 us for the x DRAM load (XLOAD) before the first step, the
+  compute runs ~49 cycles a tile multiply (microbench 34.3) - ~20% loop overhead - and 48 pairs over 11 columns put 5
+  pairs on 4 columns: those finish 30 us later and the h gather (SE-HX 43 us in s0) waits for them.
+- The W DRAM stream is the big step (+59). NoC trace (full, ~8 reads a core): 35.1 MB in 858 NCRISC NOC1 reads of
+  35-70 KB, issued 6.7-249.5 us: ~144 GB/s. tt-npe on that trace: congestion impact 0% (links are not the problem).
+  Reads with the multicast payload 16 B (NOXR,NOW): 296 (reads alone are slow); reads with no W rounds at all
+  (NOXR,NOWR: each core's reads straight into WIN): 345 - the cores pull the 35 MB at ~115-145 GB/s.
+- Deeper window is worse: WPF 6 / 12: s2 331 / 349, engine 355 / 373 (vs 304 / 312 at 3).
+- W reads on NOC0 (SE_WNOC=0): s2 291 (vs 304); the full engine HUNG (NCRISC on NOC0 beside BRISC's NOC0 traffic -
+  shared command buffers / counters; opt-in only, default untouched; default re-run 316.8 us, PCC 0.99972).
+Reading: ~14 cores read each DRAM bank (bank (c GY + cy) % 8, every core its own region) with 3 blocks in flight -
+the DRAM delivers ~145 GB/s of 512, NoC0 or NoC1 alike, and more in flight makes it worse (bank conflicts / row
+thrash is the likely cause; the flat expert's one-reader-a-bank pattern gets 98%). Next: W from a reader per bank
+(the DRISC / optimal-bank cores) forwarded to the column holders, or W prefetched under the previous op; then the
+compute loop's 49-vs-34 cycles and the 5-vs-4 pair imbalance.

@@ -194,6 +194,9 @@ void kernel_main() {
                 const uint32_t round = ((m * g + k) * NPG + pg) * (sps / 2) + st / 2;  // (the family's)
                 cb_reserve_back(CB_XIN, MT * KB);
                 const uint32_t dst = xin + (j & 1) * MT * KB * 2048;
+#ifdef SE_PROBE_NOXR
+                (void)dst, (void)round;  // (probe: no x rounds at all - XIN pushed as if it landed)
+#else
                 if (mine(j)) {  // (position j: the shard of rank j / sps must be in - the own shard always is)
 #ifndef SE_PROBE_NOXWAIT
                     if (j >= sps) noc_semaphore_wait_min(xready, m * (g - 1) + j / sps);
@@ -207,6 +210,7 @@ void kernel_main() {
                 } else {
                     if (j & 1) r1->receive(round); else r0->receive(round);
                 }
+#endif
                 cb_push_back(CB_XIN, MT * KB);
             }
         }
@@ -442,7 +446,16 @@ void kernel_main() {
     }
     // the weights' DRAM reads go in stream order a window ahead of the sends (WPF of my blocks in flight): spread
     // over gate / up at the rate the stream uses them - a burst of all 35 MB at the start starved the gather
+#ifdef SE_WNOC
+    constexpr uint8_t WNOC = SE_WNOC;  // (the W DRAM reads' NoC: 0 - NOC0, which after the x load only carries BRISC's writes)
+#else
+    constexpr uint8_t WNOC = noc_index;
+#endif
+#ifdef SE_WPF
+    constexpr uint32_t WPF = SE_WPF;  // (probe: the prefetch window)
+#else
     constexpr uint32_t WPF = 3;
+#endif
     uint8_t trid_of[64];
     uint32_t wi = 0, ni = 0, pending = 0;  // (prefetch cursor over the first chunk's rounds; issued; issued unsent)
 #ifdef SE_WRING
@@ -479,17 +492,23 @@ void kernel_main() {
             const uint32_t lo = o;
 #endif
             trid_of[b / GY] = t;
-            noc_async_read_set_trid(t);
+            noc_async_read_set_trid(t, WNOC);
 #ifdef SE_PROBE_NOWL
-            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB), wown + lo * WTB, 16);  // (probe)
+            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB, WNOC), wown + lo * WTB, 16, WNOC);  // (probe)
 #else
-            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB), wown + lo * WTB, bsize(b) * WTB);
+            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB, WNOC), wown + lo * WTB, bsize(b) * WTB, WNOC);
 #endif
             ++pending;
         }
     };
     const uint32_t NR = NCH * NB;  // (W rounds a call)
     uint32_t ws = 0, woff = 0, wr = 0, wc = NWS, p = 0, pm = 0;  // (send, my offset, pushed, credited; y pass / chunk)
+#ifdef SE_PROBE_NOWR
+    constexpr bool NOWR_ = true;  // (probe: no W rounds - no multicast, no credits; WIN pushed as if every round landed)
+    wc = NR;
+#else
+    constexpr bool NOWR_ = false;
+#endif
     uint32_t nf[NWS] = {};
     while (ws < NR && blk(ws) % GY != cy) ++ws;  // (skip rounds I do not hold)
 #ifdef SE_RS
@@ -698,7 +717,7 @@ void kernel_main() {
         invalidate_l1_cache();
 #endif
         if (wi < WPN) prefetch(0);  // (keep the window full)
-        if (ws < NR && (ws < NWS || *sem(WFREE + ws % NWS) >= GY * (nf[ws % NWS] + 1))) {  // my block: down the column
+        if (ws < NR && (NOWR_ || ws < NWS || *sem(WFREE + ws % NWS) >= GY * (nf[ws % NWS] + 1))) {  // my block: down the column
             const uint32_t b = blk(ws), n = bsize(b), kb = b / GY;  // (kb: its index among my blocks)
             woff = 0;  // (its offset in my W-own: my blocks before it)
 #ifdef SE_WRING
@@ -708,19 +727,23 @@ void kernel_main() {
 #endif
             if (ws < WPN) {  // (first chunk, or every chunk with the ring: its reads issued and landed)
                 prefetch(ws + 1);
-                noc_async_read_barrier_with_trid(trid_of[kb]);
+                noc_async_read_barrier_with_trid(trid_of[kb], WNOC);
                 --pending;
             }
             const uint32_t dst = win + (ws % NWS) * WSLOT * WTB, vw = words + (ws & 3) * 16;
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(vw) = ws + 1;
-#ifdef SE_PROBE_NOW
+#ifdef SE_PROBE_NOWR
+            (void)dst;
+#elif defined(SE_PROBE_NOW)
             noc_async_write_multicast_loopback_src(wown + woff * WTB, get_noc_multicast_addr(cxv, by, cxv, ty, dst), 16, GY);  // (probe)
 #else
             noc_async_write_multicast_loopback_src(wown + woff * WTB, get_noc_multicast_addr(cxv, by, cxv, ty, dst), n * WTB, GY);
 #endif
+#ifndef SE_PROBE_NOWR
             noc_async_writes_flushed();
             noc_semaphore_set_multicast_loopback_src(vw, get_noc_multicast_addr(cxv, by, cxv, ty, get_semaphore(WV + ws % NWS)), GY);
             noc_async_writes_flushed();
+#endif
             if (ws >= NWS) ++nf[ws % NWS];
             ++ws;
 #ifdef SE_WRING
@@ -728,12 +751,12 @@ void kernel_main() {
 #endif
             while (ws < NR && blk(ws) % GY != cy) ++ws;
         }
-        if (wr < NR && *sem(WV + wr % NWS) >= wr + 1) {  // W round wr landed here
+        if (wr < NR && (NOWR_ || *sem(WV + wr % NWS) >= wr + 1)) {  // W round wr landed here
             cb_reserve_back(CB_WIN, WSLOT);
             cb_push_back(CB_WIN, WSLOT);
             ++wr;
         }
-        if (wc < NR && wc < wr + NWS && cb_pages_reservable_at_back(CB_WIN, WSLOT * (wc - wr + 1))) {  // slot of wc free
+        if (!NOWR_ && wc < NR && wc < wr + NWS && cb_pages_reservable_at_back(CB_WIN, WSLOT * (wc - wr + 1))) {  // slot of wc free
             noc_semaphore_inc(get_noc_addr(cxv, get_arg_val<uint32_t>(ys0 + blk(wc) % GY), get_semaphore(WFREE + wc % NWS)), 1);
             ++wc;
         }
@@ -1169,7 +1192,8 @@ void kernel_main() {
 
 
 def _probes():
-    """(timing only) SE_PROBE=NOX,NOW: skip the x / W data multicasts (semaphores kept); NOMATH: no matmuls; NOWL: no W
+    """(timing only) SE_PROBE=NOX,NOW: skip the x / W data multicasts (semaphores kept); NOXR / NOWR: no x / W rounds at
+    all (no multicast, no handshake / credits: the CB pushed as if the round landed - the bottom-up build's stages); NOMATH: no matmuls; NOWL: no W
     DRAM reads (16 B a block); NOXWAIT: the x rounds do not wait for a shard's arrival (gate / up at its own pace in the
     head: GU_ALONE at the head's shapes) - the results are wrong. GUWAIT (results right): gate / up's unpacker cycles
     waiting for x / W a core, SE-GUWX / SE-GUWW; GUSTEP (with GUWAIT): the first 48 steps' waits, one data marker each
@@ -1177,6 +1201,12 @@ def _probes():
     import os
 
     out = "".join(f"#define SE_PROBE_{p}\n" for p in os.environ.get("SE_PROBE", "").split(",") if p)
+    if os.environ.get("SE_WNOC"):  # (A/B: the W DRAM reads' NoC, 0 or 1 - results checked, not a probe)
+        out += f"#define SE_WNOC {int(os.environ['SE_WNOC'])}\n"
+    if os.environ.get(
+        "SE_WPF"
+    ):  # (timing probe: the W prefetch window, blocks in flight a core; <= 13 transaction ids)
+        out += f"#define SE_WPF {int(os.environ['SE_WPF'])}u\n"
     # (HW: hang words - a kernel's state written into a persistent L1 tensor (fused_head sets HW_ADDR) as it waits;
     # tools: moe_block_runs' triage add-on reads them after a hang)
     if HW_ADDR and "HW" in os.environ.get("SE_PROBE", "").split(",") and not os.environ.get("HW_ALLOC_ONLY"):
