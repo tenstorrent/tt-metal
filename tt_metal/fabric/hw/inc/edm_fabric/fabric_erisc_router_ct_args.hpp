@@ -341,8 +341,18 @@ constexpr bool multi_txq_enabled = sender_txq_id != receiver_txq_id;
 constexpr bool vc0_uses_counter_credits = NAMED_CT_ARG("VC0_USES_COUNTER_CREDITS") != 0;
 constexpr bool vc1_uses_counter_credits = NAMED_CT_ARG("VC1_USES_COUNTER_CREDITS") != 0;
 constexpr bool vc2_uses_counter_credits = NAMED_CT_ARG("VC2_USES_COUNTER_CREDITS") != 0;
+
+// 0 on hardware without stream registers (the Keraunos CCE): every credit is a single-writer
+// free-running total in the consumer's L1 plus a processed count the consumer keeps privately, on
+// every VC. VCn_USES_COUNTER_CREDITS stay metal's per-VC choice where stream registers exist.
+constexpr bool stream_registers_available = NAMED_CT_ARG("STREAM_REGISTERS_AVAILABLE") != 0;
+static_assert(
+    stream_registers_available || !(vc0_uses_counter_credits || vc1_uses_counter_credits || vc2_uses_counter_credits),
+    "VC*_USES_COUNTER_CREDITS are metal's per-VC choice on stream-register hardware; leave them 0 when "
+    "STREAM_REGISTERS_AVAILABLE is 0");
+
 constexpr bool any_vc_uses_counter_credits =
-    vc0_uses_counter_credits || vc1_uses_counter_credits || vc2_uses_counter_credits;
+    !stream_registers_available || vc0_uses_counter_credits || vc1_uses_counter_credits || vc2_uses_counter_credits;
 
 // Flat sender channels are laid out VC0, then VC1, then VC2.
 constexpr size_t vc_of_sender_channel(size_t sender_channel) {
@@ -356,6 +366,9 @@ constexpr size_t vc_of_sender_channel(size_t sender_channel) {
 }
 
 constexpr bool sender_channel_uses_counter_credits(size_t sender_channel) {
+    if (!stream_registers_available) {
+        return true;
+    }
     switch (vc_of_sender_channel(sender_channel)) {
         case 0: return vc0_uses_counter_credits;
         case 1: return vc1_uses_counter_credits;
@@ -375,6 +388,9 @@ constexpr size_t vc_of_receiver_channel(size_t receiver_channel) {
 }
 
 constexpr bool receiver_channel_uses_counter_credits(size_t receiver_channel) {
+    if (!stream_registers_available) {
+        return true;
+    }
     switch (vc_of_receiver_channel(receiver_channel)) {
         case 0: return vc0_uses_counter_credits;
         case 1: return vc1_uses_counter_credits;
@@ -665,6 +681,18 @@ static_assert(
 static_assert(
     !any_vc_uses_counter_credits || local_receiver_completion_counters_base_address != 0,
     "local_receiver_completion_counters_base_address must be valid");
+
+// Packets-sent credits without stream registers: one 16-byte slot per receiver channel. The sender's
+// total is the source of each update (local) and lands in the receiver's slot at the same address.
+constexpr size_t to_receiver_packets_sent_counters_base_address =
+    NAMED_CT_ARG("TO_RECEIVER_PACKETS_SENT_COUNTERS_BASE_ADDR");
+constexpr size_t local_sender_packets_sent_counters_base_address =
+    NAMED_CT_ARG("LOCAL_SENDER_PACKETS_SENT_COUNTERS_BASE_ADDR");
+constexpr size_t packets_sent_counter_slot_bytes = ETH_WORD_SIZE_BYTES;
+static_assert(
+    stream_registers_available ||
+        (to_receiver_packets_sent_counters_base_address != 0 && local_sender_packets_sent_counters_base_address != 0),
+    "packets-sent counter addresses must be valid when STREAM_REGISTERS_AVAILABLE is 0");
 
 // ============================================================================
 // Host signal args (named; always available, 0 when wait_for_host_signal is false)

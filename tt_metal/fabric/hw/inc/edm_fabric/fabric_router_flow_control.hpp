@@ -14,6 +14,78 @@
 #include <type_traits>
 #include <utility>
 
+// Packets-sent credit, sender -> receiver over the link, keyed by the receiver channel's stream id in
+// both modes. With stream registers the sender adds 1 to the receiver's register and the receiver
+// subtracts each packet it consumes. Without, the sender's free-running total sits in its own slot
+// and is copied into the receiver's slot after each packet; the receiver counts what it consumed in
+// packets_sent_processed and never writes the slot it polls.
+template <uint32_t PKTS_SENT_ID>
+constexpr size_t packets_sent_slot_offset() {
+    size_t channel = 0;
+    while (channel < MAX_NUM_RECEIVER_CHANNELS && to_receiver_packets_sent_streams[channel] != PKTS_SENT_ID) {
+        channel++;
+    }
+    return channel * packets_sent_counter_slot_bytes;
+}
+
+inline std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> packets_sent_processed{};
+
+// Before the Ethernet handshake, so the peer cannot write the receiver's slot yet.
+template <uint32_t PKTS_SENT_ID>
+FORCE_INLINE void init_packets_sent_credit() {
+    if constexpr (stream_registers_available) {
+        init_ptr_val<PKTS_SENT_ID>(0);
+    } else {
+        constexpr size_t offset = packets_sent_slot_offset<PKTS_SENT_ID>();
+        static_assert(offset < MAX_NUM_RECEIVER_CHANNELS * packets_sent_counter_slot_bytes, "unknown stream id");
+        packets_sent_processed[offset / packets_sent_counter_slot_bytes] = 0;
+        *reinterpret_cast<volatile uint32_t*>(to_receiver_packets_sent_counters_base_address + offset) = 0;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_packets_sent_counters_base_address + offset) = 0;
+    }
+}
+
+// Packets the sender has sent on this receiver channel that the receiver has not yet consumed.
+template <uint32_t PKTS_SENT_ID>
+FORCE_INLINE int32_t get_packets_sent_unprocessed() {
+    if constexpr (stream_registers_available) {
+        return get_ptr_val<PKTS_SENT_ID>();
+    } else {
+        constexpr size_t offset = packets_sent_slot_offset<PKTS_SENT_ID>();
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        return static_cast<int32_t>(
+            *reinterpret_cast<volatile uint32_t*>(to_receiver_packets_sent_counters_base_address + offset) -
+            packets_sent_processed[offset / packets_sent_counter_slot_bytes]);
+    }
+}
+
+// The receiver consumed one packet.
+template <uint32_t PKTS_SENT_ID>
+FORCE_INLINE void consume_packets_sent_credit() {
+    if constexpr (stream_registers_available) {
+        increment_local_update_ptr_val<PKTS_SENT_ID>(-1);
+    } else {
+        packets_sent_processed[packets_sent_slot_offset<PKTS_SENT_ID>() / packets_sent_counter_slot_bytes]++;
+    }
+}
+
+// The sender sent one packet. Assumes !eth_txq_is_busy(TXQ_ID), and must follow the payload on the
+// same queue.
+template <uint32_t PKTS_SENT_ID, uint32_t TXQ_ID>
+FORCE_INLINE void send_packets_sent_credit() {
+    if constexpr (stream_registers_available) {
+        remote_update_ptr_val<PKTS_SENT_ID, TXQ_ID>(1U);
+    } else {
+        constexpr size_t offset = packets_sent_slot_offset<PKTS_SENT_ID>();
+        auto* total = reinterpret_cast<volatile uint32_t*>(local_sender_packets_sent_counters_base_address + offset);
+        *total = *total + 1;
+        internal_::eth_send_packet_bytes_unsafe(
+            TXQ_ID,
+            local_sender_packets_sent_counters_base_address + offset,
+            to_receiver_packets_sent_counters_base_address + offset,
+            packets_sent_counter_slot_bytes);
+    }
+}
+
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
     ReceiverChannelCounterBasedResponseCreditSender(size_t receiver_channel_index) :
