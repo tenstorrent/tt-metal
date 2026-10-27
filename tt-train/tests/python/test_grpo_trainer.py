@@ -60,12 +60,21 @@ from ttml.trainers.grpo_trainer import (
     save_checkpoint,
 )
 from ttml.trainers.grpo_trainer import grpo_trainer as grpo_trainer_module
-from ttml.trainers.grpo_trainer.remote_rollout import mpi_rollout, sync_remote_rollout_batch_source
+from ttml.trainers.grpo_trainer.remote_rollout import (
+    async_remote_rollout_batch_source,
+    async_rollout,
+    mpi_rollout,
+    rollout_queue,
+    sync_remote_rollout_batch_source,
+)
+from ttml.trainers.grpo_trainer.remote_rollout.async_remote_rollout_batch_source import AsyncRemoteRolloutBatchSource
+from ttml.trainers.grpo_trainer.remote_rollout.rollout_queue import RolloutQueue
 from ttml.trainers.grpo_trainer.remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
 from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK
 from ttml.trainers.grpo_trainer.rollout_batch_source import (
     InProcessRolloutBatchSource,
     RolloutBatchSource,
+    ScoredRolloutBatch,
     score_rollout,
     validate_rollout_batch,
 )
@@ -444,6 +453,11 @@ def test_grpo_config_requires_rollout_backend(expect_error):
 def test_grpo_config_rejects_unknown_rollout_backend(expect_error):
     with expect_error(ValueError, "'rollout_backend' must be one of"):
         GRPOConfig(**_GRPO_CONFIG_FIELDS, rollout_backend="vllm")
+
+
+def test_grpo_config_rejects_negative_max_staleness(expect_error):
+    with expect_error(ValueError, "'max_staleness' must be >= 0"):
+        GRPOConfig(**_GRPO_CONFIG_FIELDS, rollout_backend="ttml_in_process_sync", max_staleness=-1)
 
 
 def test_get_grpo_config_reads_rollout_backend():
@@ -1070,6 +1084,216 @@ def test_sync_remote_source_rejects_a_stale_rollout_version(monkeypatch, expect_
     source = _sync_source(monkeypatch, _FakeRolloutClient(applies_pushes=False), weight_sync_every=1)
     source.update_weights(None, 0)
     with expect_error(RuntimeError, "generated with weight_version -1, expected 0"):
+        next(iter(source))
+
+
+class _LoopbackContext:
+    """One rank's end of an in-memory two-rank communicator."""
+
+    def __init__(self, rank, queues):
+        self._rank = rank
+        self._queues = queues
+
+    def send(self, data, dest, tag):
+        self._queues[(dest, tag)].put(bytes(data))
+
+    def recv(self, nbytes, source, tag):
+        data = self._queues[(self._rank, tag)].get(timeout=30)
+        assert len(data) == nbytes
+        return data
+
+
+def _scored_batch(version):
+    completions = [[7, 8], [9]]
+    return ScoredRolloutBatch(
+        rollout=RolloutBatch(
+            weight_version=version,
+            prompts=[[1], [1]],
+            completions=completions,
+            logprobs=np.full((2, 4), -0.5, dtype=np.float32),
+        ),
+        rewards=np.array([1.0, 0.5], dtype=np.float32),
+        reward_components={"length": np.array([2.0, 1.0], dtype=np.float32)},
+        generation_time_s=0.25,
+        reward_time_s=0.125,
+    )
+
+
+def test_rollout_queue_loopback(monkeypatch):
+    queues = collections.defaultdict(queue.Queue)
+    contexts = iter([_LoopbackContext(TTT_RANK, queues), _LoopbackContext(TTML_RANK, queues)])
+    monkeypatch.setattr(rollout_queue, "duplicate_distributed_context", lambda: next(contexts))
+    monkeypatch.setattr(rollout_queue, "exit_on_error", contextlib.nullcontext)
+    producer = RolloutQueue.producer(peer_rank=TTML_RANK, capacity=2)
+    consumer = RolloutQueue.consumer(peer_rank=TTT_RANK, capacity=2)
+    producer.connect()
+    consumer.connect()
+
+    sent = [_scored_batch(version) for version in range(3)]
+    for scored in sent:
+        producer.push(scored)
+    producer.close()
+    received = [consumer.pop() for _ in sent]
+    assert consumer.pop() is None
+    consumer.close()
+
+    for got, want in zip(received, sent):
+        assert got.rollout.weight_version == want.rollout.weight_version
+        assert got.rollout.prompts == want.rollout.prompts
+        assert got.rollout.completions == want.rollout.completions
+        assert got.rollout.logprobs.dtype == np.float32
+        np.testing.assert_array_equal(got.rollout.logprobs, want.rollout.logprobs)
+        np.testing.assert_array_equal(got.rewards, want.rewards)
+        np.testing.assert_array_equal(got.reward_components["length"], want.reward_components["length"])
+        assert (got.generation_time_s, got.reward_time_s) == (want.generation_time_s, want.reward_time_s)
+
+
+class _ScriptedBridge:
+    """receive_weights yields the scripted results in order; the peer counts as closed once they run out."""
+
+    def __init__(self, received):
+        self._received = list(received)
+        self.blocks = []
+        self.connected = self.closed = False
+
+    def connect(self):
+        self.connected = True
+
+    def close(self):
+        self.closed = True
+
+    @contextlib.contextmanager
+    def receive_weights(self, block):
+        self.blocks.append(block)
+        yield self._received.pop(0) if self._received else None
+
+    @property
+    def peer_closed(self):
+        return not self._received
+
+
+class _RecordingQueue:
+    def __init__(self):
+        self.pushed = []
+        self.connected = self.closed = False
+
+    def connect(self):
+        self.connected = True
+
+    def push(self, scored):
+        self.pushed.append(scored)
+
+    def close(self):
+        self.closed = True
+
+
+def _async_rollout_server(bridge, queue, sampler, reward_funcs):
+    return async_rollout.AsyncRolloutServer(
+        bridge=bridge,
+        queue=queue,
+        sampler=sampler,
+        prompts=[[1], [2]],
+        extra_columns={"answer": ["a", "b"]},
+        batch_prompts=1,
+        tokenizer=_IdsTokenizer(),
+        reward_funcs=reward_funcs,
+        num_generations=1,
+    )
+
+
+def test_async_rollout_server_walks_prompts_with_the_newest_weights(monkeypatch):
+    monkeypatch.setattr(async_rollout, "_require_distributed_context", lambda owner: TTT_RANK)
+    monkeypatch.setattr(async_rollout, "exit_on_error", contextlib.nullcontext)
+    answers = []
+
+    def answer_reward(completions, answer, **_):
+        answers.append(answer)
+        return [0.0] * len(completions)
+
+    bridge = _ScriptedBridge([(0, [{}]), None, (1, [{}]), None])
+    queue_ = _RecordingQueue()
+    sampler = _EchoSampler()
+    server = _async_rollout_server(bridge, queue_, sampler, [answer_reward])
+    assert bridge.connected and queue_.connected
+    server.serve_forever()
+
+    assert [s.rollout.weight_version for s in queue_.pushed] == [0, 0, 1]
+    assert [s.rollout.prompts for s in queue_.pushed] == [[[1]], [[2]], [[1]]]
+    assert answers == [["a"], ["b"], ["a"]]
+    assert bridge.blocks == [True, False, False, False]
+    assert bridge.closed and queue_.closed
+    assert not getattr(sampler, "closed", False)
+
+
+def test_async_rollout_client_and_server_check_their_rank(monkeypatch, expect_error):
+    bridge, queue_ = _ScriptedBridge([]), _RecordingQueue()
+    monkeypatch.setattr(async_rollout, "_require_distributed_context", lambda owner: TTT_RANK)
+    with expect_error(RuntimeError, "AsyncRolloutClient must run on TTML_RANK=0"):
+        async_rollout.AsyncRolloutClient(bridge=bridge, queue=queue_)
+    monkeypatch.setattr(async_rollout, "_require_distributed_context", lambda owner: TTML_RANK)
+    with expect_error(RuntimeError, "AsyncRolloutServer must run on TTT_RANK=1"):
+        _async_rollout_server(bridge, queue_, _EchoSampler(), [])
+    assert not bridge.connected and not queue_.connected
+
+
+class _FakeAsyncClient:
+    """pop() returns batches generated at the scripted versions, then None; records the pushed versions."""
+
+    def __init__(self, versions):
+        self._batches = [_scored_batch(version) for version in versions]
+        self.pushed = []
+
+    def pop(self):
+        return self._batches.pop(0) if self._batches else None
+
+    def send_weights(self, weights, *, version):
+        self.pushed.append(version)
+
+    def shutdown(self):
+        pass
+
+
+def _async_source(monkeypatch, client, num_batches, max_staleness):
+    monkeypatch.setattr(async_remote_rollout_batch_source, "weights_ref_hf_dict", lambda model: {})
+    return AsyncRemoteRolloutBatchSource(
+        client=client,
+        num_batches=num_batches,
+        num_generations=2,
+        max_completion_length=4,
+        weight_sync_every=1,
+        max_staleness=max_staleness,
+    )
+
+
+def _drive_async_source(source, steps_per_batch):
+    """Push version 0, then consume every batch and push the step reached, as GRPOTrainer._train_policy does."""
+    source.update_weights(None, 0)
+    consumed = []
+    for batch_index, scored in enumerate(source, start=1):
+        consumed.append((scored.rollout.weight_version, scored.rollouts_dropped))
+        source.update_weights(None, batch_index * steps_per_batch)
+    return consumed
+
+
+def test_async_remote_source_drops_stale_rollouts(monkeypatch):
+    client = _FakeAsyncClient([0, 0, 1, 1, 2])
+    source = _async_source(monkeypatch, client, num_batches=3, max_staleness=0)
+
+    assert _drive_async_source(source, steps_per_batch=1) == [(0, 0), (1, 1), (2, 1)]
+    assert client.pushed == [0, 1, 2]
+
+
+def test_async_remote_source_counts_staleness_in_optimizer_steps(monkeypatch):
+    client = _FakeAsyncClient([0, 0, 2, 4])
+    source = _async_source(monkeypatch, client, num_batches=3, max_staleness=1)
+
+    assert _drive_async_source(source, steps_per_batch=2) == [(0, 0), (2, 1), (4, 0)]
+    assert client.pushed == [0, 2, 4]
+
+
+def test_async_remote_source_raises_when_the_queue_closes(monkeypatch, expect_error):
+    source = _async_source(monkeypatch, _FakeAsyncClient([]), num_batches=1, max_staleness=0)
+    with expect_error(RuntimeError, "rollout rank closed the rollout queue"):
         next(iter(source))
 
 
