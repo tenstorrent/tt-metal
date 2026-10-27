@@ -1250,3 +1250,10 @@ iteration -> 41.7 ms per token = 24.0 tok/s per user, 768 tok/s aggregate, again
 user): x1.68 (the test prints x5.53 against its eager plain loop). The (2,4) block run had shown the traced fused commit bit-equal to
 the eager one. This is the first measured point above 20 tok/s per user; it becomes a README row once a run reports its TTFT with it,
 and reaches serving through the adapter's speculative path (the gemma4_mtp pattern: B(K+1) <= 32 per row, greedy only).
+
+16:33 `spec_8x4_K3_fused_ttft` (wt_frozen25): the spec run now reports its TTFT -> README row: 32 users (4 per row), 32-token prompt,
+K=3 fused: lossless, 3.20 tokens per user per iteration, 42.0 ms per token = 23.8 tok/s per user (762 aggregate); TTFT 994 ms = the
+eager prefill with the MTP hidden capture (3.98 s for the 4 prefills of a row, each serving 8 replicas). Served spec v1 (agent,
+arg/glm53_served_spec 0c6ba7898b5 + 99435254322): the adapter implements the plugin's device-propose contract (P/V/C/D/D0 traces,
+MTP fill per prefill chunk, narrow decode, argmax_ids accept); limits: replicated caches only (the partitioned 1 M profile is refused),
+dense range only (anchor + K <= 2050), greedy only. Block test `served_spec_block` queued (wt_frozen27).

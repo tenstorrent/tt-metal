@@ -43,6 +43,7 @@ all fit with 1.1-2.0 GiB per chip to spare.
 |---|---|---|---|---|---|---|---|
 | 1   | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 134 ms | 15.5 | 60 | 15.5 | one run (2026-10-26, today's defaults: streaming routed-expert op + sharded mHC collapse norm; reproduced on the defaults-only snapshot: 64.5 ms / 136 ms): one user per row (the 8 rows decode the same prompt in parallel; a single user's figures); decode step 64.6 ms; first token == HF |
 | 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 135 ms | 14.5 | 33 | 463 | one run (2026-10-26, today's defaults: the streaming routed-expert op for the decode-shaped rows, the 16-row prefill slabs included, and the sharded mHC collapse norm; reproduced on the defaults-only snapshot: 69.2 ms / 136 ms): one random token per user slot (diverse expert routing); decode step 69.1 ms; first token == HF; the logits gate with this op is queued (the block-op path: 0.9948 / top-1 95.3 %) |
+| 32  | Galaxy 8x4 (Blackhole) | 32 (decode, speculative K=3) | 994 ms | 23.8 | 33 | 762 | one run (2026-10-27, `tests/test_mtp_spec.py`: MTP draft head, fused multi-step KDA commit, V/C/D graphs traced): lossless against plain greedy (64/64 tokens per user), 3.20 tokens per user per iteration, 42.0 ms per token; TTFT = the eager prefill with the MTP hidden capture (the traced prefill with the capture is a follow-up); harness only until the served speculative path lands |
 | 256 | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 145 ms | 8.9 | 19 | 2280 | one run (2026-10-26, today's defaults: sharded mHC collapse norm; dense expert pass `GLM53_DENSE_EXPERTS=1` at 32 users per row): one random token per user slot; decode step 112.3 ms; first token == HF |
 | 8   | Galaxy 8x4 (Blackhole) | 65 514 | 32.4 s | 10.9 | 60 | 87 | one run (needle depth 0.56, retrieved): one prompt, replicated to the 8 rows; 2023 tok/s prefill on the regions path with the stacked copy kept; decode step 91.6 ms |
 | 1   | Galaxy 8x4 (Blackhole) | 65 514 | 32.4 s | 10.9 | 60 | 10.9 | the same run as the 8-user row above: a single user's figures (one user per row) |
@@ -76,9 +77,11 @@ The checkpoint's MTP layer drafts K tokens per step and the model verifies them 
 three traced graphs, greedy only, K = min(K, 32 / users-per-row - 1)). Measured 2026-10-27 on the 8x4 (45 layers, 32 users = 4
 per row, K = 3, fused multi-step KDA commit `GLM53_SPEC_COMMIT=fused`, V/C/D traced; `tests/test_mtp_spec.py`): lossless
 against plain greedy (64/64 tokens per user), 2.45 accepted drafts = 3.20 tokens per user per iteration, 133 ms per iteration =
-41.7 ms per token = **24.0 tok/s per user, 768 tok/s aggregate** against the plain traced step's 70 ms (14.5): x1.68. It is not a
-table row yet (the row rule wants TTFT and decode from one run; the spec run reports decode only) and not served (the vLLM
-adapter's speculative path is next). Off by default (`GLM53_SPEC_K` unset).
+41.7 ms per token = **24.0 tok/s per user, 768 tok/s aggregate** against the plain traced step's 70 ms (14.5): x1.68; the table
+row above is the rerun that also reports its TTFT (23.8 tok/s per user). Not served yet: the vLLM adapter's speculative path
+(`GLM53_VLLM_SPEC=1`, the plugin's device-propose contract) is written and under device validation; it covers replicated-cache
+profiles and the dense range (anchors <= 2050) first, so the 1 M profile (partitioned caches, long anchors) needs the
+partitioned spec state and the sparse-range verify. Off by default (`GLM53_SPEC_K` unset).
 
 ## Serving (vLLM + tt-inference-server)
 
