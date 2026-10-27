@@ -10,7 +10,6 @@
 #include "cmath_common.h"
 
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_log.h"
 #include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {

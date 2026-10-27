@@ -4,7 +4,11 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
+#ifdef CUMPROD
+#include "api/compute/cumprod.h"
+#else
 #include "api/compute/cumsum.h"
+#endif
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
@@ -14,6 +18,7 @@
 #include "../accumulation_common.hpp"
 
 // Cumulative sum along one of the two tile axes, without first permuting the scan axis to dim 0.
+// With CUMPROD, a cumulative product: cumprod_tile works like cumsum_tile below.
 //
 // The reader delivers num_rows runs of tiles_per_row tiles, each run in scan order. cumsum_tile
 // scans every column of a tile top to bottom and carries the column totals into the next tile in
@@ -47,8 +52,13 @@ void kernel_main() {
             // The unpack/datacopy init above reprograms the math pipeline, so re-init before every
             // tile. The init only records the SFPU sequence without running it, which leaves the
             // totals carried in SFPU registers from the previous tile intact.
+#ifdef CUMPROD
+            cumprod_tile_init();
+            cumprod_tile(DST_TILE, /*first=*/j == 0);
+#else
             cumsum_tile_init();
             cumsum_tile(DST_TILE, /*first=*/j == 0);
+#endif
 #ifdef SCAN_WIDTH
             transpose_dest_init<DST_ACCUM_MODE>();
             transpose_dest<DST_ACCUM_MODE>(DST_TILE);

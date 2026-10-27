@@ -34,8 +34,8 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     ApproximationMode,
-    BlocksCalculationAlgorithm,
     DestAccumulation,
+    DestSync,
     FastMode,
     MathOperation,
     format_dict,
@@ -43,28 +43,15 @@ from helpers.llk_params import (
 from helpers.logger import logger
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
-    get_num_blocks_and_num_tiles_in_block,
 )
 from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand, _subtract_intervals
-from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
 from helpers.stimuli_generator.strategies.structured import (
     _enumerate_representable,
     ulp_sweep_value_count,
 )
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import (
-    APPROX_MODE,
-    CLAMP_NEGATIVE,
-    FAST_MODE,
-    MATH_OP,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
-    TILE_COUNT,
-    DestSync,
-    generate_input_dim,
-)
 from helpers.utils import passed_test
+from test_eltwise_unary_sfpu import eltwise_unary_sfpu
 
 # ---------------------------------------------------------------------------
 # House style for all plots produced by this file (module-level so it's
@@ -1420,6 +1407,8 @@ class Case:
     # ulp_sweep only: sweep a range too large for one run in batches of this
     # many tiles (offset walks the range). None = single run.
     batch_tiles: Optional[int] = None
+    # Per-case pytest-timeout ceiling, for a sweep that cannot fit the run's --timeout.
+    timeout_s: Optional[int] = None
 
     @property
     def test_id(self) -> str:
@@ -1459,12 +1448,14 @@ CASES = [
     ),
     # host-batched fp32 sweep: every fp32 value in a full octave [1.0, 2.0]
     # (2^23 values) in 64-tile batches. Exercises the batching loop + timing.
-    # Slow — ~128 device runs (minutes).
+    # Slow — ~128 device runs (minutes): ~2 min on a Wormhole n150, against the
+    # 60 s --timeout the LLK e2e workflow passes.
     Case(
         op=MathOperation.Reciprocal,
         spec=StimuliSpec.ulp_sweep(low=1.0, high=2.0),
         fmt=FP32,
         name="Reciprocal-fp32-batched",
+        timeout_s=600,
     ),
     # Diagnostic-only example (uncomment to explore a known-inaccurate op without failing the run):
     # Case(op=MathOperation.Gelu, spec=StimuliSpec.ramp(low=-13.0, high=13.0), expect_pass=False),
@@ -1558,43 +1549,24 @@ def run_case(case: Case) -> bool:
         golden = generate_golden(
             mathop, src_A, formats.output_format, dest_acc, formats.input_format, dims
         )
-        num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-            DestSync.Half,
-            dest_acc,
-            formats,
-            dims,
-            TILE_DIMENSIONS,
-            BlocksCalculationAlgorithm.Standard,
-        )
-        configuration = TestConfig(
-            "sources/eltwise_unary_sfpu_test.cpp",
-            formats,
-            templates=[
-                generate_input_dim(dims, dims),
-                APPROX_MODE(case.approx_mode),
-                FAST_MODE(FastMode.No),
-                CLAMP_NEGATIVE(case.clamp_negative),
-                MATH_OP(mathop=mathop),
-            ],
-            runtimes=[
-                TILE_COUNT(tile_cnt_A),
-                NUM_BLOCKS(num_blocks),
-                NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            ],
-            variant_stimuli=StimuliConfig(
-                src_A,
-                formats.input_format,
-                src_B,
-                formats.input_format,
-                formats.output_format,
-                tile_count_A=tile_cnt_A,
-                tile_count_B=tile_cnt_B,
-                tile_count_res=tile_cnt_A,
+        res = torch.tensor(
+            eltwise_unary_sfpu(
+                formats=formats,
+                dest_acc=dest_acc,
+                approx_mode=case.approx_mode,
+                mathop=mathop,
+                fast_mode=FastMode.No,
+                input_dimensions=dims,
+                src_A=src_A,
+                src_B=src_B,
+                tile_cnt_A=tile_cnt_A,
+                tile_cnt_B=tile_cnt_B,
+                unpack_to_dest=unpack_to_dest,
+                clamp_negative=case.clamp_negative,
+                check_golden=False,
             ),
-            dest_acc=dest_acc,
-            unpack_to_dest=unpack_to_dest,
+            dtype=torch_format,
         )
-        res = torch.tensor(configuration.run().result, dtype=torch_format)
         return src_A, golden, res
 
     # Pick batching for a ulp_sweep. Use batch_tiles if set; otherwise auto-batch
@@ -1770,7 +1742,17 @@ def run_case(case: Case) -> bool:
 
 
 @pytest.mark.accuracy
-@pytest.mark.parametrize("case", CASES, ids=[c.test_id for c in CASES])
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            c,
+            id=c.test_id,
+            marks=[] if c.timeout_s is None else [pytest.mark.timeout(c.timeout_s)],
+        )
+        for c in CASES
+    ],
+)
 def test_sfpu_stress(case: Case):
     passed = run_case(case)
     if case.expect_pass:

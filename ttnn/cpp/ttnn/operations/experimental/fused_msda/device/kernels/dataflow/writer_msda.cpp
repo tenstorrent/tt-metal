@@ -18,26 +18,56 @@
 //
 // Generic writer: one head's stick at a byte offset in the query page.
 //
+// With SPLIT_GATHER the writer also gathers part of every row-major block the
+// reader reserves; see msda_gather_rows.hpp.
+//
 // Tile face layout (bf16, 32x32 = 4 faces of 16x16, 2048 B) is documented in
 // ../msda_tile_layout.hpp. D-tile k holds value columns [k*32, k*32+31].
 //
-// Per-tile runtime args (3 per tile): (base_page, head, v_rows), where
-// base_page = b * Q + q_start; rows 0..v_rows-1 go to consecutive pages.
+// Runtime args:
+//   [0]        output buffer address
+//   [1]        num_output_tiles
+//   [2]        value buffer address (read only with SPLIT_GATHER)
+//   [3 ...]    per output tile: base_page, head, v_rows, where
+//              base_page = b * Q + q_start; rows 0..v_rows-1 go to consecutive pages
+// Compile-time arg order is fixed by fused_msda_program_factory.cpp (writer_ct).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_tile_layout.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/msda_gather_rows.hpp"
 
 constexpr uint32_t output_tile_cb_index = get_compile_time_arg_val(0);
 constexpr uint32_t output_scratch_cb_index = get_compile_time_arg_val(1);
 constexpr uint32_t output_page_nbytes = get_compile_time_arg_val(2);  // aligned H*D*2
 constexpr uint32_t D = get_compile_time_arg_val(3);
+constexpr bool SPLIT_GATHER = get_compile_time_arg_val(4) != 0;
+constexpr uint32_t gather_ready_sem_id = get_compile_time_arg_val(5);
+constexpr uint32_t gather_done_sem_id = get_compile_time_arg_val(6);
+constexpr uint32_t gather_mailbox_cb_index = get_compile_time_arg_val(7);
+constexpr uint32_t gather_mailbox_nbytes = get_compile_time_arg_val(8);  // allocated page; 0 without SPLIT_GATHER
+constexpr uint32_t POINTS_PER_BLOCK = get_compile_time_arg_val(9);
+constexpr uint32_t NUM_HEADS = get_compile_time_arg_val(10);
+constexpr uint32_t NUM_KEYS = get_compile_time_arg_val(11);
+constexpr bool VALUE_PACKED = get_compile_time_arg_val(12) != 0;
+constexpr uint32_t value_stick_nbytes = get_compile_time_arg_val(13);
+constexpr uint32_t value_page_nbytes = get_compile_time_arg_val(14);
 
-constexpr auto output_args = TensorAccessorArgs<4>();
+constexpr auto output_args = TensorAccessorArgs<15>();
+constexpr auto value_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+
+struct WriterGatherCfg {
+    static constexpr uint32_t D = ::D;
+    static constexpr uint32_t NUM_KEYS = ::NUM_KEYS;
+    static constexpr uint32_t NUM_HEADS = ::NUM_HEADS;
+    static constexpr bool VALUE_PACKED = ::VALUE_PACKED;
+    static constexpr uint32_t STICK_NBYTES = value_stick_nbytes;
+};
 
 constexpr uint32_t HALF_STICK_NBYTES = 32;
 constexpr uint32_t HALF_WORDS = HALF_STICK_NBYTES / sizeof(uint32_t);
@@ -49,12 +79,18 @@ constexpr uint32_t WORDS_PER_TILE_ROW = 2 * HALF_WORDS;
 constexpr uint32_t N_D_TILES = (STICK_WORDS + WORDS_PER_TILE_ROW - 1) / WORDS_PER_TILE_ROW;
 constexpr uint32_t HEAD_NBYTES = D * sizeof(uint16_t);
 static_assert(D % 16 == 0 && D > 0, "D must be a positive multiple of 16");
+static_assert(!SPLIT_GATHER || value_stick_nbytes == D * 2u, "the split gather packs unpadded D*2-byte sticks");
+static_assert(
+    !SPLIT_GATHER || sizeof(fused_msda_gather::PointArgs) <= gather_mailbox_nbytes,
+    "PointArgs no longer fits the gather mailbox page");
 
 void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_output_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t value_addr = get_arg_val<uint32_t>(2);
 
     const auto output_acc = TensorAccessor(output_args, output_addr, output_page_nbytes);
+    [[maybe_unused]] const auto value_acc = TensorAccessor(value_args, value_addr, value_page_nbytes);
 
     Noc noc;
     CircularBuffer output_tile_cb(output_tile_cb_index);
@@ -63,12 +99,37 @@ void kernel_main() {
     output_scratch_cb.reserve_back(1);
     const uint32_t scratch_l1 = output_scratch_cb.get_write_ptr();
 
-    uint32_t arg_idx = 2;
+    [[maybe_unused]] const uint32_t gather_mailbox_l1 =
+        SPLIT_GATHER ? CircularBuffer(gather_mailbox_cb_index).get_write_ptr() : 0u;
+    [[maybe_unused]] Semaphore<> gather_ready(gather_ready_sem_id);
+    [[maybe_unused]] Semaphore<> gather_done(gather_done_sem_id);
+    [[maybe_unused]] uint32_t gather_seq = 0;
+
+    uint32_t arg_idx = 3;
     for (uint32_t t = 0; t < num_output_tiles; ++t) {
         const uint32_t base_page = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t head = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t v_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t head_byte_offset = head * HEAD_NBYTES;
+
+        if constexpr (SPLIT_GATHER) {
+            // The block's output cannot exist before its last point is
+            // gathered, so helping with every point first costs no overlap.
+            for (uint32_t j = 0; j < POINTS_PER_BLOCK; ++j) {
+                // The wait invalidates the RISC L1 data cache on every poll, so
+                // the mailbox and the x0/y0 tiles read after it are the
+                // reader's and compute's current writes.
+                gather_ready.wait(++gather_seq);
+                const auto pt = fused_msda_gather::fetch_point(gather_mailbox_l1);
+                fused_msda_gather::gather_rows<WriterGatherCfg>(
+                    noc, value_acc, pt, fused_msda_gather::SPLIT_ROW, fused_msda_tile_layout::TILE_MAX_ROWS);
+                noc.async_read_barrier();
+                // Keeps the plain zero stores above ahead of the done store;
+                // see the ordering note in msda_gather_rows.hpp.
+                asm volatile("" ::: "memory");
+                gather_done.set(gather_seq);
+            }
+        }
 
         output_tile_cb.wait_front(N_D_TILES);
         const uint32_t tile_l1 = output_tile_cb.get_read_ptr();

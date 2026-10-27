@@ -172,7 +172,7 @@ inline void llk_unpack_A(
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     // Consecutive tiles of a batch are stride_size_tiles entries apart, as on the pack side (#56194).
-    const std::uint32_t l1_tile_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx +
+    const std::uint32_t l1_tile_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx +
                                       tile_index * local_dfb_interface.stride_size_tiles;
 
     if constexpr (BType == BroadcastType::NONE) {
@@ -239,7 +239,7 @@ inline void llk_unpack_A_block(
 
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
-    const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx;
+    const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx;
     const std::uint32_t stride_size_tiles = local_dfb_interface.stride_size_tiles;
     if constexpr (BType == BroadcastType::NONE && unpack_to_dest) {
         WAYPOINT("UPAW");

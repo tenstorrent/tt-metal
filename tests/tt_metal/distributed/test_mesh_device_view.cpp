@@ -396,7 +396,7 @@ TEST_F(MeshDeviceView2x4Test, ViewIsLocal) {
 TEST_F(MeshDeviceView2x4Test, ViewIterator) {
     const auto& view = mesh_device_->get_view();
 
-    std::vector<IDevice*> iterated_devices;
+    std::vector<Device*> iterated_devices;
     for (auto device : view.impl()) {
         iterated_devices.push_back(*device);
     }
@@ -420,7 +420,7 @@ TEST_F(MeshDeviceView2x4Test, ViewMeshId) {
 }
 
 TEST_F(MeshDeviceView2x4Test, View2DMethodsThrowOnNon2DMesh) {
-    std::vector<IDevice*> devices;
+    std::vector<Device*> devices;
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         devices.push_back(mesh_device_->get_view().impl().get_device(coord));

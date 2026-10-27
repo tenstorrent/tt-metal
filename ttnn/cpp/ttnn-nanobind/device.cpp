@@ -46,6 +46,7 @@
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
+#include <tt-metalium/experimental/operation_timeout.hpp>
 #include <tt-metalium/experimental/per_core_allocation/allocator_state.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -461,6 +462,35 @@ void device_module(nb::module_& m_device) {
         Example:
             >>> import ttnn
             >>> ttnn.device.ClearKernelCache()
+    )doc");
+    m_device.def(
+        "GetOperationTimeoutSeconds",
+        [] { return tt::tt_metal::experimental::GetOperationTimeout().count(); },
+        R"doc(
+        Get the operation timeout in seconds (0 = off), initialized from TT_METAL_OPERATION_TIMEOUT_SECONDS.
+
+        A command queue wait that sees no dispatch progress for this long runs
+        TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE (if set) and raises.
+
+        Example:
+            >>> import ttnn
+            >>> timeout_s = ttnn.device.GetOperationTimeoutSeconds()
+    )doc");
+    m_device.def(
+        "SetOperationTimeoutSeconds",
+        [](float seconds) { tt::tt_metal::experimental::SetOperationTimeout(std::chrono::duration<float>(seconds)); },
+        nb::arg("seconds"),
+        R"doc(
+        Set the operation timeout in seconds (0 = off), overriding TT_METAL_OPERATION_TIMEOUT_SECONDS.
+
+        Each wait reads the value when it starts, so a wait already in progress keeps its old value.
+
+        Args:
+            seconds (float): The new timeout; 0 turns it off.
+
+        Example:
+            >>> import ttnn
+            >>> ttnn.device.SetOperationTimeoutSeconds(300)
     )doc");
     m_device.def(
         "get_dispatch_core_axis",

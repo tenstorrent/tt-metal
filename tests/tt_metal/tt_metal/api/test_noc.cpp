@@ -108,6 +108,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: unharvested_logical_grid_size = CoreCoord(8, 10); break;
         case tt::ARCH::BLACKHOLE: unharvested_logical_grid_size = CoreCoord(14, 10); break;
+        case tt::ARCH::QUASAR: unharvested_logical_grid_size = CoreCoord(8, 4); break;
         default: TT_THROW("Unsupported arch {}", get_umd_arch_name());
     }
     auto logical_grid_size = mesh_device->logical_grid_size();

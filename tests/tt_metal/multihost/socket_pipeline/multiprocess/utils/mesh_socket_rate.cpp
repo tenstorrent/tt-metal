@@ -60,7 +60,8 @@ tt::tt_metal::Program create_send_async_rate_program(
     auto input_page_size = input_buffer->aligned_page_size();
     auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
 
-    auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
+    auto link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, sender_fabric_node_id, receiver_fabric_node_id);
     TT_FATAL(link_indices.size() > 1, "Single core multi link version of SendAsync only supports multiple links");
     uint32_t num_links = 2;
 
@@ -195,8 +196,10 @@ tt::tt_metal::Program create_socket_forward_rate_program(
 
     auto socket_aligned_page_size = tt::align(num_bytes, max_alignment);
 
-    auto bwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, upstream_fabric_node_id);
-    auto fwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, downstream_fabric_node_id);
+    auto bwd_link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, my_fabric_node_id, upstream_fabric_node_id);
+    auto fwd_link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, my_fabric_node_id, downstream_fabric_node_id);
     TT_FATAL(
         fwd_link_indices.size() > 1, "Single core multi link version of SocketForward only supports multiple links.");
     TT_FATAL(!bwd_link_indices.empty(), "No link indices found from downstream to upstream core in SocketForward.");
@@ -304,7 +307,8 @@ tt::tt_metal::Program create_recv_async_rate_program(
         mesh_device->allocator()->get_alignment(recv_socket.get_config().socket_mem_config.socket_storage_type);
     auto socket_aligned_page_size = tt::align(num_bytes, max_alignment);
 
-    auto bwd_link_indices = tt::tt_fabric::get_forwarding_link_indices(my_fabric_node_id, upstream_fabric_node_id);
+    auto bwd_link_indices =
+        tt::tt_fabric::get_forwarding_link_indices(*mesh_device, my_fabric_node_id, upstream_fabric_node_id);
     TT_FATAL(!bwd_link_indices.empty(), "No link indices found from receiver to upstream core.");
     uint32_t num_bwd_links = 1;
 

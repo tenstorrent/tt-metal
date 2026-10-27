@@ -27,10 +27,10 @@ namespace ckl = compute_kernel_lib;
 // then read another Wt tiles of mask for the next batch
 
 template <
-    std::uint32_t dfb_in,
-    std::uint32_t dfb_max_scaler,
-    std::uint32_t dfb_max,
-    std::uint32_t dfb_out,
+    const auto& dfb_in,
+    const auto& dfb_max_scaler,
+    const auto& dfb_max,
+    const auto& dfb_out,
     typename DFB0,
     typename DFB1,
     typename DFB2,
@@ -127,11 +127,11 @@ void kernel_main() {
     // We only do the reserve for the intermediates once and use pack_tile
     // So effectively these are used as pre-allocated arrays
     // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
-    constexpr auto dfb_max_scaler = dfb::max_scaler;
+    static constexpr auto dfb_max_scaler = dfb::max_scaler;
     constexpr auto dfb_sum_scaler = dfb::sum_scaler;
-    constexpr auto dfb_exps = dfb::exps;
+    static constexpr auto dfb_exps = dfb::exps;
     constexpr auto dfb_recipsumexps = dfb::recip_sum_exps;
-    constexpr auto dfb_in0 = dfb::in0;
+    static constexpr auto dfb_in0 = dfb::in0;
     constexpr auto dfb_out0 = dfb::out0;
 #ifdef FUSED_SCALE_MASK
     constexpr auto dfb_fused_scale = dfb::fused_scale;
@@ -146,7 +146,7 @@ void kernel_main() {
     constexpr auto dfb_mask_padded = dfb::mask_padded;
 #endif
 #ifdef NUMERIC_STABLE
-    constexpr auto dfb_max = dfb::max;
+    static constexpr auto dfb_max = dfb::max;
 #endif
     DataflowBuffer dfb_max_scaler_obj(dfb_max_scaler);
     DataflowBuffer dfb_sum_scaler_obj(dfb_sum_scaler);
@@ -171,12 +171,12 @@ void kernel_main() {
 #if defined(FUSED_SCALE_MASK) || defined(MASK_PADDED_DATA)
     // dfb_x is a distinct intermediate (c_10) only on the numeric-stable paths that post-process a masked
     // buffer; otherwise the reads go straight from dfb_in0 (see the calc_numeric_stable<dfb_in0,...> call).
-    constexpr auto dfb_x = dfb::x;
+    static constexpr auto dfb_x = dfb::x;
     DataflowBuffer dfb_x_obj(dfb_x);
 #endif
 #else
     // Without numeric_stable, dfb_x aliases dfb_exps (Same-FIFO reuse) so exp results circulate in one buffer.
-    constexpr auto dfb_x = dfb_exps;
+    static constexpr auto dfb_x = dfb_exps;
     auto& dfb_x_obj = dfb_exps_obj;
 #endif
 

@@ -475,7 +475,7 @@ bool reader_datacopy_writer(
                                   (test_config.l1_input_data_format == tt::DataFormat::UInt32);
     experimental::ComputeHardwareConfig compute_hw_config;
     experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
-    if (test_config.l1_input_data_format == tt::DataFormat::Float32) {
+    if (fp32_dest_acc_en) {
         unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
     compute_hw_config = experimental::ComputeHardwareConfig{
