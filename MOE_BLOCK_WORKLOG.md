@@ -1944,3 +1944,7 @@ its fused-head programs at its first call); the shared expert is bf8 / HiFi2 vs 
   1151-1152 (was 1189-1191) | tail 115-116 us; span 1768-1774 (1808-1813). PCC min 0.99612.
 - GLM-5.3-Flash 2x4, 5120, owners residual, traced: x all-to-all 121 | 27 (not identified) | fused head 1084-1088 |
   dispatch 461 | experts + combine 1373-1376 | tilize 26 | add 37 us; device sum 3103 us (3104 before). PCC min 0.98686.
+- K3 on a TP line of 4 (k3_ring4 640, p150_x4_line_1x4, no torus; PR 61481 puts TP on the tray half's line), traced:
+  head 550-552 | dispatch 83-88 | experts + combine 1219-1227 | tail 145-147 us; span 1901-1904 (ring 1768-1774).
+  Head + tail 697 vs 573 on the ring (+22%), block +7%: far less than the 2x the TP collectives' link bytes would
+  suggest - the head's engine compute hides part of it. PCC as on the ring.
