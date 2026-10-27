@@ -293,20 +293,44 @@ def test_resolve_dotted_target():
     assert parent is ttnn.experimental and attr == "paged_update_cache"
 
 
-def test_fp32_host_cast_workaround_predicate_and_rewrite():
+def test_ttsim_fp32_host_cast_applies_only_off_quasar_on_a_simulator(monkeypatch):
     import ttnn
 
     from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
 
-    wa = next(w for w in O.WORKAROUNDS if w.name == "host_cast_fp32_upload")
-    x = torch.randn(4, 4)
-    assert wa.applies((x,), {"dtype": ttnn.bfloat16, "device": object()})
+    class Dev:
+        def __init__(self, arch):
+            self._arch = arch
+
+        def arch(self):
+            return self._arch
+
+    wa = next(w for w in O.WORKAROUNDS if w.name == "ttsim_wh_host_cast_fp32_upload")
+    wh, qsr, x = Dev(ttnn.device.Arch.WORMHOLE_B0), Dev(ttnn.device.Arch.QUASAR), torch.randn(4, 4)
+    monkeypatch.setenv("TT_METAL_SIMULATOR", "/sim/libttsim.so")
+    assert wa.applies((x,), {"dtype": ttnn.bfloat16, "device": wh})
+    assert not wa.applies((x,), {"dtype": ttnn.bfloat16, "device": qsr})  # fixed on Quasar by #61421
     assert not wa.applies((x,), {"dtype": ttnn.bfloat16})  # host-only conversion is fine
-    assert not wa.applies((x,), {"dtype": ttnn.float32, "device": object()})
-    assert not wa.applies((x.bfloat16(),), {"dtype": ttnn.bfloat16, "device": object()})
+    assert not wa.applies((x,), {"dtype": ttnn.float32, "device": wh})
+    assert not wa.applies((x.bfloat16(),), {"dtype": ttnn.bfloat16, "device": wh})
+    monkeypatch.delenv("TT_METAL_SIMULATOR")
+    assert not wa.applies((x,), {"dtype": ttnn.bfloat16, "device": wh})  # WH hardware runs the dummy unpack
     seen = {}
-    wa.rewrite(lambda t, **kw: seen.update(dtype=t.dtype), (x,), {"dtype": ttnn.bfloat16, "device": object()})
+    wa.rewrite(lambda t, **kw: seen.update(dtype=t.dtype), (x,), {"dtype": ttnn.bfloat16, "device": wh})
     assert seen["dtype"] == torch.bfloat16
+
+
+def _bf16_upload_workaround(O):
+    """A stand-in workaround on ttnn.from_torch: casts fp32 sources to bf16 when uploading to a device."""
+
+    return O.Workaround(
+        name="test_bf16_upload",
+        target="ttnn.from_torch",
+        reason="test",
+        remove_when="never",
+        applies=lambda a, k: a[0].dtype == torch.float32 and k.get("device") is not None,
+        rewrite=lambda orig, a, k: orig(a[0].to(torch.bfloat16), **k),
+    )
 
 
 def test_session_installs_and_counts_workarounds(monkeypatch):
@@ -316,12 +340,13 @@ def test_session_installs_and_counts_workarounds(monkeypatch):
 
     calls = []
     monkeypatch.setattr(ttnn, "from_torch", lambda t, **kw: calls.append(t.dtype))
+    monkeypatch.setattr(O, "WORKAROUNDS", [_bf16_upload_workaround(O)])
     s = O.OverrideSession(mesh_device=None, host_ops=(), disable_wa=())
     s.install(monkeypatch)
     ttnn.from_torch(torch.randn(2, 2), dtype=ttnn.bfloat16, device=object())
     ttnn.from_torch(torch.randn(2, 2), dtype=ttnn.bfloat16)
     assert calls == [torch.bfloat16, torch.float32]
-    assert s.hits["wa:host_cast_fp32_upload"] == 1
+    assert s.hits["wa:test_bf16_upload"] == 1
 
 
 def test_session_disable_workaround(monkeypatch):
@@ -331,7 +356,8 @@ def test_session_disable_workaround(monkeypatch):
 
     calls = []
     monkeypatch.setattr(ttnn, "from_torch", lambda t, **kw: calls.append(t.dtype))
-    O.OverrideSession(None, (), ("host_cast_fp32_upload",)).install(monkeypatch)
+    monkeypatch.setattr(O, "WORKAROUNDS", [_bf16_upload_workaround(O)])
+    O.OverrideSession(None, (), ("test_bf16_upload",)).install(monkeypatch)
     ttnn.from_torch(torch.randn(2, 2), dtype=ttnn.bfloat16, device=object())
     assert calls == [torch.float32]
 

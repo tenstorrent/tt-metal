@@ -4,6 +4,7 @@
 """Named workarounds (and, for bisecting, host fallbacks) installed around ttnn ops for one test."""
 import inspect
 import math
+import os
 from collections import Counter
 from dataclasses import dataclass
 from typing import Callable
@@ -32,15 +33,19 @@ def resolve(target):
     return parent, parts[-1]
 
 
-def _fp32_to_bf16_on_device(args, kwargs):
+def _fp32_to_bf16_on_ttsim(args, kwargs):
+    """An fp32 -> bf16 upload to a non-Quasar device on a simulator: its on-device tilize aborts ttsim WH (S2)."""
     import ttnn
 
     src = args[0] if args else kwargs.get("tensor")
+    device = kwargs.get("device")
     return (
         isinstance(src, torch.Tensor)
         and src.dtype == torch.float32
         and kwargs.get("dtype") == ttnn.bfloat16
-        and kwargs.get("device") is not None
+        and device is not None
+        and device.arch() != ttnn.device.Arch.QUASAR
+        and bool(os.environ.get("TT_METAL_SIMULATOR"))
     )
 
 
@@ -169,11 +174,12 @@ def _largest_divisor(n, at_most):
 
 WORKAROUNDS = [
     Workaround(
-        name="host_cast_fp32_upload",
+        name="ttsim_wh_host_cast_fp32_upload",
         target="ttnn.from_torch",
-        reason="fp32->bf16 uploads tilize in fp32 on device, unpacking fp32 to SrcA (#57780; QUASAR_GAPS Q3/S2)",
-        remove_when="#57780 fixed: fp32 tilize unpacks to DEST on Quasar (and ttsim WH accepts it)",
-        applies=_fp32_to_bf16_on_device,
+        reason="fp32->bf16 uploads tilize fp32 into DEST on device; the WH LLK's dummy SrcA unpack after each tile "
+        "(TEN-3868) aborts ttsim WH, real WH runs it (QUASAR_GAPS S2). Quasar needs no cast since #61421",
+        remove_when="ttsim accepts the TEN-3868 dummy unpack, or tt-llk issues it with a SrcA-legal format (S1)",
+        applies=_fp32_to_bf16_on_ttsim,
         rewrite=_cast_source_to_bf16,
     ),
     Workaround(
@@ -206,7 +212,7 @@ WORKAROUNDS = [
         name="quasar_experimental_add",
         target="ttnn.add",
         reason="base binary_ng builds Gen1 DataMovementKernels, which Quasar rejects; the stop-gap "
-        "ttnn.experimental.quasar.add runs (QUASAR_GAPS Q5)",
+        "ttnn.experimental.quasar.add runs (QUASAR_GAPS Q4)",
         remove_when="base ttnn.add (binary_ng) is ported to Quasar",
         applies=_on_quasar,
         rewrite=_to_experimental_quasar("add"),
@@ -215,7 +221,7 @@ WORKAROUNDS = [
         name="quasar_experimental_sdpa",
         target="ttnn.transformer.scaled_dot_product_attention",
         reason="base prefill SDPA builds Gen1 DataMovementKernels, which Quasar rejects; the stop-gap "
-        "ttnn.experimental.quasar.transformer.scaled_dot_product_attention runs (QUASAR_GAPS Q6)",
+        "ttnn.experimental.quasar.transformer.scaled_dot_product_attention runs (QUASAR_GAPS Q5)",
         remove_when="base ttnn.transformer.scaled_dot_product_attention is ported to Quasar",
         applies=_on_quasar,
         rewrite=_to_experimental_quasar("transformer.scaled_dot_product_attention"),
@@ -224,7 +230,7 @@ WORKAROUNDS = [
         name="quasar_experimental_sdpa_decode",
         target="ttnn.transformer.paged_scaled_dot_product_attention_decode",
         reason="base decode SDPA is not ported to Quasar; the stop-gap "
-        "ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode is (QUASAR_GAPS Q8)",
+        "ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode is (QUASAR_GAPS Q7)",
         remove_when="base ttnn.transformer.paged_scaled_dot_product_attention_decode is ported to Quasar",
         applies=_on_quasar,
         rewrite=_to_experimental_quasar("transformer.paged_scaled_dot_product_attention_decode"),
@@ -233,7 +239,7 @@ WORKAROUNDS = [
         name="quasar_experimental_mul",
         target="ttnn.mul",  # the text MLP gate (tt_transformers mlp.py); the model never calls it as ttnn.multiply
         reason="base binary_ng builds Gen1 DataMovementKernels, which Quasar rejects; the stop-gap "
-        "ttnn.experimental.quasar.multiply runs, incl. input_tensor_a_activations=[SILU] (QUASAR_GAPS Q7)",
+        "ttnn.experimental.quasar.multiply runs, incl. input_tensor_a_activations=[SILU] (QUASAR_GAPS Q6)",
         remove_when="base ttnn.multiply (binary_ng) is ported to Quasar",
         applies=_on_quasar,
         rewrite=_to_experimental_quasar("multiply"),
