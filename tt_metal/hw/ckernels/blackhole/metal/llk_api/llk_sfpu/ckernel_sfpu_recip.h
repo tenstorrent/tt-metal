@@ -233,10 +233,8 @@ inline void _init_reciprocal_fast_7b_() {
     constexpr std::uint32_t round_bits = 0;
     constexpr std::uint32_t store_bits = 0x00 | 0x40 | (1 << 3) | 3;
 
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-
-    TTI_SFPCONFIG(0, 4 + kReciprocal7bMacro, 0);
+    __builtin_rvtt_sfpconfig_value(
+        4 + kReciprocal7bMacro, (((store_bits << 8) | round_bits) << 16) | (mad_bits << 8) | simple_bits);
 
     // Misc: {StoreMod0: 0, UsesLoadMod0ForStore: {0,0,0,0}, UnitDelayKind: {1,1,1,1}}. Load mod0 is DEFAULT (0), so
     // the store mode is the same.
@@ -269,9 +267,8 @@ inline void _init_reciprocal_fast_8b_3c_() {
         constexpr std::uint32_t round_bits = 0;
         constexpr std::uint32_t store_bits = 0;
 
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + kReciprocal8bMacro, 0);
+        __builtin_rvtt_sfpconfig_value(
+            4 + kReciprocal8bMacro, (((store_bits << 8) | round_bits) << 16) | (mad_bits << 8) | simple_bits);
     }
 
     // Misc: {
@@ -310,9 +307,7 @@ inline void _init_reciprocal_fast_24b_5c_() {
         constexpr std::uint32_t round_bits = 0;
         constexpr std::uint32_t store_bits = 0x00 | 0x40 | (6 << 3) | 3;
 
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4, 0);
+        __builtin_rvtt_sfpconfig_value(4, (((store_bits << 8) | round_bits) << 16) | (mad_bits << 8) | simple_bits);
     }
 
     // Macro 1: [e]
@@ -322,9 +317,7 @@ inline void _init_reciprocal_fast_24b_5c_() {
         constexpr std::uint32_t round_bits = 0;
         constexpr std::uint32_t store_bits = 0x00 | 0x00 | (2 << 3) | 3;
 
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 1, 0);
+        __builtin_rvtt_sfpconfig_value(4 + 1, (((store_bits << 8) | round_bits) << 16) | (mad_bits << 8) | simple_bits);
     }
 
     // Macro 2: [t2]
@@ -347,9 +340,7 @@ inline void _init_reciprocal_fast_24b_5c_() {
         constexpr std::uint32_t round_bits = 0;
         constexpr std::uint32_t store_bits = 0x00 | 0x00 | (3 << 3) | 3;
 
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 3, 0);
+        __builtin_rvtt_sfpconfig_value(4 + 3, (((store_bits << 8) | round_bits) << 16) | (mad_bits << 8) | simple_bits);
     }
 
     // Misc: {UsesLoadMod0ForStore=1, WaitForElapsedInstructions=1} for all macros.
