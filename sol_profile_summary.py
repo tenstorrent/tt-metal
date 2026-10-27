@@ -57,6 +57,9 @@ def main(path):
     count = collections.defaultdict(int)
     span = {}  # (run, dev, x, y) -> [first kernel start, last kernel end]
     zspan = {}  # (run, dev, x, y, risc, zone) -> [first start, last end] (compute steps and pooled reads)
+    TIMELINE_ZONES = ("RD_SYNC", "RD_RES_PIECES", "RD_RES_POOLED")
+    events = collections.defaultdict(list)  # (run, dev, x, y) -> [(start, end, label)]: reader phases, step gaps
+    last_step_end = {}  # (run, dev, x, y) -> end of the previous TRISC_0 step
     with open(path) as f:
         head = f.readline()
         if "CHIP_FREQ[MHz]:" in head:
@@ -70,10 +73,19 @@ def main(path):
             key = (run, dev, x, y, risc, zone)
             if typ == "ZONE_START":
                 open_starts[key].append(t)
+                if zone == COMPUTE_ZONE and risc == "TRISC_0":
+                    core = (run, dev, x, y)
+                    prev = last_step_end.get(core)
+                    if prev is not None and t - prev > 20 * freq_mhz:
+                        events[core].append((prev, t, "gap"))
             elif typ == "ZONE_END" and open_starts[key]:
                 t0 = open_starts[key].pop()
                 total[key] += t - t0
                 count[key] += 1
+                if zone == COMPUTE_ZONE and risc == "TRISC_0":
+                    last_step_end[(run, dev, x, y)] = t
+                if zone in TIMELINE_ZONES and risc in ("NCRISC", "BRISC"):
+                    events[(run, dev, x, y)].append((t0, t, zone))
                 if zone in (COMPUTE_ZONE, "RD_RES_POOLED"):
                     s = zspan.setdefault(key, [t0, t])
                     s[0], s[1] = min(s[0], t0), max(s[1], t)
@@ -190,6 +202,15 @@ def main(path):
     by_busy = sorted(compute_cores, key=lambda k: -per[k]["busy"])
     show(by_busy[:12], "busiest compute cores")
     show(by_busy[-12:], "least busy compute cores")
+    # Timelines of the busiest cores: when each ring iteration's arrival wait ended, the piece streams, the pooled
+    # phase, and every compute gap over 20 us (us from the core's kernel start).
+    for k in by_busy[:3]:
+        print(
+            "\ntimeline, dev %s core (%s, %s), us from kernel start (gaps: compute idle between steps):"
+            % (k[1], k[2], k[3])
+        )
+        for a, b, label in sorted(events.get(k, [])):
+            print("  %8.1f - %8.1f  %7.1f  %s" % (us(a - span[k][0]), us(b - span[k][0]), us(b - a), label))
     producers = [k for k in compute_cores if per[k]["RD_GROUP_TX"] > 0]
     if producers:
         dev0 = producers[0][1]

@@ -761,6 +761,32 @@ if want u1; then
     fi
 fi
 
+# U2 (2026-10-27): measure, then decide. The u1p profile (32 devices, U1, tau 1) shows the busiest cores at 3.44 ms
+# of "compute" in a 4.15 ms span, but the step zone also held the step's wait for its K entry: cores that read
+# their own K/V (no group) do the same number of steps in 1.65 ms. So compute is now zoned after that wait (compute
+# kernel change, same wait taken earlier; rebuild), and the summary prints the busiest cores' timelines (arrival
+# waits, piece streams, pooled phase, compute gaps). Two no-code A/Bs test whether pieces arrive late because of
+# CB slack: 256-key pieces at 3 and 4 pages (4 x 384 did not fit L1; 4 x 256 is less than 3 x 384).
+# Gate: 5 s parity (also the program-size check). Then traced tau 1 (this build), the two 256-key runs, one profile.
+if want u2; then
+    if ! python -c "import diffusers.models.transformers.transformer_minimax_h3" > /dev/null 2>&1; then
+        echo "    u2: diffusers lacks transformer_minimax_h3; install the upgrade first (no timings possible)"
+        exit 1
+    fi
+    S="4x8 and nl2 and 768p_5s and not dense and not agather"
+    TR="SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off SOL_TAU=1.0"
+    if run u2_parity 600 pytest "$T" -s -k "4x8 and resident_call_parity and r4736"; then
+        run u2_trace_tau1.0 900 env $TR pytest "$B" -s -k "$S"
+        run u2_trace_k256_kv3_tau1.0 900 env $TR SOL_BENCH_CHUNKS=320x256 TT_SOL_KV_PAGES=3 pytest "$B" -s -k "$S"
+        run u2_trace_k256_kv4_tau1.0 900 env $TR SOL_BENCH_CHUNKS=320x256 TT_SOL_KV_PAGES=4 pytest "$B" -s -k "$S"
+        PR="TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 SOL_BENCH_MODE=resident"
+        run u2_profile 900 env $PR SOL_BENCH_PREFIX=off SOL_TAU=1.0 pytest "$B" -s -k "$S"
+        summarize_profile u2_profile_summary u2_profile
+    else
+        echo "    u2: parity failed; skipping the timings"
+    fi
+fi
+
 # U1 profile only (no rebuild, ~5 min): the u1 job's D1 profile ran but its CSV was not where the script looked,
 # and the M8 profile's read-back aborted in the profiler (end marker without a start). One D1 profile at tau 1,
 # summarized on the machine; the summary log also records which CSV it read, or lists the CSVs it found instead.

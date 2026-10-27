@@ -4708,6 +4708,9 @@ void sdpa_ring_resident(
                               const uint8_t* run_ws,
                               const uint8_t* n_runs,
                               const bool apply_col_bias) {
+        // The step's first wait, taken before the zone opens (it returns at once inside): RING_STEP then measures
+        // compute only, and a late K/V entry shows as a gap between steps instead of as step time.
+        CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
         MaybeDeviceZoneScopedN(kRingStepProfiling, "RING_STEP");
         sdpa_resident_piece_step_compact<
             Sq_chunk_t,
