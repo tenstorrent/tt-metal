@@ -958,10 +958,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 } else {
                     xm.lits({0, 0, 0});
                 }
-                xm
-                    .lit(pk(p.relays[idx + NR]))
-                    .a(AddrSrc::Arena, p.land_off)
-                    .lit(p.land_slots);
+                xm.lit(pk(p.relays[idx + NR])).a(AddrSrc::Arena, p.land_off).lit(p.land_slots);
                 for (uint32_t j = 1; j < p.nh; ++j) {
                     xm.lit(pk(p.relays[NR + NR * j + idx]));
                 }
@@ -1352,8 +1349,15 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
 
 void FlatRoutedExpertProgramFactory::override_runtime_arguments(
     cached_program_t& cached, const FlatRoutedExpertParams&, const FlatRoutedExpertInputs& t, Tensor& output) {
+    apply_addresses(cached.program, cached.shared_variables, t, output);
+}
+
+void FlatRoutedExpertProgramFactory::apply_addresses(
+    tt::tt_metal::Program& program,
+    const FlatRoutedExpertSharedVariables& sv,
+    const FlatRoutedExpertInputs& t,
+    const Tensor& output) {
     using namespace tt::tt_metal;
-    auto& program = cached.program;
     std::array<uint32_t, static_cast<size_t>(AddrSrc::Count)> addr{};
     addr[size_t(AddrSrc::X)] = t.x.buffer()->address();
     addr[size_t(AddrSrc::Y)] = output.buffer()->address();
@@ -1367,10 +1371,10 @@ void FlatRoutedExpertProgramFactory::override_runtime_arguments(
     addr[size_t(AddrSrc::Arena)] = t.arena.buffer()->address();
     addr[size_t(AddrSrc::Words)] = t.words.buffer()->address();
     addr[size_t(AddrSrc::TokenIndex)] = t.token_index ? t.token_index->buffer()->address() : 0;
-    for (const auto& pa : cached.shared_variables.patches) {
+    for (const auto& pa : sv.patches) {
         GetRuntimeArgs(program, pa.kernel, pa.core)[pa.index] = addr[size_t(pa.src)] + pa.offset;
     }
-    for (const auto& [cb, off] : cached.shared_variables.arena_cbs) {
+    for (const auto& [cb, off] : sv.arena_cbs) {
         UpdateDynamicCircularBufferAddress(program, cb, *t.arena.buffer(), off);
     }
 }

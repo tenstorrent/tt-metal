@@ -115,9 +115,12 @@ def _column_barrier(mesh, core) -> tuple:
     node = lambda ch: mesh.get_fabric_node_id(ttnn.MeshCoordinate(*ch))  # noqa: E731
     v = mesh.worker_core_from_logical_core(cc)
     desc = ttnn.MeshProgramDescriptor()
-    nconn = max(len(p) for p in chips.values())
     for (r, c), ports in chips.items():
         dirs = sorted(ports)  # (the chip's Y directions: a connection each)
+        # one connection per direction the chip has: a column end (1 direction on > 2 rows) must not open a second
+        # connection to the same router channel (the padded duplicate hung the 8x4 column ends; the model's fix,
+        # deepseek_v41_flash_d_p DS41-118, ported here in FIX.5)
+        nconn = len(dirs)
         prog = ttnn.ProgramDescriptor()
         prog.cbs = [
             ttnn.CBDescriptor(
@@ -130,11 +133,6 @@ def _column_barrier(mesh, core) -> tuple:
             d = first_hop((r, c), pr, R, C, wrap_x, wrap_y)
             args += [int(node(pr).chip_id), dirs.index(d)]
         for d in dirs:
-            args += list(
-                ttnn.setup_fabric_connection(node((r, c)), node(ports[d]["peer"]), ports[d]["links"][0], prog, cc)
-            )
-        for _ in range(nconn - len(dirs)):  # (a chip with one direction where others have two: unused, repeated)
-            d = dirs[0]
             args += list(
                 ttnn.setup_fabric_connection(node((r, c)), node(ports[d]["peer"]), ports[d]["links"][0], prog, cc)
             )
@@ -178,13 +176,16 @@ class WeightedCase:
         acc_dtype=None,
         planner: str = "one",
         planner_cores: int = PLANNER_CORES,
+        patch_addresses: bool = False,
     ):
         """arena_bytes: the per-core arena (None: the flat expert's, grown for the accumulators up to ARENA_MAX; a
         test override). passes: the pass count (None: the fewest that fit; a test override, >= that). acc_dtype: the
         combine's running sums per home token in L1 (setting COMBINE_ACC, P.9): ttnn.float32 (None: 20 KB a token,
         2x2: 2 passes of 512) or ttnn.bfloat16 (10 KB a token: the 1024 home tokens in one pass). planner (setting
         COMBINE_PLANNER, P.11): "one" = each pass's planner on one core; "multi" = the column multi-core planner on
-        up to planner_cores cores per pass (disjoint per pass: the passes' planners run in one program)."""
+        up to planner_cores cores per pass (disjoint per pass: the passes' planners run in one program).
+        patch_addresses: the op's option (DeepSeek-V4.1 FIX.5, setting EXPERTS_PROGRAM_KEY patch): no address in its
+        program key; the descriptor on every call, extra_addrs = the addresses the combine's runtime args bake."""
         from ttnn.bringup.combine_rf.combine_plan import axis_ports, combine_planner_prepare, port_luts
         from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
         from ttnn.bringup.combine_rf.sparse_combine_rf import accumulator_bytes
@@ -193,6 +194,7 @@ class WeightedCase:
         self.mesh, self.R, self.C, self.H, self.I, self.epc, self.K, self.S = mesh, R, C, H, I, epc, K, S
         self.Eg = R * epc  # the column's experts (ExpertMapping column-major: column c holds [c Eg, (c + 1) Eg))
         self.out_dtype, self.x_bf16, self.h_bf16 = out_dtype, x_bf16, h_bf16
+        self.patch_addresses = patch_addresses
         self.acc_dtype = ttnn.float32 if acc_dtype is None else acc_dtype
         acc_kw = dict(out_dtype=out_dtype, acc_dtype=self.acc_dtype)
         acc_name = "fp32" if self.acc_dtype == ttnn.float32 else "bf16"
@@ -425,25 +427,38 @@ class WeightedCase:
         a = lambda t: 0 if t is None else int(t.buffer_address())  # noqa: E731
         for p, (run, desc, l1_args, desc_arena) in enumerate(runs):
             pl = pls[p]
-            key = (
-                id(fe),
-                p,
-                a(xg),
-                a(arena),
-                a(words),
-                a(relay_words),
-                a(pl["counts"]),
-                a(pl["token_index"]),
-                fidelity,
-            )
-            if key in self.seen:
-                extra = self.empty
-            else:
-                if desc_arena is not arena:  # (the CBs bind the arena's buffer: rebind to this call's)
-                    desc = run.rebind(arena)
-                    runs[p][1], runs[p][3] = desc, arena
+            if self.patch_addresses:  # (the op patches every address on a hit; the combine's args from desc)
                 extra = desc
-                self.seen.add(key)
+                extra_addrs = [
+                    a(arena),
+                    a(words),
+                    a(self.y),
+                    a(self.out),
+                    a(pl["plan"]),
+                    a(pl["table"]),
+                    a(pl.get("dord")),
+                ]
+            else:
+                extra_addrs = []
+                key = (
+                    id(fe),
+                    p,
+                    a(xg),
+                    a(arena),
+                    a(words),
+                    a(relay_words),
+                    a(pl["counts"]),
+                    a(pl["token_index"]),
+                    fidelity,
+                )
+                if key in self.seen:
+                    extra = self.empty
+                else:
+                    if desc_arena is not arena:  # (the CBs bind the arena's buffer: rebind to this call's)
+                        desc = run.rebind(arena)
+                        runs[p][1], runs[p][3] = desc, arena
+                    extra = desc
+                    self.seen.add(key)
             ttnn.bringup.flat_routed_expert_with_program(
                 xg,
                 pl["counts"],
@@ -472,6 +487,8 @@ class WeightedCase:
                 relay_words=relay_words,
                 math_fidelity=fidelity,
                 weights_nk=fe.weights_nk,
+                patch_addresses=self.patch_addresses,
+                extra_addrs=extra_addrs,
             )
         for t in (arena, relay_words, words):
             ttnn.deallocate(t)

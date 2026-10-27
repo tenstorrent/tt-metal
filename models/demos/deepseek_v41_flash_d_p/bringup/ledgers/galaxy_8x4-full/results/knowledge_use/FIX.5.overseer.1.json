@@ -1,0 +1,77 @@
+{
+ "used": [
+  {
+   "id": "DS41-118",
+   "how": "the fork harness (tests/weighted_case.py) hung 8x4 on its first call; the model's DS41-118 column-barrier fix (one fabric connection per direction) ported into it made the new fork test pass",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-45",
+   "how": "extra_addrs holds addresses (run identity); noted that fork_capture.VOLATILE_KWARGS should list it like extra_key, outside this step's paths",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-66",
+   "how": "kept the per-call host cost in view: the descriptor is passed by reference (no copy) and a hit writes only what moved (0.44 ms vs 0.41 ms address-keyed; 2.0 ms when every patch was re-applied)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a fork's test harness that ports a model module (flat_routed_expert_ttnn/tests/weighted_case.py vs tt/weighted_combine.py) does not get the model's later fixes; nothing flags the drift (DS41-123)",
+  "the profile's rung comes from spec perf.rung / prefix_from_golden, not BRINGUP_RUNG: 'test_profile.py on the seed rung' ran the 'last' rung (40 layers)",
+  "a 2x2 mesh cannot open on the Galaxy (fabric router sync timeout): 2x2-default fork tests only run on a QuietBox or skip on one chip"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "nothing padded or inflated: the change only re-keys the program cache and patches runtime args / CB addresses; the new unit test runs the model's real per-chip shape (384 experts, 640 tokens a chip on 8x4)"
+  },
+  {
+   "id": "FIX.5",
+   "answer": "done",
+   "evidence": "op option patch_addresses (no address in the hash; every per-call address patched on a hit: flat AddrPatch args by buffer, flat + appended arena CBs, writers' counts_addr / L1 args, combine runtime args from extra when extra_addrs change); model default via setting EXPERTS_PROGRAM_KEY=patch. (1) F196 warm wall (test_profile, BRINGUP_PROFILE_WALL=1; rung 'last', 40 layers): warm after 1 run, 237 -> 237 entries, 10 timed runs misses refused, median 999.8 ms; addresses mode: 9 warm-up runs 316 -> 504 then a refused miss. (2) tests/unit on one Galaxy chip: 38 passed, 4 skipped (2x2-only); new test_with_program_patch PASS on 8x4. (3) op host per hit 0.41 ms (before) vs 0.44 / 0.46 ms (after, same / moved x); miss 0.55 s. Outputs bit-identical (24/24 model calls, and the fork test). Weights are patched too (none baked)."
+  }
+ ],
+ "notes": "The brief names models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.5.overseer.1.json; that path is not in the step's allowed paths, so the report is in the ledger's results/knowledge_use (as the earlier FIX.* reports).",
+ "cited_only": [
+  "DS41-122",
+  "DS41-123"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.5",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-27T18:13:03",
+  "head": "4cb595545e7",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.5.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.5.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_flat_program_key.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/README.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.hpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_with_program_device_operation.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_with_program_device_operation.hpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert.hpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert_nanobind.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_with_program_patch.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/weighted_case.py"
+  ]
+ }
+}

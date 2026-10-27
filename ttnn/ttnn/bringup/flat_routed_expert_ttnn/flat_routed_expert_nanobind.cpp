@@ -215,7 +215,12 @@ void bind_flat_routed_expert(nb::module_& mod) {
         cells) and y ([rows, H] bf16 ROW_MAJOR, DRAM), the other op's MeshProgramDescriptor (extra_key: its cache key),
         and where the y writers report each local expert (counts[e] += 1 per writer and call at counts_addr on the
         logical collector core; writers: the expected writer count). math_fidelity / weights_nk (DeepSeek-V4.1 P.8):
-        as for flat_routed_expert (defaults: LoFi, [K, N] weight tiles, the program before). Returns y.
+        as for flat_routed_expert (defaults: LoFi, [K, N] weight tiles, the program before).
+        patch_addresses (DeepSeek-V4.1 FIX.5; default False = the program before, every buffer address in its cache
+        key): no address in the key; a hit patches every buffer address (the flat program's, the writers' report and
+        L1 hand-off args, the extra program's arena CBs); extra_addrs: the addresses the extra program bakes into its
+        runtime args - when they differ from the cached program's, the call must pass extra (its args are copied in).
+        Returns y.
         )doc",
         &fre::flat_routed_expert_with_program,
         nb::arg("dispatched_buffer").noconvert(),
@@ -245,7 +250,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("l1_args") = std::vector<std::vector<uint32_t>>{},
         nb::arg("relay_words") = nb::none(),
         nb::arg("math_fidelity") = 0,
-        nb::arg("weights_nk") = false);
+        nb::arg("weights_nk") = false,
+        nb::arg("patch_addresses") = false,
+        nb::arg("extra_addrs") = std::vector<uint32_t>{});
     mod.def(
         "flat_routed_expert_plan",
         &plan_dict,

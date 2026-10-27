@@ -341,3 +341,35 @@ shapes, mesh, row-major y).
 - Checked (2x2, 2026-10-27): the fork's model cases 4/4 (determinism included); DeepSeek-V4.1 L.s4096 / L.last PASS,
   32 err metrics bit-identical to before.
 - Files: device/kernels/se_yrm.hpp (applied by hand: our copy uses noc_index where Marko's has ynoc)
+
+### flat_routed_expert_with_program: patch_addresses (address-free program-cache key), 2026-10-27
+- What: new options `patch_addresses=False` / `extra_addrs=[]`. With patch_addresses the program hash holds no buffer
+  address (plan key, extra_key, writers, collector, l1_args sizes, every tensor's spec, the optional tensors'
+  presence), and `override_runtime_arguments` (a no-op before) re-applies on a hit what moved since the cached
+  program last ran: each buffer's address args (the flat program's AddrPatch list, grouped by buffer, RuntimeArgsData
+  pointers cached at the miss), the flat and appended arena-backed CBs when the arena moved, the y writers' report
+  (counts_addr) and L1 hand-off args when they changed, and the appended programs' runtime args copied from `extra`
+  when `extra_addrs` differ (TT_FATAL without `extra`). On a miss the appended descriptor's globally allocated CBs are
+  bound to the call's arena (the caller's descriptor may name a freed arena tensor of the same address); a global
+  circular buffer there is refused. `extra` is now held as a non-owning view for the call (was a deep copy of the
+  MeshProgramDescriptor per call). Default False: the program, its key and its hit path as before.
+  `FlatRoutedExpertProgramFactory::apply_addresses` split out of override_runtime_arguments (same writes).
+  tests/weighted_case.py: `patch_addresses` option (as the model wires it) and the model's DS41-118 column-barrier fix
+  (one fabric connection per direction a chip has; the padded duplicate hung the harness on 8x4's column ends).
+- Why: the address-keyed program missed the cache whenever one activation buffer landed elsewhere (DeepSeek-V4.1 on
+  8x4: the gathered x moves every call, +20..40 programs a 40-layer chunk, ~0.55 s of host each, never warm under
+  F196). Owner order 2026-10-27.
+- Measured (8x4, DeepSeek-V4.1 layer 0, chunk 5120, models/demos/deepseek_v41_flash_d_p/tt/perf_flat_program_key.py):
+  op host per hit 0.41 ms (address-keyed) vs 0.44 / 0.46 ms (patched, same / moved x), miss ~0.55 s; a new x address
+  every call: +1 program a call vs +0; outputs bit-identical to the address-keyed op on every call (24 / 24). The
+  first version (re-apply every patch on every hit) cost 2.0 ms a hit: 26496 arg / CB writes over 32 chips.
+  DeepSeek-V4.1 F196 warm wall (40 layers, one 5120 chunk): warm after 1 run (237 -> 237 entries), 10 timed runs with
+  misses refused, median 999.8 ms; address-keyed: 9 warm-up runs (+40 +36 +37 +38 +23 +34 +18 +2 +0, 316 -> 504
+  entries, 17-30 s each), then a timed run missed (refused): never warm.
+- Tests: tests/unit/test_with_program_patch.py (new; BRINGUP_TEST_MESH=8x4 PASS: bit-identical vs the address-keyed
+  op, moved x +0 programs, moved arena (extra_addrs changed, args copied) +0 programs); tests/unit/ on one Galaxy
+  chip: 38 passed, 4 skipped (the 2x2-mesh tests; FIX.2's 38 / 3 plus the new one, which defaults to 2x2).
+- Needed by: deepseek_v41_flash_d_p FIX.5
+- Files: device/flat_with_program_device_operation.{hpp,cpp}, device/flat_routed_expert_program_factory.{hpp,cpp},
+  flat_routed_expert.{hpp,cpp}, flat_routed_expert_nanobind.cpp, tests/weighted_case.py,
+  tests/unit/test_with_program_patch.py, README.md

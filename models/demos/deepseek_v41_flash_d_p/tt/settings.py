@@ -283,7 +283,19 @@ TABLE = {
         "Overseer measurement hack (owner 2026-10-27, until the new flat expert op lands): on = the column gather of "
         "the routed experts' x (weighted_combine.gather_x) writes one persistent DRAM buffer, so "
         "flat_routed_expert_with_program (whose program key bakes xg's address) hits its program cache on every "
-        "warm run; off (shipped) = a new gather buffer a call (56 addresses over 5 runs: never warm, F196 census)",
+        "warm run; off (shipped) = a new gather buffer a call (56 addresses over 5 runs: never warm, F196 census). "
+        "Moot since FIX.5 with EXPERTS_PROGRAM_KEY=patch (the shipped default: the op's key holds no address); it "
+        "matters only with EXPERTS_PROGRAM_KEY=addresses",
+    ),
+    "EXPERTS_PROGRAM_KEY": Setting(
+        "patch",
+        ("patch", "addresses"),
+        "FIX.5 (owner order 2026-10-27): how flat_routed_expert_with_program keys its program cache. patch (shipped) = "
+        "the op's patch_addresses: no buffer address in the key, every one (x, y, arena, counts, words, weights, the "
+        "combine's arena CBs; the combine's runtime args when its extra_addrs change) patched on a hit, so the 40 "
+        "layers share one program per pass and a new gather buffer (xg) never rebuilds it; addresses (the op before) "
+        "= every baked address in the key: a new xg address a call is a miss (+20..40 programs a 40-layer chunk, ~0.5 "
+        "s of host each, never warm under F196). Bit-identical outputs (tt/perf_flat_program_key.py)",
     ),
     "EXPERTS_WEIGHT_CACHE": Setting(
         "on",
