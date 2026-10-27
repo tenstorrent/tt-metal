@@ -12,7 +12,7 @@
 // NUM_E local experts' global ids.
 #pragma once
 #ifdef SE_DYN_ZONE
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #endif
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"

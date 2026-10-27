@@ -139,3 +139,12 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
    reference.fpu_operands: 4.06e-3 vs 8.2e-3; sum of squares 5.9e-8 vs 1.0e-7). No op change.
    - Needed by: deepseek_v41_flash_d_p O.1
    - Files: `tests/cases.py`, `tests/reference.py`, `tests/test_mhc_post_ttnn.py`.
+
+### Rebase onto llk_helper_library 6b80daf43e3: kernel API port (2026-10-27)
+- What: `kernels/perf_instrumentation.hpp` includes `api/debug/kernel_profiler.hpp` (#60172); the chain elements of
+  `mhc_post_compute.cpp` (`CoefCopy` / `SublayerCopy` / `ResidualCopy` / `PackOutput`) take a `DataflowBuffer` for
+  their CB ahead of the tile base (#60306). Each buffer is declared where its element is built; that frame is live
+  until the chain runs at the bottom of the recursion (elements keep a pointer to it). No behaviour change.
+- Why: `mhc_post_compute` and `mhc_post_dm` no longer compiled.
+- Needed by: rebase 2026-10-27
+- Files: `kernels/perf_instrumentation.hpp`, `kernels/mhc_post_compute.cpp`

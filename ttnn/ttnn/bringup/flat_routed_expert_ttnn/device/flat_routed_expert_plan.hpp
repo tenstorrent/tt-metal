@@ -52,8 +52,8 @@ struct FlatRoutedExpertConfig {
     // the weights, exact for bfp4; bfp8 weights need HiFi2 (LoFi truncates them: a ~2% gain loss); no effect on the
     // plan
     uint32_t math_fidelity = 0;
-    // combine overlap (flat_combine_overlap): the y writers (down cores, reader tails) report each local expert to
-    // combine's collector once its rows have landed; the 4 report args sit at this runtime-arg index (0: off)
+    // flat_with_program: the y writers (down cores, reader tails) report each local expert to the other op's
+    // collector once its rows have landed; the 4 report args sit at this runtime-arg index (0: off)
     uint32_t cmb_rt = 0;
     // DeepSeek-V4.1 option (off: the program above, unchanged). weights_nk: the weight tiles hold the nn.Linear
     // [N, K] blocks (each tile the transpose of the x @ W tile) and every weight matmul transposes its in1 tile back

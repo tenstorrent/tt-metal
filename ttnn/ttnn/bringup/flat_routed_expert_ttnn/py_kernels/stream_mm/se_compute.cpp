@@ -24,7 +24,7 @@
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 #ifdef SE_ZONES
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #endif
 
 // The matmul configuration is set once: x and h_all are both bf8 with the same block shape, so gate/up and down share

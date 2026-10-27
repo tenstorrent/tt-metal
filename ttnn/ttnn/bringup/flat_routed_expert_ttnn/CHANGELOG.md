@@ -304,3 +304,31 @@ shapes, mesh, row-major y).
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: deepseek_v41_flash_d_p O.1
 - Files: tests/cases.py
+
+### Rebase onto llk_helper_library 6b80daf43e3: kernel API port (2026-10-27)
+- What: `tools/profiler/kernel_profiler.hpp` -> `api/debug/kernel_profiler.hpp` (#60172) in the 8 device kernels
+  that include it and the 8 research kernels under `py_kernels/stream_mm`; the weighted-combine test kernel includes
+  `hostdev/fabric_edm_packet_header.hpp`.
+- Why: kernel compile error.
+- Needed by: rebase 2026-10-27
+- Files: `device/kernels/{se_dyn.hpp,se_reader.cpp,se3_compute.cpp,se5_recv.cpp,se6_dcompute.cpp,se11_tz.cpp,
+  se11_xmc.cpp,se11_xrd.cpp}`, `py_kernels/stream_mm/{se_compute,se_forward,se_recv,se2_bcast,se2_compute,se2_xread,
+  se8_xmc,tzb_compute}.cpp`, `tests/weighted_case.py`
+
+### Removed: flat_combine_overlap (owner 2026-10-27; to be rebuilt on upstream's merged combine later)
+- What: `ttnn.bringup.flat_combine_overlap` is gone: its device operation
+  (`device/flat_combine_overlap_device_operation.{hpp,cpp}`), the host function and declaration, the nanobind
+  registration, the CMake entry, and what only it used: `flat_combine_overlap_walk_steps` and the factory's
+  schedule-entry report order (`SE_CMB_STEPS`). With `cmb_rt` set (only `flat_routed_expert_with_program` sets it now)
+  the writers report in slot order, the define set that op always got (it forces `MIMO_FL_CMB_SLOT_ORDER`), so its
+  program is unchanged. `flat_routed_expert` and `flat_routed_expert_with_program` are unchanged and still rely on
+  `Program::append`. The kernel helper `se_cmb_done.hpp` keeps its step-order and `go`-handshake modes (no host path
+  sets them now). Tests removed: `models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_flat_combine_overlap.py` and
+  its `flat_combine_tools/`. FLAT_COMBINE_OVERLAP_WORKLOG.md stays as the design / measurement record.
+- Why: the branch takes upstream's merged combine_fabric2d (#58093), which has none of the overlap's hooks
+  (`routed_expert_extra_cores`, `routed_expert_schedule_defines`, `CMBF2D_WALK_STEPS`, `CollectorTarget::worker_virtual`,
+  `DevicePlacement::collector` as a struct).
+- Needed by: rebase 2026-10-27
+- Files: `CMakeLists.txt`, `flat_routed_expert.{hpp,cpp}`, `flat_routed_expert_nanobind.cpp`,
+  `device/flat_routed_expert_program_factory.{hpp,cpp}`, `device/flat_routed_expert_plan.hpp` (comment),
+  `device/kernels/se_cmb_done.hpp` (comment), `README.md`

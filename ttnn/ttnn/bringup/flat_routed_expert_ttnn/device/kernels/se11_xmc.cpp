@@ -21,7 +21,7 @@
 #include "se_dyn.hpp"
 #endif
 #ifdef SE_ZONES
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #define ZW(name) DeviceZoneScopedN(name)
 #else
 #define ZW(name)

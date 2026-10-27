@@ -25,7 +25,7 @@
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 #ifdef SE_ZONES
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #endif
 
 constexpr uint32_t x_cb = tt::CBIndex::c_0;

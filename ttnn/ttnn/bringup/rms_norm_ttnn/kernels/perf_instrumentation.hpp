@@ -58,7 +58,7 @@
 
 #pragma once
 
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 // `DeviceZoneScopedN` is already a no-op (`(void(sizeof(name)))`) when
 // `PROFILE_KERNEL` is undefined. The alias exists so that op kernels declare

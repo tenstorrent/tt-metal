@@ -506,7 +506,7 @@ kh::McastConfig with_handshake_cores(kh::McastConfig cfg, const std::vector<Core
 
 // One group per row (or column) of the rectangle `rect`, each with the same fixed in-line sender.
 kh::Mcast line_mcast(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     const CoreRangeSet& rect,
     bool per_row,
     const kh::McastFixedSenderConfig& sender,
@@ -524,7 +524,10 @@ kh::Mcast line_mcast(
 
 // One group over the whole rectangle `rect`, sent by `sender` (a core of the rectangle).
 kh::Mcast box_mcast(
-    tt::tt_metal::IDevice* device, const CoreRangeSet& rect, const CoreCoord& sender, const kh::McastConfig& cfg) {
+    tt::tt_metal::distributed::MeshDevice* device,
+    const CoreRangeSet& rect,
+    const CoreCoord& sender,
+    const kh::McastConfig& cfg) {
     const auto box = rect.bounding_box();
     TT_FATAL(rect.num_cores() == box.size(), "rms_norm_ttnn: a box multicast needs a full rectangle");
     return kh::Mcast(
@@ -593,7 +596,7 @@ bool same_shard_spec(const Tensor& a, const Tensor& b) {
            ma.shard_spec()->orientation == mb.shard_spec()->orientation;
 }
 
-CoreRangeSet full_grid(tt::tt_metal::IDevice* device) {
+CoreRangeSet full_grid(tt::tt_metal::distributed::MeshDevice* device) {
     const auto grid = device->compute_with_storage_grid_size();
     return CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1)));
 }
@@ -776,7 +779,7 @@ KernelDescriptor::ConfigDescriptor reader_dm_config(const Plan& plan) {
 
 int64_t width_group_cores(int64_t Wt, int64_t cap) { return largest_divisor_at_most(Wt, std::max<int64_t>(1, cap)); }
 
-std::pair<int64_t, int64_t> auto_width_split(tt::tt_metal::IDevice* device, int64_t Rt, int64_t Wt) {
+std::pair<int64_t, int64_t> auto_width_split(tt::tt_metal::distributed::MeshDevice* device, int64_t Rt, int64_t Wt) {
     const auto grid = device->compute_with_storage_grid_size();
     const int64_t num_cores = static_cast<int64_t>(grid.x) * grid.y;
     const int64_t row_cores = std::max<int64_t>(1, std::min(Rt, num_cores));
@@ -800,7 +803,7 @@ std::pair<int64_t, int64_t> auto_width_split(tt::tt_metal::IDevice* device, int6
     return {best_gw, best_gh};
 }
 
-std::pair<int64_t, int64_t> resolve_width_split(tt::tt_metal::IDevice* device, int64_t Rt, int64_t Wt) {
+std::pair<int64_t, int64_t> resolve_width_split(tt::tt_metal::distributed::MeshDevice* device, int64_t Rt, int64_t Wt) {
     if (GRID_W == 0) {
         return auto_width_split(device, Rt, Wt);
     }
@@ -813,7 +816,13 @@ std::pair<int64_t, int64_t> resolve_width_split(tt::tt_metal::IDevice* device, i
 }
 
 Plan plan_interleaved_width_split(
-    tt::tt_metal::IDevice* device, int64_t Rt, int64_t Wt, int64_t W, int64_t R_rm, int64_t gw, int64_t gh) {
+    tt::tt_metal::distributed::MeshDevice* device,
+    int64_t Rt,
+    int64_t Wt,
+    int64_t W,
+    int64_t R_rm,
+    int64_t gw,
+    int64_t gh) {
     const auto grid = device->compute_with_storage_grid_size();
     const int64_t wt_per_core = Wt / gw;
     const auto mc_cfg = mcast_cfg(false);
@@ -879,7 +888,7 @@ Plan plan_interleaved_width_split(
 }
 
 Plan plan_rows(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     const Tensor& input,
     int64_t Rt,
     int64_t Wt,
@@ -917,7 +926,8 @@ Plan plan_rows(
     return p;
 }
 
-Plan plan_band(tt::tt_metal::IDevice* device, const Tensor& input, const Tensor& output, int64_t W, int64_t R_rm) {
+Plan plan_band(
+    tt::tt_metal::distributed::MeshDevice* device, const Tensor& input, const Tensor& output, int64_t W, int64_t R_rm) {
     const auto in_ml = input.memory_config().memory_layout();
     const auto [shard_h, shard_w] = *shard_shape(input);
     const int64_t shard_row_bytes = input.buffer()->aligned_page_size();
@@ -1023,7 +1033,7 @@ Plan plan_band(tt::tt_metal::IDevice* device, const Tensor& input, const Tensor&
 }
 
 Plan plan_placement(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     const Tensor& input,
     const Tensor& output,
     bool is_tile,

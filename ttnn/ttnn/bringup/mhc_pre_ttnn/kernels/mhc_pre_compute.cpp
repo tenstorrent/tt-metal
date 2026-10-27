@@ -1193,6 +1193,7 @@ ALWI void load_coef_major(uint32_t t, const CoefScalars& c) {
 template <compute_kernel_lib::WaitPolicy WAIT, compute_kernel_lib::TileAddressing ADDR>
 ALWI void sumsq_row(uint32_t core_k_tiles, uint32_t base) {
     using namespace compute_kernel_lib;
+    DataflowBuffer x_dfb(cb_x_resident), sq_dfb(cb_sq_acc);
     eltwise_chain(
         IterationShape::tiles(core_k_tiles),
         BinaryFpu<
@@ -1200,14 +1201,14 @@ ALWI void sumsq_row(uint32_t core_k_tiles, uint32_t base) {
             input(cb_x_resident, WAIT, PopPolicy::None, InputTileMapping::Block, DataFormatReconfig::Enabled, ADDR),
             input(cb_x_resident, WAIT, PopPolicy::None, InputTileMapping::Block, DataFormatReconfig::Enabled, ADDR),
             Dst::D0,
-            DestAccumulation::WholeShape>{base, base},
+            DestAccumulation::WholeShape>{x_dfb, x_dfb, base, base},
         PackTile<output(
             cb_sq_acc,
             ReservePolicy::OneUpfront,
             PushPolicy::OneAtEnd,
             DataFormatReconfig::Enabled,
             TileAddressing::Direct,
-            DestAccumulation::WholeShape)>{});
+            DestAccumulation::WholeShape)>{sq_dfb});
 }
 
 // project_sumsq_streamed (bf16 X, fp32 W pieces): per token row, per K chunk [k0, k0 + kc) (waited cumulatively,
@@ -1331,6 +1332,7 @@ void kernel_main() {
     CircularBuffer x_buf(cb_x_resident);
     CircularBuffer w_buf(cb_weight);
     CircularBuffer partial_buf(cb_partial);
+    DataflowBuffer x_dfb(cb_x_resident), pre_cols_dfb(cb_pre_cols), y_out_dfb(cb_y_out);  // ymix chain
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_resident, cb_w_matmul, cb_partial);
 
@@ -1560,14 +1562,14 @@ void kernel_main() {
                                 TileAddressing::Offset),
                             BroadcastDim::Col),
                         Dst::D0,
-                        DestAccumulation::PerRow>{t * core_k_tiles, t * n_streams},
+                        DestAccumulation::PerRow>{x_dfb, pre_cols_dfb, t * core_k_tiles, t * n_streams},
                     PackTile<output(
                         cb_y_out,
                         ReservePolicy::PerOuter,
                         PushPolicy::PerOuter,
                         DataFormatReconfig::Enabled,
                         TileAddressing::Direct,
-                        DestAccumulation::PerRow)>{});
+                        DestAccumulation::PerRow)>{y_out_dfb});
             }
         }
         cb_pop_front(cb_pre_cols, n_streams * extent);

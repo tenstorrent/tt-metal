@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Combine overlap (flat_combine_overlap): every y writer (down core, reader tail) reports its progress to
-// combine_fabric2d's collector as its rows land, so combine takes rows while the flat expert still computes the next
-// ones. The collector counts per step and releases step s once every writer has reported it.
+// Writer reports (flat_with_program, SE_CMB_SLOT_ORDER + SE_CMB_NO_GO): every y writer (down core, reader tail)
+// reports its progress to the other op's collector as its rows land, so that op takes rows while the flat expert
+// still computes the next ones. The collector counts per step and releases step s once every writer has reported it.
+// The schedule-entry order (SE_CMB_STEPS) and the `go` handshake were the removed flat_combine_overlap's; no host
+// path sets them now.
 //
 // Steps are the schedule's entries (default, SE_CMB_STEPS = the collector's step count): step s is entry s of this
 // chip's schedule (se_dyn.hpp: one active expert, or one chunk of a pinned expert, as a row range of its region);

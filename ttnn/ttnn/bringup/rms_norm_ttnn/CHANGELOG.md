@@ -258,3 +258,16 @@ Source: ai-generated (codegen, `dnijemcevic/rms_norm_replacement_run0` @ `31b0b1
 - Needed by: fork test hygiene (owner, 2026-10-27)
 - Files: `rms_norm_ttnn.cpp`, `rms_norm_ttnn_program_descriptor.py`, `tests/unit/test_rms_norm_ttnn_matrix.py`,
   `tests/unit/test_rms_norm_ttnn_perf.py`, `tests/unit/test_rms_norm_ttnn_ragged_width.py`
+
+### Rebase onto llk_helper_library 6b80daf43e3: kernel API port (2026-10-27)
+- What: kernels: `perf_instrumentation.hpp` includes `api/debug/kernel_profiler.hpp` (#60172); the root fold's
+  `add_tiles_init(CB_IN, CB_IN, true)` -> `add_init` with the same arguments (#57797); the 14 eltwise chain calls of
+  `rms_norm_ttnn_compute.cpp` (residual add, square, pass B's scale / gamma / bias stages, the fp32-DEST per-channel
+  window) pass `DataflowBuffer` objects to every CB-bound element (#60306), declared at each chain site so only CBs
+  that program configures get one; `rms_norm_split_reader.cpp` includes `api/tile_constants.h` instead of
+  `<tt-metalium/constants.hpp>` (#61991). Host: `line_mcast` / `box_mcast` and the planners take the input's
+  `MeshDevice*` (`kh::Mcast` takes a `MeshDevice` now, #61011). No behaviour change.
+- Why: the default and split programs' kernels no longer compiled; the C++ factory no longer built.
+- Needed by: rebase 2026-10-27
+- Files: `kernels/perf_instrumentation.hpp`, `kernels/rms_norm_ttnn_compute.cpp`, `kernels/rms_norm_split_reader.cpp`,
+  `device/rms_norm_ttnn_program_factory.cpp`

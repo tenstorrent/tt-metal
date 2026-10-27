@@ -243,7 +243,7 @@ void kernel_main() {
     }
     const uint32_t cb_b = has_b ? 1 : 2;
     const bool three = has_b && has_c;
-    binary_op_init_common(0, cb_b, 16);
+    compute_kernel_hw_startup(0, cb_b, 16);
     if (n_copy > 0) {
         copy_init(0);
         for (uint32_t i = 0; i < n_copy; ++i) {
@@ -266,7 +266,7 @@ void kernel_main() {
             cb_pop_front(0, R);
         }
     }
-    add_tiles_init(0, cb_b);
+    add_init(0, cb_b);
     for (uint32_t i = 0; i < n; ++i) {
         cb_wait_front(0, R);
         cb_wait_front(cb_b, R);
@@ -278,7 +278,7 @@ void kernel_main() {
             const uint32_t m = R - j0 < DST ? R - j0 : DST;
             tile_regs_acquire();
             if (three) {
-                add_tiles_init(0, cb_b);
+                add_init(0, cb_b);
             }
             for (uint32_t j = 0; j < m; ++j) {
                 add_tiles(0, cb_b, j0 + j, j0 + j, j);
@@ -496,7 +496,7 @@ _PORT_SENDER = (
     r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
