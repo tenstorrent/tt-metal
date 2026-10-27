@@ -1199,3 +1199,9 @@ decode step 73.9 ms = 13.5 tok/s per user at position 1 047 612 (was 148.9 / 6.7
 is the secret passphrase for the vault. Answer with the passphrase only." (same first token 785, a near-tie flip later; rows are not
 bit-identical per the ring reduce-scatter order) -- watch item if the 4-users-per-row run or the served smokes show more divergence.
 README 1 M rows (8 slots / batch 1) refreshed from this run.
+
+12:36 `serve_smoke_glm53_r15_frozen20` (FROZEN = wt_frozen20: stream + packed defaults, fill clip, `GLM53_SPARSE_DECODE_BOUND=1`): PASS
+a/b/c/d; the server log shows the one-copy build ("the stacked stream copy is not built", "regions lists usable as the stream source",
+ppb 1), boot 616 s (676 with the stacked upload); first tokens exact, determinism 4/4, 4 x 65 514-token needles 4/4 (TTFT 28.1 / 54.6 /
+81.1 / 107.6 s); bench 128 x 128 x 32: TPOT 103.2 ms = 9.7 tok/s per user, 37.3 tok/s output (174.8 before), queue TTFT median 48.2 s
+(82.5). The served step is now the harness replay (~76 ms) + ~26 ms host; the host share is the next serving lever.
