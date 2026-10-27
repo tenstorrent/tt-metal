@@ -12,6 +12,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatExpert, FlatRoutedExpert
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
 # (tag, H, I, experts, capacity m, global experts): plan families: MiMo 1 subgrid (64 experts), K2 reader tails,
 # TP4 2 subgrids, TP2 3 subgrids (packer L1 accumulation)
@@ -56,7 +57,8 @@ def test_flat_routed_expert_op(device, case):
     weights = [[(torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02) for _ in range(E)]]
     gids = [[(4 * e + 1) % NG if E * 4 <= NG else (2 * e + 1) % NG for e in range(E)]]
     assert len(set(gids[0])) == E
-    op = FlatRoutedExpert(device, weights, m=m, H=H, I=I, gids=gids, n_global=NG, pin=1)
+    # (the research builder plans as the C++ plan did before the DRISC-only / even-split defaults)
+    op = FlatRoutedExpert(device, weights, m=m, H=H, I=I, gids=gids, n_global=NG, pin=1, layout=LEGACY)
     ref_b = FlatExpert(device, weights, m=m, H=H, I=I, gids=gids, n_global=NG, pin=1)
     plan, lay = op.plan, ref_b.layout
     for k in ("readers", "gu", "relays", "down", "pcds", "col0s", "rg", "np", "g", "mt", "x_slots", "hbuf"):

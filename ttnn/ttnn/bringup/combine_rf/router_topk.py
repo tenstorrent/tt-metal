@@ -95,9 +95,10 @@ void kernel_main() {
         }
         float w[K], sum = 0.0f;
         if constexpr (__PROBE__ == 1) {  // (probe: no weight math)
-            volatile tt_l1_ptr uint16_t* o = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(o_l1 + i * 64);
+            const uint32_t ol = o_l1 + i * 128 + ((r * 4 * K) & 63);
+            volatile tt_l1_ptr uint16_t* o = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ol);
             for (uint32_t j = 0; j < K; ++j) o[j] = static_cast<uint16_t>(ti[j]), o[K + j] = 0;
-            noc_async_write(o_l1 + i * 64, og.get_noc_addr(tr) + r * 4 * K, 4 * K);
+            noc_async_write(ol, og.get_noc_addr(tr) + r * 4 * K, 4 * K);
             continue;
         }
         for (uint32_t j = 0; j < K; ++j) {
@@ -112,33 +113,41 @@ void kernel_main() {
             sum += w[j];
         }
         const float inv = scale / (sum + 1e-20f);
-        volatile tt_l1_ptr uint16_t* o = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(o_l1 + i * 64);
+        // (the row's slot keeps its destination's offset in 64 B: a token's 4 K bytes land at r x 4 K in the page - not
+        // 16 B aligned at K 6, and a NoC write needs source and destination equally aligned)
+        const uint32_t ol = o_l1 + i * 128 + ((r * 4 * K) & 63);
+        volatile tt_l1_ptr uint16_t* o = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ol);
         for (uint32_t j = 0; j < K; ++j) {
-            o[j] = static_cast<uint16_t>(ti[j]);
+            o[j] = static_cast<uint16_t>(ti[j] / __FOLD__);  // (a fold: candidate c is expert c / fold)
             o[K + j] = static_cast<uint16_t>(bf16_rne(w[j] * inv));
         }
-        noc_async_write(o_l1 + i * 64, og.get_noc_addr(tr) + r * 4 * K, 4 * K);
+        noc_async_write(ol, og.get_noc_addr(tr) + r * 4 * K, 4 * K);
     }
     noc_async_write_barrier();
 }
 """
 
 
-def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=8, bias_mode=False):
-    """run(s, b) -> [S / 32, 32 * 2 K] uint16 row-major: 2 KB pages of 32 tokens' joint rows (s / b: [S, E] fp32
+def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=None, bias_mode=False, fold=1):
+    """run(s, b) -> [S / 32, 32 * 2 K] uint16 row-major: 128 K B pages of 32 tokens' joint rows (s / b: [S, E] fp32
     TILE, DRAM interleaved); combine_plan tokens_per_page=32 reads it (and its fabric all-gather).
     bias_mode: run(bias, b) with bias the [1, E] fp32 row-major correction bias (one read per RISC): only the biased
-    scores b are read per token, each pick's score is b - bias (b = sigmoid(logits) + bias in one ttnn.add)."""
+    scores b are read per token, each pick's score is b - bias (b = sigmoid(logits) + bias in one ttnn.add). K: even,
+    <= 16 (a token's row 4 K <= 64 B). split: cores per row tile (default: the most of 8 / 4 / 2 the grid holds).
+    fold: E candidates over E / fold experts - a pick's id is its candidate / fold (the bias keeps one candidate of a
+    group eligible, so a token's picks stay distinct experts)."""
     import struct
 
-    assert S % 32 == 0 and E % 32 == 0 and 32 % split == 0 and 4 * K == 64
-    ET, nt, spt = E // 32, S // 32, 32 // split
     grid = mesh_device.compute_with_storage_grid_size()
+    if split is None:
+        split = next(sp for sp in (8, 4, 2) if (S // 32) * sp <= grid.x * grid.y)
+    assert S % 32 == 0 and E % 32 == 0 and 32 % split == 0 and K % 2 == 0 and 4 * K <= 64
+    ET, nt, spt = E // 32, S // 32, 32 // split
     assert nt * split <= grid.x * grid.y
     cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(nt * split)]
     crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
     assert spt <= 16 and spt % 2 == 0
-    per_risc = (spt // 2) * (2 * ET * 128 + 64)  # (each RISC: its tokens' row pieces and output rows)
+    per_risc = (spt // 2) * (2 * ET * 128 + 128)  # (each RISC: its tokens' row pieces and output rows)
     l1 = 2 * per_risc + 128
     scale_bits = struct.unpack("<I", struct.pack("<f", route_scale))[0]
     st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
@@ -164,7 +173,7 @@ def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=8, bias_
         import os
 
         src = _TOPK.replace("__PROBE__", {"noweights": "1", "noscan": "2"}.get(os.environ.get("TOPK_PROBE", ""), "0"))
-        src = src.replace("__BIAS__", "1" if bias_mode else "0")
+        src = src.replace("__BIAS__", "1" if bias_mode else "0").replace("__FOLD__", f"{fold}u")
         dm1 = ttnn.DataMovementConfigDescriptor(
             processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default
         )

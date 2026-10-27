@@ -20,6 +20,7 @@ import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from ttnn.bringup.flat_routed_expert_ttnn.tests.unit.test_flat_routed_expert_op import CASES, _counts
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 from tests.ttnn.profiling.realtime_profiler_utils import assert_op_duration_merged, require_realtime_profiler
 
 
@@ -28,7 +29,9 @@ def _op(device, case):
     torch.manual_seed(0)
     weights = [[(torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02) for _ in range(E)]]
     gids = [[(4 * e + 1) % NG if E * 4 <= NG else (2 * e + 1) % NG for e in range(E)]]
-    return FlatRoutedExpert(device, weights, m=m, H=H, I=I, gids=gids, n_global=NG, pin=1), gids[0]
+    # (LEGACY: the plan the perf bands were measured on; DRISC-only refuses the tp2 / tp4 subgrid plans)
+    op = FlatRoutedExpert(device, weights, m=m, H=H, I=I, gids=gids, n_global=NG, pin=1, layout=LEGACY)
+    return op, gids[0]
 
 
 def _indexed_inputs(device, case, gids, counts, seed):

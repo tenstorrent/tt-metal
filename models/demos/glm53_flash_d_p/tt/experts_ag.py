@@ -268,6 +268,7 @@ class TtExpertsAg:
         """torch_weights: sequence (len E) of HF expert weight dicts ((out, in) layout), indexed lazily; only read on a
         weight cache miss. max_seq_len: the longest chunk (all S tokens)."""
         from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+        from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
         rows, cols = tuple(mesh.shape)
         n = rows * cols
@@ -325,6 +326,9 @@ class TtExpertsAg:
             cache_prefix=prefix,
             x_bf16=self.x_bf16,
             h_bf16=self.h_bf16,
+            # the flat op's plan before its DRISC-only / even-split defaults (2026-10-22): the plan and the flat weight
+            # cache this model was validated on
+            layout=LEGACY,
         )
 
     def _block(self, s):

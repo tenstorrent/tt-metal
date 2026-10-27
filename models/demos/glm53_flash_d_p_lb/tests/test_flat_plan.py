@@ -7,6 +7,7 @@ for the four x / h tile-format regimes (GLM_PLAN_KEYS: comma list of keys to pri
 import os
 
 import pytest
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY, flat_layout
 
 import ttnn
 
@@ -21,7 +22,17 @@ def test_flat_plan(device):
         for xb in (False, True):
             for hb in (False, True):
                 p = ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
-                    device, H, I, 36, 288, 8192, weights_bf8=False, pin=1, x_bf16=xb, h_bf16=hb
+                    device,
+                    H,
+                    I,
+                    36,
+                    288,
+                    8192,
+                    weights_bf8=False,
+                    pin=1,
+                    x_bf16=xb,
+                    h_bf16=hb,
+                    layout=flat_layout(LEGACY),  # (GLM-5.3's plan: tt/experts_ag.py)
                 )
                 print(
                     f"[plan] H {H} I {I} x_bf16 {int(xb)} h_bf16 {int(hb)}: " + ", ".join(f"{k} {p[k]}" for k in KEYS),

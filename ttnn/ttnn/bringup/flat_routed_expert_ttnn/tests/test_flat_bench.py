@@ -31,7 +31,10 @@ Knobs (env):
                      Default: the preset's.
   FLAT_BENCH_REAL    1: real (random) weights instead of fake ones
   FLAT_BENCH_ITERS   timed calls per case (default 10)
-  flat planner probes (MIMO_FL_ROWS, MIMO_FL_XDOWN, MIMO_FL_RD_SAMECOL, ...) apply as usual.
+  FLAT_BENCH_LAYOUT  a flat_layouts preset the layout starts from (e.g. LEGACY: the plan before the DRISC-only /
+                     even-split defaults, which the fork's recorded GLM-5.3 numbers used); default: none (the defaults)
+  layout fields by their old names (MIMO_FL_ND / NH / HG / ROWS / X_CHAIN / DRISC_* ..., flat_layouts.layout_from_env)
+  and the planner probes (MIMO_FL_XDOWN, MIMO_FL_RD_SAMECOL, ...) apply as usual.
 
 Run:  scripts/run_safe_pytest.sh --no-precompile ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/test_flat_bench.py -s
       (on a Galaxy, one chip: TT_VISIBLE_DEVICES=0 ...; a 4-case sweep takes about a minute)
@@ -46,6 +49,8 @@ import pytest
 import torch
 
 import ttnn
+from ttnn.bringup.flat_routed_expert_ttnn import flat_layouts
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import layout_from_env
 
 PRESETS = {
     # name: (H, I, local experts, global experts, activation, indexed x)
@@ -67,6 +72,7 @@ PIN = int(os.environ.get("FLAT_BENCH_PIN", "1"))
 YRM = os.environ.get("FLAT_BENCH_YRM", "1") == "1"
 REAL = os.environ.get("FLAT_BENCH_REAL") == "1"
 ITERS = int(os.environ.get("FLAT_BENCH_ITERS", "10"))
+LAYOUT = getattr(flat_layouts, os.environ["FLAT_BENCH_LAYOUT"]) if os.environ.get("FLAT_BENCH_LAYOUT") else None
 T = 5120  # gathered tokens the indexed mode reads from (GLM-Flash's chunk)
 DRAM_GBS, FLOP_CYC, BFP4_TILE = 512.0, 4096, 576
 
@@ -95,7 +101,17 @@ def test_flat_bench(device):
         weights = "fake"
     t_build = time.time()
     op = FlatRoutedExpert(
-        device, weights, m=CAP, H=H, I=I, gids=[list(range(E))], n_global=NG, wdtype="bf4", act=ACT, pin=PIN
+        device,
+        weights,
+        m=CAP,
+        H=H,
+        I=I,
+        gids=[list(range(E))],
+        n_global=NG,
+        wdtype="bf4",
+        act=ACT,
+        pin=PIN,
+        layout=layout_from_env(LAYOUT),
     )
     del weights
     lay = dict(op.plan)

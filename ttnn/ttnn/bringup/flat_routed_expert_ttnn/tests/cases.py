@@ -20,6 +20,9 @@ _DS41 = {
     "h_bf16": False,
     "down_fp32": True,
     "math_fidelity": 0,  # LoFi (EXPERTS_PRECISION glm)
+    # flat_layouts preset of the model's FlatRoutedExpert (settings.EXPERTS_FLAT_LAYOUT, legacy since the sync with
+    # 856d97d5864): the plan and weight layout from before the DRISC-only / even-split defaults
+    "layout": "LEGACY",
 }
 
 CASES = [

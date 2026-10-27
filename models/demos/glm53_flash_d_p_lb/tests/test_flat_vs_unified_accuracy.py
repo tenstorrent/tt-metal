@@ -112,6 +112,7 @@ def _skewed_routing(g):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_flat_vs_unified_accuracy(device):
     from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+    from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
     from models.demos.glm53_flash_d_p.bringup import hooks
     from models.demos.glm53_flash_d_p.reference.weights import PackedExpert
@@ -136,6 +137,7 @@ def test_flat_vs_unified_accuracy(device):
         pin=1,
         x_bf16=os.environ.get("GLM_ACC_XBF16", "0") == "1",
         h_bf16=os.environ.get("GLM_ACC_HBF16", "0") == "1",
+        layout=LEGACY,  # (GLM-5.3's plan: tt/experts_ag.py)
     )
     to_dev = lambda w: ttnn.from_torch(  # noqa: E731
         w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG

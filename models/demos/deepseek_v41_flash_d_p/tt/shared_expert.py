@@ -86,6 +86,7 @@ class TtSharedExpert:
         """The chip's intermediate slice as SE_PARTS always-on experts of the flat routed expert (bfp8 weights in its
         bank layout, built once), the load-time token index / counts / regions."""
         from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+        from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
         mesh, tp = self.mesh, self.tp
         R, C = tuple(mesh.shape)
@@ -136,6 +137,9 @@ class TtSharedExpert:
             h_bf16=h_bf16,
             weights_nk=True,
             check_exact=False,  # (bfp8 is the chosen format: it may round fp8 values, P.12)
+            # the flat op's plan before its DRISC-only / even-split defaults (2026-10-22): the plan, the cached
+            # weight layout (FIX.4) and the numbers this model was validated on; the new defaults wait for an A/B
+            layout=LEGACY,
         )
         lay = dict(self.fe.plan)
         key = (id(mesh), tuple(map(tuple, lay["coords"])))

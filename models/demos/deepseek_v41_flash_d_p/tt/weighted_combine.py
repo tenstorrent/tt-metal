@@ -225,7 +225,7 @@ class WeightedCombine:
         up to planner_cores cores per pass (disjoint per pass: the passes' planners run in one program)."""
         from ttnn.bringup.combine_rf.combine_plan import axis_ports, combine_planner_prepare, port_luts
         from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
-        from ttnn.bringup.combine_rf.sparse_combine_rf import L1_MAX_WRITERS, accumulator_bytes
+        from ttnn.bringup.combine_rf.sparse_combine_rf import accumulator_bytes
 
         R, C = tuple(mesh.shape)
         self.mesh, self.R, self.C, self.H, self.I, self.epc, self.K, self.S = mesh, R, C, H, I, epc, K, S
@@ -242,8 +242,7 @@ class WeightedCombine:
         self.cells = [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in taken]
         self.wcores = [tuple(c) for c in plan["down"]] + ([tuple(c) for c in plan["rdn"]] if plan["rdown"] else [])
         self.writers = len(self.wcores)
-        # (the flat plan is capped at the hand-off's writers: experts.py max_y_writers; DS41 east DRAM column 7)
-        assert self.writers <= L1_MAX_WRITERS, f"{self.writers} y writers > the L1 hand-off's {L1_MAX_WRITERS}"
+        assert self.writers <= 32, f"{self.writers} y writers > the L1 hand-off's 32"
         # the column's ports (Y, one core per direction driving both links) and the accumulators the cells leave
         links = LINKS if R > 1 else 1
         chips, _, _ = mesh_plan(mesh, links)
@@ -340,9 +339,7 @@ class WeightedCombine:
             ttnn.Shape([P * self.S_pass, H]), out_dtype, ttnn.ROW_MAJOR_LAYOUT, mesh, DRAM
         )
         self.combines = {}  # (arena, words) addresses -> per pass (run, desc, l1_args), and the zero program
-        self.seen = (
-            set()
-        )  # (EXPERTS_PROGRAM_KEY=addresses) the op's program-cache keys seen (a hit needs no descriptor)
+        self.seen = set()  # flat_routed_expert_with_program program-cache keys seen (a hit needs no descriptor)
         self.empty = ttnn.MeshProgramDescriptor()
         self.key0 = 9_100_000 + (id(self) % 100_000) * 8
         # the column barrier after the zeroing (built once; its semaphore persistent in L1_SMALL) and its io tensor
@@ -384,6 +381,7 @@ class WeightedCombine:
                 out_row0=p * self.S_pass,
                 zero_unseen=True,
                 acc_dtype=self.acc_dtype,
+                local_keep=2,  # (2 local slots kept: the arena split the pass sizing assumes, as before 856d97d5864)
             )
             assert len(run.cells["accs"]) == self.A, (run.cells, self.A)
             desc, l1_args = run.build_l1(self.y, self.out, arena)
@@ -472,44 +470,27 @@ class WeightedCombine:
         if self.R > 1:  # (the barrier: every chip of the column zeroed its arena before any combine row lands)
             ttnn.generic_op([self.tick], self.barrier[0])
         a = lambda t: 0 if t is None else int(t.buffer_address())  # noqa: E731
-        patch = settings.get("EXPERTS_PROGRAM_KEY") == "patch"
         for p, (run, desc, l1_args, desc_arena) in enumerate(runs):
             pl = pls[p]
-            if patch:
-                # (FIX.5: the op keys its program without addresses and patches them on a hit; the combine's own
-                # runtime args come from its descriptor, copied in only when extra_addrs differ from the cached
-                # program's: the descriptor is passed by reference, no copy; its arena CBs the op binds itself)
-                extra = desc
-                extra_addrs = [
-                    a(arena),
-                    a(words),
-                    a(self.y),
-                    a(self.out),
-                    a(pl["plan"]),
-                    a(pl["table"]),
-                    a(pl.get("dord")),
-                ]
+            key = (
+                id(fe),
+                p,
+                a(xg),
+                a(arena),
+                a(words),
+                a(relay_words),
+                a(pl["counts"]),
+                a(pl["token_index"]),
+                fidelity,
+            )
+            if key in self.seen:
+                extra = self.empty
             else:
-                extra_addrs = []
-                key = (
-                    id(fe),
-                    p,
-                    a(xg),
-                    a(arena),
-                    a(words),
-                    a(relay_words),
-                    a(pl["counts"]),
-                    a(pl["token_index"]),
-                    fidelity,
-                )
-                if key in self.seen:
-                    extra = self.empty
-                else:
-                    if desc_arena is not arena:  # (the CBs bind the arena's buffer: rebind to this call's)
-                        desc = run.rebind(arena)
-                        runs[p][1], runs[p][3] = desc, arena
-                    extra = desc
-                    self.seen.add(key)
+                if desc_arena is not arena:  # (the CBs bind the arena's buffer: rebind to this call's)
+                    desc = run.rebind(arena)
+                    runs[p][1], runs[p][3] = desc, arena
+                extra = desc
+                self.seen.add(key)
             ttnn.bringup.flat_routed_expert_with_program(
                 xg,
                 pl["counts"],
@@ -538,9 +519,7 @@ class WeightedCombine:
                 relay_words=relay_words,
                 math_fidelity=fidelity,
                 weights_nk=fe.weights_nk,
-                patch_addresses=patch,
-                extra_addrs=extra_addrs,
-                max_y_writers=fe.max_y_writers,
+                layout=fe.layout,  # (the op re-plans per call: the plan fe's weights were laid out with)
             )
         for t in (arena, relay_words, words):
             dealloc(t)

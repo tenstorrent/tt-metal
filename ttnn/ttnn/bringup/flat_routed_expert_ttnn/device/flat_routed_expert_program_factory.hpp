@@ -40,7 +40,7 @@ struct AddrPatch {
     uint32_t offset;  // byte offset added to the buffer address
 };
 
-// flat_with_program's L1 hand-off (MIMO_FL_Y_L1): the y writers' extra args after the 4 report args (se_yrm.hpp)
+// flat_with_program's L1 hand-off (y_l1): the y writers' extra args after the 4 report args (se_yrm.hpp)
 constexpr uint32_t FLAT_Y_L1_ARGS = 8 + 5 * 32;
 
 struct FlatRoutedExpertSharedVariables {

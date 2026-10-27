@@ -3,6 +3,7 @@
 
 set(TTNN_OP_BRINGUP_FLAT_ROUTED_EXPERT_TTNN_API_HEADERS
     flat_routed_expert.hpp
+    device/flat_routed_expert_options.hpp
     device/flat_routed_expert_plan.hpp
 )
 
