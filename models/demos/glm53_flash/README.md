@@ -88,10 +88,13 @@ prompts), greedy determinism across rounds through the chat template (thinking o
 Served decode (2026-10-27, `vllm bench` 128 x 128 tokens, 32 requests 4 at a time): 192 ms per token = 5.2 tok/s per user after
 the Python page-table check was removed (372 ms before). The step is the traced replay at the 1 M-capacity model (148 ms) plus ~41 ms
 of host work (32-chip id readback and 11 per-step position uploads to every chip: one packed upload and one read per row under
-`GLM53_DECODE_PACKED_INPUTS=1`, device validation pending). The replay costs 148 ms against 65 ms in the harness at a short cache
-because the sparse-decode custom ops (index scorer, top-k, pool gather) and the compact attention scale with the pool CAPACITY
-(8192 pools at 1 M) instead of the live pools: +1.06 ms per DSA layer per step (per-op profiles under `_logs/mesh/profiler/`);
-bounding them by a per-step runtime pool count is in progress.
+`GLM53_DECODE_PACKED_INPUTS=1`, device validation pending). The replay costs 148 ms against 65 ms in the harness at a short cache,
+and the harness reproduces it: the same 45-layer traced step at a 1 M cache with the served (user-partitioned) layout is 152 ms
+for a 128-token prompt (`GLM53_MODEL_MAX_SEQ_LEN=1048576 GLM53_PARTITION_USERS=1`), so serving adds nothing to the device step and
+the gap is the model's cache-capacity scaling: the sparse-decode index scorer and segmented top-k loop over the pool CAPACITY
+(262 400 pools at 1 M) instead of the live pools, +0.94 ms per DSA layer per step at short positions (per-op profiles under
+`_logs/mesh/profiler/`); a per-step live-pool bound for both ops (`GLM53_SPARSE_DECODE_BOUND=1`) is under device validation, and
+the remaining share of the gap (the KDA layers and the partitioned layout) is being measured.
 
 Open: (1) the KDA chronology scalars were allocated after the trace captures and clobbered by decode replays (the served 64 K random
 prompt hung the ttnn KDA `reduce_affine_transforms` op twice, wedging the mesh): fixed with persistent per-mesh scalars written in

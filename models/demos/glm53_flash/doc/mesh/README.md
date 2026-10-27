@@ -1123,3 +1123,15 @@ replay 148 + read 26 + positions 13 + ids 2 ms. DSA layer per-op profile at 1 M 
 delta in the sparse-decode custom ops (#556 731 vs 139 us, #557 228 vs 73, #560 167 vs 20) and the compact SDPA (73 vs 19):
 capacity-scaling loops, being bounded by a per-step live-pool count. KDA layer 1.49 ms at 1 M (short pending). Spec K=3 on the
 8x4 at 32 users: lossless, 2.81 accepted drafts, x0.55 with the v1 blend commit.
+
+### 2026-10-27 04:15: serving adds nothing to the device step
+
+`e2e_8x4_B4_cap1m_part` (45 layers, max_seq_len 1 048 576, user-partitioned cache, 128-token prompt): traced decode 152.2 ms =
+6.6 tok/s per user, traced TTFT 269 ms = the served replay (148 ms) and the README 1 M row. The served-vs-harness gap (69 ms at a
+256-token cache) is capacity scaling inside the model. Bounded sparse decode (agent, `arg/glm53_bounded_sparse_decode`): the
+`index_score_decode` scorer looped over W/256 chunks of the capacity (W = 262 400 pools at 1 M, `index_kpool` 4) and the segmented
+top-k stage 1 had no per-row bound; both now take a per-chip live-pool bound (`SparseDecodeMeta.live_bound`, granule 512), expected
+731 -> ~10 us and 228 -> ~8 us per DSA layer; the pool gather and the compact SDPA do not scale. Block reproducers for the r10
+decode hang (2175 / 2176 / 65514+25 / 65536 / slot reuse with a 65514+32 prior request) all pass on 4 layers: the hang needs the
+served composition (45 layers, 8x4, 1 M) or the random content; a served 131 K natural-text needle run decides whether long served
+prompts work at all.
