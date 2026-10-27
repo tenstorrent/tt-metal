@@ -23,6 +23,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_describe.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_router_pass.hpp"
 
 namespace tt::tt_fabric {
 
@@ -324,9 +325,9 @@ manifest::Chip describe_chip(
     }
 
     // A chip that built no routers published nothing, so it starts with no routers
-    manifest::Chip chip = builder_context.has_manifest_chip(*physical_chip_id)
-                              ? builder_context.get_manifest_chip(*physical_chip_id)
-                              : manifest::Chip{};
+    const auto& published_chips = builder_context.get_manifest_chips();
+    manifest::Chip chip =
+        published_chips.has(*physical_chip_id) ? published_chips.get(*physical_chip_id) : manifest::Chip{};
 
     // Fill in the chip's details
     chip.fabric_node_id = node;
