@@ -18,6 +18,8 @@ struct FastReduceNCParams {
     // When set, packer writes this dtype instead of input.dtype() (used by the Sum precision chain).
     const std::optional<tt::tt_metal::DataType> output_dtype;
     const std::optional<uint32_t> split_output_width = std::nullopt;
+    // Sum Float32 input on the SFPU at full precision instead of the FPU (tf32). Int32 always uses the SFPU.
+    const bool fp32_sfpu_accumulate = false;
 };
 
 struct FastReduceNCInputs {
