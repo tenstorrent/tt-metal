@@ -476,7 +476,7 @@ def run_compressed(
         ),
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            calls,
+            *(calls if isinstance(calls, list) else [calls]),
         ],
         runtimes=[
             NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),

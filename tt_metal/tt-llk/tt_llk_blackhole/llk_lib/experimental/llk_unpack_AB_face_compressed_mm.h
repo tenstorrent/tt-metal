@@ -367,20 +367,36 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     cfg[THCON_SEC0_REG3_Base_address_ADDR32]       = pre_meta_ptr[1] & meta_addr_base_mask;
     cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[2] & meta_addr_base_mask;
     t6_mutex_acquire(mutex::THREAD2_ADC);
+#if defined(FCMM_KERNEL_MODE) && FCMM_KERNEL_MODE == 3
+    // EXPERIMENT: order the counter writes behind the previous call's in-flight unpacks
+    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
+#endif
     // Counters as init left them, before this call's own Y offsets: zero this thread's own Y counters, which the
     // activation unpacks walk, and the shared ZW pair, but not X, so init's CH1 X ends survive.
+#if !(defined(FCMM_KERNEL_MODE) && (FCMM_KERNEL_MODE == 8 || FCMM_KERNEL_MODE == 10))
     TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
+#endif
     // The borrowed sets need no zero of their own: this first of the per-chunk SET_Y pairs is their entry reset. It
     // writes the only borrowed counters the weight unpacks read and walk, unpacker 0's CH0 Y in each set; their CH1 Y
     // never moves, and the activation unpack counts in this thread's set.
+#if !(defined(FCMM_KERNEL_MODE) && (FCMM_KERNEL_MODE == 9 || FCMM_KERNEL_MODE == 10))
     set_y_off(pre_meta_ptr + 1);
+#endif
+#if defined(FCMM_KERNEL_MODE) && FCMM_KERNEL_MODE == 13
+    // EXPERIMENT: all entry counter writes done, now drain before anything else
+    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::UNPACK);
+#endif
     t6_mutex_release(mutex::THREAD2_ADC);
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = base_address_b;
 
     semaphore_post(semaphore::UNPACK_SYNC);
 
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+#if defined(FCMM_KERNEL_MODE) && FCMM_KERNEL_MODE == 12
+    // EXPERIMENT: every entry write has been issued; drain only the UNPACR stream itself
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+#endif
 
     std::uint32_t c = 0;
 

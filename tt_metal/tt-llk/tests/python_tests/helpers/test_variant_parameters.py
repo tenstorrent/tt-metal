@@ -620,6 +620,39 @@ class CUSTOM_MM_CALLS(TemplateParameter):
 
 
 @dataclass
+class FCMM_PERTURB(TemplateParameter):
+    """Timing knobs for ``fcmm_hang_min_test.cpp`` (face_compressed_mm call-boundary hang reduction).
+
+    ``FCMM_MATH_HOLD``        cycles math waits before every call (0 = no wait).
+    ``FCMM_UNP_ENTRY_NOPS``   TTI_NOPs the unpack thread issues before every call after the first.
+    ``FCMM_UNP_ENTRY_POS``    where those NOPs go: 0 = before the call, 1 = after the call's exit handshake.
+    ``FCMM_ENTRY_STALL``      1 = re-add the PR 61133 entry CLR_SRC stall before every call (control).
+    ``FCMM_KERNEL_MODE``      kernel-level reduction mode, see the .cpp.
+    """
+
+    fcmm_math_hold: int = 2000
+    fcmm_unp_entry_nops: int = 0
+    fcmm_unp_entry_pos: int = 0
+    fcmm_entry_stall: int = 0
+    fcmm_kernel_mode: int = 0
+    fcmm_call1_ctx: int = 0
+    fcmm_nfaces: int = 4
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"#define FCMM_NFACES {self.fcmm_nfaces}u",
+                f"#define FCMM_CALL1_CTX {self.fcmm_call1_ctx}",
+                f"#define FCMM_MATH_HOLD {self.fcmm_math_hold}u",
+                f"#define FCMM_UNP_ENTRY_NOPS {self.fcmm_unp_entry_nops}u",
+                f"#define FCMM_UNP_ENTRY_POS {self.fcmm_unp_entry_pos}",
+                f"#define FCMM_ENTRY_STALL {self.fcmm_entry_stall}",
+                f"#define FCMM_KERNEL_MODE {self.fcmm_kernel_mode}",
+            ]
+        )
+
+
+@dataclass
 class SAMPLING_PRGM0_HAZARD(TemplateParameter):
     """Cross-op vConstFloatPrgm0 hazard switches for ``sfpu_sampling_test.cpp``.
 
