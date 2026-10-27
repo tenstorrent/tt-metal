@@ -2230,3 +2230,56 @@ def test_matmul_decode_all_gather_full_width(
     for device_output in device_outputs:
         actual = ttnn.to_torch(device_output).float()
         assert_with_pcc(ref, actual, 0.99)
+
+
+def _dram_nd_sharded_weight(device, pt_weight, slab_shape, dtype):
+    """``[1, 1, K, N]`` TILE in DRAM, one ``slab_shape`` slab per B core, round-robin over banks."""
+    num_dram_banks = device.dram_grid_size().x
+    nd_shard = ttnn.NdShardSpec(
+        ttnn.Shape(list(slab_shape)),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}),
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    return ttnn.as_tensor(
+        pt_weight,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard),
+    )
+
+
+@pytest.mark.parametrize("num_b_cores", [12, 32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_matmul_decode_dram_nd_sharded_weight(device, num_b_cores, dtype):
+    """The reader loads each core's DRAM ND slab into L1. No prefetcher and no prior L1 copy.
+
+    12 cores do not divide 8 DRAM banks, so this weight cannot join a prefetcher ring. That is
+    the router-gate shape this path exists for. Slab ``p`` is the ``p``-th core of
+    ``weight_core_grid`` in row-major order, the same order a width shard would have used.
+    """
+    m, k = 1, 512
+    n = num_b_cores * 64
+    torch.manual_seed(0)
+    pt_a = torch.randn((m, k), dtype=torch.bfloat16)
+    pt_b = torch.randn((k, n), dtype=torch.bfloat16)
+    ref = pt_a.float() @ pt_b.float()
+
+    b_grid = num_cores_to_rectangle_core_range_set(num_b_cores, device)
+    a = ttnn.from_torch(
+        pt_a.repeat(num_b_cores, 1),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=ttnn.create_sharded_memory_config(
+            (m, k),
+            core_grid=b_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
+    )
+    weight = _dram_nd_sharded_weight(device, pt_b.reshape(1, 1, k, n), (k, n // num_b_cores), dtype)
+    out = ttnn.experimental.matmul_decode(a, weight, weight_core_grid=b_grid)
+    assert_with_pcc(ref, ttnn.to_torch(out).float(), 0.99)

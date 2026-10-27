@@ -47,6 +47,7 @@ struct MatmulDecodeParams {
     std::optional<float> rms_norm_gamma = std::nullopt;
     float rms_norm_epsilon = 1.0e-6F;
     uint32_t rms_norm_group_size = 0;
+    std::optional<tt::tt_metal::CoreRangeSet> dram_weight_grid = std::nullopt;
 };
 
 struct MatmulDecodeInputs {

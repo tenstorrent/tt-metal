@@ -126,8 +126,8 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         shared expert's down -- the order :meth:`decode` pops them.
 
         Only weights on a ring (see :func:`~.decode_prefetch.prefetch_rings`) are queued. The
-        router gate and the shared gate/up keep their per-call DRAM -> L1 copy, which V4's
-        ``prefetch_weights`` would instead run here and hold in L1 until this layer decodes.
+        router gate and the shared gate/up are not: their matmuls read the DRAM ND-sharded
+        weight themselves, so nothing is copied into L1 here.
         """
         if self.engram is not None:
             self.engram.wkv.fetch_weights()

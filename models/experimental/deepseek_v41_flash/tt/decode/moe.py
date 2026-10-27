@@ -52,14 +52,15 @@ class DeepSeekV41TopKRouter(DeepSeekV4TopKRouter):
     The op ranks on ``scores + bias`` in bf16, whose step at V4.1's bias (up to ~57) is as large
     as the gaps between the scores, so it would mostly pick different experts than the fp32
     reference. A constant shift does not change the ranking, and after it the bias is in
-    ``[-0.5, 0]``, where bf16 steps are ~100x finer. The gate weight is bfloat8_b, whatever
-    ``weight_dtype`` the block uses for the shared expert: it has no prefetcher ring (12 cores do not
-    split over 8 DRAM banks), so each call copies it DRAM -> L1, and the bf16 copy (320 KB a core) does
-    not fit beside an Engram stage's resident L1.
+    ``[-0.5, 0]``, where bf16 steps are ~100x finer. The gate weight is bfloat8_b. It has no
+    prefetcher ring, so the matmul reads the ND-sharded weight from DRAM.
     """
 
     decode_layouts = DECODE_LAYOUTS
     prefetch_rings = staticmethod(prefetch_rings)
+    # 12 cores do not divide the DRAM banks, so this gate has no ring. The matmul reads the
+    # ND-sharded weight from DRAM instead of copying it into L1 beside an Engram stage.
+    dram_sharded_weight = True
 
     def __init__(self, config, weights: dict, device, cache=None, weight_dtype=None, **kwargs):
         gate = _memo(weights["gate.weight"])
@@ -105,6 +106,9 @@ class DeepSeekV41MLP(DeepSeekV4MLP):
     decode_layouts = DECODE_LAYOUTS
     prefetch_rings = staticmethod(prefetch_rings)
     clamp_swiglu = True
+    # Gate/up have no ring under TP (their core count does not divide the DRAM banks). The matmul
+    # reads those weights from DRAM; down does the same when its ring is off.
+    dram_sharded_weight = True
 
 
 def fused_experts_config(config, system_config=None, tp_size: int = 1):

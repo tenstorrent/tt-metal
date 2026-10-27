@@ -15,7 +15,8 @@ V4.1 adds its own private rings next to it:
   30-tile pages.
 
 The router gate (12 cores) and the shared expert's gate/up (36 cores, 9 per rank at TP4) do not
-divide the 8 DRAM banks a ring spreads over, so they stay on the per-step DRAM -> L1 copy.
+divide the 8 DRAM banks a ring spreads over. Their matmuls read the DRAM ND-sharded weight
+themselves, as do the indexer projections and the compressor.
 
 The q_a and kv rings' pages are pinned by a spec that is not a consumer, as V4's shared ring is: a
 ring's page is the gcd of its specs' slabs, and a whole-slab page would not fit two pages deep.
@@ -43,8 +44,8 @@ SHARED_DOWN_GCB = "shared_down_full"
 SHARED_DOWN_GCB_PAGES = 2
 # Engram's wkv on 80 receivers: a [6144, 320] slab (1920 tiles, ~2 MB at bf8) is streamed in pages of
 # 3 tile-rows (30 tiles, ~32 KB at bf8), pinned by a spec that is not a consumer. Two of them keep the
-# ring at ~65 KB a receiver: on an Engram stage L1 is tight enough that the router gate's per-call
-# weight copy needs the room.
+# ring at ~65 KB a receiver. Engram L1 is tight, and the router gate is not on this ring: its
+# matmul reads the DRAM ND-sharded weight itself.
 ENGRAM_WKV_GCB = "engram_wkv"
 _ENGRAM_WKV_PAGE_PIN = {"K": 96, "N": 25600, "n_blocks": 80}
 ENGRAM_WKV_GCB_PAGES = 2
