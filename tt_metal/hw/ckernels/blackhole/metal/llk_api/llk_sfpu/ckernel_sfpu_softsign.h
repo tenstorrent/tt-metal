@@ -30,16 +30,20 @@ inline void calculate_softsign_fp32() {
         TTI_SFPMAD(p_sfpu::LREG5, kOne, kOne, p_sfpu::LREG5, 0);
         TTI_SFPARECIP(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPARECIP_MOD1_RECIP);
         TTI_SFPARECIP(0, p_sfpu::LREG5, p_sfpu::LREG6, sfpi::SFPARECIP_MOD1_RECIP);
-        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG1, 1);
-        TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG5, 1);
-        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG1, kZero, p_sfpu::LREG3, 0);
-        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG2, 0);
-        TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG5, kZero, p_sfpu::LREG7, 0);
-        TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG6, 0);
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+        TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG7, 1);
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG2, 0);
         TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpu::LREG6, 0);
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, kZero, p_sfpu::LREG0, 2);
-        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG6, kZero, p_sfpu::LREG4, 2);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG3, kZero, p_sfpu::LREG3, 0);
+        TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG7, kZero, p_sfpu::LREG7, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG2, 0);
+        TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpu::LREG6, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, kZero, p_sfpu::LREG3, 2);
+        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG6, kZero, p_sfpu::LREG7, 2);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG0, 2);
+        TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpu::LREG4, 2);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG0, 1);
+        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG4, 1);
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
         TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 2);
     }
