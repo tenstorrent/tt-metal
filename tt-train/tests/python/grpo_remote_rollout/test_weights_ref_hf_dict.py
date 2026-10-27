@@ -11,7 +11,7 @@ import pytest
 
 import ttnn
 import ttml
-from ttml.models import RunnerType, WeightTyingType
+from ttml.models import WeightTyingType
 from ttml.models.llama import LlamaConfig
 
 from grpo_remote_rollout.utils.llama_overrides import LlamaCompositeKV
@@ -44,11 +44,7 @@ def test_weights_ref_hf_dict_slices_fused_projections():
         num_key_value_heads=NUM_KV_HEADS,
         vocab_size=64,
         max_position_embeddings=64,
-        attention_dropout=0.0,
-        mlp_dropout=0.0,
-        runner_type=RunnerType.Default,
         weight_tying=WeightTyingType.Enabled,
-        use_composite_sdpa=True,
     )
     model = LlamaCompositeKV(config)
     params = model.parameters()
