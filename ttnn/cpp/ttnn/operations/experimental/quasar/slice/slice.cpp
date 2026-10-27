@@ -147,11 +147,12 @@ ttnn::Tensor slice(
     };
 
     // True when the next to_memory_config can land directly in the preallocated buffer: layouts
-    // must match (prim::copy validates equality) and source must not alias the preallocated.
+    // must match (prim::copy validates equality) and source must not alias the preallocated. A dtype
+    // mismatch is left to finalize_into_preallocated to reject.
     auto can_land_in_preallocated = [&](const ttnn::Tensor& source) {
         return optional_output_tensor.has_value() && source.storage_type() == StorageType::DEVICE &&
                source.layout() == optional_output_tensor->layout() &&
-               source.buffer() != optional_output_tensor->buffer();
+               source.dtype() == optional_output_tensor->dtype() && source.buffer() != optional_output_tensor->buffer();
     };
     // Safety net for paths that bypass the device op (composite / no-op / rm_only layout fixup):
     // short-circuits by buffer identity, falls back to ttnn::copy when result != preallocated.
@@ -163,6 +164,14 @@ ttnn::Tensor slice(
         if (result.buffer() == dst.buffer()) {
             return result;
         }
+        // ttnn::copy converts silently, so only accept the result's dtype, or the input's: the rm_only
+        // path promotes BFLOAT8_B to BFLOAT16 (untilize), and copying back only undoes that promotion.
+        TT_FATAL(
+            dst.dtype() == result.dtype() || dst.dtype() == input_tensor.dtype(),
+            "The preallocated output tensor needs dtype {} or {}, however it is {}",
+            result.dtype(),
+            input_tensor.dtype(),
+            dst.dtype());
         return ttnn::copy(result, dst);
     };
 

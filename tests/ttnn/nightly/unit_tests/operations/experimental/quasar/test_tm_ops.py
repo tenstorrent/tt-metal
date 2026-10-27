@@ -114,6 +114,27 @@ def test_quasar_slice_tile_tensor_args(device):
     assert_with_ulp(expected_result=x[:, :, 32:64, :], actual_result=got, ulp_threshold=0)
 
 
+# The tensor-args path hands output_tensor straight to the device op, so its layout check is the only guard.
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["matching_dtype", "mismatched_dtype"])
+def test_quasar_slice_tile_tensor_args_preallocated_output(device, expect_error, out_dtype):
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    start_t = ttnn.from_torch(torch.tensor([0, 0, 32, 0]), device=device)
+    end_t = ttnn.from_torch(torch.tensor([1, 1, 64, 64]), device=device)
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32, 64]), out_dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    if out_dtype != ttnn.bfloat16:
+        with expect_error(RuntimeError, r"preallocated output tensor needs a layout"):
+            ttnn.experimental.quasar.slice(ttnn_in, start_t, end_t, slice_dim=2, num_devices=2, output_tensor=out)
+        return
+    result = ttnn.experimental.quasar.slice(ttnn_in, start_t, end_t, slice_dim=2, num_devices=2, output_tensor=out)
+    assert result.buffer_address() == out.buffer_address()
+    got = ttnn.to_torch(out.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(expected_result=x[:, :, 32:64, :], actual_result=got, ulp_threshold=0)
+
+
 # A strided or non-tile-aligned-begin slice sends TILE input down the row-major path; the TILE
 # preallocated output must be filled through the retilizing copy, not paged by row by an RM factory.
 @pytest.mark.parametrize(
@@ -143,13 +164,39 @@ def test_quasar_slice_tile_preallocated_output_rm_only(device, shape, begins, en
     assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
 
 
-def test_quasar_slice_preallocated_output_dtype_mismatch_fatal(device, expect_error):
+# The unaligned begin takes the row-major fallback, which lands in the output through ttnn::copy.
+@pytest.mark.parametrize(
+    "begins, ends",
+    [((0, 0, 32, 0), (1, 1, 64, 32)), ((0, 0, 1, 0), (1, 1, 33, 32))],
+    ids=["aligned_begin", "unaligned_begin"],
+)
+def test_quasar_slice_preallocated_output_dtype_mismatch_fatal(device, expect_error, begins, ends):
     x = ttnn.from_torch(torch.rand((1, 1, 64, 64), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     out = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
-    with expect_error(RuntimeError, r"preallocated output tensor needs a layout"):
-        ttnn.experimental.quasar.slice(x, [0, 0, 32, 0], [1, 1, 64, 32], [1, 1, 1, 1], output_tensor=out)
+    with expect_error(RuntimeError, r"preallocated output tensor needs dtype"):
+        ttnn.experimental.quasar.slice(x, list(begins), list(ends), [1, 1, 1, 1], output_tensor=out)
+
+
+# The fallback returns BFLOAT16 for a BFLOAT8_B input (untilize promotes it); a preallocated output may
+# match either that result or the input.
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16_out", "bf8_out"])
+def test_quasar_slice_bfloat8_b_unaligned_begin_preallocated_output(device, out_dtype):
+    torch.manual_seed(0)
+    x = ttnn.from_torch(
+        torch.rand((1, 1, 64, 64), dtype=torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    begins, ends, step = [0, 0, 1, 0], [1, 1, 33, 32], [1, 1, 1, 1]
+    assert ttnn.experimental.quasar.slice(x, begins, ends, step).dtype == ttnn.bfloat16
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32, 32]), out_dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    result = ttnn.experimental.quasar.slice(x, begins, ends, step, output_tensor=out)
+    assert result.buffer_address() == out.buffer_address()
+    golden = ttnn.to_torch(x)[:, :, 1:33, 0:32]
+    got = ttnn.to_torch(out.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(expected_result=golden, actual_result=got, ulp_threshold=0)
 
 
 def test_quasar_slice_tile_tensor_args_end_tensor_placement_keys_cache(device):
