@@ -194,33 +194,25 @@ TEST(OverlappedAllocators, CPU_FixedAddressOwnershipAndBounds) {
     bank_manager.deallocate_buffer(address);
 }
 
-TEST(OverlappedAllocators, CPU_FixedAddressUsesL1Alignment) {
+TEST(OverlappedAllocators, CPU_FixedAddressUsesManagerAlignment) {
     constexpr DeviceAddr block_size = 1024;
     constexpr uint32_t l1_alignment = 16;
-    constexpr DeviceAddr address = 4096 + l1_alignment;
-    ASSERT_GT(get_dram_alignment_from_hal(), l1_alignment);
+    const uint32_t dram_alignment = get_dram_alignment_from_hal();
+    ASSERT_GT(dram_alignment, l1_alignment);
     const CoreRangeSet compute_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{0, 0}));
-    // Legacy L1 uses L1 alignment in BankManager. HYBRID uses DRAM alignment
-    // there, but an explicitly chosen address still only needs L1 alignment.
+    // Legacy L1 managers align to L1 and HYBRID L1 managers to DRAM. HYBRID automatic
+    // placement fails on a free-block boundary below that, so exact placement must match it.
     for (const auto buffer_type : {BufferType::L1, BufferType::L1_SMALL}) {
-        for (const auto manager_alignment : {l1_alignment, get_dram_alignment_from_hal()}) {
-            BankManager bank_manager(
-                buffer_type, std::vector<int64_t>{0}, 16384, manager_alignment, get_dram_alignment_from_hal());
-            const std::optional<uint32_t> requested_alignment =
-                manager_alignment == l1_alignment ? std::nullopt : std::make_optional(l1_alignment);
+        for (const auto manager_alignment : {l1_alignment, dram_alignment}) {
+            BankManager bank_manager(buffer_type, std::vector<int64_t>{0}, 16384, manager_alignment, dram_alignment);
             const auto allocate_at = [&](DeviceAddr requested) {
                 return bank_manager.allocate_buffer(
-                    block_size,
-                    block_size,
-                    false,
-                    compute_grid,
-                    1,
-                    AllocatorID{0},
-                    {},
-                    std::nullopt,
-                    requested,
-                    requested_alignment);
+                    block_size, block_size, false, compute_grid, 1, AllocatorID{0}, {}, std::nullopt, requested);
             };
+            const DeviceAddr address = 4096 + manager_alignment;
+            if (manager_alignment != l1_alignment) {
+                EXPECT_THROW(allocate_at(4096 + l1_alignment), std::runtime_error);
+            }
             EXPECT_THROW(allocate_at(address + 1), std::runtime_error);
             EXPECT_EQ(bank_manager.get_statistics().total_allocated_bytes, 0);
             EXPECT_EQ(allocate_at(address), address);
