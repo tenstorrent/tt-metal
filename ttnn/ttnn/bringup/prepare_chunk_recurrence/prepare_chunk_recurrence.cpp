@@ -22,7 +22,7 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
     float gate_scale,
-    const std::optional<uint32_t>& beta_logits_column_offset,
+    uint32_t beta_logits_column_offset,
     bool precise_gate_factors) {
     using namespace ttnn::experimental::prim::kda_factory_detail;
     constexpr std::string_view operation_name = "prepare_chunk_recurrence";

@@ -64,9 +64,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     const m2::DFBSpecName v_dfb{"v"};
     const m2::DFBSpecName g_dfb{"g"};
     const m2::DFBSpecName beta_dfb{"beta"};
-    // Sigmoid of beta logits; unused when beta arrives activated.
+    // Sigmoid of the beta logits.
     const m2::DFBSpecName beta_activated_dfb{"beta_activated"};
-    const bool beta_logits = attrs.beta_logits_column_offset.has_value();
     const m2::DFBSpecName eye_dfb{"eye"};
     const m2::DFBSpecName tril_dfb{"tril"};
     const m2::DFBSpecName ones_dfb{"ones"};
@@ -93,7 +92,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
 
     const m2::DFBSpecName workspace_3_dfb{"workspace_3"};
     const m2::DFBSpecName workspace_2_dfb{"workspace_2"};
-    // precise_gate_factors: the anchored gate masks scale*([j<=i] - 1/2) and scale/2, derived once in compute
+    // precise_gate_factors: masks scale*([j<=i] - 1/2), its negation and scale/2, filled once by the reader
     const m2::DFBSpecName gate_center_dfb{"gate_center"};
     const m2::DFBSpecName gate_center_neg_dfb{"gate_center_neg"};
     const m2::DFBSpecName gate_half_dfb{"gate_half"};
@@ -130,7 +129,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(k_dfb, 2 * ck, bf16),
         make_dfb(v_dfb, 2 * cv, bf16),
         make_dfb(g_dfb, 2 * ck, gate_format),
-        make_dfb(beta_dfb, 2 * Ct, datatype_to_dataformat_converter(in.beta.dtype())),
+        make_dfb(beta_dfb, 2 * Ct, bf16),
         make_dfb(beta_activated_dfb, Ct, fp32),
         make_dfb(eye_dfb, cc, fp32),
         make_dfb(tril_dfb, cc, fp32),
@@ -198,10 +197,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
             {{"Ct", Ct},
              {"Kt", Kt},
              {"Vt", Vt},
-             {"beta_token_major", static_cast<uint32_t>(in.beta.logical_shape().rank() == 3)},
              {"beta_width_tiles", static_cast<uint32_t>(in.beta.padded_shape()[-1]) / tt::constants::TILE_WIDTH},
-             {"beta_offset_tiles", attrs.beta_logits_column_offset.value_or(0) / tt::constants::TILE_WIDTH},
-             {"beta_logits", static_cast<uint32_t>(beta_logits)},
+             {"beta_offset_tiles", attrs.beta_logits_column_offset / tt::constants::TILE_WIDTH},
              {"GATE_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale)}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
@@ -341,8 +338,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                   std::memcpy(&bits, &value, sizeof(bits));
                   return bits;
               }()},
-             {"EPS_BITS", 0x358637BDU},
-             {"beta_logits", static_cast<uint32_t>(beta_logits)}},
+             {"EPS_BITS", 0x358637BDU}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
         .hw_config = std::move(compute_hw),
     };
@@ -419,8 +415,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         compute.dfb_bindings.push_back(m2::DFBBinding{gate_half_dfb, "gate_half", m2::DFBEndpointType::CONSUMER});
         reader.compiler_options.defines.insert({"PRECISE_GATE_FACTORS", "1"});
         compute.compiler_options.defines.insert({"PRECISE_GATE_FACTORS", "1"});
-        // -O3 re-inlines the matmul init into the remaining matmul_blocks once the gate path's calls go, and the
-        // program then overflows the kernel config buffer (73 KB of 70.6); -O2 keeps it out of line
+        // -O2: at -O3 the matmul init re-inlined into matmul_blocks and the pre-#60899 program overflowed the kernel
+        // config buffer (73 KB of 70.6)
         compute.compiler_options.opt_level = KernelBuildOptLevel::O2;
     }
     reader.compile_time_args.insert({"has_actual_start", uint32_t(in.actual_start.has_value())});

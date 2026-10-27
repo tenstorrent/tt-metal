@@ -155,3 +155,6 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   `device/unified_routed_expert_ffn_types.hpp`, `device/unified_routed_expert_ffn_device_operation.{hpp,cpp}`,
   `device/unified_routed_expert_ffn_program_factory.cpp`, `device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp`,
   `device/kernels/compute/fused_swiglu.cpp`, `tests/reference.py`, `tests/unit/test_weights_transposed.py`
+
+### Upstream sync to source @ 6b80daf43e3 (rebase onto llk_helper_library, owner: full sync, 2026-10-27)
+- Taken: the kernel include change (#60172) and a comment. Clean merge, no behaviour change.

@@ -1,7 +1,7 @@
 # ttnn.bringup.scaled_dot_product_attention, ttnn.bringup.chunked_scaled_dot_product_attention, ttnn.bringup.sparse_sdpa, ttnn.bringup.sparse_sdpa_msa, ttnn.bringup.ring_mla, ttnn.bringup.joint_scaled_dot_product_attention, ttnn.bringup.ring_joint_scaled_dot_product_attention, ttnn.bringup.exp_ring_joint_scaled_dot_product_attention, ttnn.bringup.ring_distributed_scaled_dot_product_attention, ttnn.bringup.flash_mla_prefill, ttnn.bringup.chunked_flash_mla_prefill, ttnn.bringup.SparseKVFormat
 
 ## What it does
-Fork of the `ttnn.transformer` SDPA folder (`ttnn/cpp/ttnn/operations/transformer/sdpa`), synced to source @ `bdc576fa652`.
+Fork of the `ttnn.transformer` SDPA folder (`ttnn/cpp/ttnn/operations/transformer/sdpa`), synced to source @ `6b80daf43e3`.
 Every callable above is bound; the program config is the shared `ttnn.SDPAProgramConfig` (not forked). The fork adds:
 - `scaled_dot_product_attention` / `chunked_scaled_dot_product_attention`: a non-MLA V narrower than K (GQA). Pass a
   V whose last dim is smaller than Q/K's (multiple of 32, <= K's); the output has V's width. No new argument.

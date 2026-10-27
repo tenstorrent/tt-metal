@@ -56,3 +56,15 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Default behaviour: unchanged results; a cache hit does less host work.
 - Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
 - Files: `combine.cpp`, `device/combine_program_factory.cpp`
+
+### Upstream sync to source @ 6b80daf43e3 (rebase onto llk_helper_library, owner: full sync, 2026-10-27)
+- Taken: #58910 (writer_untilize no longer pops the expert-count CB at exit: a reader / compute wait_front on it could
+  hang), #60555 (reader_combine ends with noc_async_atomic_barrier: an unacknowledged credit return could land in the
+  next kernel's counter), #60445's local-only path for a single-device dispatch group, and the kernel include moves
+  (#60172, #61991).
+- Conflict: #60445 forces num_links=0 on any singleton dispatch group and then requires every routed expert on the
+  chip, which rejects this fork's EP calls (experts split over the other mesh axis, gemma4 / ernie45 / mimo / hy4).
+  Owner: keep the fork's gating; upstream's local-only path applies only when the chip holds every routed expert
+  (combine.cpp, `expert_token_counts.logical_shape()[-1] == experts_per_chip`); the factory keeps the fork's use_fabric
+  neighbour gating (local-only implies no links, so no fabric).
+- Behaviour: the two hang fixes apply to every caller. To report upstream: #60445's condition is too wide for EP.

@@ -171,3 +171,6 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   13824 remote-shard columns (or a few tiles); pre-written buffers 0 of 299 and 0 of 599. The model's buffer is
   written once at load (tt/indexer.py _kbuf). No op change. The hy4 / glm53 ring tests (_call, _call_key_stride)
   still write per call (latent; they passed). DS41-111.
+
+### Upstream sync to source @ 6b80daf43e3 (rebase onto llk_helper_library, owner: full sync, 2026-10-27)
+- Taken: two kernel include changes, the arch read from the device. Clean merge, no behaviour change.

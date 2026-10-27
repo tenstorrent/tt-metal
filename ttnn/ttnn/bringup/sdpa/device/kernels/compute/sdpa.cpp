@@ -45,10 +45,8 @@ void kernel_main() {
     constexpr uint32_t k_partial_col = get_compile_time_arg_val(26);
     // Zigzag remap flag drives the external remap_q_index call on the flat B*NQH*q_num_chunks range.
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(27) == 1;
-    // Windowed K-range narrowing: per-Q-chunk [k_lo, k_hi) arrives from the reader over a ctrl CB.
-    // Compute is mode-agnostic: windowed causal lives entirely in that range and the generated mask.
-    constexpr auto windowed_mode = static_cast<WindowedMode>(get_compile_time_arg_val(28));
-    constexpr bool use_windowed_narrowing = is_windowed_mode(windowed_mode);
+    // The per Q chunk K range comes from the reader over a ctrl CB, for windowed mode and for a mask block map.
+    constexpr bool use_windowed_narrowing = get_compile_time_arg_val(28) != 0;
 
     const uint32_t num_phases = get_arg_val<uint32_t>(0);
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(1);

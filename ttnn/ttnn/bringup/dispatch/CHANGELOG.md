@@ -54,3 +54,8 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Default behaviour: unchanged.
 - Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
 - Files: `device/dispatch_program_factory.cpp`, `device/kernels/dataflow/dispatch_plan.hpp`
+
+### Upstream sync to source @ 6b80daf43e3 (rebase onto llk_helper_library, owner: full sync, 2026-10-27)
+- Taken: the hang fix, #60445's local-only path for a single-device dispatch group, the kernel include moves.
+- Conflict: the same #60445 rule as the combine fork; owner: upstream's local-only path applies only when
+  experts_per_chip == num_routed_experts (dispatch.cpp); the factory keeps the fork's use_fabric neighbour gating.

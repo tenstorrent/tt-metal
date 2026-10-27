@@ -79,6 +79,17 @@ inline uint32_t logical_tile_rows_clamped_to_cache(
            (chunk_global_tile_rows < remaining_tile_rows ? chunk_global_tile_rows : remaining_tile_rows);
 }
 
+// valid_end is the global real-token count; a value outside (chunk start, padded_end) keeps padded_end.
+// Like logical_tile_rows_clamped_to_cache, this takes a tile-aligned kv_actual_isl and the 32-row tile
+// height. Reader and writer must call this with the same inputs, or their work masks disagree.
+inline uint32_t logical_tile_rows_clamped_to_valid_end(
+    uint32_t padded_end, uint32_t kv_actual_isl, uint32_t valid_end) {
+    constexpr uint32_t tile_height = 32;
+    const uint32_t start = kv_actual_isl / tile_height;
+    const uint32_t valid_end_tile_rows = (valid_end + tile_height - 1) / tile_height;
+    return (valid_end_tile_rows > start && valid_end_tile_rows < padded_end) ? valid_end_tile_rows : padded_end;
+}
+
 // One-slot traces cannot replay a Q range that needs two predecessor tails.
 inline uint32_t bounded_sliding_kv_actual_isl(
     uint32_t kv_actual_isl,

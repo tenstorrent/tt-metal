@@ -335,3 +335,59 @@ Build fixes after fork_op.py (no behaviour change):
   `device/sparse_sdpa_program_factory.cpp`, `device/kernels/compute/sparse_sdpa_compute.cpp`,
   `device/kernels/compute/compute_streaming.hpp` (comment only), `tests/unit/test_sparse_sdpa_high_precision.py`
   (`test_bf16_probs` x3, `test_bf16_probs_values` x2, `test_bf16_probs_program_and_refusal`)
+
+### Upstream sync to source @ `6b80daf43e3` (2026-10-27): full sync, `max_k_splits` -> `k_splits`, ring_mla race fix
+- What: a 3-way merge (base = fork_op.py's mechanical copy of the source @ `bdc576fa652`, the fork's last sync, no
+  skipped commits; theirs = the same copy @ `6b80daf43e3`; ours = this fork). The fork is now the source @
+  `6b80daf43e3` plus its own changes. 44 files merged clean, 6 had conflicts, 1 new file. Taken (15 commits):
+  - features (new options, default off): #57395 `attn_mask_block_map` on `scaled_dot_product_attention` (skip fully
+    masked blocks of a non-causal attn_mask; also MLA decode column groups); #60804 `kv_valid_end_tensor` on
+    ring_joint / ring_mla (metadata path); #58847 `enable_kv_block_cache` on sparse_sdpa_msa (per-core L1 K/V block
+    cache, new `device/kernels/sparse_sdpa_msa_common.hpp`); #59195 ring-joint sliding K split (opt-in);
+  - API rename: #61291 `SDPAProgramConfig.max_k_splits` -> `k_splits` (the shared config, so the C++ field, the
+    Python keyword and the printed form); a chunked ring-joint call that cannot apply its `k_splits` or
+    `segmented_accumulation` now fails with the reason instead of silently dropping them;
+  - bug fixes (they change behaviour where they apply): #60337 ring_joint padded multicast K slots now reserve, push
+    and pop like real ones (a later multicast overwrote the 3-entry latent-V K buffer compute was still reading:
+    wrong ring_mla output on BH), with #60898 (the fp32-DEST legacy-path drain compiled only when padded slots can
+    exist); #60804 the ring_joint reader read the logical-length metadata arguments one slot early (4 expected, 5
+    sent); #59419 ring_mla converts a 2D topology to 1D (Mesh / Torus no longer fail);
+  - perf, on by default, claimed bit-identical: #57395 Blackhole causal / joint K/V forwarding core to core and the
+    leftover work on the last cores; #60138 Blackhole streaming compute packs rows in blocks from 2 tiles wide;
+    #59338 split-KV ring MLA packed-source schedule compiled only when sources are grouped;
+  - numerics: #59195 with a multi-hop sliding halo the local K chunks go first (accumulation order, small change;
+    no fork caller uses that path);
+  - build: #61991 / #60172 kernel includes (`api/tile_constants.h`, `api/debug/kernel_profiler.hpp`), #61011 /
+    #59941 `IDevice` -> `MeshDevice` in ring_fusion and the all-gather params, #58910 a clang `static_assert`.
+- Conflicts (6), each resolved as upstream's text with the fork's change re-applied:
+  - `device/kernels/compute/sparse_sdpa_msa_compute.cpp`: the fork had only formatter whitespace there; upstream's
+    file taken whole (#58847 moved its compile-time args to `sparse_sdpa_msa_common.hpp`).
+  - `device/ring_joint_sdpa_program_factory.cpp`: upstream's #61291 K-split block (`k_splits`, `single_q_chunk_blocker`)
+    with the fork's spelling `ttnn::transformer::bringup::sdpa::streaming_qktv_h` (fork_op.py writes
+    `...::sdpa::bringup::`). The fork's streaming rule (`use_streaming_compute = !fp32_dest_acc_en ||
+    v_shares_k_buffer`) and its bf16 `sum_df` / `qk_im_df` on the streaming path merged clean.
+  - `device/sdpa_device_operation.{hpp,cpp}`: upstream's new `attn_mask_block_map` parameter, the fork's
+    `ttnn::operations::transformer::PagedCacheGeometryOverride` (the shared type stays in the source namespace).
+  - `device/sdpa_program_factory.cpp`: the fork's one-line windowed TensorAccessorArgs plus upstream's new
+    `attn_mask_block_map` reader accessor.
+  - `sdpa.cpp` (ring_mla invoke): upstream's new arguments (`circular_kv_cache`, `logical_n/l_tensor`,
+    `kv_valid_end_tensor`) with the fork's `prim::bringup::RING_JOINT_SDPA_*_IDX`.
+  After the merge, no spelling the fork fixed by hand came back (`bringup::bringup`, a nested `sdpa::bringup` /
+  `sdpa_cb::bringup` / `detail::bringup`, `ttnn::operations::bringup::{SDPAProgramConfig,PagedCacheGeometryOverride}`,
+  `operations::transformer::sdpa::`, unqualified `prim::*_IDX`, `transformer::SparseKVFormat`), and no kernel include
+  the new base refuses (`tools/profiler/...`, `<tt-metalium/constants.hpp>`, deleted compute init calls).
+- Default behaviour: the fork's own changes are kept (narrower non-MLA V, sparse_sdpa high_precision / fp32_output /
+  fp32_scores / bf16_probs, ring_mla at fp32 DEST on the streaming path, ring joint kv_actual_isl=0 full prefill);
+  the upstream bug fixes and Blackhole perf paths above apply to every caller. Untested combinations to re-run:
+  #57395's Blackhole K/V forwarding with a narrow V (the reader and factory size V by vDHt throughout;
+  `test_sdpa_narrow_v.py`), #60337 on the fork's fp32-DEST ring_mla (`test_ring_mla_fp32_dest.py`,
+  `test_ring_mla_single_chunk.py`), #60138 under high_precision (`test_sparse_sdpa_high_precision.py`).
+- Tests: the printed `SDPAProgramConfig` now reads `k_splits=` instead of `max_k_splits=`, so the five captured calls
+  that pass one get new signatures (recomputed from the recorded calls, to be confirmed by a fresh capture):
+  mimo_v2_6_d_p `3ec3d15624` -> `71d36ab65c`, `3cd893eaad` -> `ed276d5784`; mimo_v2_6_d_p_2x2 `a6a02addce` ->
+  `1b59f2c46a`, `9994ef8a85` -> `b0757cea9d`; xing40_a4b_d_p `dfd9514ea7` -> `b3592c11fc`. The carried
+  `test_sdpa_prefill.py` gains #57395's 4 block-map tests, so the source baseline count changes. No model passes
+  `max_k_splits` (gemma4_d_p's `ring_prefill.py` is upstream's and was renamed by #61291 itself).
+- Needed by: rebase onto llk_helper_library @ `6b80daf43e3` (2026-10-27); the fork does not build without #61291
+- Files: 50 merged files under `device/`, `sdpa.{cpp,hpp}`, `sdpa_nanobind.cpp`, `sparse_sdpa.cpp`, `sparse_sdpa_msa.{cpp,hpp}`; new
+  `device/kernels/sparse_sdpa_msa_common.hpp`; `README.md` (sync SHA)
