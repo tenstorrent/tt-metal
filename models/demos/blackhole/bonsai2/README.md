@@ -43,12 +43,16 @@ python models/demos/blackhole/bonsai2/cpu_reference.py <out dir>
 
 Prints the top-5 first-token distribution and 8 greedy tokens for the same 128-token prompt `traced_128` uses.
 
-## Measured (single P150, bfp4 gate/up + bfp8 elsewhere, ~24 GB DRAM)
+## Measured
 
-| ISL | TTFT | decode |
-| --- | --- | --- |
-| 128 | 0.83 s | 8.1-8.3 tok/s |
-| 4k (2642 tok) | 12.5 s (212 tok/s prefill) | 8.1 tok/s |
+| Mesh | ISL | TTFT | decode (batch 1) |
+| --- | --- | --- | --- |
+| 1 x P150 (`MESH_DEVICE=P150`) | 128 | 0.83 s | 8.1-8.3 tok/s |
+| 1 x P150 | 4k (2642 tok) | 12.5 s (212 tok/s prefill) | 8.1 tok/s |
+| 2 x P300 = (1, 4) mesh (`MESH_DEVICE=P150x4`) | 128 | 0.35 s | 26.4 tok/s |
+
+Weights are bfp4 for the MLP gate/up and bfp8 elsewhere (~24 GB). On a host with several P300 boards, pick the four
+chips that are Ethernet-cabled into one ring with `TT_VISIBLE_DEVICES` (otherwise the mesh downgrades to 2x1).
 
 The first generated tokens match the CPU reference exactly.
 
