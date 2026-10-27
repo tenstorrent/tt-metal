@@ -641,26 +641,44 @@ class TestImportReportRankCompleteness:
 
 
 class TestGraphReportFixtureMultiRankTeardown:
-    """Teardown of the graph report pytest fixture on a two-rank run, with ttnn's capture and distributed calls
-    replaced by recorders. Every rank must reach both barriers, even when rank 0's import raises."""
+    """Teardown of the graph report pytest fixture on a two-rank run, as seen by one rank, with ttnn's capture and
+    distributed calls replaced by recorders. Every rank writes into rank 0's report directory, and every rank reaches
+    the final barrier, even when a capture write or rank 0's import fails."""
 
-    @staticmethod
-    def _stub_ttnn(monkeypatch, tmp_path, rank, world_size):
+    RANK_0_DIR = "rank_0_report"
+
+    @classmethod
+    def _stub_ttnn(cls, monkeypatch, tmp_path, rank, local_dir=None, write_fails=False, peer_wrote=True):
+        """Stub ttnn for ``rank`` of 2. Paths in the recorded calls are relative to tmp_path."""
+        world_size = 2
         calls = []
         capture_active = [False]
+        allgathers = []
+        rank_0_dir = str(tmp_path / cls.RANK_0_DIR)
 
         def begin_graph_capture(run_mode):
             capture_active[0] = True
 
         def end_graph_capture_to_file(path):
+            calls.append(("end", str(Path(path).relative_to(tmp_path))))
+            if write_fails:
+                raise RuntimeError("Failed to open graph report file for writing")
             capture_active[0] = False
-            calls.append(("end", Path(path).name))
+
+        def allgather_int(value):
+            # First the length of rank 0's report path, then whether each rank wrote its capture.
+            calls.append(("allgather", value))
+            allgathers.append(value)
+            if len(allgathers) == 1:
+                return [len(rank_0_dir.encode()), 0]
+            values = [value, int(peer_wrote)]
+            return values if rank == 0 else values[::-1]
 
         config = SimpleNamespace(
             enable_graph_report=True,
             enable_comparison_mode=False,
             enable_detailed_buffer_report=True,
-            report_path=str(tmp_path / "report"),
+            report_path=str(tmp_path / (local_dir or cls.RANK_0_DIR)),
         )
         monkeypatch.setattr(ttnn, "CONFIG", config)
         monkeypatch.setattr(ttnn.graph, "is_graph_capture_active", lambda: capture_active[0])
@@ -672,7 +690,22 @@ class TestGraphReportFixtureMultiRankTeardown:
         monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: rank)
         monkeypatch.setattr(ttnn, "distributed_context_get_size", lambda: world_size)
         monkeypatch.setattr(ttnn, "distributed_context_barrier", lambda: calls.append("barrier"))
-        monkeypatch.setattr(ttnn, "save_config_to_json_file", lambda path: calls.append(("config", Path(path).name)))
+        monkeypatch.setattr(ttnn, "distributed_context_allgather_int", allgather_int)
+        monkeypatch.setattr(
+            ttnn, "distributed_context_send_bytes", lambda data, dest, tag: calls.append(("send", dest, data.decode()))
+        )
+
+        def recv_bytes(size, source, tag):
+            calls.append(("recv", source))
+            return rank_0_dir.encode()[:size]
+
+        monkeypatch.setattr(ttnn, "distributed_context_recv_bytes", recv_bytes)
+        monkeypatch.setattr(
+            ttnn,
+            "save_config_to_json_file",
+            lambda path: calls.append(("config", str(Path(path).relative_to(tmp_path)))),
+        )
+        monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
         return calls
 
     @staticmethod
@@ -683,8 +716,40 @@ class TestGraphReportFixtureMultiRankTeardown:
         next(fixture)
         next(fixture, None)
 
+    def test_rank_0_sends_its_report_dir_writes_and_imports(self, monkeypatch, tmp_path):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0)
+        self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("allgather", len(str(tmp_path / self.RANK_0_DIR).encode())),
+            ("send", 1, str(tmp_path / self.RANK_0_DIR)),
+            ("end", f"{self.RANK_0_DIR}/graph_capture_1_of_2.json"),
+            ("allgather", 1),
+            "import",
+            "barrier",
+            "disable_tracing",
+            ("config", f"{self.RANK_0_DIR}/config_1_of_2.json"),
+        ]
+
+    def test_other_rank_writes_into_rank_0_report_dir(self, monkeypatch, tmp_path):
+        """This rank's own report directory got a different minute stamp; its capture still goes where rank 0
+        imports from, and it skips the import."""
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=1, local_dir="report_stamped_a_minute_later")
+        self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("allgather", 0),
+            ("recv", 0),
+            ("end", f"{self.RANK_0_DIR}/graph_capture_2_of_2.json"),
+            ("allgather", 1),
+            "barrier",
+            "disable_tracing",
+            ("config", f"{self.RANK_0_DIR}/config_2_of_2.json"),
+        ]
+        assert not (tmp_path / "report_stamped_a_minute_later").exists()
+
     def test_rank_0_import_error_still_releases_the_other_ranks(self, monkeypatch, tmp_path, expect_error):
-        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=2)
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0)
 
         def failing_import_report(report_path, output_dir):
             calls.append("import")
@@ -693,28 +758,30 @@ class TestGraphReportFixtureMultiRankTeardown:
         monkeypatch.setattr(graph_report, "import_report", failing_import_report)
         with expect_error(ValueError, "1 of 2 ranks are missing"):
             self._run_fixture()
-        assert calls == [
-            "enable_tracing",
-            ("end", "graph_capture_1_of_2.json"),
-            "barrier",
-            "import",
-            "barrier",
-            "disable_tracing",
-            ("config", "config_1_of_2.json"),
-        ]
+        assert calls[calls.index("import") :] == ["import", "barrier", "disable_tracing", calls[-1]]
 
-    def test_other_ranks_skip_the_import_and_reach_both_barriers(self, monkeypatch, tmp_path):
-        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=1, world_size=2)
-        monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
-        self._run_fixture()
-        assert calls == [
-            "enable_tracing",
-            ("end", "graph_capture_2_of_2.json"),
-            "barrier",
-            "barrier",
-            "disable_tracing",
-            ("config", "config_2_of_2.json"),
-        ]
+    def test_other_rank_write_failure_is_reported_by_rank_0_without_hanging(self, monkeypatch, tmp_path, expect_error):
+        """Rank 1 failed to write its capture: rank 0 says which file is missing instead of importing a partial DB."""
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, peer_wrote=False)
+        with expect_error(RuntimeError, r"failed to write on rank\(s\) \[1\] \(graph_capture_2_of_2\.json\)"):
+            self._run_fixture()
+        assert "import" not in calls
+        assert calls[calls.index(("allgather", 1)) :] == [("allgather", 1), "barrier", "disable_tracing", calls[-1]]
+
+    def test_own_write_failure_is_raised_after_the_barrier(self, monkeypatch, tmp_path, expect_error):
+        """Rank 1's write throws: it still reports the failure to the others and reaches the barrier first."""
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=1, write_fails=True)
+        with expect_error(RuntimeError, "Failed to open graph report file for writing"):
+            self._run_fixture()
+        end = calls.index(("end", f"{self.RANK_0_DIR}/graph_capture_2_of_2.json"))
+        assert calls[end + 1 : end + 3] == [("allgather", 0), "barrier"]
+
+    def test_rank_0_own_write_failure_names_its_file(self, monkeypatch, tmp_path, expect_error):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, write_fails=True)
+        with expect_error(RuntimeError, r"rank\(s\) \[0\] \(graph_capture_1_of_2\.json\)") as excinfo:
+            self._run_fixture()
+        assert "Failed to open graph report file" in str(excinfo.value.__cause__)
+        assert "import" not in calls and "barrier" in calls
 
 
 @pytest.fixture
@@ -7109,10 +7176,10 @@ def test_multihost_graph_report(request):
     with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
         "enable_logging", True
     ), ttnn.manage_config("enable_graph_report", True), ttnn.manage_config("report_name", None):
-        # The report directory is stamped with the current minute, so start every rank together.
-        ttnn.distributed_context_barrier()
+        # No barrier first: ranks can stamp their report directories with different minutes, and the fixture has to
+        # bring every capture into rank 0's directory anyway.
         with contextlib.contextmanager(graph_report.run_pytest_graph_report_fixture)(request):
-            report_path = Path(ttnn.CONFIG.report_path)
+            local_report_path = Path(ttnn.CONFIG.report_path)
             # Build on host and then move to device: from_torch(device=...) would touch the other ranks' chips.
             x = ttnn.from_torch(
                 torch.rand((32, 32), dtype=torch.bfloat16),
@@ -7126,6 +7193,8 @@ def test_multihost_graph_report(request):
             ttnn.multiply(y, x)
             ttnn.synchronize_device(mesh_device)
 
+    # Where the fixture put this rank's files: rank 0's report directory, which may not be this rank's own.
+    report_path = graph_report._rank_0_report_path(local_report_path, rank)
     config_path = report_path / f"config_{rank + 1}_of_{world_size}.json"
     assert config_path.exists(), f"rank {rank} wrote no {config_path.name} under {report_path}"
     if rank != 0:

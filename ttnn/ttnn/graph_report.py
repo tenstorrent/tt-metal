@@ -139,7 +139,6 @@ def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
     try:
         yield
     finally:
-        report_path.mkdir(parents=True, exist_ok=True)
         try:
             if enable_graph_report:
                 if not ttnn.graph.is_graph_capture_active():
@@ -151,26 +150,42 @@ def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
                     else:
                         rank, world_size = 0, 1
                     if world_size > 1:
+                        report_path = _rank_0_report_path(report_path, rank)
                         json_path = report_path / _rank_capture_name(rank, world_size)
                     else:
                         json_path = report_path / "graph_capture.json"
-                    ttnn.graph.end_graph_capture_to_file(str(json_path))
-                    if ttnn.distributed_context_is_initialized():
-                        ttnn.distributed_context_barrier()
+                    report_path.mkdir(parents=True, exist_ok=True)
+                    # A rank whose write fails must still take part in the collectives below, or the others hang.
+                    write_error = None
                     try:
-                        if (
-                            not ttnn.distributed_context_is_initialized()
-                            or int(ttnn.distributed_context_get_rank()) == 0
-                        ):
+                        ttnn.graph.end_graph_capture_to_file(str(json_path))
+                    except Exception as e:
+                        write_error = e
+                    if world_size > 1:
+                        wrote_capture = ttnn.distributed_context_allgather_int(0 if write_error else 1)
+                    elif write_error is not None:
+                        raise write_error
+                    try:
+                        if rank == 0:
+                            failed_ranks = [r for r in range(world_size) if world_size > 1 and not wrote_capture[r]]
+                            if failed_ranks:
+                                failed_names = ", ".join(_rank_capture_name(r, world_size) for r in failed_ranks)
+                                raise RuntimeError(
+                                    f"Graph capture failed to write on rank(s) {failed_ranks} ({failed_names}), so "
+                                    f"no report was imported into {report_path}"
+                                ) from write_error
                             import_report(report_path, report_path)
                             (report_path / "graph_capture.json").unlink(missing_ok=True)
                             for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
                                 p.unlink(missing_ok=True)
+                        elif write_error is not None:
+                            raise write_error
                     finally:
-                        # Release the other ranks even if rank 0's import raised, or they wait here forever.
-                        if ttnn.distributed_context_is_initialized():
+                        # Release the other ranks even if this rank raised, or they wait here forever.
+                        if world_size > 1:
                             ttnn.distributed_context_barrier()
             elif enable_comparison_mode and ttnn.graph.has_comparison_records():
+                report_path.mkdir(parents=True, exist_ok=True)
                 ttnn.graph.flush_comparison_records_to_db(report_path)
         finally:
             # Also when rank 0's import raised: tracing left on would leak into later tests, and the config is still
@@ -187,6 +202,7 @@ def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
                 config_path = report_path / f"config_{rank+1}_of_{world_size}.json"
             else:
                 config_path = report_path / "config.json"
+            report_path.mkdir(parents=True, exist_ok=True)
             ttnn.save_config_to_json_file(config_path)
 
 
@@ -330,6 +346,31 @@ class _ReportFile(NamedTuple):
     path: Path
     rank: Optional[int] = None
     world_size: Optional[int] = None
+
+
+# MPI tag for sending rank 0's report path to the other ranks, so the message can't be taken for anyone else's.
+_REPORT_PATH_MESSAGE_TAG = 0x7247
+
+
+def _rank_0_report_path(report_path: Path, rank: int) -> Path:
+    """Return rank 0's report directory on every rank. Collective: every rank must call it.
+
+    Each process stamps its report directory with its own clock's minute (``Config::get_report_path_impl``), so
+    ranks that start in different minutes, or on hosts whose clocks disagree, would otherwise write their captures
+    to different directories, and rank 0 would find only its own.
+    """
+    import ttnn
+
+    encoded = str(report_path).encode() if rank == 0 else b""
+    length = ttnn.distributed_context_allgather_int(len(encoded))[0]
+    if rank == 0:
+        for dest in range(1, int(ttnn.distributed_context_get_size())):
+            ttnn.distributed_context_send_bytes(encoded, dest, _REPORT_PATH_MESSAGE_TAG)
+        return report_path
+    rank_0_path = Path(ttnn.distributed_context_recv_bytes(length, 0, _REPORT_PATH_MESSAGE_TAG).decode())
+    if rank_0_path != report_path:
+        logger.info(f"Writing this rank's graph capture to rank 0's report directory {rank_0_path}, not {report_path}")
+    return rank_0_path
 
 
 def _rank_capture_name(rank: int, world_size: int) -> str:
