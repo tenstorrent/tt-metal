@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
@@ -26,16 +27,17 @@ void kernel_main() {
     const auto intermediate = TensorAccessor(intermediate_args, intermediate_addr);
     const auto sigmoid = TensorAccessor(sigmoid_args, sigmoid_addr);
 
+    const Noc noc;
     DataflowBuffer intermediate_tile(cb_inter);
     DataflowBuffer sigmoid_tile(cb_sig_bcast);
     {
         intermediate_tile.wait_front(1);
-        noc_async_write(intermediate_tile.get_read_ptr(), intermediate.get_noc_addr(tile), tile_bytes);
+        noc.async_write(intermediate_tile, intermediate, tile_bytes, {}, {.page_id = tile});
         if (has_scalar) {
             sigmoid_tile.wait_front(1);
-            noc_async_write(sigmoid_tile.get_read_ptr(), sigmoid.get_noc_addr(0), tile_bytes);
+            noc.async_write(sigmoid_tile, sigmoid, tile_bytes, {}, {.page_id = 0});
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
         intermediate_tile.pop_front(1);
         if (has_scalar) {
             sigmoid_tile.pop_front(1);
