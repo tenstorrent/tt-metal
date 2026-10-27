@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--qualitative-output-tokens", type=int, default=512)
     parser.add_argument("--state-checks", action="store_true")
+    parser.add_argument("--continuation-prefix-length", type=int, default=4097)
     parser.add_argument("--prefill-chunk-size", type=int, default=256)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -42,6 +43,7 @@ def main():
         length=args.length,
         outputs=args.outputs,
         physical_prefill_chunk_size=args.prefill_chunk_size,
+        continuation_prefix_length=args.continuation_prefix_length,
         allocation_tracking=os.getenv("TT_METAL_TRACE_ALLOC_TRACKING"),
         program_cache_skip=os.getenv("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE"),
         generated_delta_source=delta_source,
@@ -171,15 +173,15 @@ def main():
             result["mixed_state_sha256"] = mixed_state
             gen.reset()
             gen.prefill_forward(
-                torch.full((args.batch, 33), 100, dtype=torch.int64),
+                torch.full((args.batch, args.continuation_prefix_length), 100, dtype=torch.int64),
                 page_table=gen.page_table,
                 kv_cache=gen.kv_cache,
-                prompt_lens=[33] * args.batch,
+                prompt_lens=[args.continuation_prefix_length] * args.batch,
                 return_device=True,
             )
             result["continuation"] = []
-            # Both groups start from the same nonzero prefix, then independently
-            # continue from33 while the other group's bound slots are inactive.
+            # Both groups independently advance7 tokens from a nonzero prefix
+            # while the other group's bound slots are inactive.
             for parity in (0, 1):
                 lengths = [7 if row % 2 == parity else 0 for row in range(args.batch)]
                 logits = gen.prefill_continuation(
@@ -187,11 +189,11 @@ def main():
                     page_table=gen.page_table,
                     kv_cache=gen.kv_cache,
                     prompt_lens=lengths,
-                    start_position=33,
+                    start_position=args.continuation_prefix_length,
                 )
                 result["continuation"].append(
                     dict(
-                        start_position=33,
+                        start_position=args.continuation_prefix_length,
                         prompt_lengths=lengths,
                         state_sha256=state_receipt(),
                         logits_sha256=[
@@ -202,6 +204,27 @@ def main():
                         ],
                     )
                 )
+            # Both groups are now aligned at prefix+7. Cross the public decode
+            # bridge into an eager padded prefill tail without resetting state.
+            start_position = args.continuation_prefix_length + 7
+            logits = gen.prefill_continuation(
+                torch.full((args.batch, 129), 103, dtype=torch.int64),
+                page_table=gen.page_table,
+                kv_cache=gen.kv_cache,
+                prompt_lens=[129] * args.batch,
+                start_position=start_position,
+            )
+            result["continuation"].append(
+                dict(
+                    start_position=start_position,
+                    prompt_lengths=[129] * args.batch,
+                    state_sha256=state_receipt(),
+                    logits_sha256=[
+                        hashlib.sha256(ttnn.to_torch(part).contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()
+                        for part in ttnn.get_device_tensors(logits)
+                    ],
+                )
+            )
         assert trace_ids == [str(t) for t in gen.decode_traces.values()] + [
             str(gen.sample_trace),
             str(gen.buffered_sample_trace),

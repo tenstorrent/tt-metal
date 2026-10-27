@@ -111,7 +111,7 @@ before capture, avoiding its stock fixed32-row offset broadcast failure. No
 sampler replacement is selected. These are traced sampler-only host wall times;
 they establish neither model-task accuracy nor a SWE runtime gain. Independent
 process repeats of the stock rows agree closely (see local raw artifacts).
-The retained final JSON and comparison are in [samplers](samplers/comparison.json).
+The compact measured comparison is in [samplers](samplers/comparison.json). Raw per-draw JSON, CSVs, Tracy captures and logs stay in local/CI evidence and are not published with the source.
 
 The earlier failed capture left its process alive in teardown; a subsequent
 probe waited on its device lock. Evidence was retained, triage attempted (installed
