@@ -190,12 +190,17 @@ RUN git config --global --add safe.directory '*'
 
 # Install extra ci apt requirements
 # Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
+# clang-tidy-23 comes from the llvm-23 apt repo added in install_dependencies.sh
+# (base stage); it's baked in alongside clang-tidy-20 (the default, see
+# update-alternatives below) so the clang-tidy-23 shadow scan in
+# code-analysis.yaml doesn't need to install it from apt.llvm.org at job start.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
     libclang-20-dev \
     libclang-rt-20-dev \
     clang-tidy-20 \
+    clang-tidy-23 \
     clang-20 \
     llvm-20 \
     curl \
@@ -221,17 +226,6 @@ RUN for tool in clang clang++ clang-tidy; do \
         update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100; \
     done && \
     clang --version && clang-tidy --version
-
-# Install clang-tidy-23 alongside the clang-tidy-20 default above, so the
-# code-analysis clang-tidy-23 shadow scan (code-analysis.yaml
-# clang-tidy-version: "23") can use the binary already baked into the image
-# instead of installing it from apt.llvm.org at job start. clang-tidy-20
-# remains the default toolchain (see update-alternatives above); this does
-# not touch it. The llvm-23 apt repo is already configured by
-# install_dependencies.sh (base stage), alongside its v17/v20 repos.
-RUN apt-get update && apt-get install -y --no-install-recommends clang-tidy-23 && \
-    apt-get clean && rm -rf /var/lib/apt/lists/* && \
-    clang-tidy-23 --version
 
 #############################################################
 # CI Build image

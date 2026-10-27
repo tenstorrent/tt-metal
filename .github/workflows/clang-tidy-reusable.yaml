@@ -135,10 +135,10 @@ jobs:
             echo "::warning::S3 connectivity probe failed; ccache will degrade remote misses to local. Continuing."
           fi
 
-      - name: Select clang-tidy ${{ inputs.clang-tidy-version }}
-        # CI image bakes in clang-tidy-20 and clang-tidy-23; just point the build at
-        # the requested version's binary instead of installing it at job start.
-        if: ${{ inputs.clang-tidy-version != '20' }}
+      - name: Print clang-tidy version
+        # CI image bakes in both clang-tidy-20 and clang-tidy-23; print the
+        # version here (every run, not just non-default ones) so it's obvious
+        # from the log which one actually ran.
         env:
           LLVM_VERSION: ${{ inputs.clang-tidy-version }}
         run: |
