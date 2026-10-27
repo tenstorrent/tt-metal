@@ -254,6 +254,8 @@ public:
 
     void dram_barrier(ChipId chip_id) const;
     void l1_barrier(ChipId chip_id) const;
+    // Barrier on just these L1 cores, given as virtual coordinates. An empty set is a no-op.
+    void l1_barrier(ChipId chip_id, const std::set<tt::tt_metal::CoreCoord>& virtual_cores) const;
 
     uint32_t get_num_host_channels(ChipId device_id) const;
     uint32_t get_host_channel_size(ChipId device_id, uint32_t channel) const;
