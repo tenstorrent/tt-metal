@@ -507,12 +507,12 @@ struct SDPATestConfig {
     float dropout_prob = 0.0F;
     // 0 = program factory default.
     ttml::metal::SDPAForwardProgramConfig program_config{};
+    bool return_intermediates = true;
+    std::optional<uint32_t> seed;  // input RNG seed; unset = fresh from the context generator
     float result_atol = 2e-2F;
     float result_rtol = 2e-2F;
     float intermediate_atol = 2e-2F;
     float intermediate_rtol = 2e-2F;
-    bool return_intermediates = true;
-    std::optional<uint32_t> seed;  // input RNG seed; unset = fresh from the context generator
     std::string test_name = "SDPA Test";
 };
 
@@ -636,8 +636,7 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
         // The gate CB takes L1, so the gated run may resolve different chunks than an ungated run would.
         // Reproduce the gated run's pick and pin the ungated run to it: both must use the same numerics.
         auto* device = &autograd::ctx().get_device();
-        const uint64_t l1_budget_bytes =
-            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        const uint64_t l1_budget_bytes = ttml::metal::ops::sdpa_fw::device::l1_budget_bytes(device);
         const auto grid = device->compute_with_storage_grid_size();
         const auto picked = ttml::metal::ops::sdpa_fw::device::resolve_chunks(
             config.program_config,
@@ -1126,9 +1125,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_MultiBatch) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_TwoTileRows) {
-    // 64 seq len = 2 tile rows -> Ht=2 -> Sk_chunk_t=2. Forces the chunked inner loop with
-    // exactly one chunk per row and exercises the diagonal-chunk masking path for the
-    // smallest non-trivial chunk size.
+    // 64 seq len = 2 tile rows: the smallest shape where the K/V loop can take more than one step and
+    // the diagonal-chunk masking path runs.
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 64U,
@@ -1157,8 +1155,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_NoMask_Small) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_NoMask_TwoTileRows) {
-    // 64 seq len -> Ht=2 -> Sk_chunk_t=2 on the no-mask compute path: chunked inner loop
-    // with no mask CB traffic.
+    // 64 seq len = 2 tile rows on the no-mask compute path: no mask CB traffic.
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 64U,
@@ -1172,7 +1169,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_NoMask_TwoTileRows) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ArbitraryMask_TwoTileRows) {
-    // 64 seq len -> Ht=2 -> Sk_chunk_t=2 on the arbitrary-mask compute path (USE_ATTN_MASK).
+    // 64 seq len = 2 tile rows on the arbitrary-mask compute path (USE_ATTN_MASK).
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 64U,
@@ -1478,18 +1475,13 @@ struct ChunkKnobs {
 // One Q row with a wide K step, many Q rows with one K tile, square, and both rectangles.
 const std::vector<ChunkKnobs> kChunkKnobSweep = {{32, 256}, {128, 32}, {64, 64}, {128, 64}, {64, 256}};
 
-void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sweep = kChunkKnobSweep) {
-    for (const auto& knobs : sweep) {
-        SDPATestConfig config = base;
-        config.program_config = {
-            .q_chunk_size = knobs.q_chunk_size,
 // Every chunking computes the same fp32 math in a different order and rounds once to bf16, so besides the
 // reference checks each row is held against the default pick: a mean absolute gap of 5e-4 is a few
 // bf16 ULP at the ~0.03-0.1 output magnitudes here, where the 2e-2 reference tolerance would let a
 // uniform few-percent rescale error through.
 constexpr float kCrossChunkingMeanAbsTol = 5e-4F;
 
-            .k_chunk_size = knobs.k_chunk_size,
+void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sweep = kChunkKnobSweep) {
     if (!base.seed.has_value()) {
         base.seed = ttml::autograd::ctx().get_generator()();  // every row sees the same inputs
     }
@@ -1501,6 +1493,11 @@ constexpr float kCrossChunkingMeanAbsTol = 5e-4F;
         SCOPED_TRACE(config.test_name);
         run_sdpa_test(config, &default_output);
     }
+    for (const auto& knobs : sweep) {
+        SDPATestConfig config = base;
+        config.program_config = {
+            .q_chunk_size = knobs.q_chunk_size,
+            .k_chunk_size = knobs.k_chunk_size,
             .heads_per_item = knobs.heads_per_item};
         config.test_name =
             fmt::format("{}_q{}_k{}_h{}", base.test_name, knobs.q_chunk_size, knobs.k_chunk_size, knobs.heads_per_item);
@@ -1573,11 +1570,6 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Causal_HeadStacking) 
         {{32, 64, 4}, {128, 256, 2}, {64, 32, 4}, {128, 64, 4}, {0, 0, 2}});
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Arbitrary_HeadStacking) {
-    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // The (1, 1, S, S) mask is read once per step and shared by the stacked heads.
-    run_chunk_knob_sweep(
-        SDPATestConfig{
 // One blocking row per compiled variant (causal, arbitrary, no mask + gate); the full sweeps are nightly.
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Smoke) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
@@ -1651,6 +1643,11 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Arbitrary_NonPow2) {
         {{96, 64, 1}, {96, 96, 1}});
 }
 
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Arbitrary_HeadStacking) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // The (1, 1, S, S) mask is read once per step and shared by the stacked heads.
+    run_chunk_knob_sweep(
+        SDPATestConfig{
             .batch_size = 1U,
             .sequence_length = 256U,
             .query_dim = 256U,     // 4 heads * 64
@@ -1812,7 +1809,6 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
         << "a user config that overflows L1 must be refused with a message, not die in the allocator";
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     // Two chunkings on the same tensors are two cached programs; the first one again is a hit.
     using namespace ttml;
@@ -1845,6 +1841,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     EXPECT_LT(xt::mean(xt::abs(out_a - out_b))(), kCrossChunkingMeanAbsTol) << "both chunkings compute the same op";
 }
 
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
     // The op hashes its attributes by reflection; the chunk knobs must take part, or a second config on
     // the same shapes would silently reuse the first config's cached program.
     using Params = ttml::metal::ops::sdpa_fw::device::SDPAForwardParams;
