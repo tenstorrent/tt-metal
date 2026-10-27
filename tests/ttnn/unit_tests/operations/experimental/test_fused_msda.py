@@ -641,6 +641,51 @@ def test_fused_msda_v1_masks_out_of_bounds_corners(device, Q, D, memory):
     )
 
 
+@pytest.mark.parametrize(
+    "memory, Q, D",
+    [(m, 32 + q, 32) for m, s in SPLIT_ROW.items() for q in (s, s + 1)] + [("dram", 32 + SPLIT_ROW["dram"], 16)],
+)
+def test_fused_msda_v2_tiled_masks_out_of_bounds_corners(device, memory, Q, D):
+    """An out-of-bounds corner must contribute nothing on the tiled geometry too.
+
+    V2 with L * P = 16, bf16 reference points and packed inputs takes the tiled
+    geometry on Blackhole, whose block solve and corner tile are separate code
+    from the per-point path. Each Q is a full query block followed by a tail
+    block with v_rows = SPLIT_ROW[memory] or SPLIT_ROW[memory] + 1 on the split,
+    where the writer only zeroes or gathers one row. D = 16 takes the
+    tile-scatter gather.
+    """
+    spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
+    B, H, L, P, R = 1, 1, 4, 4, 4
+    value, ref_pts, offsets, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes)
+    ref_pts = _bf16(ref_pts * 1.5 - 0.25)
+    loc = _locations_from_offsets(ref_pts, offsets, spatial_shapes, "pillar")
+
+    oob = _oob_corner_fraction(loc, spatial_shapes)
+    assert 0.25 < oob < 0.75, f"test no longer exercises the mask: {oob:.2%} of corners are out of bounds"
+
+    ref = _msda_reference(value, loc, attn, spatial_shapes)
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda_from_offsets(
+            _to_device_in(_pack_value(value), device, memory),
+            _to_device(ref_pts, device),
+            _to_device(_pack_locations(offsets), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+            reference_mode="pillar",
+        )
+    ).to(torch.float32)
+
+    _assert_close(ref, out)
+
+    abs_tol = max(2e-2, 6e-2 * ref.abs().max().item())
+    high_error_ratio = ((ref - out).abs() > abs_tol).float().mean().item()
+    assert high_error_ratio <= 0.01, (
+        f"{high_error_ratio:.2%} of output elements are off by more than {abs_tol:.4f}. "
+        "An unmasked out-of-bounds corner reads a stale input row and multiplies it by a live weight"
+    )
+
+
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("memory", ["dram", "l1"])
 def test_fused_msda_v1_repeated_calls_hit_program_cache(device, memory):
@@ -807,8 +852,10 @@ def test_fused_msda_v2_bevformer_pillar_shape(device):
         ("level", [(200, 200)], 256, 4, 1),
         # The encoder's spatial cross-attention: four z-anchors, a partial query tile.
         ("pillar", [(29, 50), (15, 25), (8, 13), (4, 7)], 33, 8, 4),
+        # L * P = 16: the bf16 run takes the tiled geometry, the float32 run must not.
+        ("pillar", [(29, 50), (15, 25), (8, 13), (4, 7)], 33, 4, 4),
     ],
-    ids=["decoder-200x200", "pillar-R4"],
+    ids=["decoder-200x200", "pillar-R4", "pillar-R4-tiled"],
 )
 def test_fused_msda_v2_float32_reference_points(device, reference_mode, spatial_shapes, Q, P, R):
     """float32 reference points, forwarded to the SFPU unrounded, next to the same points in
@@ -943,6 +990,27 @@ def _v2_case(B, Q, H, L, P, D, R, spatial_shapes, seed=0):
     return value, ref_pts, offsets, attn
 
 
+def _check_reference_points_reused(device, Q, reference_mode, R, D, ref_dtype, L, P, spatial_shapes):
+    H = 3
+    grid = device.compute_with_storage_grid_size()
+    B = 2 * grid.x * grid.y + 1
+
+    value, ref_pts, offsets, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes)
+    loc = _locations_from_offsets(ref_pts, offsets, spatial_shapes, reference_mode)
+
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda_from_offsets(
+            _to_device(_pack_value(value), device),
+            ttnn.from_torch(ref_pts, dtype=ref_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT),
+            _to_device(_pack_locations(offsets), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+            reference_mode=reference_mode,
+        )
+    ).to(torch.float32)
+    _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out)
+
+
 @pytest.mark.parametrize("ref_dtype", [ttnn.bfloat16, ttnn.float32], ids=["ref_bf16", "ref_fp32"])
 @pytest.mark.parametrize("D", [32, 64])
 @pytest.mark.parametrize("reference_mode,R", [("level", 2), ("pillar", 2)])
@@ -964,25 +1032,18 @@ def test_fused_msda_v2_reference_points_reused_across_heads(device, Q, reference
         block into a v_rows = 1 tail block.
     float32 reference points use a 4-byte-per-coordinate arena, reused the same way.
     """
-    spatial_shapes = [(8, 10), (4, 5)]
-    H, L, P = 3, 2, 4
-    grid = device.compute_with_storage_grid_size()
-    B = 2 * grid.x * grid.y + 1
+    _check_reference_points_reused(device, Q, reference_mode, R, D, ref_dtype, 2, 4, [(8, 10), (4, 5)])
 
-    value, ref_pts, offsets, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes)
-    loc = _locations_from_offsets(ref_pts, offsets, spatial_shapes, reference_mode)
 
-    out = ttnn.to_torch(
-        ttnn.experimental.fused_msda_from_offsets(
-            _to_device(_pack_value(value), device),
-            ttnn.from_torch(ref_pts, dtype=ref_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT),
-            _to_device(_pack_locations(offsets), device),
-            _to_device(_pack_weights(attn), device),
-            spatial_shapes,
-            reference_mode=reference_mode,
-        )
-    ).to(torch.float32)
-    _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out)
+@pytest.mark.parametrize("Q", [17, 33])
+def test_fused_msda_v2_tiled_reference_points_reused_across_heads(device, Q):
+    """The same reuse and re-staging, on the tiled geometry (L * P = 16, bf16 points).
+
+    There the reference tile is rewritten only when the query block changes and
+    re-pushed unchanged otherwise, and block t+1's points are staged while block
+    t is still being gathered.
+    """
+    _check_reference_points_reused(device, Q, "pillar", 2, 32, ttnn.bfloat16, 4, 4, [(8, 10), (4, 5), (2, 3), (1, 2)])
 
 
 @pytest.mark.timeout(300)
