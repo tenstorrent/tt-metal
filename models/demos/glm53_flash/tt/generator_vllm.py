@@ -183,13 +183,15 @@ def _install_step_profiler() -> None:
     runner_cls = getattr(mr, "TTModelRunner", None)
     if runner_cls is None or getattr(runner_cls.execute_model, "_glm53_profiled", False):
         return
-    n_profile = max(1, int(spec))
+    # "N" profiles engine steps [0, N); "S:N" profiles steps [S, S+N) (e.g. 600:200 = inside a 32-user benchmark)
+    first, _, count = spec.partition(":")
+    start, n_profile = (int(first), max(1, int(count))) if count else (0, max(1, int(first)))
     state = {"calls": 0, "wall": 0.0, "prof": cProfile.Profile(), "done": False}
     orig = runner_cls.execute_model
 
     def execute_model(self, *args, **kwargs):
         t0 = time.perf_counter()
-        profiling = not state["done"] and state["calls"] < n_profile
+        profiling = not state["done"] and start <= state["calls"] < start + n_profile
         if profiling:
             state["prof"].enable()
         try:
@@ -207,15 +209,17 @@ def _install_step_profiler() -> None:
                     f"[glm53-vllm-step] engine step {1000 * state['wall'] / state['calls']:.1f} ms mean over "
                     f"{state['calls']} execute_model calls; adapter decode wall {adapter_ms:.1f} ms over {steps} steps"
                 )
-            if not state["done"] and state["calls"] >= n_profile:
+            if not state["done"] and state["calls"] >= start + n_profile:
                 state["done"] = True
                 buf = io.StringIO()
                 pstats.Stats(state["prof"], stream=buf).strip_dirs().sort_stats("cumulative").print_stats(40)
-                logger.info(f"[glm53-vllm-step] cProfile of the first {n_profile} engine steps:\n{buf.getvalue()}")
+                logger.info(
+                    f"[glm53-vllm-step] cProfile of engine steps [{start}, {start + n_profile}):\n{buf.getvalue()}"
+                )
 
     execute_model._glm53_profiled = True  # type: ignore[attr-defined]
     runner_cls.execute_model = execute_model
-    logger.info(f"GLM53 vLLM: step profiler installed (cProfile over the first {n_profile} engine steps)")
+    logger.info(f"GLM53 vLLM: step profiler installed (cProfile over engine steps [{start}, {start + n_profile}))")
 
 
 @dataclass
