@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Segmented-mode copy (custom_ops/topk_rows): also emits the survivor's FP32 VALUES (rank order) to a values CB.
+// Segmented-mode copy (custom_ops/topk_rows): also emits the survivor's FP32 VALUES (rank order) to a values CB, and
+// replays the live-bound reader's PHANTOM chunks in the classic body (phantom mode 1, ``phantom_classic_chunk``).
 // Model-local copy (custom_ops/topk_rows) of the shared topk_large_indices kernel with per-row valid lengths:
 // valid_length_tensor is [rows, 1] (one 4-byte page per input row), the reader derives and pushes the bounds per row.
 
@@ -120,8 +121,26 @@ FORCE_INLINE void sort_fused_chunk(
     topk_xl_local_sort<K>(dst, ascending);
 }
 
+// A PHANTOM chunk (the live-bound segment mode, custom_ops/sparse_bound.py, phantom mode 1): one of the trailing
+// all--inf chunks of the unbounded row (columns beyond the user's bound, -inf from the scorer's mask) that the reader
+// pushed no page for. The zero-element copy clears the incoming DEST slot to -inf (the LLK reads no source data), the
+// stamp / local sort / split are skipped (an all--inf chunk is sorted in either direction and no -inf entry's id ever
+// survives: a -inf survivor is sentinel-marked at the end of the row), then the unfused merge + rebuild the unbounded
+// row runs on the survivor: their tie handling is what makes the ranked ids a function of the row's chunk count, so
+// the bounded row replays exactly as many of them.
 template <uint32_t K>
-FORCE_INLINE void reduce_classic_row(CircularBuffer& input, uint32_t num_chunks, uint32_t tail_elements) {
+FORCE_INLINE void phantom_classic_chunk(CircularBuffer& input, uint32_t incoming_slot, uint32_t survivor_slot) {
+    const uint32_t input_cb = input.get_cb_id();
+    topk_xl_copy_tile_init(input_cb);
+    topk_xl_copy_tile<K>(input_cb, incoming_slot, 0, 0);
+    topk_xl_init<K, false>();
+    topk_xl_merge<K, false>(survivor_slot);
+    topk_xl_rebuild<K, false>(survivor_slot, false);
+}
+
+template <uint32_t K>
+FORCE_INLINE void reduce_classic_row(
+    CircularBuffer& input, uint32_t num_chunks, uint32_t tail_elements, uint32_t phantom_chunks) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     constexpr uint32_t survivor_slot = 0;
     constexpr uint32_t incoming_slot = 2 * tiles_per_sequence;
@@ -129,7 +148,7 @@ FORCE_INLINE void reduce_classic_row(CircularBuffer& input, uint32_t num_chunks,
     topk_xl_separate_indices_row_major_init_static<0, 0>();
     sort_classic_chunk<K>(input, survivor_slot, num_chunks == 1 ? tail_elements : K, false);
 
-    if (num_chunks == 1) {
+    if (num_chunks == 1 && phantom_chunks == 0) {
         topk_xl_init<K, false>();
         topk_xl_rebuild<K, false>(survivor_slot, false);
         return;
@@ -142,6 +161,9 @@ FORCE_INLINE void reduce_classic_row(CircularBuffer& input, uint32_t num_chunks,
         topk_xl_init<K, false>();
         topk_xl_merge<K, false>(survivor_slot);
         topk_xl_rebuild<K, false>(survivor_slot, false);
+    }
+    for (uint32_t p = 0; p < phantom_chunks; ++p) {
+        phantom_classic_chunk<K>(input, incoming_slot, survivor_slot);
     }
 }
 
@@ -256,6 +278,7 @@ void kernel_main() {
     constexpr uint32_t meta_cb = get_compile_time_arg_val(5);
     constexpr bool per_row_metadata = get_compile_time_arg_val(6) != 0;  // one bounds entry per row
     constexpr uint32_t values_cb = get_compile_time_arg_val(7);  // the survivor's FP32 values, rank order (seg mode)
+    constexpr uint32_t phantom_mode = get_compile_time_arg_val(8);  // 1: the mailbox's phantom chunks are replayed
 
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     static_assert(
@@ -271,11 +294,15 @@ void kernel_main() {
 
     uint32_t num_chunks = 0;
     uint32_t tail_elements = 0;
+    uint32_t phantom_chunks = 0;
     CircularBuffer meta_cb_obj(valid_length_from_metadata ? meta_cb : input_cb);
     auto pop_bounds = [&]() {
         meta_cb_obj.wait_front(1);
         num_chunks = ckernel::read_tile_value(meta_cb, 0, topk_metadata_num_chunks_word);
         tail_elements = ckernel::read_tile_value(meta_cb, 0, topk_metadata_tail_elements_word);
+        if constexpr (phantom_mode == 1) {
+            phantom_chunks = ckernel::read_tile_value(meta_cb, 0, topk_metadata_phantom_chunks_word);
+        }
         meta_cb_obj.pop_front(1);
     };
     if constexpr (valid_length_from_metadata && !per_row_metadata) {
@@ -300,7 +327,7 @@ void kernel_main() {
         } else if constexpr (body_mode == ComputeBodyMode::FusedEndToEnd) {
             reduce_fused_row<K>(input, num_chunks, tail_elements);
         } else {
-            reduce_classic_row<K>(input, num_chunks, tail_elements);
+            reduce_classic_row<K>(input, num_chunks, tail_elements, phantom_chunks);
         }
 
         mark_neginf_indices<K>(final_survivor);

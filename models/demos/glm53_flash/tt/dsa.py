@@ -106,7 +106,9 @@ POOL_GATHER_MODES = ("gather", "dense_skip")
 # + segmented top-k 249 us against 11 + 5 us when built at 1088 positions). The ranked ids and the attention are the
 # unbounded path's (``tests/test_sparse_decode_bound_mesh.py``); "0" (default until that block test passes) = today's
 # capacity-wide graph. Read at construction (``sparse_decode_bound_enabled``); the compact flash-MLA decode is untouched:
-# its page table is the [B, 65]-block identity of the compact cache already (73 us at either capacity).
+# its page table is the [B, 65]-block identity of the compact cache already (73 us at either capacity). The segmented
+# top-k's partial row replays the unbounded row's trailing chunks as phantoms (``GLM53_TOPK_PHANTOM``, see
+# ``custom_ops/sparse_bound.py``): the classic body's ranked ids depend on the chunk count.
 SPARSE_BOUND_ENV = "GLM53_SPARSE_DECODE_BOUND"
 # prefill stems (q_a, kv_a, q_b, the indexer's q): "fixed" (default: M-independent prefill_linear) | "default"
 PREFILL_STEMS = os.environ.get("GLM53_PREFILL_STEMS", "fixed")
@@ -2112,14 +2114,15 @@ class TtDSA(LightweightModule):
                 return self._gather_and_attend(top, q_lat, cache, meta, B, P, out_persistent=True)
             # the bounded scorer runs the masked (v2) writer: the same scores in [0, valid[u]), the columns the single-stage
             # top-k reads; -inf beyond, up to the bound (the unbounded form writes the raw scores over the whole width)
-            rows = self.index_scorer(
+            rows = self._score_buffers(B, W, 1)  # [B,1,1,W], the persistent score rows (written in place)
+            self.index_scorer(
                 q4,
                 w_i,
                 cache.index.pools_batched(),
-                self._score_buffers(B, W, 1),
+                rows,
                 valid_rows=meta.valid_len_rows if bound is not None else None,
                 bound=bound,
-            )  # [B,1,1,W]
+            )
             ttnn.deallocate(q4)
             ttnn.deallocate(w_i)
             self._mark("index_score")

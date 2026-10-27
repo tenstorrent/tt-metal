@@ -30,7 +30,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.glm53_flash.custom_ops.sparse_bound import live_bound_pools
+from models.demos.glm53_flash.custom_ops.sparse_bound import live_bound_pools, phantom_mode
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.mesh import mesh_device_params
@@ -157,8 +157,9 @@ def test_sparse_decode_bound_bit_identical(mesh_device):
     W = dsa_dec.cache.index.pools_per_user  # the pool capacity per user (TtIndexCache: rounded to 256)
     segments = dsa[0].topk_rows.segments_for(W)
     logger.info(
-        f"BOUND: max_seq_len {MAX_SEQ_LEN}, pools per user {W}, top-k segments {segments}, prompt {LEN} tokens "
-        f"(valid {max((LEN + 1) // cfg.index_kpool, cfg.index_select_pools)} pools at the first decode)"
+        f"BOUND: max_seq_len {MAX_SEQ_LEN}, pools per user {W}, top-k segments {segments} (phantom mode "
+        f"{phantom_mode()}), prompt {LEN} tokens (valid {max((LEN + 1) // cfg.index_kpool, cfg.index_select_pools)} "
+        f"pools at the first decode)"
     )
     assert LEN > dsa[0].dense_exact_max_pos, "the prompt must put slot 0 on the sparse (gather) path"
     prompt = _ramp(LEN)

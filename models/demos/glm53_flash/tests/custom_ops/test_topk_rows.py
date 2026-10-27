@@ -209,13 +209,16 @@ def test_topk_rows_segmented(mesh_device, W, B):
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("W,B", [(262400, 4), (262400, 8)])
-def test_topk_rows_segmented_live_bound(mesh_device, W, B):
+@pytest.mark.parametrize("phantom", ["cheap", "full"])
+def test_topk_rows_segmented_live_bound(mesh_device, W, B, phantom):
     """``segmented(..., valid_rows=...)`` (the live-bound stage 1, custom_ops/sparse_bound.py): every segment row ranks the
     user's live columns in it only (empty segments synthesized as -inf in L1), reading nothing beyond ``valid[u]``:
-    the stage-1 tables and the final ids must be BIT-IDENTICAL to the unbounded ``segmented`` call on the same rows
-    (the dropped chunks are entirely -inf, below every finite survivor; the W = 262 400 geometry is the served 1 M
-    build's: S = 5 segments of 52 480 columns = 103 chunks, the classic body). The columns beyond each user's bound
-    hold a finite MARKER here, not -inf: the bounded call must not read them."""
+    the stage-1 tables and the final ids must be BIT-IDENTICAL to the unbounded ``segmented`` call on the same rows.
+    The W = 262 400 geometry is the served 1 M build's: S = 5 segments of 52 480 columns = 103 chunks, the classic
+    body, whose merge / rebuild permute equal scores on every chunk: the partial segment replays the unbounded row's
+    trailing all--inf chunks as ``phantom`` chunks ("cheap": merge + rebuild only; "full": synthesized pages through
+    the whole path). The columns beyond each user's bound hold a finite MARKER here, not -inf: the bounded call must
+    not read them. On a mismatch the first differing slots per user / segment are logged."""
     op = TopkRows(mesh_device)
     S = op.segments_for(W)
     assert S > 1, (W, S)
@@ -243,15 +246,36 @@ def test_topk_rows_segmented_live_bound(mesh_device, W, B):
     out_r = ttnn.zeros((B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
     out_b = ttnn.zeros((B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
     op.segmented(ref_t, S, ids1_r, vals1_r, out_r)
-    op.segmented(b_t, S, ids1_b, vals1_b, out_b, valid_rows=v_t)
-    same_out = torch.equal(ttnn.to_torch(out_r), ttnn.to_torch(out_b))
-    same_ids1 = torch.equal(ttnn.to_torch(ids1_r), ttnn.to_torch(ids1_b))
-    same_vals1 = torch.equal(ttnn.to_torch(vals1_r), ttnn.to_torch(vals1_b))
-    ok, common = _check(masked, valid, ttnn.to_torch(out_b).long())
+    op.segmented(b_t, S, ids1_b, vals1_b, out_b, valid_rows=v_t, phantom=phantom)
+    o_r, o_b = ttnn.to_torch(out_r).long(), ttnn.to_torch(out_b).long()
+    i_r, i_b = ttnn.to_torch(ids1_r).long().reshape(B, S, K), ttnn.to_torch(ids1_b).long().reshape(B, S, K)
+    v_r, v_b = ttnn.to_torch(vals1_r).float().reshape(B, S, K), ttnn.to_torch(vals1_b).float().reshape(B, S, K)
+    same_out, same_ids1, same_vals1 = torch.equal(o_r, o_b), torch.equal(i_r, i_b), torch.equal(v_r, v_b)
+    ok, common = _check(masked, valid, o_b)
     logger.info(
-        f"segmented live bound W={W} B={B} S={S} valid {valid.tolist()}: out identical {same_out}, stage-1 ids identical "
-        f"{same_ids1}, stage-1 values identical {same_vals1}; vs torch ok {ok}, common ids {common}/{B * K}"
+        f"segmented live bound W={W} B={B} S={S} phantom {phantom} valid {valid.tolist()}: out identical {same_out}, "
+        f"stage-1 ids identical {same_ids1}, stage-1 values identical {same_vals1}; vs torch ok {ok}, common ids "
+        f"{common}/{B * K}"
     )
+    if not (same_out and same_ids1 and same_vals1):
+        for b in range(B):
+            for s_ in range(S):
+                d = (i_r[b, s_] != i_b[b, s_]).nonzero().flatten().tolist()
+                dv = (v_r[b, s_] != v_b[b, s_]).nonzero().flatten().tolist()
+                if d or dv:
+                    j = (d or dv)[0]
+                    logger.info(
+                        f"  user {b} segment {s_} (live {max(0, min(int(valid[b]) - s_ * Wseg, Wseg))}): {len(d)} ids / "
+                        f"{len(dv)} values differ, first slot {j}: ref id {int(i_r[b, s_, j])} val {float(v_r[b, s_, j]):.5g}"
+                        f" vs bounded id {int(i_b[b, s_, j])} val {float(v_b[b, s_, j]):.5g}; ids same as sets: "
+                        f"{set(i_r[b, s_].tolist()) == set(i_b[b, s_].tolist())}"
+                    )
+            do = (o_r[b, 0, 0] != o_b[b, 0, 0]).nonzero().flatten().tolist()
+            if do:
+                logger.info(
+                    f"  user {b} out: {len(do)} ids differ, first slot {do[0]}; same set "
+                    f"{set(o_r[b, 0, 0].tolist()) == set(o_b[b, 0, 0].tolist())}"
+                )
     assert ok and same_out and same_ids1 and same_vals1
 
     def bench(fn, n=5):
@@ -264,7 +288,9 @@ def test_topk_rows_segmented_live_bound(mesh_device, W, B):
         return (time.perf_counter() - t0) / n * 1e3
 
     t_ref = bench(lambda: op.segmented(ref_t, S, ids1_r, vals1_r, out_r))
-    t_b = bench(lambda: op.segmented(b_t, S, ids1_b, vals1_b, out_b, valid_rows=v_t))
-    logger.info(f"segmented live bound W={W} B={B}: {t_b:.3f} ms bounded vs {t_ref:.3f} ms unbounded (two stages)")
+    t_b = bench(lambda: op.segmented(b_t, S, ids1_b, vals1_b, out_b, valid_rows=v_t, phantom=phantom))
+    logger.info(
+        f"segmented live bound W={W} B={B} phantom {phantom}: {t_b:.3f} ms bounded vs {t_ref:.3f} ms unbounded (two stages)"
+    )
     for t in (ref_t, b_t, v_t, ids1_r, vals1_r, ids1_b, vals1_b, out_r, out_b):
         ttnn.deallocate(t)

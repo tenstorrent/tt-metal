@@ -29,12 +29,27 @@ This module imports nothing from ttnn or torch (host tests run with ``--noconfte
 
 from __future__ import annotations
 
+import os
 from math import gcd
 from typing import Sequence
 
 TILE = 32
 TOPK_CHUNK = 512  # the K=512 LLK window: the top-k reads and ranks 512-element chunks
 DEFAULT_KC = 8  # k-tiles per scorer chunk (IndexScoreDecode.KC): a chunk is 32*KC columns
+# The top-k's classic compute body (> FUSED_MAX_CHUNKS chunks per row) merges values and ids as two tiles and its
+# merge + rebuild permute EQUAL finite scores on every chunk, so a row's ranked ids depend on how many chunks it
+# processed, trailing all--inf chunks included (chip-0 measurement 2026-10-27: a bounded partial segment ranked the
+# same values with other ids). The fused body (<= 32 chunks) sorts unique [bf16 | index] keys: its ranking is a
+# function of the key set alone. Under the live bound the partial segment of a classic row therefore replays the
+# unbounded row's trailing chunks as PHANTOMS (``GLM53_TOPK_PHANTOM``): "cheap" (default) = no page, the compute
+# clears the incoming DEST slot to -inf and runs the merge + rebuild only (the stamp / sort / split of an all--inf
+# chunk are skipped: it is sorted either way and no -inf id survives the sentinel mark); "full" = one synthesized -inf
+# page per trailing chunk through the unchanged compute path (the exact-by-construction fallback, no compute saving
+# on that row). Fused rows drop the trailing chunks (phantom code 0).
+FUSED_MAX_CHUNKS = 32
+PHANTOM_ENV = "GLM53_TOPK_PHANTOM"
+PHANTOM_MODES = ("cheap", "full")
+PHANTOM_NONE, PHANTOM_CHEAP, PHANTOM_FULL = 0, 1, 2
 
 
 def scorer_chunk_cols(kc: int = DEFAULT_KC) -> int:
@@ -126,6 +141,43 @@ def topk_row_chunks_unbounded(seg_cols: int, llk_k: int = TOPK_CHUNK) -> tuple[i
     """The chunk count / tail of a full segment row (the unbounded stage 1)."""
     n = -(-seg_cols // llk_k)
     return n, seg_cols - (n - 1) * llk_k
+
+
+def phantom_mode(env=None) -> str:
+    """The ``GLM53_TOPK_PHANTOM`` knob (``PHANTOM_MODES``, default "cheap")."""
+    env = os.environ if env is None else env
+    mode = env.get(PHANTOM_ENV, "cheap")
+    if mode not in PHANTOM_MODES:
+        raise ValueError(f"{PHANTOM_ENV}={mode!r}: expected one of {PHANTOM_MODES}")
+    return mode
+
+
+def phantom_code(seg_cols: int, mode: str, llk_k: int = TOPK_CHUNK) -> int:
+    """The reader / compute phantom code of a segment row of ``seg_cols`` columns: 0 for a fused row (at most
+    ``FUSED_MAX_CHUNKS`` chunks: the trailing chunks are simply dropped), else the mode's code."""
+    if -(-seg_cols // llk_k) <= FUSED_MAX_CHUNKS:
+        return PHANTOM_NONE
+    return {"cheap": PHANTOM_CHEAP, "full": PHANTOM_FULL}[mode]
+
+
+def topk_row_plan(row_len: int, seg_cols: int, code: int, llk_k: int = TOPK_CHUNK) -> dict:
+    """What the reader does with a segment row of ``row_len`` live elements (the kernel's derivation, segment mode):
+    ``num_chunks`` / ``tail_elements`` = the mailbox bounds the compute consumes (its real chunks, the last one
+    ``tail_elements`` wide), ``phantom_chunks`` = the merge + rebuild replays (code 1), ``live_chunks`` /
+    ``live_tail`` = the DRAM reads (never beyond ``row_len``), ``synth`` = the chunk index from which pages are
+    synthesized -inf in L1 (None = none). The compute always ends a non-empty classic row after
+    ``num_chunks + phantom_chunks`` = the unbounded row's count under codes 1 and 2."""
+    total, total_tail = topk_row_chunks_unbounded(seg_cols, llk_k)
+    if row_len <= 0:  # the empty segment: one synthesized -inf chunk (all survivors -inf -> sentinels either way)
+        return dict(num_chunks=1, tail_elements=llk_k, phantom_chunks=0, live_chunks=0, live_tail=0, synth=0)
+    n, tail = topk_row_chunks(row_len, llk_k)[:2]
+    trailing = total - n
+    plan = dict(num_chunks=n, tail_elements=tail, phantom_chunks=0, live_chunks=n, live_tail=tail, synth=None)
+    if code == PHANTOM_CHEAP:
+        plan["phantom_chunks"] = trailing
+    elif code == PHANTOM_FULL and trailing:
+        plan.update(num_chunks=total, tail_elements=total_tail, synth=n)
+    return plan
 
 
 def check_bound_covers(valid: Sequence[int], bound: int, W: int, kc: int = DEFAULT_KC) -> None:
