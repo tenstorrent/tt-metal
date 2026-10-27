@@ -33,7 +33,7 @@ over rows ``[0, window)``.
 import torch
 import ttnn
 
-from models.experimental.deepseek_v4_flash.tt.common import _HIFI4_SDPA, _MASK_NEG, DeepSeekV4Module, _profile
+from models.experimental.deepseek_v4_flash.tt.common import _HIFI4_SDPA, _MASK_NEG, DeepSeekV4Module, _profile, _region
 from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     CSA_INDEX_BLOCK_SIZE,
     _StaticLayerCache,
@@ -757,11 +757,12 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             ttnn.deallocate(tokens)
             return ttnn.reshape(out, [b, s, 1, d])
         assert b == 1, "fused_lightning_select_kv decodes one user"
-        latent = (
-            self._latent(tokens, scache, win_slot, pool, hist_slot, win_offset=win_offset)
-            if self.is_kv_source
-            else None
-        )
+        latent = None
+        if self.is_kv_source:
+            # V4 marks its CSA/HCA compressor's decode the same way; V4.1 inlines the compressor
+            # into this method, so without this the whole compressed path is one ATTENTION blob.
+            with _region("COMPRESSOR"):
+                latent = self._latent(tokens, scache, win_slot, pool, hist_slot, win_offset=win_offset)
         assert latent is None or select, "a closed group is written by the select that follows it"
         assert received_entry is None or (select and latent is None), "received rows are written by a non-source select"
         assert select or not candidates, "candidates are a select mode"
