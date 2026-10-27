@@ -2,9 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The free-running CPU reference ``test_mtp_multiturn_pcc`` checks, and its stored copy.
+"""The MTP predictor's free-running CPU reference, and its stored copy.
 
-Causal, so one run over the longest conversation serves every schedule.
+Causal, so one run over the longest sequence serves every shorter one.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLARef
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.mtp import glm_mtp_predictor_reference
 
 
-def multiturn_inputs(hidden: int, vocab: int, seq_len: int, num_levels: int, seed: int):
+def predictor_inputs(hidden: int, vocab: int, seq_len: int, num_levels: int, seed: int):
     """``(table, h0, ids)``: the token table, every row's trunk hidden, and the token ids, ``p + 1`` at ``p``."""
     g = torch.Generator().manual_seed(seed)
     table = torch.randn(vocab, hidden, generator=g).to(torch.bfloat16)
@@ -29,7 +29,7 @@ def multiturn_inputs(hidden: int, vocab: int, seq_len: int, num_levels: int, see
     return table, h0, list(range(1, seq_len + num_levels + 1))
 
 
-def compute_multiturn_reference(
+def compute_predictor_reference(
     config,
     mtp_state_dict,
     layer_state_dict,
@@ -46,7 +46,7 @@ def compute_multiturn_reference(
 
     ``x``, ``out``, ``normed`` are ``[K, L, H]``, ``kvpe`` ``[K, L, 576]``, and ``index_k`` level 1's ``[L, 128]``.
     """
-    table, h0, ids = multiturn_inputs(config.hidden_size, vocab, seq_len, num_levels, seed)
+    table, h0, ids = predictor_inputs(config.hidden_size, vocab, seq_len, num_levels, seed)
     token_ids = torch.tensor(ids)
     mla_weights = layer_state_dict["mla_weights"]
     moe_weights = {k: layer_state_dict[k] for k in ("gate_weights", "routed_expert_weights", "shared_expert_weights")}
@@ -86,15 +86,15 @@ def compute_multiturn_reference(
 
 
 @functools.cache
-def stored_reference_path(root: str, checkpoint: str, layer_idx: int, **args) -> Path:
-    """The stored reference's path under ``root``: its name is a key over ``checkpoint``'s real path, config.json and
-    model.safetensors.index.json, ``layer_idx`` and ``args``, the values the reference is computed from."""
+def stored_reference_path(root: str, prefix: str, checkpoint: str, layer_idx: int, **args) -> Path:
+    """The stored reference's path under ``root``: ``prefix``, then a key over ``checkpoint``'s real path, config.json
+    and model.safetensors.index.json, ``layer_idx`` and ``args``, the values the reference is computed from."""
     checkpoint = Path(checkpoint).resolve()
     key = hashlib.sha256(str(checkpoint).encode())
     for name in ("config.json", "model.safetensors.index.json"):
         key.update((checkpoint / name).read_bytes())
     key.update(repr((layer_idx, sorted(args.items()))).encode())
-    return Path(root) / f"glm53_mtp_multiturn_ref_{key.hexdigest()[:16]}.pt"
+    return Path(root) / f"{prefix}_{key.hexdigest()[:16]}.pt"
 
 
 def load_reference(path: Path) -> dict:

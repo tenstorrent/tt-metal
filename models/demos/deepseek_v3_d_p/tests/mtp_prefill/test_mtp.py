@@ -30,10 +30,10 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3.mtp import (
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.mtp_prefill.conftest import glm53_checkpoint_path
-from models.demos.deepseek_v3_d_p.tests.mtp_prefill.multiturn_reference import (
-    compute_multiturn_reference,
+from models.demos.deepseek_v3_d_p.tests.mtp_prefill.predictor_reference import (
+    compute_predictor_reference,
     load_reference,
-    multiturn_inputs,
+    predictor_inputs,
     prepare_store,
     save_reference,
     stored_reference_path,
@@ -602,7 +602,9 @@ def _multiturn_reference(
     root = os.environ.get("TT_GLM53_MTP_REF_CACHE")
     path = None
     if use_pretrained and root:
-        path = stored_reference_path(root, glm53_checkpoint_path(), layer_idx, num_levels=MAX_LEVELS, **args)
+        path = stored_reference_path(
+            root, "glm53_mtp_multiturn_ref", glm53_checkpoint_path(), layer_idx, num_levels=MAX_LEVELS, **args
+        )
     if path is not None and path.exists():
         logger.info(f"[mtp multiturn] CPU reference stored at {path}")
         ref = load_reference(path)
@@ -616,7 +618,7 @@ def _multiturn_reference(
         logger.info(
             f"[mtp multiturn] CPU reference, {levels} level(s) over [0, {REFERENCE_LEN}) in {CHUNK}-token chunks"
         )
-        ref = compute_multiturn_reference(config, mtp_sd, layer_sd, num_levels=levels, **args)
+        ref = compute_predictor_reference(config, mtp_sd, layer_sd, num_levels=levels, **args)
         if store:
             try:
                 save_reference(ref, path)
@@ -694,7 +696,7 @@ def test_mtp_multiturn_pcc(
     )
     mesh_device.enable_program_cache()
 
-    table, h0, ids = multiturn_inputs(hidden, VOCAB, REFERENCE_LEN, MAX_LEVELS, INPUT_SEED)
+    table, h0, ids = predictor_inputs(hidden, VOCAB, REFERENCE_LEN, MAX_LEVELS, INPUT_SEED)
     # A pad id is clamped to the table's last row, which no real id may share.
     assert ids[-1] < VOCAB - 1
     embedding = TtParallelEmbedding(mesh_device, VOCAB, hidden, torch_weight=table, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
