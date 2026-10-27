@@ -1,14 +1,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """The SP relay must leave every rank the entry state the gather + chain gives it, and the final state on the first
-and last chronological ranks; with an output gate beside it, and call after call."""
+and last chronological ranks; with an output gate beside it, and call after call.
+
+Galaxy runs the relay on its SP8 torus axis; LoudBox SP8xTP1 and QuietBox SP4xTP1 run it on a FABRIC_1D_RING SP ring
+with Galaxy's per-chip workload, as their KDA layer gates do. Every rank holds 640 rows of 24 heads.
+"""
+
+import statistics
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.kda.config import block_projection_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import (
     AffineTransform,
@@ -18,21 +25,39 @@ from models.demos.deepseek_v3_d_p.tt.kda.recurrence import (
     pack_transform,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix, RelayOutputGate
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
 pytestmark = run_for_blackhole()
 
 _ROWS, _HEADS, _KEY = 640, 24, 128
 
+
+def _ring_case(shape: tuple[int, int], case_id: str, **fabric):
+    """LoudBox's and QuietBox's SP ring: FABRIC_1D_RING rings mesh axis 0, so SP takes that axis."""
+    return pytest.param(
+        shape,
+        fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING, **fabric),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=shape, topology="ring"),
+        id=case_id,
+    )
+
+
+def _galaxy_case(case_id: str, **fabric):
+    return pytest.param(
+        (8, 4),
+        torus_xy_device_params(**fabric),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id=case_id,
+    )
+
+
 _MESH = pytest.mark.parametrize(
     "mesh_device,device_params",
     [
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="SP8xTP4",
-        )
+        _galaxy_case("SP8xTP4"),
+        _ring_case((8, 1), "loudbox-SP8xTP1-ring"),
+        _ring_case((4, 1), "quietbox-SP4xTP1-ring"),
     ],
     indirect=True,
 )
@@ -42,12 +67,9 @@ _MESH = pytest.mark.parametrize(
 _MESH_ONE_TILE_PACKETS = pytest.mark.parametrize(
     "mesh_device,device_params",
     [
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(fabric_payload_size=7168),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="SP8xTP4-one-tile-packets",
-        )
+        _galaxy_case("SP8xTP4-one-tile-packets", fabric_payload_size=7168),
+        _ring_case((8, 1), "loudbox-SP8xTP1-ring-one-tile-packets", fabric_payload_size=7168),
+        _ring_case((4, 1), "quietbox-SP4xTP1-ring-one-tile-packets", fabric_payload_size=7168),
     ],
     indirect=True,
 )
@@ -259,3 +281,73 @@ def test_relay_affine_prefix_back_to_back(mesh_device):
                 name=f"carry start={start} rank={rank} tp={tp}",
                 nrmse_threshold=0.03,
             )
+
+
+# Device time of one relay call: its program's slowest chip under the realtime profiler, the median over single calls,
+# each after a discarded first and never back to back (a device synchronize separates them, the barrier consecutive
+# calls need). As in the KDA layer gate, the ring's wait for its predecessors moves a single call by a few percent.
+_PERF_SAMPLES = 7
+_PERF_MARGIN = 0.05
+# A full chunk that starts 320 rows into the second rank, as the layer gates place it: the relay starts mid-ring.
+_PERF_START = _ROWS + 320
+_PERF_KERNEL = "relay_affine_prefix"
+
+
+def _perf_case(shape: tuple[int, int], case_id: str, reference_us: float | None):
+    """A ring case with its device-time reference; None fails the case with its measured time, to calibrate it."""
+    ring = _ring_case(shape, case_id)
+    return pytest.param(*ring.values, reference_us, marks=ring.marks, id=case_id)
+
+
+# TODO: calibrate on the dedicated LoudBox and QuietBox runners.
+_PERF_CASES = [
+    _perf_case((8, 1), "loudbox-SP8xTP1-ring", None),
+    _perf_case((4, 1), "quietbox-SP4xTP1-ring", None),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params,reference_us", _PERF_CASES, indirect=["mesh_device", "device_params"]
+)
+def test_relay_affine_prefix_kimi_k3_perf(mesh_device, reference_us):
+    """The model's relay: Galaxy's per-chip 24 heads, HiFi2, entry states in L1 for the entry correction."""
+    require_realtime_profiler("the relay_affine_prefix device-time gate")
+    layout = "SP{}xTP{}".format(*tuple(mesh_device.shape))
+    transforms = _Transforms(mesh_device, seed=_PERF_START)
+    actual_start = make_actual_start(mesh_device, _PERF_START)
+    relay = _relay(mesh_device)
+    relay.entry_memory_config = ttnn.L1_MEMORY_CONFIG
+
+    def call():
+        outputs = relay(transforms.packed, transforms.initial_tt, actual_start)
+        ttnn.synchronize_device(mesh_device)
+        return outputs
+
+    entry, final, _ = call()
+    transforms.assert_matches_gather_and_chain(entry, final, actual_start, _PERF_START)
+    for tensor in (entry, final):
+        ttnn.deallocate(tensor)
+
+    def profiled_us() -> float:
+        (entry, final, _), programs = profile_realtime_program_merged(mesh_device, call)
+        for tensor in (entry, final):
+            ttnn.deallocate(tensor)
+        matched = [
+            program["duration_ns"]
+            for program in programs.values()
+            if any(_PERF_KERNEL in source.replace("\\", "/") for source in program["kernel_sources"])
+        ]
+        assert len(matched) == 1, f"expected one program running {_PERF_KERNEL}, got {len(matched)}"
+        return matched[0] / 1e3
+
+    profiled_us()  # exclude first-call jitter
+    samples_us = [profiled_us() for _ in range(_PERF_SAMPLES)]
+    median_us = statistics.median(samples_us)
+    logger.info(f"relay_affine_prefix Kimi-K3 {layout} perf: {median_us:.1f} us device, samples {samples_us}")
+    if reference_us is None:
+        pytest.fail(f"{layout} has no reference: set it from the measured {median_us:.1f} us")
+    lower, upper = reference_us * (1 - _PERF_MARGIN), reference_us * (1 + _PERF_MARGIN)
+    assert lower <= median_us <= upper, (
+        f"{median_us:.1f} us outside [{lower:.1f}, {upper:.1f}] "
+        f"(reference {reference_us} us, margin +/- {_PERF_MARGIN * 100:.0f}%)"
+    )
