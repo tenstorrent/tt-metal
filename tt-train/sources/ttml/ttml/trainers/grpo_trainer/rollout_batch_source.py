@@ -22,6 +22,7 @@ class ScoredRolloutBatch:
     reward_components: Dict[str, np.ndarray]
     generation_time_s: float
     reward_time_s: float
+    rollouts_dropped: int = 0
 
 
 class RolloutBatchSource(ABC):
@@ -186,10 +187,22 @@ def build_rollout_batch_source(
         num_generations=config.num_generations,
         max_completion_length=config.max_completion_length,
     )
-    if config.backend.in_process:
-        return InProcessRolloutBatchSource(sampler=sampler, **common)
-    if config.backend.sync:
-        from .remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
+    match config.rollout_backend:
+        case "ttml_in_process_sync":
+            return InProcessRolloutBatchSource(sampler=sampler, **common)
+        case "ttt_remote_sync":
+            from .remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
 
-        return SyncRemoteRolloutBatchSource(client=client, weight_sync_every=config.weight_sync_every, **common)
+            return SyncRemoteRolloutBatchSource(client=client, weight_sync_every=config.weight_sync_every, **common)
+        case "ttt_remote_async":
+            from .remote_rollout.async_remote_rollout_batch_source import AsyncRemoteRolloutBatchSource
+
+            return AsyncRemoteRolloutBatchSource(
+                client=client,
+                num_batches=len(prompts) // batch_prompts,
+                num_generations=config.num_generations,
+                max_completion_length=config.max_completion_length,
+                weight_sync_every=config.weight_sync_every,
+                max_staleness=config.max_staleness,
+            )
     raise ValueError(f"unsupported rollout_backend {config.rollout_backend!r}")
