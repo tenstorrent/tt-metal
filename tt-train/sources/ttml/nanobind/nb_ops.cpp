@@ -17,6 +17,8 @@
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
+#include "metal/ops/chunk_gated_delta_rule_bw/chunk_gated_delta_rule_bw.hpp"
+#include "metal/ops/chunk_gated_delta_rule_fw/chunk_gated_delta_rule_fw.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "metal/ops/rmsnorm_bw/rmsnorm_bw.hpp"
@@ -27,6 +29,7 @@
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/conv3d_op.hpp"
+#include "ops/chunk_gated_delta_rule_op.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/distributed/losses.hpp"
 #include "ops/dropout_op.hpp"
@@ -61,7 +64,11 @@ void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ReduceType>(m);
 
     m.def_submodule("binary");
+<<<<<<< HEAD
     m.def_submodule("conv");
+=======
+    m.def_submodule("chunk_gated_delta_rule");
+>>>>>>> 425e9caed9 (Add ttml chunk_gated_delta_rule fw and bw)
     m.def_submodule("distributed");
     m.def_submodule("dropout");
     m.def_submodule("embedding");
@@ -542,6 +549,25 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_cgdr = static_cast<nb::module_>(m.attr("chunk_gated_delta_rule"));
+        py_cgdr.def(
+            "chunk_gated_delta_rule",
+            &ttml::ops::chunk_gated_delta_rule,
+            nb::arg("q"),
+            nb::arg("k"),
+            nb::arg("v"),
+            nb::arg("g"),
+            nb::arg("beta"),
+            nb::arg("key_head_dim"),
+            nb::arg("chunk_size") = 64U,
+            nb::arg("scale") = nb::none(),
+            nb::arg("initial_state") = nullptr,
+            "Chunked gated delta rule with a fused backward.\n"
+            "q, k [B,1,T,HK*K] (L2-normalized); v [B,1,T,HV*V]; g, beta [B,1,T,HV]; all BFLOAT16;\n"
+            "initial_state [B,HV,K,V] (optional).\n"
+            "Returns the head-major output [B*HV,1,T,V].");
+    }
+    {
         auto py_rmsnorm = static_cast<nb::module_>(m.attr("rmsnorm"));
         py_rmsnorm.def("rmsnorm", &ttml::ops::rmsnorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("epsilon"));
         py_rmsnorm.def(
@@ -703,6 +729,90 @@ void py_module(nb::module_& m) {
 
     {
         auto py_metal = static_cast<nb::module_>(m.attr("metal"));
+        py_metal.def(
+            "chunk_gated_delta_rule_fw",
+            [](const ttnn::Tensor& q,
+               const ttnn::Tensor& k,
+               const ttnn::Tensor& v,
+               const ttnn::Tensor& g,
+               const ttnn::Tensor& beta,
+               uint32_t key_head_dim,
+               const std::optional<ttnn::Tensor>& initial_state,
+               uint32_t chunk_size,
+               std::optional<float> scale,
+               bool output_head_major) {
+                auto r = ttml::metal::chunk_gated_delta_rule_fw(
+                    q, k, v, g, beta, key_head_dim, initial_state, chunk_size, scale, output_head_major);
+                return std::make_tuple(r.output, r.final_state, r.h, r.v_new, r.g_cumsum, r.a);
+            },
+            nb::arg("q"),
+            nb::arg("k"),
+            nb::arg("v"),
+            nb::arg("g"),
+            nb::arg("beta"),
+            nb::arg("key_head_dim"),
+            nb::arg("initial_state") = nb::none(),
+            nb::arg("chunk_size") = 64U,
+            nb::arg("scale") = nb::none(),
+            nb::arg("output_head_major") = false,
+            "Chunked gated delta rule forward on flat layouts, with the intermediates the backward needs.\n"
+            "q, k [B,1,T,HK*K] bf16 (L2-normalized along K); v [B,1,T,HV*V] bf16; g, beta [B,1,T,HV];\n"
+            "initial_state [B,HV,K,V] fp32 (optional).\n"
+            "Returns (o [B,1,T,HV*V] or [B*HV,1,T,V] if output_head_major, final_state [B,HV,K,V], h [B*HV,NC,K,V], "
+            "v_new [B*HV,1,T,V],\n"
+            "g_cumsum [B*HV,1,T,1], A [B*HV,1,T,C]), all fp32.");
+        py_metal.def(
+            "chunk_gated_delta_rule_bw",
+            [](const ttnn::Tensor& q,
+               const ttnn::Tensor& k,
+               const ttnn::Tensor& v,
+               const ttnn::Tensor& g,
+               const ttnn::Tensor& beta,
+               const ttnn::Tensor& d_out,
+               uint32_t key_head_dim,
+               const std::optional<ttnn::Tensor>& initial_state,
+               const std::optional<ttnn::Tensor>& d_final_state,
+               const std::optional<ttnn::Tensor>& h,
+               const std::optional<ttnn::Tensor>& v_new,
+               const std::optional<ttnn::Tensor>& a,
+               uint32_t chunk_size,
+               std::optional<float> scale) {
+                return ttml::metal::chunk_gated_delta_rule_bw(
+                    q,
+                    k,
+                    v,
+                    g,
+                    beta,
+                    d_out,
+                    key_head_dim,
+                    initial_state,
+                    d_final_state,
+                    h,
+                    v_new,
+                    a,
+                    chunk_size,
+                    scale);
+            },
+            nb::arg("q"),
+            nb::arg("k"),
+            nb::arg("v"),
+            nb::arg("g"),
+            nb::arg("beta"),
+            nb::arg("d_out"),
+            nb::arg("key_head_dim"),
+            nb::arg("initial_state") = nb::none(),
+            nb::arg("d_final_state") = nb::none(),
+            nb::arg("h") = nb::none(),
+            nb::arg("v_new") = nb::none(),
+            nb::arg("a") = nb::none(),
+            nb::arg("chunk_size") = 64U,
+            nb::arg("scale") = nb::none(),
+            "Chunked gated delta rule backward on flat layouts.\n"
+            "q, k [B,T,HK*K]; v [B,T,HV*V]; g, beta [B,T,HV] (each also accepted as [B,1,T,X]);\n"
+            "d_out [B,T,HV*V] or head-major [B*HV,1,T,V];\n"
+            "initial_state, d_final_state [B,HV,K,V] (optional);\n"
+            "h, v_new, a: the saved intermediates of chunk_gated_delta_rule_fw (optional, all or none).\n"
+            "Returns [dq, dk, dv, dg, dbeta, dh0]; dh0 is None without initial_state.");
         py_metal.def(
             "moe_group",
             &ttml::metal::moe_group,

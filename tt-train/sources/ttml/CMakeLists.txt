@@ -56,6 +56,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/chunk_gated_delta_rule_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/embedding_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/layernorm_op.cpp
@@ -204,6 +205,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_q_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_program_factory.cpp
+    # Chunked gated delta rule forward with saved intermediates (Gated DeltaNet)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/chunk_gated_delta_rule_fw/chunk_gated_delta_rule_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/chunk_gated_delta_rule_fw/device/chunk_gated_delta_rule_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/chunk_gated_delta_rule_fw/device/chunk_gated_delta_rule_fw_program_factory.cpp
+    # Chunked gated delta rule backward (Gated DeltaNet)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/chunk_gated_delta_rule_bw/chunk_gated_delta_rule_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/chunk_gated_delta_rule_bw/device/chunk_gated_delta_rule_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/chunk_gated_delta_rule_bw/device/chunk_gated_delta_rule_bw_program_factory.cpp
     # SDPA Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.cpp
