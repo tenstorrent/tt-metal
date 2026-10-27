@@ -16,6 +16,7 @@ Cases take every path: clean (causal), missing patches (the group mask), multiva
 from __future__ import annotations
 
 import gc
+import math
 import pytest
 import torch
 
@@ -94,6 +95,13 @@ def _case(device, ckpt, case, precision_name):
     return g, model, host
 
 
+def _stream_scale(model, layer: int | None) -> float:
+    """``c`` of the folded residual stream at the input of ``layer`` (None: the head); 1 when unfolded."""
+    w = model.weights
+    eps = w.head_eps if layer is None else w.layers[layer].eps_attn
+    return 1.0 if eps is None else math.sqrt(w.config.norm_eps / eps)
+
+
 @pytest.mark.parametrize("precision_name", PRECISIONS)
 @pytest.mark.parametrize("ckpt,case", CASES, ids=[f"{c}-{n}" for c, n in CASES])
 def test_modules(device, ckpt, case, precision_name):
@@ -116,12 +124,12 @@ def test_modules(device, ckpt, case, precision_name):
         results["embed"] = pcc(_back(out, r, s, sp), expected)
         ttnn.deallocate(out)
 
-        # Time layers, each from the golden input.
+        # Time layers, each from the golden input, scaled to the folded residual stream y = x / c (R2-1).
         layer_in = expected
         for li, kind in enumerate(kinds):
             if kind == "variate":
                 continue
-            x = _flat(device, layer_in, sp)
+            x = _flat(device, layer_in / _stream_scale(model, li), sp)
             y = model.run_layer(li, x, inputs)
             golden = cap[f"layer_{li}"]
             if kind == "last_time":
@@ -133,14 +141,14 @@ def test_modules(device, ckpt, case, precision_name):
 
         # Variate layer on the read-out tokens.
         vi = kinds.index("variate")
-        x = _flat(device, cap[f"layer_{vi - 1}"][:, start : start + count])
+        x = _flat(device, cap[f"layer_{vi - 1}"][:, start : start + count] / _stream_scale(model, vi))
         y = model.run_layer(vi, x, inputs)
         golden = _rows_from_variate_layout(cap[f"layer_{vi}"], host.batch, host.variates)[:, start : start + count]
         results[f"layer_{vi}"] = pcc(_back(y, r, count), golden)
         ttnn.deallocate(y)
 
         # out_norm + head.
-        x = _flat(device, golden)
+        x = _flat(device, golden / _stream_scale(model, None))
         out = model.head(x)
         head = model.normalized_output(ttnn.to_torch(out).float(), host)
         results["head"] = pcc(head, cap["head_out"])
