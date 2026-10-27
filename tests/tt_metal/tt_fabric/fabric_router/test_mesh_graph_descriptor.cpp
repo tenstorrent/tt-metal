@@ -3181,7 +3181,7 @@ void expect_pipeline_rejected(const std::string& pipelines, const std::string& r
 
 namespace tt::tt_fabric::fabric_router_tests {
 
-TEST(MeshGraphDescriptorPipelineTests, GptOssRingParsesAndIsReadable) {
+TEST(MeshGraphDescriptorTests, GptOssRingParsesAndIsReadable) {
     MeshGraphDescriptor desc(mgd_with_pipelines(kGptOssRing));
     ASSERT_TRUE(desc.has_pipeline_descriptors());
     ASSERT_EQ(desc.pipeline_descriptors().size(), 1u);
@@ -3201,7 +3201,7 @@ TEST(MeshGraphDescriptorPipelineTests, GptOssRingParsesAndIsReadable) {
     EXPECT_EQ(pipeline.edges[3].dst, "s0");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, Llama8bPodParsesFortyStages) {
+TEST(MeshGraphDescriptorTests, Llama8bPodParsesFortyStages) {
     MeshGraphDescriptor desc(mgd_with_pipelines(llama_8b_pod_pipeline()));
     ASSERT_EQ(desc.pipeline_descriptors().size(), 1u);
     const PipelineDescriptorData& pipeline = desc.pipeline_descriptors().front();
@@ -3215,7 +3215,7 @@ TEST(MeshGraphDescriptorPipelineTests, Llama8bPodParsesFortyStages) {
     EXPECT_EQ(pipeline.edges.back().dst, "s0");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, JointStageShapeParses) {
+TEST(MeshGraphDescriptorTests, JointStageShapeParses) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
           name: "joint_lm_head"
@@ -3239,7 +3239,7 @@ TEST(MeshGraphDescriptorPipelineTests, JointStageShapeParses) {
     EXPECT_EQ(stored.stages[1].dims, (std::vector<std::int32_t>{4, 4}));
 }
 
-TEST(MeshGraphDescriptorPipelineTests, DflashForkWithFabricReturnsParses) {
+TEST(MeshGraphDescriptorTests, DflashForkWithFabricReturnsParses) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
           name: "gpt_oss_dflash_router"
@@ -3274,7 +3274,7 @@ TEST(MeshGraphDescriptorPipelineTests, DflashForkWithFabricReturnsParses) {
     EXPECT_EQ(stored.stages[0].label, "");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, TwoPipelinesInOneMgdParse) {
+TEST(MeshGraphDescriptorTests, TwoPipelinesInOneMgdParse) {
     MeshGraphDescriptor desc(mgd_with_pipelines(kGptOssRing + R"proto(
         pipeline_descriptors {
           name: "mixed4_b"
@@ -3295,7 +3295,7 @@ TEST(MeshGraphDescriptorPipelineTests, TwoPipelinesInOneMgdParse) {
     EXPECT_EQ(desc.pipeline_descriptors()[1].stages[0].id, "s0");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, RepeatedEdgeDeclaresAnotherChannel) {
+TEST(MeshGraphDescriptorTests, RepeatedEdgeDeclaresAnotherChannel) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
           name: "two_channels"
@@ -3317,7 +3317,7 @@ TEST(MeshGraphDescriptorPipelineTests, RepeatedEdgeDeclaresAnotherChannel) {
     EXPECT_EQ(desc.pipeline_descriptors().front().edges[1].dst, "s1");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, TwoRootsParse) {
+TEST(MeshGraphDescriptorTests, TwoRootsParse) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
           name: "two_roots"
@@ -3344,7 +3344,7 @@ TEST(MeshGraphDescriptorPipelineTests, TwoRootsParse) {
     EXPECT_NO_THROW(MeshGraphDescriptor desc(mgd_with_pipelines(pipeline)));
 }
 
-TEST(MeshGraphDescriptorPipelineTests, ThreeOutgoingEdgesParse) {
+TEST(MeshGraphDescriptorTests, ThreeOutgoingEdgesParse) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
           name: "fan_out"
@@ -3372,7 +3372,7 @@ TEST(MeshGraphDescriptorPipelineTests, ThreeOutgoingEdgesParse) {
     EXPECT_NO_THROW(MeshGraphDescriptor desc(mgd_with_pipelines(pipeline)));
 }
 
-TEST(MeshGraphDescriptorPipelineTests, BranchStageWithOutDegreeTwoParses) {
+TEST(MeshGraphDescriptorTests, BranchStageWithOutDegreeTwoParses) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
           name: "fork_in_branch"
@@ -3407,7 +3407,7 @@ TEST(MeshGraphDescriptorPipelineTests, BranchStageWithOutDegreeTwoParses) {
     EXPECT_NO_THROW(MeshGraphDescriptor desc(mgd_with_pipelines(pipeline)));
 }
 
-TEST(MeshGraphDescriptorPipelineTests, DeadEndBranchParses) {
+TEST(MeshGraphDescriptorTests, DeadEndBranchParses) {
     const std::string pipeline = R"proto(
         pipeline_descriptors {
           name: "dead_end"
@@ -3432,7 +3432,7 @@ TEST(MeshGraphDescriptorPipelineTests, DeadEndBranchParses) {
     EXPECT_EQ(desc.pipeline_descriptors().front().stages.size(), 3u);
 }
 
-TEST(MeshGraphDescriptorPipelineTests, RejectsDuplicatePipelineName) {
+TEST(MeshGraphDescriptorTests, RejectsDuplicatePipelineName) {
     expect_pipeline_rejected(
         kGptOssRing + R"proto(
             pipeline_descriptors {
@@ -3446,7 +3446,7 @@ TEST(MeshGraphDescriptorPipelineTests, RejectsDuplicatePipelineName) {
         "pipeline name 'gpt_oss_120b_single_galaxy' is empty or repeated");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, RejectsEmptyPipelineName) {
+TEST(MeshGraphDescriptorTests, RejectsEmptyPipelineName) {
     expect_pipeline_rejected(
         R"proto(
             pipeline_descriptors {
@@ -3459,7 +3459,7 @@ TEST(MeshGraphDescriptorPipelineTests, RejectsEmptyPipelineName) {
         "pipeline name '' is empty or repeated");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, RejectsPipelineWithNoStages) {
+TEST(MeshGraphDescriptorTests, RejectsPipelineWithNoStages) {
     expect_pipeline_rejected(
         R"proto(
             pipeline_descriptors { name: "empty" }
@@ -3467,7 +3467,7 @@ TEST(MeshGraphDescriptorPipelineTests, RejectsPipelineWithNoStages) {
         "pipeline 'empty': must declare at least one stage");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, RejectsDuplicateStageId) {
+TEST(MeshGraphDescriptorTests, RejectsDuplicateStageId) {
     expect_pipeline_rejected(
         R"proto(
             pipeline_descriptors {
@@ -3485,7 +3485,7 @@ TEST(MeshGraphDescriptorPipelineTests, RejectsDuplicateStageId) {
         "pipeline 'dup': stage id 's0' is empty or repeated");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, RejectsEmptyStageId) {
+TEST(MeshGraphDescriptorTests, RejectsEmptyStageId) {
     expect_pipeline_rejected(
         R"proto(
             pipeline_descriptors {
@@ -3499,7 +3499,7 @@ TEST(MeshGraphDescriptorPipelineTests, RejectsEmptyStageId) {
         "pipeline 'blank': stage id '' is empty or repeated");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, RejectsUnknownStage) {
+TEST(MeshGraphDescriptorTests, RejectsUnknownStage) {
     expect_pipeline_rejected(
         R"proto(
             pipeline_descriptors {
@@ -3514,7 +3514,7 @@ TEST(MeshGraphDescriptorPipelineTests, RejectsUnknownStage) {
         "pipeline 'missing': edge s0 -> s9 names an unknown stage");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, RejectsSelfEdge) {
+TEST(MeshGraphDescriptorTests, RejectsSelfEdge) {
     expect_pipeline_rejected(
         R"proto(
             pipeline_descriptors {
@@ -3529,7 +3529,7 @@ TEST(MeshGraphDescriptorPipelineTests, RejectsSelfEdge) {
         "pipeline 'loop': self-edge on 's0'");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, RejectsRank3Shape) {
+TEST(MeshGraphDescriptorTests, RejectsRank3Shape) {
     expect_pipeline_rejected(
         R"proto(
             pipeline_descriptors {
@@ -3543,7 +3543,7 @@ TEST(MeshGraphDescriptorPipelineTests, RejectsRank3Shape) {
         "pipeline 'rank3': stage 's0' shape must be rank 2, dims > 0");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, RejectsNonPositiveShape) {
+TEST(MeshGraphDescriptorTests, RejectsNonPositiveShape) {
     expect_pipeline_rejected(
         R"proto(
             pipeline_descriptors {
@@ -3568,7 +3568,7 @@ TEST(MeshGraphDescriptorPipelineTests, RejectsNonPositiveShape) {
         "pipeline 'line': stage 's0' shape must be rank 2, dims > 0");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, EdgePolicyStrictParses) {
+TEST(MeshGraphDescriptorTests, EdgePolicyStrictParses) {
     MeshGraphDescriptor desc(mgd_with_pipelines(R"proto(
         pipeline_descriptors {
           name: "strict_edge"
@@ -3588,7 +3588,7 @@ TEST(MeshGraphDescriptorPipelineTests, EdgePolicyStrictParses) {
     EXPECT_EQ(pipeline.edges.front().dst, "s1");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, EdgePolicyRelaxedIsRejected) {
+TEST(MeshGraphDescriptorTests, EdgePolicyRelaxedIsRejected) {
     expect_pipeline_rejected(
         R"proto(
             pipeline_descriptors {
@@ -3607,7 +3607,7 @@ TEST(MeshGraphDescriptorPipelineTests, EdgePolicyRelaxedIsRejected) {
         "pipeline 'relaxed_edge': edge s0 -> s1 policy is RELAXED; every edge is STRICT");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, UnknownFieldElsewhereStillParses) {
+TEST(MeshGraphDescriptorTests, UnknownFieldElsewhereStillParses) {
     // Channel policy is a real field. An unknown mesh field stays legal. A comment that
     // mentions policy is not an edge field.
     const std::string text_proto = R"proto(
@@ -3635,13 +3635,13 @@ TEST(MeshGraphDescriptorPipelineTests, UnknownFieldElsewhereStillParses) {
     EXPECT_EQ(desc.pipeline_descriptors().front().name, "solo");
 }
 
-TEST(MeshGraphDescriptorPipelineTests, AbsentSectionIsUnchanged) {
+TEST(MeshGraphDescriptorTests, AbsentSectionIsUnchanged) {
     MeshGraphDescriptor desc(mgd_with_pipelines(""));
     EXPECT_FALSE(desc.has_pipeline_descriptors());
     EXPECT_TRUE(desc.pipeline_descriptors().empty());
 }
 
-TEST(MeshGraphDescriptorPipelineTests, ShippedMeshGraphDescriptorsStillParse) {
+TEST(MeshGraphDescriptorTests, ShippedMeshGraphDescriptorsStillParse) {
     const std::filesystem::path root = "tt_metal/fabric/mesh_graph_descriptors";
     ASSERT_TRUE(std::filesystem::is_directory(root));
     std::size_t parsed = 0;
