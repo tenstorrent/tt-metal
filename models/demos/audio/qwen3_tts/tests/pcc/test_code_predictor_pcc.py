@@ -218,8 +218,7 @@ def test_greedy_decode_tracks_the_reference_step_by_step(device, frame):
         length = embeddings.shape[1]
         cos, sin, mask = model.host_inputs(length)
         hidden_states = model(*(_to_device(device, t) for t in (embeddings, cos, sin, mask)))
-        row = ttnn.slice(hidden_states, [0, length - 1, 0], [1, length, hidden_states.shape[2]])
-        device_logits = ttnn.to_torch(ttnn.linear(row, model.p["lm_head"][step])).float().reshape(-1)
+        device_logits = ttnn.to_torch(model.logits(hidden_states, length - 1)).float().reshape(-1)
 
         projected = reference.model.small_to_mtp_projection(embeddings)
         reference_hidden = reference.model.model(inputs_embeds=projected).last_hidden_state[:, -1]
