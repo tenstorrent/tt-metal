@@ -92,13 +92,15 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         // mid += a1*b0
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG6, 0);
 
-        // extract integers from mantissas
+        // Extract the integer from the mantissa of low only. mid and top are shifted left by
+        // 11 / 22 next, and the fp32 bit pattern of (x + 2**23) for 0 <= x < 2**23 is
+        // 0x4B000000 + x, whose lowest constant set bit is bit 24: shifted by >= 11 that
+        // constant leaves the 32-bit word, so the raw float bits give exactly (x << 11) and
+        // (x << 22). The two SFPEXMANs for mid/top would be no-ops.
         TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPEXMAN_MOD1_PAD9);
-        TTI_SFPEXMAN(0, p_sfpu::LREG6, p_sfpu::LREG6, sfpi::SFPEXMAN_MOD1_PAD9);
-        TTI_SFPEXMAN(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPEXMAN_MOD1_PAD9);
 
-        TTI_SFPSHFT(22, 0, p_sfpu::LREG5, 1);  // top <<= 22
-        TTI_SFPSHFT(11, 0, p_sfpu::LREG6, 1);  // mid <<= 11
+        TTI_SFPSHFT(22, 0, p_sfpu::LREG5, 1);  // top = (top + 2**23) as bits, <<= 22
+        TTI_SFPSHFT(11, 0, p_sfpu::LREG6, 1);  // mid = (mid + 2**23) as bits, <<= 11
 
         TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
