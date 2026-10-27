@@ -9,16 +9,10 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS
+from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS, download_replica
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import router_tail
 
 pytestmark = pytest.mark.skipif(os.environ.get("QWEN38_FUSED_DEVICE_TEST") != "1", reason="requires held four-die mesh")
-
-
-def _host(tensor):
-    replicas = [ttnn.to_torch(local) for local in ttnn.get_device_tensors(tensor)]
-    assert all(torch.equal(replicas[0], other) for other in replicas[1:])
-    return replicas[0]
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
@@ -42,9 +36,9 @@ def test_router_tail_current_llk_and_reuse(mesh_device, rows):
         expected = router_tail.router_tail_composed(logits)
         outputs = router_tail.router_tail(logits)
         for got, reference in zip(outputs, expected):
-            assert torch.equal(_host(got), _host(reference))
+            assert torch.equal(download_replica(got), download_replica(reference))
         # Independent numeric control on probabilities; ties need not use PyTorch's index order.
-        scores, indices = (_host(t) for t in outputs)
+        scores, indices = (download_replica(t) for t in outputs)
         probabilities = torch.softmax(values, dim=-1)
         selected = probabilities.gather(-1, indices.long())
         selected /= selected.sum(dim=-1, keepdim=True)
@@ -62,7 +56,7 @@ def test_router_tail_current_llk_and_reuse(mesh_device, rows):
             for _ in range(3):
                 ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
                 for got, reference in zip(outputs, expected):
-                    assert torch.equal(_host(got), _host(reference))
+                    assert torch.equal(download_replica(got), download_replica(reference))
             assert mesh_device.num_program_cache_entries() == cached
         finally:
             ttnn.release_trace(mesh_device, trace_id)

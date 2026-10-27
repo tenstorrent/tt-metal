@@ -9,17 +9,11 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS
+from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS, download_replica
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_post_rows as post
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_pre_rows as pre
 
 pytestmark = pytest.mark.skipif(os.environ.get("QWEN38_FUSED_DEVICE_TEST") != "1", reason="requires held four-die mesh")
-
-
-def _host(tensor):
-    replicas = [ttnn.to_torch(local) for local in ttnn.get_device_tensors(tensor)]
-    assert all(torch.equal(replicas[0], value) for value in replicas[1:])
-    return replicas[0]
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
@@ -81,10 +75,12 @@ def test_gdn_rows_sfpu_and_reuse(mesh_device, rows):
 
             def compare():
                 for label, actual, expected in zip(("q", "k", "v", "beta", "g", "sig"), outputs, reference):
-                    assert torch.equal(_host(actual), _host(expected)), f"{label}, rows={rows}, seed={seed}"
+                    assert torch.equal(
+                        download_replica(actual), download_replica(expected)
+                    ), f"{label}, rows={rows}, seed={seed}"
                 for label, expected in zip(("gated", "history_next"), post_reference[:2]):
                     assert torch.equal(
-                        _host(post_outputs[label]), _host(expected)
+                        download_replica(post_outputs[label]), download_replica(expected)
                     ), f"{label}, rows={rows}, seed={seed}"
 
             execute()
