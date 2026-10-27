@@ -47,6 +47,7 @@ CHUNK = int(
 )  # 32 K chunks exceed the KDA grouped-scan owner cores on 8 rows
 GEN = int(os.environ.get("GLM53_LONG_GEN", "32"))
 DEPTH = float(os.environ.get("GLM53_LONG_NEEDLE_DEPTH", "0.5"))  # needle position as a fraction of the filler
+RANDOM_FILLER_OFFSET = int(os.environ.get("GLM53_LONG_RANDOM_OFFSET", "12345"))  # GLM53_LONG_RANDOM_FILLER=1 ramp start
 B = int(os.environ.get("GLM53_LONG_B", "4"))  # user slots per row (one per column with the partitioned cache)
 _users_env = os.environ.get("GLM53_LONG_USERS", "1")
 N_USERS = B if _users_env == "all" else min(B, int(_users_env))  # slots per row prefilled (sequentially)
@@ -113,8 +114,17 @@ def build_needle_ids(tok, n_tokens: int, depth: float) -> tuple[list[int], str]:
         return [int(t) for t in ids] + close_think
 
     def prompt(n_sent: int) -> str:
-        a = filler_sentences(max(1, int(n_sent * depth)), seed=1)
-        b = filler_sentences(max(1, n_sent - int(n_sent * depth)), seed=2)
+        if os.environ.get("GLM53_LONG_RANDOM_FILLER", "0") == "1":
+            # the vllm bench "random" dataset: a ramp of consecutive vocab ids decoded to text (and re-tokenized by
+            # the template below), the prompt that hung the served regions prefill in its 3rd 16 K chunk (2026-10-27)
+            n_fill = max(2, n_sent * 20)
+            vocab = int(getattr(tok, "vocab_size", 150000))
+            ramp = [(RANDOM_FILLER_OFFSET + i) % vocab for i in range(n_fill)]
+            cut = max(1, int(n_fill * depth))
+            a, b = tok.decode(ramp[:cut]), tok.decode(ramp[cut:])
+        else:
+            a = filler_sentences(max(1, int(n_sent * depth)), seed=1)
+            b = filler_sentences(max(1, n_sent - int(n_sent * depth)), seed=2)
         if (
             os.environ.get("GLM53_LONG_NO_QUESTION", "0") == "1"
         ):  # filler only: the model continues it (near-tie numbers)
