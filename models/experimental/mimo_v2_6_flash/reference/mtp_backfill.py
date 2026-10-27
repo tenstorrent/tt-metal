@@ -204,7 +204,7 @@ def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS, window
             for i in range(layers):
                 if held(q + i + 1):
                     out["tokens"][i][r] = token(q + i + 1)
-    if stash is None:
+    if stash is None or layers == 1:  # one layer re-runs no row: the stash is never read (mtp_history.cpp)
         return out, stash
     from .spec_chain import STASH_POSITIONS, STASH_TOKENS
 

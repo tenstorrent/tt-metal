@@ -20,12 +20,13 @@ import ttnn
 NH, DK, DV, BLOCK, TILE = 16, 192, 128, 64, 32
 
 
-def program(batch, table_tokens, cands=0):
+def program(batch, table_tokens, cands=0, k_chunk_size=0):
     """MiMo's _split_sdpa_program (8 x 8 grid), and _verify_sdpa_program's limits from 8 candidates."""
     k_chunk = 256 if table_tokens % 256 == 0 else 128
     cores = max(16, min(64, 64 // batch))
     if cands >= 8:
         k_chunk, cores = 128, min(cores, 32)
+    k_chunk = k_chunk_size or k_chunk
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
         q_chunk_size=0,
@@ -56,6 +57,7 @@ def main():
     p.add_argument("--cands", type=int, default=4)
     p.add_argument("--iters", type=int, default=20)
     p.add_argument("--grouped-fidelity", default="HiFi4", help="the grouped verify's math fidelity")
+    p.add_argument("--grouped-k-chunk", type=int, default=0, help="the grouped verify's K chunk (0: the decode's)")
     a = p.parse_args()
     reqs, cands, n_local = a.reqs, a.cands, a.local
     slots, blocks = reqs * cands, n_local // BLOCK
@@ -133,7 +135,7 @@ def main():
                 v_cache,
                 page_table_tensor=group_table,
                 cur_pos_tensor=slot_pos,
-                program_config=program(reqs, tokens, cands),
+                program_config=program(reqs, tokens, cands, a.grouped_k_chunk),
                 spec_multi_pos_tiles=cands,
                 compute_kernel_config=cfg_grouped,
                 **common,

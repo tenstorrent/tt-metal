@@ -51,7 +51,12 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 from models.experimental.mimo_v2_6_flash.reference.config import MiMoConfig
-from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, accept_greedy
+from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
+    MAX_DRAFTS,
+    SPEC_SLOTS,
+    accept_greedy,
+    planned_drafts,
+)
 from models.experimental.mimo_v2_6_flash.tests.common import DP, GALAXY_DEVICE_PARAMS, model_path
 from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import BLOCK_SIZE, MiMoV2ForCausalLM
@@ -59,10 +64,10 @@ from models.experimental.mimo_v2_6_flash.tt.generator_vllm import BLOCK_SIZE, Mi
 pytest.importorskip("vllm_tt_plugin")
 
 SPEC_DEVICE_PARAMS = {**GALAXY_DEVICE_PARAMS, "trace_region_size": 1_200_000_000}
-PER_LANE = 4
+PER_LANE = max(4, SPEC_SLOTS)  # a verify runs in SPEC_SLOTS decode slots of the lane
 # The prefill warmup lays a lane's first-chunk batches (PER_LANE users of up to TtMiMoModel.PREFILL_BATCH_MAX_PADDED,
 # 512 tokens) along one page-table row, so the row must hold PER_LANE * 512 positions.
-MAX_SEQ_LEN = 2048
+MAX_SEQ_LEN = max(2048, PER_LANE * 512)
 STEPS = 96
 # The first verifies also run in logits and fused_sample mode and must agree with argmax_ids and the host walk.
 LOGITS_CHECKS = 4
@@ -73,7 +78,7 @@ PROMPT = (
 # Committed tokens per verify (the bonus token plus the accepted drafts) the drafter must average: drafts that never
 # match commit 1.0, and greedy MTP commits 2.79 per verify on SPEED-Bench coding at c=1. One accepted draft per verify
 # fails a broken drafter and leaves margin for this one short coding prompt.
-MIN_MEAN_ACCEPTED = 2.0
+MIN_MEAN_ACCEPTED = 2.0 if MAX_DRAFTS >= 3 else 1.5  # one draft (MIMO_SPEC_GROUPS=4): accepted half the time
 # The mean accepted length of each (MTP layers, RoPE tables, backfill) case run in this session.
 MEAN_ACCEPTED = {}
 
@@ -133,8 +138,10 @@ def kv_cache_and_tables(model, cfg, groups, buffers, rows, width):
 @pytest.mark.parametrize("device_params", [SPEC_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, monkeypatch):
-    if mtp_layers > 1 and device_rope is None:
-        pytest.skip("every-layer drafting plans its passes on device: it needs the decode RoPE tables")
+    if mtp_layers not in (1, MAX_DRAFTS):
+        pytest.skip(f"{mtp_layers} MTP layers draft {mtp_layers} tokens; the groups hold {MAX_DRAFTS}")
+    if planned_drafts(mtp_layers) and device_rope is None:
+        pytest.skip("the planned MTP program plans its passes on device: it needs the decode RoPE tables")
     if not backfill and (mtp_layers == 1 or device_rope != "whole"):
         pytest.skip("without the backfill: once (3 MTP layers, whole RoPE tables)")
     path = model_path()
@@ -345,6 +352,8 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
 @pytest.mark.parametrize("device_params", [SPEC_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 def test_chained_spec_decode_tp8_dp4(mesh_device, mtp_layers, monkeypatch):
+    if mtp_layers not in (1, MAX_DRAFTS):
+        pytest.skip(f"{mtp_layers} MTP layers draft {mtp_layers} tokens; the groups hold {MAX_DRAFTS}")
     path = model_path()
     cfg = MiMoConfig.from_model_path(path)
     monkeypatch.setattr(generator_vllm, "SPEC_DECODE", "mtp")

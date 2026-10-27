@@ -29,6 +29,7 @@ from .spec_decode import (
     mtp_stash,
     plan_mtp,
     plan_mtp_layers,
+    planned_drafts,
 )
 
 
@@ -91,18 +92,19 @@ class ReferenceMTPDrafter:
         self.reset()
 
     @property
-    def multi_layer(self):
-        return len(self.mtps) > 1
+    def planned(self):
+        """The planned program (planned_drafts): every layer, or one layer drafting one token (groups of 2 slots)."""
+        return planned_drafts(len(self.mtps))
 
     def reset(self):
         """A new request's prompt: no K / V, nothing stashed."""
         self.histories = [PositionalHistory() for _ in self.mtps]
-        self.stash = MtpStash.empty() if self.multi_layer else None
+        self.stash = MtpStash.empty() if self.planned else None
         self.stash_rows = [None] * SPEC_SLOTS  # (hidden, layer-0 token) of each stash slot
         self.outputs = None  # each draft's final normed output at its row (the anchor), of the last draft
 
     def plan(self, source, committed_positions, accepted):
-        if self.multi_layer:
+        if self.planned:
             return plan_mtp_layers(source, committed_positions, accepted, self.stash, len(self.mtps))
         return plan_mtp(source, committed_positions, accepted)
 

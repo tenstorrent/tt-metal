@@ -247,6 +247,7 @@ def test_top_k_rows_draw_in_logit_order_and_nucleus_rows_in_id_order():
             assert near or tokens == [want], (top_k, u)
 
 
+@pytest.mark.skipif(MAX_DRAFTS < 3, reason="walks chains of 3 drafts (MIMO_SPEC_GROUPS=4 verifies 1)")
 def test_greedy_rows_commit_the_argmax_chain_lowest_id_on_ties():
     rng = SeededRng(6)
     slots = [make_logits(rng, 2.0) for _ in range(MAX_DRAFTS + 1)]
