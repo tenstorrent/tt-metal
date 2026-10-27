@@ -678,6 +678,14 @@ if [[ -n "${TT_DEVICE_TIMING_LOG:-}" ]]; then
     export PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}"
     PYTEST_CMD+=(-p tests.plugins.phase_timing)
 fi
+# Device reuse (tests/plugins/device_reuse.py): one device open for the whole session instead of
+# one per parametrized case. Hardware only; off under --profile (the device profiler reads its
+# data at device close) and with SAFE_PYTEST_REUSE_DEVICE=0.
+if [[ "$SIM_MODE" == false && "$PROFILE_MODE" == false && "${SAFE_PYTEST_REUSE_DEVICE:-1}" != 0 ]]; then
+    [[ ":${PYTHONPATH:-}:" == *":$REPO_DIR:"* ]] || export PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}"
+    PYTEST_CMD+=(-p tests.plugins.device_reuse)
+    echo "SAFE_PYTEST: device reuse on — one device open per session (SAFE_PYTEST_REUSE_DEVICE=0 to turn off)"
+fi
 # -x: stop on first failure (avoids running tests after a hang bricks the device)
 # --run-all: skip -x to get full pass/fail counts (for eval scoring)
 if [[ "$FAIL_FAST" == true ]]; then
