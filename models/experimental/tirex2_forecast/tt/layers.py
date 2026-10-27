@@ -415,8 +415,9 @@ class _Acts:
     """Unary activations to fuse into binary ops."""
 
     def __init__(self, ttnn):
-        for k in ("SIGMOID", "EXP", "TANH"):
+        for k in ("SIGMOID", "LOG", "EXP", "TANH"):
             setattr(self, k, ttnn.UnaryWithParam(getattr(ttnn.UnaryOpType, k)))
+        self.N_FLOOR = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU_MIN, 1.0)
 
 
 def slstm_recurrence(
@@ -469,9 +470,11 @@ def slstm_recurrence(
             free(po)
         else:
             # activations fused into the binary ops (not into the scalar maximum: it drops them)
-            lf = log_sigmoid(pf)
-            lfm = ttnn.add(lf, m)
-            free(pf, lf)
+            xc = ttnn.maximum(pf, -80.0)
+            sf = ttnn.sigmoid(xc)
+            free(pf, xc)
+            lfm = ttnn.add(sf, m, input_tensor_a_activations=[_act.LOG])  # log_sigmoid(f) + m
+            free(sf)
             m_new = ttnn.maximum(pi, lfm)
             ig = ttnn.subtract(pi, m_new, activations=[_act.EXP])
             fg = ttnn.subtract(lfm, m_new, activations=[_act.EXP])
@@ -484,10 +487,8 @@ def slstm_recurrence(
             free(fc, iz)
             fn = ttnn.multiply(fg, n)
             free(n, fg)
-            nn = ttnn.add(fn, ig)
+            n = ttnn.add(fn, ig, activations=[_act.N_FLOOR])  # max(fg n + ig, 1)
             free(fn, ig)
-            n = ttnn.maximum(nn, 1.0)
-            free(nn)
             oc = ttnn.multiply(c, po, input_tensor_b_activations=[_act.SIGMOID])
             free(po)
             y = ttnn.divide(oc, n)
