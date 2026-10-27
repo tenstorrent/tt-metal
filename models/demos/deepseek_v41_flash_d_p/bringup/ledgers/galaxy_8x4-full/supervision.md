@@ -234,3 +234,4 @@ Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release on
   depth as expected (L00 0.025 -> L30 0.147); host_transfers_per_layer 0. Commit holds records only (no code change).
   L.s10240 started. Dashboard republished (milestone).
 - 08:10 L.s10240 PASS 9960b0b018b (523 s). L.last started.
+- 08:32 L.last PASS af70ec04593 (483 s; top5 1.0, err_final_hidden 0.185 / 0.242). L.s56320 started. DASHBOARD STALE wake: not republished (owner: milestones only; next at the ladder's end).
