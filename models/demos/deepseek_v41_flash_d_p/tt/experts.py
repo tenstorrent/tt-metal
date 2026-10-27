@@ -379,9 +379,13 @@ class TtExperts:
             # 16-value groups _bfp8_exact asserted on the [N, K] matrices above)
             check_exact=False,
             cache_prefix=cache_prefix,
-            # the flat op's plan before its DRISC-only / even-split defaults (2026-10-22): the plan, the cached
-            # weight layout (FIX.4) and the numbers this model was validated on; the new defaults wait for an A/B
-            layout=LEGACY,
+            # EXPERTS_LAYOUT: legacy = the flat op's plan before its DRISC-only / even-split defaults (the cached
+            # weight layout, FIX.4); marko = his defaults + moe_block.layout_of's rows_hint / x_helpers
+            layout=(
+                LEGACY
+                if settings.get("EXPERTS_LAYOUT") == "legacy"
+                else dict(rows_hint=round(self.max_chunk * self.K / self.E), x_helpers=1)
+            ),
         )
         logger.info(
             f"EXPERTS_FLAT layer={self.layer} plan nu={self.fe.plan['nu']} np={self.fe.plan['np']} "
