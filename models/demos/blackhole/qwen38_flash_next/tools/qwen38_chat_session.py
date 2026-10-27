@@ -1975,8 +1975,6 @@ class Qwen38TracedChain:
     slab_capture_ms: float = 0.0
     # The GDN state re-anchor the chunk trace was captured with (every chunk replay commits through it).
     chunk_gdn_step_anchor: bool = False
-    # Re-verify the traces' allocations before every prefill (diagnostic; they are verified once after capture).
-    verify_each_prefill: bool = False
     sampling: sampling_step.Qwen38SamplingChainExtension | None = None
     mtp: Qwen38ChainMTP | None = None
     # The prompt-end snapshot buffers, allocated before the warm pass.
@@ -2111,7 +2109,7 @@ class Qwen38TracedChain:
             self.chunk_state,
             self.chunk_trace_id,
             forced_step=forced_step,
-            verify_allocations=self.verify_each_prefill,
+            verify_allocations=False,  # verified once after capture
             gdn_step_anchor=self.chunk_gdn_step_anchor,
             long_chunk_state=self.long_chunk_state,
             long_chunk_trace_id=self.long_chunk_trace_id,

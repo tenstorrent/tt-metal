@@ -903,7 +903,6 @@ class Qwen38TTNNTextModelOutput:
     hyper_residual_sharded: Any | None
     hidden_sharded: Any | None
     logits: Qwen38ShardedLogits | None
-    greedy_token: torch.Tensor | None
     state: Qwen38TTNNTextModelState
     layer_aux: tuple[Qwen38TTNNDecoderLayerAux, ...]
     active: bool = True
@@ -926,21 +925,6 @@ class Qwen38TTNNTextModelOutput:
             raise RuntimeError("model-output device tensors were already released")
         _release_tensor_slots(self._owned_tensors, label="text-model output")
         self.active = not all(tensor is None for tensor in self._owned_tensors)
-
-
-@dataclass(frozen=True)
-class Qwen38TTNNGreedyStep:
-    input_token_id: int
-    next_token_id: int
-    state: Qwen38TTNNTextModelState
-    layer_aux: tuple[Qwen38TTNNDecoderLayerAux, ...]
-
-
-LayerObserver = Callable[
-    [int, Any, Qwen38TTNNDecoderLayerState, Qwen38TTNNDecoderLayerAux],
-    None,
-]
-DecodePhaseObserver = Callable[[str], None]
 
 
 QSA_LANE_FUSED_KERNELS = (  # the six programs the fused QSA lane body needs together (ttnn/qsa.py binds it on all six)
@@ -1067,7 +1051,6 @@ class Qwen38TTNNTextModel:
         self._poisoned_error: Qwen38TTNNModelPoisonedError | None = None
         self._poisoned_device_owners: list[Any] = []
         self._active_snapshot: Qwen38TTNNTextModelSnapshot | None = None
-        self._runtime_owner: object | None = None
 
     @property
     def poisoned(self) -> bool:
@@ -1095,25 +1078,6 @@ class Qwen38TTNNTextModel:
                 f"cannot {operation} while a text-model snapshot is active; "
                 "restore or commit that exact transaction first"
             )
-
-    def claim_runtime_owner(self, owner: object) -> None:
-        """Exclusively bind one ordinary/MTP controller to this live model."""
-
-        self._require_healthy()
-        if owner is None:
-            raise TypeError("runtime owner token cannot be None")
-        if self._runtime_owner is not None:
-            raise RuntimeError("the TTNN text model already has a live runtime owner")
-        self._runtime_owner = owner
-
-    def release_runtime_owner(self, owner: object) -> None:
-        """Release a healthy controller claim after its state is gone."""
-
-        self._require_healthy()
-        self._require_no_active_snapshot("release the runtime owner")
-        if self._runtime_owner is not owner:
-            raise ValueError("runtime owner token does not own this TTNN text model")
-        self._runtime_owner = None
 
     def _validate_hidden(self, tensor, *, label: str) -> None:
         if _shape(tensor) != BLOCK_LOCAL_SHAPE or tensor.dtype != ttnn.bfloat16 or tensor.layout != ttnn.TILE_LAYOUT:
@@ -1562,7 +1526,6 @@ class Qwen38TTNNTextModel:
         state: Qwen38TTNNTextModelState,
         *,
         return_logits: bool = True,
-        resolve_greedy: bool = False,
         retain_hidden: bool = True,
         retain_hyper_residual: bool = True,
         return_routing: bool = False,
@@ -1580,7 +1543,6 @@ class Qwen38TTNNTextModel:
             prepared.input_token_id,
             state,
             return_logits=return_logits,
-            resolve_greedy=resolve_greedy,
             retain_hidden=retain_hidden,
             retain_hyper_residual=retain_hyper_residual,
             retain_input_state=False,
@@ -1594,23 +1556,18 @@ class Qwen38TTNNTextModel:
         state: Qwen38TTNNTextModelState,
         *,
         return_logits: bool = True,
-        resolve_greedy: bool = False,
         retain_hidden: bool = True,
         retain_hyper_residual: bool = True,
         retain_input_state: bool = False,
         return_routing: bool = False,
-        layer_observer: LayerObserver | None = None,
-        phase_observer: DecodePhaseObserver | None = None,
         _prepared_inputs: Qwen38TTNNPreparedDecodeInputs | None = None,
     ) -> Qwen38TTNNTextModelOutput:
         """Advance one token through all 48 target layers; the input state is consumed into the returned state.
 
-        Activations are returned only when their ``retain_*`` flag is set; ``resolve_greedy`` transfers only four local
-        candidates. An exception after any decoder layer permanently poisons this owner.
+        Activations are returned only when their ``retain_*`` flag is set. An exception after any decoder layer
+        permanently poisons this owner.
         """
 
-        if phase_observer is not None and not callable(phase_observer):
-            raise TypeError("decode phase observer must be callable")
         self._validate_state(state)
         active_snapshot = self._preflight_forward_transaction(
             state,
@@ -1678,55 +1635,23 @@ class Qwen38TTNNTextModel:
         owned: list[Any | None] | None = None
         hidden = None
         logits = None
-        greedy_token = None
         try:
             for layer_index, (layer, layer_state) in enumerate(zip(self.layers, state.layers)):
                 qsa = layer.layer_type is Qwen38TTNNLayerType.QSA
                 prepared_ple = _prepared_inputs.ple if _prepared_inputs is not None and layer_index == 1 else None
-                deferred_phase_errors: list[BaseException] = []
-                layer_phase_observer = None
-                if phase_observer is not None:
-                    phase_observer(f"before-layer-{layer_index}")
-
-                    def observe_layer_phase(phase: str, *, index: int = layer_index) -> None:
-                        if deferred_phase_errors:
-                            return
-                        try:
-                            if type(phase) is not str:
-                                raise TypeError("decoder-layer phase observer payload must be str")
-                            phase_observer(f"layer-{index}-{phase}")
-                        except BaseException as error:
-                            deferred_phase_errors.append(error)
-
-                    layer_phase_observer = observe_layer_phase
                 inside_layer = True
-                if layer_phase_observer is None:
-                    result = layer.forward_decode(
-                        residual,
-                        layer_state,
-                        token_id=host_token,
-                        prepared_ple=prepared_ple,
-                        cos=rope_inputs.cos if qsa else None,
-                        sin=rope_inputs.sin if qsa else None,
-                        block_start_cos=rope_inputs.block_start_cos if qsa else None,
-                        block_start_sin=rope_inputs.block_start_sin if qsa else None,
-                        retain_input_state=retain_input_state,
-                        return_routing=return_routing,
-                    )
-                else:
-                    result = layer.forward_decode(
-                        residual,
-                        layer_state,
-                        token_id=host_token,
-                        prepared_ple=prepared_ple,
-                        cos=rope_inputs.cos if qsa else None,
-                        sin=rope_inputs.sin if qsa else None,
-                        block_start_cos=rope_inputs.block_start_cos if qsa else None,
-                        block_start_sin=rope_inputs.block_start_sin if qsa else None,
-                        retain_input_state=retain_input_state,
-                        return_routing=return_routing,
-                        phase_observer=layer_phase_observer,
-                    )
+                result = layer.forward_decode(
+                    residual,
+                    layer_state,
+                    token_id=host_token,
+                    prepared_ple=prepared_ple,
+                    cos=rope_inputs.cos if qsa else None,
+                    sin=rope_inputs.sin if qsa else None,
+                    block_start_cos=rope_inputs.block_start_cos if qsa else None,
+                    block_start_sin=rope_inputs.block_start_sin if qsa else None,
+                    retain_input_state=retain_input_state,
+                    return_routing=return_routing,
+                )
                 next_residual = result.residual_sharded
                 inside_layer = False
                 residual = next_residual
@@ -1739,12 +1664,6 @@ class Qwen38TTNNTextModel:
                         f"expected {state.position + 1}"
                     )
                 self._validate_residual(residual, label=f"target layer {layer_index} output")
-                if deferred_phase_errors:
-                    raise deferred_phase_errors[0]
-                if layer_observer is not None:
-                    layer_observer(layer_index, residual, result.state, result.aux)
-                if phase_observer is not None:
-                    phase_observer(f"after-layer-{layer_index}")
 
             if owns_rope_inputs:
                 rope_inputs.deallocate()
@@ -1760,34 +1679,15 @@ class Qwen38TTNNTextModel:
             # retry only failed groups without double-freeing earlier groups.
             owned = [residual, None, None, *routing_tensors]
 
-            if phase_observer is not None:
-                phase_observer("before-final-mixer")
             hidden = self.final_mixer(residual)
             owned[1] = hidden
-            if phase_observer is not None:
-                phase_observer("after-final-mixer")
             self._validate_hidden(hidden, label="terminal hyper-connection output")
 
-            if return_logits or resolve_greedy:
-                if phase_observer is not None:
-                    phase_observer("before-lm-head")
+            if return_logits:
                 logits = self.model_io.lm_head(hidden)
                 owned[2] = logits.tensor
-                if phase_observer is not None:
-                    phase_observer("after-lm-head")
-                if resolve_greedy:
-                    if phase_observer is None:
-                        greedy_token = self.model_io.lm_head.greedy_token(logits)
-                    else:
-                        phase_observer("before-greedy-resolve")
-                        greedy_token = self.model_io.lm_head.greedy_token(logits)
-                        phase_observer("after-greedy-resolve")
-                    if greedy_token.device.type != "cpu" or tuple(greedy_token.shape) != (1, 1, 1):
-                        raise RuntimeError("greedy decode must return one CPU token as [1,1,1]")
 
             release_indices = []
-            if not return_logits and owned[2] is not None:
-                release_indices.append(2)
             if not retain_hidden:
                 release_indices.append(1)
             if not retain_hyper_residual:
@@ -1800,7 +1700,6 @@ class Qwen38TTNNTextModel:
                 hyper_residual_sharded=owned[0],
                 hidden_sharded=owned[1],
                 logits=logits if owned[2] is not None else None,
-                greedy_token=greedy_token,
                 state=next_state,
                 layer_aux=tuple(aux_outputs),
             )
@@ -1829,118 +1728,6 @@ class Qwen38TTNNTextModel:
             )
             cause = _cleanup_failure_cause("failed ordinary decode", actions, error)
             self._mark_poisoned("forward_decode", processed_layers, cause)
-
-    def greedy_step(
-        self,
-        token_id: int | torch.Tensor,
-        state: Qwen38TTNNTextModelState,
-        *,
-        retain_input_state: bool = False,
-        layer_observer: LayerObserver | None = None,
-        phase_observer: DecodePhaseObserver | None = None,
-    ) -> Qwen38TTNNGreedyStep:
-        """Run one ordinary target step and retain only the resolved CPU token."""
-
-        if phase_observer is None:
-            output = self.forward_decode(
-                token_id,
-                state,
-                return_logits=False,
-                resolve_greedy=True,
-                retain_hidden=False,
-                retain_hyper_residual=False,
-                retain_input_state=retain_input_state,
-                layer_observer=layer_observer,
-            )
-        else:
-            output = self.forward_decode(
-                token_id,
-                state,
-                return_logits=False,
-                resolve_greedy=True,
-                retain_hidden=False,
-                retain_hyper_residual=False,
-                retain_input_state=retain_input_state,
-                layer_observer=layer_observer,
-                phase_observer=phase_observer,
-            )
-        try:
-            if output.greedy_token is None:
-                raise AssertionError("greedy target step did not resolve a token")
-            next_token = int(output.greedy_token.item())
-            result = Qwen38TTNNGreedyStep(
-                input_token_id=output.input_token_id,
-                next_token_id=next_token,
-                state=output.state,
-                layer_aux=output.layer_aux,
-            )
-            output.release_tensors()
-            return result
-        except BaseException as error:
-            actions = [("greedy output", output.release_tensors)] if output.active else []
-            cause = _cleanup_failure_cause("failed greedy step", actions, error)
-            self._mark_poisoned("greedy_step", BACKBONE_LAYERS, cause)
-
-    def prefill_serial(
-        self,
-        input_ids: torch.Tensor,
-        *,
-        state: Qwen38TTNNTextModelState | None = None,
-        return_logits: bool = True,
-        resolve_greedy: bool = False,
-        retain_hidden: bool = True,
-        retain_hyper_residual: bool = True,
-        layer_observer: LayerObserver | None = None,
-    ) -> Qwen38TTNNTextModelOutput:
-        """Prefill by exact one-token device decode; only the final token's activations / logits are retained."""
-
-        self._require_healthy()
-        self._require_no_active_snapshot("run serial prefill")
-        if input_ids.device.type != "cpu" or input_ids.dtype not in (torch.int32, torch.int64):
-            raise ValueError("serial prefill IDs must be CPU int32/int64")
-        if input_ids.ndim != 2 or tuple(input_ids.shape[:1]) != (1,) or input_ids.shape[1] <= 0:
-            raise ValueError("serial prefill IDs must be nonempty true-global-B1 [1,sequence]")
-        if int(input_ids.min()) < 0 or int(input_ids.max()) >= VOCAB_SIZE:
-            raise IndexError(f"serial prefill token is outside [0,{VOCAB_SIZE})")
-        prompt_length = int(input_ids.shape[1])
-        if state is None:
-            start_position = 0
-        else:
-            self._validate_state(state)
-            start_position = state.position
-        if start_position + prompt_length > self.allocated_context:
-            raise ValueError(
-                f"serial prefill exceeds allocated cache capacity {self.allocated_context}; "
-                f"semantic model limit remains {MAX_CONTEXT}"
-            )
-        current = self.allocate_state() if state is None else state
-        self._validate_state(current)
-
-        final = None
-        for offset in range(prompt_length):
-            last = offset == prompt_length - 1
-            output = self.forward_decode(
-                input_ids[:, offset : offset + 1],
-                current,
-                return_logits=return_logits if last else False,
-                resolve_greedy=resolve_greedy if last else False,
-                retain_hidden=retain_hidden if last else False,
-                retain_hyper_residual=retain_hyper_residual if last else False,
-                layer_observer=layer_observer,
-            )
-            current = output.state
-            if last:
-                final = output
-            else:
-                try:
-                    output.release_tensors()
-                except BaseException as error:
-                    actions = [("prefill output", output.release_tensors)] if output.active else []
-                    cause = _cleanup_failure_cause("serial prefill output", actions, error)
-                    self._mark_poisoned("prefill_serial", BACKBONE_LAYERS, cause)
-        if final is None:
-            raise AssertionError("nonempty serial prefill did not produce a final row")
-        return final
 
     # --- position-generic body: one trace captured at position 0 serves every position ---
 
@@ -3480,7 +3267,6 @@ __all__ = [
     "Qwen38TTNNGenericHandoff",
     "Qwen38TTNNGenericHead",
     "Qwen38TTNNGenericTraceKey",
-    "Qwen38TTNNGreedyStep",
     "Qwen38TTNNModelPoisonedError",
     "Qwen38TTNNPreparedDecodeInputs",
     "Qwen38TTNNRoPE",

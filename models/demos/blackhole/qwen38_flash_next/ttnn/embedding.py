@@ -2160,15 +2160,6 @@ class Qwen38TTNNLMHead:
             collective_topology=self.collective_topology,
         )
 
-    def greedy_token(self, logits: Qwen38ShardedLogits) -> torch.Tensor:
-        """Convenience path that transfers candidates, never full logits."""
-
-        candidates = self.greedy_candidates(logits)
-        try:
-            return self.resolve_greedy(candidates)
-        finally:
-            _deallocate(candidates.local_indices, candidates.local_values)
-
 
 class Qwen38TTNNModelIO:
     """Convenience owner for the exact embedding and LM-head modules."""

@@ -173,29 +173,8 @@ def _finite_real(value: Real, *, label: str) -> float:
     return result
 
 
-def _duration(start: int, end: int, *, label: str) -> int:
-    if isinstance(start, bool) or isinstance(end, bool) or not isinstance(start, int) or not isinstance(end, int):
-        raise RuntimeError(f"{label} clock must return integer nanoseconds")
-    if end < start:
-        raise RuntimeError(f"{label} monotonic clock moved backwards: {start} -> {end}")
-    return end - start
-
-
 def _shape(tensor: Any) -> tuple[int, ...]:
     return tuple(int(value) for value in tensor.shape)
-
-
-def _normalize_eos_ids(values: Sequence[int]) -> tuple[int, ...]:
-    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
-        raise TypeError("eos_token_ids must be a sequence of integers")
-    result = tuple(values)
-    if not result:
-        raise ValueError("at least one pinned EOS token ID is required")
-    if len(set(result)) != len(result):
-        raise ValueError(f"EOS token IDs must be unique, got {result}")
-    if any(isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < VOCAB_SIZE for value in result):
-        raise ValueError(f"EOS token IDs must be integers in [0,{VOCAB_SIZE}), got {result}")
-    return result
 
 
 def _normalize_one_history(values: Sequence[int], *, label: str) -> tuple[int, ...]:

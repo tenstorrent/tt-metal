@@ -75,7 +75,6 @@ from .layer import (
 )
 from .model import (
     Qwen38TTNNCleanupError,
-    Qwen38TTNNGreedyStep,
     Qwen38TTNNModelPoisonedError,
     Qwen38TTNNPreparedDecodeInputs,
     Qwen38TTNNRoPE,
@@ -163,7 +162,6 @@ __all__ = [
     "Qwen38TTNNLayerType",
     "validate_layer_static_contract",
     "Qwen38TTNNCleanupError",
-    "Qwen38TTNNGreedyStep",
     "Qwen38TTNNModelPoisonedError",
     "Qwen38TTNNPreparedDecodeInputs",
     "Qwen38TTNNRoPE",
