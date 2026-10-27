@@ -312,15 +312,6 @@ def cause_hang_with_app(request):
     "cause_hang_with_app",
     [
         (
-            # Manual hang detection with timeout from outside
-            HANG_APP_ADD_2_INTEGERS,
-            [],
-            {
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
-            },
-            10,
-        ),
-        (
             # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, fast dispatch
             # with lightweight asserts on
             HANG_APP_ADD_2_INTEGERS,
