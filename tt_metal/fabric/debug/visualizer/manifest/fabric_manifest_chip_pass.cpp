@@ -295,13 +295,9 @@ uint32_t hal_size(const tt::tt_metal::Hal& hal, HalL1MemAddrType area) {
     return hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, area);
 }
 
-// A HAL area holding a whole number of `one`s, described as `count` of them from its address: one of them, or an
-// array. `count` defaults to as many as the HAL's size holds.
-manifest::content::L1 hal_area(
-    const tt::tt_metal::Hal& hal,
-    HalL1MemAddrType area,
-    const layout::Type& one,
-    std::optional<uint32_t> count = std::nullopt) {
+// A HAL area holding a whole number of `one`s, described from its address as one of them or as an array of as many as
+// the HAL's size holds.
+manifest::content::L1 hal_area(const tt::tt_metal::Hal& hal, HalL1MemAddrType area, const layout::Type& one) {
     const uint32_t size = hal_size(hal, area);
     TT_FATAL(
         one.size > 0 && size >= one.size && size % one.size == 0,
@@ -310,7 +306,7 @@ manifest::content::L1 hal_area(
         size,
         one.size,
         manifest::schema_name(one));
-    const uint32_t n = count.value_or(size / one.size);
+    const uint32_t n = size / one.size;
     return {.address = hal_address(hal, area), .type = n == 1 ? one : layout::Type{one.element, n * one.size, n}};
 }
 
@@ -420,15 +416,6 @@ manifest::Chip join_chip(
 }
 
 manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
-    namespace dev_msgs = tt::tt_metal::dev_msgs;
-    const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH);
-    const layout::Type go_msg{
-        layout::element::Struct{layout::go_msg_name}, static_cast<uint32_t>(factory.size_of<dev_msgs::go_msg_t>()), 0};
-    const layout::Type launch_msg{
-        layout::element::Struct{enchantum::type_name<dev_msgs::launch_msg_t>},
-        static_cast<uint32_t>(factory.size_of<dev_msgs::launch_msg_t>()),
-        0};
-    std::vector<manifest::StructType> types = manifest::described_struct_types();
     return manifest::Arch{
         .arch = hal.get_arch(),
         .areas =
@@ -437,13 +424,6 @@ manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
                 .fabric_telemetry =
                     hal_area(hal, HalL1MemAddrType::FABRIC_TELEMETRY, layout::type_of<FabricTelemetry>()),
                 .routing_table = hal_area(hal, HalL1MemAddrType::ROUTING_TABLE, layout::type_of<routing_l1_info_t>()),
-                // Active ERISC firmware only reads and writes go_messages[0].
-                .go_msg = hal_area(hal, HalL1MemAddrType::GO_MSG, go_msg, 1),
-                // The HAL's LAUNCH is the ring's first entry; firmware and the router index the ring by its read
-                // pointer.
-                .launch = hal_area(hal, HalL1MemAddrType::LAUNCH, launch_msg, dev_msgs::launch_msg_buffer_num_entries),
-                .launch_msg_rd_ptr =
-                    hal_area(hal, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR, layout::type_of<uint32_t>()),
                 .eth_fw_mailbox =
                     hal.get_supports_eth_fw_mailbox()
                         ? std::optional(hal_area(hal, HalL1MemAddrType::ETH_FW_MAILBOX, layout::type_of<uint32_t>()))
@@ -456,7 +436,7 @@ manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
             },
         .stream_registers = stream_registers(hal),
         .core_registers = core_registers(hal),
-        .types = std::move(types),
+        .types = manifest::described_struct_types(),
     };
 }
 
