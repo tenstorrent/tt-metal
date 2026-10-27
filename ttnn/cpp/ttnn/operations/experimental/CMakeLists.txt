@@ -63,6 +63,7 @@ add_subdirectory(deepseek/mix_streams)
 add_subdirectory(deepseek/csa_pool)
 add_subdirectory(deepseek/engram_gate)
 add_subdirectory(deepseek/fused_lightning_select_kv)
+add_subdirectory(deepseek/build_candidate_pool)
 add_subdirectory(deepseek/merge_select_kv)
 add_subdirectory(deepseek/all_gather_for_matmul)
 add_subdirectory(deepseek/width_sharded_all_reduce)
@@ -118,6 +119,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeek::CsaPool
         TTNN::Ops::Experimental::DeepSeek::EngramGate
         TTNN::Ops::Experimental::DeepSeek::FusedLightningSelectKv
+        TTNN::Ops::Experimental::DeepSeek::BuildCandidatePool
         TTNN::Ops::Experimental::DeepSeek::MergeSelectKv
         TTNN::Ops::Experimental::DeepSeek::AllGatherForMatmul
         TTNN::Ops::Experimental::DeepSeek::WidthShardedAllReduce
@@ -178,6 +180,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::CsaPool>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::EngramGate>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::FusedLightningSelectKv>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::BuildCandidatePool>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MergeSelectKv>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::AllGatherForMatmul>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::WidthShardedAllReduce>
