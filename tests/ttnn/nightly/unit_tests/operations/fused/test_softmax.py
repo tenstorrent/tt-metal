@@ -11,6 +11,8 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_softmax
 from tt_py_test_utils_common.utility_functions import torch_random
 
+import tests.ttnn.unit_tests.operations.fused.test_softmax as base
+
 # Module-scoped device: every test here shares one device configuration
 pytestmark = pytest.mark.use_module_device
 
@@ -130,3 +132,22 @@ def test_softmax_rows_are_normalised(device, shape, dtype):
     assert torch.allclose(
         row_sums, torch.ones_like(row_sums), atol=0.02
     ), f"row sums range [{float(row_sums.min()):.5f}, {float(row_sums.max()):.5f}], expected 1.0"
+
+
+# The module-scoped device above rules out the sanity test's device_params; the default L1-small size serves.
+@pytest.mark.parametrize("batch_size, h, w, dim", base.LARGE_SOFTMAX_NIGHTLY_SHAPES)
+def test_large_softmax(device, batch_size, h, w, dim):
+    base.test_large_softmax(device, batch_size, h, w, dim)
+
+
+@pytest.mark.parametrize("batch, causal, Wt, pad", base.SCALE_MASK_SOFTMAX_NON_DIVISIBLE_WIDTH_NIGHTLY_CASES)
+@pytest.mark.parametrize("fp32_acc_en", [True, False])
+@pytest.mark.parametrize("numeric_stable", [True, False])
+def test_scale_mask_softmax_non_divisible_width(device, batch, causal, Wt, pad, fp32_acc_en, numeric_stable):
+    base.test_scale_mask_softmax_non_divisible_width(device, batch, causal, Wt, pad, fp32_acc_en, numeric_stable)
+
+
+@pytest.mark.parametrize("W", base.ROW_MAJOR_MASK_NIGHTLY_WIDTHS)
+@pytest.mark.parametrize("api", ["scale_mask_softmax_in_place", "attention_softmax_"])
+def test_scale_mask_softmax_in_place_row_major_mask(device, W, api):
+    base.test_scale_mask_softmax_in_place_row_major_mask(device, W, api)

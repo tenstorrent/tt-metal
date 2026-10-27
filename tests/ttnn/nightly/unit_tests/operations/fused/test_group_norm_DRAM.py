@@ -204,6 +204,21 @@ def test_group_norm_DRAM_unit_shapes(
     )
 
 
+_GROUP_NORM_DRAM_NIGHTLY_ONLY = [s for s in base.GROUP_NORM_DRAM_SHAPES if s not in base.GROUP_NORM_DRAM_SANITY_SHAPES]
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", _GROUP_NORM_DRAM_NIGHTLY_ONLY)
+@pytest.mark.parametrize("statistics_mode", base.STATISTICS_MODES)
+@pytest.mark.parametrize("specify_grid", [True])
+def test_group_norm_DRAM_model_shapes(
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
+):
+    base.test_group_norm_DRAM(
+        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
+    )
+
+
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", base.GROUP_NORM_NO_INPUT_MASK_DRAM_SHAPES
