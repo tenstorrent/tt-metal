@@ -146,7 +146,17 @@ _emit_device_timing() {
     fi
     return $ec
 }
-trap _emit_device_timing EXIT
+
+# The script's only EXIT trap. bash keeps one EXIT handler and each `trap ... EXIT` replaces
+# the previous one, so later sections add their exit work here instead of registering a trap.
+# _emit_device_timing goes first: it records the script's exit status from $?. The other two
+# are defined further down; `declare -F` skips them on exits that happen before that point.
+_on_exit() {
+    _emit_device_timing
+    declare -F _print_total_runtime >/dev/null && _print_total_runtime
+    declare -F emit_missing_ttexalens_warning >/dev/null && emit_missing_ttexalens_warning
+}
+trap _on_exit EXIT
 
 # --- Detect simulator mode ---
 SIM_MODE=false
@@ -405,20 +415,21 @@ emit_profiler_csv() {
 }
 
 # --- Total-run timer ---
-# Reports wall-clock time from "device lock acquired" to script exit. Registered as an
-# EXIT trap so it ALWAYS prints last, on every exit path (pass, fail, hang, error). The
-# RUN_START guard means nothing is printed for exits that happen before testing begins
-# (e.g. missing args), since no run took place.
+# Reports wall-clock time from "device lock acquired" to script exit. Called from _on_exit, so
+# it prints on every exit path (pass, fail, hang, error). The hang branch calls it earlier, so
+# the triage-report line stays the last line of hang output; clearing RUN_START after printing
+# keeps _on_exit from printing it twice. The RUN_START guard also means nothing is printed for
+# exits that happen before testing begins (e.g. missing args), since no run took place.
 _print_total_runtime() {
     [[ -z "${RUN_START:-}" ]] && return 0
     local run_end elapsed
     run_end=$(date +%s)
     elapsed=$((run_end - RUN_START))
+    RUN_START=
     echo "========================================" >&2
     printf 'SAFE_PYTEST_TOTAL_RUNTIME: %dm%02ds (%ds total, device-lock-acquired -> exit)\n' \
         $((elapsed / 60)) $((elapsed % 60)) "$elapsed" >&2
 }
-trap _print_total_runtime EXIT
 
 # --- Acquire flock (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
@@ -605,7 +616,7 @@ MISSING_TTEXALENS=false
 if [[ "$SIM_MODE" == false ]]; then
     export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
     # Requires tt-exalens: uv pip install -r tools/triage/requirements.txt
-    # Defer the missing-tool warning to EXIT via trap — otherwise it gets buried
+    # Defer the missing-tool warning to _on_exit — otherwise it gets buried
     # in pytest / triage output and users never see it.
     if ! python3 -c "import ttexalens" 2>/dev/null; then
         MISSING_TTEXALENS=true
@@ -621,7 +632,6 @@ emit_missing_ttexalens_warning() {
         echo "SAFE_PYTEST: Install with: uv pip install -r tools/triage/requirements.txt"
     fi
 }
-trap '_emit_device_timing; emit_missing_ttexalens_warning' EXIT
 
 # --- Build the pytest command ---
 # Wrapper-injected options go FIRST and the user's args LAST, verbatim and contiguous. Both halves
@@ -870,7 +880,9 @@ if [[ "$IS_HANG" == true ]]; then
         echo ""
     fi
 
-    # Print the triage report path as the last line so machine-readers can find it.
+    # Print the triage report path as the last line so machine-readers can find it. The
+    # total-runtime line would otherwise follow it from _on_exit, so print that first.
+    _print_total_runtime
     if [[ -f "$TRIAGE_REPORT" ]]; then
         echo "SAFE_PYTEST: triage report: ${TRIAGE_REPORT}"
     fi
