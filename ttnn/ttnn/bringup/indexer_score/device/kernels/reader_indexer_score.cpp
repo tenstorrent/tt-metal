@@ -10,7 +10,7 @@
 // sender reads DRAM + mcasts; receiver takes the L1->L1 copy; none is a plain DRAM read. q/w (row) and k
 // (column) mcast are independent; either may be off.
 
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 
 #include "indexer_score_runtime_args.hpp"
 #include "indexer_schedule.hpp"

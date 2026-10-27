@@ -34,14 +34,23 @@ ttnn::Tensor combine(
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
+    // A singleton communication axis has no peers, even when other axes have devices.
+    // Preserve omitted-axis behavior and the existing local worker pipeline.
+    const bool singleton_domain =
+        mesh_device->shape().mesh_size() == 1 || (cluster_axis == 0 && mesh_device->shape()[0] == 1);
+    // Fork (owner, 2026-10-27): upstream's local-only path (#60445) is for a chip holding EVERY routed expert (TP);
+    // a singleton dispatch group whose experts are split over the other mesh axis (EP, e.g. 1x4) keeps the fork's
+    // fabric-free gating in the program factory (use_fabric), with its column counter_offset.
+    const bool local_only =
+        singleton_domain && dispatch_group_size == 1 && expert_token_counts.logical_shape()[-1] == experts_per_chip;
     // Validate fabric configuration - only tested values are supported
     TT_FATAL(
         cluster_axis.value_or(0) == 0,
         "cluster_axis must be 0 (current value: {}). Other values are not tested.",
         cluster_axis.value_or(0));
     TT_FATAL(
-        num_links.value_or(1) >= 1 && num_links.value_or(1) <= 4,
-        "num_links must be between 1 and 4 (current value: {}).",
+        (local_only || num_links.value_or(1) >= 1) && num_links.value_or(1) <= 4,
+        "num_links must be between 1 and 4, or 0 on a singleton dispatch group (current value: {}).",
         num_links.value_or(1));
     auto topology_ = topology.value_or(tt::tt_fabric::Topology::Linear);
     TT_FATAL(
@@ -49,8 +58,11 @@ ttnn::Tensor combine(
         "topology must be Linear or Ring. 2D topologies are not supported.");
 
     std::optional<uint32_t> axis = cluster_axis;
-    uint32_t num_links_ = num_links.has_value() ? *num_links : ccl::common::get_num_links(*mesh_device, axis);
-    tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(dispatched_buffer, topology_, axis);
+    uint32_t num_links_ =
+        local_only ? 0 : (num_links.has_value() ? *num_links : ccl::common::get_num_links(*mesh_device, axis));
+    tt::tt_fabric::Topology usable_topology =
+        local_only ? tt::tt_fabric::Topology::Linear
+                   : ::ttnn::ccl::get_usable_topology(dispatched_buffer, topology_, axis);
 
     log_debug(tt::LogOp, "num_links={} axis={} topology={}", num_links_, axis, usable_topology);
 

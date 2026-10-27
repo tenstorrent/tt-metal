@@ -35,7 +35,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 
 // The kernel is bound by scalar L1 accesses, not NOC traffic. Both helpers walk N columns at a time so
 // the running sums stay in registers while each row is still read contiguously.

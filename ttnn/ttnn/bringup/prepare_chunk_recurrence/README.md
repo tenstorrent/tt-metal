@@ -1,8 +1,8 @@
 # ttnn.bringup.prepare_chunk_recurrence
 
 ## What it does
-Fork of `ttnn.experimental.kda.prepare_chunk_recurrence` (`ttnn/cpp/ttnn/operations/experimental/kda/prepare_chunk_recurrence`
-@ `c6a7679fb87`). Adds `precise_gate_factors`: the anchored gate exponents exp(G - G_last/2), exp(G_last/2 - G) and
+Fork of `ttnn.experimental.kda.prepare_chunk_recurrence` (`ttnn/cpp/ttnn/operations/experimental/kda/prepare_chunk_recurrence`,
+forked @ `c6a7679fb87`, synced to `6b80daf43e3`, the final #59918). Adds `precise_gate_factors`: the anchored gate exponents exp(G - G_last/2), exp(G_last/2 - G) and
 exp(G_last/2) are formed as exact matmuls of the bf16 gate with constant masks (+-scale/2) and exponentiated in DST,
 instead of the source's FP32 subtraction that the FPU reads at TF32 (biased near the -5 gate bound). Fixes the bias
 in k_dec_t, q_decay, kd and intra. Everything else as `ttnn.experimental.kda.prepare_chunk_recurrence` (seven
@@ -18,18 +18,22 @@ chunk-local KDA terms for `recurrent_chunk_scan`).
 ## Options
 `prepare_chunk_recurrence(q, k, v, g, beta, num_heads, *, memory_config=None, compute_kernel_config=None,
 output_bf16_mask=0, actual_start=None, actual_end=None, sequence_parallel_axis=0, gate_scale=1.0,
-beta_logits_column_offset=None, precise_gate_factors=False)` (`prepare_chunk_recurrence_nanobind.cpp`).
+beta_logits_column_offset=0, precise_gate_factors=False)` (`prepare_chunk_recurrence_nanobind.cpp`).
 
 Realistic (use by default):
 - `precise_gate_factors=False` (fork, opt-in): exact anchored gate exponents. False = the source program. Realistic:
   it removes the source's TF32 bias near the -5 gate bound.
 - All other arguments as the source: `output_bf16_mask` bits 0, 1, 2, 4, 5 select bf16 outputs; `gate_scale` multiplies
-  g before the cumulative sum; `beta_logits_column_offset` reads pre-sigmoid bf16 beta logits in place;
+  g before the cumulative sum; `beta` is a token-major bf16 tensor `[1, T, columns]` whose `num_heads` columns from
+  the tile-aligned `beta_logits_column_offset` hold pre-sigmoid logits, read in place (the only beta form since
+  #59918: the FP32 pre-activated and the by-chunk `[H, N, 32, 1]` beta are gone);
   `actual_start` / `actual_end` device UINT32 bounds; default compute config HiFi4, approx math, fp32 DEST.
 
 Precision only: per-step checks or a measured end-to-end gap (rule 7): none.
 
 ## Measured
+All numbers below were taken before the 2026-10-27 upstream sync (CHANGELOG.md); program size, accuracy and speed
+must be re-measured on the synced fork.
 - GLM layer, LoudBox 2x4, 2560 rows per chip: op 0.471 ms (fork, precise_gate_factors) vs 0.586 ms (source)
   (CHANGELOG.md; `models/demos/glm53_flash_d_p_lb/bringup/BREADCRUMBS.md`).
 - GLM layer-0 KDA component test vs CPU golden: output rel L2 0.0072, state rel 0.0142, worst head 0.0227 (source
@@ -41,8 +45,9 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7): none.
 
 ## Limits
 - Inputs as the source: T divisible by 32, K and V tile-aligned, interleaved TILE tensors; q / k / v / g bf16.
-- The option builds the compute kernel at -O2 to fit the kernel config buffer (source within ~1.7 KB of 70.6 KB;
-  CHANGELOG.md); further kernel growth may not fit.
+- The option builds the compute kernel at -O2: before upstream's code-size fix (#60899) the program was within
+  ~1.7 KB of the 70.6 KB kernel config buffer and -O3 overflowed it. #60899 brought the source program to ~60.2 KB;
+  whether -O2 is still needed is not re-measured (CHANGELOG.md).
 - Only tested with GLM's call (2x2, 32 heads x 128, gate_scale -5, beta logits in the fused projection). No source
   tests carried (`tests/source.yaml`: `tests: []`).
 

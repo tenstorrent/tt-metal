@@ -61,3 +61,6 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   fourth output against the torch reference too.
 - Needed by: rebase onto origin/malimpic/llk_helper_library_rebased_0110_2
 - Files: `device/*`, `offset_cumsum.{hpp,cpp}`, `offset_cumsum_nanobind.cpp`, `tests/test_offset_cumsum.py`
+
+### Upstream sync to source @ 6b80daf43e3 (rebase onto llk_helper_library, owner: full sync, 2026-10-27)
+- Taken: the kernel include change (#61991). Clean merge, no behaviour change.
