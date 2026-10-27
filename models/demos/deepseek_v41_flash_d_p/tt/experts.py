@@ -352,8 +352,8 @@ class TtExperts:
         groups). Built once per layer; the plan is the op's for this chip's grid (16-column units). The column's
         planner numbers the column's experts from 0 (chip r holds [r epc, (r + 1) epc) of its column's Eg;
         ExpertMapping column-major), counts are [1, Eg]; an expert sees at most every token of its column once."""
-        from ttnn.bringup.combine_rf.sparse_combine_rf import L1_MAX_WRITERS
         from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+        from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
         from .weighted_combine import weighted_combine
 
@@ -379,9 +379,9 @@ class TtExperts:
             # 16-value groups _bfp8_exact asserted on the [N, K] matrices above)
             check_exact=False,
             cache_prefix=cache_prefix,
-            # (at most the combine's L1 hand-off writers: a Galaxy chip with its east DRAM readers in column 7 has 40
-            # down cores, column 6 has 32; capped, both get the 32-core down split and the same weight cache key)
-            max_y_writers=L1_MAX_WRITERS,
+            # the flat op's plan before its DRISC-only / even-split defaults (2026-10-22): the plan, the cached
+            # weight layout (FIX.4) and the numbers this model was validated on; the new defaults wait for an A/B
+            layout=LEGACY,
         )
         logger.info(
             f"EXPERTS_FLAT layer={self.layer} plan nu={self.fe.plan['nu']} np={self.fe.plan['np']} "

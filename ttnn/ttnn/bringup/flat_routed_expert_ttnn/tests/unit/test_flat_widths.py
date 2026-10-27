@@ -24,6 +24,7 @@ import ttnn
 from models.demos.common.bringup.testing import determinism
 from models.demos.common.bringup.testing.fork_cases import noise_limit
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
 _HERE = Path(__file__).resolve().parent.parent
 
@@ -90,6 +91,7 @@ def test_flat_widths(device, case):
         h_bf16=full,
         weights_nk=True,
         check_exact=True,
+        layout=LEGACY,  # (deepseek_v41_flash_d_p's shared-expert plan)
     )
     plan = dict(fe.plan)
     logger.info(

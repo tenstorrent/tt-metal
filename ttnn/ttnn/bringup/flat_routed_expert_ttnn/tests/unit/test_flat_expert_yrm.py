@@ -14,6 +14,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from ttnn.bringup.flat_routed_expert_ttnn.tests.unit.test_flat_routed_expert_op import CASES, _counts, _inputs
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
 
 @pytest.mark.timeout(3600)
@@ -24,7 +25,8 @@ def test_flat_expert_yrm(device, case):
     torch.manual_seed(0)
     weights = [[(torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02) for _ in range(E)]]
     gids = [[(4 * e + 1) % NG if E * 4 <= NG else (2 * e + 1) % NG for e in range(E)]]
-    op = FlatRoutedExpert(device, weights, m=m, H=H, I=I, gids=gids, n_global=NG, pin=1)
+    # (LEGACY: DRISC-only refuses the tp2 / tp4 subgrid plans)
+    op = FlatRoutedExpert(device, weights, m=m, H=H, I=I, gids=gids, n_global=NG, pin=1, layout=LEGACY)
     q = lambda w: ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
     pinned = []
     for launch, seed in enumerate((1, 2)):

@@ -68,6 +68,7 @@ def _pattern(kind, g):
 @mesh_parametrize
 def test_flat_stress(mesh_device):
     from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+    from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
     import ttnn
 
@@ -91,6 +92,7 @@ def test_flat_stress(mesh_device):
             pin=1,
             x_bf16=r[0],
             h_bf16=r[1],
+            layout=LEGACY,  # (GLM-5.3's plan: tt/experts_ag.py)
         )
         logger.info(f"[stress] built {_rname(r)}")
     del w

@@ -1050,3 +1050,1094 @@ In the overlap (K3 harness, accumulators on ports): NH 2 flat alone packed 5592 
 chip's combine links then show: fused / flat 1.039 -> 1.082); uniform / spread unchanged. K3 block: NH 2 neutral
 (traced 3312), now its default with acc_on_ports. Next levers: gate/up block shape (taller blocks: fewer weight unpacks
 per FLOP), down cores at the next granularity step, the hot chip's combine link time.
+
+### x delivery: unicast snakes by default (2026-10-19, TS_HANG_WORKLOG.md waves 9-14)
+The relay's linked NOC0 multicast into the gate/up rectangle wedged NOC0 beside the DRISC weight writes and DRAM
+traffic (a hardware hang, reproduced by a traffic-only probe). Default now (program factory XPath): each primary
+unicasts its blocks into one snake head per rectangle; the gate/up cores forward them along the snake (down a column,
+wrapping, one column over) with a dedicated NCRISC forwarder (se5_xfwd.cpp, NOC0, 4 cut-through pieces, 3 in
+flight); the receiver BRISC (NOC1) only consumes. Multicast stays as MIMO_FL_X_CHAIN=0, and where the plan has no
+full rectangles / one primary per rectangle. Perf vs the multicast (fused flat + combine, us): GLM-Flash S 256 / S
+640, K3, V4.1-Flash within +1.0 .. -4.4% (V4.1 packed -4.4%); GLM-5.3 flat alone M 512 / 1024 -4.8 / -3.0%. Whole
+model GLM-Flash traced chunk neutral (S 256 244.2 -> 244.4 ms, S 640 479.4 -> 479.1 ms). Bugs on the way: the
+receiver's end count lagging (forwarder never ended), the relay counting a batch only on retirement (GLM-5.3's full
+24-of-24 x ring deadlocked), ids polled before the command buffer drained (stale x, 1 in ~1e5 calls).
+
+### Fused flat + combine vs the DRAM floor (2026-10-19, 2 x 4, pure DRISC, unicast x, full-L1 arena + landing pool)
+Floor of the busiest chip (lean_sender/floor.py, the harness's routings): DRAM = its active experts' bfp4 weights + x
+row reads (M_total x H bf16) + combine's output writes (S K rows: y reaches combine in L1) at 512 GB/s; math = LoFi
+4096 FLOP / cycle / core at 1.35 GHz (assumed, not measured) on the 90 compute cores. Harness FC_DET_REPEAT=0 (the
+full-L1 arena leaves no room for its sum check).
+| config | routing | M_total | flat alone | fused | DRAM floor | math floor | fused / floor | DRAM % | math % 90 / 110 | us / expert |
+| GLM-Flash S 640 | uniform | 5206 | 1331 | 1362 | 1161 | 579 | 1.17x | 85% | 43 / 35% | 38 |
+| GLM-Flash S 640 | zipf spread | 8071 | 1607 | 1700 | 1206 | 874 | 1.41x | 71% | 51 / 42% | 47 |
+| GLM-Flash S 640 | zipf packed | 29579 | 4097 | 4741 | 1551 | 3052 | 1.55x | 33% | 64 / 53% | 132 |
+| GLM-Flash S 256 | uniform | 2083 | 1208 | 1229 | 1061 | 252 | 1.16x | 86% | 21 / 17% | 34 |
+| GLM-Flash S 256 | zipf spread | 3216 | 1327 | 1349 | 1080 | 392 | 1.25x | 80% | 29 / 24% | 37 |
+| GLM-Flash S 256 | zipf packed | 11801 | 2049 | 2215 | 1217 | 1259 | 1.76x | 55% | 57 / 47% | 62 |
+| K3 (S 320, K 16) | uniform | 5246 | 2285 | 2305 | 2177 | 786 | 1.06x | 94% | 34 / 28% | 41 |
+| K3 | zipf spread | 6369 | 2493 | 2515 | 2193 | 956 | 1.15x | 87% | 38 / 31% | 45 |
+| K3 | zipf packed | 28854 | 5228 | 5321 | 2508 | 3955 | 1.35x | 47% | 74 / 61% | 95 |
+| V4.1-Flash (S 320) | uniform | 1967 | 1093 | 1100 | 1011 | 332 | 1.09x | 92% | 30 / 25% | 46 |
+| V4.1-Flash | zipf spread | 3281 | 1237 | 1248 | 1037 | 528 | 1.20x | 83% | 42 / 35% | 52 |
+| V4.1-Flash | zipf packed | 10718 | 2493 | 2509 | 1186 | 1579 | 1.59x | 47% | 63 / 51% | 105 |
+The combine costs 0.6-2.3% on uniform and spread (fused / flat) except GLM-Flash S 640 spread (5.8%) and packed S 640
+/ S 256 (16% / 8%): the gap to the floor is the flat expert's own. GLM-Flash spread S 640: flat alone 1.33x the floor
+(the hot experts' 4738 rows on one chip's grid).
+
+### GLM-Flash uniform: why the flat expert is at ~82-86% of the floor (2026-10-19, one chip, pure DRISC 64 gate/up + 32 down)
+test_flat_balanced_sweep.py (now takes layout_from_env(): the harness's MIMO_FL_CMB_DRISC=1 DRISC_DUAL=0 DRISC_PURE=1
+ND=32 NH=1; the plan: 64 gate/up, 32 down, 4 relays), M 58 / 145 (S 256 / 640 uniform), E 36, us per call; floor
+weights 996 + x 33 / 84 + y 33 / 84. Recipe: /localdev/mstaletovic/flat90/run.sh <tag> [probes].
+| variant | M 58 | M 145 |
+| base (y to DRAM) | 1208 | 1436 |
+| NO_MATH | 1210 | 1430 |
+| YRM_NOWRITE (no y: the fused case, floor 1029 / 1080) | 1199 | 1322 |
+| + XRD_SKIP (weights only) | 1198 | 1288 |
+| XRD_SKIP | 1202 | 1289 |
+| W_NOREAD (weights forwarded, not read) | 1044 | 1285 |
+| W_NOFWD (read, not forwarded) | 1182 | 1433 |
+| read only (W_NOFWD + XRD_SKIP + YRM_NOWRITE) | 1036 | 1089 |
+| H_NODATA | 1201 | 1417 |
+| E 18 (base / no y) | 621 / 606 | 744 / 693 |
+| no y + DRISC_DMA_MAX 4 / 8 | 1199 / 1200 | 1356 / 1367 |
+| no y + DRISC_UB 2 / 4 (blocks per DMA unit) | 1122 / 1158 | 1394 / 1385 |
+| no y + DRISC_ALT_DMA_MAX 1 / ALT_BURST 4 / XHELP_NOC0 | 1389 / 1288 / 1199 | 1485 / 1418 / 1320 |
+| X_RESIDENT | hang (triage: flat90/xres_triage.txt) | |
+- Not compute (NO_MATH unchanged). No y: 14 / 65 us fixed + 32.9 / 34.9 us an expert (floor 28.6 / 30.0): ~87% of 512 GB/s
+  in steady state at both M, plus a pipeline tail at M 145.
+- The DRAM reads alone run at 96% (read only 1036); forwarding alone near the floor too (W_NOREAD 1044); both on one
+  tile: 1198 = 16 tiles x ~26.6 GB/s - the per-tile DMA-in + NoC-write-out loop (~600 of ~830 cycles a 13.8 KB block
+  fixed), the "one tile ~28 GB/s" ceiling. Single-block units (pure DRISC: one job per tile) pay it per block: UB 2
+  takes M 58 to 1122 (92% of the fused floor), but M 145 to 1394 (+5%: half the slots in flight, NS = room / (UB blk)).
+- M 145 also: x reads cost 147 us against 84 of floor (the x relays' NOC1 reads vs each bank's NOC1-endpoint DRISC
+  tile), and the 65 us tail (the last experts' gate/up -> down after their weights).
+Options: UB chosen per call from the rows (runtime, like the ALT_MAXCNT switch), or UB 2 with the slot room kept; the
+bank's third tile as a forwarder (if free); the tail / x port at M 145.
+
+### x injectors on the gate/up cores instead of relays: microbenchmarks (2026-10-19, one chip, nothing else running)
+zz_scratch_x_injector.py (flat90/xi.sh): a piece = 32 random x rows (T 5120, H 4096 bf16 row-major in DRAM) x W tiles
+of columns; tilize = fast_tilize bf16 -> bfp8 (se11_tz.cpp's); inject = gather + tilize + write the bfp8 tiles to one
+other core's L1. GB/s of bf16 x.
+| case | result |
+| tilize, W 8 / 16 / 32 | 33.7 / 32.9 / 32.4 cycles a tile (~83 GB/s a core) |
+| gather, 1 core, 512 B a row (W 8) | 11.2 (1 piece in flight) / 13.5 (4): ~51 cycles a read, issue bound; NOC0 = NOC1 |
+| gather, 1 core, 1 / 2 KB a row (W 16 / 32) | 26.9 / 52.6 |
+| gather 2 KB rows, 8 / 16 cores, NOC0 | 335 / 368 (row placement), 342 / 353 (spread over rows) |
+| gather 2 KB rows, 8 / 16 cores, NOC1 | 95 / 155 (side by side on one / two rows), 223 / 228 (spread) |
+| inject 16 cores -> one core, NOC0 reads | 155 / 149: the one receiving core's ingress (~80 GB/s of bfp8) |
+- Tilizing on the gate/up cores is free: M 145 = 73 tiles an expert for an injector doing 1/8 of x (~1.8 us of a 35 us
+  expert, math ~40% busy), ~0.2 us with all 64.
+- Reads must be >= 1-2 KB a row (the issue cost); NOC1 DRAM reads cap at ~225 GB/s spread and less for cores sharing
+  rows, NOC0 ~350; one receiving core takes ~150 GB/s of x (so >= 2 snake heads for a hot expert's ~85-100 GB/s).
+Not yet measured beside the DRISC weight stream (NOC1 = the DRISC tile 1 port; the full op's NOC0 x reads hang).
+- The full op's MIMO_FL_XRD_NOC=0 hang was the relay's reader and sender both on NOC0 (dedicated-NoC mode: one RISC
+  per NoC). Now reads on NOC0 move the sender to NOC1 (unicast chain only; TT_FATAL on a shared NoC). It runs, no gain:
+  no y M 58 / 145 1199 / 1331 (NOC1 reads 1199 / 1322); with y 1221 / 1554 (1208 / 1436: the y writes vs the NOC0
+  reads). In the fused case (no y) x reads cost only ~34 us at M 145 (XRD_SKIP 1288 vs 1322) and ~0 at M 58 - the
+  147 us earlier was with the y writes. x is not what keeps uniform GLM-Flash under 90%.
+- Unit size, profiled (MIMO_FL_DRISC_PROF + flat_drisc_dump after each M, GLM_SWEEP_DRISC_DUMP=1; no y). Pure DRISC
+  without dual has no switch (ALT_MAXCNT 0xFFFFFFFF: both of a bank's tiles every call). The profile's timestamp reads
+  alone slow UB 1 from 1199 / 1322 to 1821 / 1865 us (M 58 / 145) and UB 2 not (1122 / 1360): single-block units are
+  bound by the per-unit cost on the DRAM core. Per tile, cycles of the last call (units 2304 UB 1, 1152 UB 2):
+  | | dma | refresh (grant waits) | write | flush + inc | total |
+  | UB 1 M 58, tile 1 / free tile | 468k / 583k | 250k / 30k | 455k / 460k | 345k / 454k | 2.19M / 2.41M |
+  | UB 2 M 58 | ~300-335k | 21-78k | ~290-390k | ~260-280k | 1.38-1.47M |
+  | UB 2 M 145 | ~275-330k | 205-410k | ~290-450k | ~235-285k | 1.70-1.75M |
+  UB 2 unprofiled M 58: 657 cycles a 13.8 KB block (UB 1: 702), ~29 GB/s a tile: mostly per byte, not per unit -
+  16 tiles cap near ~460 GB/s (~90%). UB 2 at M 145: the DRISCs wait 12-24% of the call on the gate/up cores' grants
+  (2-5% at M 58): the receive side limits there. Next: what the gate/up cores wait on at M 145 (zones).
+- Why UB 2 loses at M 145: device-profiler zones (MIMO_FL_ZONES=1 MIMO_FL_WAITZ=0, flat90/zones.py; W_X / W_W
+  sampled, compare between runs), last call, no y:
+  | M 145 | UB 1 | UB 2 |
+  | gate/up waits on x (W_X) / weights (W_W) | 36.5 / 8.2 us | 56.3 / 3.4 |
+  | relay DRAM read barrier (XRD_DRAM) / tilizer starved (TZ_IN) | 142 / 77 | 166 / 103 |
+  | relay sender waits on the tilizer (XMC_SB) / on credits (XMC_CRED) | 39 / 27 | 219 / 2 |
+  With paired DMA units x becomes the bottleneck: the relays' gathers slow, the tilizer starves, the sender waits, the
+  gate/up cores wait on x and hold their weight slots (the DRISCs' grant waits). Not the NOC1 port: UB 2 with the relay
+  reads on NOC0 1131 / 1435 (NOC1 1122 / 1394); XRD_BATCH 4 1120 / 1439; DRISC_BURST 64 1122 / 1387 (XRD_BATCH 8:
+  TT_FATAL, must divide 4). Likely the DRAM side: the weight stream near the practical peak (read only ~492 GB/s)
+  leaves the latency-bound x gathers (7% of the bytes) queued. Next: x priority at the DRAM (MPFE), or x read further
+  ahead (relay buffering), with UB 2.
+- x priority / read-ahead with UB 2 (one chip, no y, M 58 / 145 us; UB 2 default weights 1122 / 1394): x reads on
+  NOC0 with their port first (MPFE 1,7,1 / 3,7,3) 1138 / 1389, 1136 / 1399; relay RM_CHUNKS 8 1120 / 1383; gate/up x
+  ring 32 slots 1121 / 1390 (SB_SLOTS 6: relay arena does not fit) - neither helps. The GDDR port weights (DRISC
+  port, NOC0 endpoint, NOC1 endpoint) do: 1,1,7 1127 / 1305, 1,1,5 1119 / 1301 (best), 1,1,3 1116 / 1310, 2,1,7
+  1149 / 1338, 1,0,7 1179 / 1386, 7,1,1 1129 / 1429; UB 1 + 1,1,7 1222 / 1310 - the free tile's own port held back
+  vs the NOC1 endpoint (tile 1's DMA and the x reads together). Fused harness (8 chips): UB 2 + 1,1,5 S 256 uniform /
+  spread fused 1229 -> 1192, 1349 -> 1303 (-3%), S 640 1362 -> 1500, 1700 -> 1837 (+10%: the combine hidden 98 -> 85%).
+  S 640 uniform: UB 2 alone fused 1531 (flat 1403), 1,1,5 alone 1391 (flat 1319), UB 2 + 1,0,5 1564, + 1,5,5 1543 -
+  UB 2 is what hurts the fused S 640 (not the weights). Net: no default change; per-call UB (rows <= ~100: UB 2) would
+  take S 256 -3% and leave S 640.
+
+### Per-expert weight layout is independent of experts-per-chip (2026-10-21)
+For a per-expert weight cache (moe_knowledge_dump.md section 14): `zz_scratch_flat_epc_layout.py` plans each model's
+shape on bh-lb-09 (12 x 10 grid, pure DRISC, MIMO_FL_RDOWN=0: no Tensix readers) at two experts-per-chip values and
+lays out the same two random experts with `flat_weight_regions`. K3 28 / 56, K2.7 12 / 24, GLM-5.3 8 / 16, M3 4 / 8,
+GLM-5.3-Flash 9 / 18: every layout field equal (np, rg, nu, nk_gu, nd, pcds, col0s, banks, dw_rot, ...), the experts'
+blocks bit-identical, only the down regions' zero padding grows with the count (K3 1344 -> 2688 tiles per down
+region). A chip's tensor = per-expert blocks placed into its regions; nothing per mesh.
+
+## GLM-5.3 flat expert vs the DRAM floor: the DRISC per-tile ceiling again (2026-10-21, one chip bh-lb-09 12 x 10)
+test_flat_balanced_sweep.py, E 32, H 6144, I 2048, SiLU, bfp4, pure DRISC 64 gate/up + 32 down + 4 relays
+(MIMO_FL_CMB_DRISC=1 DRISC_DUAL=0 DRISC_PURE=1 ND=32 RDOWN=0), balanced M per expert; recipe
+/localdev/mstaletovic/flat90_glm53/run.sh <tag> [probes]. Floors at 512 GB/s: weights 32 x 21.2 MB = 680 MB 1327 us,
+x 61 / 123 us, y 61 / 123 us (M 80 / 160) -> 1450 / 1573 us (1389 / 1450 without y).
+| variant | M 80 | M 160 |
+| base | 1668 (87%) | 1919 (82%) |
+| NO_MATH | 1683 | 1938 |
+| no y (YRM_NOWRITE: the fused case) | 1617 | 1785 |
+| + W_NOREAD (weights forwarded, not read) | 1404 | 1727 |
+| + W_NOFWD (read, not forwarded) | 1528 | 1706 |
+| read only (W_NOFWD + XRD_SKIP, no y) | 1385 (491 GB/s) | 1439 |
+| no y + DRISC_UB 2 | 1561 (-3.5%) | 1868 (+4.6%) |
+| no y, E 16 | 822 | 939 |
+- Not compute (NO_MATH unchanged). No y, steady state from E 16 / 32: 49.7 / 52.9 us an expert against a floor of
+  43.4 / 45.3 (87 / 86%), fixed 27 / 93 us.
+- M 80: reading alone 1385 (96% of 512) and forwarding alone 1404 are at the floor; both on one tile 1617 = 3072
+  units of one 13.8 KB block per tile per call in 0.53 us each = 26.2 GB/s a tile x 16 tiles = 420 GB/s: the
+  per-tile ceiling of the GLM-Flash 2026-10-19 entry. DRISC profile (MIMO_FL_DRISC_PROF, the profiled call 2437 us),
+  cycles per unit, the bank's two tiles: DMA 214 / 254, grant refresh 94-108 / 11-16 (470-650 vs 84-108 refreshes a
+  call), NoC writes 199 / 201, flush + semaphore 155 / 197, total 984 / 1048 (a third of it outside those sections).
+  One RISC does all of it per block, serially.
+- DRISC_UB 2 halves the per-unit cost but halves the units in flight: -3.5% at M 80, +4.6% at M 160 (as GLM-Flash).
+- x is not it (no y in all): XRD_SKIP (no x DRAM reads) 1608 / 1740, XRD_SKIP + XMC_NODATA (no x data sent either)
+  1608 / 1737 vs 1617 / 1785: x costs 9 / 48 us. With x gone the weights alone run at 423 GB/s at M 80 (the ceiling)
+  and 391 at M 160; the extra ~130 us at M 160 is mostly the pipeline tail (93 us fixed from E 16 / 32) plus a slower
+  steady state (52.9 vs 49.7 us an expert). (The read-only vs no-forwarding gap at M 160, 1439 vs 1706, is not x.)
+Options: fewer RISC cycles a block on the DRISC (no ack wait per unit, batched flushes, a multicast write where a block
+goes to G > 1 receivers, fewer grant refreshes on tile 1); UB from the call's rows (2 at small M, 1 above); the tail at
+large M.
+
+### What limits the DRISC tile (GLM-5.3, same recipe; x off = XRD_SKIP + XMC_NODATA, no y = YRM_NOWRITE)
+Corrections to the entry above: GLM-5.3's DRISC blocks are 9216 B (R 4 receivers, G 1), and the DRISC tiles carry
+only gate/up (453 MB a call; the down cores read their own 226 MB): 3072 units of one block per tile per call, 28.3 MB
+a tile -> 17.6 GB/s a tile in the real path (16 tiles), 20.2 when it only forwards.
+| variant (us, M 80 / 160) | x on, no y | x off, no y |
+| UB 1 (default) | 1617 / 1785 | 1608 / 1737 |
+| DRISC loop only (W_NOREAD + W_NOFWD: no DMA, no writes, the grant / flush / semaphore protocol) | - | 840 / 1419 |
+| units in flight 7 -> 9 (new probe MIMO_FL_DRISC_NS_MAX=14: one job a tile takes transaction ids 1-14; the L1 room, 91 KB, holds 9) | - | 1608 / 1737 |
+| UB 2 (4 units of 18 KB in flight) | 1561 / 1868 | 1412 / 1747 |
+| read only (no forwarding) | - | 1385 / 1420 |
+- Not bandwidth (each half alone at the floor), not units in flight (7 -> 9 changes nothing), not the slow write path
+  (BH NOC_MAX_BURST_SIZE 16 KB: a 9 KB block is one fast_write), not the loop's bookkeeping alone (840 us).
+- Per unit: UB 2 halves the DMAs, the flush checks and the passes (the writes and semaphore increments stay one per
+  receiver) and takes M 80 x off from 1608 to 1412, the read-only time. So the tile's limit is its RISC's per-unit
+  work: the DRISC profile's ~1000 cycles a unit are mostly register (MMIO) accesses to its DMA engine and NIU - issuing
+  the DMA and polling its outstanding count (DMA section ~230), the write command (~200), polling the transaction id's
+  ack counter + the semaphore increment (~175).
+- With x on, UB 2 gains only 1617 -> 1561: the next limit is x (the relays' NOC1 DRAM reads against the bank's
+  NOC1-endpoint DRISC tile, drisc-endpoint-tile memory), which UB 1 hid. M 160 is bound elsewhere: no weights moved at
+  all (loop only) is already 1419.
+Next: UB 2 where the rows are few (per call, like the ALT_MAXCNT switch); fewer MMIO accesses a unit (outstanding-count
+polls only when the slots are full, one flush poll for several units, one semaphore increment of n); then the x / NOC1
+conflict, which caps what UB 2 can show with x on.
+
+### Fewer register accesses a DRISC unit (probe MIMO_FL_DRISC_LEAN, GLM-5.3, same recipe)
+Level 1: the DMA's source-high register written once a call (bank-local sources: always 0) and the attribute word
+built once a job; the DMA completion count re-read only when the known completions are used up (the stream completes
+in order). Level 2 (measure only, unsafe in general): no ready poll before the semaphore increment. y at M 128
+bit-exact against the default at both levels.
+| us, M 80 / 160 | default | LEAN 1 | LEAN 2 |
+| real path (x, y) | 1667 / 1926 (M 128: 1821) | 1685 / 1929 (1817) | 1685 / 1927 (1817) |
+| x off, no y | 1608 / 1737 | 1551 / 1734 (-3.5%) | 1536 / 1734 (-4.5%) |
+| x off, no y, UB 2 | 1412 / 1747 | 1412 / 1746 | - |
+- Where the DRISC binds (x off, M 80) one write and ~one read fewer a unit is -3.5%, one more read -1%: the reads
+  (round trips) cost, the posted writes little. M 160 is bound elsewhere; with UB 2 the DRISC is no longer the limit.
+- On the real path it buys nothing: as with UB 2 (1617 -> 1561 with x vs 1608 -> 1412 without), once the DRISC gets
+  faster the x traffic against the DRISC tiles takes over. That conflict is now what gates the real path.
+Kept as a probe (not the default: no gain where it matters; level 2 is not safe).
+
+### x vs the weight stream on GLM-5.3's real path: the known knobs (2026-10-21)
+Real path (x, y), M 80 / 160 us: default 1667 / 1926; UB 2 1672 / 2116; GDDR port weights 1,1,5 (MIMO_FL_DRISC_MPFE,
+GLM-Flash's best at M 145 with UB 2) 1703 / 2007; UB 2 + 1,1,5 1746 / 2060; + LEAN 1 1751 / 2057. All worse. With
+the earlier no-gain list (x reads on NOC0: hang or no help; MPFE alone; relay RM_CHUNKS / x ring depth / XRD_BATCH;
+DMA caps; free-on-sent; drain) the knob space is exhausted: the x gathers (row reads into a saturated GDDR, ~7% of
+the bytes) queue behind the bulk streams whatever the NoC, port weight or depth. Gap to the floor: 217 / 353 us
+(1450 / 1573 with x and y at 512 GB/s). What is left is structural: x not read from DRAM in the experts window (the
+dispatch lands rows in L1 in the experts' order), or x read as bulk (expert-contiguous, pre-tilized bfp8 from the
+dispatch; possibly by the DRISC in the same queue as the weights) instead of row gathers.
+
+### x through the DRISC's queue (option A), emulated: orderings, queues, the lean registers (2026-10-21, GLM-5.3)
+Probe MIMO_FL_DRISC_XEMU=N[:B] + MIMO_FL_DRISC_XEMU_OPT="mode,k,cap,other,first,w": each DRISC tile also DMAs x's
+share of reads from its own bank (12 KB, 2 M a tile per call = x's volume; re-reads of other weight blocks of the
+bank: same DRAM load) into a scratch slot; with w each completed read is also written out (stock NoC write on the read
+command buffer, transaction id 15) to a receiver's landing ring = the DRISC -> relay delivery. Relays' x reads off
+(XRD_SKIP) in every row; real path otherwise (y on); garbage x, so perf only. Accounting check (real x + the extra
+reads on the job's stream, UB 2, LEAN 1, M 128): y bit-exact vs the default.
+| us, M 80 / 160 | |
+| default (relays read x over NOC1) | 1667 / 1926 |
+| UB 2 + LEAN 1, no x reads at all | 1552 / 1750 |
+| ... x spread / at each load's start / one load ahead | 1552 / 1752, 1552 / 1750, 1552 / 1748 |
+| ... 4 in flight / x before the weights / on the other stream (triage off) | 1555 / 1750, 1553 / 1749, 1553 / 1748 |
+| ... + each x row written to a receiver: at the load / ahead / spread / cap 4 / without LEAN | 1553 / 1751, 1553 / 1750, 1555 / 1750, 1554 / -, 1553 / 1750 |
+| UB 1 + LEAN 1, x spread / at the load | 1649 / 1790, 1669 / 1790 |
+| UB 1 + LEAN 1 + writes, at the load | HANG at M 80 (triage off, host up; not narrowed - UB 1 is not the configuration) |
+- **WRONG, see the correction below:** every UB 2 row above issued no x reads at all (the scratch slot did not fit
+  past UB 2's 5 x 18 KB slots, room 93696 B, and the probe switched itself off silently) - they measure XRD_SKIP only.
+  Only the UB 1 rows issued x reads.
+
+### Correction: option A emulated with every x read issued (2026-10-21, GLM-5.3, real path, y on, relays' x off)
+The probe now takes one weight slot when the scratch does not fit (UB 2: 5 -> 4 units in flight) and reports its state
+in the DRISC dump (ns, scratch slot, room, x reads issued); the no-x baselines are held to the same slots
+(MIMO_FL_DRISC_NS_MAX now also lowers the cap). Issued counts checked on every run (1760 / 3520 over 11 calls = x's
+volume; spread rounds the interval: 1870 / 4224).
+| us | M 80 | M 160 |
+| default (relays read x over NOC1) | 1667 | 1926 |
+| no x reads: UB 2 4 slots / UB 2 + LEAN / UB 1 | 1556 / 1552 / 1613 | 1752 / - / 1740 |
+| UB 2 + x: spread / at each load / one load ahead | 1603 / 1586 / 1586 | 1841 / 1821 / 1827 |
+| UB 2 + x at each load: cap 8 / x first / LEAN / other stream | 1582 / 1583 / 1590 / 1575 | 1823 / 1833 / 1822 / 1813 |
+| UB 2 + LEAN + x as 2 KB segments (6 a row, cap 8: the relays' real granularity) | 1577 | 1816 |
+| UB 1 + LEAN + x at each load | 1671 | 1790 |
+| + each x read written out by the DRISC (to a receiver's landing ring) | HANG (UB 1 and UB 2) | - |
+- x through the DRISC queue is not free: +20..47 us over no x at M 80, +38..89 at M 160. It still beats the default:
+  best M 80 1575 (-5.5%, UB 2, other stream), M 160 1790 (-7.1%, UB 1 + LEAN). At each load (or ahead) beats spread;
+  depth, x first and LEAN change little; 2 KB segments cost the same as 12 KB rows (the per-unit work does not bind at
+  UB 2 + 4 slots).
+- The writes are not measured: the write emulation hangs (garbage into the receivers' landing rings - not the real
+  target; not narrowed). So A's projected gain is ~90 us (M 80) / ~136 us (M 160) less the DRISC -> relay writes.
+
+### Option A for real: x from the DRISCs (MIMO_FL_DRISC_X, 2026-10-21, GLM-5.3, one chip, M 128)
+Implemented end to end (probe, off by default): the launcher writes each slot's x info (the call's schedule entries,
+the relays, the addresses) into its DRISC's L1 next to the job descriptor; each DRISC walks the relays' chunk stream
+(entries, sub-blocks, super-blocks, row tiles) and for the rows of its bank (bank = token % 8, half = token / 8 % 2)
+DMAs the 2 KB segment on its job's stream (the emulation's in-order accounting), writes it into the relay's row-major
+chunk once the relay's credit covers it, then (one flush check over every x write, transaction id 15, after the
+command buffer drained) bumps the relay's arrival count for that chunk slot. The relays read no DRAM: they publish a
+credit per reserved batch and wait for each slot's rows. Credits and arrivals are program semaphores on the relays
+(ids 0 / 1, 2, 6, 11, 12: zero at each launch, so nothing carries across calls - the op's arena is per launch and
+garbage, which hung the first, arena-word version).
+- **Correct:** y bit-exact vs the default path at M 128, also with x read once (X1). Default path unchanged and
+  bit-exact after the change (1667 / 1824 / 1928 us at M 80 / 128 / 160).
+- **Slow:** M 128 default 1821 us; DRISC x 4249 (credit re-read every 8th pass), 3348 (every pass), 3883 (XRD_BATCH 1),
+  X1 3074 (vs X1 default 1801: half the writes and increments save only 274 us).
+- **Why (DRISC counters, per call per tile):** ~1500 x tasks, ~1600 loop passes, ~2900 credit stalls, ~1500 credit
+  re-reads (each a blocking NoC round trip). Every 32-row chunk needs rows from all 16 DRISCs while a relay holds 4
+  chunks: DRISCs and relays move in lockstep, one round trip per chunk, and the stalls hold the weight stream.
+- What it would take: far deeper relay rings (L1, more than 5 semaphores), non-blocking credit reads, out-of-order
+  writes across relays - and even then each 2 KB segment costs the DRISC ~25-40 register accesses (DMA, write,
+  increment), against a read-side gain of ~90 / 136 us (M 80 / 160) in the emulation. Not pursued further: the DRISC is
+  the wrong engine for x's scatter-gather; kept as a probe.
+
+### fp8 x (half the bytes), emulated (2026-10-21, GLM-5.3, one chip, real path)
+Probe MIMO_FL_XRD_HALF: the relays read the first half of each 2 KB segment - the same requests at fp8 x's bytes
+(garbage x, perf only). us, M 80 / 160: default (bf16 x) 1667 / 1926; half bytes 1615 / 1800 (-3.1 / -6.5%); no x
+reads at all 1612 / 1742; half + UB 2 1574 / 1851. So x's cost is bytes as well as queueing: half the bytes recovers
+95% of it at M 80 and 68% at M 160; with UB 2 at small M another 2.5% (UB 2 still loses at M 160). In the block it also
+halves the dispatch's fabric bytes and its x write to DRAM. Open: fp8 x needs the dispatch to send fp8 rows and the
+relays' tilizer to read fp8 (to the bfp8 tiles the gate/up cores take) - the accuracy of fp8 then bfp8 x needs the
+golden check.
+
+### Close-out defaults: DRISC only and even splits (2026-10-22, bh-lb-09 12 x 10; EXPERTS_COMBINE_CLOSEOUT.md)
+The plan's defaults are now the close-out layout (FlatLayoutOptions): DRISC only (drisc_dual false, drisc_pure 1,
+drisc_in_overlap true: every gate/up weight from the DRAM cores, no Tensix readers, no per-call fallback, inside the
+combine overlaps too) and `even_split` (new, default true):
+- **Gate/up** over the 2 I weight tiles a K row ([gate | up] 16-column units) on at most 64 cores: the fewest tiles a
+  core that divide evenly over a multiple of the 16 weight slots; whole gate / up tile pairs (the older NP split) where
+  they give the same tiles a core, 16-column units otherwise. GLM-5.3 / -Flash / K2.7 64 x 2 (pairs, NP 1), K3 / M3
+  (I 3072) 64 x 3 units (the old first-fit picked NP 2: 48 cores x 4 tiles), V4.1-Flash (I 2304) 48 x 3 units.
+- **Down** over H on at most 32 cores, the fewest cores at the fewest columns a core: GLM-5.3 / M3 32 x 6, K2.7 32 x 7,
+  GLM-5.3-Flash 32 x 4, V4.1-Flash 32 x 5, K3 (Hr 3584) 28 x 4. No reader down columns (K2.7 / GLM-5.3 used them).
+- Preset `LEGACY` (flat_layouts.py) restores the old defaults; the research builder's plan-equality test uses it.
+- The 16-column units' face-wise GLU gained SwiGLU-OAI (MiniMax M3: (clamp(u, 7) + 1) g sigmoid(1.702 g), g =
+  min(gate, 7)); the factory had refused units for it.
+- `role_bytes` in the plan dict: the arena each role uses (gate/up, down, relay, reader), for the free-L1 report.
+
+Checked (correctness only, no perf): tests/unit/test_closeout_flat.py - GLM-5.3, GLM-5.3-Flash, K3, K2.7, M3 at the
+Galaxy 8x4 per-chip experts (8 / 9 / 28 / 12 / 4) and uniform counts for chunks 5120 / 16384 (M 91 - 512), two
+launches: every expert's PCC >= 0.998 against the bfp4 reference. V4.1-Flash is planned only (test_closeout_plans.py).
+Existing unit tests with the new defaults: uneven split (V4.1 E12 / E24 / bf16 h / pin 0, glm / k3 E12), y row-major
+(mimo, k2) and indexed shapes / determinism (mimo, k2) pass. Not runnable on bh-lb-09's 12 x 10 grid whatever the
+defaults: test_flat_routed_expert_op (the Python builder asserts an 11 x 10 grid) and the tp4 / tp2 cases (2-3
+subgrids, which the overlap-era factory no longer builds).
+
+### DRISC sender: posted writes, the tensor prefetcher's scheme (2026-10-22, bh-lb-09 12 x 10, flat alone, pure DRISC)
+Idea from John Bauman's tensor prefetcher (PR 59934, tensor_prefetcher.cpp): posted NoC writes, one flush per slot
+reuse instead of an ack check per unit. New probe levels of MIMO_FL_DRISC_LEAN (kernel only, se_drisc_gu.cpp):
+- **3** (on top of 1): the block writes POSTED (no transaction id, no acks); the receivers' semaphore increments on the
+  same static VC as the data (FWD_VC), issued once the NIU's posted-write-sent counter has passed the unit's last write
+  (same VC and route: they arrive behind the data - the noc_async_writes_flushed + semaphore_inc pattern). One counter
+  read a pass completes every unit that left, in order, and frees its slot. Without transaction ids the units in
+  flight are bound only by L1: MIMO_FL_DRISC_NS_MAX up to 16 (10 fit at one 9 KB block a unit). Safe; y bit-exact.
+- **4**: 3 without the ready poll before an increment - HANGS (the increments go out back to back, so the command
+  buffer is overwritten while busy). Measure-only, dropped.
+
+us per call (RT profiler, 10 iters; runs repeat within 0.1%), y bit-exact vs the default in every row:
+
+| GLM-5.3 E 32, M 80 / 128 / 160 | real x path | x off (no x reads / x data / y writes) | half-bytes x (fp8 x) |
+|---|---|---|---|
+| default | 1665 / 1822 / 1923 | 1608 / - / 1734 | 1615 / - / 1798 |
+| LEAN 1 | 1683 / 1816 / 1930 | 1551 / - / 1734 | - |
+| LEAN 3 | 1713 / 1813 / 1930 | 1482 / - / 1681 | - |
+| LEAN 3, NS 10 | 1682 / 1811 / 1927 | **1461** / - / **1677** (-9.1 / -3.3%) | 1590 / - / 1796 (-1.5 / -0.1%) |
+| UB 2 | 1680 / 1866 / 2116 | 1412 / - / 1744 | 1576 / - / 1848 |
+| LEAN 3 + UB 2 | 1678 / 1879 / 2094 | 1423 / - / 1680 | - |
+
+GLM-5.3-Flash (E 9, M 64 / 128): default 329 / 388, LEAN 1 328 / 385, LEAN 3 329 / 386, LEAN 3 NS 10 328 / 384,
+UB 2 335 / 406, LEAN 3 + UB 2 336 / 392. K3 (Hr 3584, I 3072, E 28, M 91 / 128): default 1230 / 1306, LEAN 1 1230 /
+1315, LEAN 3 1227 / 1307, LEAN 3 NS 10 1230 / 1308, UB 2 1299 / 1414, LEAN 3 + UB 2 1300 / 1408.
+
+- Where the DRISC binds (x off) posted writes are the biggest lever found for it: -8 / -9% at M 80 and -3% at M 160,
+  and they remove UB 2's loss at M 160 (1744 -> 1680). The per-unit ack check, not the DMA, was the DRISC's cost.
+- On the real x path nothing moves by 1%: x binds (GLM-5.3 M 80 +1.0%, M 128 / 160 -0.5 / -0.2% with NS 10;
+  GLM-Flash and K3 within 0.3%). UB 2 loses everywhere on the real path (K3 +6%).
+- Kept as a probe (LEAN 3, NS 10). Revisit with fp8 x: with half the x bytes it is already -1.5% at M 80.
+
+### Utilization sweep, six models at Galaxy 8x4 experts per chip (2026-10-22, bh-lb-09 12 x 10, flat alone)
+
+Current defaults (pure DRISC, even splits, default kernel, real x path), balanced M (every expert the same rows),
+`models/demos/glm53_flash_d_p_lb/tests/test_flat_balanced_sweep.py` (RT-profiler device time, median of 10 calls,
+1.35 GHz). Experts per chip: GLM-5.3 8, GLM-5.3-Flash 9, K3 28, K2.7 12, M3 4, DSv4.1-Flash 12. DRAM % = (bfp4
+weights + x bf16 read once + y bf16) / 512 GB/s; math % against LoFi peak on 90 compute cores / the 110-core grid (the
+plans' real compute cores: 96, K3 92, DSv4.1 80). Scripts and logs: /localdev/mstaletovic/flat_util_sweep/.
+
+Plans: gate/up 64 x pairs (GLM-5.3, GLM-Flash, K2.7), 64 x 3 16-column units (K3, M3), 48 x 3 units (DSv4.1); down 32
+(K3 28); 4 relays, 1 Tensix launcher.
+
+us per call / DRAM % / math % (90):
+
+| M | GLM-5.3 | GLM-5.3-Flash | K3 | K2.7 | M3 | DSv4.1-Flash |
+|---|---|---|---|---|---|---|
+| 32 | 408 / 84 / 10 | 312 / 83 / 9 | 1110 / 94 / 11 | 695 / 87 / 10 | 297 / 86 / 10 | 530 / 91 / 10 |
+| 64 | 436 / 82 / 18 | 330 / 81 / 18 | 1169 / 91 / 20 | 735 / 85 / 18 | 326 / 80 / 18 | 570 / 87 / 19 |
+| 96 | 468 / 79 / 25 | 356 / 78 / 25 | 1233 / 89 / 29 | 784 / 82 / 26 | 354 / 75 / 25 | 609 / 84 / 27 |
+| 128 | 516 / 74 / 30 | 389 / 74 / 30 | 1308 / 85 / 36 | 829 / 80 / 33 | 375 / 73 / 31 | 656 / 80 / 33 |
+| 160 | 539 / 73 / 36 | 410 / 72 / 36 | 1434 / 80 / 41 | 875 / 79 / 39 | 390 / 72 / 37 | 711 / 76 / 38 |
+| 192 | 572 / 71 / 41 | 435 / 70 / 40 | 1503 / 78 / 47 | 927 / 77 / 44 | 411 / 69 / 43 | 761 / 73 / 43 |
+| 256 | 642 / 67 / 48 | 494 / 65 / 47 | 1692 / 72 / 56 | 1062 / 71 / 51 | 457 / 65 / 51 | 880 / 67 / 50 |
+| 384 | 787 / 61 / 59 | 598 / 60 / 58 | 2244 / 59 / 64 | 1350 / 62 / 60 | 555 / 58 / 63 | 1088 / 60 / 60 |
+| 512 | 960 / 55 / 65 | 718 / 55 / 65 | 2791 / 51 / 68 | 1670 / 55 / 65 | 661 / 53 / 70 | 1344 / 53 / 65 |
+| 1024 | 1722 / 42 / 72 | 1283 / 42 / 73 | 4999 / 36 / 76 | 3138 / 40 / 69 | 1159 / 38 / 80 | 2589 / 37 / 68 |
+| 2048 | 3300 / 34 / 75 | 2462 / 34 / 76 | 9849 / 27 / 77 | 6077 / 32 / 72 | 2131 / 30 / 87 | 5068 / 29 / 69 |
+
+- DRAM-bound up to M ~256-384, math-bound from ~384 (the crossover is at 384 for every model).
+- A fixed ~40-95 us per call above the weight floor even at M 32 (GLM-5.3 64, GLM-Flash 54, K3 69, K2.7 93, M3 42,
+  DSv4.1 48 us): pipeline fill / drain. It is 10-16% of the call for the few-expert plans (GLM-5.3 8, GLM-Flash 9,
+  M3 4 experts) and 6% for K3 (28), which is why K3 reaches 94% and the others 83-86% at M 32.
+- The Galaxy 5120 range (M 80-160): GLM-5.3 / GLM-Flash / M3 at 72-80% DRAM with math at 25-37%: neither bound is
+  near full; that middle range is the weakest. GLM-5.3 at 8 experts and M 160 is 73% (539 us) against 82% at 32
+  experts (the earlier sweeps): the fixed cost and x weigh more with fewer experts.
+- Math tops out at 69-77% of the 90-core peak (M3 87%); DSv4.1's 69% is on 80 real compute cores (78% of those).
+- DSv4.1-Flash (48 x 3 16-column units) shows no trace of the old ~33% DRISC-only slowdown at M 32-80 (91 / 87% DRAM,
+  above the pair-split GLM models): no LEAN 3 run needed.
+- Correctness: test_closeout_flat (GLM-5.3, GLM-Flash, K3, M3 at chunks 5120 / 16384, K2.7 at 5120) plus DSv4.1-Flash
+  at both chunks (the same check, run ad hoc): 11 passed, min PCC 0.9980 (K3) against the bfp4 reference; M covered
+  about 80-512.
+
+### The fixed cost and the crossover, diagnosed; 64-row sub-blocks from layout.rows_hint (2026-10-22, bh-lb-09, flat alone)
+Same bench as the sweep above (test_flat_balanced_sweep.py, Galaxy 8x4 experts per chip, defaults); scripts and logs
+/localdev/mstaletovic/flat_fix/ (run.sh, batch.sh, prof.py / tl.py / hlat.py: per-core zone timelines from
+profile_log_device.csv with MIMO_FL_ZONES=1 / MIMO_FL_WAITZ).
+
+**The "fixed cost" is mostly not fixed.** Scaling experts per call at one M separates the two (us per call, E 4 / 8 /
+16 for GLM-5.3, 2 / 4 / 8 for M3):
+| | GLM-5.3 M 32 | GLM-5.3 M 384 | M3 M 32 | M3 M 384 |
+|---|---|---|---|---|
+| calls | 220 / 408 / 797 | 442 / 789 / 1464 | 160 / 297 / 565 | 334 / 556 / 1021 |
+| per expert (slope) / its floor | 48.6 / 43.0 | 84.4 / 60 DRAM, 58 math | 67 / 63.7 | 116 / 81 DRAM, 87 math |
+| intercept (truly per call) | ~19 | ~114 | ~29 | ~92 |
+At M 32 the gap is the stream rate (88-95% of the floor per expert) plus ~20-30 us per call; at M 384 it is the
+steady state and a ~100 us fill + drain.
+
+Where the per-call part goes (GLM-5.3 E 8, profiles):
+- **The slowest DRISC slot sets the end.** Expert e's gate/up weights land every 44-46 us at M 32 (the first 58: it
+  shares DRAM with two experts of down weights and x); per gate/up core the last block lands 429-460 us at M 160 - a
+  7% spread between slots over a call, and every h waits for all 64 gate/up cores.
+- **The drain after the last weights** (M 160, 128-row sub-blocks): last weights 440 / 460 us (median / slowest) ->
+  last gate/up row pass 495 / 507 -> h at the down cores ~501 -> down done 527: 67-87 us = the last expert's remaining
+  row passes (~26 us), the h hand-off (~6-15), the last 128-row down sub-block (20) and its 32-row tail (5).
+- **The fill at M 384**: the first sub-block's K loop waits for expert 0's whole gate/up slice (lands at 67 us vs ~45
+  in steady state); a first h at the down cores at ~105-111 us.
+
+What the crossover's steady state waits on (M 384, E 8 / E 3):
+- **Gate/up compute is the bound, not the DRAM / math overlap.** fp32 DST (4 tiles a half) forces 2-row-tile passes
+  (row passes, SE_GU_RP): a pass of 64 rows x 2 tiles x K 192 takes 12.8 us (~71% of the LoFi tile rate), 25.6 us per
+  128-row sub-block; the down cores take 20 us per sub-block (~91%) and wait ~7 us each for h. Gate/up also waits
+  ~3.5 us per sub-block on x / weights (WAITZ): the x ring holds exactly one sub-block (x_slots 24 = nk_gu) and row
+  passes keep it until the final pass, so the next sub-block's x streams in only during that pass.
+- **DRAM is a near tie**: with x read by both rectangles (2 x 4.7 MB at M 384) the true bytes are ~35 MB an expert
+  (~69 us); without the down-weight reads (MIMO_FL_DN_NOREAD, garbage) 790 -> 728 us. The two near-equal limits are
+  why the time looks like a sum.
+
+Tried, no gain (GLM-5.3 E 8 unless noted, us at M 32 / 160 / 384 / 1024 vs 408 / 539 / 790 / 1722):
+- MIMO_FL_GU_FULL_SYNC (one 4-row pass in a full-sync DST): 408 / - / 770 / 1760; M3 and K3 +12-23% at M >= 384.
+- h chains: DCH 4 / 16 / 32, HPIECES 8, LINK_DEPTH 8: within 0.5% (DCH 32 +6% at 384).
+- down weights: DW_BATCH 1 / 4 unchanged; their start delayed 20-70 us at the call start (a probe, reverted):
+  unchanged - the DN_NOREAD gain is steady-state sharing, not the fill.
+- LEAN 3 + NS_MAX 10: 402 / 535 / - (-1.5% at M 32 only); M3 unchanged.
+- x read once (X1): 411 / 755 / 1119 / 2644 (one primary's multicast caps x); M3 likewise.
+- x ring 26 slots (MIMO_FL_X_SLOTS_MAX): **hangs** (gate/up waits on x at se3_compute.cpp:437: the row-pass x
+  indexing assumes x_slots == nk_gu); 28 does not fit. Not pursued.
+- 64-row sub-blocks with a 4th h buffer (MIMO_FL_HBUF=4 extended to bfp8 h, a probe, reverted): same as without it.
+
+**Change: layout.rows_hint** (FlatLayoutOptions; expected mean rows per local expert per call, -1 unknown; in the
+plan key and the plan log line). The capacity callers pass is the whole chunk, so the plan cannot infer M. With a
+hint <= 320, plans that have 128-row sub-blocks and gate/up row passes (GLM-5.3, GLM-5.3-Flash; every other model
+already plans 64-row ones) take 64-row sub-blocks: one row pass a sub-block (x streams in during the whole pass; the
+drain is halved). y bit-exact (GLM-5.3 M 128). Above ~384 rows the 128-row sub-blocks are better (64-row ones:
++0.4% at 384, +3.1% at 512, +5.9% at 1024 on GLM-5.3), hence the threshold. The close-out tests pass the hint
+(round(chunk x top-k / experts)): GLM-5.3 / GLM-Flash at 5120 take 64-row sub-blocks, at 16384 128-row ones.
+test_flat_balanced_sweep.py: GLM_SWEEP_ROWS_HINT=<n> | auto (auto: the op rebuilt per M with the hint M).
+
+Full sweep, before (the table above) -> after (hint = M; us / DRAM %):
+| M | GLM-5.3 | GLM-5.3-Flash | K3 | K2.7 | M3 | DSv4.1-Flash |
+|---|---|---|---|---|---|---|
+| 32 | 408 -> 403 / 85 | 312 -> 307 / 84 | 1110 -> 1109 | 695 -> 696 | 297 -> 297 | 530 -> 529 |
+| 96 | 468 -> 458 / 80 | 356 -> 347 / 80 | 1233 -> 1230 | 784 -> 782 | 354 -> 355 | 609 -> 608 |
+| 128 | 516 -> 497 / 77 | 389 -> 377 / 76 | 1308 -> 1311 | 829 -> 829 | 375 -> 375 | 656 -> 658 |
+| 160 | 539 -> 524 / 75 | 410 -> 397 / 74 | 1434 -> 1448 | 875 -> 877 | 390 -> 389 | 711 -> 716 |
+| 192 | 572 -> 553 / 73 | 435 -> 420 / 72 | 1503 -> 1515 | 927 -> 925 | 411 -> 413 | 761 -> 762 |
+| 256 | 642 -> 630 / 68 | 494 -> 479 / 67 | 1692 -> 1699 | 1062 -> 1057 | 457 -> 458 | 880 -> 871 |
+| 384 | 787 -> 786 | 598 -> 599 | 2244 -> 2241 | 1350 -> 1345 | 555 -> 556 | 1088 -> 1086 |
+| 1024 | 1722 -> 1722 | 1283 -> 1283 | 4999 -> 4999 | 3138 -> 3136 | 1159 -> 1156 | 2589 -> 2589 |
+GLM-5.3 -1.2 .. -3.7% and GLM-Flash -1.5 .. -3.4% at M 32-256, unchanged above. The other plans are unchanged (their
+plan is identical); the largest move, K3 at 160 / 192 (+0.9 / +0.8%), is run-to-run noise: HEAD without the change
+gave 1441 / 1431 / 1448 at 160 and 1498 / 1519 / 1508 at 192, with it 1447 / 1440 / 1440 and 1515 / 1514 / 1518.
+Correctness: test_closeout_flat 9 / 9 (min PCC 0.9980), test_flat_combine_closeout 9 / 9 under uniform, zipf
+spread and zipf packed routing (flat min PCC 0.9984, worst per-token rel err 2.43e-3), test_closeout_plans passes.
+
+Left (largest first): gate/up compute at mid / large M (2-row passes at ~71% of LoFi: a 4-row pass needs 8 fp32 DST
+tiles - full sync lost the pack overlap; an x ring deeper than one sub-block needs the row-pass x indexing fixed);
+the DRISC slot spread (~7% of a call, the slowest slot gates the drain); x read twice (~7% of DRAM bytes at M 160+);
+the remaining drain (h hand-off + the last down sub-block).
+
+### Gate/up K loop microbenchmark: where the "~71% of LoFi" goes (2026-10-22)
+`tests/microbench/test_gu_matmul_bench.py`: one Tensix core, x bfp8 [RT x K] and gate/up weights bfp4 [K x CT]
+resident in L1, LoFi, K 192 (GLM-5.3), 32 passes of one RT x CT block over all of K with stock `matmul_block` (one
+call per K tile, as se3_compute), timed on the device wall clock (UNPACK after the inputs are resident -> PACK after
+the last pack; counted as AICLK cycles, us at 1.35 GHz). Peak: 2 x 32^3 FLOP / 4096 FLOP per cycle = 16 cycles a tile
+product. "stream" = CB wait / pop of x and w per K-block (the reader re-pushes resident blocks: the flat op's
+handshakes without data movement); "act" = silu(gate) * up on the PACK thread's SFPU as act_dst. PCC vs torch on the
+quantized inputs: fp32 1.0000, bf16 DEST 0.9989 (0.9967 with act).
+| block | resident | resident + act | stream kblk 8 | stream + act |
+|---|---|---|---|---|
+| 2 x 2 fp32 (GLM gate/up pass) | 17.80 cyc (89.9%) | 18.04 (88.7%) | 19.75 (81.0%) | 20.00 (80.0%) |
+| 1 x 3 fp32 (K3 / M3 / DSv4.1 pass) | 17.36 (92.2%) | 17.69 (90.4%) | 19.56 (81.8%) | 19.87 (80.5%) |
+| 4 x 2 bf16 DEST (8-tile half) | 17.26 (92.7%) | 17.77 (90.0%) | 18.09 (88.4%) | 18.58 (86.1%) |
+K-block size, stream, fp32: 2 x 2 kblk 4 / 8 / 16 / 24: 21.33 / 19.75 / 18.86 / 18.49 (75.0 / 81.0 / 84.8 / 86.5%);
+1 x 3: 20.95 / 19.56 / 18.78 / 18.52. Shapes, resident fp32: 1 x 1 27.24 (58.7%), 1 x 4 17.27, 4 x 1 17.28 (92.6%).
+- The FPU loop itself is ~90-93%: stock matmul_block saturates at ~17.3 cycles a product once 3+ output tiles share
+  an operand (1 x 1 pays ~11 cycles a call). 2 x 2 is 0.5 cycle worse than 1 x 4.
+- The per-K-block CB handshake (wait + pop of x and w) costs ~55-65 cycles a block: at kblk 8 on a 2 x 2 pass that is
+  -9 points (90 -> 81%). Larger K-blocks (24: 86.5%) or larger blocks (4 x 2 bf16: 88.4%) amortize it.
+- The activation on the PACK thread stays hidden (+1-3%).
+- In the op the pass runs at ~22.5 cycles (71%): 17.8 loop + ~2 handshakes + ~2.7 around the loop (x / weight arrival
+  waits, row passes, h hand-off).
+- custom_mm-style loop (variant 4) not built: for full 32x32 tiles the stock LLK already has custom_mm's structure
+  (one operand held in SrcB, in1 streamed through SrcA with CLR_A per tile, a 16-MVMUL replay per tile); what is left is
+  folding the per-tile software step (dest base + MOP run) into one MOP over CT, bounded by the measured ~1.3 cycles a
+  product (<= ~7.5%). custom_mm's other tricks (split accumulation and dense packing in the empty rows of <= 8-row
+  tiles) do not apply to 32-row tiles. Not worth building into se3_compute ahead of the handshakes and the stalls.
+
+### Bigger gate/up compute K-blocks: decoupled K groups vs larger DRISC blocks (2026-10-22)
+Why: the gate/up microbench (above) put ~2 cycles per tile product in the per-K-block CB handshake (wait / pop of x and
+weights, ~55-65 cycles a block of 8 K tiles): streamed K-block 8 / 16 / 24 = 81 / 85 / 86.5% of LoFi vs 90% resident.
+- **A, decoupled** (se3_compute row-pass loop, `SE_GU_KG`): wait for / pop G blocks at once, the matmul still walks them
+  block by block (same accumulation order: y bit-exact vs G 1 at GLM-5.3 M 128, G 2 and 3). DRISC blocks unchanged; the
+  x ring (a whole sub-block) and the weight ring (2 loads) already hold G blocks. Typed `layout.gu_kgroup` (-1: 2), plan
+  `gu_kg` (logged with the plan: "gate/up row passes .. K group .."), probe `MIMO_FL_GU_KG` overrides.
+- **B, larger DRISC blocks**, emulated as A + `MIMO_FL_DRISC_UB=G` (each DRISC unit carries G blocks, the consumer pops G):
+  the full form (KBLK beyond 8 in every kernel: relays, receivers, DRISC chunks, h layout) was not built because the
+  emulation already loses.
+us per call, Galaxy experts per chip, rows_hint = M (E 8 GLM-5.3, E 28 K3):
+| variant | GLM-5.3 M 32 / 128 / 160 / 384 / 1024 | K3 M 32 / 160 / 384 / 1024 |
+|---|---|---|
+| today (G 1) | 403 / 498 / 523 / 788 / 1723 | 1111 / 1439 / 2247 / 5000 |
+| A, G 2 | 403 / 499 / 523 / 784 / 1677 | 1111 / 1441 / 2233 / 5001 |
+| A, G 3 | 404 / 500 / 524 / 786 / 1704 | - |
+| A, G 4 | - / - / - / 786 / 1671 | 1111 / 1439 / 2253 / 4987 |
+| B (UB 2 + G 2) | 389 / 500 / 569 / 847 / 1738 | 1111 / 1593 / 2419 / 5111 |
+| B + LEAN 3 | 394 / - / 566 / 846 / 1722 | - |
+B loses 7-11% at M 160-384 (the shallower DRISC pipeline next to x, as UB 2 alone did) and only wins GLM M 32 (-3.5%).
+A: a few % at M >= 1024, nothing below 512 (there the handshake is not the bound). Full 66-point sweep, G 4: GLM-5.3
+-2.6 / -2.8% at 1024 / 2048, DSv4.1 -1.0..-2.1% from 512, but M3 +1.7% at 2048 (rerun: +1.6%); G 2 (default):
+| model | M 512 / 1024 / 2048 vs G 1 (us) | rest |
+|---|---|---|
+| GLM-5.3 | 967->960 / 1722->1676 / 3300->3188 (-0.7 / -2.7 / -3.4%) | within +-0.5% |
+| GLM-5.3-Flash | 717->721 / 1283->1294 / 2462->2487 (+0.6 / +0.9 / +1.0%) | within +-0.5% |
+| K3 | 2792->2785 / 4999->5006 / 9855->9854 | within +-0.6% |
+| K2.7 | flat | within +-0.4% |
+| M3 | 662->664 / 1156->1161 / 2131->2135 | within +-0.7% |
+| DSv4.1-Flash | 1344->1330 / 2589->2556 / 5067->5002 (-1.0 / -1.3 / -1.3%) | within +-0.7% |
+GLM-5.3-Flash at large M is noisy: a rerun gave G 1 / 2 / 4 = 1283 / 1290 / 1342 at 1024 and 2462 / 2476 / 2426 at 2048
+(the earlier G 4 sweep: 1266 / 2405) - G 2 is within that noise. Correctness: test_closeout_flat 9/9, test_flat_combine_
+closeout 9/9, test_closeout_plans pass (G 2 in every row-pass plan). Logs: /localdev/mstaletovic/gu_kblk/.
+Takeaway: the handshake is a real but small cost in the op (the microbench's 81 -> 86% does not carry over: below M 512
+the gate/up loop is not the bound, above it G 2 buys ~3% on the pair-split GLM-5.3 and ~1.3% on DSv4.1's units).
+
+### GLM-5.3 alone at its Galaxy 8x4 load: what holds it at ~67% DRAM (2026-10-25, bh-lb-09, one chip)
+Why: the Galaxy reports ~67% DRAM for GLM-5.3's flat expert (8 experts a chip, 160 home tokens, ~160 rows an expert at
+chunk 5120); our 2x4 numbers said the same. test_flat_balanced_sweep, E 8, H 6144, I 2048, silu, bfp4, rows_hint = M,
+DRISC-only defaults (pure, no Tensix readers), even split (64 gate/up cores x 1 pair, 32 down x 6 tiles, 4 relays).
+Weights 21.2 MB an expert (3 x 6144 x 2048 x 0.5625 B) = 41.5 us at 512 GB/s; x + y bf16 1.97 MB each an expert.
+| M | M_total | total us | us / expert | DRAM % (w + x + y) | DRAM % (weights) | math % (96 compute) | math % (110 grid) |
+|---|---|---|---|---|---|---|---|
+| 96 | 768 | 458 | 57.2 | 81 | 72 | 23 | 21 |
+| 128 | 1024 | 498 | 62.3 | 76 | 67 | 29 | 26 |
+| 160 | 1280 | 521 | 65.2 | 75 | 64 | 35 | 30 |
+| 192 | 1536 | 554 | 69.3 | 73 | 60 | 39 | 34 |
+| 224 | 1792 | 599 | 74.9 | 70 | 55 | 42 | 37 |
+| 256 | 2048 | 631 | 78.8 | 68 | 53 | 46 | 40 |
+Galaxy loads of the others: GLM-5.3-Flash E 9 M 142: 381 us, 42.3 / expert, 76% DRAM; K3 E 28 M 91 (H 3584, I 3072,
+units): 1233 us, 44.0 / expert, 88%. The gap over the DRAM floor (w + x + y) is ~90-150 us a call on all three: K3
+hides it under 28 experts' weights, GLM-5.3's 8 do not.
+
+Probes at M 160 (us, base 521; one-chip, MIMO_FL_* probes):
+- No math: 527 - the compute is not the bound (gate/up's math hides under the rest).
+- DRAM reads: any one stream off - x (XRD_SKIP) 442, gate/up W (GU_NOREAD / W_NOREAD) 434, down W (DN_NOREAD) 433 -
+  or all three 434: the read streams interfere (~87 us), removing any one removes it (the x reads go through each
+  bank's NOC1 endpoint = DRISC tile 1's port: drisc-endpoint-tile-x-conflict).
+- Below that an on-chip floor: no reads 434, + no math 414, + no weight forwards (W_NOFWD) 334, + no x / h / y data
+  333: the control skeleton (every handshake, no data, no math) runs 333 us. Weight forwards into the gate/up L1 ~81.
+- The skeleton per (expert, sub-block): GLM-5.3 28.6 us at M 96 (2 sub-blocks of 64 rows: 24 K-blocks each),
+  41.6 at M 160 (3 sub-blocks), ~1.2 us a K-block per 128 rows - the same on GLM-5.3-Flash (19.7 us, 16 K-blocks) and
+  K3 (16.0, 14): the op's per-step cost. At H 6144 it about equals the weights' DRAM time (41.5 us an expert), so the
+  two run near serially. Sampled gate/up waits (WAITZ, K group 1): x 3.6 us, weights 0.5 a 28 us sub-block - the loop
+  is not starved; K group 1 / 2 / 4 / 8 / 12 / 24: 334 / - / 328 / 330 / 332 / 351 (the compute handshake is not it).
+- Not levers here: x helpers 2 (6 relays) 515, 128-row sub-blocks (MT 4) 535, + full-sync gate/up 527, GU_SPLIT 2,2
+  (2 M-groups) 701, 4,4 (-> 2 units) 526, 2,1 (32 gate/up cores x 4 tiles: 18.4 KB blocks) 642 (M 96 61.6 vs 57.2),
+  DRISC NOC1 0 521, JOB1_NOC 0 / 1 524 / 525, STREAM_SPLIT 0 525, TILES 2 530, TILES 1 565.
+- X_RESIDENT hung (probe, twice; triage in /localdev/mstaletovic/flat_glm53/hang_x_resident) - not chased.
+Levers (estimates, M 160):
+- The per-K-block control cost (~1.2 us / K-block / 128 rows): fewer, larger steps end to end (16-tile K-blocks with
+  a ring as deep as today's in bytes - the 2026-10-22 UB 2 emulation lost from a shallower DRISC pipeline): skeleton
+  42 -> ~21 us / expert; with forwards + interference on top of the DRAM floor ~430-450 us (82-88%).
+- The read interference (~87 us): x off the DRISC tile's port (x landed in the relays' L1 by the dispatch, or x reads
+  on NOC0 once the linked-multicast hang is fixed): -50..-87 us.
+- Sub-blocks sized to M (5 row tiles as 3 + 2, not 2 + 2 + 1): the skeleton's third sub-block is ~13 us / expert, but
+  128-row sub-blocks did not show it in the real run (535) - low.
+Logs: /localdev/mstaletovic/flat_glm53/.
+
+### Lever 1 (fewer, larger K steps): emulations say it is not the bound (2026-10-25, bh-lb-09, GLM-5.3 E 8)
+Why: the GLM-5.3 analysis above priced the per-K-block control cost at ~1.2 us / K-block / 128 rows and proposed
+16-tile K-blocks end to end. A global kKBlk = 16 hangs at the first call (se6_drecv / se5_recv / se11_xrd in
+cb_reserve_back: every kernel assumes 8-tile blocks; triage /localdev/mstaletovic/flat_glm53/hang_k16; reverted).
+Before rewriting every kernel, each step type was made larger on its own with the existing knobs (us a call, M 96 /
+128 / 160; base 459 / 500 / 522):
+| variant (one variable) | real run | no reads (XRD_SKIP GU_NOREAD DN_NOREAD; base 386 / - / 436) | skeleton M 160 (base 333) |
+|---|---|---|---|
+| DRISC units of 2 blocks (DRISC_UB 2: half the DRISC loop's per-unit cost) | 468 / 497 / 571 | 381 / - / 437 | - |
+| x pieces 2 (8.7 KB snake hops, half the handshakes) | 461 / 503 / 526 | 380 / - / 424 | 314 |
+| x pieces 1 | 474 / 510 / 538 | - | 328 |
+| x pieces 8 | - | - | 594 |
+| snake forward depth 6 (vs 3) | 459 / 499 / 524 | - | 313 |
+| pieces 2 + depth 6 | 463 / 502 / 526 | - | - |
+| gate/up K group 4 (one compute handshake per 32 K tiles) | - | 389 / - / 434 | (K group 1..24 earlier: 328-351) |
+| x ring 32 / 48 blocks (MT 2; 24 = one sub-block) | 457 / 497 / 527 ; 457 / 496 / 524 | - | 2 snakes a rectangle: 325 |
+- DRISC profile at M 160 (MIMO_FL_DRISC_PROF): each tile ~1000 cycles a 9.2 KB unit, busy 681-792 k cycles of a
+  ~860 k-cycle call; UB 2 cuts the busy time to ~535 k for the same call time: the DRISC loop is not what paces.
+- Skeleton zones (M 160): the gate/up UNPACK thread waits in its K loop 316 of 321 us (math 1.7, pack 0.8), the down
+  cores wait for h, the relays' readers wait on a full ring (XRD_FULL 195 us): the gate/up cores are starved of x.
+  The skeleton tracks the padded x bytes a gate/up core takes in: M 96 / 160 / 256 = 2 / 3 / 4 sub-blocks of 64 rows
+  = 6.7 / 10.0 / 13.4 MB a core a call at ~32 GB/s = 209 / 313 / 418 us vs 229 / 333 / 436 measured; bf16 x (1.9x
+  the bytes, its own plan) 229 -> 332 / 333 -> 476. Fewer handshakes (pieces 2, depth 6, K group) move it <= 6%.
+Takeaway: no larger-step emulation moves the real run by more than noise (best -0.5%), the no-read floor by <= 3%;
+the 16-tile rewrite of every kernel is not worth it on this evidence. The real run is the on-chip floor (no reads
+434) + the read interference (~87 us): lever 2 next. (The "x bytes" reading of the skeleton is wrong - see the
+padding section below: the skeleton is a fixed ~0.54 us per x block whatever its bytes.)
+Logs: /localdev/mstaletovic/flat_glm53/ (ab_*, r_*, nr*, xs_*, zs_sk, zw_sk, sk_xbf16, ub2_glm53, dprof).
+
+### Lever 2 (x off the DRISC tile's port): retest with the unicast snakes (2026-10-25, bh-lb-09, GLM-5.3 E 8)
+x path today: the 4 relays (BRISC) gather x rows from the row-major bf16 dispatch buffer in DRAM (2 KB segments, NOC1
+reads -> each bank's NOC1 endpoint = DRISC tile 1, which also DMAs half the bank's gate/up weights in switch mode),
+tilize to bfp8 (TRISC), and their NCRISC unicasts each super-block to one snake head per gate/up rectangle; the
+gate/up cores forward it down the snake (NCRISC, NOC0, 4 pieces, 3 in flight). No multicast, fabric not involved.
+Ports: tile 0 (NOC0 endpoint) = the down cores' weight reads; tile 1 (NOC1 endpoint) = x reads + DRISC job; tile 2 =
+the other DRISC job. One variable a run, us a call M 96 / 128 / 160 (base 459 / 500 / 522), no hang in any:
+| variant | us | note |
+|---|---|---|
+| x reads on NOC0 (MIMO_FL_XRD_NOC=0: sender to NOC1) | 470 / 499 / 546 | y bit-exact vs base; x on tile 0 beside the down weights |
+| down weight reads on NOC1 (DN_NOC0=1: down weights on tile 1 beside the DRISC job and x) | 508 / 545 / 615 | |
+| both: x alone on tile 0's port, down weights on tile 1 | 460 / 495 / 553 | x isolated from every DRISC port: no gain |
+| x reads of 2 / 6 segments (XRD_BIG, same bytes) | 459 / 495 / 534 ; 503 / 565 / 611 | bigger requests hurt |
+| XRD_BATCH 4 | 460 / 499 / 540 | |
+| half the x bytes, same requests (XRD_HALF, garbage x) | 430 / 462 / 481 | recovers 70 / 100 / 50% of x's cost |
+| no x reads (XRD_SKIP) | 418 / 425 / 437 | x's cost: 41 / 75 / 85 us (its bytes: ~31 us at M 160) |
+Takeaway: the port is not the mechanism - x on a port of its own (tile 0, down weights moved) costs as much as on
+tile 1. x's cost follows its bytes (half the bytes, half the cost), i.e. GDDR contention from ~16 MB of 2 KB row
+gathers a call next to the 170 MB weight streams. The lever left is fewer x bytes: block-fp8 rows from the dispatch
+(one exponent per 16 consecutive columns = exactly the bfp8 tile's per-face-row groups, so no accuracy change vs
+today's tilize; 1.0625 B / element) with a relay-side rearrange into bfp8 tiles: estimate -30..-40 us at M 160
+(XRD_HALF), dispatch + relay work. Landing x in L1 instead does not fit: M_total 1280 x 6144 bf16 = 15.7 MB a chip.
+Logs: /localdev/mstaletovic/flat_glm53/ (x0_glm53, l2_*).
+
+### Padding rows: not the cost; the skeleton is a fixed rate per x block (2026-10-25, GLM-5.3 E 8)
+Before sizing the last sub-block to its real rows (M 160: 64 + 64 + 32, the third ships 64 rows of x), the emulation:
+32-row sub-blocks (MIMO_FL_MT=1: no padding at all, more sub-blocks) - skeleton M 96 / 128 / 160 313 / 410 / 508 (3 /
+4 / 5 sub-blocks) vs 64-row 229 / 229 / 333 (2 / 2 / 3); real 472 / 509 / 572 vs 459 / 500 / 522. Every sub-block
+costs the same ~100 us a call (12.5-13 us an expert) whether it has 1 or 2 row tiles: shipping fewer rows saves
+nothing, fewer sub-blocks does. Not implemented.
+- The per-sub-block cost is 24 x blocks at ~0.54 us each at the gate/up core (X_ARR marks every 8 blocks 4.3 us apart,
+  the unpacker in its K loop the rest), the same for 8.7 and 17.4 KB blocks.
+- Skeleton M 96 / 160 exactly 229 / 333 with: 6 relays (NH 2), tilize skipped (TZ_SKIP), a 2-sub-block x ring (48),
+  2 snakes a rectangle (325), forward depth 6 (313), pieces 2 / 1 (314 / 328); pieces 8 594. The relays are
+  backpressured (XRD_FULL 195 us), the down cores wait for h, the weights land ahead (every 8 blocks ~6.4 us).
+  What fixes the 0.54 us a block is not found yet - none of the x path's own knobs.
+Logs: /localdev/mstaletovic/flat_glm53/ (pad_*, sk_nh2, sk_tzskip, sk_xs48, zs_sk2 + zs_sk2.csv).
+- What sets the 0.54 us (per-core X_ARR marks, zs_sk2.csv): 2 snakes of 32 gate/up cores each, every core gets blocks
+  at the same 0.54 us, ~0.43 us later than its predecessor; the head runs a full x ring (24 blocks, 12.5 us) ahead of
+  core 2. It is the NCRISC forwarder's acked writes: 3 pieces in flight, one ack round trip (~0.4 us) each ->
+  4 pieces = 0.53 us a block whatever the block's bytes (MT 1 / MT 2 the same). Pieces 8 predicts 1.07 us a block,
+  measured 1.03 (594); forward depth 12: skeleton 333 -> 304 (M 96 229 -> 217), where the next limit is the snake's
+  bandwidth, ~35-40 GB/s a link: 128-row sub-blocks (MT 4, 34.8 KB blocks) take ~0.9 us a block, so 2 x 24 x 0.9 ~
+  3 x 24 x 0.54 (skeleton MT 4 M 160 345 vs 333) - why MT 4 did not help (real 535, no math 531).
+- And it does not reach the real run: depth 12 no reads 387 / 434 (= base), real 459 / 499 / 526. The skeleton is not
+  what binds; above it sit the weight forwards (+80 us at no reads) and the read interference (+87). Not fixed: a
+  posted-write forwarder (no ack round trip) is estimated at ~0 in the real run on this evidence.
+Logs: sk_mt4, sk_p2d6, sk_p4d12, nm_mt4, r_d12, nr_d12.
+
+### Forward depth 12 as a default? No: +0.3..0.8% at the larger Galaxy M (2026-10-25, bh-lb-09, one chip)
+us a call, base -> MIMO_FL_X_FWD_DEPTH=12: GLM-5.3 E 8 M 96 / 128 / 160 459 / 500 / 522 -> 459 / 499 / 526; GLM-5.3-
+Flash E 9 M 96 / 142 / 192 347 / 381 / 417 -> 347 / 383 / 420; K3 E 28 (situ) M 64 / 91 / 128 1171 / 1233 / 1314 ->
+1170 / 1235 / 1307; K2.7 E 12 M 80 / 107 / 160 757 / 807 / 874 -> 759 / 809 / 877. Repeat-run noise here is ~1 us
+(GLM-5.3 M 160 base 521 / 522 / 522), so +3-4 us at GLM-5.3 160 / GLM-Flash 192 / K2.7 160 is real if small; only K3
+M 128 gains (-0.5%). Default stays 3 (the skeleton's -29 us does not reach the real run).
+
+### The weight forwards (DRISC -> gate/up L1): what the +80 us at no reads is (2026-10-25, GLM-5.3 E 8)
+At no reads (XRD_SKIP GU_NOREAD DN_NOREAD; 386 / 436 us at M 96 / 160) the forwards cost 137 / 83 us (W_NOFWD 249 /
+353), but in the real run only 15 / 5 (W_NOFWD with reads 444 / 517 vs 459 / 522).
+| no reads, one variable | M 96 / 160 |
+|---|---|
+| base | 386 / 436 |
+| no forwards (W_NOFWD) | 249 / 353 |
+| DRISC 14 units in flight / LEAN 1 / free slots once sent | 384 / 433 ; 384 / 435 ; 383 / 434 |
+| DRISC job 1 on NOC1 / on NOC0 | 381 / 429 ; 386 / 435 |
+| DRISC NOC1 0 (tile 2's half on NOC0 too) | 412 / 473 |
+| x snake on NOC1 (MIMO_FL_X_CHAIN_NOC=1) | 342 / 376 |
+| real run, x snake on NOC1 (y bit-exact) / + x reads on NOC0 | 457 / 495 / 530 ; 471 / 503 / 546 (M 96 / 128 / 160) |
+- The DRISC loop is not the cost (its in-flight / register / free-on-sent knobs change nothing); the weight writes slow
+  the x snake where they share NOC0 links (more weights on NOC0: +26 / +37; the snake moved to NOC1: -44 / -60).
+- With the DRAM reads on, that recovery vanishes (the snake on NOC1 meets the x reads' NOC1 traffic) and the forwards
+  themselves cost <= 15 us: not a real-run lever. The real run is bound by the three read streams together (any one
+  off: ~434 at M 160, DRAM 75% with all three); the on-chip side only shows once one stream is gone.
+Logs: dd_*, wf_*, r_xnoc1*.
+
+### Read mix per bank: MPFE port weights; down weights through the DRISC (2026-10-25, GLM-5.3 E 8)
+MIMO_FL_DRISC_MPFE=w,o,x (the DRISC port, NOC0 endpoint = down reads, NOC1 endpoint = x reads), us M 96 / 128 / 160
+(base 459 / 500 / 522), no hang: 0,0,3 461 / 490 / 526; 0,3,0 459 / 502 / 527; 3,0,0 463 / 499 / 530; 0,3,3 459 /
+491 / 528. Only M 128 gains (-2%, x's port favoured); M 160 +1%. Not a lever.
+Down weights through the DRISC: there is no such path (MIMO_FL_DRISC_RD_DOWN only reuses freed reader cells as down
+cores). Not worth building: a DRISC tile forwards ~12-16 GB/s in this op (DRISC_PROF ~1000 cycles a 9.2 KB unit, the
+~28 GB/s ceiling at best), so all 21.2 MB of an expert over the 16 tiles is >= ~50-88 us an expert against 65 today;
+the ceiling of any change to the down stream is DN_NOREAD 433 at M 160.
+So GLM-5.3 E 8 sits at ~75% DRAM with three read streams per bank; every on-chip and port knob tried moves it < 2%.
+The measured lever left is fewer x bytes (block-fp8 x rows, -30..-40 us at M 160; parked by the user: no quantization).
+Logs: rm_*.
+
+### Flat vs main's routed experts (unified, fused, hybrid) at the Galaxy per-chip loads (2026-10-25, one chip, bh-lb-09)
+Main = origin/main 07fac6de536 (worktree /localdev/mstaletovic/tt-metal-main-1025, built as is). Every implementation
+on the same bfp4 experts at LoFi; device time from the program real-time profiler, median of 10 calls, every program
+of a call summed. Flat: test_flat_balanced_sweep (DRISC-only defaults, rows_hint = M, x bf16 row-major gathered by
+token index, y bf16 row-major, fp32 DEST down). Main: scratch harness zz_re_compare.py (copy in
+/localdev/mstaletovic/re_cmp/) on TtRoutedExpert's weights and its production config (LoFi, bf16 DEST, packer L1 acc):
+row-major bf16 dispatch buffer, E regions of 512 rows; "unified" = unified_routed_expert_moe; "fused" = TtRoutedExpert
+.forward with T >= max_tokens (moe_fused_swiglu alone); "hybrid op" = the one-dispatch hybrid_routed_expert_moe at
+T 320 (the models' ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD) and T 128; skewed: zipf (count ~ 1 / rank, same total, cap
+512), also the two-op forward at T 128. DRAM % = (weights + x bf16 + y; y bf16 flat, bfp8 main) / 512 GB/s. Math %
+over the compute cores (flat 64 gate/up + 32 down, K3 + 28; main 11 x 8 = 88) and over 110. * = the Galaxy M.
+
+**GLM-5.3 E8** (Galaxy M 160), cells: total us / us per expert / DRAM % / math % compute cores / math % 110 grid; flat compute = 96 cores, main's ops 88 (11 x 8)
+
+| M | flat | unified | fused (moe_fused_swiglu) | hybrid op T 320 | hybrid op T 128 | best main / flat |
+|---|---|---|---|---|---|---|
+| 64 | 433 / 54.1 / 82% / 17% / 15% | 697 / 87.1 / 50% / 11% / 9% | 533 / 66.6 / 66% / 15% / 12% | 562 / 70.2 / 62% / 14% / 11% | 561 / 70.1 / 63% / 14% / 11% | 1.23x |
+| 96 | 459 / 57.4 / 80% / 24% / 21% | 694 / 86.7 / 52% / 18% / 14% | 561 / 70.1 / 64% / 21% / 17% | 604 / 75.5 / 60% / 20% / 16% | 602 / 75.3 / 60% / 20% / 16% | 1.22x |
+| 128 | 498 / 62.2 / 77% / 30% / 26% | 691 / 86.3 / 53% / 22% / 18% | 589 / 73.6 / 63% / 28% / 22% | 626 / 78.3 / 59% / 25% / 20% | 623 / 77.9 / 59% / 25% / 20% | 1.18x |
+| 160 * | 526 / 65.8 / 75% / 34% / 30% | 711 / 88.8 / 53% / 28% / 22% | 698 / 87.3 / 54% / 29% / 23% | 744 / 93.0 / 51% / 26% / 21% | 818 / 102.2 / 46% / 24% / 19% | 1.33x |
+| 192 | 555 / 69.4 / 73% / 39% / 34% | 733 / 91.6 / 53% / 32% / 26% | 711 / 88.9 / 55% / 34% / 27% | 746 / 93.3 / 52% / 32% / 26% | 829 / 103.7 / 47% / 29% / 23% | 1.28x |
+| 256 | 632 / 79.0 / 68% / 46% / 40% | 757 / 94.6 / 54% / 42% / 34% | 753 / 94.1 / 54% / 42% / 34% | 765 / 95.6 / 53% / 41% / 33% | 853 / 106.7 / 48% / 38% / 30% | 1.19x |
+| zipf (mean 160) | 529 / 66.1 / 74% / 34% / 30% | 748 / 93.5 / 51% / 26% / 21% | 697 / 87.1 / 54% / 29% / 23% | 711 / 88.9 / 53% / 28% / 22% | 731 / 91.3 / 52% / 28% / 22% | 1.28x (two-op T 128: 679) |
+
+**GLM-5.3-Flash E9** (Galaxy M 142), cells: total us / us per expert / DRAM % / math % compute cores / math % 110 grid; flat compute = 96 cores, main's ops 88 (11 x 8)
+
+| M | flat | unified | fused (moe_fused_swiglu) | hybrid op T 320 | hybrid op T 128 | best main / flat |
+|---|---|---|---|---|---|---|
+| 64 | 324 / 36.0 / 83% / 17% / 15% | 591 / 65.7 / 44% / 10% / 8% | 444 / 49.3 / 59% / 14% / 11% | 489 / 54.3 / 54% / 12% / 10% | 488 / 54.2 / 54% / 12% / 10% | 1.37x |
+| 96 | 349 / 38.8 / 79% / 23% / 20% | 590 / 65.6 / 46% / 15% / 12% | 489 / 54.4 / 55% / 19% / 15% | 540 / 60.0 / 50% / 16% / 13% | 539 / 59.9 / 50% / 16% / 13% | 1.40x |
+| 128 | 375 / 41.7 / 76% / 29% / 25% | 580 / 64.4 / 48% / 20% / 16% | 494 / 54.9 / 56% / 24% / 19% | 558 / 62.0 / 50% / 21% / 17% | 557 / 61.8 / 50% / 21% / 17% | 1.32x |
+| 142 * | 381 / 42.4 / 76% / 32% / 28% | 583 / 64.8 / 48% / 22% / 18% | 637 / 70.8 / 44% / 21% / 17% | 683 / 75.9 / 41% / 19% / 15% | 688 / 76.5 / 41% / 19% / 15% | 1.53x |
+| 160 | 398 / 44.2 / 74% / 34% / 30% | 588 / 65.4 / 48% / 25% / 20% | 637 / 70.8 / 45% / 24% / 19% | 682 / 75.8 / 42% / 21% / 17% | 691 / 76.7 / 41% / 21% / 17% | 1.48x |
+| 192 | 420 / 46.7 / 72% / 39% / 34% | 614 / 68.2 / 47% / 29% / 23% | 637 / 70.8 / 46% / 28% / 22% | 683 / 75.8 / 43% / 26% / 21% | 703 / 78.1 / 41% / 25% / 20% | 1.46x |
+| 256 | 477 / 53.0 / 68% / 46% / 40% | 631 / 70.1 / 48% / 38% / 30% | 653 / 72.5 / 47% / 36% / 29% | 688 / 76.4 / 44% / 35% / 28% | 720 / 80.0 / 42% / 32% / 26% | 1.32x |
+| zipf (mean 142) | 395 / 43.9 / 73% / 31% / 27% | 625 / 69.5 / 45% / 21% / 17% | 594 / 66.0 / 47% / 22% / 18% | 615 / 68.4 / 46% / 21% / 17% | 618 / 68.7 / 45% / 21% / 17% | 1.43x (two-op T 128: 564) |
+
+**K3 E28 (H 3584)** (Galaxy M 91), cells: total us / us per expert / DRAM % / math % compute cores / math % 110 grid; flat compute = 92 cores, main's ops 88 (11 x 8)
+
+| M | flat | unified | fused (moe_fused_swiglu) | hybrid op T 320 | hybrid op T 128 | best main / flat |
+|---|---|---|---|---|---|---|
+| 64 | 1170 / 41.8 / 91% / 20% / 17% | 2565 / 91.6 / 41% / 10% / 8% | 1840 / 65.7 / 57% / 14% / 11% | 1995 / 71.3 / 53% / 12% / 10% | 1991 / 71.1 / 53% / 12% / 10% | 1.57x |
+| 91 * | 1231 / 44.0 / 88% / 26% / 22% | 2568 / 91.7 / 42% / 14% / 11% | 2187 / 78.1 / 49% / 16% / 13% | 2359 / 84.3 / 45% / 15% / 12% | 2354 / 84.1 / 45% / 15% / 12% | 1.78x |
+| 96 | 1231 / 44.0 / 89% / 29% / 24% | 2569 / 91.7 / 42% / 14% / 11% | 2186 / 78.1 / 49% / 16% / 13% | 2358 / 84.2 / 46% / 15% / 12% | 2354 / 84.1 / 46% / 15% / 12% | 1.78x |
+| 128 | 1313 / 46.9 / 85% / 36% / 30% | 2499 / 89.2 / 44% / 20% / 16% | 2273 / 81.2 / 48% / 21% / 17% | 2415 / 86.3 / 45% / 20% / 16% | 2413 / 86.2 / 45% / 20% / 16% | 1.73x |
+| 160 | 1436 / 51.3 / 79% / 41% / 34% | 2493 / 89.0 / 45% / 25% / 20% | 3050 / 108.9 / 36% / 20% / 16% | 3337 / 119.2 / 33% / 19% / 15% | 2835 / 101.3 / 39% / 21% / 17% | 1.74x |
+| 192 | 1508 / 53.9 / 77% / 47% / 39% | 2513 / 89.7 / 45% / 29% / 23% | 3051 / 109.0 / 37% / 24% / 19% | 3337 / 119.2 / 34% / 21% / 17% | 2820 / 100.7 / 40% / 26% / 21% | 1.67x |
+| 256 | 1708 / 61.0 / 71% / 55% / 46% | 2632 / 94.0 / 44% / 38% / 30% | 3067 / 109.5 / 38% / 31% / 25% | 3339 / 119.3 / 35% / 29% / 23% | 2892 / 103.3 / 40% / 34% / 27% | 1.54x |
+| zipf (mean 91) | 1274 / 45.5 / 85% / 26% / 22% | 2651 / 94.7 / 40% / 12% / 10% | 2269 / 81.0 / 47% / 15% / 12% | 2356 / 84.1 / 45% / 15% / 12% | 2294 / 81.9 / 47% / 15% / 12% | 1.68x (two-op T 128: 2139) |
+
+**K2.7 E12** (Galaxy M 107), cells: total us / us per expert / DRAM % / math % compute cores / math % 110 grid; flat compute = 96 cores, main's ops 88 (11 x 8)
+
+| M | flat | unified | fused (moe_fused_swiglu) | hybrid op T 320 | hybrid op T 128 | best main / flat |
+|---|---|---|---|---|---|---|
+| 64 | 733 / 61.1 / 85% / 17% / 15% | 1166 / 97.2 / 53% / 12% / 10% | 885 / 73.7 / 69% / 16% / 13% | 939 / 78.3 / 65% / 15% / 12% | 942 / 78.5 / 65% / 15% / 12% | 1.21x |
+| 96 | 782 / 65.2 / 82% / 24% / 21% | 1157 / 96.4 / 54% / 18% / 14% | 935 / 77.9 / 67% / 22% / 18% | 992 / 82.6 / 64% / 21% / 17% | 991 / 82.6 / 64% / 21% / 17% | 1.20x |
+| 107 * | 806 / 67.2 / 81% / 26% / 23% | 1163 / 96.9 / 55% / 20% / 16% | 991 / 82.5 / 64% / 24% / 19% | 1026 / 85.5 / 62% / 22% / 18% | 1028 / 85.7 / 62% / 22% / 18% | 1.23x |
+| 128 | 829 / 69.1 / 80% / 31% / 27% | 1166 / 97.2 / 55% / 24% / 19% | 989 / 82.4 / 65% / 28% / 22% | 1026 / 85.5 / 63% / 28% / 22% | 1026 / 85.5 / 63% / 28% / 22% | 1.19x |
+| 160 | 878 / 73.1 / 78% / 37% / 32% | 1197 / 99.8 / 55% / 29% / 23% | 1159 / 96.6 / 57% / 30% / 24% | 1208 / 100.7 / 55% / 29% / 23% | 1369 / 114.1 / 48% / 25% / 20% | 1.32x |
+| 192 | 926 / 77.1 / 77% / 41% / 36% | 1239 / 103.3 / 55% / 34% / 27% | 1195 / 99.6 / 57% / 35% / 28% | 1211 / 100.9 / 56% / 35% / 28% | 1393 / 116.1 / 49% / 30% / 24% | 1.29x |
+| 256 | 1059 / 88.2 / 71% / 48% / 42% | 1283 / 106.9 / 56% / 44% / 35% | 1282 / 106.8 / 56% / 44% / 35% | 1265 / 105.4 / 56% / 44% / 35% | 1439 / 119.9 / 50% / 39% / 31% | 1.19x |
+| zipf (mean 107) | 814 / 67.8 / 80% / 26% / 23% | 1223 / 101.9 / 52% / 19% / 15% | 1056 / 88.0 / 60% / 22% / 18% | 1089 / 90.7 / 58% / 21% / 17% | 1119 / 93.3 / 57% / 21% / 17% | 1.28x (two-op T 128: 1044) |
+
+- Flat is fastest at every point: best of main / flat 1.18-1.33x on GLM-5.3, 1.32-1.53x GLM-5.3-Flash, 1.54-1.78x K3,
+  1.19-1.32x K2.7; zipf 1.28 / 1.43 / 1.68 / 1.28x. Flat holds 71-91% DRAM; main's best 44-69%.
+- Among main's: the fused op wins at <= 128 tokens an expert, then steps up (GLM-5.3 589 -> 698 us at 128 -> 160,
+  GLM-Flash 494 -> 637 at 142, K3 2273 -> 3050 at 160); unified is ~flat in M (87-107 us an expert) and wins above 128 on
+  GLM-Flash / K3. The models' T 320 sends 129-320-token experts to the fused op, slower than unified there (GLM-Flash
+  M 142 637 vs 583, K3 M 160 3050 vs 2493): ~128 is the crossover on these shapes.
+- The one-dispatch hybrid op costs over the separate ops: T 320 (all fused) +5-9% over the fused op alone, its unified
+  half (T 128 at M >= 160) +12-15% over unified alone. Under zipf routing the two-op forward at T 128 is main's best.
+Logs: /localdev/mstaletovic/re_cmp/ (fl_*, mn_*, mz_*, main_all.out, flat_all.out, table.md).
+
+### Fixed costs per call: what sits 90-150 us above the DRAM floor (2026-10-26, one chip bh-lb-09, DRISC-only defaults)
+Why: at the Galaxy loads every model runs ~90-150 us above its DRAM floor (weights + x bf16 + y bf16 at 512 GB/s); K3
+hides it under 28 experts, GLM-5.3 (8) cannot. Two methods: an E x M regression, and per-role zone timestamps.
+
+**1. Regression.** test_flat_balanced_sweep, E 1 / 2 / 4 / 8 / 16 / 28 x M 32 / 64 / 96 / 128 / 160 / 256, uniform,
+rows_hint = M (64-row sub-blocks at every point), 144 points, no hang. The overhead (time - floor) is linear in E at
+each M (rms 1-5 us), with a per-call intercept a(M) and a per-expert slope b(M):
+| M | GLM-5.3 a / b | GLM-5.3-Flash a / b | K3 a / b | K2.7 a / b |
+|---|---|---|---|---|
+| 32 | 18 / 5.7 | 18 / 3.8 | 26 / 1.6 | 18 / 6.7 |
+| 64 | 36 / 4.8 | 28 / 3.1 | 35 / 2.5 | 39 / 5.8 |
+| 96 | 41 / 6.1 | 32 / 4.2 | 45 / 3.4 | 46 / 7.0 |
+| 128 | 49 / 7.8 | 38 / 5.4 | 51 / 5.0 | 53 / 8.9 |
+| 160 | 53 / 9.6 | 44 / 6.5 | 52 / 8.9 | 60 / 10.9 |
+| 256 | 59 / 17.2 | 49 / 12.0 | 62 / 15.2 | 69 / 19.4 |
+(us per call / us per expert.) One global fit over M <= 160, a + b E + c E ceil(M / 64) + d E M, leaves rms 9-13 us
+(max 22-32): a 32-43 us a call, b -2..2.5 an expert, c 1.0-1.6 an expert sub-block, d 19-39 ns an expert row. So:
+the per-call part grows with M (18 -> 53-60 us from M 32 to 160), the per-expert part is 2-7 us at small M and grows
+with M (the x / y traffic, then math above M ~160). Galaxy loads from the per-M fits: GLM-5.3 E 8 M 160 53 + 77 = 130
+(measured 129), GLM-Flash E 9 M 142 ~41 + ~55, K3 E 28 M 91 ~43 + ~90, K2.7 E 12 M 107 ~48 + ~90.
+
+**2. Pieces (zones, MIMO_FL_ZONES=1, the second of 2 calls; new receiver marks W_E0 / W_E1 = each expert's first /
+last gate/up weight block landed on a core, X_FIRST = its first x block; K3 / K2.7 with the every-8-blocks marks off,
+or the profiler buffer drops the tail).** us from the call's first kernel start; floor/expert = (w + x + y) / 512.
+| | GLM-5.3 E 8 M 160 | GLM-Flash E 9 M 142 | K3 E 28 M 91 | K2.7 E 12 M 107 |
+|---|---|---|---|---|
+| call (profiled) / floor | 529 / 393 | 381 / 290 | 1234 / 1087 | 805 / 653 |
+| first weight block landed (min / med) | 8.7 / 10.4 | 8.5 / 10.3 | 12.6 / 14.4 | 9.3 / 10.9 |
+| first x block landed (med / max) | 15.6 / 22.6 | 15.8 / 22.9 | 14.9 / 22.1 | 16.4 / 24.0 |
+| weight landing per expert on a core (med) / gap to the next expert | 47.2 / 3.0 | 31.3 / 3.1 | 36.0 / 3.9 | 54.6 / 2.5 |
+| sum of the gaps (median core) | 45 (1.9-3 early, 6.5 / 11.7 / 16.5 at experts 4-6) | 28 | ~100 | 28 |
+| last weight block landed (med / max) | 439 / 453 | 320 / 341 | 1164 / 1195 | 711 / 764 |
+| last gate/up K loop end (max) | 512 | 365 | 1212 | 780 |
+| kernel end (max: down cores, y writes) | 529 | 381 | 1234 | 805 |
+Fixed-cost table (us at the Galaxy load):
+| fixed cost | GLM-5.3 | GLM-Flash | K3 | K2.7 | scales with | lever |
+|---|---|---|---|---|---|---|
+| head: launch -> first weight block lands (DRAM idle) | 10 | 10 | 14 | 11 | nothing (K3 +4: the 28-expert schedule) | start the first expert's weight stream before the op (in the dispatch / previous op's window) |
+| x head: first x block on the gate/up cores (med / max) | 16 / 23 | 16 / 23 | 15 / 22 | 16 / 24 | nothing; hidden under the weights' head + first expert | - |
+| weight stream excess: (last weight landed max - first landed) - E x floor/expert | 49 | 41 | 93 | 100 | E (per-expert gaps 2.5-3.9 us + backpressure) and M (x / y reads interfere) | see the two rows below |
+| ... of which per-expert switch gaps (median core) | 45 (21 base + 24 backpressure at experts 4-6) | 28 | ~100 | 28 | E | grant the next expert's slots before the current one drains (ring credit at the switch) |
+| ... of which slot skew (last weight landed max - med) | 15 | 20 | 31 | 53 | E (accumulated imbalance across DRISC slots) | balance the slots' loads / work stealing at the end |
+| tail: last weight landed -> last gate/up K loop | 59 | 24 | 17 | 16 | sub-blocks of the last expert (x passes ~13 us each at H 6144) | split the last expert's rows over idle cores / put the smallest expert last |
+| tail: last gate/up -> last down / y write -> kernel end | 17 | 16 | 22 | 25 | nothing much (down of the last sub-block + y) | overlap with the next op (the fused flat + combine already does) |
+| sum (head + stream excess + tail) | 135 | 91 | 146 | 152 | | |
+| measured overhead above floor (profiled call) | 136 | 91 | 147 | 152 | | |
+Takeaways: the head (10-14) and the drain (16-25) are true per-call constants; the rest scales. GLM-5.3's large tail
+is its last expert's three 64-row sub-blocks re-running the x passes after its weights landed (59 us), and its stream
+stalls behind the weight ring at experts 4-6 (backpressure: the ring holds two experts, the compute falls behind).
+K3 / K2.7 pay mostly in the stream (per-expert switch gaps x 28, slot skew 31-53 us).
+Logs / scripts: /localdev/mstaletovic/fixed_cost/ (fc_*.log the sweep, fit.py, pz_* / pz2_* + csv, pieces.py).
+
+### Two attempts at each fixed cost (2026-10-26, one chip bh-lb-09, Galaxy loads; A/B = /localdev/mstaletovic/fc_ab/ab.sh)
+Every attempt: GLM-5.3 E 8 M 160 / GLM-Flash E 9 M 142 / K3 E 28 M 91 / K2.7 E 12 M 107, us a call (median of 10),
+plus a zones run (pieces.py) for the targeted piece, y at M 128 vs the base (bit-exact on every kept change). Base
+525 / 382 / 1232 / 808. No hang in any run. Corrections to the fixed-cost table above, from the new marks: the head is
+the launcher's job post (schedule load 1.4 us, then 4 us of descriptor building + one barrier for all 16 slots), and
+the first math waits for x (first x block med 15.7, max 22.8 us), not the weights; the per-expert switch gap is
+~0.5-1.3 us above a core's normal block spacing (2.0-2.6 us), the rest of the "gaps" was backpressure; K2.7's slot skew
+is tile 1 (all job-1 slots, the NOC1-endpoint tiles, finish ~45 us after the job-0 slots: the x reads' port).
+| fixed cost | attempt | GLM-5.3 | GLM-Flash | K3 | K2.7 | targeted piece | kept? | why |
+|---|---|---|---|---|---|---|---|---|
+| startup | 1a each slot's job count right behind its own descriptor (no barrier over all 16) | 523 | 382 | 1233 | 807 | first weight block -1.3..-1.7 us (med), -1.7..-3.1 (min) | yes | free; the start is x-bound (first x ~16 / 23 us), so the total does not move |
+| startup | 1b 16-tile super-blocks (shorter x head, MIMO_FL_SBT=16) | 565 | 411 | (16 already) | 797 | first x block -1.5 us | no | the head shrinks but GLM-5.3 / Flash lose 30-40 us steady state (more, smaller x reads); K2.7 -11 |
+| expert switch | 2a non-blocking grant refresh in the DRISC loop | 524 | 383 | 1234 | 806 | K2.7 gap 2.57 -> 2.36 us, others same | no | the refresh is rarely on the path (the gaps are backpressure, not the DRISC) |
+| expert switch | 2b 3-expert weight ring (GU_NREG 3 + DRING 3, MT 2) | 539 | 392 | 1245 | 827 | backpressure gaps gone (GLM-5.3 13 / 35 -> 3 us) | no | +12-19 us everywhere: the bigger ring costs more than the stalls it removes |
+| slot skew | 3a slots' cores by hops from the tile that really sends (switch mode: job 1 from the NOC1 endpoint), nearest pairs first | 522 | 381 | 1216 | 808 | GLM-5.3 skew 10 -> 4, K3 30 -> 27, K2.7 55 -> 55 | yes (default) | job 1 was planned from the free tile (10.7 real vs 6.8 believed hops, last slots 15-21); M 256-1024 unchanged / -1% |
+| slot skew | 3b x reads on NOC0 (off tile 1's port), on top of 3a | 548 | 418 | 1295 | 820 | skew gone (K2.7 55 -> 15, K3 -> 6) | no | the skew was tile 1's x port, but x on NOC0 costs more than the skew everywhere |
+| last-expert tail | 4a experts by sub-blocks, most first (uniform: no change) | 522 | 381 | 1234 | 806 | reversed zipf (biggest last) 560 / 412 / 1316 / 849 -> 527 / 398 / 1295 / 825 | yes (default) | the tail is the last expert's sub-blocks after its weights: put the smallest last |
+| last-expert tail | 4b 32-row sub-blocks (MT 1) | 572 | 458 | 1239 | 821 | GLM-5.3 gate/up tail 56 -> 83 us | no | the tail is compute-bound per pass (~13 us a pass at 1 row tile, rp 1): more, smaller sub-blocks cost more |
+| drain | 5a 16 h chains to the down cores (MIMO_FL_DCH=16) | 524 | 380 | 1251 | 805 | drain -2 us on the pair plans | no | within noise on GLM-5.3 / Flash / K2.7, K3 (units, 4 chains) +19 |
+| drain | 5b 48 down cores (smaller final down block, MIMO_FL_ND=48) | 527 | 389 | 1242 | 807 | drain unchanged / +4 | no | the drain is the last h + one row tile of down, not the down width |
+Kept together: 522 / 380 / 1216 / 807 (base 525 / 382 / 1232 / 808), y bit-exact at M 128 on all four, test_closeout_flat
+9/9, test_closeout_plans, the fused flat + combine closeout (2x4) pass; 20k-call soaks of GLM-5.3 / K3 / K2.7 at their
+Galaxy loads pass. (1a relies on the NoC rule the DRISC already uses: a write that has left the NIU is followed on the
+same static VC and route by the atomic.) New probes: MIMO_FL_SBT (super-block width), MIMO_FL_DRISC_PLACE=0 (the old
+round-robin). tt-npe could not model the placement: this install aborts on any workload, its own example included.
+Logs: /localdev/mstaletovic/fc_ab/ (p1a..p5b, *z zones + csv, zbase / zr* zipf, final, soak_*).
+
+### x data movement alone vs next to the weights (2026-10-26, bh-lb-09, GLM-5.3 E 8, one chip)
+One variable set at a time; "off" = NO_MATH H_NODATA YRM_NOWRITE. us a call, M 96 / 160:
+| case | us |
+|---|---|
+| real (base) | 460 / 523 |
+| x only: x DRAM reads + tilize + snakes; no weight reads or forwards (GU_NOREAD DN_NOREAD W_NOFWD + off) | 233 / 336 |
+| x only, x DRAM reads skipped (+XRD_SKIP) | 230 / 333 |
+| x only, relay sends no x bytes (+XMC_NODATA) | 232 / 335 |
+| weights read (not forwarded) + x (W_NOFWD + off) | 418 / 466 |
+| weights read (not forwarded), no x reads (+XRD_SKIP) | 355 / 383 |
+| weight forwards (no DRAM reads) + x (GU_NOREAD DN_NOREAD + off) | 318 / 378 |
+- Alone, x takes 336 us at M 160 (64% of the call). Its DRAM reads (+3) and bytes (+2) cost nothing: it is the snake's
+  per-block rate, 0.54 us a block x 24 blocks x 3 sub-blocks x 8 experts = 311 us + ~25 fixed (the acked NCRISC
+  forwarder, 3 pieces in flight, ~0.4 us round trip: ~30 GB/s a core vs ~10 MB of bfp8 x into every one of the 64
+  gate/up cores = 640 MB of L1 landings a call, 3.8x the weight bytes).
+- Next to the weights x gets slower two ways: its DRAM reads cost +83 us beside the weight streams (vs +3 alone), and
+  the snake loses +42 us sharing NOC0 links with the weight forwards. x alone (336) sits under the weight read floor
+  (383), so the snake's rate is not what binds the real run; the read interference is.
+Logs: /localdev/mstaletovic/xonly/.
+
+### Gate/up placement nearer the banks: the ceiling (2026-10-26, bh-lb-09, Galaxy loads, one chip)
+W_NOFWD (weights still read from DRAM, never written to the gate/up cores) = what perfect proximity could reach.
+us a call at the Galaxy M (GLM-5.3 160 / GLM-Flash 142 / K3 91 / K2.7 107): old placement (DRISC_PLACE=0) 524 / 384 /
+1232 / 807; today's bank-aware placement (3a) 522 / 380 / 1216 / 807; no forwards at all 520 / 384 / 1208 / 775.
+- Left for any placement: 2 / 0 / 8 us. K2.7's 32 us is not distance: its job-1 slots send from tile 1, whose DMA +
+  NoC writes share that tile and port with the x reads (the 45 us job-1 lag); 3a's distance fix did not move it, x on
+  NOC0 (3b) cost more. The ceiling also drops the forwards' link sharing with the x snake, so it overstates placement.
+Logs: /localdev/mstaletovic/fc_ab/ (nofwd_*, place0_*).
+
+### ttsim-perf vs silicon: DRAM / NoC of the flat op (2026-10-26, bh-lb-09 one chip vs ttsim-perf release_bh)
+Why: check whether the ttsim performance model reproduces the x read interference (+83 us at M 160) and the snake's
+0.54 us a block, and whether it could be used to explore layouts off-silicon. ttsim (ttsim-private, built with
+ENABLE_PERF=1) models each DRAM channel as one 759/16 B/cycle pipe shared by its 3 NoC endpoints, +142 cycles on a read
+to an idle channel: no banks / rows / read-write turnaround. Time = device profiler kernel span (wall clock = sim
+cycles), 1.35 GHz.
+- DRISC does not run on ttsim: the model has no cores in the DRAM tiles, and Metal's BH HAL drops the DRAM core type
+  when TT_METAL_SIMULATOR is set; the default plan (DRISC pure) TT_FATALs. Comparisons below use MIMO_FL_DRISC=0
+  (16 Tensix weight readers), a different traffic mix from the default.
+- The sim has an 11 x 10 grid; silicon ran with MIMO_FL_SKIP_COLS=6 to get the same plan (64 gate/up, 24 down, 16
+  readers, 4 relays). Sim wall ~2-10 min for a GLM-5.3 E 8 call pair (5-12 kHz).
+DRAM microbenchmark (scratch, same kernels both sides; W = 2 Tensix readers a bank, 8 KB reads, NOC0; x = 4 cores, 2 KB
+reads of random 12 KB rows, NOC1), us: silicon / sim
+| case | W | x |
+|---|---|---|
+| W, bank 0 (4 MB) | 66.3 / 66.3 | - |
+| x, bank 0 (3 MB) | - | 63.4 / 60.9 |
+| W + x, bank 0 | 115.1 / 82.4 | 102 / 121 |
+| W, 8 banks (32 MB) | 66.6 / 66.7 (503 GB/s both) | - |
+| x, 8 banks (3 MB) | - | 66.2 / 66.0 |
+| W + x, 8 banks | 73.7 / 68.4 | 78.1 / 111.9 |
+| W + x (1 KB x reads, same count) | 69.7 / 67.2 | 72.8 / 105.5 |
+Single streams match to 0-4%. In a mix silicon shares the channel ~fairly (W pays slightly more than x's bytes: +7.0
+us for 3 MB, +3.2 for 1.5 MB); the sim lets W keep the channel and starves x (x 40 vs 28 GB/s), so W pays +1.7 / +0.6.
+Op, GLM-5.3 E 8, DRISC off, us M 96 / 160 (silicon / sim):
+| case | silicon | ttsim |
+|---|---|---|
+| real | 445 / 500 | 432 / 481 |
+| x only (GU_NOREAD DN_NOREAD W_NOFWD + off) | 232 / 335 | 222 / 320 |
+| x only, XRD_SKIP | 229 / 333 | 219 / 317 |
+| weights read + x (W_NOFWD + off) | 397 / 439 | 398 / 438 |
+| weights read, no x (+XRD_SKIP) | 363 / 390 | 386 / 410 |
+| weight forwards + x, no DRAM reads | 234 / 336 | 231 / 320 |
+- Snake rate (x only, slope M 96 -> 160 = 192 blocks): silicon 0.538, ttsim 0.512 us a block: the sim reproduces the
+  acked-forwarder rate (-5%).
+- x read interference (weights+x minus weights alone): silicon 34 / 49 us, ttsim 12 / 28; but the sim's weight-only
+  floor is 6% above silicon (386 / 410 vs 363 / 390) while its 8-bank W microbench matched exactly. So the sim gets the
+  sum right and the split wrong: it under-charges x, over-charges the bare weight stream.
+- With Tensix readers the silicon interference is 34 / 49 us vs DRISC's 63 / 83 (x bytes ~18 / 31 us at 512 GB/s):
+  the DRISC streams roughly double x's excess cost. The DRISC path cannot be checked on ttsim.
+- Side result: on this one-chip E 8 run the Tensix-reader layout is faster than the DRISC default: 444 / 503 (full
+  12 x 10, 32 down) and 445 / 501 (SKIP_COLS 6) vs 460 / 523. Not followed up here.
+Takeaway: ttsim-perf is good to ~5% for NoC / snake work and single DRAM streams, but its DRAM model has no GDDR
+internals and no DRISC, so it cannot explain the +83 us; the silicon data point it adds is that the excess x cost is
+about twice as large next to DRISC streams as next to Tensix reader streams.
+Logs: /localdev/mstaletovic/ttsim_perf/ (si_*, sim_*, op_*, prof_*; scripts/).
+
+### DRAM alone: weights + gathered x, can the mix reach 90%? (2026-10-26, bh-lb-09 one P150 card, 12 x 10)
+models/demos/moe_block/tests/perf/test_dram_xw_mix.py: a generic_op with nothing but NoC reads DRAM -> L1 (no compute,
+forwards, tilize or writes). GLM-5.3 at Galaxy load per call: weights 169.9 MB (bfp4 gate/up/down, E 8) + x 15.7 MB
+(1280 bf16 rows of 12 KB, one row a page interleaved over the banks, a random permutation split in 8 experts of 160)
+= 185.6 MB: 100% of 512 GB/s = 362.5 us, 90% = 403. One kernel: a continuous queue of DEPTH reads (one transaction id
+each) over weight chunks and/or a per-core x read table; spans from the RISC wall clock at 1350 MHz (aiclk 1350 for the
+whole run; host time a launch = span + ~9 us in every case, which checks the conversion). Median of 5.
+Base = weights: per bank the optimal NOC0 core + its row neighbour (16 BRISC readers, NOC0) streaming their bank, 32 KB
+reads, 4 deep; x: 4 cores away from the DRAM columns (BRISC, NOC1), 2 KB segments of the rows, 3 deep. One variable at a
+time from base; us (% of 512 GB/s on the bytes of that mode):
+| variant | weights alone | x alone | both |
+|---|---|---|---|
+| base | 332.7 (99.7) | 264.6 (11.6) | 375.8 (96.5) |
+| x 4 KB / 12 KB reads | | 169 / 151 | 364.4 / 363.9 (99.5 / 99.6) |
+| x depth 1 / 2 / 6 / 12 | | 770 / 388 / 166 / 155 | 868 (41.7) / 493 (73.5) / 364.2 / 364.1 |
+| x barrier batches of 2 / 3 / 6 (not a queue) | | 435 / 341 / 231 | 540 (67.1) / 435 (83.3) / 363.7 (99.7) |
+| x on 2 / 8 / 16 cores | | 517 / 141 / 92 | 622 (58.3) / 363.9 / 363.9 |
+| x 2 KB, depth 2, 8 cores | | 198 | 363.9 (99.6) |
+| x on NOC0 (depth 3 / 6 / near-DRAM cores own bank) | | 251 / 134 / 134 | 556 (65.2) / 443 (81.8) / 452 (80.2) |
+| x near-DRAM 8 / 16 cores, own bank only (NOC1) | | 132 / 68 | 364.0 / 363.6 |
+| x on the weight readers' NCRISC (NOC1), own bank / any bank | | 67 / 84 | 363.7 / 364.2 |
+| x in the weight readers' queue (spread), own bank, 2 KB / 12 KB | | 40 / 31 | 363.9 / 363.7 (99.6 / 99.7) |
+| same, any bank / x first / weights first | | 59 / 39 / 40 | 389.6 (93.0) / 371.3 / 371.4 (97.6) |
+| x paced over 360 us, depth 3 / 6 | | 360 | 378.6 (95.7) / 364.2 (99.5) |
+| x pre-gathered (each bank's slab, 12 KB reads) | | 144 | 363.8 |
+| weight reads 8 / 16 / 64 KB | 380.1 (87.3) / 333.5 / 332.5 | | 399.3 (90.8) / 373.4 / 377.0 |
+| weight depth 2 / 8; 1 / 3 readers a bank | 332.9 / 333.0; 332.6 / 371.3 (89.3) | | 374.6 / 374.6; 375.9 / 391.6 |
+| weights rotating over banks / from mid cores / on NOC1 | 479.9 (69.1) / 495.3 (67.0) / 497.2 (66.7) | | 486.5 / 498.2 / 767.3 (47.2) |
+| weights as the flat op: down third as 9 KB blocks rotating from 32 cores, depth 2 | 355.2 (93.4) | | 384.9 (94.2) |
+| same, down depth 4; + x depth 6; + x in the reader queue 12 KB | 342.6 (96.9) | | 372.8 (97.2); 371.8; 372.3 |
+| K3 (520.1 + 18.3 MB, floor 1051.6): base / down as the flat op / + x in reader queue | 1017.7 / 1080.9 | 345 | 1053.7 (99.8) / 1116.0 (94.2) / 1090.6 (96.4) |
+- Yes, many ways: the combined bytes download at 99.5-99.7% (363.6-364.4 us vs the 362.5 floor) whenever x has enough
+  reads in flight on NOC1: >= 6 x 2 KB a core on 4 cores, or 4 KB+ reads, or 8+ cores, or x issued by the bank readers
+  from their own bank (either RISC). The weight stream then ends +31 us after weights alone = x's bytes at 512 GB/s:
+  random 2 KB row segments cost the banks no more than sequential bytes.
+- What caps a mix is never the banks: (1) x issue rate - with 24 KB of x in flight (base) x is latency-bound (0.41 us
+  a read alone, 0.58 us next to the weights) and becomes the tail (x 375 vs weights 363); depth 2 / barrier batches /
+  2 cores make it worse (67-83%); (2) x on NOC0 (65-82%, even near-DRAM cores reading their own bank); (3) weights on
+  NOC1, rotating over banks, or from cores away from the DRAM (67-69% alone); (4) the flat op's down pattern (9 KB
+  blocks rotating, depth 2) costs 6.6% alone (355 vs 333), depth 4 recovers half of it.
+- For the flat op (inferred, the real kernels are not in this benchmark): the DRAM can take x next to the weights for
+  +31 us, not +83 (DRISC) / +49 (Tensix readers, ttsim section above). The excess is in how x is issued / coupled,
+  not in the banks. Candidates: keep >= ~32-48 KB of x reads in flight continuously (trid queue, not barrier batches)
+  or larger reads, on NOC1; or have the bank readers read their own bank's x rows; down-weight reads 4 deep. The
+  DRISC DMA path is not reproduced here (no DRISC kernels in a generic_op), so its NOC1-endpoint interaction with x
+  stays the open suspect.
+Logs: /localdev/mstaletovic/dram_xw/ (r03_sweep, r04_combos, r05_batch; results.jsonl).
+
+### Continuous read queues in the op (x relays, down weights): no gain, not kept (2026-10-26, bh-lb-09, GLM-5.3 E 8)
+Why: the DRAM-only benchmark (test_dram_xw_mix.py) reached 99.5% once x reads never drained, and the down pattern
+gained ~3% at 4 in flight. Tried as typed layout options (x_read_depth / dw_depth): each relay's row-major chunks
+(se11_xrd.cpp) and each down core's weight blocks (se6_dw.cpp) as a transaction-id queue, pushed in order as each id
+lands, instead of barrier batches. Note: the op's relays already issue a whole 64 KB chunk (32 rows x 2 KB) at once
+and 2 chunks a barrier, so the benchmark's "3 reads in flight" baseline understated today's x issue.
+us a call M 128 / 160 (base 494 / 522), y vs base:
+| variant | us | y |
+|---|---|---|
+| down queue 2 / 4 / 6 | 495 / 522 ; 495 / 526-527 ; 495 / 525 | bit-exact |
+| x queue 2 (3 runs) | 496 / 518 ; 496 / 520 ; 497 / 518 | bit-exact (after the fix below) |
+| x queue 3 / 4 | 497 / 518 ; 498 / 520-523 | intermittently wrong rows (99-213 of 1024) |
+- Pushing a chunk as soon as its id's outstanding count read 0 put stale rows into the tilizer; checking ids only
+  with the read command buffer idle and the newest chunk by the global issued-vs-received count fixed depth 2 but not
+  3 / 4 (cause not found; not chased: the best clean gain is -4 us at M 160 and +2 at M 128).
+- Reading: the drain between batches is not what x costs in the op (+83 us next to the DRISC weight streams vs +31 for
+  its bytes in the benchmark); the remaining suspects are the DRISC path (tile 1 shared with x's NOC1 reads, and its
+  shallow DMA-then-write loop, which feels every extra DRAM latency). Code reverted; the patch is
+  /localdev/mstaletovic/dram_xw/op/read_queues.patch. Logs: /localdev/mstaletovic/dram_xw/op/.
+
+### Why x costs more next to DRISC weights: port sharing, not pipeline depth (2026-10-26, bh-lb-09, one chip)
+Per config three runs: real / weights read + x (W_NOFWD, no math / h / y) / the same without x reads (XRD_SKIP);
+x's excess = the last two's difference (its bytes alone at 512 GB/s: ~18 / 31 us GLM-5.3 M 96 / 160). us a call.
+DRAM_TILEs per bank: NOC0-endpoint (worker NOC0 DRAM traffic: the down weights), NOC1-endpoint (worker NOC1 traffic:
+the x reads; in switch mode also DRISC job 1, sending on NOC0), free (DRISC job 0).
+| GLM-5.3 E 8, M 96 / 160 | real | weights + x | weights, no x | x's excess |
+|---|---|---|---|---|
+| DRISC default (switch mode) | 461 / 522 | 418 / 464 | 355 / 382 | 63 / 82 |
+| Tensix readers (DRISC=0) | 444 / 503 | 393 / 434 | 356 / 381 | 37 / 53 |
+| DRISC units in flight 3 (NS_MAX; default 7) | 478 / 524 | 418 / 466 | 355 / 382 | 63 / 84 |
+| DRISC units in flight 14 | 460 / 525 | 418 / 465 | 355 / 382 | 63 / 83 |
+| DRISC DMA only on the free DRAM_TILE (DRISC_TILES=1) | 526 / 564 | 422 / 458 | 396 / 412 | 26 / 46 |
+| Galaxy loads, DRISC / Tensix readers | real | weights + x | weights, no x | x's excess |
+|---|---|---|---|---|
+| GLM-Flash E 9 M 142 | 381 / 373 | 336 / 325 | 286 / 287 | 50 / 38 |
+| K3 E 28 M 91 | 1218 / 1249 | 1125 / 1146 | 1046 / 1087 | 79 / 59 |
+| K2.7 E 12 M 107 | 807 / 778 | 718 / 684 | 614 / 617 | 104 / 67 |
+- Not latency / pipeline depth: 3 or 14 DRISC units in flight leave x's excess at 63 / 83.
+- Port sharing: with no DMA on the NOC1-endpoint DRAM_TILE x's excess falls 82 -> 46 at M 160 (below the Tensix
+  readers' 53) - the NOC1-endpoint DRAM_TILE's DMA and the x reads share its port into the controller. But one DRAM_TILE
+  a bank caps the gate/up stream (weights alone 382 -> 412) and the real run loses (522 -> 564).
+- Weights alone, DRISC = Tensix readers (GLM-5.3, GLM-Flash, K2.7), DRISC better on K3 (1046 vs 1087); the real runs
+  follow x's excess: Tensix readers -19 / -8 / -29 us on GLM-5.3 / GLM-Flash / K2.7, +31 on K3.
+- (AI clock sampled between runs read the 800 MHz idle clock: not a during-run sample.)
+Logs: /localdev/mstaletovic/drisc_mech/ (go.sh, go.out).
+
+### x read once on the snakes: one snake through both rectangles (2026-10-26, bh-lb-09, pure DRISC, default now)
+Why: each rectangle's relays read all of x (2 rectangles: 2x x's DRAM bytes, 31 MB a call at GLM-5.3 M 160); x's
+excess next to the DRISC streams was 82 us of which ~61 its (doubled) bytes. layout.x_once existed only for the
+multicast delivery (one multicaster into both rectangles), which wedged NOC0 beside the DRISC writes.
+- Try 1, rectangle 0's primary writes every block into both rectangles' snake heads (its relays read / tilize x
+  once, rectangle 1's idle; heads report to it): bit-exact; GLM-5.3 E 8 M 96 / 128 / 160 / 192 431 / 459 / 580 / 588
+  vs 460 / 495 / 526 / 555. The relays' DRAM waits fall 275 -> 85 us, but the primary's acked head writes cap ~35
+  GB/s (20 MB a call at M >= 160); 8 batches in flight / 2 pieces a block no help. (Probe MIMO_FL_X1_HEADS=1.)
+- Try 2 (kept), snake g of rectangle 0 continues into snake g of rectangle 1 (its tail forwards into that head,
+  credits hop by hop): the primary sends every block once, each core forwards it once. Bit-exact on all four models.
+| us a call | GLM-5.3 E 8 | GLM-Flash E 9 | K3 E 28 | K2.7 E 12 |
+|---|---|---|---|---|
+| Galaxy M (160 / 142 / 91 / 107): x twice -> once | 522 -> 490 (-6.1%) | 380 -> 369 (-2.9%) | 1216 -> 1197 (-1.6%) | 807 -> 761 (-5.7%) |
+| M 128 | 495 -> 466 | 373 -> 345 | 1326 -> 1253 | 822 -> 772 |
+| M 32 / 256 | 402 -> 402 ; 635 -> 622 | 306 -> 307 ; 475 -> 469 | 1110 -> 1093 ; 1705 -> 1529 | 694 -> 694 ; 1055 -> 1042 |
+| M 512 / 1024 | 956 -> 1106 ; 1714 -> 2056 | 720 -> 820 ; 1296 -> 1493 | 2785 -> 2536 ; 4983 -> 4939 | 1655 -> 1901 ; 3086 -> 3652 |
+- Above 320 rows an expert (128-row sub-blocks: the ring pins a whole sub-block until its last row pass, so every
+  sub-block boundary refills the snake) the 64-core snake loses to two 32-core ones (+14..20%; K3 still wins). So the
+  default (layout.x_once -1) is on only with the snakes and rows_hint <= 320 - the 64-row sub-block regime; 0 off,
+  1 forces. (Refill mechanism inferred, not profiled.) GLM-5.3 default M 32 / 160 / 320 / 512: 402 / 490 / 743 / 955.
+- Now ahead of the Tensix-reader layouts measured today on GLM-5.3 (503) and K2.7 (778), with no Tensix readers.
+- Block (2x4, traced, device; the fused call no longer forces x_once off - tt_k3_token_split_moe.py): K3 g224 chunk
+  1280 experts + combine 1206 -> 1170 us; GLM-Flash 1231 -> 1231 (that program is not flat-bound).
+- Checks: test_closeout_flat 9/9, test_closeout_plans; 20k-call soaks at the four Galaxy loads, no hang; block PCC
+  tests pass. Logs: /localdev/mstaletovic/x1/ (g*, val*, lm_*, soak_*, blk*), /localdev/mstaletovic/fc_ab/x1j_*.
+- Why it loses above 320 rows (GLM-5.3 E 8 M 512, zones, x once forced on vs off): not the sub-block refill - the
+  final row pass already pops x block by block and se5_recv publishes XCONS a block at a time, so the next sub-block
+  streams in during it. Gate/up compute time rises along the joined snake: rectangle 0's columns 922 -> 950 us, then
+  rectangle 1's cores ~1050 (x read twice: 900-920 everywhere); the primary waits on the chain's credits (XMC_CRED 72
+  vs 18 us). The limit is the joining hop - rectangle 0's tail (column 6) to rectangle 1's head (column 13), 7 NOC0
+  hops east through the down-core / DRAM-column middle - carrying ~27 GB/s of 34.8 KB blocks at M 512 (20 GB/s at M
+  160). Deeper forwarding makes it worse (contention, not round trips): x once, forward depth 3 / 6 / 12, M 160 /
+  512 / 1024: 490 / 1102 / 2056 ; 514 / 1146 / 2138 ; 510 / 1139 / 2109 (x twice, depth 12: 521 / 962 / 1688). The
+  default stays rows_hint <= 320. To go further: a short joining hop (gate/up rectangles adjacent in the plan) or
+  the crossing off the congested NOC0 row.
+
+### x read once under other routings (2026-10-26, bh-lb-09, one chip, Galaxy totals E x M)
+Patterns (routings.json in the log dir): uniform; zipf (hot first) / reversed; hot50 (one expert half the rows);
+half_empty (every other expert 2 M, the rest 0); random (Dirichlet 1, seed 7). us a call, x read twice / read once
+(rectangle 0's relays, NOC0 forwarding: 33a91e614b9) / read once (eastern rectangle's relays, NOC1 forwarding - the
+gate/up receiver's h writes then go on NOC0; not committed). Bit-exact on every pattern's real rows (padding rows of
+counts that are not multiples of 32 are never written and hold leftovers).
+| | uniform | zipf | zipf_rev | hot50 | half_empty | random |
+|---|---|---|---|---|---|---|
+| GLM-5.3 E 8 (160) | 534 / 493 / 484 | 530 / 515 / 506 | 524 / 512 / 510 | 555 / 549 / 542 | 387 / 411 / 405 | 520 / 537 / 529 |
+| GLM-Flash E 9 (142) | 387 / 367 / 360 | 399 / 383 / 380 | 401 / 387 / 382 | 409 / 401 / 403 | 293 / 315 / 305 | 390 / 390 / 384 |
+| K3 E 28 (91) | 1222 / 1195 / 1188 | 1281 / 1251 / 1272 | 1294 / 1262 / 1273 | 1227 / 1207 / 1195 | 776 / 700 / 711 | 1254 / 1207 / 1228 |
+| K2.7 E 12 (107) | 803 / 758 / 750 | 812 / 803 / 788 | 821 / 807 / 787 | 795 / 738 / 745 | 539 / 547 / 522 | 817 / 816 / 809 |
+- Read once wins where the weights dominate; it loses when few experts carry all rows (GLM-5.3 / GLM-Flash
+  half_empty +4..8%, GLM-5.3 random +2..3%): the same x per core in a shorter call - the one snake's x rate is then
+  the bound (as above 320 rows), the two read-twice snakes are not.
+Logs: /localdev/mstaletovic/routings/ (go.sh, go.out, routings.json).
+
+### x read once, other layouts tried (2026-10-26, GLM-5.3 E 8, us M 128 / 160 / 512; read twice 495 / 526 / 962)
+- Joined snake, the eastern rectangle's relays + NOC1 forwarding (probes MIMO_FL_X1_RECT=1 MIMO_FL_X_CHAIN_NOC=1):
+  455 / 483 / 1058 (rectangle 0 + NOC1 461 / 497 / 1230, rectangle 1 + NOC0 462 / 542 / 1196). Not the default: the
+  gate/up receiver's h writes move to NOC0 (needs the long wedge soak first).
+- Two snakes, x read once, each primary hands its half to the other (MIMO_FL_XFWD now runs on the snakes; the hand-over
+  under its own transaction id 15, issued before the snake sends and retired in the background): 454 / 587 / 1267,
+  bit-exact (with the old write barrier after the snake sends: 463 / 619 / 1489). A deeper hand-over ring
+  (MIMO_FL_FW_SLOTS=4) does not fit the relay arena. Limit: each primary now sends 1.5x today's bytes, above what
+  one relay NCRISC's acked writes reach (~35 GB/s).
+Next: keep every RISC at <= today's load - the primaries read nothing and feed only their snake; the two helpers read /
+tilize half of x each and write every super-block into both primaries' landing rings.
+
+### x read once by the helpers: default (2026-10-26, bh-lb-09, one chip; block on the 2x4)
+Every read-once form so far overloaded one RISC (the joined snake's crossing, or a primary sending 1.5x). Now (plan
+xdual, layout.x_once -1): the primaries read nothing and feed only their own snake (as when reading twice); each
+rectangle's one helper reads / tilizes the super-blocks g % 2 == k and writes every one into both primaries' landing
+rings (helper k = ring k, 2 slots each; arrivals on semaphore {4, 7}[k] there, credits back on 5 / 6). x leaves DRAM
+once, two 32-core snakes, the crossing is half of x each way, no relay sends more than a primary did before.
+Bit-exact (M 128 and six routings' real rows). us a call, x read twice -> helpers:
+| | M 32 | Galaxy M | M 128 | M 256 | M 512 | M 1024 |
+|---|---|---|---|---|---|---|
+| GLM-5.3 E 8 (160) | 402 -> 403 | 522 -> 483 | 495 -> 458 | 635 -> 560 | 956 -> 876 | 1714 -> 1636 |
+| GLM-Flash E 9 (142) | 306 -> 306 | 380 -> 355 | 373 -> 342 | 475 -> 458 | 720 -> 687 | 1296 -> 1286 |
+| K3 E 28 (91) | 1110 -> 1093 | 1216 -> 1181 | 1326 -> 1237 | 1705 -> 1545 | 2785 -> 2554 | 4983 -> 4961 |
+| K2.7 E 12 (107) | 694 -> 694 | 807 -> 749 | 822 -> 763 | 1055 -> 931 | 1655 -> 1609 | 3086 -> 3075 |
+| routings (GLM-5.3 / GLM-Flash / K3 / K2.7) | uniform | zipf | zipf_rev | hot50 | half_empty | random |
+|---|---|---|---|---|---|---|
+| read twice | 534 / 387 / 1222 / 803 | 530 / 399 / 1281 / 812 | 524 / 401 / 1294 / 821 | 555 / 409 / 1227 / 795 | 387 / 293 / 776 / 539 | 520 / 390 / 1254 / 817 |
+| helpers | 479 / 358 / 1181 / 748 | 486 / 359 / 1238 / 763 | 485 / 363 / 1250 / 769 | 520 / 384 / 1216 / 739 | 356 / 271 / 699 / 467 | 499 / 366 / 1202 / 780 |
+- No per-call choice needed: never slower anywhere measured. The one-snake form stays as layout.x_once 1 (and the auto
+  fallback for two-rectangle plans with more helpers, rows_hint <= 320); probe MIMO_FL_XDUAL=0/1 overrides.
+- Block (2x4 traced, device): K3 g224 chunk 1280 experts + combine 1206 (twice) / 1170 (one snake) / 1164 us, block
+  1982 -> 1944; GLM-Flash 1231 (combine-bound). test_closeout_flat 9/9, test_closeout_plans, 20k-call soaks at the four
+  Galaxy loads (no hang). Logs: /localdev/mstaletovic/x1/ (xd*, xdv*, val5*, blk5*), routings/ (rt_*_xd).
+
+## FlatRoutedExpert.replanned: one weight set, a plan per chunk (2026-10-26)
+
+A model running several chunk sizes on one layer's weights (GLM-5.3-Flash on the MoE block: chunks 2048 / 5120 /
+8192) needs a plan per capacity m, and 42 layers cannot hold a second weight copy (~510 MB a chip each at bfp4).
+replanned(m, layout) returns a copy with its own plan sharing w_gu / w_d / gidx / done; it asserts the two plans pack
+the weights the same way (_weight_packing: the weight cache's key, now one function) and use the same down
+coordinators (the done words). GLM's flat cache key is the same for the ag layout and the block's (985f637a8d15).

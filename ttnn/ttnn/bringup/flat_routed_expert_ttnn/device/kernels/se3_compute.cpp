@@ -379,6 +379,9 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
 }
 
 #if defined(SE_GU_RP) && defined(SE_DYN) && defined(SE_GU_ONLY)
+#ifndef SE_GU_KG
+#define SE_GU_KG 1  // gate/up K blocks per handshake (wait / pop), row passes only
+#endif
 uint32_t x_front = 0;  // x blocks popped (the ring's read slot = x_front % SE_XSLOTS)
 // Row passes (SE_GU_RP row tiles each): the sub-block keeps MT rows for the whole pipeline (x delivery, h exchange,
 // down passes cost ~3.5 us per sub-block on K3 whatever its rows), but DST (4 fp32 tiles) only holds RP x 2 NP
@@ -420,6 +423,34 @@ FORCE_INLINE void gate_up_rp(uint32_t e, bool last, uint32_t ph0, uint32_t rows)
 #else
             tile_regs_acquire();
 #endif
+#if SE_GU_KG > 1
+            // K groups: SE_GU_KG weight / x blocks waited for and popped at once (one handshake per group, not per
+            // block); the matmul still walks them block by block (same accumulation order: bit-exact)
+            for (uint32_t b = 0; b < nk_gu; b += SE_GU_KG) {
+                const uint32_t gn = nk_gu - b < SE_GU_KG ? nk_gu - b : SE_GU_KG;
+                cb_wait_front(x_cb, fin ? gn * xblk : (b + gn) * xblk);
+                wblock_dyn(e * nk_gu + b + gn - 1, ph0 + b + gn - 1);  // (waits for the whole group)
+                const uint32_t f = x_front % xs, wr = d_popped % ring;
+                for (uint32_t g = 0; g < gn; ++g) {
+                    const uint32_t xb = fin ? g : b + g;  // the block's place after the ring's front
+                    const uint32_t xo =
+                        static_cast<uint32_t>(static_cast<int32_t>((f + xb) % xs) - static_cast<int32_t>(f)) * xblk;
+                    const uint32_t w =
+                        static_cast<uint32_t>(static_cast<int32_t>(ph0 + b + g) - static_cast<int32_t>(wr)) * slot;
+                    for (uint32_t k = 0; k < kblk; ++k) {
+                        matmul_block(x_cb, in1_cb, xo + x_row0 + r0 * kblk + k, w + k * gw, 0, SE_WT, gw, rr, kblk);
+                    }
+                }
+                if (fin) {
+                    cb_pop_front(x_cb, gn * xblk);
+                    x_front += gn;
+                    if (last) {
+                        cb_pop_front(in1_cb, gn * slot);
+                        d_popped += gn;
+                    }
+                }
+            }
+#else
             for (uint32_t b = 0; b < nk_gu; ++b) {
                 uint32_t xo = 0;
 #ifdef SE_WAITZ
@@ -452,6 +483,7 @@ FORCE_INLINE void gate_up_rp(uint32_t e, bool last, uint32_t ph0, uint32_t rows)
                     }
                 }
             }
+#endif
             tile_regs_commit();
         }
         tile_regs_wait();

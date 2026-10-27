@@ -11,6 +11,7 @@ import pytest
 import torch
 from loguru import logger
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert, act_ref
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
 import ttnn
 
@@ -31,7 +32,9 @@ def test_flat_scale_probe(device, wdtype, act, down_fp32):
     if os.environ.get("GLM_PROBE_PREQ") == "1":  # weights already on the dtype's grid: the host quantizer is exact
         weights = [[tuple(q(w_) for w_ in ws) for ws in weights[0]]]
     gids = [list(range(E))]
-    op = FlatRoutedExpert(device, weights, m=M, H=H, I=I, gids=gids, n_global=NG, wdtype=wdtype, act=act, pin=1)
+    op = FlatRoutedExpert(
+        device, weights, m=M, H=H, I=I, gids=gids, n_global=NG, wdtype=wdtype, act=act, pin=1, layout=LEGACY
+    )
     counts = [200 + 37 * (e % 7) for e in range(E)]
     offs = [sum(-(-c // 32) * 32 for c in counts[:e]) for e in range(E)]
     rows = offs[-1] + -(-counts[-1] // 32) * 32

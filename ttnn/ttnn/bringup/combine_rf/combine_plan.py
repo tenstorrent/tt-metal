@@ -573,6 +573,7 @@ constexpr uint32_t P = get_compile_time_arg_val(9), ROWS_CAP = get_compile_time_
 constexpr uint32_t M = get_compile_time_arg_val(11), CH = get_compile_time_arg_val(12), HS = get_compile_time_arg_val(13);
 constexpr uint32_t N = R * C, T = N * S * K, SK = S * K;
 constexpr uint32_t al64(uint32_t v) { return (v + 63) / 64 * 64; }
+constexpr uint32_t gcd_(uint32_t a, uint32_t b) { return b ? gcd_(b, a % b) : a; }
 constexpr uint32_t CNT = al64(2 * EPC * 4);  // a chunk's counts per expert, then its bucket prefix per expert
 // token-major rows (TM): core p plans tokens [p TPC, (p + 1) TPC) of every home (its ids / weights one run per home,
 // 64 B of slack for a run's unaligned start), so an expert's rows come out in (token, home, k) order
@@ -581,15 +582,19 @@ constexpr uint32_t IDB = TM ? N * RUNB : al64(CH * 2);
 constexpr uint32_t O_IDS = 0, O_WTS = O_IDS + IDB, O_HOME = O_WTS + IDB;
 constexpr uint32_t O_LST = O_HOME + al64(SK * 2);           // my local entries: chunk index << 8 | expert
 constexpr uint32_t O_BUCK = O_LST + al64(CH * 4);           // CH entries x 8 bytes, sorted by expert
-constexpr uint32_t O_MYC = O_BUCK + al64(CH * 8);           // my counts (sent to everyone)
+constexpr uint32_t O_MYC = O_BUCK + al64(__BUCKB__);        // my counts (sent to everyone) - the bucket region also
+                                                            // stages the row pages (64 B a token: more than CH x 8 at K < 8)
 constexpr uint32_t O_CIN = O_MYC + CNT;                     // M x counts
 constexpr uint32_t STG = get_compile_time_arg_val(14);      // slice staging bytes (all of a core's slices at once)
 constexpr uint32_t XP = al64((M + 2) * 4);                  // per expert: total, region, then each chunk's first row
 constexpr uint32_t O_XP = O_CIN + M * CNT;                  // EPC x XP: filled by the experts' owner cores
 constexpr uint32_t O_STG = O_XP + EPC * XP;
 constexpr uint32_t O_PART = O_STG + al64(STG);              // home partial (plan words 0..544)
-constexpr uint32_t O_TIDX = O_PART + al64(544 * 4), O_TAB = O_TIDX + al64(ROWS_CAP * 4);
-constexpr uint32_t O_PLAN = O_TAB + al64(ROWS_CAP * 8), O_CNT = O_PLAN + 4096, O_REG = O_CNT + al64(NG * 4);
+// (a core's rows [R0, R1): the plan's 32-row tiles split M ways - at most INSTR, the worst case's share; the plan
+// tensors in DRAM hold ROWS_CAP, every row a chip can get)
+constexpr uint32_t INSTR = (ROWS_CAP / 32 + M - 1) / M * 32;
+constexpr uint32_t O_TIDX = O_PART + al64(544 * 4), O_TAB = O_TIDX + al64(INSTR * 4);
+constexpr uint32_t O_PLAN = O_TAB + al64(INSTR * 8), O_CNT = O_PLAN + 4096, O_REG = O_CNT + al64(NG * 4);
 constexpr uint32_t O_DBG = O_REG + al64(NG * 4);  // 64 bytes of timestamps, then 512 slice records
 // deterministic combine (DET): per owned accumulator, per home token, the source chips of its rows in a fixed order -
 // the order the accumulator adds them in, whatever the arrival timing (combine_plan docstring)
@@ -643,7 +648,12 @@ void kernel_main() {
     // (JW) one page per token of its K ids then its K weights ([N S, 2 K] uint16, RP = 4 K bytes; wts = ids)
     constexpr uint32_t RP = __RPAGE__, JW = __RJOINT__, RB = 2 * K;  // (RB: one row's ids, or weights, in bytes)
     constexpr uint32_t PT = __RPT__;  // tokens per page (joint rows: PT rows of RP bytes a page; 1: a page a row)
-    static_assert(PT == 1 || (JW && RP == 64), "multi-token pages: joint rows only");
+    // (staging stride: 64 B a row with one row a page; RP with multi-token pages - a run is one read that keeps its
+    // source's 64 B alignment, so it starts SH rows into the staging when its first row is not 64 B aligned: rows come
+    // back to a 64 B boundary every RA = lcm(64, RP) / RP rows - 2 at K 8, 8 at K 6 (DeepSeek V4's 24 B rows))
+    constexpr uint32_t SR = PT == 1 ? 64 : (RP ? RP : 64);
+    constexpr uint32_t RA = 64 / gcd_(64, SR);
+    static_assert(PT == 1 || (JW && PT % RA == 0), "multi-token pages: joint rows only, whole 64 B runs a page");
     const InterleavedAddrGen<true> ids_g = {.bank_base_address = ids_addr, .page_size = RP ? RP * PT : T * 2};
     const InterleavedAddrGen<true> w_g = {.bank_base_address = w_addr, .page_size = RP ? RP * PT : T * 2};
     // (row pages land 64 bytes apart in local scratch, free until the sort: a DRAM read keeps its source's 64-byte
@@ -660,18 +670,19 @@ void kernel_main() {
             noc_async_read(get_noc_addr(0, g) + e0 * 2 - d0, dst, al64(n * 2 + d0));
             return dst + d0;
         } else {
-            const uint32_t r0 = e0 / K, rows = n / K;
+            const uint32_t r0 = e0 / K, rows = n / K, sh = r0 % RA;
             if constexpr (PT == 1) {
                 for (uint32_t r = 0; r < rows; ++r) noc_async_read(get_noc_addr(r0 + r, g), stg + r * 64, RP);
-            } else {  // (whole runs of rows per page: one read each, rows already 64 bytes apart)
+            } else {  // (whole runs of rows per page: one read each, rows SR apart)
                 for (uint32_t r = r0; r < r0 + rows;) {
                     const uint32_t first = r % PT, cnt = PT - first < r0 + rows - r ? PT - first : r0 + rows - r;
-                    noc_async_read(get_noc_addr(r / PT, g) + first * RP, stg + (r - r0) * 64, cnt * RP);
+                    noc_async_read(get_noc_addr(r / PT, g) + first * RP, stg + (r - r0 + sh) * SR, cnt * RP);
                     r += cnt;
                 }
             }
-            pk_src[npk] = stg, pk_dst[npk] = dst, pk_dw[npk] = dst_w, pk_rows[npk++] = rows;
-            stg += rows * 64;
+            pk_src[npk] = stg + sh * SR, pk_dst[npk] = dst, pk_dw[npk] = dst_w, pk_rows[npk++] = rows;
+            stg += (rows + sh) * SR;
+            stg = (stg + 63) & ~63u;
             return dst;
         }
     };
@@ -692,11 +703,23 @@ void kernel_main() {
     if constexpr (RP != 0) {
         // (RP == 0 ||: a static_assert in a discarded if-constexpr branch of a non-template is still checked)
         static_assert(RP == 0 || (RP <= 64 && RB % 4 == 0 && RP == (JW ? 2 : 1) * RB), "row pages");
-        // (unpacked by local NoC copies, one per row and array: scalar L1 copies cost ~50 cycles a word here)
+        // (unpacked by local NoC copies, one per row and array: scalar L1 copies cost ~50 cycles a word here; a row
+        // under 16 B - K < 8, MiniMax M3's top-4 - by words: a NoC copy needs source and destination equally 16 B
+        // aligned, and the packed destination rows alternate)
         for (uint32_t q = 0; q < npk; ++q) {
             for (uint32_t r = 0; r < pk_rows[q]; ++r) {
-                noc_async_read(get_noc_addr(pk_src[q] + r * 64), pk_dst[q] + r * RB, RB);
-                if (pk_dw[q]) noc_async_read(get_noc_addr(pk_src[q] + r * 64 + RB), pk_dw[q] + r * RB, RB);
+                if constexpr (RB % 16 == 0) {
+                    noc_async_read(get_noc_addr(pk_src[q] + r * SR), pk_dst[q] + r * RB, RB);
+                    if (pk_dw[q]) noc_async_read(get_noc_addr(pk_src[q] + r * SR + RB), pk_dw[q] + r * RB, RB);
+                } else {
+                    const uint32_t* sw = reinterpret_cast<const uint32_t*>(pk_src[q] + r * SR);
+                    uint32_t* di = reinterpret_cast<uint32_t*>(pk_dst[q] + r * RB);
+                    for (uint32_t i = 0; i < RB / 4; ++i) di[i] = sw[i];
+                    if (pk_dw[q]) {
+                        uint32_t* dw = reinterpret_cast<uint32_t*>(pk_dw[q] + r * RB);
+                        for (uint32_t i = 0; i < RB / 4; ++i) dw[i] = sw[RB / 4 + i];
+                    }
+                }
             }
         }
         noc_async_read_barrier();
@@ -865,7 +888,8 @@ void kernel_main() {
         reg[e] = off;
         off += (s_ + 31) / 32 * 32;
     }
-    const uint32_t NT = off / 32, R0 = (p * NT / M) * 32, R1 = ((p + 1) * NT / M) * 32;
+    const uint32_t NT = (off < ROWS_CAP ? off : ROWS_CAP) / 32;  // (past the worst case: flagged, plan word 601)
+    const uint32_t R0 = (p * NT / M) * 32, R1 = ((p + 1) * NT / M) * 32;
     uint32_t* tidx = reinterpret_cast<uint32_t*>(B + O_TIDX);
     uint32_t* tab = reinterpret_cast<uint32_t*>(B + O_TAB);
     // (slices: issue every read, one barrier, then copy)
@@ -1129,7 +1153,18 @@ def _mc2_det_bytes(M, A, N, NG, VM, S, K):
     )
 
 
-def _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, home_rows=0, idb=None):
+def _bucket_bytes(CH, K, row_pages=False, joint=False):
+    """The multi-core planner's bucket region: CH entries x 8 B, and the row pages staged there first (64 B a token,
+    ids and weights once each or once joint: more than the entries at K < 8 - MiniMax M3's top-4)."""
+    return max(CH * 8, 64 * (1 if joint else 2) * CH // K if row_pages else 0)
+
+
+def _mc2_inst_rows(rows_cap, M):
+    """A multi-core planner core's rows at most: the plan's 32-row tiles (rows_cap / 32 at most) split M ways."""
+    return (rows_cap // 32 + M - 1) // M * 32
+
+
+def _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, home_rows=0, idb=None, K=8, row_pages=False, joint=False):
     al = lambda v: (v + 63) // 64 * 64  # noqa: E731
     CNT = al(2 * EPC * 4)
     XP = al((M + 2) * 4)
@@ -1137,14 +1172,14 @@ def _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, home_rows=0, idb=None):
         2 * (al(CH * 2) if idb is None else idb)
         + al(HS * M * 2)
         + al(CH * 4)
-        + al(CH * 8)
+        + al(_bucket_bytes(CH, K, row_pages, joint))
         + CNT
         + M * CNT
         + EPC * XP
         + _mc2_stg(M, EPC, rows_cap, home_rows)
         + al(544 * 4)
-        + al(rows_cap * 4)
-        + al(rows_cap * 8)
+        + al(_mc2_inst_rows(rows_cap, M) * 4)
+        + al(_mc2_inst_rows(rows_cap, M) * 8)
         + 4096
         + 2 * al(NG * 4)
         + 64
@@ -1947,7 +1982,8 @@ def combine_planner_prepare(
         assert not joint or row_pages
         HR = S if row_pages else 0  # (row pages: chunk ids + weights land in the bucket region, the home ids in the
         # (slice staging: 64 B a token row, ids and weights staged once each, or once joint)
-        assert not row_pages or (2 * K <= 64 and 64 * (1 if joint else 2) * CH // K <= CH * 8)
+        assert not row_pages or 2 * K <= 64
+        buckb = _bucket_bytes(CH, K, row_pages, joint)
 
         V2 = os.environ.get("FC_PLAN_V", "2") == "2"
         assert V2 or (CH < (1 << 13) and GS <= 8), (CH, GS)
@@ -1958,7 +1994,9 @@ def combine_planner_prepare(
         TM = bool(token_major and V2 and det is None and S % M == 0)
         idb = N * ((S // M * K * 2 + 63) // 64 * 64 + 64) if TM else None
         mc_bytes = (
-            _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, HR, idb) if V2 else _mc_l1_bytes(M, CH, HS, EPC, NG, rows_cap)
+            _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, HR, idb, K, row_pages, joint)
+            if V2
+            else _mc_l1_bytes(M, CH, HS, EPC, NG, rows_cap)
         )
         if det is not None:
             assert V2, "det: the V2 multi-core planner"
@@ -2013,6 +2051,7 @@ def combine_planner_prepare(
                     ttnn.KernelDescriptor(
                         kernel_source=wsub(_PLANNER_MC2 if V2 else _PLANNER_MC)
                         .replace("__RPAGE__", str((4 if joint else 2) * K if row_pages else 0))
+                        .replace("__BUCKB__", str(buckb))
                         .replace("__RJOINT__", str(int(joint)))
                         .replace("__RPT__", str(tokens_per_page))
                         .replace("__DET__", str(int(det is not None)))
@@ -2184,6 +2223,7 @@ def combine_planner_prepare(
         k = (int(ids.buffer_address()), int(wts.buffer_address()))
         if state.get("key") != k:
             state["key"], state["desc"] = k, build(ids, wts)
+            ttnn.freeze_program_hashes(state["desc"])  # (hash stored once: not re-hashed per call)
         ttnn.generic_op(
             [ids, wts, outs["counts"], outs["regions"], outs["token_index"], outs["table"], outs["plan"]]
             + ([outs["dord"]] if "dord" in outs and (cores is None or colmc) else []),

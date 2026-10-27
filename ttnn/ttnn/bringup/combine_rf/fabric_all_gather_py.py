@@ -1129,6 +1129,7 @@ def fabric_all_gather(
     if dkey is not None:
         if len(_DESC_CACHE) >= 256:
             _DESC_CACHE.pop(next(iter(_DESC_CACHE)))
+        ttnn.freeze_program_hashes(desc)  # (hash stored once: not re-hashed per call)
         _DESC_CACHE[dkey] = (mesh_device, desc)
     # (extra = (tensors, fn((r, c)) -> (cbs, kernels)): another op merged in, off worker_cores(plan(..)[0]))
     return ttnn.generic_op(([] if extra is None else list(extra[0])) + [input_tensor, output], desc)

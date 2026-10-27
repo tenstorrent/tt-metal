@@ -59,7 +59,11 @@ void kernel_main() {
     auto read_seg = [&](uint32_t row, uint32_t j, uint32_t dst) {
         const uint32_t b = j * seg;
         for (uint32_t q = 0; q < seg; q += pread) {
+#ifdef XRD_HALF  // (perf probe MIMO_FL_XRD_HALF: half of each read - fp8 x's DRAM bytes, the same requests; garbage)
+            noc_async_read(get_noc_addr(row * ppr + (b + q) / row_bytes, xg, (b + q) % row_bytes), dst + q, pread / 2);
+#else
             noc_async_read(get_noc_addr(row * ppr + (b + q) / row_bytes, xg, (b + q) % row_bytes), dst + q, pread);
+#endif
         }
     };
 #ifdef XRD_INDEXED
@@ -68,18 +72,37 @@ void kernel_main() {
         0,
         InterleavedAddrGen<true>{
             .bank_base_address = get_arg_val<uint32_t>(get_compile_time_arg_val(7)), .page_size = 4});
-#ifdef XRD_IDX_ALL
-    // the call's whole token index in this relay's arena (RT CT 7 + 1), read once below, after the schedule
-    const uint32_t idx_l1 = get_arg_val<uint32_t>(get_compile_time_arg_val(7) + 1);
-#else
     const uint32_t idx_l1 = get_write_ptr(tt::CBIndex::c_7);  // MT x 32 words (<= 512 B <= 2 SE_DYN_HALF)
 #endif
-#endif
     uint32_t in_batch = 0, l1 = 0;
+#ifdef XRD_DRISC
+    // x from the DRISCs (se_drisc.hpp SE_XSEM_*): no DRAM reads here. Program semaphores, zero at the launch: the
+    // credit (batches reserved), published as they are reserved; per chunk slot the rows landed, a slot ready once its
+    // count reaches the rows staged into it this call. (The ids as se_drisc.hpp: that header's DRISC-L1 helpers are
+    // NOC0-only, this RISC reads on NOC1.)
+    constexpr uint32_t rmc = XRD_RMC, arr_ids[5] = {1, 2, 6, 11, 12};
+    static_assert(rmc <= 5, "DRISC x: at most 5 row-major chunks (semaphores)");
+    volatile tt_l1_ptr uint32_t* rsv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));
+    volatile tt_l1_ptr uint32_t* arr[rmc];
+    uint32_t arr_need[rmc];
+    for (uint32_t p = 0; p < rmc; ++p) {
+        arr[p] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(arr_ids[p]));
+        arr_need[p] = 0;
+    }
+    uint32_t n_rsv = 0, xq = 0;  // (batches reserved, chunks staged this call)
+#endif
     auto flush = [&]() {
         {
             ZW("XRD_DRAM");
+#ifdef XRD_DRISC
+            for (uint32_t p = 0; p < rmc; ++p) {
+                while (*arr[p] < arr_need[p]) {
+                    invalidate_l1_cache();
+                }
+            }
+#else
             noc_async_read_barrier();
+#endif
         }
 #ifndef XRD_SOLO
         cb_push_back(rm_cb, 32 * in_batch);
@@ -128,17 +151,15 @@ void kernel_main() {
             tot > soff ? (tot - soff + stride - 1) / stride : 0;
         cb_push_back(tt::CBIndex::c_6, 1);
     }
-#if defined(XRD_INDEXED) && defined(XRD_IDX_ALL)
-    {  // every row this call reads: up to the end of the last active region (regions are padded to 32 rows)
-        uint32_t rows = 0;
-        for (uint32_t a = 0; a < dyn.n_act; ++a) {
-            const uint32_t end = dyn.off[a] + (dyn.cnt[a] + 31) / 32 * 32;
-            rows = end > rows ? end : rows;
+#if defined(XRD_READY) && defined(XRD_INDEXED)
+    {  // x lands during this program (the caller's dispatch): its ports count in here once their rows are in DRAM
+        volatile tt_l1_ptr uint32_t* rdy =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(get_compile_time_arg_val(7) + 1));
+        ZW("XRD_READY");
+        while (*rdy < XRD_READY) {
+            invalidate_l1_cache();
         }
-        if (rows) {
-            noc_async_read(idx_base, idx_l1, rows * 4);
-            noc_async_read_barrier();
-        }
+        *rdy = *rdy - XRD_READY;  // (re-armed: every increment of this call is in)
     }
 #endif
     for (uint32_t a = 0; a < dyn.n_act; ++a) {
@@ -149,17 +170,14 @@ void kernel_main() {
 #endif
         const uint32_t subs = (count + mt * 32 - 1) / (mt * 32);
         for (uint32_t s = 0; s < subs; ++s) {
-#if defined(XRD_INDEXED) && defined(XRD_IDX_ALL)
-            volatile tt_l1_ptr uint32_t* idx =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1) + off + s * mt * 32;
-#elif defined(XRD_INDEXED)
+#if defined(XRD_INDEXED)
             volatile tt_l1_ptr uint32_t* idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
             {
                 bool mine = false;  // does this relay take any of the sub-block's super-blocks
                 for (uint32_t j = 0; j < nsb && !mine; ++j) {
                     mine = (g + j) % stride == soff;
                 }
-#ifdef XRD_SOLO_NOIDX  // (probe MIMO_FL_XSOLO_NOIDX: no token-index read / barrier per sub-block)
+#if defined(XRD_SOLO_NOIDX) || defined(XRD_DRISC)  // (probe MIMO_FL_XSOLO_NOIDX; DRISC x: the DRISCs read them)
                 mine = false;
 #endif
                 if (mine) {
@@ -182,9 +200,20 @@ void kernel_main() {
                         cb_reserve_back(rm_cb, 32 * batch);
 #endif
                         l1 = get_write_ptr(rm_cb);
+#ifdef XRD_DRISC
+                        *rsv = ++n_rsv;  // (the DRISCs may write this batch's chunks now)
+#endif
                     }
                     const uint32_t dst = l1 + in_batch * 32 * seg;
                     const uint32_t r0 = s * mt * 32 + m * 32;
+#ifdef XRD_DRISC
+                    (void)dst;
+                    arr_need[xq++ % rmc] += r0 < count ? (count - r0 < 32 ? count - r0 : 32) : 0;
+                    if (++in_batch == batch) {
+                        flush();
+                    }
+                    continue;
+#endif
 #ifdef XRD_SKIP_READS
                     // perf experiment only: no DRAM traffic (the tiles are garbage)
                     for (uint32_t r = 0; r < XRD_SKIP_READS && r0 + r < count; ++r) {

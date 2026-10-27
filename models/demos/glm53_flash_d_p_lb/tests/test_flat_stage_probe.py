@@ -52,6 +52,7 @@ def _coef(g, w):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_flat_stage_probe(device):
     from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatExpert, FlatRoutedExpert
+    from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
     from models.demos.glm53_flash_d_p.bringup import hooks
     from models.demos.glm53_flash_d_p.reference.weights import PackedExpert
@@ -104,7 +105,16 @@ def test_flat_stage_probe(device):
         try:
             if name in ("cpp", "cpp_srnd"):
                 op = FlatRoutedExpert(
-                    device, [W], m=m, H=H, I=I, gids=[list(range(E))], n_global=NG, wdtype="bf4", act="clamped_silu"
+                    device,
+                    [W],
+                    m=m,
+                    H=H,
+                    I=I,
+                    gids=[list(range(E))],
+                    n_global=NG,
+                    wdtype="bf4",
+                    act="clamped_silu",
+                    layout=LEGACY,
                 )
                 y = op(
                     x_dev, c_dev, r_dev, y_row_major=True, down_fp32=True, pack_stochastic_rounding=name == "cpp_srnd"
