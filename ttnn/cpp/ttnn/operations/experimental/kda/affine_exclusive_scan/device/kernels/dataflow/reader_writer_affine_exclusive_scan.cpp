@@ -141,6 +141,7 @@ template <
     uint32_t Vt,
     uint32_t BH,
     uint32_t G,
+    uint32_t zero_initial_state_on_start,
     uint32_t has_actual_end,
     uint32_t sp_rank,
     uint32_t sp_size,
@@ -175,6 +176,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     Semaphore release(sem::release);
 
     kda_chronology::Topology topology{};
+    bool request_start = false;
     {
         DataflowBuffer chronology(dfb::chronology_compute);
         chronology.reserve_back(1);
@@ -183,6 +185,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         noc.async_read_barrier();
         auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_write_ptr());
         const uint32_t start = words[0];
+        request_start = zero_initial_state_on_start && start == 0;
         if constexpr (has_actual_end) {
             const auto end = TensorAccessor(*tensor::get_token_if_present<"actual_end">());
             noc.async_read(end, chronology, sizeof(uint32_t), {.page_id = 0}, {});
@@ -228,8 +231,14 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
             noc, tail_entry_states_accessor, tail_entry_states, (worker_index / G) * affine_b_tiles, affine_b_tiles);
         noc.write_zeros_l1_barrier();
     }
-    issue_tensor_block_read(
-        noc, initial_state_accessor, initial_state, (worker_index / G) * affine_b_tiles, affine_b_tiles);
+    if (request_start) {
+        // A new request starts from a zero seed; every active group owns a copy.
+        noc.async_write_zeros(initial_state, affine_b_tiles * initial_state.get_entry_size());
+        noc.write_zeros_l1_barrier();
+    } else {
+        issue_tensor_block_read(
+            noc, initial_state_accessor, initial_state, (worker_index / G) * affine_b_tiles, affine_b_tiles);
+    }
     noc.async_read_barrier();
     initial_a.push_back(affine_a_tiles);
     if (!reset_worker) {

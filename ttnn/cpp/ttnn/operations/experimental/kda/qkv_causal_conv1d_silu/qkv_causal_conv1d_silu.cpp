@@ -109,7 +109,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     uint32_t sequence_parallel_axis,
-    uint32_t input_column_offset) {
+    uint32_t input_column_offset,
+    bool zero_initial_state_on_start) {
     auto params = make_params(
         input,
         q_width,
@@ -120,6 +121,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
         compute_kernel_config,
         sequence_parallel_axis,
         input_column_offset);
+    params.zero_initial_state_on_start = zero_initial_state_on_start;
     TT_FATAL(
         exchange_semaphores.size() == params.exchange_semaphore_addresses.size(),
         "qkv_causal_conv1d_silu_with_carry: pass {} exchange_semaphores",

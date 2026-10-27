@@ -8,9 +8,9 @@
 * the transformer it drives is `TtKimiK3Transformer` (the `MODEL_CLS` seam), because only 24 of
   Kimi-K3's 93 layers write a KV slab and its residual is block-structured, so it cannot reuse the
   shared block; and
-* the KDA carries must be zeroed at the head of a request. A carry summarises the whole prefix
-  behind it, so leaving the previous request's carry in place is not a small error — it conditions
-  every token of the new one on text it never saw; and
+* the KDA carries start each request from zero. A carry summarises the whole prefix behind it, so
+  the KDA kernels ignore the previous request's carry when the device `actual_start` is 0, which
+  also holds under trace replay; and
 * the chunk start must be 32-token aligned for KDA; the end may be any real length. Host bounds
   are checked before execution; device-only trace metadata must satisfy the same contract on
   every replay.
@@ -19,8 +19,6 @@
 from __future__ import annotations
 
 import inspect
-
-from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
@@ -300,30 +298,15 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         )
 
     def prefill_chunk(self, *args, **kwargs):
-        """Reset the KDA carries at the start of a request, then defer to the shared runtime.
+        """Validate the KDA bounds, then defer to the shared runtime.
 
-        `actual_start == 0` is the head of a request, and it is the only safe moment to zero: the
-        reset is a device copy from a held zero tensor rather than a reallocation, so it must not
-        land inside a captured region, which would re-zero on every replay and destroy the carry
-        the trace exists to advance.
+        No reset is needed at the head of a request: the KDA kernels start from zero state when the
+        device `actual_start` is 0.
         """
         # Bound from the real signature rather than by counting positions: `actual_start` is the
-        # fourth positional parameter, and reading the third instead would take `slot_id` — which is
-        # 0 on every chunk of a single-user run, so the carries would be zeroed at every chunk
-        # boundary and multi-chunk prefill would silently lose its recurrence.
+        # fourth positional parameter, and the third is `slot_id`.
         bound = inspect.signature(TtPrefillRuntime.prefill_chunk).bind_partial(self, *args, **kwargs)
-        actual_start = bound.arguments.get("actual_start")
-        # Validate before resetting carries or replaying a trace. Device-only
-        # metadata must satisfy the same aligned-start, nonempty-interval contract.
-        validate_kda_bounds(actual_start, bound.arguments.get("actual_end"))
-        if actual_start == 0:
-            states = getattr(self.model, "kda_states", None)
-            if states is not None:
-                # This slot only. Zeroing every slot would wipe the in-flight carries of any OTHER
-                # user mid-prefill, and a recurrent carry cannot be rebuilt from the chunk in front
-                # of it -- the remaining chunks would be conditioned on nothing and the run would
-                # return a plausible answer computed from the wrong history, with no error.
-                slot_id = bound.arguments.get("slot_id", 0)
-                states.reset(slot_id)
-                logger.debug(f"KDA carries reset for slot {slot_id} at request head")
+        # Validate before replaying a trace. Device-only metadata must satisfy the same
+        # aligned-start, nonempty-interval contract.
+        validate_kda_bounds(bound.arguments.get("actual_start"), bound.arguments.get("actual_end"))
         return super().prefill_chunk(*args, **kwargs)

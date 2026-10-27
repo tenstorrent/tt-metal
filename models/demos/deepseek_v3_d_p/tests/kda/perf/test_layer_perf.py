@@ -364,6 +364,8 @@ def test_synthetic_kimi_k3_perf(
         case,
         tensor_parallel_axis=tensor_parallel_axis,
         cache_weights=False,
+        # Production K3 builds its layers with request-owned carries (kimi_k3/attention.py).
+        zero_initial_state_on_start=True,
     )
     assert (layer.active_seq_len_local, layer.config.num_heads) == (
         PREFILL_CHUNK_TOKENS_PER_CHIP,

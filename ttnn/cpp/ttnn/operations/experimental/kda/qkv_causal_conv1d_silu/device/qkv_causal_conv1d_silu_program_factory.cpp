@@ -182,7 +182,8 @@ void add_history_exchange(
                  {"sp_rank", coordinate[axis]},
                  {"sp_size", sp_size},
                  {"local_rows", attrs.sequence},
-                 {"has_actual_end", uint32_t(in.actual_end.has_value())}},
+                 {"has_actual_end", uint32_t(in.actual_end.has_value())},
+                 {"zero_initial_state_on_start", uint32_t(attrs.zero_initial_state_on_start)}},
             .runtime_arg_schema = {.runtime_arg_names = {semaphore_args.begin(), semaphore_args.end()}},
             .hw_config = exchange_datamovement_config(),
         };
@@ -349,7 +350,8 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
              {"group", group},
              {"input_wt", input_wt},
              {"input_ct_offset", input_ct_offset},
-             {"exchange", uint32_t(exchange)}},
+             {"exchange", uint32_t(exchange)},
+             {"zero_initial_state_on_start", uint32_t(attrs.zero_initial_state_on_start)}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };

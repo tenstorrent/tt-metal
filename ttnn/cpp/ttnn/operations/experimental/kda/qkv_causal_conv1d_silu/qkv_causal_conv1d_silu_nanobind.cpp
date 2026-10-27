@@ -122,6 +122,11 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         three-token history ending at the logical end of the interval
         (``actual_end``, default full capacity), for the next call.
 
+        With ``zero_initial_state_on_start``, an ``actual_start`` of 0 starts a
+        new request: the history before the logical start is zeros and
+        ``history`` is not read, including for the replacement carry of an
+        interval shorter than three tokens.
+
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: ``q``, ``k``,
                 ``v`` as ``qkv_causal_conv1d_silu``, and the ROW_MAJOR BFLOAT16
@@ -146,6 +151,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("input_column_offset") = 0);
+        nb::arg("input_column_offset") = 0,
+        nb::arg("zero_initial_state_on_start") = false);
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail

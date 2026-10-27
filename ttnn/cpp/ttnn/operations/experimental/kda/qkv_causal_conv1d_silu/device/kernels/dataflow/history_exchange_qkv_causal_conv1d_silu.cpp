@@ -49,7 +49,8 @@ template <
     uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows,
-    uint32_t has_actual_end>
+    uint32_t has_actual_end,
+    uint32_t zero_initial_state_on_start>
 TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore, uint32_t carry_semaphore) {
     constexpr uint32_t row_bytes = channel_tiles * tile_row_bytes;
     static_assert(max_payload % read_alignment == 0, "row chunks must stay aligned in DRAM");
@@ -68,7 +69,10 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
     const uint32_t outgoing = scalar_slot + read_alignment;
     const uint32_t carry = outgoing + history_rows * row_bytes;
     const auto offset_of = [&](uint32_t address) { return address - scratch_base; };
-    const auto interval = read_chronology<has_actual_end, sp_rank, sp_size, local_rows>(noc, scalar_slot);
+    uint32_t actual_start;
+    const auto interval = read_chronology<has_actual_end, sp_rank, sp_size, local_rows>(noc, scalar_slot, actual_start);
+    // A new request has no history before its first token.
+    const bool request_start = zero_initial_state_on_start && actual_start == 0;
     const auto read_rows = [&](uint32_t first_page, uint32_t destination) {
         for (uint32_t row = 0; row < history_rows; ++row) {
             noc.async_read(
@@ -81,7 +85,8 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
     };
 
     // The replacement carry, on the owner of the interval's final segment: its last valid rows, preceded by the
-    // caller's history or the predecessor's outgoing rows when that segment holds fewer than three.
+    // caller's history (zeros at a request start) or the predecessor's outgoing rows when that segment holds fewer
+    // than three.
     const auto assemble_carry = [&]() {
         const uint32_t carried = interval.carried_rows();
         for (uint32_t row = 0; row < history_rows; ++row) {
@@ -91,7 +96,10 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
                                   : from_layer_history     ? position
                                                            : predecessor_page + position;
             const uint32_t destination = offset_of(carry) + row * row_bytes;
-            if (from_layer_history) {
+            if (from_layer_history && request_start) {
+                noc.async_write_zeros(scratch, row_bytes, {.offset_bytes = destination});
+                noc.write_zeros_l1_barrier();
+            } else if (from_layer_history) {
                 noc.async_read(history, scratch, row_bytes, {.page_id = page}, {.offset_bytes = destination});
             } else {
                 noc.async_read(exchange_buffer, scratch, row_bytes, {.page_id = page}, {.offset_bytes = destination});

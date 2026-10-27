@@ -29,6 +29,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import (
     K3AttnContext,
@@ -164,6 +165,11 @@ def test_kda_construction_passes_global_and_local_geometry(monkeypatch, sp_axis,
     assert kwargs["active_seq_len"] == 2560
     # SP8 owns 320 rows (10 chunks); SP4 owns 640 rows (20 chunks).
     assert kwargs["program_config"].recurrence.summary_group_chunks == (10 if sp_axis == 0 else 20)
+    # K3's carries are request-owned; the generic program configs keep explicit-state semantics.
+    assert kwargs["program_config"].zero_initial_state_on_start
+    assert not kimi_k3_program_config(
+        active_seq_len_local=320, tp_ccl_topology=ttnn.Topology.Linear
+    ).zero_initial_state_on_start
 
 
 @pytest.mark.parametrize(
@@ -264,30 +270,30 @@ def test_kda_rejects_invalid_host_bounds_before_device_work(monkeypatch, expect_
     gather.assert_not_called()
 
 
-def test_runtime_rejects_unaligned_start_before_reset_or_replay(monkeypatch, expect_error):
+def test_runtime_rejects_unaligned_start_before_replay(monkeypatch, expect_error):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
     runtime = object.__new__(TtKimiK3Runtime)
-    runtime.model = SimpleNamespace(kda_states=Mock())
     parent_forward = create_autospec(TtPrefillRuntime.prefill_chunk)
     monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_forward)
     # Positional arguments exercise the same binding used by the runner.
     with expect_error(ValueError, "32-token aligned"):
         runtime.prefill_chunk(object(), object(), 0, 33, 64)
-    runtime.model.kda_states.reset.assert_not_called()
     parent_forward.assert_not_called()
 
 
-def test_runtime_accepts_unaligned_end(monkeypatch):
-    """A prompt's last chunk ends at its real length, which need not be 32-aligned."""
+@pytest.mark.parametrize("start", [0, 128])
+def test_runtime_delegates_without_touching_carries(monkeypatch, start):
+    """A request head needs no host reset, and a prompt's last chunk may end at any real length."""
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
     runtime = object.__new__(TtKimiK3Runtime)
-    runtime.model = SimpleNamespace(kda_states=Mock())
+    # A Mock would accept any call: a strict namespace fails if the runtime reaches for the carries.
+    runtime.model = SimpleNamespace(kda_states=SimpleNamespace())
     parent_forward = create_autospec(TtPrefillRuntime.prefill_chunk)
     monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_forward)
-    runtime.prefill_chunk(object(), object(), 0, 0, 33)
-    runtime.model.kda_states.reset.assert_called_once_with(0)
-    parent_forward.assert_called_once()
+    args = (object(), object(), 0, start, start + 33)
+    assert runtime.prefill_chunk(*args) is parent_forward.return_value
+    parent_forward.assert_called_once_with(runtime, *args)

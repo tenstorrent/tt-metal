@@ -8,7 +8,8 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import deallocate_state, make_small_kda_test_config, random_weights
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -111,3 +112,63 @@ def test_trace_replay_matches_eager_without_mutating_input_state(device: ttnn.De
     assert_bit_identical(eager_result, replayed_output, name="traced layer output")
     for name, expected, actual in zip(("recurrent", "convolution"), input_state_before, input_state_after):
         assert_bit_identical(expected, actual, name=f"traced input {name} state")
+
+
+@pytest.mark.parametrize("length", [64, 2], ids=["full", "two-token"])
+def test_request_start_ignores_stale_state(device: ttnn.Device, length: int) -> None:
+    """With zero_initial_state_on_start, actual_start 0 starts from zero state; later starts read the carry."""
+    config = make_small_kda_test_config()
+    weights = random_weights(config)
+    hidden = torch.randn(1, 128, config.hidden_size, generator=torch.Generator().manual_seed(991)).to(torch.bfloat16)
+    # The policy needs the grouped scan, so the explicit-state control runs the same schedule.
+    recurrence = KDARecurrenceProgramConfig(local_scan_strategy="grouped", summary_group_chunks=1)
+    layer = ttKDA(
+        device,
+        config,
+        weights,
+        active_seq_len=64,
+        program_config=KDAProgramConfig(recurrence=recurrence, zero_initial_state_on_start=True),
+    )
+    control = ttKDA(device, config, weights, active_seq_len=64, program_config=KDAProgramConfig(recurrence=recurrence))
+
+    stale = layer.allocate_state()
+    for tensor in (stale.recurrent, stale.convolution):
+        poison = ttnn.from_torch(
+            torch.full(tuple(tensor.shape), float("nan")), dtype=tensor.dtype, layout=tensor.layout, device=device
+        )
+        ttnn.copy(poison, tensor)
+        ttnn.deallocate(poison)
+    zero = control.allocate_state()
+
+    def run(model: ttKDA, state: KdaState, start: int, end: int) -> tuple[torch.Tensor, KdaState]:
+        hidden_tt = ttnn.from_torch(
+            hidden[:, start : start + 64], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        start_tt, end_tt = make_actual_start(device, start), make_actual_start(device, end)
+        output, next_state = model.forward(hidden_tt, state, start_tt, end_tt)
+        result = ttnn.to_torch(output)[:, : end - start]
+        for tensor in (hidden_tt, start_tt, end_tt, output):
+            ttnn.deallocate(tensor)
+        return result, next_state
+
+    def assert_same(expected: tuple[torch.Tensor, KdaState], actual: tuple[torch.Tensor, KdaState], name: str):
+        assert_bit_identical(expected[0], actual[0], name=f"{name} output")
+        for field in ("recurrent", "convolution"):
+            assert_bit_identical(
+                ttnn.to_torch(getattr(expected[1], field)),
+                ttnn.to_torch(getattr(actual[1], field)),
+                name=f"{name} {field} state",
+            )
+
+    # A request start never reads the stale carries, including the history of a request shorter than the kernel.
+    fresh = run(layer, stale, 0, length)
+    expected_fresh = run(control, zero, 0, length)
+    assert_same(expected_fresh, fresh, "request start")
+    golden, _ = kda_forward_reference(hidden[:, :length], weights, config)
+    assert_accurate(golden, fresh[0], name="request start output", pcc_threshold=0.999, nrmse_threshold=0.015)
+    # The next chunk continues from the committed carry.
+    assert_same(
+        run(control, expected_fresh[1], 64, 128), run(layer, fresh[1], 64, 128), "continuation after request start"
+    )
+    for state in (stale, zero, fresh[1], expected_fresh[1]):
+        deallocate_state(state)

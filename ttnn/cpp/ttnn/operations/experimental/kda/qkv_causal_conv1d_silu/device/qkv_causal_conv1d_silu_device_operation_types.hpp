@@ -24,6 +24,9 @@ struct QkvCausalConv1dSiluParams {
     uint32_t input_column_offset;
     // Fabric history exchange only: L1 addresses of its global semaphores, entry, predecessor arrival, carry arrival.
     std::array<uint32_t, 3> exchange_semaphore_addresses{};
+    // Fabric history exchange only: a request starts at absolute position zero, so its history is zeros instead of
+    // the caller's carry.
+    bool zero_initial_state_on_start = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
