@@ -305,6 +305,79 @@ def regions_keep_stacked() -> bool:
     return os.environ.get("GLM53_REGIONS_KEEP_STACKED", "0") == "1"
 
 
+# GLM53_ROUTER_PAD_MASK (2026-10-27, default 1): a prefill chunk's rows past its ``seq_len`` are unspecified (the DSA
+# prefill contract: "rows past seq_len are garbage"; the MTP prefill: "unspecified") and reached the MoE router
+# unmasked. A NaN / Inf in such a row becomes a non-zero at EVERY selected column through the fp32 selector matmul
+# (NaN * 0 = NaN, ne(NaN, 0) = 1), which breaks the dispatch ops' pass budget (sum_e ceil(n_e / 32) <= 8 T / 32 + E
+# holds for <= 8 non-zeros per row only) and deadlocked the down dispatch on a (2,4) block (three short prompts in the
+# T = 128 trace: 80-96 pad rows each). The mask zeroes the dense routing rows >= seq_len before ``routing_counts``
+# (``TtMoE._mask_pad_rows``: one exact 0/1 matmul + ``ttnn.where``, bit-identical for rows < seq_len; the traced
+# prefill carries it as a persistent per-length input refreshed per prompt). ``0`` disables it (the discriminating
+# run: the eager guard below then names the offending rows). Read per call: a captured trace replays its mode.
+ROUTER_PAD_MASK_ENV = "GLM53_ROUTER_PAD_MASK"
+# GLM53_DISPATCH_GUARD (default 1): an eager (not captured) dispatch call reads the per-expert counts back (one 2 KB
+# tile per chip) and refuses a routing over the top-k budget with the call site, the chip and the offending rows;
+# ``0`` skips the readback. Never inside a trace capture (``ttnn.is_trace_capture_active``).
+DISPATCH_GUARD_ENV = "GLM53_DISPATCH_GUARD"
+
+
+def pad_mask_enabled(env=None) -> bool:
+    env = os.environ if env is None else env
+    return env.get(ROUTER_PAD_MASK_ENV, "1") != "0"
+
+
+def dispatch_guard_enabled(env=None) -> bool:
+    env = os.environ if env is None else env
+    return env.get(DISPATCH_GUARD_ENV, "1") != "0"
+
+
+def pad_row_mask_host(T: int, seq_len: int) -> torch.Tensor:
+    """[1, 1, T, 32] bf16: column 0 is 1.0 on rows < ``seq_len`` and 0 past them (the other columns 0): the row mask
+    of a chunk of ``T`` padded rows (global rows; ``GLMMesh.upload(..., rows=2)`` / ``rows_dim=2`` hands mesh row r
+    its slab). ``TtMoE._mask_pad_rows`` expands column 0 over the expert columns on device."""
+    if not 0 <= seq_len <= T:
+        raise ValueError(f"seq_len {seq_len} outside [0, {T}]")
+    m = torch.zeros(1, 1, T, TILE, dtype=torch.bfloat16)
+    m[0, 0, :seq_len, 0] = 1.0
+    return m
+
+
+def pad_mask_ones_host(E: int) -> torch.Tensor:
+    """[1, 1, 32, E] bf16 with row 0 all ones (the rest 0): ``mask[:, 0:1] x ones[0:1, :]`` as one tile matmul."""
+    o = torch.zeros(1, 1, TILE, E, dtype=torch.bfloat16)
+    o[0, 0, 0, :] = 1.0
+    return o
+
+
+def mask_dense_host(dense: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Host mirror of ``TtMoE._mask_pad_rows``: ``dense`` [.., T, E] with every row whose ``mask`` column 0 is 0
+    set to 0 (a NaN there becomes 0; the other rows are copied bit for bit)."""
+    rows = mask.reshape(-1, TILE)[:, 0] != 0  # [T]
+    keep = rows.reshape(*([1] * (dense.dim() - 2)), -1, 1).expand(dense.shape)
+    return torch.where(keep, dense, torch.zeros((), dtype=dense.dtype))
+
+
+def routing_rows_over_budget(routing: torch.Tensor, picks: int = MAX_PICKS) -> list[tuple[int, int, bool]]:
+    """(row, non-zero count, finite) of every row of a [T, E] routing matrix that breaks the top-k contract the
+    dispatch ops' pass budget rests on: more than ``picks`` non-zeros or a non-finite entry (``NaN != 0`` counts as
+    a non-zero on device)."""
+    r = routing.float()
+    nz = (r != 0).sum(-1)
+    finite = torch.isfinite(r).all(-1)
+    out = []
+    for t in range(r.shape[0]):
+        if int(nz[t]) > picks or not bool(finite[t]):
+            out.append((t, int(nz[t]), bool(finite[t])))
+    return out
+
+
+def _capture_active(device) -> bool:
+    """Whether a trace is being captured on ``device`` (no host readback allowed then). Without the query in this
+    ttnn the answer is "assume yes": the guard stays off rather than breaking a capture."""
+    fn = getattr(ttnn, "is_trace_capture_active", None)
+    return True if fn is None else bool(fn(device))
+
+
 # GLM53_REGIONS_DECODE (2026-10-27; custom_ops/expert_stream/regions.py, doc/mesh/regions_decode.md; ``stream`` is the
 # default since 2026-10-27): ``off`` = the earlier rule (decode on the stacked stream copy when ``GLM53_REGIONS_KEEP_STACKED=1`` kept it, else through the
 # regions kernel: ~+80 ms per 45-layer step on the 8x4 at >= 512 K x 4 users and at 128 K x 32 users, where the second
@@ -947,6 +1020,7 @@ class TtRoutedExperts(LightweightModule):
         self.regions_stream_ok, self.regions_stream_reason = False, "no regions lists"
         self.paths_used: set[str] = set()
         self.last_path: str | None = None
+        self.call_site = "routed experts"  # the owner's label in the eager guard's message (layer / MTP)
         # the regions / dispatch per-expert lists are sliced out of the block layout ([1,E,H,2I] / [1,E,I,H]); with
         # the stream layout that source is loaded from the block-op cache files (or the host tensors), sliced and
         # released again (``_build_dispatch_path``): the stream tensors stay the stacked decode copy
@@ -1253,11 +1327,39 @@ class TtRoutedExperts(LightweightModule):
         op = self._dispatch_op(x.shape[-2], regions=regions)
         w13, w2 = (self._regions_src, self._regions_src) if regions else (self.w13, self.w2)
         x_rm, counts = ExpertDispatch.prepare(x, dense_w)
+        if dispatch_guard_enabled() and not _capture_active(self.device):
+            self._guard_counts(counts, dense_w, int(x.shape[-2]))
         act, table, out = op.alloc(self.device, act_l1=self.stream_act_l1)
         op.forward(x_rm, dense_w, counts, w13, w2, act, table, out)
         for t in (x_rm, counts, act, table):
             ttnn.deallocate(t)
         return out
+
+    def _guard_counts(self, counts: ttnn.Tensor, routing: ttnn.Tensor, T: int) -> None:
+        """The eager guard (``GLM53_DISPATCH_GUARD``): every chip's per-expert counts must respect the top-k budget
+        ``sum_e n_e <= MAX_PICKS * T`` the kernels' pass budget rests on; a violation raises with the call site, the
+        chip and the offending routing rows (more than MAX_PICKS non-zeros or a non-finite entry: the 2026-10-27
+        hang's signature) instead of a truncated result on device. One 2 KB tile read per chip, the routing read
+        on a violation only; never called inside a trace capture."""
+        bad = []
+        for i, shard in enumerate(self.mesh.device_tensors(counts)):
+            c = ttnn.to_torch(shard).float().reshape(-1)[: self.E_local]
+            total = int(c.sum())
+            if total <= MAX_PICKS * T:
+                continue
+            r = ttnn.to_torch(self.mesh.device_tensors(routing)[i]).float().reshape(T, -1)[:, : self.E_local]
+            rows = routing_rows_over_budget(r)
+            shown = ", ".join(f"row {t}: {nz} non-zeros{'' if ok else ', non-finite'}" for t, nz, ok in rows[:16])
+            bad.append(
+                f"chip {i} (mesh row {i // self.mesh.cols}, col {i % self.mesh.cols}): counts sum {total} > "
+                f"{MAX_PICKS * T}; {len(rows)} rows over budget [{shown}{', ...' if len(rows) > 16 else ''}]"
+            )
+        if bad:
+            raise RuntimeError(
+                f"{self.call_site}: routing over the dispatch pass budget at T={T}, E_local={self.E_local} "
+                f"(rows past seq_len unmasked? {ROUTER_PAD_MASK_ENV}; a NaN row, a corrupted gather?): "
+                + "; ".join(bad)
+            )
 
     # ------------------------------------------------------------- prefill: batched sparse blocks
     def _forward_batched(self, x: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
@@ -2295,6 +2397,11 @@ class TtMoE(LightweightModule):
                 dense=dense_experts,
                 stream=stream_experts,
             )
+        # the pad-row mask's ones row (``_mask_pad_rows``): one DRAM constant per mesh, allocated here, before any
+        # trace capture (a persistent tensor allocated after a capture may alias that trace's transient buffers)
+        self.pad_ones = self.mesh.const(
+            ("pad_mask_ones", E), lambda: self.mesh.upload(pad_mask_ones_host(E), ttnn.bfloat16)
+        )
         self.shared = TtClampedSwiGLU(
             device,
             mlp_state_dict["shared_experts.gate_proj.weight"],
@@ -2336,9 +2443,23 @@ class TtMoE(LightweightModule):
             cache_dir, mesh, expert_dtype, expert_down_dtype, dense_experts, stream_experts
         )
 
-    def forward(self, x: ttnn.Tensor, *, prefill: bool = False) -> ttnn.Tensor:
+    def _mask_pad_rows(self, dense: ttnn.Tensor, row_mask: ttnn.Tensor) -> ttnn.Tensor:
+        """``dense`` [1,1,T,E] with the rows past seq_len zeroed (``GLM53_ROUTER_PAD_MASK``): ``row_mask``
+        [1,1,T,32] bf16 (column 0 = the row's 0 / 1, ``pad_row_mask_host``) expanded over the E columns by one exact
+        0 / 1 matmul (HiFi4, fp32 accumulation: one product per element) and ``ttnn.where``: a NaN in a masked row
+        becomes 0, the other rows are copied bit for bit. ``dense`` is consumed."""
+        full = ttnn.matmul(row_mask, self.pad_ones, dtype=dense.dtype, compute_kernel_config=self.router.fp32)
+        out = ttnn.where(full, dense, 0.0)
+        ttnn.deallocate(full)
+        ttnn.deallocate(dense)
+        return out
+
+    def forward(self, x: ttnn.Tensor, *, prefill: bool = False, row_mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """x [1,1,T,H] bf16 (T multiple of 32; replicated over the TP columns) -> [1,1,T,H] replicated.
-        ``prefill``: the rows are a prompt slab (the router keeps its composite path, see ``TtRouter.forward``)."""
+        ``prefill``: the rows are a prompt slab (the router keeps its composite path, see ``TtRouter.forward``).
+        ``row_mask`` [1,1,T,32] bf16 (``pad_row_mask_host``, this chip's slab): the dense routing rows whose mask is
+        0 (past the chunk's seq_len) are zeroed before the experts (``_mask_pad_rows``); the EP layouts' top-k lists
+        are not masked (their kernels bound the rows per token)."""
         if self.layout == "ep" and self.experts.D > 1:
             # rm: the router's [x | w] pages + id rows go straight into all_to_all_dispatch (C10); off the fused
             # path (prefill slabs) the router falls back to the tile outputs, which TtEPExperts.forward also takes
@@ -2358,12 +2479,16 @@ class TtMoE(LightweightModule):
                 ttnn.deallocate(t)
         elif getattr(self.experts, "_dispatch", None) is not None:
             w, idx, dense = self.router(x, prefill=prefill)
+            if row_mask is not None:
+                dense = self._mask_pad_rows(dense, row_mask)
             routed = self.experts(x, dense, idx=idx, w=w)
             for t in (w, idx, dense):
                 if t.is_allocated():
                     ttnn.deallocate(t)
         else:
             _, _, dense = self.router(x, dense_only=True, prefill=prefill)
+            if row_mask is not None:
+                dense = self._mask_pad_rows(dense, row_mask)
             routed = self.experts(x, dense)
             ttnn.deallocate(dense)
         shared = self.shared(x, reduce=False)

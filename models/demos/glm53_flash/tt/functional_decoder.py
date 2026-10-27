@@ -173,6 +173,9 @@ class PrefillTraceCall:
     slot: object
     end: ttnn.Tensor
     ring_sel: ttnn.Tensor
+    # [1,1,T,32] bf16 row-sharded: column 0 = 1.0 on rows < S (the MoE router's pad-row mask, ``tt/moe.py``
+    # ``pad_row_mask_host``); None under GLM53_ROUTER_PAD_MASK=0
+    row_mask: ttnn.Tensor | None = None
 
 
 class FunctionalDecoder(LightweightModule):
@@ -522,11 +525,19 @@ class FunctionalDecoder(LightweightModule):
                 start=0,
                 actual_start=layer.attn.scalar(0),
                 actual_end=trace.end,
+                row_mask=trace.row_mask,
             )
             self._write_user_kda_state_slot(slot, new_state.kda)
         else:
             out, _ = layer.prefill_forward(
-                streams, LayerState(cache=self.cache), user=user, seq_len=T, start=0, slot=slot, ring_sel=trace.ring_sel
+                streams,
+                LayerState(cache=self.cache),
+                user=user,
+                seq_len=T,
+                start=0,
+                slot=slot,
+                ring_sel=trace.ring_sel,
+                row_mask=trace.row_mask,
             )
         self.next_start[user] = T  # the caller (GLM53MeshModel.prefill_traced) sets the prompt's real length
         return out

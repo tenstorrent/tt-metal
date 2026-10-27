@@ -61,7 +61,7 @@ from models.demos.glm53_flash.tt.functional_decoder import DecodePositions
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
 from models.demos.glm53_flash.tt.model_head import TtModelHead
-from models.demos.glm53_flash.tt.moe import TtMoE
+from models.demos.glm53_flash.tt.moe import TtMoE, pad_mask_enabled, pad_row_mask_host
 
 TILE = 32
 MTP_LAYER = 45  # checkpoint layer index of the (single) MTP module: num_nextn_predict_layers = 1
@@ -144,6 +144,7 @@ class TtMTPBlock(LightweightModule):
             mesh=self.mesh,
             weight_cache_path=weight_cache_path,
         )
+        self.mlp.experts.call_site = f"MTP (layer {MTP_LAYER}) MoE"  # the eager dispatch guard's label
         # the MTP's own autoregressive state: latent cache + pooled-key index (``TtLatentCache.index``)
         self.cache = TtLatentCache(
             device,
@@ -323,8 +324,11 @@ class TtMTPBlock(LightweightModule):
         ttnn.deallocate(eh)
         return x
 
-    def _residual_block(self, x: ttnn.Tensor, attention, *, prefill: bool) -> ttnn.Tensor:
-        """``x += attention(input_layernorm(x)); x += MoE(post_attention_layernorm(x))`` on ``[1, 1, T, H]`` bf16."""
+    def _residual_block(
+        self, x: ttnn.Tensor, attention, *, prefill: bool, row_mask: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
+        """``x += attention(input_layernorm(x)); x += MoE(post_attention_layernorm(x))`` on ``[1, 1, T, H]`` bf16.
+        ``row_mask`` (prefill): the MoE router's pad-row mask of this row's slab (``TtMoE.forward``)."""
         h = self._norm(x, self.input_norm_w)
         a = attention(h)
         ttnn.deallocate(h)
@@ -332,7 +336,7 @@ class TtMTPBlock(LightweightModule):
         ttnn.deallocate(a)
         ttnn.deallocate(x)
         h = self._norm(x1, self.post_norm_w)
-        m = self.mlp(h, prefill=True) if prefill else self.mlp(h)
+        m = self.mlp(h, prefill=True, row_mask=row_mask) if prefill else self.mlp(h)
         ttnn.deallocate(h)
         out = ttnn.add(x1, m)
         ttnn.deallocate(m)
@@ -372,6 +376,7 @@ class TtMTPBlock(LightweightModule):
             return self._prefill_rows_impl(x, user=user, seq_len=seq_len, start=start, rows=rows)
 
     def _prefill_rows_impl(self, x: ttnn.Tensor, *, user: int, seq_len: int, start: int, rows: int) -> ttnn.Tensor:
+        T = int(x.shape[-2]) * rows  # the chunk's padded rows (this row's slab x rows)
         if rows == 1:
             attention = lambda h: self.attn.prefill_forward(h, self.cache, user, seq_len, start=start)
         else:
@@ -384,7 +389,16 @@ class TtMTPBlock(LightweightModule):
                 ttnn.deallocate(y_full)
                 return ttnn.multiply(y, 1.0 / rows, output_tensor=y)
 
-        out = self._residual_block(x, attention, prefill=True)
+        # rows past seq_len come back unspecified from the attention: they leave the MoE router through the mask
+        # (GLM53_ROUTER_PAD_MASK; an over-budget routing deadlocked the dispatch op on them, 2026-10-27)
+        mask = (
+            self.mesh.upload(pad_row_mask_host(T, seq_len), ttnn.bfloat16, rows=2)
+            if seq_len < T and pad_mask_enabled()
+            else None
+        )
+        out = self._residual_block(x, attention, prefill=True, row_mask=mask)
+        if mask is not None:
+            ttnn.deallocate(mask)
         self.next_start[user] = start + seq_len
         return out
 

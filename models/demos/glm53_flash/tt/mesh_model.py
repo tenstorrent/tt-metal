@@ -27,6 +27,7 @@ from models.demos.glm53_flash.tt.embedding import TtEmbedding
 from models.demos.glm53_flash.tt.functional_decoder import DecodePositions, FunctionalDecoder, PrefillTraceCall
 from models.demos.glm53_flash.tt.mesh import GLMMesh
 from models.demos.glm53_flash.tt.model_head import TtModelHead
+from models.demos.glm53_flash.tt.moe import pad_mask_enabled
 from models.demos.glm53_flash.tt.packed_inputs import UINT32, PackedDecodeLayout
 from models.demos.glm53_flash.tt.trace_prefill import (
     DEFAULT_LENGTHS,
@@ -499,7 +500,14 @@ class GLM53MeshModel:
     def _prefill_graph(self, inp: PrefillTraceInputs):
         """The traced prefill graph on the persistent inputs ``inp`` + ``self.prefill_slot`` (no host value
         of the prompt inside): embedding -> every layer (device-slot form) -> head on the selected row."""
-        call = PrefillTraceCall(slot=self.prefill_slot, end=inp.end, ring_sel=inp.ring_sel)
+        # the pad-row mask (rows >= S out of the MoE router) is a per-length input refreshed per prompt; the knob is
+        # read at capture (an eager compile pass precedes it), so the trace replays the mode it was captured in
+        call = PrefillTraceCall(
+            slot=self.prefill_slot,
+            end=inp.end,
+            ring_sel=inp.ring_sel,
+            row_mask=inp.row_mask if pad_mask_enabled() else None,
+        )
         streams = self.embedding(inp.ids)  # [1,1,T_loc,16384] per row
         for dec in self.layers:
             out = dec.prefill_forward(streams, user=self.prefill_slot.user, seq_len=inp.T, start=0, trace=call)
