@@ -85,8 +85,8 @@ repeated wall runs):
 
 ### The fused tail (MOE_TAIL=fused)
 
-Setting `MOE_TAIL` (env `DS41_MOE_TAIL`, read only under `MOE_IMPL=block`): `ops` (default, provisional until the owner
-has seen the A/B) or `fused` - Marko's TailA2A (models/demos/moe_block/tt/tail_a2a.py): the combine's row-major owner
+Setting `MOE_TAIL` (env `DS41_MOE_TAIL`, read only under `MOE_IMPL=block`): `fused` (default, owner decision 2026-10-27
+after the A/B) or `ops` - Marko's TailA2A (models/demos/moe_block/tt/tail_a2a.py): the combine's row-major owner
 rows tilized, + the shared expert's owner rows, the TP all-to-all into `[S/SP, H/TP]`, one program a chip (20 worker
 cores, the tilize and add under the sends). Its output is the ops tail's (bf16 TILE, DRAM; GLUE_FOLD's typecast after,
 in the adapter, as before). Fits DS41 as is (H/TP 80 tiles, 512 owned rows a chip); no code change in the block.
