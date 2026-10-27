@@ -9,22 +9,23 @@
 #include "api/dataflow/circular_buffer.h"
 #include "tt-train/sources/ttml/metal/ops/all_gather_weight_minimal_matmul_async/device/kernels/all_gather_weight_minimal_matmul_async_utils.hpp"
 
-void copy_and_pack_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+void copy_and_pack_block(
+    uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles, uint32_t rows, uint32_t cols) {
     CircularBuffer cb_out(out_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
     copy_init(in_cb);
 
-    uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
-        for (uint32_t n = 0; n < N_block_tiles; n++) {
-            tile_regs_acquire();
-            tile_regs_wait();
-            copy_tile(in_cb, tile_id, 0);
-            pack_tile(0, out_cb);
-            tile_regs_commit();
-            tile_regs_release();
-            tile_id++;
+        if (m < rows) {
+            for (uint32_t n = 0; n < cols; n++) {
+                tile_regs_acquire();
+                tile_regs_wait();
+                copy_tile(in_cb, (m * N_block_tiles) + n, 0);
+                pack_tile<true>(0, out_cb, n);
+                tile_regs_commit();
+                tile_regs_release();
+            }
         }
         cb_out.push_back(N_block_tiles);
     }
@@ -152,7 +153,8 @@ void kernel_main() {
 
             cb_out.reserve_back(out_block_num_tiles);
             cb_intermediate.wait_front(out_block_num_tiles);
-            copy_and_pack_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+            copy_and_pack_block(
+                intermediate_cb, out_cb, M_block_tiles, N_block_tiles, current_M_block_tiles, current_N_block_tiles);
             cb_intermediate.pop_front(out_block_num_tiles);
         }
     }
