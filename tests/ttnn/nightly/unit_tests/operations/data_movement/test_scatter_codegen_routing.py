@@ -150,3 +150,4 @@ def test_scatter_codegen_unsupported_output_memory_config_falls_back(device):
 
 
 # --- Off-grid regressions (hand-added; edit here, not the emitter) ---
+# The hand-written regressions for this op live in test_scatter_codegen_edges.py.

@@ -28,7 +28,9 @@ _TWO_RANGES = ttnn.CoreRangeSet(
 # is not 32 B aligned, which keeps it off the row-major detour; on the default grid more columns than
 # the two tile rows selects the column-split (streaming) factory, while a two-core grid keeps the
 # row resident (interleaved). A reduce draws positions from 8 columns so every hit column takes
-# several updates; add is order-independent, so the duplicates have one answer.
+# several updates; adding a few bf16 values is exact in FP32, so the duplicates have one answer
+# whatever the visit order (multiply, where rounding order shows, is compared against native in
+# nightly).
 _FACTORY_CASES = [
     pytest.param(
         [1, 1, 64, 200], [1, 1, 64, 100], ttnn.TILE_LAYOUT, {"sub_core_grids": _TWO_CORES}, None, id="tile_interleaved"
@@ -106,4 +108,22 @@ def test_scatter_codegen_two_range_grid(device, layout, kwargs, index_max):
     golden = _force_native(xt, -1, it, st, sub_core_grids=_TWO_RANGES, **kwargs)
     output = _force_codegen(xt, -1, it, st, sub_core_grids=_TWO_RANGES, **kwargs)
 
+    assert_equal(ttnn.to_torch(golden), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("shape, index_shape, layout, kwargs, index_max", _FACTORY_CASES)
+def test_scatter_codegen_skips_out_of_range_indices(device, shape, index_shape, layout, kwargs, index_max):
+    # Every reader skips an index at or past the row's logical width, which a negative int32 also is
+    # once read as unsigned; a skip that did not hold would write outside the resident output page.
+    # Native skips the same positions, so the two forced legs must agree bit for bit.
+    torch.manual_seed(42)
+    xt, it, st = _case(device, shape, index_shape, layout, index_max)
+    index = ttnn.to_torch(it)
+    index[..., 0] = -1
+    index[..., 1] = 0x7FFFFFFF
+    index[..., 2] = shape[-1]
+    it = ttnn.from_torch(index.to(torch.int32).contiguous(), dtype=ttnn.int32, layout=layout, device=device)
+
+    golden = _force_native(xt, -1, it, st, **kwargs)
+    output = _force_codegen(xt, -1, it, st, **kwargs)
     assert_equal(ttnn.to_torch(golden), ttnn.to_torch(output))

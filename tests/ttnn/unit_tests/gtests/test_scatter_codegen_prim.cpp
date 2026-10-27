@@ -14,9 +14,12 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
+
 #include "ttnn/device.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/scatter/codegen/scatter_codegen_device_operation.hpp"
+#include "ttnn/operations/data_movement/scatter/codegen/scatter_codegen_program_factory.hpp"
 #include "ttnn/operations/data_movement/scatter/codegen/scatter_codegen_supported.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -89,6 +92,61 @@ TEST_F(ScatterCodegenPrimFixture, RejectsADestinationThatAliasesSrc) {
     ASSERT_EQ(ops.src.tensor_spec(), ops.input.tensor_spec());
     EXPECT_THROW(run(ops, ops.src), std::exception);
     EXPECT_NO_THROW(run(ops, std::nullopt));
+}
+
+TEST_F(ScatterCodegenPrimFixture, RejectsADestinationOfAnotherShapeDtypeLayoutOrTile) {
+    // Every factory sizes its page count and per-core split from the input's geometry, so only the
+    // spec the op would create for itself is a destination it can address.
+    const Operands ops = make_operands(device_, 64);
+    const auto spec_with = [&](const ttnn::Shape& shape, DataType dtype, const tt::tt_metal::PageConfig& page) {
+        return tt::tt_metal::TensorSpec(shape, tt::tt_metal::TensorLayout(dtype, page, ops.input.memory_config()));
+    };
+    const tt::tt_metal::PageConfig tile_page(Layout::TILE);
+    const std::vector<tt::tt_metal::TensorSpec> wrong = {
+        spec_with(ttnn::Shape({1, 1, 32, 128}), DataType::BFLOAT16, tile_page),
+        spec_with(ops.input.logical_shape(), DataType::FLOAT32, tile_page),
+        spec_with(ops.input.logical_shape(), DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR)),
+        spec_with(
+            ops.input.logical_shape(),
+            DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(Layout::TILE, tt::tt_metal::Tile({16, 32}))),
+    };
+    for (const auto& spec : wrong) {
+        const Tensor destination = ttnn::create_device_tensor(spec, device_);
+        EXPECT_FALSE(supported_execution_controls(ops.input, ops.input.memory_config(), destination));
+        EXPECT_THROW(run(ops, destination), std::exception);
+    }
+}
+
+// A device opened with an L1_SMALL region: the allocator's L1 bank stops below that region, and the
+// occupancy query the live budget reads never reports the buffers living in it.
+class ScatterCodegenL1SmallFixture : public TTNNFixtureBase {
+protected:
+    static constexpr int kL1SmallSize = 16384;
+    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
+
+    void SetUp() override {
+        device_holder_ = ttnn::open_mesh_device(/*device_id=*/0, kL1SmallSize, DEFAULT_TRACE_REGION_SIZE);
+        device_ = device_holder_.get();
+    }
+
+    void TearDown() override {
+        device_holder_->close();
+        device_holder_.reset();
+        device_ = nullptr;
+    }
+};
+
+TEST_F(ScatterCodegenL1SmallFixture, BudgetsStopAtTheL1Bank) {
+    // The RM chunk planner fills whatever budget it is given, so a budget past the bank would plan
+    // CBs over the L1_SMALL region.
+    const Operands ops = make_operands(device_, 64);
+    const uint64_t bank = device_->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+    const uint64_t base = device_->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    ASSERT_EQ(bank + kL1SmallSize + base, static_cast<uint64_t>(device_->l1_size_per_core()));
+    EXPECT_LE(ttnn::prim::scatter_static_l1(ops.input), bank);
+    EXPECT_LE(ttnn::prim::scatter_usable_l1(ops.input), bank);
 }
 
 }  // namespace ttnn::operations::data_movement::scatter::test
