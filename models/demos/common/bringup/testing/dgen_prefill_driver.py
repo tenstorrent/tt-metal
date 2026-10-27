@@ -10,7 +10,7 @@ must not import ttnn or anything from tt-metal (ttnn is built for another Python
 starts this script; the runner (tt-metal) owns the H2D stream service and the layer-ack channel, this process
 connects to both as tt-d-gen's PrefillPipeline does (engine/src/pipeline/prefill_pipeline.cpp):
 
-    te.BackendRuntime(cfg, te.device_prefill_pipeline(service_id, "/tt_prefill_layer_acks_<service_id>",
+    te.BackendRuntime(cfg, te.device_prefill_pipeline(service_id, "/tt_prefill_layer_completions_<service_id>",
                                                       chunk_size, layers_per_chunk, connect_timeout_ms, sp_factor))
 
 plan.json:
@@ -80,7 +80,7 @@ def main(plan_path: str, out_path: str) -> int:
     if "evict_enabled" in plan:
         cfg.evict_enabled = bool(plan["evict_enabled"])
     svc = plan["service_id"]
-    ack = plan.get("ack_shm_name") or f"/tt_prefill_layer_acks_{svc}"
+    ack = plan.get("ack_shm_name") or f"/tt_prefill_layer_completions_{svc}"  # dgen_engine.ack_shm_name (no ttnn here)
     lpc = int(plan["layers_per_chunk"])
     if plan.get("mock"):
         pipe = te.mock_prefill_pipeline(lpc, auto_ack=True)
