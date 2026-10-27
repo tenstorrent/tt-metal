@@ -1936,3 +1936,11 @@ its fused-head programs at its first call); the shared expert is bf8 / HiFi2 vs 
   the fabric. The bring-up kernels are unchanged apart from include paths: suspect main's kernel-side dataflow / NoC /
   fabric-adapter changes underneath. Triage + logs: scratch triage_stress1.txt, stress_fork_hang1_saved.log.
   The perf numbers above come from runs that did not hang.
+
+### Block re-profiled on the merged tree, with the se_yrm trailer fence (2026-10-27, bh-lb-19)
+- Device profiler on main needs TT_METAL_PROFILER_MID_RUN_DUMP=1 and TT_METAL_PROFILER_CPP_POST_PROCESS=1 besides
+  TT_METAL_DEVICE_PROFILER=1, else ttnn.get_latest_programs_perf_data() is empty (replay_device_times read 0 programs).
+- K3 ring of 4 (k3_ring4, 640, traced, 100 replays, slowest chip): head 455-460 | dispatch 57-58 | experts + combine
+  1151-1152 (was 1189-1191) | tail 115-116 us; span 1768-1774 (1808-1813). PCC min 0.99612.
+- GLM-5.3-Flash 2x4, 5120, owners residual, traced: x all-to-all 121 | 27 (not identified) | fused head 1084-1088 |
+  dispatch 461 | experts + combine 1373-1376 | tilize 26 | add 37 us; device sum 3103 us (3104 before). PCC min 0.98686.
