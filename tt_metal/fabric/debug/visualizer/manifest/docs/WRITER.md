@@ -93,7 +93,7 @@ than writing a schema `types` can't resolve.
 Some keys hold one of a fixed set of names, such as a channel's `status` or a field's `category`. `vocabulary` lists
 every name each can hold, so a reader knows them all without the C++ enums.
 
-The lists are `k_vocabulary_lists` in `fabric_manifest_model.hpp`. Each entry names the list and the type whose names it holds. For an enum, the list is every enumerator in lower case. For the field kinds, it's every alternative of the  
+The lists are `k_vocabulary_lists` in `fabric_manifest_model.hpp`. Each entry names the list and the type whose names it holds. For an enum, the list is every enumerator in lower case. For the field kinds, it's every alternative of the
 `Content` variant, spelled as the `kind` key spells it (`kind_name`, such as `l1` or `stream`).
 
 These are names the manifest writes as strings, so nothing appears both here and in `types.enums`, which describes enums
