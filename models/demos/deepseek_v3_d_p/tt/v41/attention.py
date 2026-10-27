@@ -22,6 +22,8 @@ sparse_sdpa's row-major heads with the RoPE tail, and one (``head_layout.o_heads
 tiled head groups of ``wo_a`` with the inverse RoPE (no create / concat-heads or RoPE-tail glue ops).
 """
 
+import os
+
 import torch
 
 import ttnn
@@ -38,6 +40,10 @@ from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
 TOPK_ALIGN = 32  # topk_large_indices needs a multiple of 16; sparse_sdpa k chunks a multiple of 32
+# the output projection's head concatenation on the decode tile: ``op`` (``nlp_concat_heads``, one core, ~26 us) or
+# ``qdq`` (folded into the FP8 QDQ's output shape)
+_CONCAT = os.environ.get("V41_DECODE_CONCAT", "op")
+assert _CONCAT in ("op", "qdq"), _CONCAT
 
 
 def _round_up(x: int, m: int) -> int:
@@ -330,8 +336,15 @@ class TtV41Attention(LightweightModule):
 
     def _o_proj(self, attn):
         """[1, G/tp, S/sp, (H/G) * head_dim] (each group's heads side by side) -> [1, 1, S/sp, hidden/tp]."""
-        grouped = ttnn.experimental.nlp_concat_heads(
-            self._dense(attn, "wo_a")
-        )  # [1, g, S, rank] -> [1, 1, S, g * rank]
-        out = ttnn.linear(fp8_qdq(grouped), self.wo_b, compute_kernel_config=self.compute_kernel_config)
+        low = self._dense(attn, "wo_a")  # [1, g, S, rank]
+        if _CONCAT == "qdq" and int(low.shape[-2]) == 32:
+            # the decode tile: one tile row a group, so the groups' tile pages in order are the concatenation's;
+            # the QDQ writes them into the [1, 1, 32, g * rank] shape (no nlp_concat_heads)
+            _, g, s, rank = (int(d) for d in low.shape)
+            quant = fp8_qdq(low, out_shape=(1, 1, s, g * rank))
+            ttnn.deallocate(low)
+        else:
+            grouped = ttnn.experimental.nlp_concat_heads(low)  # [1, g, S, rank] -> [1, 1, S, g * rank]
+            quant = fp8_qdq(grouped)
+        out = ttnn.linear(quant, self.wo_b, compute_kernel_config=self.compute_kernel_config)
         return self.ccl.tp_reduce_scatter(out)
