@@ -44,5 +44,24 @@
     "reduction": "none: the processor fixes the patch count, and both buckets run at their maximum",
     "untested": "videos longer than 8 frames (32-frame video = batch 32 x 1280, not probed); non-default max_soft_tokens (70/140 for images)",
     "decode": "not applicable: one-pass bidirectional encoder per image / frame"
+  },
+  "audio": {
+    "component": "audio tower (Gemma4AudioModel: conv subsampling + 12 conformer layers + output_proj) + embed_audio (RMSNorm no scale + Linear 1536->512)",
+    "input_contract": "feature-extractor output: input_features [B, T, 128] log-mel (100 frames/s), input_features_mask [B, T] (True = valid, right padded)",
+    "tokens_per_second": 25,
+    "hf_max_frames_per_clip": 2999,
+    "hf_max_tokens_per_clip": 750,
+    "hf_max_evidence": "recon: 60 s of audio -> 750 tokens (feature extractor caps at 2999 frames); here 30.00 s -> 2999 frames -> 750 tokens",
+    "attention": "causal-local band 0 <= q - kv < 12 (HF chunk 12, context_left 13), evaluated on 32-query blocks x 64 keys",
+    "physical_token_buckets": [32, 64, 128, 256, 512, 768],
+    "frame_bucket": "4 x token bucket",
+    "supported_max_tokens_per_clip": 750,
+    "largest_tested_tokens_per_clip": 750,
+    "largest_tested_evidence": "tests/pcc/audio/test_audio_model.py::test_soft_tokens[s30] (30 s real speech, 750 tokens; soft-token PCC 0.99905 vs HF fp32) and test_audio_layer.py::test_conformer_stack[s30]",
+    "logical_tokens_tested": [1, 11, 12, 13, 16, 24, 25, 37, 50, 75, 100, 250, 750],
+    "largest_tested_batch": {"pcc": 2, "perf_traced": 4},
+    "reduction": "none: the feature extractor bounds a clip at 750 tokens and the largest bucket (768) runs it",
+    "untested": "batch > 4; act_dtype=float32 traced beyond batch 1",
+    "decode": "not applicable: one-pass causal-local encoder per clip; no streaming cache"
   }
 }

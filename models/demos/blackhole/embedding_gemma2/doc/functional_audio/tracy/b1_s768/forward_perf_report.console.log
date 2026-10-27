@@ -1,0 +1,12 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 130
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_AUDIO'.
+Using operations until 'PERF_AUDIO_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to forward_perf_report.csv
+Overall DRAM roofline (modeled ops): 7.6% (39 GB/s)
+Warning: Unclassified operation 'ReshapeCodegenDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to forward_perf_report_stacked.csv
+Plotting PNG stacked report to forward_perf_report_stacked.png

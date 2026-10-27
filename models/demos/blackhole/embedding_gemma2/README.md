@@ -6,9 +6,9 @@ token embedding, projection-only per-layer inputs (PLE), 24 bidirectional encode
 norm, 512->768 projection, masked mean pooling and L2 normalization. The output matches
 `SentenceTransformer("google/embeddinggemma-2").encode(text)` (`[Transformer, Pooling(mean), Normalize]`).
 
-Status: stage E1 (functional text encoder) and stage E2 (functional vision tower, see
-[Vision tower](#vision-tower)). The audio tower (`tt/audio`) and the multimodal merge come in
-later stages.
+Status: stage E1 (functional text encoder), stage E2 (functional vision tower, see
+[Vision tower](#vision-tower)) and stage E3 (functional audio tower, see
+[Audio tower](#audio-tower)). The multimodal merge comes in a later stage.
 
 ## Setup
 
@@ -133,16 +133,70 @@ Measured on real images and an 8-frame video: per-module PCC >= 0.99995 and soft
 the same reference. Traced latency is 55.6 ms for 1 image and 294.5 ms for a batch of 4. Details
 and limitations are in `doc/functional_vision/README.md`.
 
+## Audio tower
+
+`tt/audio/` implements HF `Gemma4AudioModel` + `embed_audio`:
+
+- subsampling: two on-device `ttnn.conv2d` (k3 s2) with channel LayerNorm, ReLU and input-mask
+  zeroing, then flatten and `input_proj`
+- 12 Macaron conformer layers: FFN1, chunked causal-local attention with the relative-position
+  term, per-dim query scale and logit softcap 50, LightConv1d (GLU, causal depthwise k5,
+  RMSNorm, SiLU), FFN2, norm_out
+- the checkpoint's per-tensor clip bounds folded into `ttnn.clamp`
+- `output_proj` 1024->1536 (+bias), then `embed_audio` (scale-free RMSNorm + Linear 1536->512)
+
+Clips run in token buckets of 32 to 768 (25 tokens per second, at most 750 tokens for 30 s).
+
+```python
+from models.demos.blackhole.embedding_gemma2.tt.audio.audio_encoder import AudioEncoder
+
+aenc = AudioEncoder.from_pretrained(device, "google/embeddinggemma-2")
+feats, mask = aenc.extract_features([waveform_16k])                 # HF feature extractor (host)
+soft = aenc.encode(feats, mask)                                     # list of [n_clip, 512], eager
+
+aenc.capture_all([(1, 256), (1, 768)])       # every (batch, token bucket) the session will replay
+soft = aenc.encode(feats, mask, traced=True)
+```
+
+| path | content |
+|---|---|
+| `tt/audio/config.py` | `AudioConfig` from the HF audio config; token buckets |
+| `tt/audio/weights.py` | audio / embed_audio tensor loading; clip bounds |
+| `tt/audio/clippable_linear.py` | `ClippableLinear` (clamp -> linear -> clamp, bounds folded) |
+| `tt/audio/subsample.py` | `AudioSubsample` (2 x conv2d + LN + ReLU + masks, input_proj) |
+| `tt/audio/feed_forward.py` | `AudioFeedForward` (Macaron half-step FFN) |
+| `tt/audio/attention.py` | `AudioAttention` (band attention on 32-row blocks, rel-pos shift, softcap); host `attention_mask` |
+| `tt/audio/light_conv.py` | `AudioLightConv1d` (GLU, causal depthwise conv by selection matmul) |
+| `tt/audio/conformer_layer.py` | `AudioConformerLayer` |
+| `tt/audio/embedder.py` | `AudioOutputProj`, `AudioEmbedder` (`embed_audio`) |
+| `tt/audio/audio_model.py` | `AudioModel` (device-only forward; `prepare` lays out conv weights per shape) |
+| `tt/audio/audio_encoder.py` | `AudioEncoder` (host: features, masks, upload, trace capture/replay, readback) |
+| `reference/hf_audio_reference.py` | HF fp32 audio reference + activation hooks |
+| `tests/pcc/audio/` | PCC per layer kind, crops around the 12-token chunk, 12-layer stack, soft tokens, trace, determinism, audit, perf |
+| `doc/functional_audio/` | stage report, work log, tt-perf-report artifacts |
+
+```bash
+pytest models/demos/blackhole/embedding_gemma2/tests/pcc/audio -q -k "not tracy"          # PCC + trace + audit + perf
+pytest models/demos/blackhole/embedding_gemma2/tests/pcc/audio/test_audio_perf.py -k traced -s
+```
+
+Measured on real in-tree speech (0.64 s to 30 s, and a padded batch of 2): per-layer-kind PCC
+>= 0.9997, and soft-token PCC 0.9984-0.9999 per clip vs the HF fp32 reference. HF's own bf16 run
+scores 0.9985-0.9999 against the same reference. Traced latency is 23.7 ms for a 10 s clip,
+47.8 ms for 30 s, and 80.5 ms for 4 x 10 s. Details, the fp32-activation precision lever and
+limitations are in `doc/functional_audio/README.md`.
+
 ## Out of scope (decoder-only items of the bring-up skill)
 
 This model is an encoder that returns one embedding per input. It has no paged KV cache, decode
 step, page table, current-position tensor or sampling, so none is built. Chunked prefill is not
 needed either: the whole sequence runs in one pass per bucket, up to 32768 tokens. The vision
-tower is also a one-pass bidirectional encoder per image (or video frame); the same items do not
-apply to it.
+tower is also a one-pass bidirectional encoder per image (or video frame), and the audio tower is
+a one-pass causal-local encoder per clip; the same items do not apply to them.
 
 ## Limitations
 
 See `doc/functional_text/README.md` (dense O(S^2) masks, power-of-two buckets, supported context
-32768 of the advertised 262144) and `doc/functional_vision/README.md` (dense key-padding mask,
-batch scaling, video tested up to 8 frames).
+32768 of the advertised 262144), `doc/functional_vision/README.md` (dense key-padding mask,
+batch scaling, video tested up to 8 frames) and `doc/functional_audio/README.md` (bf16
+activation drift vs HF-bf16, per-shape conv weight preparation, batch tested up to 4).
