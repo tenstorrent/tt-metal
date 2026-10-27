@@ -18,7 +18,6 @@
 #include "core/tt_tensor_utils.hpp"
 #include "xtensor/containers/xarray.hpp"
 #include "xtensor/core/xoperation.hpp"
-#include "xtensor/generators/xbuilder.hpp"
 
 // Helpers for the program-cache tests, which launch an op again on fresh tensors while the earlier launches' tensors
 // stay alive: a cache hit must read and write its own buffers on every core.
@@ -80,14 +79,12 @@ inline uint32_t partial_grid_seq_len(uint32_t padding) {
 
 // A bf16 TILE tensor of `value`, e.g. a preallocated output filled with a value the op cannot write.
 inline ttnn::Tensor filled_on_device(const std::vector<uint32_t>& shape, float value) {
-    xt::xarray<float> values = xt::empty<float>(std::vector<std::size_t>(shape.begin(), shape.end()));
-    values.fill(value);
-    return ttml::core::from_xtensor(values, &ttml::autograd::ctx().get_device());
+    return ttml::core::full(ttnn::Shape(shape), value, &ttml::autograd::ctx().get_device());
 }
 
 // A bf16 TILE tensor of zeros, e.g. for a preallocated output.
 inline ttnn::Tensor zeros_on_device(const std::vector<uint32_t>& shape) {
-    return filled_on_device(shape, 0.0F);
+    return ttml::core::zeros(ttnn::Shape(shape), &ttml::autograd::ctx().get_device());
 }
 
 // A later launch's tensor must not share a buffer with an earlier one's, or a hit that kept the old address would pass.

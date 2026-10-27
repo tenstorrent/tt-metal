@@ -46,15 +46,9 @@ uint32_t cursor_align_elems() {
     return tt::tt_metal::hal::get_l1_alignment() / sizeof(uint16_t);
 }
 
-uint32_t device_grid_cores() {
-    auto& device = ttml::autograd::ctx().get_device();
-    auto grid = device.compute_with_storage_grid_size();
-    return static_cast<uint32_t>(grid.x) * static_cast<uint32_t>(grid.y);
-}
-
 // Mirrors moe_group_device_operation.cpp's t_cap formula.
 uint32_t compute_t_cap(uint32_t e_local, uint32_t k, uint32_t d, uint32_t b, uint32_t s) {
-    const uint32_t num_total_cores = device_grid_cores();
+    const uint32_t num_total_cores = ttml::test_utils::num_worker_cores();
     const uint32_t cur_align = cursor_align_elems();
     const uint32_t unaligned =
         std::min(e_local, k) * d * b * s + e_local * (kTileH + (cur_align - 1U) * num_total_cores);
@@ -63,7 +57,7 @@ uint32_t compute_t_cap(uint32_t e_local, uint32_t k, uint32_t d, uint32_t b, uin
 
 // num_workers as picked by split_work_to_cores(grid, total_tiles).
 uint32_t compute_num_workers(uint32_t e_local, uint32_t k, uint32_t d, uint32_t b, uint32_t s) {
-    const uint32_t grid = device_grid_cores();
+    const uint32_t grid = ttml::test_utils::num_worker_cores();
     const uint32_t t_cap = compute_t_cap(e_local, k, d, b, s);
     return std::min(t_cap / kTileH, grid);
 }
@@ -403,7 +397,7 @@ constexpr uint32_t kCacheTestK = 2U;
 // two core groups (two combined, writer and tilize kernels) on any grid; and for which the last core's scan slice is
 // not empty, so that every core reads metadata and scores and scatters plan, grouped_scores and k_slot entries.
 uint32_t two_core_group_s(uint32_t D, uint32_t B) {
-    const uint32_t cores = device_grid_cores();
+    const uint32_t cores = ttml::test_utils::num_worker_cores();
     for (uint32_t s = kTileH;; s += kTileH) {
         const uint32_t tile_rows = compute_t_cap(kCacheTestELocal, kCacheTestK, D, B, s) / kTileH;
         const uint32_t tokens = D * B * s;
