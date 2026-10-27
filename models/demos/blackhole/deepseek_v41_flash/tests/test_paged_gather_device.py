@@ -28,11 +28,7 @@ def test_gather_roundtrip(mesh_device, dtype):
             ttnn.Shape(pool_shape), dtype, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
         )
 
-    class _Pool:  # the two attributes the ops read
-        pass
-
-    pl = _Pool()
-    pl.pool, pl.dtype, pl.device = pool, dtype, lambda: md
+    pl = pool  # (the ops take the pool TENSOR)
     x = torch.randn(N, 512) * 2
     x[:, :64] *= 2**-7  # subnormal range of e4m3
     x = x.to(torch.bfloat16)
