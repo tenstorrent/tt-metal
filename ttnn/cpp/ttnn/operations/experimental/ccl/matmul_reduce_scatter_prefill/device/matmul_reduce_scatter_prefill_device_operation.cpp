@@ -1,0 +1,206 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#include "matmul_reduce_scatter_prefill_device_operation.hpp"
+
+#include <algorithm>
+#include <initializer_list>
+#include <string_view>
+
+#include <tt-metalium/constants.hpp>
+
+#include "ttnn/tensor/tensor_ops.hpp"
+
+namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill {
+
+using namespace tt::tt_metal;
+
+namespace {
+
+template <typename T>
+void refuse_unless(bool supported, std::string_view axis, const T& value, std::string_view allowed) {
+    TT_FATAL(supported, "matmul_reduce_scatter_prefill: {}={} is not supported (supported: {})", axis, value, allowed);
+}
+
+bool is_one_of(DataType dtype, std::initializer_list<DataType> allowed) {
+    return std::find(allowed.begin(), allowed.end(), dtype) != allowed.end();
+}
+
+void check_dram_interleaved_tile(const Tensor& t, std::string_view what) {
+    const MemoryConfig& mc = t.memory_config();
+    TT_FATAL(
+        mc.buffer_type() == BufferType::DRAM && mc.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "matmul_reduce_scatter_prefill: {} must be DRAM interleaved",
+        what);
+    TT_FATAL(t.layout() == Layout::TILE, "matmul_reduce_scatter_prefill: {} must be TILE layout", what);
+}
+
+// The output must not share a buffer with an operand: fin entries write output tiles while other cores still read
+// A and W (and the resident operand is re-read across chunks), so no read-before-write order holds.
+void validate_output(const MatmulReduceScatterPrefillParams& attrs, const MatmulReduceScatterPrefillInputs& t) {
+    if (!t.output_tensor.has_value()) {
+        return;
+    }
+    const Tensor& output = *t.output_tensor;
+    const TensorSpec expected = MatmulReduceScatterPrefillDeviceOperation::compute_output_specs(attrs, t);
+    TT_FATAL(
+        output.logical_shape() == expected.logical_shape(),
+        "matmul_reduce_scatter_prefill: output_tensor shape {} does not match {}",
+        output.logical_shape(),
+        expected.logical_shape());
+    TT_FATAL(
+        output.dtype() == expected.data_type(),
+        "matmul_reduce_scatter_prefill: output_tensor dtype {} does not match {}",
+        output.dtype(),
+        expected.data_type());
+    TT_FATAL(
+        output.layout() == expected.layout(),
+        "matmul_reduce_scatter_prefill: output_tensor layout {} does not match {}",
+        output.layout(),
+        expected.layout());
+    TT_FATAL(
+        output.memory_config() == expected.memory_config(),
+        "matmul_reduce_scatter_prefill: output_tensor memory_config {} does not match {}",
+        output.memory_config(),
+        expected.memory_config());
+    TT_FATAL(
+        output.tensor_spec() == expected,
+        "matmul_reduce_scatter_prefill: output_tensor spec {} does not match {}",
+        output.tensor_spec(),
+        expected);
+    TT_FATAL(
+        output.buffer() != t.input_tensor.buffer() && output.buffer() != t.weight.buffer(),
+        "matmul_reduce_scatter_prefill: output_tensor must not share a buffer with input_tensor or weight (in place is "
+        "refused)");
+}
+
+}  // namespace
+
+void check_support(
+    const Tensor& input_tensor,
+    const Tensor& weight,
+    int32_t cluster_axis,
+    int32_t scatter_dim,
+    ttnn::ccl::Topology topology,
+    const std::optional<int32_t>& num_links) {
+    const auto& a_shape = input_tensor.logical_shape();
+    const auto& w_shape = weight.logical_shape();
+    TT_FATAL(a_shape.rank() >= 2, "matmul_reduce_scatter_prefill: input_tensor must have rank >= 2, got {}", a_shape);
+
+    refuse_unless(
+        is_one_of(input_tensor.dtype(), {DataType::BFLOAT16, DataType::BFLOAT8_B}),
+        "dtype",
+        input_tensor.dtype(),
+        "BFLOAT16, BFLOAT8_B");
+    refuse_unless(
+        is_one_of(weight.dtype(), {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::BFLOAT4_B}),
+        "weight_dtype",
+        weight.dtype(),
+        "BFLOAT16, BFLOAT8_B, BFLOAT4_B");
+    const Layout layout = input_tensor.layout() != Layout::TILE ? input_tensor.layout() : weight.layout();
+    refuse_unless(layout == Layout::TILE, "layout", layout, "TILE");
+    const bool aligned = a_shape[-2] % tt::constants::TILE_HEIGHT == 0 &&
+                         a_shape[-1] % tt::constants::TILE_WIDTH == 0 && w_shape[-1] % tt::constants::TILE_WIDTH == 0;
+    refuse_unless(aligned, "alignment", aligned ? "tile_aligned" : "non_aligned", "tile_aligned");
+    refuse_unless(cluster_axis == 0 || cluster_axis == 1, "cluster_axis", cluster_axis, "0, 1");
+    refuse_unless(scatter_dim == -1 || scatter_dim == -2, "scatter_dim", scatter_dim, "-1, -2");
+    refuse_unless(
+        topology == ttnn::ccl::Topology::Linear || topology == ttnn::ccl::Topology::Ring,
+        "topology",
+        static_cast<int>(topology),
+        "Linear, Ring");
+    if (num_links.has_value()) {
+        refuse_unless(*num_links == 1 || *num_links == 2, "num_links", *num_links, "1, 2");
+    }
+}
+
+void check_operands(
+    const Tensor& input_tensor, const Tensor& weight, const std::optional<MemoryConfig>& memory_config) {
+    const auto& a_shape = input_tensor.logical_shape();
+    const auto& w_shape = weight.logical_shape();
+    bool leading_ones = true;
+    for (int32_t i = 0; i + 2 < static_cast<int32_t>(a_shape.rank()); ++i) {
+        leading_ones = leading_ones && a_shape[i] == 1;
+    }
+    TT_FATAL(
+        a_shape.rank() >= 2 && a_shape.rank() <= 4 && leading_ones,
+        "matmul_reduce_scatter_prefill: A must be rank 2-4 with leading dims 1, got {}",
+        a_shape);
+    TT_FATAL(w_shape.rank() == 2, "matmul_reduce_scatter_prefill: W must be (K, N), got {}", w_shape);
+    TT_FATAL(a_shape[-1] == w_shape[0], "matmul_reduce_scatter_prefill: K mismatch, A {} vs W {}", a_shape, w_shape);
+    check_dram_interleaved_tile(input_tensor, "input_tensor");
+    check_dram_interleaved_tile(weight, "weight");
+    TT_FATAL(
+        !memory_config.has_value() || memory_config->memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "matmul_reduce_scatter_prefill: a sharded output memory_config is not supported");
+}
+
+MatmulReduceScatterPrefillDeviceOperation::program_factory_t
+MatmulReduceScatterPrefillDeviceOperation::select_program_factory(
+    const operation_attributes_t& /*attrs*/, const tensor_args_t& /*tensor_args*/) {
+    return MatmulReduceScatterPrefillProgramFactory{};
+}
+
+void MatmulReduceScatterPrefillDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& attrs, const tensor_args_t& t) {
+    // The public entry checked these before resolving the plan; a direct prim caller has not.
+    check_support(
+        t.input_tensor,
+        t.weight,
+        static_cast<int32_t>(attrs.cluster_axis),
+        attrs.scatter_dim,
+        attrs.topology,
+        std::nullopt);
+    check_operands(t.input_tensor, t.weight, attrs.output_memory_config);
+    validate_output(attrs, t);
+}
+
+void MatmulReduceScatterPrefillDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& attrs, const tensor_args_t& t) {
+    validate_output(attrs, t);
+}
+
+MatmulReduceScatterPrefillDeviceOperation::spec_return_value_t
+MatmulReduceScatterPrefillDeviceOperation::compute_output_specs(
+    const operation_attributes_t& attrs, const tensor_args_t& t) {
+    const uint32_t group = t.input_tensor.device()->shape()[attrs.cluster_axis];
+    TT_FATAL(group > 0, "matmul_reduce_scatter_prefill: cluster_axis {} has no devices", attrs.cluster_axis);
+    ttnn::Shape out_shape = t.input_tensor.logical_shape();
+    const uint32_t n = t.weight.logical_shape()[-1];
+    out_shape[-1] = n;
+    if (attrs.scatter_dim == -2) {
+        out_shape[-2] = out_shape[-2] / group;
+    } else {
+        out_shape[-1] = n / group;
+    }
+    return TensorSpec(
+        out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_memory_config));
+}
+
+MatmulReduceScatterPrefillDeviceOperation::tensor_return_value_t
+MatmulReduceScatterPrefillDeviceOperation::create_output_tensors(
+    const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (t.output_tensor.has_value()) {
+        return *t.output_tensor;
+    }
+    return create_device_tensor(compute_output_specs(attrs, t), t.input_tensor.device());
+}
+
+}  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill
+
+namespace ttnn::prim {
+
+Tensor matmul_reduce_scatter_prefill(
+    const Tensor& input_tensor,
+    const Tensor& weight,
+    const std::optional<Tensor>& output_tensor,
+    const ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::MatmulReduceScatterPrefillParams&
+        params) {
+    using OperationType =
+        ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::MatmulReduceScatterPrefillDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        params,
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .weight = weight, .output_tensor = output_tensor});
+}
+
+}  // namespace ttnn::prim
