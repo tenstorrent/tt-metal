@@ -437,9 +437,9 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(const std::shared_ptr<dist
     int num_cores_r = mesh_device->compute_with_storage_grid_size().y;
     int num_cores_c = mesh_device->compute_with_storage_grid_size().x;
 
-    uint32_t M = 16 * num_cores_r;
-    uint32_t K = 16 * 12;
-    uint32_t N = 16 * num_cores_c;
+    uint32_t M = 8 * num_cores_r;
+    uint32_t K = 16;
+    uint32_t N = 4 * num_cores_c;
     int out_subblock_h = 4;
     int out_subblock_w = 2;
     int in0_block_w = 2;
