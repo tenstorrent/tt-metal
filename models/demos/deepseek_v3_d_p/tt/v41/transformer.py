@@ -50,7 +50,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41.image_processor import 
 from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import routed_expert_dtype
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import mhc_expand
 from models.demos.deepseek_v3_d_p.tt.v41.block import TtV41Block
-from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
+from models.demos.deepseek_v3_d_p.tt.v41.cache import PACK, V41PrefillState, check_pack, pack_enabled, pack_segments
 from models.demos.deepseek_v3_d_p.tt.v41.dspark import TtV41DSpark
 from models.demos.deepseek_v3_d_p.tt.v41.engram import EngramChunkInputs
 from models.demos.deepseek_v3_d_p.tt.v41.head import TP_AXIS, TtV41Embedding, TtV41Head
@@ -141,6 +141,7 @@ class _HostChunk:
     types: torch.Tensor | None  # the first chunk's token types padded with TEXT, when it holds image spans
     tables: list | None = None  # generic states: ``V41ChunkTables.prepare_chunk_host`` (host tensors, buffers)
     cost: dict | None = None  # host seconds of making this chunk: hash, gather (Engram), tables
+    segments: tuple | None = None  # a packed chunk's layout, ((offset, length), ...) (TT_V41_PACK); None: a prompt
 
 
 def image_spans(token_types: torch.Tensor) -> list[tuple[int, int]]:
@@ -425,18 +426,19 @@ class TtV41Transformer(LightweightModule):
         """Write a chunk's host inputs into the request's device input buffers (allocated by its first chunk, so
         every chunk's forward reads fixed addresses) -> (token ids, Engram inputs) on device. ``tables`` (a generic
         state's ``V41ChunkTables``): the chunk's position inputs are filled too (``prepare_chunk``), in the same
-        dispatch round as the rest with ``TT_V41_PREFILL_HOST_BATCH=1``."""
+        dispatch round as the rest with ``TT_V41_PREFILL_HOST_BATCH=1``. A packed chunk's layout (``host.segments``,
+        ``TT_V41_PACK``) goes to ``prepare_chunk`` with it."""
         if "token_ids" not in buffers:
             buffers["token_ids"] = ttnn.to_device(host.token_ids, self.mesh_device)
             buffers["engram"] = {l: e.to_device(self.mesh_device) for l, e in host.engram.items()}
             if tables is not None:
-                tables.prepare_chunk(host.start, host.length, host.tables)
+                tables.prepare_chunk(host.start, host.length, host.tables, segments=host.segments)
             return buffers["token_ids"], dict(buffers["engram"])
         if not prefill_host_batch():
             ttnn.copy_host_to_device_tensor(host.token_ids, buffers["token_ids"])
             engram = {l: e.copy_into(buffers["engram"][l]) for l, e in host.engram.items()}
             if tables is not None:
-                tables.prepare_chunk(host.start, host.length, host.tables)
+                tables.prepare_chunk(host.start, host.length, host.tables, segments=host.segments)
             return buffers["token_ids"], engram
         pairs = [(host.token_ids, buffers["token_ids"])]
         engram = {}
@@ -444,7 +446,7 @@ class TtV41Transformer(LightweightModule):
             pairs += e.copy_pairs(buffers["engram"][l])
             engram[l] = e.device_inputs(buffers["engram"][l])
         if tables is not None:
-            tables.prepare_chunk(host.start, host.length, host.tables, pairs=pairs)
+            tables.prepare_chunk(host.start, host.length, host.tables, pairs=pairs, segments=host.segments)
         ttnn.copy_host_to_device_tensors([h for h, _ in pairs], [d for _, d in pairs])
         return buffers["token_ids"], engram
 
@@ -481,9 +483,12 @@ class TtV41Transformer(LightweightModule):
         if self.dspark is not None:
             self.dspark.seed(taps, start, length, state.dspark_rings, rope)
         scored = []
-        if start + length > first_scored:
+        if host.segments is not None:  # packed: each segment's last row (in segment order)
+            rows = [offset + n - 1 for offset, n in host.segments]
+        else:
+            rows = list(range(max(first_scored - start, 0), length)) if start + length > first_scored else []
+        if rows:
             final = ttnn.typecast(self.blocks[-1].residual.final_collapse(x, pre), ttnn.bfloat16)
-            rows = list(range(max(first_scored - start, 0), length))
             while rows:  # one head projection per distinct 32-row tile (a tile never spans chips)
                 logits, (sp_row, offset) = self.head(final, rows[0])
                 first = rows[0] - offset
@@ -652,6 +657,74 @@ class TtV41Transformer(LightweightModule):
 
     def new_state(self, generic: bool = False) -> V41PrefillState:
         return self._new_state(generic)
+
+    # --- packed chunks (TT_V41_PACK) ----------------------------------------------
+    def _host_pack(self, prompts: list[torch.Tensor]) -> _HostChunk:
+        """The host inputs of one chunk holding ``prompts`` concatenated from row 0: the token ids, each prompt's
+        Engram hash from an empty history (an n-gram never spans two prompts) and the layout."""
+        segments = pack_segments([int(t.numel()) for t in prompts])
+        check_pack(segments, self.chunk, {self.config.compress_ratio(l) for l in self.layers})
+        tokens = torch.cat([t.to(torch.int64) for t in prompts])
+        total = int(tokens.numel())
+        chunk_tokens = torch.zeros(self.chunk, dtype=torch.int64)
+        chunk_tokens[:total] = tokens
+        engram = {}
+        cost = {"hash": 0.0, "gather": 0.0, "tables": 0.0}
+        if self.engram:
+            t0 = time.perf_counter()
+            ids = torch.cat([self.engram_hash(t, self.engram_hash.new_history())[0] for t in prompts])
+            cost["hash"] = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            engram = {
+                l: e.prepare_host(ids[:, self.engram_hash.layer_index(l)], self.chunk, None)
+                for l, e in self.engram.items()
+            }
+            cost["gather"] = time.perf_counter() - t0
+        return _HostChunk(0, total, self._token_ids(chunk_tokens, device=False), engram, None, None, cost, segments)
+
+    def prefill_packed(
+        self,
+        prompts: list[torch.Tensor],
+        state: V41PrefillState,
+        buffers: dict | None = None,
+        on_block: Callable | None = None,
+        timings: dict | None = None,
+        step: Callable | None = None,
+    ) -> tuple[torch.Tensor, tuple]:
+        """Prefill several whole text prompts (each ``[S_i]``, ratio-aligned lengths whose sum fits one chunk) in one
+        chunk of ``state`` (generic, reset first), each prompt isolated from the others (``V41ChunkTables``'s packed
+        fills: its own positions, window rows, index-mask bounds, Engram history, window carries and scored row)
+        -> (fp32 logits ``[len(prompts), vocab]`` of each prompt's last position, the layout ``((offset, length),
+        ...)``). After the call the state holds every prompt's rows at its segment's offset (compressed and
+        index-K rows at ``offset / ratio``, the window scratch at ``WINDOW_SLOT + offset``), each segment's window
+        carries in ``state.segment_carry[g]`` and ``state.start`` at the pack's end; a segment joins a decode slot
+        from those rows (the pool's segment join). ``step(forward)`` runs the chunk's device forward (default
+        ``forward()``; a test's capture hook). Eager only (captures are)."""
+        assert pack_enabled(), f"{PACK}=1 is required"
+        assert state.generic, "packed chunks run on generic states"
+        buffers = {} if buffers is None else buffers
+        t = timings if timings is not None else {}
+        t0 = time.perf_counter()
+        self.reset_state(state)
+        t["reset"] = t.get("reset", 0.0) + time.perf_counter() - t0
+        t0 = time.perf_counter()
+        host = self._host_pack(prompts)
+        t["prepare"] = t.get("prepare", 0.0) + time.perf_counter() - t0
+        for k, v in host.cost.items():
+            t[k] = t.get(k, 0.0) + v
+        t0 = time.perf_counter()
+        token_ids, engram_inputs = self._stage(host, buffers)
+        state.tables.prepare_chunk(0, host.length, None, segments=host.segments)
+        t["stage"] = t.get("stage", 0.0) + time.perf_counter() - t0
+        t0 = time.perf_counter()
+        forward = lambda: self._chunk_forward(state, host, token_ids, engram_inputs, None, None, 0, on_block)
+        scored = forward() if step is None else step(forward)
+        t["step"] = t.get("step", 0.0) + time.perf_counter() - t0
+        state.advance(host.length)
+        t0 = time.perf_counter()
+        logits = self._logits(scored)
+        t["logits"] = t.get("logits", 0.0) + time.perf_counter() - t0
+        return logits, host.segments
 
     def reset_state(self, state: V41PrefillState) -> None:
         """``state`` as a fresh request starts from, where the first chunk reads it: position 0, zero window carries

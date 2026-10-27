@@ -29,6 +29,7 @@ Ratio-0 (sliding-window-only) layers keep BF16 in both stages: their window KV h
 block-32 values exactly, and no compressed rows share their tensor.
 """
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -47,9 +48,37 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 
 WINDOW_SLOT = 128  # >= sliding_window - 1 carried rows, tile aligned
 
+# "1": a generic state may run a packed chunk (several whole prompts concatenated in one chunk, each isolated by
+# its own RoPE positions, window rows, index-mask bounds, carries and scored row; 
+# ``TtV41Transformer.prefill_packed``). Off (the default), nothing in the chunk graph changes.
+PACK = "TT_V41_PACK"
+
+
+def pack_enabled() -> bool:
+    return os.environ.get(PACK, "0") == "1"
+
 
 def _round_up(x: int, m: int) -> int:
     return -(-x // m) * m
+
+
+def pack_segments(lengths: list[int]) -> tuple[tuple[int, int], ...]:
+    """The ``(offset, length)`` of each prompt of a pack laid out contiguously from row 0 (layout L-A)."""
+    segments, offset = [], 0
+    for n in lengths:
+        segments.append((offset, int(n)))
+        offset += int(n)
+    return tuple(segments)
+
+
+def check_pack(segments, chunk: int, ratios) -> None:
+    """A pack fits the chunk and every segment starts and ends on a ratio-group boundary (the compressor pairs
+    ``(2i, 2i + 1)`` must not straddle a prompt, and a segment's compressed rows must be whole groups)."""
+    align = max([r for r in ratios if r > 0] or [1])
+    assert len(segments) >= 1 and all(n > 0 for _, n in segments), segments
+    assert all(o % align == 0 and n % align == 0 for o, n in segments), f"segments must be multiples of {align}"
+    end = segments[-1][0] + segments[-1][1]
+    assert end <= chunk, f"pack of {end} rows does not fit the {chunk}-row chunk"
 
 
 # per-chip bytes of the one zero block a state uploads per tensor; larger caches are zeroed by device copies of it (a
@@ -176,6 +205,7 @@ class V41ChunkTables:
         self._window = {w: self._window_table(w) for w in {min(s, window - 1) for s in range(0, max_seq_len, chunk)}}
         self._query_first = self._query_first_table()
         self._rope, self._visibility = {}, {}
+        self._segments = None  # the packed layout being run (generic states only, TT_V41_PACK)
         if generic:
             self._init_generic(ratios, kinds)
             return
@@ -235,6 +265,16 @@ class V41ChunkTables:
         self._chunk_start = None
         self._host_cache: dict[int, list] = {}
         self._chunk_masks = None  # per-chunk row-major masks shared by the index sources (begin_chunk_masks)
+        # packed chunks (TT_V41_PACK): per ratio the per-query lower bound of the index mask
+        # (the first compressed row of the query's segment, [1, 1, rows, 1] fp32 tiled like ``_visible``), the
+        # window-row table per layout (``window_rows``) and the packed host fills per layout; ``_segments`` is the
+        # layout of the chunk being run (None: a single prompt, the graph of before)
+        self._base = {}
+        if pack_enabled():
+            self._base = {r: self._per_query_chip(torch.zeros(self.chunk, 1), ttnn.float32) for r in ratios if r > 0}
+        self._pack_windows: dict[tuple, ttnn.Tensor] = {}
+        self._pack_host: dict[tuple, list] = {}
+        self._segments = None
 
     def _sharded_u32(self, host):
         return ttnn.from_torch(
@@ -339,24 +379,105 @@ class V41ChunkTables:
         _, a, b = seed_rows(length, self.config.SLIDING_WINDOW)
         return tuple(ttnn.slice(t, [0, 0, 0, 0], [1, 1, b - a, t.shape[3]]) for t in self._dspark_rope)
 
-    def prepare_chunk(self, start: int, length: int, host: list | None = None, pairs: list | None = None) -> None:
+    def prepare_chunk(
+        self, start: int, length: int, host: list | None = None, pairs: list | None = None, segments=None
+    ) -> None:
         """Host-fill the chunk's input buffers: RoPE rows, the pin page, the visible counts, the row indices. Runs
         between a chunk's ``_stage`` and its forward (or replay); no device work beyond the copies (ordered on the
         command queue after the replays issued before them). ``host``: ``prepare_chunk_host(start)`` made ahead.
         ``pairs``: a list the (host, buffer) pairs are appended to instead of copied, for a batched upload
-        (``TtV41Transformer._stage`` with ``TT_V41_PREFILL_HOST_BATCH=1``)."""
+        (``TtV41Transformer._stage`` with ``TT_V41_PREFILL_HOST_BATCH=1``). ``segments``: a packed chunk's layout
+        (``prepare_pack_host``; ``start`` is 0): the fills are per segment and the chunk's graph adds the index
+        mask's lower bound and takes the layout's window rows."""
         assert self.generic
-        items = self.prepare_chunk_host(start) if host is None else host
-        if self._dspark_rope is not None and length != self.chunk:  # a partial final chunk: its own seed rows
-            # replace the full chunk's rope rows, so a batched upload writes each buffer once
-            rope = self._dspark_rope
-            items = [it for it in items if not any(it[1] is b for b in rope)] + self._dspark_rope_host(start, length)
+        if segments is not None:
+            assert start == 0, start
+            items = self.prepare_pack_host(segments) if host is None else host
+        else:
+            items = self.prepare_chunk_host(start) if host is None else host
+            if self._dspark_rope is not None and length != self.chunk:  # a partial final chunk: its own seed rows
+                # replace the full chunk's rope rows, so a batched upload writes each buffer once
+                rope = self._dspark_rope
+                items = [it for it in items if not any(it[1] is b for b in rope)] + self._dspark_rope_host(start, length)
         if pairs is not None:
             pairs.extend(items)
         else:
             for tensor, buffer in items:
                 ttnn.copy_host_to_device_tensor(tensor, buffer)
         self._chunk_start = start
+        self._segments = None if segments is None else tuple(segments)
+
+    @property
+    def segments(self):
+        """The layout of the packed chunk being run (``prepare_chunk(..., segments=...)``), or None."""
+        return self._segments
+
+    # --- packed chunks (TT_V41_PACK) -------------------------------------------------------
+    @staticmethod
+    def _segment_starts(segments, chunk: int) -> torch.Tensor:
+        """[chunk] int64: the start row of the segment holding each chunk row (the pad rows after the pack form a
+        segment of their own at the pack's end: never read by a valid query)."""
+        starts = torch.zeros(chunk, dtype=torch.int64)
+        for offset, length in segments:
+            starts[offset : offset + length] = offset
+        end = segments[-1][0] + segments[-1][1]
+        starts[end:] = end
+        return starts
+
+    def prepare_pack_host(self, segments) -> list[tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """``prepare_chunk_host`` of a packed chunk at start 0 (kept per layout): the RoPE rows at each row's
+        position within its segment (the compressed tables at the group-first rows' local positions, whole groups
+        since segments are ratio-aligned), the pin page and the visible counts as at start 0 (a query's visible
+        count ``(i + 1) // r`` is unchanged: its segment's rows are at ``[offset / r, (i + 1) // r)``), the lower
+        bound ``offset / r`` per query (``_base``) and the row indices as at start 0 (the pack's compressed rows
+        are contiguous)."""
+        assert self.generic and self._base, "packed chunks need TT_V41_PACK=1 at the state's construction"
+        segments = tuple(segments)
+        cached = self._pack_host.get(segments)
+        if cached is not None:
+            return cached
+        chunk = self.chunk
+        starts = self._segment_starts(segments, chunk)
+        local = torch.arange(chunk) - starts
+        pairs = []
+        for (compressed, stride), buffers in self._rope_buffers.items():
+            positions = local[::stride]
+            for host, buffer in zip(cos_sin(self.config, compressed, positions), buffers):
+                pairs.append((self._host_replicated(host, ttnn.bfloat16), buffer))
+        single = {id(buffer): tensor for tensor, buffer in self._prepare_chunk_host(0)}  # pin, visible, row index
+        pairs.append((single[id(self._pin)], self._pin))
+        for r, buffer in self._visible.items():
+            pairs.append((single[id(buffer)], buffer))
+        for r, buffer in self._base.items():
+            base = (starts // r).float().view(chunk, 1).reshape(self.sp, self.tp, self._query_rows, 1)
+            pairs.append(
+                (
+                    ttnn.from_torch(
+                        base,
+                        dtype=ttnn.float32,
+                        layout=ttnn.TILE_LAYOUT,
+                        mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, 1)),
+                    ),
+                    buffer,
+                )
+            )
+        for r, buffer in self._row_index.items():
+            pairs.append((single[id(buffer)], buffer))
+        self._pack_host[segments] = pairs
+        return pairs
+
+    def _pack_window_table(self, segments):
+        """``_window_table(0)`` of a layout: rows ``WINDOW_SLOT + i + o`` of query i, -1 where ``i + o`` lies before
+        the query's segment (the previous prompt's last rows are not its window)."""
+        return self._per_query_chip(self.pack_window_rows_host(segments), ttnn.int32)
+
+    def pack_window_rows_host(self, segments) -> torch.Tensor:
+        """The host form of the layout's window table ([chunk, window] int32, chunk query order)."""
+        window = self.config.SLIDING_WINDOW
+        i = torch.arange(self.chunk).view(-1, 1)
+        offset = torch.arange(-(window - 1), 1).view(1, -1)
+        starts = self._segment_starts(tuple(segments), self.chunk).view(-1, 1)
+        return torch.where(i + offset >= starts, WINDOW_SLOT + i + offset, -1).to(torch.int32)
 
     def _host_replicated(self, host, dtype, layout=ttnn.TILE_LAYOUT):
         """A replicated host tensor (``copy_host_to_device_tensor`` into a replicated device buffer)."""
@@ -377,6 +498,8 @@ class V41ChunkTables:
         assert self.generic
         iota = ttnn.slice(self._iota[ratio], [0, 0, 0, 0], [1, 1, 1, width])
         beyond = ttnn.ge(iota, self._visible[ratio])
+        if self._segments is not None:  # packed: the columns before the query's segment are not its rows either
+            beyond = ttnn.logical_or(beyond, ttnn.lt(iota, self._base[ratio]))
         return ttnn.typecast(ttnn.where(beyond, float("-inf"), 0.0), ttnn.bfloat16)
 
     # --- the masks built once per chunk (TT_V41_PREFILL_MASK_ONCE) ------------------------
@@ -405,9 +528,14 @@ class V41ChunkTables:
             # bf16 from the comparison on (no fp32 intermediate to typecast), untilized once for the chunk
             iota = ttnn.slice(self._iota[ratio], [0, 0, 0, 0], [1, 1, 1, width])
             beyond = ttnn.ge(iota, self._visible[ratio], dtype=ttnn.bfloat16)
+            transient = [beyond]
+            if self._segments is not None:  # packed: a two-sided bound, [base, visible) per query
+                before = ttnn.lt(iota, self._base[ratio], dtype=ttnn.bfloat16)
+                beyond = ttnn.logical_or(beyond, before)
+                transient += [before, beyond]
             tiled = ttnn.where(beyond, float("-inf"), 0.0)
             mask = ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT)
-            for t in (beyond, tiled):  # not the iota slice: at the widest bucket it is the table itself
+            for t in transient + [tiled]:  # not the iota slice: at the widest bucket it is the table itself
                 ttnn.deallocate(t)
             self._chunk_masks[(ratio, width)] = mask
         return mask
@@ -486,7 +614,14 @@ class V41ChunkTables:
         return tuple(out)
 
     def window_rows(self, start: int):
-        """Per-chip [1, 1, chunk/(sp*tp), window] int32 tiled rows of the chunk's causal windows (-1: none)."""
+        """Per-chip [1, 1, chunk/(sp*tp), window] int32 tiled rows of the chunk's causal windows (-1: none); a
+        packed chunk's are its layout's (``_pack_window_table``, resident per layout)."""
+        if self._segments is not None:
+            assert start == 0, start
+            table = self._pack_windows.get(self._segments)
+            if table is None:
+                table = self._pack_windows[self._segments] = self._pack_window_table(self._segments)
+            return table
         return self._window[min(start, self.config.SLIDING_WINDOW - 1)]
 
     def visibility_tail(self, ratio: int, width: int):
@@ -582,6 +717,10 @@ class V41PrefillState:
             )
             for l in self.compressor_carry
         }
+        # packed chunks (TT_V41_PACK): each segment's own window carries, per segment index then layer, allocated
+        # at a segment's first packed chunk (``segment_window_carry``); the join of a segment takes them instead of
+        # ``window_carry`` (which holds the pack's last segment's, as a single prompt's would)
+        self.segment_carry: dict[int, dict[int, ttnn.Tensor]] = {}
         # chunk-transient sharing: the latest index source's top-k and the candidate source's CandidateBlocks
         self.selection = {}
         # DSpark window rings (one per DSpark layer, slot p % window), set by the transformer when DSpark runs
@@ -717,12 +856,33 @@ class V41PrefillState:
             self._write_rows(cache, row, offset + dst)
             ttnn.deallocate(row)
 
+    def segment_window_carry(self, segment: int, layer: int) -> ttnn.Tensor:
+        """The window carry buffer of packed segment ``segment`` for ``layer`` (WINDOW_SLOT rows in the layer's KV
+        format), allocated at first use."""
+        carries = self.segment_carry.setdefault(segment, {})
+        if layer not in carries:
+            fmt = self.layer_kv_format(layer)
+            carries[layer] = replicated_zeros(
+                self.mesh_device, WINDOW_SLOT, fmt.storage_width(self.kv_geometry), fmt.storage_dtype
+            )
+        return carries[layer]
+
     def update_window_carry(self, layer: int, length: int):
         """After ``layer``'s attention: its carry becomes the last WINDOW_SLOT rows ending at the chunk's
-        last valid token (rows [length, length + WINDOW_SLOT) of the window region)."""
+        last valid token (rows [length, length + WINDOW_SLOT) of the window region). A packed chunk also writes
+        each segment's carry (the WINDOW_SLOT rows ending at the segment's last token) into the segment's own
+        buffer."""
         src = self.kv_tensor(layer)
         carry = ttnn.slice(src, [0, 0, length, 0], [1, 1, length + WINDOW_SLOT, src.shape[3]])
         self._write_rows(self.window_carry[layer], carry, 0)
+        segments = self.tables.segments
+        if segments is not None:
+            for g, (offset, n) in enumerate(segments):
+                end = offset + n
+                rows = (
+                    carry if end == length else ttnn.slice(src, [0, 0, end, 0], [1, 1, end + WINDOW_SLOT, src.shape[3]])
+                )
+                self._write_rows(self.segment_window_carry(g, layer), rows, 0)
 
     def set_compressor_carry(self, source: int, carry, length: int):
         """Keep the fp32 projections of a trailing incomplete ratio group (valid length not a multiple of the

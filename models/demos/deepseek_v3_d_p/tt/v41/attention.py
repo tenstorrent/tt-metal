@@ -6,19 +6,23 @@
 
 q = wq_b(q_norm(wq_a(x))) with RoPE on the trailing 64 channels (no per-head norm); window KV
 kv_norm(wkv(x)), RoPE, FP8 QDQ (BF16 KV format; the SCALED_FP8 format encodes the unrounded KV, epic KV
-FORMAT; likewise the compressed KV's FP4 QDQ). Compressed layers attend over their KV source's compressed rows too:
+FORMAT; likewise the compressed KV's FP4 QDQ). Compressed layers attend over their KV source's compressed rows
+too:
 a KV source runs its compressor, index keys and compressed-KV write; an index source runs its indexer
 (the candidate source publishes candidate blocks); consumers reuse the top-k their index source published
 this chunk. One ``sparse_sdpa`` over the layer's KV tensor (``cache.V41PrefillState``: window region + the
-source's compressed rows) with the per-head sink, inverse RoPE, grouped low-rank output projection. Position-dependent
-inputs (RoPE, window rows) are device slices of ``state.tables`` (``cache.V41ChunkTables``): the forward uploads
+source's compressed rows) with the per-head sink, inverse RoPE, grouped low-rank output projection.
+Position-dependent
+inputs (RoPE, window rows) are device slices of ``state.tables`` (``cache.V41ChunkTables``): the forward
+uploads
 nothing, so it can be traced.
 
 Every quantized GEMM input gets the reference's FP8 activation QDQ (dev-spec D-I). Layout: input/output
 ``[1, 1, S/sp, hidden/tp]``; the attention itself runs on a sequence shard of all heads (head->sequence
 all-to-all over TP), which is also the query layout of the indexer's selection. The queries stay in the
 projection's seq-major layout through that all-to-all; one fused op (``head_layout.q_heads``) splits them into
-sparse_sdpa's row-major heads with the RoPE tail, and one (``head_layout.o_heads``) takes the output back to the
+sparse_sdpa's row-major heads with the RoPE tail, and one (``head_layout.o_heads``) takes the output back to
+the
 tiled head groups of ``wo_a`` with the inverse RoPE (no create / concat-heads or RoPE-tail glue ops).
 """
 
@@ -41,14 +45,18 @@ from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
 TOPK_ALIGN = 32  # topk_large_indices needs a multiple of 16; sparse_sdpa k chunks a multiple of 32
-# the output projection's head concatenation on the decode tile: ``op`` (``nlp_concat_heads``, one core, ~26 us) or
+# the output projection's head concatenation on the decode tile: ``op`` (``nlp_concat_heads``, one core, ~26
+# us) or
 # ``qdq`` (folded into the FP8 QDQ's output shape)
 _CONCAT = os.environ.get("V41_DECODE_CONCAT", "op")
 assert _CONCAT in ("op", "qdq"), _CONCAT
-# the decode step's SDPA: ``gather`` (the queries all-gathered over TP, every chip's sparse_sdpa over all 64 heads and
-# its own groups of the output kept) or ``local`` (each chip's 16 heads padded with zero heads to the 32 sparse_sdpa
+# the decode step's SDPA: ``gather`` (the queries all-gathered over TP, every chip's sparse_sdpa over all 64
+# heads and
+# its own groups of the output kept) or ``local`` (each chip's 16 heads padded with zero heads to the 32
+# sparse_sdpa
 # takes: no all-gather, half the SDPA, no partition) or ``flash`` (the local heads through the
-# flash-decode program of tt/v41/flash_sdpa.py: the live rows' keys split over the grid, one merge a row). The prefill keeps its head-to-sequence all-to-all.
+# flash-decode program of tt/v41/flash_sdpa.py: the live rows' keys split over the grid, one merge a row). The
+# prefill keeps its head-to-sequence all-to-all.
 _SDPA = os.environ.get("V41_DECODE_SDPA", "gather")
 assert _SDPA in ("gather", "local", "flash"), _SDPA
 SDPA_MIN_HEADS = 32  # sparse_sdpa: H a multiple of the tile height
@@ -59,9 +67,12 @@ def _round_up(x: int, m: int) -> int:
 
 
 def compact_leading_rows(rows, n: int, window: int):
-    """In place on the uint32 row-major [1, 1, R, K] index rows (DRAM-interleaved): each of the first ``n`` rows is
-    shifted left by its count m of sentinels (0xFFFFFFFF) among its first ``window`` entries, the last m entries set
-    to the sentinel. One data-movement op (kernels/index_rows_compact.cpp): a row per core, rows with m = 0 are
+    """In place on the uint32 row-major [1, 1, R, K] index rows (DRAM-interleaved): each of the first ``n``
+    rows is
+    shifted left by its count m of sentinels (0xFFFFFFFF) among its first ``window`` entries, the last m
+    entries set
+    to the sentinel. One data-movement op (kernels/index_rows_compact.cpp): a row per core, rows with m = 0
+    are
     not written. Returns ``rows`` (generic_op io: the input doubles as the output)."""
     memory = rows.memory_config()
     assert rows.layout == ttnn.ROW_MAJOR_LAYOUT and rows.dtype == ttnn.uint32, (rows.layout, rows.dtype)
@@ -85,17 +96,22 @@ def compact_leading_rows(rows, n: int, window: int):
     return ttnn.generic_op([rows, rows], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs))
 
 
-# Dense projections on a 2D-multicast program config (bead 8y7.9.7): ttnn's default config for these shapes is 1.4-2x
-# slower at chunk 5120. The K block is per projection: bf16 partial sums round more with wider blocks, so each takes the
+# Dense projections on a 2D-multicast program config (bead 8y7.9.7): ttnn's default config for these shapes is
+# 1.4-2x
+# slower at chunk 5120. The K block is per projection: bf16 partial sums round more with wider blocks, so each
+# takes the
 # widest that keeps the default's accuracy (tests/v41/test_v41_attention_matmuls.py sweeps and checks them).
 MATMUL_GRID = (11, 10)  # as tt/mla/mla_config.py
 DENSE_IN0_BLOCK_W = {"wq_a": 5, "wkv": 5, "wq_b": 5, "wo_a": 8}
-# One tile row (the decode step): the projections where a 1D multicast config (N over the grid, the row multicast)
-# beats the 2D one's single grid row in the micro-benchmark (wq_b 41 to 35 us, wo_a 48 to 43); the two small ones
+# One tile row (the decode step): the projections where a 1D multicast config (N over the grid, the row
+# multicast)
+# beats the 2D one's single grid row in the micro-benchmark (wq_b 41 to 35 us, wo_a 48 to 43); the two small
+# ones
 # are below what an eager loop resolves.
 DECODE_1D = {"wq_b", "wo_a"}
 DENSE_L1_BUDGET = 1 << 20  # bytes of output block + double-buffered in0 / in1 blocks per core
-# ttnn.linear without a program config runs bf16 x bfp8 at HiFi2 with packer L1 accumulation; a program config alone
+# ttnn.linear without a program config runs bf16 x bfp8 at HiFi2 with packer L1 accumulation; a program config
+# alone
 # would select LoFi. Every projection runs this explicit config (the default's numerics).
 DENSE_COMPUTE_CONFIG = ttnn.types.BlackholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
@@ -103,8 +119,10 @@ DENSE_COMPUTE_CONFIG = ttnn.types.BlackholeComputeKernelConfig(
 
 
 def dense_program_config(m: int, k: int, n: int, in0_block_w: int, one_d: bool = False):
-    """2D-multicast config of a [m, k] x [k, n] bf16 x bfp8 matmul (per batch) on ``MATMUL_GRID``, or None (ttnn's
-    default) when the blocks do not fit ``DENSE_L1_BUDGET`` or ``in0_block_w`` does not divide K; ``one_d`` and one
+    """2D-multicast config of a [m, k] x [k, n] bf16 x bfp8 matmul (per batch) on ``MATMUL_GRID``, or None
+    (ttnn's
+    default) when the blocks do not fit ``DENSE_L1_BUDGET`` or ``in0_block_w`` does not divide K; ``one_d``
+    and one
     tile row: the 1D multicast config."""
     tile = 32
     mt, kt, nt = m // tile, k // tile, n // tile
@@ -236,7 +254,8 @@ class TtV41Attention(LightweightModule):
         self.indexer = TtV41Indexer(mesh_device, config, layer, weights["indexer"]) if self.is_index_source else None
 
     def _dense(self, x, name: str):
-        """``x @ self.<name>`` on its tuned program config; on the decode tile (one tile row, DRAM-interleaved)
+        """``x @ self.<name>`` on its tuned program config; on the decode tile (one tile row,
+        DRAM-interleaved)
         with ``V41_DECODE_DENSE=matvec`` the :class:`DecodeDense` program of that weight."""
         w = getattr(self, name)
         if DECODE_DENSE == "matvec" and int(x.shape[-2]) == 32 and not x.memory_config().is_sharded():
@@ -260,15 +279,21 @@ class TtV41Attention(LightweightModule):
         )
         return ttnn.concat([nope, rope], dim=-1)
 
-    def _index_rows(self, window, window_base: int, compressed, start: int):
+    def _index_rows(self, window, window_base: int, compressed, start: int, packed: bool = False):
         """``window``: the chunk's per-chip window rows (``V41ChunkTables.window_rows``) -> per-chip
         [1, 1, S/(sp*tp), K] uint32 rows into the KV tensor, valid first, sentinel tail.
 
         Both parts are valid-first except the window of a query with fewer than ``window`` earlier tokens: its
-        missing rows are a leading run of -1 (``_window_table``); the top-k has a sentinel tail. So [window | top-k]
-        is valid-first for every query at or after position window - 1; the earlier ones are compacted: a chip's rows
-        are contiguous query positions, so only its first ``compact_rows`` rows can lack window rows (the others,
-        with m = 0, are left as they are)."""
+        missing rows are a leading run of -1 (``_window_table``); the top-k has a sentinel tail. So [window |
+        top-k]
+        is valid-first for every query at or after position window - 1; the earlier ones are compacted: a
+        chip's rows
+        are contiguous query positions, so only its first ``compact_rows`` rows can lack window rows (the
+        others,
+        with m = 0, are left as they are). ``packed``: every segment's first rows can lack window rows,
+        wherever the
+        segment starts on the chip, so every row of the chip is compacted (rows with m = 0 are not
+        written)."""
         if compressed is None:
             rows = window
         else:
@@ -280,7 +305,9 @@ class TtV41Attention(LightweightModule):
         if k != width:
             rows = ttnn.pad(rows, [(0, 0), (0, 0), (0, 0), (0, k - width)], -1)
         rows = ttnn.to_layout(ttnn.typecast(rows, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
-        if start < self.window - 1:
+        if packed:
+            rows = compact_leading_rows(rows, rows.shape[2], window.shape[3])
+        elif start < self.window - 1:
             # the missing window rows are the leading -1 run: shift it past the top-k's sentinel tail
             rows = compact_leading_rows(rows, min(self.compact_rows, rows.shape[2]), window.shape[3])
         return rows
@@ -339,10 +366,14 @@ class TtV41Attention(LightweightModule):
                     state.selection["candidates"] = candidates
             else:
                 compressed = state.selection["topk"]
-        rows = self._index_rows(tables.window_rows(start), state.geometry.window_rows, compressed, start)
+        rows = self._index_rows(
+            tables.window_rows(start), state.geometry.window_rows, compressed, start, packed=tables.segments is not None
+        )
 
-        # sparse_sdpa needs >= 32 heads per chip: attend on a sequence shard of all heads (head->sequence: the chips'
-        # head columns side by side, in head order); RoPE and its inverse run on that shard (the chip's rows of cos /
+        # sparse_sdpa needs >= 32 heads per chip: attend on a sequence shard of all heads (head->sequence: the
+        # chips'
+        # head columns side by side, in head order); RoPE and its inverse run on that shard (the chip's rows
+        # of cos /
         # sin), fused into the head layout ops around the row-major, head-major sparse_sdpa operands
         head_to_seq = self.tp > 1
         if head_to_seq:
@@ -368,7 +399,8 @@ class TtV41Attention(LightweightModule):
         """[1, G/tp, S/sp, (H/G) * head_dim] (each group's heads side by side) -> [1, 1, S/sp, hidden/tp]."""
         low = self._dense(attn, "wo_a")  # [1, g, S, rank]
         if _CONCAT == "qdq" and int(low.shape[-2]) == 32:
-            # the decode tile: one tile row a group, so the groups' tile pages in order are the concatenation's;
+            # the decode tile: one tile row a group, so the groups' tile pages in order are the
+            # concatenation's;
             # the QDQ writes them into the [1, 1, 32, g * rank] shape (no nlp_concat_heads)
             _, g, s, rank = (int(d) for d in low.shape)
             quant = fp8_qdq(low, out_shape=(1, 1, s, g * rank))
