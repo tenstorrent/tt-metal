@@ -64,10 +64,6 @@ struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDeviceImpl;
 
-namespace multihost {
-class DistributedContext;
-}
-
 using DeviceIds = std::vector<int>;
 
 // Options for creating a MeshDevice from a MetalEnv.
