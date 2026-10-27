@@ -106,6 +106,125 @@ def decode_matmul_config(device, in_features, out_features, fused_activation=Non
     )
 
 
+# Cores a DRAM-sharded linear spreads its activation over, at most. At M=1 the weight read
+# is spread over the DRAM banks whatever the core count, so more cores only thin each one's
+# K block: on every decode shape, 32 cores ran 1.3 to 2x slower than 8, and 4 matched 8.
+DRAM_SHARDED_MAX_CORES = 8
+
+
+def mlp_compute_config(device):
+    """HiFi2 for the bfloat8_b MLP: a DRAM-sharded bf8 linear is compute-bound at HiFi4,
+    20.3 against 28.0 us on the predictor's gate, at the same PCC to five places."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
+class DramShardedPlan:
+    """Configs for a DRAM-sharded decode linear of `in_features` by `out_features`.
+
+    The weight is width-sharded across the DRAM banks, so every bank streams its own slice
+    and none sits idle; an interleaved weight reaches well under the DRAM peak at M=1. The
+    activation and the output are width-sharded in L1 over one grid of cores, which must
+    divide both K and N in tiles.
+    """
+
+    def __init__(self, device, in_features, out_features, compute_config, fused_activation=None):
+        k_tiles, n_tiles = in_features // TILE_ROWS, out_features // TILE_ROWS
+        grid = device.compute_with_storage_grid_size()
+        cols, rows = next(
+            (cores, 1) if cores <= grid.x else (grid.x, cores // grid.x)
+            for cores in range(min(DRAM_SHARDED_MAX_CORES, grid.x * grid.y), 0, -1)
+            if k_tiles % cores == 0 and n_tiles % cores == 0 and (cores <= grid.x or cores % grid.x == 0)
+        )
+        cores = cols * rows
+        core_grid = ttnn.CoreGrid(x=cols, y=rows)
+        self.in_features, self.out_features = in_features, out_features
+        self.compute_config = compute_config
+        self.input_memory = self._width_sharded(in_features // cores, core_grid)
+        self.output_memory = self._width_sharded(out_features // cores, core_grid)
+        self.program = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=next(w for w in range(8, 0, -1) if (k_tiles // cores) % w == 0),
+            per_core_M=1,
+            per_core_N=n_tiles // cores,
+            fused_activation=fused_activation,
+        )
+        banks = device.dram_grid_size().x
+        # Every bank holds an equal slice, so the last one's is ragged where N does not divide.
+        padded_out = -(-out_features // (TILE_ROWS * banks)) * TILE_ROWS * banks
+        self.weight_memory = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))}),
+                (in_features, padded_out // banks),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+    @staticmethod
+    def _width_sharded(width, core_grid):
+        return ttnn.create_sharded_memory_config(
+            shape=(TILE_ROWS, width),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    def weight(self, tensor, device, dtype):
+        """A [K, N] host weight on device in this plan's DRAM sharding."""
+        return ttnn.from_torch(
+            tensor.reshape(1, 1, self.in_features, self.out_features).contiguous(),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=self.weight_memory,
+        )
+
+    def __call__(self, x, weight):
+        """x [.., rows <= 32, K], interleaved or already in `input_memory`; the output stays
+        width-sharded in L1."""
+        if not x.is_sharded():
+            x = ttnn.interleaved_to_sharded(x, self.input_memory)
+        return ttnn.linear(
+            x,
+            weight,
+            compute_kernel_config=self.compute_config,
+            program_config=self.program,
+            memory_config=self.output_memory,
+        )
+
+
+def linear_plans(device, config):
+    """A DRAM-sharded plan per decoder-layer linear; `gate_proj` fuses its SiLU."""
+    hidden, intermediate = config["hidden_size"], config["intermediate_size"]
+    attention = config["num_attention_heads"] * config["head_dim"]
+    qkv = attention + 2 * config["num_key_value_heads"] * config["head_dim"]
+    silu = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
+    attention_config, mlp_config = _compute_config(device), mlp_compute_config(device)
+    return {
+        "qkv": DramShardedPlan(device, hidden, qkv, attention_config),
+        "o_proj": DramShardedPlan(device, attention, hidden, attention_config),
+        "gate_proj": DramShardedPlan(device, hidden, intermediate, mlp_config, silu),
+        "up_proj": DramShardedPlan(device, hidden, intermediate, mlp_config),
+        "down_proj": DramShardedPlan(device, intermediate, hidden, mlp_config),
+    }
+
+
+def decode_mlp(x, layer, plans):
+    """The MLP over up to 32 rows, returned interleaved. Gate, up and their product stay
+    sharded on one grid, which is down's input grid."""
+    gate = plans["gate_proj"](x, layer["gate_proj"])
+    up = plans["up_proj"](x, layer["up_proj"])
+    product = ttnn.multiply(gate, up, memory_config=plans["down_proj"].input_memory)
+    return ttnn.sharded_to_interleaved(plans["down_proj"](product, layer["down_proj"]))
+
+
 def preprocess_cached_talker_parameters(
     device, config=None, state=None, num_layers=None, dtype=ttnn.bfloat16, mlp_dtype=MLP_WEIGHT_DTYPE
 ):

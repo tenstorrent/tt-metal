@@ -180,6 +180,9 @@ What made it fast:
   heads, same error.
 - **Swept matmul program configs** (`decode_matmul_config`): every winner uses 11 to 22 cores
   rather than 64; `down_proj` went 112.8 to 69.6 us.
+- **DRAM-sharded predictor linears** (`DramShardedPlan`) on 8 cores, the bf8 MLP at HiFi2:
+  30.4 to 28.1 ms a frame on N150. The talker's prefill reads the same weights through an
+  interleaved matmul, so its step keeps `decode_matmul_config`.
 - **MLP weights in `bfloat8_b`** (`MLP_WEIGHT_DTYPE`). Norm weights stay bf16 (bfp8 norms: PCC
   0.9751 against 0.9954); attention weights stay bf16 too (below).
 - **The predictor's codebook lookups and the talker's hidden state stay on device**: 1.1 ms a
