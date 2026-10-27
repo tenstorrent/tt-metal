@@ -11,6 +11,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <map>
+#include <optional>
+#include <set>
 #include <stdexcept>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -1910,6 +1913,183 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
     EXPECT_EQ(picked_few.Sq_chunk_t, 2U);
     EXPECT_GE(num_work_items(few_seqs, picked_few), kCores);
     EXPECT_EQ(picked_few.Sk_chunk_t, picked.Sk_chunk_t) << "the K/V step does not depend on the core count";
+}
+
+namespace {
+
+using ttml::metal::ops::sdpa_fw::device::SDPAForwardChunks;
+using ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule;
+using ttml::metal::ops::sdpa_fw::device::SDPAForwardShape;
+using ttml::metal::ops::sdpa_fw::device::UnitRole;
+using ttml::metal::ops::sdpa_fw::device::WorkUnit;
+
+// What every schedule must satisfy for the kernels to compute each item exactly once and for the senders
+// and mergers to find each other: full coverage, consecutive slots per item, matching semaphores, and
+// senders before whole items before mergers on every core.
+void check_schedule(
+    const SDPAForwardShape& shape,
+    const SDPAForwardChunks& chunks,
+    const SDPAForwardSchedule& schedule,
+    uint32_t max_pieces) {
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    const uint32_t total_items = num_work_items(shape, chunks);
+    std::vector<uint32_t> whole_count(total_items, 0U);
+    struct Cut {
+        std::vector<std::pair<uint32_t, uint32_t>> ranges;  // step ranges of every piece
+        std::vector<uint32_t> sender_slots;
+        std::vector<uint32_t> sender_sems;
+        std::vector<uint32_t> sender_merger_cores;
+        std::optional<WorkUnit> merger;
+        uint32_t merger_core = 0;
+    };
+    std::map<uint32_t, Cut> cuts;
+    std::set<uint32_t> slots;
+    for (uint32_t core = 0; core < schedule.per_core.size(); ++core) {
+        auto rank = [](UnitRole role) { return role == UnitRole::Sender ? 0 : role == UnitRole::Whole ? 1 : 2; };
+        int last_rank = 0;
+        std::set<uint32_t> sems_on_core;
+        for (const WorkUnit& unit : schedule.per_core[core]) {
+            EXPECT_GE(rank(unit.role), last_rank) << "core " << core << ": senders, then whole items, then mergers";
+            last_rank = rank(unit.role);
+            if (unit.role == UnitRole::Whole) {
+                ASSERT_LE(unit.item + unit.num_items, total_items);
+                for (uint32_t item = unit.item; item < unit.item + unit.num_items; ++item) {
+                    ++whole_count[item];
+                }
+                continue;
+            }
+            ASSERT_LT(unit.item, total_items);
+            Cut& cut = cuts[unit.item];
+            cut.ranges.emplace_back(unit.step_begin, unit.step_end);
+            EXPECT_LT(unit.step_begin, unit.step_end) << "empty piece";
+            if (unit.role == UnitRole::Sender) {
+                EXPECT_TRUE(slots.insert(unit.slot).second) << "slot " << unit.slot << " used twice";
+                EXPECT_LT(unit.slot, schedule.num_slots);
+                cut.sender_slots.push_back(unit.slot);
+                cut.sender_sems.push_back(unit.sem_idx);
+                cut.sender_merger_cores.push_back(unit.merger_core);
+            } else {
+                EXPECT_FALSE(cut.merger.has_value()) << "item " << unit.item << " has two mergers";
+                EXPECT_TRUE(sems_on_core.insert(unit.sem_idx).second) << "core " << core << " reuses a semaphore";
+                EXPECT_LT(unit.sem_idx, kMaxMergersPerCore);
+                cut.merger = unit;
+                cut.merger_core = core;
+            }
+        }
+    }
+    EXPECT_EQ(slots.size(), schedule.num_slots) << "every slot belongs to one sender";
+    for (uint32_t item = 0; item < total_items; ++item) {
+        const auto cut = cuts.find(item);
+        if (cut == cuts.end()) {
+            EXPECT_EQ(whole_count[item], 1U) << "item " << item << " is computed " << whole_count[item] << " times";
+            continue;
+        }
+        EXPECT_EQ(whole_count[item], 0U) << "item " << item << " is both cut and whole";
+        Cut& c = cut->second;
+        ASSERT_TRUE(c.merger.has_value()) << "item " << item << " is cut but has no merger";
+        EXPECT_EQ(c.merger->num_partials, c.sender_slots.size());
+        EXPECT_LE(c.ranges.size(), max_pieces);
+        EXPECT_GE(c.ranges.size(), 2U);
+        std::sort(c.ranges.begin(), c.ranges.end());
+        uint32_t next = 0;
+        for (const auto& [begin, end] : c.ranges) {
+            EXPECT_EQ(begin, next) << "item " << item << ": pieces must tile its K/V steps";
+            next = end;
+        }
+        EXPECT_EQ(next, num_kv_steps(shape, chunks, item)) << "item " << item << ": pieces must cover every step";
+        std::sort(c.sender_slots.begin(), c.sender_slots.end());
+        for (uint32_t k = 0; k < c.sender_slots.size(); ++k) {
+            EXPECT_EQ(c.sender_slots[k], c.merger->slot + k) << "item " << item << ": slots must follow the merger's";
+            EXPECT_EQ(c.sender_sems[k], c.merger->sem_idx)
+                << "item " << item << ": a sender bumps its merger's semaphore";
+            EXPECT_EQ(c.sender_merger_cores[k], c.merger_core)
+                << "item " << item << ": a sender targets its merger's core";
+        }
+    }
+}
+
+SDPAForwardShape causal_shape(uint32_t batch, uint32_t q_heads, uint32_t kv_heads, uint32_t St, uint32_t Wt) {
+    return SDPAForwardShape{
+        .batch = batch,
+        .q_heads = q_heads,
+        .kv_heads = kv_heads,
+        .St = St,
+        .qWt = Wt,
+        .vWt = Wt,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .has_gate = false,
+        .return_intermediates = true};
+}
+
+uint32_t count_role(const SDPAForwardSchedule& schedule, UnitRole role) {
+    uint32_t n = 0;
+    for (const auto& units : schedule.per_core) {
+        for (const auto& unit : units) {
+            n += unit.role == role ? 1U : 0U;
+        }
+    }
+    return n;
+}
+
+}  // namespace
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
+    // The scheduler is pure, so its invariants are checked on the host for the cases the device tests can
+    // not reach: many pieces per item, the merger cap, the runtime-arg fallback.
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    constexpr uint32_t kCores = 120U;
+
+    // Enough items per core: nothing is cut, every core gets whole items.
+    const SDPAForwardShape tinyllama = causal_shape(1U, 32U, 4U, 64U, 2U);
+    const SDPAForwardChunks sq4sk8{.Sq_chunk_t = 4U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
+    const SDPAForwardSchedule uncut = make_schedule(tinyllama, sq4sk8, kCores, kDefaultMaxPieces);
+    EXPECT_EQ(uncut.num_slots, 0U);
+    EXPECT_EQ(count_role(uncut, UnitRole::Sender), 0U);
+    EXPECT_EQ(uncut.per_core.size(), kCores);
+    check_schedule(tinyllama, sq4sk8, uncut, kDefaultMaxPieces);
+
+    // Two heads, S=2048: the late items are cut.
+    const SDPAForwardShape two_heads = causal_shape(1U, 2U, 2U, 64U, 2U);
+    const SDPAForwardSchedule cut = make_schedule(two_heads, sq4sk8, kCores, kDefaultMaxPieces);
+    EXPECT_GT(cut.num_slots, 0U);
+    EXPECT_EQ(count_role(cut, UnitRole::Sender), cut.num_slots);
+    EXPECT_GT(count_role(cut, UnitRole::Merger), 0U);
+    check_schedule(two_heads, sq4sk8, cut, kDefaultMaxPieces);
+
+    // max_pieces = 1 never cuts.
+    const SDPAForwardSchedule one_piece = make_schedule(two_heads, sq4sk8, kCores, 1U);
+    EXPECT_EQ(one_piece.num_slots, 0U);
+    check_schedule(two_heads, sq4sk8, one_piece, 1U);
+
+    // One head with one K tile per step: items of up to 64 steps cut into many pieces, more partials than
+    // any device test reaches, several mergers on one core.
+    const SDPAForwardShape one_head = causal_shape(1U, 1U, 1U, 64U, 2U);
+    const SDPAForwardChunks sq4sk1{.Sq_chunk_t = 4U, .Sk_chunk_t = 1U, .heads_per_item = 1U};
+    const SDPAForwardSchedule many = make_schedule(one_head, sq4sk1, kCores, 16U);
+    uint32_t most_partials = 0;
+    for (const auto& units : many.per_core) {
+        for (const auto& unit : units) {
+            most_partials = std::max(most_partials, unit.num_partials);
+        }
+    }
+    EXPECT_GT(most_partials, 3U);
+    check_schedule(one_head, sq4sk1, many, 16U);
+
+    // More cores than items with no cuts allowed: one core per item.
+    const SDPAForwardSchedule few_items = make_schedule(two_heads, sq4sk8, kCores, 1U);
+    EXPECT_EQ(few_items.per_core.size(), num_work_items(two_heads, sq4sk8));
+
+    // Longest-first scatters equal-cost items across the cores, so with far more items than the runtime
+    // args can list per core the schedule falls back to contiguous blocks.
+    const SDPAForwardShape many_items = causal_shape(2U, 32U, 32U, 256U, 2U);
+    const SDPAForwardChunks sq1sk8{.Sq_chunk_t = 1U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
+    const SDPAForwardSchedule contiguous = make_schedule(many_items, sq1sk8, kCores, kDefaultMaxPieces);
+    const uint32_t total = num_work_items(many_items, sq1sk8);
+    ASSERT_EQ(contiguous.per_core.size(), kCores);
+    ASSERT_EQ(contiguous.per_core[0].size(), 1U);
+    EXPECT_EQ(contiguous.per_core[0][0].item, 0U);
+    EXPECT_EQ(contiguous.per_core[0][0].num_items, total / kCores + 1U);  // the remainder goes to the first cores
+    check_schedule(many_items, sq1sk8, contiguous, kDefaultMaxPieces);
 }
 
 // The production pick (four-row chunks, eight K/V tiles) only lands on device when the items keep the
