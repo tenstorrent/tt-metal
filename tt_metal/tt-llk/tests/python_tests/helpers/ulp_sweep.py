@@ -1004,10 +1004,10 @@ def _collapse(
     decided: dict[BudgetKey, Decision], excluded: frozenset[BudgetKey] = frozenset()
 ) -> dict[BudgetKey, Decision]:
     """The decided cells as the fewest rows that reproduce them; the formats stay
-    pinned, because a wildcard would answer for any a driver adds later. A field stays
-    pinned where dropping it would cover an *excluded* cell: a pair swept at one Dest
-    because the other holds fp16 keeps its ``dest``. (A promoted cell is not excluded:
-    its ``dest_acc=No`` request runs the ``Yes`` kernel the dest-less row measured.)"""
+    pinned, because a wildcard would answer for any a driver adds later. A field is
+    dropped only where it can be on every pair of the op, and dropping it over an
+    *excluded* cell cannot: an op with any pair swept at one Dest because the other
+    holds fp16 keeps ``dest`` on every pair (on Blackhole, every swept op)."""
     weighed = {**decided, **{key: _EXCLUDED for key in excluded}}
     dropped = [
         name

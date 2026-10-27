@@ -27,10 +27,12 @@ CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --compile-consumer
 ```
 
 The same three commands with `CHIP_ARCH=blackhole` measure and gate the op on a
-Blackhole card and write `sfpu_accuracy_budget_bh.yaml`; each table is its own
-measurement, and an op enrolled in one is enrolled in the other by its own rows. A
-not-measurable cell parked on one table only is acknowledged for that architecture
-(step 4).
+Blackhole card and write `sfpu_accuracy_budget_bh.yaml`. Each table is its own
+measurement, and **enrolling an op takes both cards**: CI judges each table under its
+own architecture, so an op emitted on one only fails the other's pass
+(`test_every_unary_op_is_enrolled_or_excused`), and a placeholder row left there fails
+`test_every_enrolled_op_reaches_its_step_budget`. A not-measurable cell parked on one
+table only is acknowledged for that architecture (step 4).
 
 `--op` matches the op name exactly; `-k Exp` would also run and rewrite `Exp2`,
 `ExpWithBase`, `Expm1` and `Expm1Cw`.
@@ -62,8 +64,9 @@ inputs reach the hardware and are masked out afterwards. An exponent-B input pac
 `dest_acc=Yes` only (`ulp_sweep.sweep_cells`). On Blackhole no cell that holds fp16 in
 a 16-bit Dest (a `Float16` input, or a `Float16` output from `Float32`, at
 `dest_acc=No`) is swept, since the SFPU reads garbage there (#62654,
-`ulp_sweep.fp16_dest_unusable`). The emitter keeps `dest` pinned on a pair swept at one
-Dest for that reason, so no row of the Blackhole table covers those cells. No functional
+`ulp_sweep.fp16_dest_unusable`). The emitter keeps `dest` pinned on every pair of an
+op with a pair swept at one Dest for that reason (on Blackhole, every swept op), so no
+step-budget row of the Blackhole table covers those cells. No functional
 driver runs a `Float16` unary cell either; the unary driver's `_skip_bh_unless_fp32` is
 a separate, broader Blackhole skip (every `dest_acc=No` variant but
 `Float32 -> Float32`).
@@ -103,16 +106,17 @@ fp16 subnormals the pack does not reproduce.
 1. **Check it can be gated.** The op needs a format the SFPU computes in
    (`ulp.ULP_FORMATS`) as input and output, a place in `sfpu_domains.sfpu_unary_ops()`,
    and a registered domain.
-2. **Give it a block.** The sweep collects the ops the table names, and an op with no
-   rows fails to load, so a new op needs one row by hand, keyed on a swept pair or the
-   emit keeps it instead of replacing it:
+2. **Give it a block in both tables.** The sweep collects the ops the table names, and
+   an op with no rows fails to load, so a new op needs one row by hand in `_wh.yaml` and
+   in `_bh.yaml`, keyed on a swept pair or the emit keeps it instead of replacing it:
 
    ```yaml
    MyOp:
    - {input: Float16_b, output: Float16_b, metric: TOLERANCE, note: placeholder}
    ```
 
-3. **Measure it** with the two `--ulp-emit` commands above.
+3. **Measure it** with the two `--ulp-emit` commands above, on a Wormhole card and on a
+   Blackhole card: each emit replaces its own table's placeholder.
 4. **Read what it wrote.** Every row records what was measured, and a figure *is* the
    gate, with no headroom over it; a row's `note` is for people. The shapes:
 
@@ -242,16 +246,17 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
   maximum in the skip reason. To hold them to the figures their rows record:
 
   ```bash
-  CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py -n auto --ulp-measure=ulp.jsonl
-  python -m helpers.ulp_budget_diff headroom --table helpers/sfpu_accuracy_budget_wh.yaml --measured ulp.jsonl
+  CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py -n auto --ulp-measure=ulp_wh.jsonl
+  python -m helpers.ulp_budget_diff headroom --table helpers/sfpu_accuracy_budget_wh.yaml --measured ulp_wh.jsonl
 
-  CHIP_ARCH=blackhole pytest test_unary_sfpu_ulp.py -n auto --ulp-measure=ulp.jsonl
-  python -m helpers.ulp_budget_diff headroom --table helpers/sfpu_accuracy_budget_bh.yaml --measured ulp.jsonl
+  CHIP_ARCH=blackhole pytest test_unary_sfpu_ulp.py -n auto --ulp-measure=ulp_bh.jsonl
+  python -m helpers.ulp_budget_diff headroom --table helpers/sfpu_accuracy_budget_bh.yaml --measured ulp_bh.jsonl
   ```
 
-  Each line of `ulp.jsonl` is one `ulp_table.Measurement`. The report judges a table
+  Each line of a records file is one `ulp_table.Measurement`. The report judges a table
   under the architecture its file name says, not the shell's `CHIP_ARCH` (`--arch` for a
-  file named otherwise), and needs no card.
+  file named otherwise), and needs no card. It refuses (exit 2) records run on a chip
+  that does not read that table.
 - **`--ulp-measure` can fail the sweep**: the sweep's records are required, since the
   headroom report judges only the cells it reads, so a sweep cell whose record is not
   written fails (`RecordDropped`), and a path that cannot be prepared is a usage error.

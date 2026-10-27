@@ -23,12 +23,13 @@ COMMON=(
     --tb=short
     --timeout=120
 )
+# Cap at 8: more workers lose to startup, and the longest case is already under that.
+XDIST=(-n auto --maxprocesses=8 --dist=worksteal)
 
 pytest_exit=0
 
 export CHIP_ARCH=wormhole
-# The long pass. Cap at 8: more workers lose to startup, and the longest case is already under that.
-pytest "${COMMON[@]}" -n auto --maxprocesses=8 --dist=worksteal \
+pytest "${COMMON[@]}" "${XDIST[@]}" \
     ../hardware_free \
     --ignore=../hardware_free/kernels/test_gathering_config.py \
     --junitxml=pytest-report-hardware-free-wormhole.xml \
@@ -41,7 +42,7 @@ pytest "${COMMON[@]}" ../hardware_free \
     --junitxml=pytest-report-hardware-free-blackhole.xml \
     || pytest_exit=$?
 # The accuracy suite by its directory, not by -k: a renamed directory fails here rather than selecting nothing.
-pytest "${COMMON[@]}" -n auto --maxprocesses=8 --dist=worksteal \
+pytest "${COMMON[@]}" "${XDIST[@]}" \
     ../hardware_free/accuracy \
     --junitxml=pytest-report-hardware-free-blackhole-accuracy.xml \
     || pytest_exit=$?

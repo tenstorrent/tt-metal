@@ -269,6 +269,22 @@ def test_importing_the_table_tools_does_not_ask_the_chip():
 
 
 @pytest.mark.parametrize("path", TABLE_PATHS.values(), ids=lambda p: p.stem[-2:])
+def test_writing_a_table_to_a_named_path_does_not_ask_the_chip(
+    path, tmp_path, monkeypatch
+):
+    """The normalise command in `SFPU_ULP.md` runs on a host with no card: checking a
+    table before writing it does not depend on which architecture it is for."""
+
+    def ask_the_chip():
+        raise AssertionError("asked the chip")
+
+    monkeypatch.setattr("helpers.ulp_table.measured_arch", ask_the_chip)
+    out = tmp_path / path.name
+    write_table_file(load_table(path), out)
+    assert out.read_text(encoding="utf-8") == path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("path", TABLE_PATHS.values(), ids=lambda p: p.stem[-2:])
 def test_the_table_on_disk_is_exactly_what_the_serializer_writes(path):
     """No hand formatting survives a re-emit, so none may be in either file."""
     assert dump_table(load_table(path)) == path.read_text(encoding="utf-8")

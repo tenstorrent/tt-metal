@@ -949,8 +949,9 @@ def test_a_pair_swept_at_one_dest_because_the_other_holds_fp16_keeps_its_dest(
 ):
     """On Blackhole a Float16 -> Float32 pair is swept at `dest_acc=Yes` only. Its
     cells agree, but a dest-less row would also answer the `No` cell nobody measured
-    (where Sign is 1.3e8 steps off), so the row keeps `dest`. The promoted
-    Float16_b -> Float16 pair, whose `No` request runs the `Yes` kernel, drops it."""
+    (where Sign is 1.3e8 steps off), so the row keeps `dest`. A promoted cell is not
+    excluded (its `No` request runs the `Yes` kernel): Sqrt, with no excluded cell in
+    this run, still drops `dest` from its Float16_b -> Float16 pair."""
     path = tmp_path / "budget.yaml"
     write_table_file({}, path)
     sqrt = MathOperation.Sqrt

@@ -46,7 +46,14 @@ from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.ulp import ULP_FORMATS, has_ulp_gate, mantissa_bits, ulp_dtype
 from helpers.ulp_domains import Domain, Problem, usable_budget_ceiling
 from helpers.ulp_sweep import sweep_cells
-from helpers.ulp_table import MEASURED_ARCH, OTHER_ARCH, Metric, Row, load_table
+from helpers.ulp_table import (
+    MEASURED_ARCH,
+    OTHER_ARCH,
+    TABLE_PATHS,
+    Metric,
+    Row,
+    load_table,
+)
 from helpers.utils import passed_test
 
 # Every architecture this session's table is not for.
@@ -180,8 +187,9 @@ def test_the_binary_gate_enforces_the_whole_contract(arch, gated, monkeypatch):
     """`assert_against_contract` is the binary and ternary drivers' gate, and they run
     only on hardware, so this is the one host check that it takes the step budget: a
     one-step drift on SfpuElwEq, exact on the table's architecture, fails there and
-    passes the tolerance it falls back to elsewhere. It also ranks subnormal outputs flushed: an
-    fp16-subnormal golden the pack writes as 0 is no step of SfpuElwsub's error."""
+    passes the tolerance it falls back to elsewhere. It also ranks subnormal outputs
+    flushed: under a 0-step SfpuElwsub budget (an op-wide row, which binds wherever the
+    table is read), an fp16-subnormal golden the pack writes as 0 is no step."""
     monkeypatch.setattr(chip, "get_chip_architecture", lambda: arch)
     bf16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     golden = torch.ones(_LANES, dtype=torch.bfloat16)
@@ -193,12 +201,18 @@ def test_the_binary_gate_enforces_the_whole_contract(arch, gated, monkeypatch):
             MathOperation.SfpuElwEq, bf16, DestAccumulation.No, golden, drifted
         )
 
-    if gated:
-        with pytest.raises(AssertionError):  # allow-pytest.raises: host-only test
-            eq_gate()
-    else:
+    if not gated:
+        eq_gate()
+        return
+    with pytest.raises(AssertionError):  # allow-pytest.raises: host-only test
         eq_gate()
 
+    # The real fp16 row is a carried tolerance row on Blackhole, which never ranks.
+    monkeypatch.setitem(
+        _SFPU_ACCURACY_BUDGET,
+        MathOperation.SfpuElwsub,
+        {BudgetKey(): AccuracyContract(max_ulp=0)},
+    )
     fp16 = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
     golden = torch.ones(_LANES, dtype=torch.float16)
     golden[0] = float(torch.finfo(torch.float16).smallest_normal) / 2
@@ -991,6 +1005,26 @@ def test_a_demoted_row_measured_past_the_ceiling():
         and row.input is not None
         and row.output is not None
         and row.measured <= usable_budget_ceiling(row.output)
+    ]
+    assert not wrong, wrong
+
+
+def test_a_carried_figure_binds_nowhere():
+    """A row keeping another architecture's figure is a tolerance row with its
+    `measured` (`SFPU_ULP.md`). Kept as a ULP row, it would hold the first Blackhole
+    driver to reach it to Wormhole's figure, with no headroom. Read from the Blackhole
+    file, so both passes check it."""
+    carried = [
+        (op, row)
+        for op, rows in load_table(TABLE_PATHS[ChipArchitecture.BLACKHOLE]).items()
+        for row in rows
+        if (row.note or "").startswith(_CARRIED_FIGURE)
+    ]
+    assert carried, f"no row is noted {_CARRIED_FIGURE!r}: retire the note's rules"
+    wrong = [
+        (op, row)
+        for op, row in carried
+        if row.metric is not Metric.TOLERANCE or row.measured is None
     ]
     assert not wrong, wrong
 

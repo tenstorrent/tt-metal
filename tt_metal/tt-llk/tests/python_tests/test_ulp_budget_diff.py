@@ -5,10 +5,12 @@
 to the gates, and how the ``--ulp-measure`` records are judged against it."""
 
 import math
+from dataclasses import replace
 
 import pytest
 from conftest import TANH_DOMAINS
 from helpers import ulp_budget_diff
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.ulp_budget_diff import (
@@ -295,7 +297,7 @@ def test_diff_exit_status(tmp_path, head, flags, status):
         "missing-file",
     ],
 )
-def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text):
+def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text, capsys):
     """Exit 2, "cannot load", even under --allow-raises: the flag admits a loosened
     gate, not a table no gate can be read from. A conflict marker, a mapping used as a
     key, an entry missing a field and a file that is not UTF-8 used to escape as
@@ -307,7 +309,9 @@ def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text):
     elif head_text is not None:
         head_path.write_text(head_text)
     argv = ["diff", "--base", str(base_path), "--head", str(head_path)]
-    assert main([*argv, "--allow-raises"]) == 2
+    assert main([*argv, "--arch", MEASURED_ARCH.value, "--allow-raises"]) == 2
+    # Refused by the loader, not by the architecture check that runs first.
+    assert "cannot tell which architecture" not in capsys.readouterr().out
 
 
 def test_the_guard_imports_no_module_that_loads_the_checked_out_table():
@@ -666,7 +670,27 @@ def test_headroom_judges_a_table_by_the_architecture_its_file_names(tmp_path, ar
     argv = ["headroom", "--table", str(table), "--measured", str(measured)]
     assert main(argv) == 1
     other = next(a for a in TABLE_PATHS if a is not arch)
-    assert main([*argv, "--arch", other.value]) == 0  # --arch overrides the name
+    other_cell = replace(cell, arch=other)
+    measured.write_text(Measurement(op=ABS, key=other_cell, worst=9, lanes=1).to_json())
+    assert main(argv) == 2  # another chip's records, not judged against this table
+    assert main([*argv, "--arch", other.value]) == 1  # --arch overrides the name
+
+
+def test_headroom_takes_records_from_a_chip_that_reads_the_table(tmp_path):
+    """Quasar has no table of its own and reads Wormhole's, so its records are not
+    another chip's; no step budget binds them there."""
+    table = tmp_path / TABLE_PATHS[ChipArchitecture.WORMHOLE].name
+    write_table_file(_table(Row(output=F16B, measured=1)), table)
+    measured = tmp_path / "measured.jsonl"
+    cell = BudgetKey(
+        input_format=F16B,
+        output_format=F16B,
+        approx_mode=NO,
+        dest_acc=D_NO,
+        arch=ChipArchitecture.QUASAR,
+    )
+    measured.write_text(Measurement(op=ABS, key=cell, worst=9, lanes=1).to_json())
+    assert main(["headroom", "--table", str(table), "--measured", str(measured)]) == 0
 
 
 def test_a_table_whose_name_names_no_architecture_needs_arch(tmp_path):

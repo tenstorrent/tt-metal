@@ -190,7 +190,7 @@ class BudgetKey:
     def matches(self, query: "BudgetKey") -> bool:
         """Whether this key covers *query*; an unset query dimension matches only a
         wildcard. Spelled out, with `_values` cached: this is `validate_contracts`' hot
-        loop (via `resolve_variant`), and a generator over `zip` here costs that host
+        loop (via `most_specific`), and a generator over `zip` here costs that host
         test 1.3 s."""
         a, i, o, d, r = self._values
         qa, qi, qo, qd, qr = query._values
@@ -421,8 +421,9 @@ def validate_contracts(
     by_op: dict[MathOperation, dict[BudgetKey, AccuracyContract]],
 ) -> None:
     """Raise if any op of *by_op* can resolve ambiguously, for any variant a driver may
-    ask about. Per op, an axis is the values its own rows pin, plus ``None``; the output
-    format and the architecture stay whole, because :func:`steps_bind` reads them."""
+    ask about, on any architecture: both lookups :func:`resolve_variant` can make are
+    checked, whether or not a step budget binds. Per op, an axis is the values its own
+    rows pin, plus ``None``: any other value matches the same rows ``None`` does."""
     for op, contracts in by_op.items():
 
         def pinned(field: str) -> list:
@@ -431,23 +432,21 @@ def validate_contracts(
             ) + [None]
 
         for approx_mode, input_format, output_format, dest_acc, arch in product(
-            pinned("approx_mode"),
-            pinned("input_format"),
-            DataFormat,
-            pinned("dest_acc"),
-            ChipArchitecture,
+            *map(
+                pinned,
+                ("approx_mode", "input_format", "output_format", "dest_acc", "arch"),
+            )
         ):
+            query = BudgetKey(
+                approx_mode=approx_mode,
+                input_format=input_format,
+                output_format=output_format,
+                dest_acc=dest_acc,
+                arch=arch,
+            )
             try:
-                resolve_variant(
-                    contracts,
-                    BudgetKey(
-                        approx_mode=approx_mode,
-                        input_format=input_format,
-                        output_format=output_format,
-                        dest_acc=dest_acc,
-                        arch=arch,
-                    ),
-                )
+                most_specific(contracts, query)
+                most_specific(contracts, query, only=lambda c: c.declares_tolerance)
             except TableError as error:
                 raise TableError(error.problem, f"{op.name}: {error}") from error
 

@@ -21,6 +21,7 @@ from .chip_architecture import ChipArchitecture
 from .llk_params import MathOperation
 from .ulp_domains import Domain, largest_figure, usable_budget_ceiling
 from .ulp_table import (
+    TABLE_PATHS,
     BudgetKey,
     Measurement,
     Metric,
@@ -32,6 +33,7 @@ from .ulp_table import (
     most_specific,
     read_measurements,
     steps_bind,
+    table_arch,
 )
 
 # The op and the key of the row that decides a cell.
@@ -717,6 +719,21 @@ def _tables_arch(given: str | None, *paths: Path) -> ChipArchitecture:
     )
 
 
+def _check_records_arch(
+    records: list[Measurement], arch: ChipArchitecture, path: Path
+) -> None:
+    """Refuse records run on a chip that does not read the *arch* table: judged against
+    another architecture's table, plain rows stop binding and lists are held to the
+    other chip's figures, and the report can still pass."""
+    ran_on = {table_arch(m.key.arch) for m in records if m.key.arch is not None}
+    if ran_on - {arch}:
+        raise ValueError(
+            f"{path} holds records run on "
+            f"{', '.join(sorted(a.value for a in ran_on))}, judged against the "
+            f"{arch.value} table; judge each chip's records against its own table"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -733,7 +750,7 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--out", type=Path, help="also write the report here")
         command.add_argument(
             "--arch",
-            choices=("wormhole", "blackhole"),
+            choices=[arch.value for arch in TABLE_PATHS],
             help="the architecture the table(s) were measured on (default: from the "
             "file name, e.g. sfpu_accuracy_budget_bh.yaml)",
         )
@@ -750,9 +767,9 @@ def main(argv: list[str] | None = None) -> int:
             # first cell); here it is an input that is not there, so it cannot load.
             args.measured.stat()
             arch = _tables_arch(args.arch, args.table)
-            headroom = judge(
-                load_table(args.table), read_measurements(args.measured), arch
-            )
+            records = read_measurements(args.measured)
+            _check_records_arch(records, arch, args.measured)
+            headroom = judge(load_table(args.table), records, arch)
             report = render_headroom(headroom)
             status = 1 if headroom.regressions else 0
     except (ValueError, OSError) as refused:
