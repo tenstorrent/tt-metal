@@ -62,11 +62,15 @@ from tests.ttnn.utils_for_testing import comp_pcc
 # TODO: import from models.demos.common.prefill.prefill_chunk once #62535 moves it there.
 from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk
 
-FIRST_LAYER = 6
-NUM_LAYERS = 4
+# Sweep knobs (GLM_WORKLOAD_*): the layer window, the history every user has already prefilled, and the new
+# requests (comma-separated lengths, one user each; a request may span several chunks).
+FIRST_LAYER = int(os.environ.get("GLM_WORKLOAD_FIRST_LAYER", "6"))
+NUM_LAYERS = int(os.environ.get("GLM_WORKLOAD_NUM_LAYERS", "4"))
 PRODUCTION_HISTORY = int(os.environ.get("GLM_WORKLOAD_HISTORY", 40 * 1024))
 # Production-like new-request lengths (median ~1.9K, against 5K chunks), one per user.
-PRODUCTION_REQUEST_LENGTHS = [1600, 2200, 896, 2496, 1792, 2048, 1280, 2400]
+PRODUCTION_REQUEST_LENGTHS = [
+    int(n) for n in os.environ.get("GLM_WORKLOAD_REQUESTS", "1600,2200,896,2496,1792,2048,1280,2400").split(",")
+]
 USERS = len(PRODUCTION_REQUEST_LENGTHS)
 REPEATS = int(os.environ.get("GLM_WORKLOAD_REPEATS", "3"))
 KV_DIR = os.environ.get("GLM_WORKLOAD_KV_DIR", "generated/glm_workload_kv")
@@ -162,9 +166,9 @@ def test_glm_chunk_batching_workload(
     history_len, request_lengths = _workload(scale)
     big_chunk = 5120 // scale  # the largest chunk any config of this scale uses
     assert history_len % big_chunk == 0, f"history {history_len} must be whole {big_chunk}-token chunks"
-    assert max(request_lengths) <= big_chunk
-    # Room for the longest request, and whole chunks of every size (2 x 5,120 is a multiple of 2,048 too).
-    seq_cache = history_len + 2 * big_chunk
+    assert history_len >= KV_TAIL, f"history {history_len} is shorter than the saved KV tail {KV_TAIL}"
+    # Room for the longest request, in whole chunks of every size (2 x 5,120 is a multiple of 2,048 too).
+    seq_cache = history_len + 2 * big_chunk * -(-max(request_lengths) // (2 * big_chunk))
     config = copy.deepcopy(config_only)
     config.max_seq_len = seq_cache
     rt_config = TtPrefillRuntimeConfig(
@@ -291,7 +295,7 @@ def test_glm_chunk_batching_workload(
     median_s = statistics.median(times)
     logger.warning(
         f"GLM_WORKLOAD mesh={mesh_shape[0]}x{mesh_shape[1]} config=c{chunk}-f{forward_chunks} history={history_len} "
-        f"users={USERS} real_tokens={real} "
+        f"layers={FIRST_LAYER}+{NUM_LAYERS} users={USERS} real_tokens={real} "
         f"forwards={len(requests)} computed_tokens={computed} padding={1 - real / computed:.1%} "
         f"time_ms={median_s * 1000:.1f} real_tok_per_s={real / median_s:.0f} "
         f"runs_ms={' '.join(f'{t * 1000:.1f}' for t in times)}"
