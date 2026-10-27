@@ -134,29 +134,39 @@ class ReduceCase:
         return group
 
     def additive_cutoff(self, arch) -> int:
-        # Reduced-axis tiles at which TileSum starts to win, per (row, col, scalar).
+        # Reduced-axis tiles at which TileSum starts to win, per (row, col, scalar), keyed by (input, fp32 DEST).
         cutoffs = {
             ttnn.device.Arch.BLACKHOLE: {
-                "LoFi": (64, 32, 16),
-                "HiFi2": (30, 16, 8),
-                "HiFi3": (16, 8, 8),
-                "HiFi4": (10, 4, 4),
+                ("bf16", False): {"LoFi": (34, 26, 10), "HiFi2": (28, 12, 6), "HiFi3": (14, 6, 4), "HiFi4": (10, 4, 4)},
+                ("bf16", True): {"LoFi": (34, 26, 10), "HiFi2": (28, 12, 6), "HiFi3": (14, 6, 4), "HiFi4": (10, 4, 4)},
+                ("fp32", False): {"LoFi": (24, 16, 8), "HiFi2": (24, 14, 5), "HiFi3": (18, 7, 4), "HiFi4": (12, 4, 4)},
+                ("fp32", True): {"LoFi": (22, 18, 8), "HiFi2": (22, 14, 6), "HiFi3": (18, 6, 4), "HiFi4": (10, 4, 4)},
+                ("bf8", False): {"LoFi": (30, 26, 12), "HiFi2": (30, 14, 6), "HiFi3": (16, 6, 5), "HiFi4": (10, 4, 4)},
+                ("bf8", True): {"LoFi": (26, 26, 12), "HiFi2": (30, 14, 6), "HiFi3": (16, 6, 5), "HiFi4": (10, 4, 4)},
+                ("bf4", False): {"LoFi": (34, 26, 12), "HiFi2": (30, 14, 6), "HiFi3": (16, 6, 5), "HiFi4": (10, 4, 4)},
+                ("bf4", True): {"LoFi": (34, 26, 12), "HiFi2": (30, 14, 6), "HiFi3": (16, 6, 5), "HiFi4": (10, 4, 4)},
             },
             ttnn.device.Arch.WORMHOLE_B0: {
-                "LoFi": (14, 52, 14),
-                "HiFi2": (14, 52, 8),
-                "HiFi3": (14, 12, 6),
-                "HiFi4": (14, 7, 5),
+                ("bf16", False): {
+                    "LoFi": (14, 50, 13),
+                    "HiFi2": (14, 48, 8),
+                    "HiFi3": (14, 12, 6),
+                    "HiFi4": (14, 6, 5),
+                },
+                ("bf16", True): {"LoFi": (14, 50, 14), "HiFi2": (14, 50, 8), "HiFi3": (14, 12, 6), "HiFi4": (14, 6, 5)},
+                ("fp32", False): {"LoFi": (8, 6, 6), "HiFi2": (8, 6, 4), "HiFi3": (8, 6, 4), "HiFi4": (8, 6, 4)},
+                ("fp32", True): {"LoFi": (8, 34, 12), "HiFi2": (8, 34, 8), "HiFi3": (8, 34, 6), "HiFi4": (8, 22, 4)},
+                ("bf8", False): {"LoFi": (14, 62, 14), "HiFi2": (14, 20, 8), "HiFi3": (14, 10, 6), "HiFi4": (14, 6, 5)},
+                ("bf8", True): {"LoFi": (16, 62, 14), "HiFi2": (14, 20, 8), "HiFi3": (14, 10, 6), "HiFi4": (14, 6, 5)},
+                ("bf4", False): {"LoFi": (16, 34, 14), "HiFi2": (14, 16, 8), "HiFi3": (14, 8, 6), "HiFi4": (12, 6, 5)},
+                ("bf4", True): {"LoFi": (16, 34, 14), "HiFi2": (16, 16, 8), "HiFi3": (14, 8, 6), "HiFi4": (12, 6, 5)},
             },
         }
-        return (
-            cutoffs[arch][self.math_fidelity][DIMS.index(self.dim)]
-            if arch in cutoffs
-            else (4, 8, 8)[DIMS.index(self.dim)]
-        )
+        if arch not in cutoffs:
+            return (4, 8, 8)[DIMS.index(self.dim)]
+        return cutoffs[arch][(self.input_dtype, self.fp32_dest_acc_en)][self.math_fidelity][DIMS.index(self.dim)]
 
     def expected_algorithm(self, arch) -> str:
-        cutoff = self.additive_cutoff(arch)
         reduced_tiles = self.cols if self.dim == "REDUCE_ROW" else self.rows
         if self.dim == "REDUCE_SCALAR":
             reduced_tiles = self.rows * self.cols
@@ -166,7 +176,7 @@ class ReduceCase:
             and self.input_dtype in ("bf16", "fp32", "bf8", "bf4")
             and self.fp32_mode != "Accurate"
             and not (self.dim == "REDUCE_COL" and self.input_mode == "per_tile" and self.streams_column_groups)
-            and reduced_tiles * self.calls >= cutoff
+            and reduced_tiles * self.calls >= self.additive_cutoff(arch)
         )
         return "TILE_SUM" if additive else "NATIVE"
 
@@ -757,13 +767,13 @@ def _make_logical_chunks(case: ReduceCase) -> list[torch.Tensor]:
     for call in range(case.calls):
         if case.input_dtype == "int32":
             chunk = torch.randint(-16, 17, shape, generator=generator, dtype=torch.int32) + call
+        elif case.family == "fidelity":
+            # Small exactly representable values keep LoFi's native path accurate.
+            chunk = (torch.arange(math.prod(shape)).reshape(shape) % 7 - 3).to(torch.bfloat16)
         elif case.input_dtype in ("bf8", "bf4"):
             # Exactly representable in both compressed formats, including the
             # nonzero padding which a partial reduction must exclude.
             chunk = torch.randint(1, 4, shape, generator=generator).float()
-        elif case.family == "fidelity":
-            # Small exactly representable values keep LoFi's native path accurate.
-            chunk = (torch.arange(math.prod(shape)).reshape(shape) % 7 - 3).to(torch.bfloat16)
         elif case.family == "sfpu-placeholder":
             # Small integer-valued floats keep these SFPU folds exact.
             chunk = torch.randint(-16, 17, shape, generator=generator).float()
@@ -1927,20 +1937,31 @@ def test_reduce_helpers_mixed_auxiliary_format(device, dtype, dim, input_mode, p
 @pytest.mark.parametrize("dim", DIMS)
 @pytest.mark.parametrize("offset", [-1, 0])
 @pytest.mark.parametrize("fp32_dest_acc_en", [True, False])
-def test_reduce_fidelity_crossover(device, math_fidelity, dim, offset, fp32_dest_acc_en):
-    """The planner switches to TileSum exactly at each fidelity's cutoff, and both sides compute the mean."""
+@pytest.mark.parametrize("input_dtype", ["bf16", "fp32", "bf8", "bf4"])
+def test_reduce_fidelity_crossover(device, math_fidelity, dim, offset, fp32_dest_acc_en, input_dtype):
+    """The planner switches to TileSum exactly at each cutoff, and both sides compute the mean."""
     if device.arch() not in (ttnn.device.Arch.BLACKHOLE, ttnn.device.Arch.WORMHOLE_B0):
         pytest.skip("Cutoffs were measured on Blackhole and Wormhole")
-    probe = ReduceCase(name="probe", family="fidelity", dim=dim, rows=1, cols=1, math_fidelity=math_fidelity)
+    probe = ReduceCase(
+        name="probe",
+        family="fidelity",
+        dim=dim,
+        rows=1,
+        cols=1,
+        input_dtype=input_dtype,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        math_fidelity=math_fidelity,
+    )
     tiles = probe.additive_cutoff(device.arch()) + offset
     rows, cols = (tiles, 1) if dim == "REDUCE_COL" else (1, tiles)
     case = ReduceCase(
-        name=f"fidelity-{math_fidelity}-{dim}-{tiles}",
+        name=f"fidelity-{input_dtype}-{math_fidelity}-{dim}-{tiles}",
         family="fidelity",
         dim=dim,
         rows=rows,
         cols=cols,
         pool="AVG",
+        input_dtype=input_dtype,
         output_dtype="fp32",
         fp32_dest_acc_en=fp32_dest_acc_en,
         math_fidelity=math_fidelity,

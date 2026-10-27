@@ -76,63 +76,119 @@ TEST(ReduceHostPlanner, FidelitySelectsArchitectureAdditiveCrossover) {
     using Policy = compute_kernel_lib::ReduceInputPolicy;
     struct Crossover {
         tt::ARCH arch;
+        DataType input_dtype;
+        bool fp32;
         MathFidelity fidelity;
         std::array<uint32_t, 3> tiles;  // W, H, HW
     };
     // Sustained >1% library-add wins from the Blackhole and Wormhole sweeps.
     const std::array cases{
-        Crossover{tt::ARCH::BLACKHOLE, MathFidelity::LoFi, {64, 32, 16}},
-        Crossover{tt::ARCH::BLACKHOLE, MathFidelity::HiFi2, {30, 16, 8}},
-        Crossover{tt::ARCH::BLACKHOLE, MathFidelity::HiFi3, {16, 8, 8}},
-        Crossover{tt::ARCH::BLACKHOLE, MathFidelity::HiFi4, {10, 4, 4}},
-        Crossover{tt::ARCH::WORMHOLE_B0, MathFidelity::LoFi, {14, 52, 14}},
-        Crossover{tt::ARCH::WORMHOLE_B0, MathFidelity::HiFi2, {14, 52, 8}},
-        Crossover{tt::ARCH::WORMHOLE_B0, MathFidelity::HiFi3, {14, 12, 6}},
-        Crossover{tt::ARCH::WORMHOLE_B0, MathFidelity::HiFi4, {14, 7, 5}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT16, false, MathFidelity::LoFi, {34, 26, 10}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT16, false, MathFidelity::HiFi2, {28, 12, 6}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT16, false, MathFidelity::HiFi3, {14, 6, 4}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT16, false, MathFidelity::HiFi4, {10, 4, 4}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT16, true, MathFidelity::LoFi, {34, 26, 10}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT16, true, MathFidelity::HiFi2, {28, 12, 6}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT16, true, MathFidelity::HiFi3, {14, 6, 4}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT16, true, MathFidelity::HiFi4, {10, 4, 4}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::FLOAT32, false, MathFidelity::LoFi, {24, 16, 8}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::FLOAT32, false, MathFidelity::HiFi2, {24, 14, 5}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::FLOAT32, false, MathFidelity::HiFi3, {18, 7, 4}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::FLOAT32, false, MathFidelity::HiFi4, {12, 4, 4}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::FLOAT32, true, MathFidelity::LoFi, {22, 18, 8}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::FLOAT32, true, MathFidelity::HiFi2, {22, 14, 6}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::FLOAT32, true, MathFidelity::HiFi3, {18, 6, 4}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::FLOAT32, true, MathFidelity::HiFi4, {10, 4, 4}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT8_B, false, MathFidelity::LoFi, {30, 26, 12}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT8_B, false, MathFidelity::HiFi2, {30, 14, 6}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT8_B, false, MathFidelity::HiFi3, {16, 6, 5}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT8_B, false, MathFidelity::HiFi4, {10, 4, 4}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT8_B, true, MathFidelity::LoFi, {26, 26, 12}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT8_B, true, MathFidelity::HiFi2, {30, 14, 6}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT8_B, true, MathFidelity::HiFi3, {16, 6, 5}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT8_B, true, MathFidelity::HiFi4, {10, 4, 4}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT4_B, false, MathFidelity::LoFi, {34, 26, 12}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT4_B, false, MathFidelity::HiFi2, {30, 14, 6}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT4_B, false, MathFidelity::HiFi3, {16, 6, 5}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT4_B, false, MathFidelity::HiFi4, {10, 4, 4}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT4_B, true, MathFidelity::LoFi, {34, 26, 12}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT4_B, true, MathFidelity::HiFi2, {30, 14, 6}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT4_B, true, MathFidelity::HiFi3, {16, 6, 5}},
+        Crossover{tt::ARCH::BLACKHOLE, DataType::BFLOAT4_B, true, MathFidelity::HiFi4, {10, 4, 4}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT16, false, MathFidelity::LoFi, {14, 50, 13}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT16, false, MathFidelity::HiFi2, {14, 48, 8}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT16, false, MathFidelity::HiFi3, {14, 12, 6}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT16, false, MathFidelity::HiFi4, {14, 6, 5}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT16, true, MathFidelity::LoFi, {14, 50, 14}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT16, true, MathFidelity::HiFi2, {14, 50, 8}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT16, true, MathFidelity::HiFi3, {14, 12, 6}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT16, true, MathFidelity::HiFi4, {14, 6, 5}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::FLOAT32, false, MathFidelity::LoFi, {8, 6, 6}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::FLOAT32, false, MathFidelity::HiFi2, {8, 6, 4}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::FLOAT32, false, MathFidelity::HiFi3, {8, 6, 4}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::FLOAT32, false, MathFidelity::HiFi4, {8, 6, 4}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::FLOAT32, true, MathFidelity::LoFi, {8, 34, 12}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::FLOAT32, true, MathFidelity::HiFi2, {8, 34, 8}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::FLOAT32, true, MathFidelity::HiFi3, {8, 34, 6}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::FLOAT32, true, MathFidelity::HiFi4, {8, 22, 4}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT8_B, false, MathFidelity::LoFi, {14, 62, 14}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT8_B, false, MathFidelity::HiFi2, {14, 20, 8}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT8_B, false, MathFidelity::HiFi3, {14, 10, 6}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT8_B, false, MathFidelity::HiFi4, {14, 6, 5}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT8_B, true, MathFidelity::LoFi, {16, 62, 14}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT8_B, true, MathFidelity::HiFi2, {14, 20, 8}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT8_B, true, MathFidelity::HiFi3, {14, 10, 6}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT8_B, true, MathFidelity::HiFi4, {14, 6, 5}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT4_B, false, MathFidelity::LoFi, {16, 34, 14}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT4_B, false, MathFidelity::HiFi2, {14, 16, 8}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT4_B, false, MathFidelity::HiFi3, {14, 8, 6}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT4_B, false, MathFidelity::HiFi4, {12, 6, 5}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT4_B, true, MathFidelity::LoFi, {16, 34, 14}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT4_B, true, MathFidelity::HiFi2, {16, 16, 8}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT4_B, true, MathFidelity::HiFi3, {14, 8, 6}},
+        Crossover{tt::ARCH::WORMHOLE_B0, DataType::BFLOAT4_B, true, MathFidelity::HiFi4, {12, 6, 5}},
     };
     const std::array dims{ReduceOpDim::W, ReduceOpDim::H, ReduceOpDim::HW};
-    for (const auto& [arch, fidelity, cutoffs] : cases) {
-        for (const bool fp32 : {false, true}) {
-            const ReduceHardwareConfig hardware{arch, fp32, false, fidelity};
-            for (size_t d = 0; d < dims.size(); ++d) {
-                for (const uint32_t tiles : {cutoffs[d] - 1, cutoffs[d], cutoffs[d] + 1}) {
-                    SCOPED_TRACE(
-                        ::testing::Message() << "arch=" << static_cast<int>(arch) << " fidelity=" << fidelity
-                                             << " dim=" << d << " tiles=" << tiles << " fp32=" << fp32);
-                    auto block = whole_input(ReduceBlockSpec::tiled(
-                        dims[d] == ReduceOpDim::H ? tiles * 32 : 32,
-                        dims[d] == ReduceOpDim::H ? 32 : tiles * 32,
-                        DataType::BFLOAT16,
-                        DataType::FLOAT32));
-                    for (const auto math : {ReduceOpMath::SUM, ReduceOpMath::AVG}) {
-                        const ReduceCallConfig call{
-                            block, math, dims[d], std::nullopt, ReduceFp32Mode::Fast, Policy::BulkWaitBulkPop};
-                        const auto sequence = make_reduce_sequence_plan({{0, call}}, {1, 2, 16, 64}, hardware);
-                        EXPECT_EQ(
-                            sequence.calls[0].plan.algorithm,
-                            tiles >= cutoffs[d] ? Algorithm::TileSum : Algorithm::Native);
-                        // Explicit choices bypass the performance heuristic in both directions.
-                        for (const auto forced : {Algorithm::Native, Algorithm::TileSum}) {
-                            EXPECT_EQ(
-                                make_reduce_sequence_plan({{0, call}}, {1, 2, 16, 64}, hardware, forced)
-                                    .calls[0]
-                                    .plan.algorithm,
-                                forced);
-                        }
-                    }
-                    // Fidelity must not override the additive path's eligibility restrictions.
+    for (const auto& [arch, input_dtype, fp32, fidelity, cutoffs] : cases) {
+        const ReduceHardwareConfig hardware{arch, fp32, false, fidelity};
+        for (size_t d = 0; d < dims.size(); ++d) {
+            for (const uint32_t tiles : {cutoffs[d] - 1, cutoffs[d], cutoffs[d] + 1}) {
+                SCOPED_TRACE(
+                    ::testing::Message() << "arch=" << static_cast<int>(arch)
+                                         << " input=" << static_cast<int>(input_dtype) << " fidelity=" << fidelity
+                                         << " dim=" << d << " tiles=" << tiles << " fp32=" << fp32);
+                auto block = whole_input(ReduceBlockSpec::tiled(
+                    dims[d] == ReduceOpDim::H ? tiles * 32 : 32,
+                    dims[d] == ReduceOpDim::H ? 32 : tiles * 32,
+                    input_dtype,
+                    DataType::FLOAT32));
+                for (const auto math : {ReduceOpMath::SUM, ReduceOpMath::AVG}) {
+                    const ReduceCallConfig call{
+                        block, math, dims[d], std::nullopt, ReduceFp32Mode::Fast, Policy::BulkWaitBulkPop};
+                    const auto sequence = make_reduce_sequence_plan({{0, call}}, {1, 2, 16, 64}, hardware);
                     EXPECT_EQ(
-                        make_reduce_plan(
-                            block,
-                            ReduceOpMath::MAX,
-                            dims[d],
-                            std::nullopt,
-                            ReduceFp32Mode::Fast,
-                            hardware,
-                            Policy::BulkWaitBulkPop)
-                            .algorithm,
-                        Algorithm::Native);
+                        sequence.calls[0].plan.algorithm, tiles >= cutoffs[d] ? Algorithm::TileSum : Algorithm::Native);
+                    // Explicit choices bypass the performance heuristic in both directions.
+                    for (const auto forced : {Algorithm::Native, Algorithm::TileSum}) {
+                        EXPECT_EQ(
+                            make_reduce_sequence_plan({{0, call}}, {1, 2, 16, 64}, hardware, forced)
+                                .calls[0]
+                                .plan.algorithm,
+                            forced);
+                    }
                 }
+                // Fidelity must not override the additive path's eligibility restrictions.
+                EXPECT_EQ(
+                    make_reduce_plan(
+                        block,
+                        ReduceOpMath::MAX,
+                        dims[d],
+                        std::nullopt,
+                        ReduceFp32Mode::Fast,
+                        hardware,
+                        Policy::BulkWaitBulkPop)
+                        .algorithm,
+                    Algorithm::Native);
             }
         }
     }
@@ -144,7 +200,7 @@ TEST(ReduceHostPlanner, AdditiveStreamingRequiresPairs) {
     for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
         for (const auto dtype : {DataType::BFLOAT16, DataType::FLOAT32}) {
             const ReduceHardwareConfig hardware{.arch = arch, .fp32_dest_acc_en = true};
-            auto block = ReduceBlockSpec::tiled(9 * 32, 14 * 32, dtype, DataType::FLOAT32);
+            auto block = ReduceBlockSpec::tiled(24 * 32, 14 * 32, dtype, DataType::FLOAT32);
             block.input_cb_tiles = 2;
             for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H, ReduceOpDim::HW}) {
                 const auto plan = make_reduce_plan(

@@ -235,26 +235,59 @@ struct AddCutoffs {
     std::uint32_t col;
     std::uint32_t scalar;
 };
+using AddCutoffTable = std::array<std::array<std::array<AddCutoffs, 4>, 2>, 4>;
 
-// Library-add/native crossovers indexed by math fidelity {LoFi, HiFi2, HiFi3, HiFi4}.
-// BF16 input, FP32 output, both DEST accumulation modes. See reduce_accumulate/README.md
-// for provenance.
-//
-// Blackhole P150b, 2026-09-23: first sustained >1% win. Dense sweeps refine HiFi2 ROW to
-// 30 and HiFi4 ROW to 10; other entries use the measured power-of-two grid.
-constexpr std::array<AddCutoffs, 4> BLACKHOLE_ADD_CUTOFFS{{
-    {.row = 64, .col = 32, .scalar = 16},
-    {.row = 30, .col = 16, .scalar = 8},
-    {.row = 16, .col = 8, .scalar = 8},
-    {.row = 10, .col = 4, .scalar = 4},
+// Library-add/native crossovers per architecture, indexed by
+// [input format {BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B}][DEST {16-bit, FP32}][fidelity {LoFi, HiFi2, HiFi3, HiFi4}].
+// Each entry is the first {row, col, scalar} reduction-axis tile count from which TileSum beats Native by >1% at
+// every larger width: single-core sharded L1 AVG, BulkWaitBulkPop, FP32 output, median of ten 100-iteration launches.
+// Measured 2026-10-23 on Wormhole B0 (n300) and Blackhole (P100a). Output format moves crossovers by at most two tiles.
+constexpr AddCutoffTable BLACKHOLE_ADD_CUTOFFS{{
+    {{
+        {{{34, 26, 10}, {28, 12, 6}, {14, 6, 4}, {10, 4, 4}}},
+        {{{34, 26, 10}, {28, 12, 6}, {14, 6, 4}, {10, 4, 4}}},
+    }},
+    {{
+        {{{24, 16, 8}, {24, 14, 5}, {18, 7, 4}, {12, 4, 4}}},
+        {{{22, 18, 8}, {22, 14, 6}, {18, 6, 4}, {10, 4, 4}}},
+    }},
+    {{
+        {{{30, 26, 12}, {30, 14, 6}, {16, 6, 5}, {10, 4, 4}}},
+        {{{26, 26, 12}, {30, 14, 6}, {16, 6, 5}, {10, 4, 4}}},
+    }},
+    {{
+        {{{34, 26, 12}, {30, 14, 6}, {16, 6, 5}, {10, 4, 4}}},
+        {{{34, 26, 12}, {30, 14, 6}, {16, 6, 5}, {10, 4, 4}}},
+    }},
 }};
-// Wormhole B0, 2026-09-24: conservative sustained >1% wins across repeated sweeps.
-constexpr std::array<AddCutoffs, 4> WORMHOLE_ADD_CUTOFFS{{
-    {.row = 14, .col = 52, .scalar = 14},
-    {.row = 14, .col = 52, .scalar = 8},
-    {.row = 14, .col = 12, .scalar = 6},
-    {.row = 14, .col = 7, .scalar = 5},
+constexpr AddCutoffTable WORMHOLE_ADD_CUTOFFS{{
+    {{
+        {{{14, 50, 13}, {14, 48, 8}, {14, 12, 6}, {14, 6, 5}}},
+        {{{14, 50, 14}, {14, 50, 8}, {14, 12, 6}, {14, 6, 5}}},
+    }},
+    {{
+        {{{8, 6, 6}, {8, 6, 4}, {8, 6, 4}, {8, 6, 4}}},
+        {{{8, 34, 12}, {8, 34, 8}, {8, 34, 6}, {8, 22, 4}}},
+    }},
+    {{
+        {{{14, 62, 14}, {14, 20, 8}, {14, 10, 6}, {14, 6, 5}}},
+        {{{16, 62, 14}, {14, 20, 8}, {14, 10, 6}, {14, 6, 5}}},
+    }},
+    {{
+        {{{16, 34, 14}, {14, 16, 8}, {14, 8, 6}, {12, 6, 5}}},
+        {{{16, 34, 14}, {16, 16, 8}, {14, 8, 6}, {12, 6, 5}}},
+    }},
 }};
+
+std::size_t add_format_index(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16: return 0;
+        case DataType::FLOAT32: return 1;
+        case DataType::BFLOAT8_B: return 2;
+        case DataType::BFLOAT4_B: return 3;
+        default: TT_THROW("Reduce planner: unsupported TileSum input type");
+    }
+}
 
 std::size_t fidelity_index(tt::tt_metal::MathFidelity fidelity) {
     switch (fidelity) {
@@ -266,8 +299,8 @@ std::size_t fidelity_index(tt::tt_metal::MathFidelity fidelity) {
     }
 }
 
-std::uint32_t add_threshold(ReduceOpDim dim, const ReduceHardwareConfig& hardware) {
-    const std::array<AddCutoffs, 4>* cutoffs = nullptr;
+std::uint32_t add_threshold(ReduceOpDim dim, DataType input_dtype, const ReduceHardwareConfig& hardware) {
+    const AddCutoffTable* cutoffs = nullptr;
     if (hardware.arch == tt::ARCH::BLACKHOLE) {
         cutoffs = &BLACKHOLE_ADD_CUTOFFS;
     } else if (hardware.arch == tt::ARCH::WORMHOLE_B0) {
@@ -276,7 +309,8 @@ std::uint32_t add_threshold(ReduceOpDim dim, const ReduceHardwareConfig& hardwar
         // Preserve the existing policy on architectures not covered by either sweep.
         return dim == ReduceOpDim::W ? 4U : 8U;
     }
-    const auto& cutoff = (*cutoffs)[fidelity_index(hardware.math_fidelity)];
+    const auto& cutoff = (*cutoffs)[add_format_index(input_dtype)][hardware.fp32_dest_acc_en ? 1 : 0]
+                                   [fidelity_index(hardware.math_fidelity)];
     return dim == ReduceOpDim::W ? cutoff.row : (dim == ReduceOpDim::H ? cutoff.col : cutoff.scalar);
 }
 
@@ -409,7 +443,8 @@ ReducePlan make_tiled_plan(
     // Streaming TileSum consumes input tiles in pairs.
     const bool add_fits = input_policy != ReduceInputPolicy::WaitAndPopPerTile || block.input_cb_tiles >= 2;
     const auto automatic_algorithm =
-        add_legal && add_fits && threshold_axis_tiles.value_or(reduced_tiles) >= add_threshold(dim, hardware)
+        add_legal && add_fits &&
+                threshold_axis_tiles.value_or(reduced_tiles) >= add_threshold(dim, block.input_dtype, hardware)
             ? ReduceAlgorithm::TileSum
             : ReduceAlgorithm::Native;
     TT_FATAL(
