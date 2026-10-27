@@ -658,48 +658,23 @@ def test_sqrt_family_negative_zero_regression(
 def _run_unary_float32(mathop, src_A):
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     dest_acc = DestAccumulation.Yes
-    input_dimensions = [32, 32]
     assert negative_zero_delivered(formats.input_format, dest_acc)
 
-    src_B = torch.zeros_like(src_A)
-    tile_cnt = 1
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
+    return torch.tensor(
+        eltwise_unary_sfpu(
+            formats=formats,
+            dest_acc=dest_acc,
+            approx_mode=ApproximationMode.No,
+            mathop=mathop,
+            fast_mode=FastMode.No,
+            input_dimensions=[32, 32],
+            src_A=src_A,
+            src_B=torch.zeros_like(src_A),
+            unpack_to_dest=True,
+            check_golden=False,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
+        dtype=torch.float32,
     )
-    return torch.tensor(configuration.run().result, dtype=torch.float32)
 
 
 def test_erfinv_small_magnitude_regression():
