@@ -30,12 +30,12 @@ def _chunks(t: torch.Tensor, heads: int, dim: int) -> torch.Tensor:
     return t.double().reshape(n * CHUNK, heads, dim).permute(1, 0, 2).reshape(heads, n, CHUNK, dim)
 
 
-def prepare_chunk_recurrence(q, k, v, g, beta_src, *, num_heads, gate_scale=1.0, beta_logits_column_offset=None):
-    """q, k, g [1, T, H * K], v [1, T, H * V]; beta_src: token-major logits [1, T, columns] (with
-    beta_logits_column_offset) -> the seven outputs, float64, in OUTPUT_NAMES order."""
+def prepare_chunk_recurrence(q, k, v, g, beta_src, *, num_heads, gate_scale=1.0, beta_logits_column_offset=0):
+    """q, k, g [1, T, H * K], v [1, T, H * V]; beta_src: token-major logits [1, T, columns], H of them from
+    beta_logits_column_offset (the op's only beta form since #59918) -> the seven outputs, float64, in OUTPUT_NAMES
+    order."""
     H = num_heads
     K, V = q.shape[-1] // H, v.shape[-1] // H
-    assert beta_logits_column_offset is not None, "only the beta-logits form is modelled"
     logits = beta_src[..., beta_logits_column_offset : beta_logits_column_offset + H]
     beta = _chunks(torch.sigmoid(logits.double()), H, 1)
     q, k, v = _chunks(q, H, K), _chunks(k, H, K), _chunks(v, H, V)

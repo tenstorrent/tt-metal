@@ -52,3 +52,9 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: deepseek_v41_flash_d_p O.1
 - Files: tests/cases.py, tests/reference.py, tests/test_update_padded_kv_cache.py
+
+### Upstream sync to source @ 6b80daf43e3 (rebase onto llk_helper_library, owner: full sync, 2026-10-27)
+- Taken: #61236 (an input row window: input_row_offset / input_rows, plain page copy only, default the whole input)
+  and the header move (#60308). The window is unused by our models.
+- Conflict: the device-operation entry point's signature (upstream's two new arguments taken). The fork's ROW_MAJOR
+  row-granular validation (page_row_unit) merged clean next to upstream's windowed validator; checked by hand.

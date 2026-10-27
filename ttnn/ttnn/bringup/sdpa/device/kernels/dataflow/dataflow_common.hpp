@@ -12,7 +12,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/debug/assert.h"
 #include "../q_chunk_remapping.hpp"
 #include "../sliding_window_geometry.hpp"
