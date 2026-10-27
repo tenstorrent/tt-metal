@@ -136,14 +136,17 @@ public:
             // word[2]=provided L1 cache size, word[3]=minimum L1 cache size that would
             // have made the aggregator usable. Host reads these to produce an actionable
             // warning. The leading 32-byte (DRAM-aligned) slot in DRAM has plenty of
-            // room for these four words.
-            volatile tt_l1_ptr uint32_t* dram_rw_pointers = local_l1_ptr<uint32_t>(l1_dram_rw_pointers);
+            // room for these four words. They are staged at the start of the cache, because
+            // the layout above may extend past its end; the location table they overwrite
+            // there is not needed once the aggregator is disabled.
+            uintptr_t l1_diagnostics = dram_align(l1_cache_buffer_address);
+            volatile tt_l1_ptr uint32_t* dram_rw_pointers = local_l1_ptr<uint32_t>(l1_diagnostics);
             dram_rw_pointers[0] = DEBUG_PRINT_SERVER_DISABLED_MAGIC;
             dram_rw_pointers[1] = 0;
             dram_rw_pointers[2] = l1_cache_buffer_size;
             dram_rw_pointers[3] = static_cast<uint32_t>(min_buffer_end - l1_cache_buffer_address);
             noc_wwrite_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_SNDL>(
-                NOC_INDEX, noc_local(l1_dram_rw_pointers), dram_noc_xy, dram_rw_pointers_addr, 4 * sizeof(uint32_t));
+                NOC_INDEX, noc_local(l1_diagnostics), dram_noc_xy, dram_rw_pointers_addr, 4 * sizeof(uint32_t));
             noc_async_write_barrier();
         } else {
             // Clear STARTING_MAGIC the host wrote at attach time so it can distinguish
