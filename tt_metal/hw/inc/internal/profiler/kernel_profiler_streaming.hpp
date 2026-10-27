@@ -513,16 +513,21 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #include "perf_counters.hpp"
 #include "internal/profiler/synchronization_event_profiler.hpp"
 
-// Scoped zones. The metadata struct a macro builds is what the host gets back for the zone's site
-// (hostdev/debug_event_meta.h); the device only ever sends the id.
-#define DeviceZoneScopedWith(...)     \
-    TT_DEBUG_SITE(hash, __VA_ARGS__); \
+// Scoped zones. Each macro takes exactly the fields of its metadata type (hostdev/debug_event_meta.h), which is what
+// the host gets back for the zone's site; the device only ever sends the id. All arguments are compile-time constants.
+#define DeviceZoneScopedN(name)                             \
+    TT_DEBUG_SITE(hash, ::tt::debug_event::ZoneMeta{name}); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
-#define DeviceZoneScopedN(name) DeviceZoneScopedWith(::tt::debug_event::ZoneMeta{name})
+// `color` is 0xRRGGBB.
+#define DeviceZoneScopedNC(name, color)                                 \
+    TT_DEBUG_SITE(hash, ::tt::debug_event::ZoneColorMeta{name, color}); \
+    kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
-// `color` is 0xRRGGBB, a compile-time constant.
-#define DeviceZoneScopedNC(name, color) DeviceZoneScopedWith(::tt::debug_event::ZoneColorMeta{name, color})
+// `color` is 0xRRGGBB; `verbosity` is a uint8_t level the host receives with the zone.
+#define DeviceZoneScopedNCV(name, color, verbosity)                                    \
+    TT_DEBUG_SITE(hash, ::tt::debug_event::ZoneVerbosityMeta{name, color, verbosity}); \
+    kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
 #define DeviceZoneScopedNIf(name, active)         \
     TT_OBSERVABILITY_EVENT_DEFINE_ID(hash, name); \
@@ -580,9 +585,7 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 
 #define DeviceZoneScopedNC(name, color) (void(name), void(sizeof(color)))
 
-// No code, but the metadata type is still checked (see kernel_profiler.hpp).
-#include "hostdev/debug_event_meta.h"
-#define DeviceZoneScopedWith(...) static_assert(::tt::debug_event::detail::check_site_type<decltype(__VA_ARGS__)>())
+#define DeviceZoneScopedNCV(name, color, verbosity) (void(name), void(sizeof(color)), void(sizeof(verbosity)))
 
 #define DeviceZoneScopedNIf(name, active) (void(name), void(sizeof(active)))
 

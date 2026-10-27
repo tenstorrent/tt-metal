@@ -40,10 +40,13 @@ constexpr uint32_t kProcessorColors[kProcessorCount] = {
     tracy::Color::Yellow3,
     tracy::Color::Yellow2};
 
-// A DeviceZoneScopedNC site's own colour (0xRRGGBB), or 0 for its processor's.
+// A DeviceZoneScopedNC or DeviceZoneScopedNCV site's own colour (0xRRGGBB), or 0 for its processor's.
 uint32_t site_color(const experimental::streaming_profiler::ObservabilityEventInfo& site) {
     if (site.meta != nullptr) {
         if (auto m = site.meta->as<tt::debug_event::ZoneColorMeta>()) {
+            return m->color & 0xFFFFFFu;
+        }
+        if (auto m = site.meta->as<tt::debug_event::ZoneVerbosityMeta>()) {
             return m->color & 0xFFFFFFu;
         }
     }

@@ -8,7 +8,7 @@ L1. Generating and placing that hard-coded instruction takes several steps, list
 | step | stage | action | the id is |
 |---|---|---|---|
 | 1 | source | the debug event site is written, with its metadata struct | — |
-| 2 | preprocess | the macro names the site's handle `__tt_observability_event_0_6_faf478821554a5b6` (a name, not the id) | not yet a number |
+| 2 | preprocess | the macro names the site's handle `__tt_observability_event_0_6_4cd02044811a3690` (a name, not the id) | not yet a number |
 | 3 | compile | the metadata struct becomes assembler directives, plus `lui`/`addi` | not yet a number |
 | 4 | link | the linker places the handle | `0x06800005` |
 | 5 | link | the linker fills in the instructions | `0x06800005` |
@@ -26,11 +26,11 @@ This page follows one debug event through every stage, from the line of device-s
 compile, link and load, to the device sending its id and the host turning that id back into the event's name and
 metadata.
 
-**The event.** For this example we picked a scoped event that carries three fields of metadata, a name, a colour and
-a verbosity level: `DeviceZoneScopedWith(ZoneVerbosityMeta{"T1_Zone5", 0x42D4F4, 2})`. It marks the start and end of
-a region of code. It sits in the demo compute kernel next to nine others (`T1_Zone0` … `T1_Zone9`), which carry the
-two-field `ZoneColorMeta`. We chose it because it is in the middle of the kernel, so its numbers are not zeros. Every
-other kind of debug event gets its id the same way.
+**The event.** For this example we picked a scoped event that carries three fields of metadata, a name, a colour and a
+verbosity level: `DeviceZoneScopedNCV("T1_Zone5", 0x42D4F4, 2)`. It marks the start and end of a region of code. It sits
+in the demo compute kernel next to nine others (`T1_Zone0` … `T1_Zone9`), which carry the two-field `ZoneColorMeta`. We
+chose it because it is in the middle of the kernel, so its numbers are not zeros. Every other kind of debug event gets
+its id the same way.
 
 **The data.** Every value below is real. It was read from the JIT-built ELF and the loader's output on a Blackhole
 p300a, running the demo program:
@@ -76,31 +76,32 @@ The TRISC1 (math) kernel opens the event:
 
 ```cpp
 {
-    DeviceZoneScopedWith(ZoneVerbosityMeta{"T1_Zone5", 0x42D4F4, 2});
+    DeviceZoneScopedNCV("T1_Zone5", 0x42D4F4, 2);
     ...   // ~12 us of work
 }
 ```
 
-It sits at **line 135** of `test_streaming_profiler_zones/kernels/zones_compute.cpp` (through the kernel's `ZONE_V`
+It sits at **line 126** of `test_streaming_profiler_zones/kernels/zones_compute.cpp` (through the kernel's `ZONE_V`
 macro); the host reports that line at the end. It is the sixth of the kernel's ten scoped events, `T1_Zone0` …
 `T1_Zone9`.
 
-**The site's metadata is a struct.** Each event macro passes the site a constant value of a plain C++ struct, and the
-host gets that value back, field by field. This event uses a type the kernel defines itself:
+**The site's metadata is a struct.** Each zone macro takes exactly the fields of one fixed type and passes the site
+a constant value of it; the host gets that value back, field by field. `DeviceZoneScopedN(name)` passes
+`ZoneMeta{name}`, `DeviceZoneScopedNC(name, color)` passes `ZoneColorMeta{name, color}`, which the other nine zones
+use, and `DeviceZoneScopedNCV(name, color, verbosity)` passes this one:
 
 ```cpp
-// test_streaming_profiler_zones/kernels/zones_compute.cpp
+// tt_metal/hw/inc/hostdev/debug_event_meta.h
 struct ZoneVerbosityMeta {
     const char* name;
-    uint32_t color;
-    uint8_t verbosity;
+    uint32_t color;     // 0xRRGGBB
+    uint8_t verbosity;  // carried to the host as is; the device does not filter on it
 };
 ```
 
-`DeviceZoneScopedWith(value)` takes any such type. The library's own macros are shorthands for it:
-`DeviceZoneScopedN(name)` passes `ZoneMeta{name}`, and `DeviceZoneScopedNC(name, color)` passes
-`ZoneColorMeta{name, color}`, which the other nine zones use. Any **simple aggregate**, a struct with public data
-members only, can be one:
+Underneath, every macro hands its value to `TT_DEBUG_SITE`, the metadata API in
+`tt_metal/hw/inc/hostdev/observability_event_id.h`. That takes any **simple aggregate**, a struct with public data members
+only, so a new macro with a new type needs no change below it:
 
 - each field is a string literal (`const char*`), an integer, enum or `bool` of 1, 2, 4 or 8 bytes, or a nested
   struct that follows the same rules;
@@ -117,15 +118,16 @@ any of this: it only ever has the site's id.
 > assembler label, so the next steps can refer to the handle. The id is the label's *address*, which the
 > linker (step 4) and the loader (step 9) decide. The name is gone once the file is assembled.
 
-`DeviceZoneScopedWith(meta)` expands to `TT_DEBUG_SITE(hash, meta)`, which spells the label name from three parts:
+`DeviceZoneScopedNCV(name, color, verbosity)` expands to `TT_DEBUG_SITE(hash, ZoneVerbosityMeta{name, color,
+verbosity})`, which spells the label name from three parts:
 
 | part | value | from | why it is in the name |
 |---|---|---|---|
 | `TT_PROFILER_TU_ID` | `0` | the JIT compile command: `-DTT_PROFILER_TU_ID=0`, the source's index in its link | two sources of one link can be merged into one assembly by LTO; this keeps their names apart |
 | `__COUNTER__` | `6` | the seventh site in this source: `0` is `STACK-OVERFLOW` (in `kernel_profiler_streaming.hpp`), `1`–`5` are `T1_Zone0`–`T1_Zone4` | keeps the names of different sites in one source apart |
-| hash of the value | `faf478821554a5b6` | an FNV-1a hash of the metadata value: its type and every field, here `"T1_Zone5"`, `0x42D4F4` and `2` | a site inside a template can be instantiated with different values (a colour from a template parameter); they share the counter, so the hash keeps them apart |
+| hash of the value | `4cd02044811a3690` | an FNV-1a hash of the metadata value: its type and every field, here `"T1_Zone5"`, `0x42D4F4` and `2` | a site inside a template can be instantiated with different values (a colour from a template parameter); they share the counter, so the hash keeps them apart |
 
-Label name: **`__tt_observability_event_0_6_faf478821554a5b6`**. Two different sites, or one site with two different values, must
+Label name: **`__tt_observability_event_0_6_4cd02044811a3690`**. Two different sites, or one site with two different values, must
 not share a name; nothing else depends on it.
 
 > **Naming the label is an optimization, not a requirement.** A site could give its handle an anonymous local label,
@@ -146,7 +148,7 @@ carry several values:
 template <uint32_t Color>
 void colored_zone() {
     // __COUNTER__ is expanded here, once
-    DeviceZoneScopedWith(ZoneVerbosityMeta{"Zone", Color, 2});
+    DeviceZoneScopedNCV("Zone", Color, 2);
 }
 
 void kernel_main() {
@@ -177,7 +179,7 @@ behave like the case without the hash, so it is not checked for.
 computed by the compiler:
 
 ```cpp
-static constexpr auto tt_site_meta = ZoneVerbosityMeta{"T1_Zone5", 0x42D4F4, 2};
+static constexpr auto tt_site_meta = ::tt::debug_event::ZoneVerbosityMeta{"T1_Zone5", 0x42D4F4, 2};
 asm((::tt::debug_event::detail::emit_site(tt_site_meta, "__tt_observability_event_0_6", __FILE__, __LINE__)) : "=r"(v));
 ```
 
@@ -190,22 +192,22 @@ written out for 1 to 8 fields, which is where the limit of 8 fields per struct c
 device. The text it returns for this site:
 
 ```asm
-.ifndef __tt_observability_event_0_6_faf478821554a5b6
+.ifndef __tt_observability_event_0_6_4cd02044811a3690
 .pushsection .tt_observability_event_ids,"",@progbits
-__tt_observability_event_0_6_faf478821554a5b6:	.byte 0                        # the handle: exactly one byte
+__tt_observability_event_0_6_4cd02044811a3690:	.byte 0                        # the handle: exactly one byte
 .popsection
 .pushsection .tt_observability_event_meta,"",@progbits
 .balign 4
-.long __tt_observability_event_0_6_faf478821554a5b6                            # header: id slot
+.long __tt_observability_event_0_6_4cd02044811a3690                            # header: id slot
 .pushsection .tt_observability_event_str,"MS",@progbits,1
-8880:	.asciz "ZoneVerbosityMeta:swb"
+8880:	.asciz "tt::debug_event::ZoneVerbosityMeta:swb"
 .popsection
 .long 8880b                                                     # header: signature
 .pushsection .tt_observability_event_str,"MS",@progbits,1
 8880:	.asciz "/localdev/…/kernels/zones_compute.cpp"
 .popsection
 .long 8880b                                                     # header: file
-.long 135                                                       # header: line
+.long 126                                                       # header: line
 .pushsection .tt_observability_event_str,"MS",@progbits,1
 8880:	.asciz "T1_Zone5"
 .popsection
@@ -217,8 +219,8 @@ __tt_observability_event_0_6_faf478821554a5b6:	.byte 0                        # 
 .balign 4                                                       # pad the record to a multiple of 4
 .popsection
 .endif
-	lui %0, %%hi(__tt_observability_event_0_6_faf478821554a5b6)
-	addi %0, %0, %%lo(__tt_observability_event_0_6_faf478821554a5b6)
+	lui %0, %%hi(__tt_observability_event_0_6_4cd02044811a3690)
+	addi %0, %0, %%lo(__tt_observability_event_0_6_4cd02044811a3690)
 ```
 
 The compiler replaces `%0` with a register (`s4` in this kernel).
@@ -229,21 +231,22 @@ The compiler replaces `%0` with a register (`s4` in this kernel).
   size (at most 4). The record is then padded to a multiple of 4. `ZoneVerbosityMeta` gives
   **16 + 4 + 4 + 1 = 25 bytes, padded to 28**; `ZoneColorMeta` gives 24 and `ZoneMeta` 20. Records differ in size by
   type.
-- **The signature** makes every record self-describing: `"<type name>:<field codes>"`, one code per field (`s`
-  string, `b`/`h`/`w`/`q` for 1/2/4/8 bytes, braces around a nested struct's codes). `ZoneVerbosityMeta:swb` is the
-  name (a string), the colour (a 4-byte integer) and the verbosity (a 1-byte integer); the header's own four words
-  are not in it. The host sizes and reads any record from its signature, without knowing the type; the type name lets
-  a reader ask for the struct back by name.
-- `135` is `__LINE__` from step 1.
+- **The signature** makes every record self-describing: `"<type name>:<field codes>"`, one code per field (`s` string,
+  `b`/`h`/`w`/`q` for 1/2/4/8 bytes, braces around a nested struct's codes). `tt::debug_event::ZoneVerbosityMeta:swb` is
+  the name (a string), the colour (a 4-byte integer) and the verbosity (a 1-byte integer); the header's own four words
+  are not in it. The host sizes and reads any record from its signature, without knowing the type; the type name lets a
+  reader ask for the struct back by name.
+- `126` is `__LINE__` from step 1.
 
-**A richer struct works the same way.** A site can carry any number of formatting attributes, grouped however suits
-it. A type of your own, with the style in a nested struct and a further field:
+**A richer struct works the same way.** A new macro can give its sites any number of attributes, grouped however
+suits them, by passing its own type to the metadata API. A type with the style in a nested struct and a further
+field:
 
 ```cpp
 struct Style { uint32_t color; uint8_t verbosity; };
 struct MyZoneMeta { const char* name; Style style; uint16_t flags; };
 
-DeviceZoneScopedWith(MyZoneMeta{"T1_Zone5", {0x42D4F4, 2}, 0x0001});
+TT_DEBUG_SITE(site, MyZoneMeta{"T1_Zone5", {0x42D4F4, 2}, 0x0001});
 ```
 
 `emit_site` flattens the nested struct in place and marks its bounds with braces in the signature. The record body
@@ -259,7 +262,7 @@ it writes after the same 16-byte header (the text `emit_site` returns for this v
 Signature `"MyZoneMeta:s{wb}h"`, 28 bytes in all. The host reads it with no code of its own for this type, and
 `site.meta->as<MyZoneMeta>()` gives the struct back.
 
-Nothing is a number yet: the id is "wherever `__tt_observability_event_0_6_faf478821554a5b6` ends up".
+Nothing is a number yet: the id is "wherever `__tt_observability_event_0_6_4cd02044811a3690` ends up".
 
 ## 4. Link: the handle is placed
 
@@ -317,7 +320,7 @@ five before ours are all 24-byte `ZoneColorMeta` records, so `T1_Zone5`'s record
 `0x06700000 + 5 × 24 = 0x06700000 + 0x78 =` **`0x06700078`**. Its 28 bytes, as `readelf -x` prints them:
 
 ```
-0x06700078:  05008006  cb006006  22006006  87000000  e1006006  f4d44200  02000000
+0x06700078:  05008006  cb006006  22006006  7e000000  f2006006  f4d44200  02000000
 ```
 
 The seven groups are the record's seven 4-byte words from step 3, in file byte order. Reversing each group gives the
@@ -326,14 +329,14 @@ number:
 | word | bytes in file | as a number | meaning |
 |---|---|---|---|
 | id slot | `05 00 80 06` | `0x06800005` | the handle's address from step 4; it becomes the id at load (step 11) |
-| signature | `cb 00 60 06` | `0x066000cb` | where `"ZoneVerbosityMeta:swb"` starts in `.tt_observability_event_str` |
+| signature | `cb 00 60 06` | `0x066000cb` | where `"tt::debug_event::ZoneVerbosityMeta:swb"` starts in `.tt_observability_event_str` |
 | file | `22 00 60 06` | `0x06600022` | where the file path starts in `.tt_observability_event_str` |
-| line | `87 00 00 00` | `0x87` = 135 | the line from step 1 |
-| field 1, `name` | `e1 00 60 06` | `0x066000e1` | where `"T1_Zone5"` starts in `.tt_observability_event_str` |
+| line | `7e 00 00 00` | `0x7e` = 126 | the line from step 1 |
+| field 1, `name` | `f2 00 60 06` | `0x066000f2` | where `"T1_Zone5"` starts in `.tt_observability_event_str` |
 | field 2, `color` | `f4 d4 42 00` | `0x0042d4f4` | the colour, stored as the value itself |
 | field 3, `verbosity` | `02` `00 00 00` | `2` | the verbosity, one byte, then 3 bytes of padding |
 
-**Where `0x066000e1` comes from.** `.tt_observability_event_str` sits at `TT_OBSERVABILITY_EVENT_STR_VMA`, `0x06600000`, and is just the
+**Where `0x066000f2` comes from.** `.tt_observability_event_str` sits at `TT_OBSERVABILITY_EVENT_STR_VMA`, `0x06600000`, and is just the
 strings of all sites packed back to back, each ending in a `\0` byte, in the order the sites were emitted:
 
 | starts at | offset | string | its size (with `\0`) |
@@ -343,15 +346,15 @@ strings of all sites packed back to back, each ending in a `\0` byte, in the ord
 | `0x0660009e` | 158 | `T1_Zone0` | 9 |
 | `0x066000a7` | 167 | `T1_Zone1` | 9 |
 | … | | | |
-| `0x066000cb` | 203 | `ZoneVerbosityMeta:swb` (this site's signature) | 22 |
-| **`0x066000e1`** | **225** | **`T1_Zone5`** | 9 |
+| `0x066000cb` | 203 | `tt::debug_event::ZoneVerbosityMeta:swb` (this site's signature) | 39 |
+| **`0x066000f2`** | **242** | **`T1_Zone5`** | 9 |
 
-`225` is how many bytes of strings came **before** it: `34 + 124 + 5 × 9 + 22 = 225`. Strings that several sites
+`242` is how many bytes of strings came **before** it: `34 + 124 + 5 × 9 + 39 = 242`. Strings that several sites
 share appear only once: the section is marked mergeable (`"MS"` in step 3), so the linker keeps one copy of the file
 path and of the `ZoneColorMeta:sw` signature, and every `T1_ZoneN` record points at it.
 
-The host turns a pointer back into a string by subtracting the section's address: `0x066000e1 − 0x06600000 = 225`,
-then reads from byte 225 up to the next `\0`.
+The host turns a pointer back into a string by subtracting the section's address: `0x066000f2 − 0x06600000 = 242`,
+then reads from byte 242 up to the next `\0`.
 
 ## 7. Link: the relocations are kept
 
@@ -361,9 +364,9 @@ The three that mention this handle:
 
 ```
 at address  type            symbol
-00007cd0    R_RISCV_HI20    __tt_observability_event_0_6_faf478821554a5b6   ← the lui from step 5   (upper 20 bits)
-00007cd4    R_RISCV_LO12_I  __tt_observability_event_0_6_faf478821554a5b6   ← the addi from step 5  (lower 12 bits)
-06700078    R_RISCV_32      __tt_observability_event_0_6_faf478821554a5b6   ← the record's id slot from step 6 (all 32 bits)
+00007cd0    R_RISCV_HI20    __tt_observability_event_0_6_4cd02044811a3690   ← the lui from step 5   (upper 20 bits)
+00007cd4    R_RISCV_LO12_I  __tt_observability_event_0_6_4cd02044811a3690   ← the addi from step 5  (lower 12 bits)
+06700078    R_RISCV_32      __tt_observability_event_0_6_4cd02044811a3690   ← the record's id slot from step 6 (all 32 bits)
 ```
 
 These three lines are exactly the list of places the host will change in steps 10 and 11. They sit among 20,922
@@ -475,16 +478,16 @@ multiple of 4, the record is 28 bytes, and the next one starts right after it. I
 into a string (subtract `0x06600000`, read up to `\0`, as in step 6) and publishes:
 
 ```
-sites[60] = { name "T1_Zone5", file ".../kernels/zones_compute.cpp", line 135,
-              meta = "ZoneVerbosityMeta:swb" { "T1_Zone5", 0x42d4f4, 2 } }
+sites[60] = { name "T1_Zone5", file ".../kernels/zones_compute.cpp", line 126,
+              meta = "tt::debug_event::ZoneVerbosityMeta:swb" { "T1_Zone5", 0x42d4f4, 2 } }
 ```
 
 A reader gets the struct back by asking for its type. `as<T>()` checks the signature against `T`'s and walks `T`'s
-fields with the same structured binding the compiler used in step 3, filling each one in. The host needs the same
-struct definition as the kernel, with the same name, since the signature names the type:
+fields with the same structured binding the compiler used in step 3, filling each one in. The host and the device
+include the same `hostdev/debug_event_meta.h`, so both name the type alike:
 
 ```cpp
-if (auto v = site.meta->as<ZoneVerbosityMeta>()) {
+if (auto v = site.meta->as<tt::debug_event::ZoneVerbosityMeta>()) {
     // v->name == "T1_Zone5", v->color == 0x42D4F4, v->verbosity == 2
 }
 ```
@@ -548,13 +551,13 @@ The relay carries the ring buffer to the host. The decoder masks off the type to
 `0x1800003C & 0x7FFFFFF = 60` (`0x7FFFFFF` is 27 one-bits), and calls `observability_event_of(60)`, which is one array load:
 
 ```
-sites[60]  →  "T1_Zone5"  zones_compute.cpp:135  ZoneVerbosityMeta{ color 0x42d4f4, verbosity 2 }
+sites[60]  →  "T1_Zone5"  zones_compute.cpp:126  ZoneVerbosityMeta{ color 0x42d4f4, verbosity 2 }
 ```
 
-A consumer reads the metadata from there. The Tracy sink, for instance, takes a zone's own colour only from
-`ZoneColorMeta`, so it draws `T1_Zone5` in TRISC1's colour; a consumer that knows `ZoneVerbosityMeta` reads all three
-fields with `as<ZoneVerbosityMeta>()`. A run of this program that completes its capture receives every event: 105
-scoped events and 12 point events, with 0 stalls.
+A consumer reads the metadata from there. The Tracy sink, for instance, takes a zone's own colour from `ZoneColorMeta`
+or `ZoneVerbosityMeta`, so it draws `T1_Zone5` in cyan; a consumer that also wants the verbosity reads all three fields
+with `as<ZoneVerbosityMeta>()`. A run of this program that completes its capture receives every event: 105 scoped events
+and 12 point events, with 0 stalls.
 
 ---
 
