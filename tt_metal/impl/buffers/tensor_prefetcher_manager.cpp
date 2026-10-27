@@ -1921,11 +1921,8 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     // Destination of the dispatcher write: the full device address (the kernel's
     // local slot base plus the programmable-DRAM-core L1 NOC offset), so the
     // dispatcher must NOT apply a bank offset.
-    const uint64_t dram_l1_noc_offset = MetalContext::instance(mesh_device_->impl().get_context_id())
-                                            .hal()
-                                            .get_l1_noc_offset(HalProgrammableCoreType::DRAM);
-    const uint64_t slot_addr = static_cast<uint64_t>(cq_signal_l1_addr_) +
-                               static_cast<uint64_t>(cq_id) * cq_signal_slot_stride_ + dram_l1_noc_offset;
+    const DeviceAddr slot_local_addr =
+        static_cast<DeviceAddr>(cq_signal_l1_addr_) + static_cast<DeviceAddr>(cq_id) * cq_signal_slot_stride_;
 
     std::vector<DeviceMemoryAddress> targets;
     targets.reserve(target_devices.size() * num_senders_);
@@ -1933,9 +1930,9 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
         IDevice* device = devices_[device_index_by_coord_.at(coord)];
         for (uint32_t s = 0; s < num_senders_; ++s) {
             // Per-device translation; see metal_SocDescriptor::dram_bank_endpoint_coords.
-            const CoreCoord virtual_core =
-                device->virtual_core_from_logical_core(sender_logical_cores_[s], CoreType::DRAM);
-            targets.push_back(DeviceMemoryAddress{coord, virtual_core, slot_addr});
+            const DramCoreL1Address slot =
+                dram_core_l1_address(*mesh_device_, device, sender_logical_cores_[s], slot_local_addr);
+            targets.push_back(DeviceMemoryAddress{coord, slot.virtual_core, slot.noc_addr});
         }
     }
 

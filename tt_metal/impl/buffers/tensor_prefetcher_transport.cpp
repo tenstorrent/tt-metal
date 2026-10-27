@@ -19,6 +19,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/buffers/h2d_socket_internal.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/context/metal_context.hpp"
@@ -35,16 +36,15 @@ std::vector<uint32_t> read_sender_words(
     const CoreCoord& sender_logical,
     uint32_t local_addr,
     uint32_t num_words) {
-    const MetalContext& metal = MetalContext::instance(mesh_device.impl().get_context_id());
-    const uint64_t read_addr =
-        metal.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) + static_cast<uint64_t>(local_addr);
-    const CoreCoord virtual_core = device->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
+    const DramCoreL1Address source = dram_core_l1_address(mesh_device, device, sender_logical, local_addr);
     std::vector<uint32_t> words(num_words, 0);
-    metal.get_cluster().read_core(
-        words.data(),
-        num_words * static_cast<uint32_t>(sizeof(uint32_t)),
-        tt_cxy_pair(device->id(), virtual_core),
-        read_addr);
+    MetalContext::instance(mesh_device.impl().get_context_id())
+        .get_cluster()
+        .read_core(
+            words.data(),
+            num_words * static_cast<uint32_t>(sizeof(uint32_t)),
+            tt_cxy_pair(device->id(), source.virtual_core),
+            source.noc_addr);
     return words;
 }
 
@@ -57,12 +57,15 @@ void write_sender_bytes(
     uint32_t local_addr,
     const void* bytes,
     uint32_t num_bytes) {
-    const MetalContext& metal = MetalContext::instance(mesh_device.impl().get_context_id());
-    const uint64_t write_addr =
-        metal.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) + static_cast<uint64_t>(local_addr);
-    const CoreCoord virtual_core = device->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
-    metal.get_cluster().write_core(
-        bytes, num_bytes, tt_cxy_pair(device->id(), virtual_core), write_addr, tt::umd::IoOrdering::Strict);
+    const DramCoreL1Address target = dram_core_l1_address(mesh_device, device, sender_logical, local_addr);
+    MetalContext::instance(mesh_device.impl().get_context_id())
+        .get_cluster()
+        .write_core(
+            bytes,
+            num_bytes,
+            tt_cxy_pair(device->id(), target.virtual_core),
+            target.noc_addr,
+            tt::umd::IoOrdering::Strict);
 }
 
 }  // namespace

@@ -119,17 +119,26 @@ std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<Co
     return bases;
 }
 
+DramCoreL1Address dram_core_l1_address(
+    const distributed::MeshDevice& mesh_device, IDevice* device, const CoreCoord& dram_logical, DeviceAddr local_addr) {
+    const MetalContext& metal_ctx = MetalContext::instance(mesh_device.impl().get_context_id());
+    return DramCoreL1Address{
+        .virtual_core = device->virtual_core_from_logical_core(dram_logical, CoreType::DRAM),
+        .noc_addr =
+            metal_ctx.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) + static_cast<uint64_t>(local_addr),
+    };
+}
+
 void write_dram_core_l1(
     const distributed::MeshDevice& mesh_device,
     IDevice* device,
     const CoreCoord& dram_logical,
     DeviceAddr local_addr,
     std::span<const std::byte> bytes) {
-    auto& metal_ctx = MetalContext::instance(mesh_device.impl().get_context_id());
-    const uint64_t write_addr =
-        metal_ctx.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) + static_cast<uint64_t>(local_addr);
-    const CoreCoord virtual_core = device->virtual_core_from_logical_core(dram_logical, CoreType::DRAM);
-    metal_ctx.get_cluster().write_core(device->id(), tt_cxy_pair(device->id(), virtual_core), bytes, write_addr);
+    const DramCoreL1Address target = dram_core_l1_address(mesh_device, device, dram_logical, local_addr);
+    MetalContext::instance(mesh_device.impl().get_context_id())
+        .get_cluster()
+        .write_core(device->id(), tt_cxy_pair(device->id(), target.virtual_core), bytes, target.noc_addr);
 }
 
 uint32_t package_dram_core_index(const metal_SocDescriptor& soc_desc, const CoreCoord& dram_logical) {
