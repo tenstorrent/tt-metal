@@ -241,6 +241,20 @@ tt::tt_metal::CoreRangeSet rect_ranges(const std::vector<Core>& cores) {
     return tt::tt_metal::CoreRangeSet(rects);
 }
 
+// max_y_writers: the down cores it leaves (the reader tails, when the readers compute down columns, are y writers too)
+static uint32_t max_down_cores(const FlatRoutedExpertConfig& cfg, const FlatRoutedExpertPlan& p) {
+    if (cfg.max_y_writers == 0) {
+        return 0;
+    }
+    const uint32_t tails = p.rdown ? p.n_rdn : 0;
+    TT_FATAL(
+        cfg.max_y_writers > tails,
+        "flat_routed_expert: max_y_writers {} <= the {} reader tails",
+        cfg.max_y_writers,
+        tails);
+    return cfg.max_y_writers - tails;
+}
+
 FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device, const FlatRoutedExpertConfig& cfg) {
     FlatRoutedExpertPlan p;
     p.H = cfg.hidden;
@@ -950,6 +964,10 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
                 kept.push_back(c);
             }
         }
+        // (max_y_writers: the first ones that fit, before the columns per core are chosen)
+        if (const uint32_t cap = max_down_cores(cfg, p); cap && kept.size() > cap) {
+            kept.resize(cap);
+        }
         if (!kept.empty()) {
             // at least 4 tile columns per down core: each writes its columns of every row-major y row, and 3 columns
             // (192 B writes; a Galaxy-like 12 x 10 gives K3 38 down cores) cost the y writes far more than their bytes
@@ -961,6 +979,21 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             ND = p.down.size();
             p.nd_sg = ND;
         }
+    }
+    if (const uint32_t cap = max_down_cores(cfg, p); cap && ND > cap) {
+        // max_y_writers (the other plans): each subgrid keeps its first cap / nsg (its block is ordered nearest
+        // first); the rest stay idle
+        const uint32_t per_sg = cap / p.nsg;
+        TT_FATAL(
+            per_sg >= 1, "flat_routed_expert: max_y_writers {} leaves no down core per subgrid", cfg.max_y_writers);
+        std::vector<Core> kept;
+        for (uint32_t k = 0; k < p.nsg; ++k) {
+            kept.insert(
+                kept.end(), p.down.begin() + k * p.nd_sg, p.down.begin() + k * p.nd_sg + std::min(per_sg, p.nd_sg));
+        }
+        p.down = kept;
+        p.nd_sg = std::min(per_sg, p.nd_sg);
+        ND = p.down.size();
     }
     if (p.nd_sg > p.rem_cols) {
         // more down cores than output tile columns (small H on a wide grid, e.g. a Galaxy chip's 12 x 10): keep each

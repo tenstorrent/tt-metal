@@ -28,6 +28,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from ttnn.bringup.combine_rf.sparse_combine_rf import L1_MAX_WRITERS
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
 _TESTS = Path(__file__).resolve().parents[1]
@@ -94,6 +95,7 @@ def test_with_program_patch_addresses(mesh_device, device_params):
         pin=1,
         weights_nk=True,
         check_exact=True,
+        max_y_writers=L1_MAX_WRITERS,  # (the model's cap: 32 y writers on any Galaxy chip, CHANGELOG 2026-10-27)
     )
     wc = wcase.WeightedCase(
         mesh_device,

@@ -207,6 +207,7 @@ def _combine_ref(xr, ids, wts, col, Eg, experts, act, formats=None):
     indirect=["mesh_device", "device_params"],
 )
 def test_flat_routed_expert_with_program(mesh_device, device_params, case):
+    from ttnn.bringup.combine_rf.sparse_combine_rf import L1_MAX_WRITERS
     from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
     wcase = _load("weighted_case")
@@ -235,6 +236,7 @@ def test_flat_routed_expert_with_program(mesh_device, device_params, case):
         h_bf16=c["h_bf16"],
         weights_nk=c["weights_nk"],
         check_exact=True,
+        max_y_writers=L1_MAX_WRITERS,  # (as the model: the combine's L1 hand-off, on any Galaxy chip's harvesting)
     )
     del per_dev
     logger.info(f"{c['id']}: {E} experts built and laid out in {time.time() - t0:.0f} s")

@@ -392,3 +392,49 @@ check (F196 / F197); host times stay hidden until verified warm.
 - tt-d-gen: the dgen-build agent could not clone (no GitHub credentials on this node: no gh login, no registered key).
   b06u08's checkout is a9701ce6675 = origin main (ls-remote from b06u08 21:01), so its checkout + build tree are
   copied to the same paths (copy_dgen.sh); a later tt-d-gen update needs `gh auth login` here.
+- 21:12 F201 committed 3c5ad4d385c (framework): a HANG unit's generated/tt-triage + generated/inspector are copied into
+  logs/<stem>.hang-<unit>-<time>/ before the next unit runs; overseer abort, agent timeouts and orchestrator stops wait for
+  a running tt-triage (selftest test_hangdump.py; core/overseer selftests 67 pass). Diagnostic runs outside gates go
+  through /scratch/dnijemcevic/diag/run.sh (flock-serialized, copies the same dirs to /data/dnijemcevic/diag/ on exit).
+- 21:14 hf_full complete (48 shards). Fast hang loop built (owner: no 15-min iterations): diag/test_repro_tail.py = the
+  K.1 smoke's stand-in decode without the runner (REPRO_LAYERS subset, prefix prefilled on the device or loaded from a
+  runner run's dump), diag/moe_dump_plugin.py (pytest -p: per-call routing dump + sync to localise the hanging layer,
+  load_served/tail inputs saved). Always --no-precompile (the precompile pass costs 3 min).
+- 21:19 NEW BLOCKER (box portability, model + fork): the device model does not build on this Galaxy:
+  weighted_combine.py:245 '40 y writers > the L1 hand-off's 32'. flat_expert._layout's DRAM readers follow harvesting
+  (get_optimal_dram_bank_to_logical_worker_assignment): reader columns 0,1,7,8 here (E=7) vs E=6 on b06u08 -> plan
+  down 40 (was 32), same cap/gu/mt. Consequences: the copied expert cache misses on this box (new layout hash; ~75 min
+  cold rebuild at the first full load, after the fix); the cache marker dropped 2 stale L00 laydbf29... files not in
+  its marker. bringup-engineer (fix role, outside the orchestrator) started on it: hand-off > 32 writers if contained,
+  else a fork option capping y writers; E=6 plan unchanged.
+- 21:20 owner did gh auth login on this node; dgen-build agent started (tt-d-gen main a9701ce6675).
+- 21:40 marker: no change. _CacheMarker.write lists every *.flat.* file present (all layouts), so layouts of several
+  boxes coexist; it deletes only files no completed write listed (an interrupted dump). The 2 dropped L00 files were
+  such leftovers from b06u08. (My earlier claim to the owner that it keeps one layout was wrong; corrected.)
+- 21:40 owner decision (cache portability): the E=7 fix caps the plan's down cores at 32 so the weight layout key
+  (WEIGHT_LAYOUT_KEYS, count-based) equals the E=6 one and the copied cache hits; told the fix agent.
+- 21:42 run-2 triage (K.1.units.log) parsed offline: se3_compute / se6_dcompute trisc1 inside
+  matmul_block_math_dynamic_throttle on all 32 chips, readers / se5_recv / se6_drecv / combine kernels in cb waits,
+  routers waiting for credits: compute fed more work than its data (count / loop bound on near-empty experts?) rather
+  than a lost semaphore. Data from the fast loop decides.
+- OWNER SIDE NOTE (21:45): matmuls on more than 110 cores at a time may hang a card (power-supply current limits,
+  rare). If nothing else explains the hang: count the matmul cores per program (Inspector kernels.yaml /
+  programs_log core ranges) and flag any program over 110. Flat expert today: 48 gate/up + 32 down = 80 (E=6).
+- 21:50 OWNER ORDER (binding sequence): (1) fix the decode hang, Paris end to end (tt-d-gen prefill + stand-in decode).
+  ONLY AFTER Paris is confirmed: (2) reconcile with origin dnijemcevic/model_bringup (owner's new MoE, f81cb90+;
+  moe_port_report.md: 9 textual conflicts, renumber our F200/F201 against theirs, full rebuild); (3) profile one new
+  5120-token chunk at context 0 / 50k / 100k / 200k / 500k (device + verified-warm host, F196/F197) in BOTH MoE modes:
+  flat and block (DS41_MOE_IMPL=block; may need the expert weight re-layout = a new cache, build it outside a gate);
+  (4) once block works on FABRIC_2D: try torus (FABRIC_2D_TORUS_XY: wrap-around links, ring instead of line;
+  untested, expected further gain; adapter D10 assert at tt/moe_block_adapter.py:159 dropped with the owner's word).
+  B (test_adapter_acks) and the K.1 commit stay after Paris as in the hand-off; perf tasks X.* stay off.
+- 21:55 portability fix accepted + committed (bringup-engineer, fix role outside the orchestrator): fork option
+  flat_routed_expert max_y_writers (default 0 = off; plan, program and op keys; README/CHANGELOG/INDEX; unit test
+  test_max_y_writers.py 2/2 on this chip); the model passes the combine's L1_MAX_WRITERS = 32 (a receive-side layout
+  limit of sparse_combine_rf: per-writer landed counters at state words 128..191 and wx/wy[32]; words 352..511 free if
+  more writers are ever wanted). E=7 chips: nd 32, per 5, the same weight layout key as E=6 -> copied cache HITS
+  (layer 0: 7.3 s, model up 34 s). E=6: plan unchanged by code reading + unit assertion (not on an E=6 device).
+  SEED-BOX RE-VERIFY += max_y_writers (programs recompile once: new key field).
+- 21:38 the 1-layer repro (prefill [0,128) at start 0, layer 0 only) HANGS: Timeout, every device on physical 15-3 /
+  15-2 = logical (11,1)/(11,0) - the same core that led run 2's triage on b06u08 (combine kernel in cb_wait_front).
+  The K.1 hang now reproduces in ~2 min with ONE layer and without the runner.

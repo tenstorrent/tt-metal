@@ -115,3 +115,10 @@ imported, unchanged.
 - Why: kernel compile error (DeepSeek-V4.1's weighted combine included); TypeError in automatic core placement.
 - Needed by: rebase 2026-10-27
 - Files: `fabric_all_gather_py.py`, `sparse_all_gather_2d.py`, `sparse_combine_l1.py`, `sparse_combine_rf.py`
+
+### `L1_MAX_WRITERS` constant (2026-10-27, deepseek_v41_flash_d_p galaxy_8x4-full)
+- What: sparse_combine_rf.py names the L1 hand-off's writer limit (32: one landed counter per writer at MISC words
+  128..159, 160..191 for an accumulator sharing a port's core; the port readers' wx / hwx[32]) and asserts with it.
+  No kernel or program change.
+- Why: the flat expert's `max_y_writers` and the model read the limit from here.
+- Files: sparse_combine_rf.py

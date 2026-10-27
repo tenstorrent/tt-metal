@@ -39,7 +39,8 @@ nb::dict plan_dict(
     bool weights_bf8,
     uint32_t pin,
     bool x_bf16,
-    bool h_bf16) {
+    bool h_bf16,
+    uint32_t max_y_writers) {
     const auto p = fre::flat_routed_expert_plan(
         device,
         fre::FlatRoutedExpertConfig{
@@ -52,7 +53,8 @@ nb::dict plan_dict(
             .activation = 0,
             .pin = pin,
             .x_bf16 = x_bf16,
-            .h_bf16 = h_bf16});
+            .h_bf16 = h_bf16,
+            .max_y_writers = max_y_writers});
     nb::dict d;
     d["nsg"] = p->nsg;
     d["n_rd"] = p->readers.size();
@@ -176,6 +178,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
                 every weight matmul transposes its in1 tile back.
             hidden (int): H when x's rows are wider (0: x's width x x_pages_per_row): the relays read each row's first
                 H values (x_pages_per_row 1, no token_index), e.g. a dispatch buffer with extra columns per row.
+            max_y_writers (int): at most this many y writers, down cores + reader tails (0: off, the plan unchanged;
+                DeepSeek-V4.1: an appended combine's L1 hand-off limit). As the plan the weights were laid out with.
 
         Returns:
             ttnn.Tensor: y [rows, H] bfp8 TILE, or bf16 ROW_MAJOR with y_row_major (rows: token_index's length in
@@ -205,7 +209,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("y_bf16") = false,
         nb::arg("math_fidelity") = 0,
         nb::arg("weights_nk") = false,
-        nb::arg("hidden") = 0);
+        nb::arg("hidden") = 0,
+        nb::arg("max_y_writers") = 0);
 
     ttnn::bind_function<"flat_routed_expert_with_program", "ttnn.bringup.">(
         mod,
@@ -220,6 +225,7 @@ void bind_flat_routed_expert(nb::module_& mod) {
         key): no address in the key; a hit patches every buffer address (the flat program's, the writers' report and
         L1 hand-off args, the extra program's arena CBs); extra_addrs: the addresses the extra program bakes into its
         runtime args - when they differ from the cached program's, the call must pass extra (its args are copied in).
+        max_y_writers (DeepSeek-V4.1; default 0 = off): at most this many y writers, as flat_routed_expert's.
         Returns y.
         )doc",
         &fre::flat_routed_expert_with_program,
@@ -252,7 +258,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("math_fidelity") = 0,
         nb::arg("weights_nk") = false,
         nb::arg("patch_addresses") = false,
-        nb::arg("extra_addrs") = std::vector<uint32_t>{});
+        nb::arg("extra_addrs") = std::vector<uint32_t>{},
+        nb::arg("max_y_writers") = 0);
     mod.def(
         "flat_routed_expert_plan",
         &plan_dict,
@@ -266,7 +273,10 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("pin") = 1,
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
-        "The flat_routed_expert layout plan (weight bank layout, coordinator cores for the done words).");
+        nb::arg("max_y_writers") = 0,
+        "The flat_routed_expert layout plan (weight bank layout, coordinator cores for the done words). "
+        "max_y_writers (0: off): at most this many y writers (down cores + reader tails), the rest of the down cells "
+        "idle; the op's calls must pass the same value.");
     mod.def(
         "flat_drisc_stop",
         [](tt::tt_metal::distributed::MeshDevice* device) {
