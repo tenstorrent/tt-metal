@@ -33,7 +33,4 @@ std::vector<VcCreditTransport> describe_credit_transport(const FabricBuilderCont
 // Describes the L1 areas and registers the architecture fixes on every router core.
 Arch describe_arch(const tt::tt_metal::Hal& hal);
 
-// Describes every struct and enum a schema names.
-TypeCatalog describe_types();
-
 }  // namespace tt::tt_fabric::manifest
