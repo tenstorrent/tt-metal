@@ -249,10 +249,15 @@ inline void calculate_sine() {
         // Store for later; the LSB determines the sign of the result.
         sfpi::vInt q = sfpi::as<sfpi::vInt>(j);
         // Shift mantissa bits back; j is now round(v / PI) in fp32.
-        j = j - rounding_bias;
+        // Written as SFPMAD(j, 1, -bias) rather than `j - rounding_bias`: the latter copies j (SFPMOV + SFPADDI) because
+        // q still reads it, and the copy stalls on the SFPMAD above. SFPADDI is itself a MAD on the same unit
+        // (imm * 1 + j), so both forms are the single RNE rounding of j + (-bias): bit-identical for every j.
+        sfpi::vFloat neg_rounding_bias = sfpi::sFloat16b(-0x1.8p23f);
+        sfpi::vFloat one = 1.0f;
+        j = __builtin_rvtt_sfpmad(j.get(), one.get(), neg_rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI.
-        // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
+        // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
         sfpi::vFloat a = v + j * P0;
         // P1 representable as fp16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
         a = a + j * P1;
@@ -306,9 +311,6 @@ inline void calculate_cosine() {
         C0 = -0x1.5554a4p-3f;
     }
 
-    const float ROUNDING_BIAS = 12582912.0f;
-    const float NEG_ROUNDING_BIAS = -12582912.0f;
-
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
@@ -316,25 +318,31 @@ inline void calculate_cosine() {
         // Force v * (1/PI) + 0.5 to compile as a single SFPMAD sequence for consistent instruction scheduling.
         sfpi::vFloat half = sfpi::sFloat16b(0.5f);  // 0.5
         sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
-        sfpi::vFloat neg_one = -1.0f;
 
         // Start from j = v * (1 / PI) + 0.5; after bias-round and 2*j - 1, j is an odd quadrant index.
-        // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest.
+        // The rounding bias (1.5 * 2^23) shifts mantissa bits to perform round-to-nearest.
         sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), SFPMAD_MOD1_OFFSET_NONE);
 
-        j = j + ROUNDING_BIAS;
+        // The bias is added and removed with SFPMAD(j, 1, +-bias) instead of `j + bias` / `j - bias`: SFPADDI is a MAD
+        // on the same unit (imm * 1 + j), so the value is the same single RNE rounding either way, but the SFPLOADI of
+        // the bias fills the shadow of the preceding SFPMAD and the unbias no longer needs a copy of j for q.
+        sfpi::vFloat rounding_bias = sfpi::sFloat16b(0x1.8p23f);
+        sfpi::vFloat one = 1.0f;
+        j = __builtin_rvtt_sfpmad(j.get(), one.get(), rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat neg_rounding_bias = sfpi::sFloat16b(-0x1.8p23f);
 
         // At this point, the mantissa bits of j contain the rounded integer.
         // Store for later; the LSB tracks quadrant parity for sign selection.
         sfpi::vInt q = sfpi::as<sfpi::vInt>(j);
 
-        j = j + NEG_ROUNDING_BIAS;
+        j = __builtin_rvtt_sfpmad(j.get(), one.get(), neg_rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         sfpi::vFloat two = sfpi::sFloat16b(2.0f);
+        sfpi::vFloat neg_one = -1.0f;
         j = __builtin_rvtt_sfpmad(j.get(), two.get(), neg_one.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI / 2.
-        // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
+        // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
         sfpi::vFloat a = v + j * P0;
         // P1 representable as fp16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
         a = a + j * P1;
