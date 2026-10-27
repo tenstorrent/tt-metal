@@ -95,7 +95,9 @@ def _text_content(content: Any, *, label: str) -> str | list[dict[str, str]]:
             "image_url",
             "video",
         }:
-            raise Qwen38ChatFormatError("vision content is unsupported by the text-only TTNN demo")
+            raise Qwen38ChatFormatError(
+                "vision content is unsupported by the text chat format (the server's request parser takes images)"
+            )
         if item.get("type", "text") != "text" or not isinstance(item.get("text"), str):
             raise Qwen38ChatFormatError(f"{label} content item {index} is not an exact text item")
         result.append({"type": "text", "text": item["text"]})
@@ -447,7 +449,7 @@ SAFE_ADD_TOOL = {
 
 
 class Qwen38SafeLocalTools:
-    """The demo's closed, side-effect-free local tool allowlist."""
+    """A closed, side-effect-free local tool allowlist."""
 
     @property
     def schemas(self) -> tuple[dict[str, Any], ...]:

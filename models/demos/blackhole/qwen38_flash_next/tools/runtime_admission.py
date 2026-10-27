@@ -67,7 +67,7 @@ def git_identity(root: Path = REPO_ROOT) -> dict[str, Any]:
     ``QWEN38_TT_METAL_SHA`` names its 40-hex head; with history, the variable, if set, must agree with the head."""
 
     declared = os.environ.get(DECLARED_HEAD_VARIABLE)
-    if declared is not None and (len(declared) != 40 or any(c not in "0123456789abcdef" for c in declared)):
+    if declared is not None and (len(declared) != 40 or any(digit not in "0123456789abcdef" for digit in declared)):
         raise RuntimeAdmissionError(f"{DECLARED_HEAD_VARIABLE} must be lowercase 40-hex, got {declared!r}")
     if not (root / ".git").exists():
         if declared is None:
