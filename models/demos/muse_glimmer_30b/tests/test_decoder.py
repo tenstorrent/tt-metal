@@ -15,13 +15,13 @@ from models.demos.muse_glimmer_30b.reference.model import MLP, DecoderLayer, Rot
 from models.demos.muse_glimmer_30b.tt.ccl import MuseCCL
 from models.demos.muse_glimmer_30b.tt.common import RopeTables
 from models.demos.muse_glimmer_30b.tt.mesh_utils import mesh_test_params, skip_and_submesh
-from models.demos.muse_glimmer_30b.tt.model_config import MuseGlimmerModelArgs, checkpoint_dir
+from models.demos.muse_glimmer_30b.tt.model_config import LOW_PRECISION, MuseGlimmerModelArgs, checkpoint_dir
 
 pytestmark = pytest.mark.skipif(
     not os.path.exists(os.path.join(checkpoint_dir(), "config.json")), reason="checkpoint not available"
 )
 
-PCC = 0.99
+PCC = 0.98 if LOW_PRECISION else 0.99
 
 
 _mesh_params = mesh_test_params()

@@ -37,6 +37,16 @@ MESH_DEVICE=BHGLX pytest models/demos/muse_glimmer_30b/demo/text_demo.py -k "dp1
 | ISL | up to 131072 tokens including generated tokens (batch 1); batch 32 runs with max sequence length 4096 |
 | Batch size | 1 to 32 per replica |
 
+## Precision
+
+Default: BFP4 projection and LM-head weights, BFP8 KV cache, LoFi matmuls, HiFi2 SDPA. Set `MUSE_LOW_PRECISION=0` for BFP8 weights, BF16 KV cache, HiFi2 matmuls and HiFi4 SDPA (about 30% slower decode).
+
+| QB2 TP4 | default | `MUSE_LOW_PRECISION=0` |
+|---|---|---|
+| GSM8K test set (1319, greedy) | 94.16% | 95.38% |
+| Teacher-forced top-1 vs bf16 CPU reference (3200 tokens) | 88.8% | 97.6% |
+| Reference top-1 in TT top-5 | 99.5% | 100% |
+
 ## Performance
 
 Batch 1, greedy, measured on a Blackhole Galaxy (TP4 on a 1x4 submesh, same code path as QB2).

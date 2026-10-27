@@ -9,19 +9,22 @@ import functools
 import torch
 
 import ttnn
+from models.demos.muse_glimmer_30b.tt.model_config import LOW_PRECISION
 
 
-def _cfg(mesh_device, fidelity, packer_l1_acc):
+def _cfg(mesh_device, fidelity, packer_l1_acc, fp32_acc=True):
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=fp32_acc,
         packer_l1_acc=packer_l1_acc,
     )
 
 
 def matmul_compute_config(mesh_device):
+    if LOW_PRECISION:
+        return _cfg(mesh_device, ttnn.MathFidelity.LoFi, True, fp32_acc=False)
     return _cfg(mesh_device, ttnn.MathFidelity.HiFi2, True)
 
 
@@ -30,6 +33,8 @@ def norm_compute_config(mesh_device):
 
 
 def sdpa_compute_config(mesh_device):
+    if LOW_PRECISION:
+        return _cfg(mesh_device, ttnn.MathFidelity.HiFi2, True)
     return _cfg(mesh_device, ttnn.MathFidelity.HiFi4, False)
 
 

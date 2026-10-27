@@ -17,9 +17,9 @@ from models.demos.muse_glimmer_30b.tt.attention import MuseGlimmerAttention, all
 from models.demos.muse_glimmer_30b.tt.ccl import MuseCCL
 from models.demos.muse_glimmer_30b.tt.common import RopeTables
 from models.demos.muse_glimmer_30b.tt.mesh_utils import mesh_test_params, skip_and_submesh
-from models.demos.muse_glimmer_30b.tt.model_config import MuseGlimmerModelArgs
+from models.demos.muse_glimmer_30b.tt.model_config import LOW_PRECISION, MuseGlimmerModelArgs
 
-PCC_THRESHOLD = 0.99
+PCC_THRESHOLD = 0.90 if LOW_PRECISION else 0.99
 
 
 mesh_fabric = mesh_test_params()
