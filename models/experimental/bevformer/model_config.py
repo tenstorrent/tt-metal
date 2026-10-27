@@ -320,8 +320,9 @@ DCN_SHARDED_INPUT_STAGES = (2,)
 STEM_CONV_HEIGHT_SLICES = 4
 STEM_MAXPOOL_HEIGHT_SLICES = 6
 
-# conv2d's act_block_h overrides: the stem conv's, the non-DCN 3x3 conv2's of the bottlenecks and
-# the DRAM levels' FPN output convs'. The FPN's larger blocks overflow L1 at these slice counts.
+# conv2d's act_block_h overrides: the stem conv's, the whole-batch non-DCN 3x3 conv2's of the
+# bottlenecks and the DRAM levels' FPN output convs'. The FPN's larger blocks overflow L1 at these
+# slice counts.
 STEM_ACT_BLOCK_H = 128
 CONV2_ACT_BLOCK_H = 32
 FPN_OUTPUT_CONV_ACT_BLOCK_H = 32
