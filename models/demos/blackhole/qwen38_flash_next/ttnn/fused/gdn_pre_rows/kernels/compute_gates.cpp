@@ -16,7 +16,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/cb_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_binary_sfpu.h"
@@ -28,93 +28,93 @@
 using namespace ckernel;
 
 namespace {
-constexpr uint32_t CB_AB = 20, CB_Z = 21, CB_CONST = 22, CB_BETA = 23, CB_G = 24, CB_SIG = 25;
-constexpr uint32_t HEAD_TILES = 4, CONST_DT_BIAS = 0, CONST_NEG_EXP_A = 1;
-constexpr uint32_t A_INDEX = 0, B_INDEX = 1;
-constexpr uint32_t F_ONE = 0x3F800000u, F_TWENTY = 0x41A00000u;  // beta = 1, 1 / beta, threshold = 20
-constexpr uint32_t DF_FP32 = (uint32_t)DataFormat::Float32, DF_BF16 = (uint32_t)DataFormat::Float16_b;
+constexpr uint32_t cb_ab = 20, cb_z = 21, cb_const = 22, cb_beta = 23, cb_g = 24, cb_sig = 25;
+constexpr uint32_t head_tiles = 4, dt_bias_index = 0, neg_exp_a_index = 1;
+constexpr uint32_t a_index = 0, b_index = 1;
+constexpr uint32_t one_bits = 0x3F800000u, twenty_bits = 0x41A00000u;  // beta = 1, 1 / beta, threshold = 20
+constexpr uint32_t fp32_format = (uint32_t)DataFormat::Float32, bf16_format = (uint32_t)DataFormat::Float16_b;
 constexpr uint32_t dst0 = 0, dst1 = 1;
 
 ALWI void gates() {
-    cb_wait_front(CB_AB, 2);
-    cb_wait_front(CB_CONST, 2);
+    CircularBuffer(cb_ab).wait_front(2);
+    CircularBuffer(cb_const).wait_front(2);
 
     // beta = sigmoid(fp32(b))
     {
-        cb_reserve_back(CB_BETA, 1);
-        pack_reconfig_data_format(CB_BETA);
+        CircularBuffer(cb_beta).reserve_back(1);
+        pack_reconfig_data_format(cb_beta);
         tile_regs_acquire();
-        reconfig_data_format_srca(CB_AB);
-        copy_init(CB_AB);
-        copy_tile(CB_AB, B_INDEX, dst0);
+        reconfig_data_format_srca(cb_ab);
+        copy_init(cb_ab);
+        copy_tile(cb_ab, b_index, dst0);
         sigmoid_tile_init<false>();
         sigmoid_tile<VectorMode::RC, false>(dst0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(dst0, CB_BETA);
+        pack_tile(dst0, cb_beta);
         tile_regs_release();
-        cb_push_back(CB_BETA, 1);
+        CircularBuffer(cb_beta).push_back(1);
     }
 
     // g = neg_exp_A * softplus(fp32(a) + dt_bias)
     {
-        cb_reserve_back(CB_G, 1);
-        pack_reconfig_data_format(CB_G);
+        CircularBuffer(cb_g).reserve_back(1);
+        pack_reconfig_data_format(cb_g);
         tile_regs_acquire();
-        reconfig_data_format_srca(CB_AB);
-        copy_init(CB_AB);
-        copy_tile(CB_AB, A_INDEX, dst0);
-        reconfig_data_format_srca(CB_CONST);
-        copy_init(CB_CONST);
-        copy_tile(CB_CONST, CONST_DT_BIAS, dst1);
+        reconfig_data_format_srca(cb_ab);
+        copy_init(cb_ab);
+        copy_tile(cb_ab, a_index, dst0);
+        reconfig_data_format_srca(cb_const);
+        copy_init(cb_const);
+        copy_tile(cb_const, dt_bias_index, dst1);
         add_binary_tile_init();
         add_binary_tile<ckernel::DstRoundingMode::NearestEven>(dst0, dst1, dst0);
         softplus_tile_init();
-        qwen38_softplus_tile(dst0, F_ONE, F_ONE, F_TWENTY);
-        copy_tile(CB_CONST, CONST_NEG_EXP_A, dst1);
+        qwen38_softplus_tile(dst0, one_bits, one_bits, twenty_bits);
+        copy_tile(cb_const, neg_exp_a_index, dst1);
         mul_binary_tile_init();
         mul_binary_tile(dst0, dst1, dst0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(dst0, CB_G);
+        pack_tile(dst0, cb_g);
         tile_regs_release();
-        cb_push_back(CB_G, 1);
+        CircularBuffer(cb_g).push_back(1);
     }
-    cb_pop_front(CB_AB, 2);
+    CircularBuffer(cb_ab).pop_front(2);
 }
 
 ALWI void z_sigmoid() {
-    cb_wait_front(CB_Z, HEAD_TILES);
-    cb_reserve_back(CB_SIG, HEAD_TILES);
-    pack_reconfig_data_format(CB_SIG);
-    for (uint32_t d = 0; d < HEAD_TILES; ++d) {
+    CircularBuffer(cb_z).wait_front(head_tiles);
+    CircularBuffer(cb_sig).reserve_back(head_tiles);
+    pack_reconfig_data_format(cb_sig);
+    for (uint32_t d = 0; d < head_tiles; ++d) {
         tile_regs_acquire();
-        reconfig_data_format_srca(CB_Z);
-        copy_init(CB_Z);
-        copy_tile(CB_Z, d, dst0);
+        reconfig_data_format_srca(cb_z);
+        copy_init(cb_z);
+        copy_tile(cb_z, d, dst0);
         sigmoid_tile_init<false>();
         sigmoid_tile<VectorMode::RC, false>(dst0);
-        typecast_tile_init<DF_FP32, DF_BF16>();
-        typecast_tile<DF_FP32, DF_BF16>(dst0);
+        typecast_tile_init<fp32_format, bf16_format>();
+        typecast_tile<fp32_format, bf16_format>(dst0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(dst0, CB_SIG);
+        pack_tile(dst0, cb_sig);
         tile_regs_release();
     }
-    cb_push_back(CB_SIG, HEAD_TILES);
-    cb_pop_front(CB_Z, HEAD_TILES);
+    CircularBuffer(cb_sig).push_back(head_tiles);
+    CircularBuffer(cb_z).pop_front(head_tiles);
 }
 }  // namespace
 
 void kernel_main() {
     const uint32_t units = get_arg_val<uint32_t>(0);
-    constexpr uint32_t PAIRS = 1;
+    constexpr uint32_t first_pair_arg = 1;
 
-    compute_kernel_hw_startup(CB_AB, CB_CONST, CB_BETA);
-    cb_wait_front(CB_CONST, 2);
+    compute_kernel_hw_startup(cb_ab, cb_const, cb_beta);
+    CircularBuffer(cb_const).wait_front(2);
 
     for (uint32_t unit = 0; unit < units; ++unit) {
-        const uint32_t kind = get_arg_val<uint32_t>(PAIRS + 2 * unit + 1);
+        const uint32_t kind = get_arg_val<uint32_t>(first_pair_arg + 2 * unit + 1);
         if (kind == 0) {
             gates();
         } else {

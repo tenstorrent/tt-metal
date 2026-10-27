@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Group A reader. Once per core: the nine 0/1 selection tiles, the reduce scaler, the epsilon tile and the bf16
-// scale tile, host-built and never popped. Per (column group, tile row) unit: the group's four taps (CB_TAP index
-// 4 d + t, re-read only when the column group changes) and one CB_IN window: the previous tile row's four column tiles
+// scale tile, host-built and never popped. Per (column group, tile row) unit: the group's four taps (cb_tap index
+// 4 d + t, re-read only when the column group changes) and one cb_in window: the previous tile row's four column tiles
 // (the history tile's at tile row 0) at 0..3, then this tile row's at 4..7. A v group also gets the chain's row-mask
-// tile (CB_MASK).
+// tile (cb_mask).
 // Column tiles of group g: q key head g at 4 g, k key head g - 4 at 16 + 4 (g - 4), v value head g - 8 at
 // 32 + 4 (g - 8). Projection page of tile row c = c * 130 + column tile; the history and the taps are one tile row.
 //
@@ -18,23 +18,23 @@
 #include "api/tensor/noc_traits.h"
 
 namespace {
-constexpr uint32_t CB_IN = 0, CB_SEL = 1, CB_TAP = 2, CB_SCALER = 8, CB_EPS = 9, CB_SCALE = 10, CB_MASK = 15;
-constexpr uint32_t HEAD_TILES = 4, CONV_KERNEL = 4, QK_HEADS = 4, QK_GROUPS = 8;
-constexpr uint32_t WINDOW = 2 * HEAD_TILES;  // the previous tile row's four column tiles, then this one's
-constexpr uint32_t K_TILE0 = 16, V_TILE0 = 32, PROJECTION_TILES = 130;
-constexpr uint32_t SELECT_TILES = 9, BF16_TILE = 2048;
-constexpr uint32_t TILE_ROWS = 32, FACE_ELEMS = 256, FACE_COLS = 16;
-constexpr uint16_t BF16_ONE = 0x3F80;
+constexpr uint32_t cb_in = 0, cb_sel = 1, cb_tap = 2, cb_scaler = 8, cb_eps = 9, cb_scale = 10, cb_mask = 15;
+constexpr uint32_t head_tiles = 4, conv_taps = 4, qk_heads = 4, qk_groups = 8;
+constexpr uint32_t window_tiles = 2 * head_tiles;  // the previous tile row's four column tiles, then this one's
+constexpr uint32_t k_tile0 = 16, v_tile0 = 32, projection_tiles = 130;
+constexpr uint32_t select_tiles = 9, bf16_tile_bytes = 2048;
+constexpr uint32_t tile_rows = 32, face_elements = 256, face_columns = 16;
+constexpr uint16_t bf16_one_bits = 0x3F80;
 
 constexpr uint32_t face_element(uint32_t row, uint32_t col) {
-    return ((row >> 4) * 2 + (col >> 4)) * FACE_ELEMS + (row & 15) * FACE_COLS + (col & 15);
+    return ((row >> 4) * 2 + (col >> 4)) * face_elements + (row & 15) * face_columns + (col & 15);
 }
-constexpr uint32_t SCALAR_REDUCE = 0, SCALAR_EPS = 1, SCALAR_SCALE = 2;
+constexpr uint32_t reduce_scaler_page = 0, eps_page = 1, scale_page = 2;
 
 constexpr uint32_t group_first_tile(uint32_t group) {
-    return group < QK_HEADS      ? group * HEAD_TILES
-           : (group < QK_GROUPS) ? K_TILE0 + (group - QK_HEADS) * HEAD_TILES
-                                 : V_TILE0 + (group - QK_GROUPS) * HEAD_TILES;
+    return group < qk_heads      ? group * head_tiles
+           : (group < qk_groups) ? k_tile0 + (group - qk_heads) * head_tiles
+                                 : v_tile0 + (group - qk_groups) * head_tiles;
 }
 
 // The chain's row_mask_bf16_col tile for one tile row: 1.0 in column 0 of the rows below `rows`, zero elsewhere
@@ -43,69 +43,69 @@ void build_row_mask(uint32_t cb, uint32_t keep) {
     cb_reserve_back(cb, 1);
     const uint32_t l1 = get_write_ptr(cb);
     volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
-    for (uint32_t k = 0; k < BF16_TILE / 4; ++k) {
+    for (uint32_t k = 0; k < bf16_tile_bytes / 4; ++k) {
         words[k] = 0;
     }
     volatile tt_l1_ptr uint16_t* elements = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1);
     for (uint32_t row = 0; row < keep; ++row) {
-        elements[face_element(row, 0)] = BF16_ONE;
+        elements[face_element(row, 0)] = bf16_one_bits;
     }
     cb_push_back(cb, 1);
 }
 
-template <typename Acc>
-void read_one(uint32_t cb, const Acc& acc, uint32_t page) {
+template <typename Accessor>
+void read_one(uint32_t cb, const Accessor& tensor, uint32_t page) {
     cb_reserve_back(cb, 1);
-    noc_async_read_page(page, acc, get_write_ptr(cb));
+    noc_async_read_page(page, tensor, get_write_ptr(cb));
     noc_async_read_barrier();
     cb_push_back(cb, 1);
 }
 }  // namespace
 
 void kernel_main() {
-    constexpr auto p_args = TensorAccessorArgs<0>();
-    constexpr auto h_args = TensorAccessorArgs<p_args.next_compile_time_args_offset()>();
-    constexpr auto t0_args = TensorAccessorArgs<h_args.next_compile_time_args_offset()>();
-    constexpr auto t1_args = TensorAccessorArgs<t0_args.next_compile_time_args_offset()>();
-    constexpr auto t2_args = TensorAccessorArgs<t1_args.next_compile_time_args_offset()>();
-    constexpr auto t3_args = TensorAccessorArgs<t2_args.next_compile_time_args_offset()>();
-    constexpr auto s_args = TensorAccessorArgs<t3_args.next_compile_time_args_offset()>();
-    constexpr auto c_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
+    constexpr auto projected_args = TensorAccessorArgs<0>();
+    constexpr auto history_args = TensorAccessorArgs<projected_args.next_compile_time_args_offset()>();
+    constexpr auto tap0_args = TensorAccessorArgs<history_args.next_compile_time_args_offset()>();
+    constexpr auto tap1_args = TensorAccessorArgs<tap0_args.next_compile_time_args_offset()>();
+    constexpr auto tap2_args = TensorAccessorArgs<tap1_args.next_compile_time_args_offset()>();
+    constexpr auto tap3_args = TensorAccessorArgs<tap2_args.next_compile_time_args_offset()>();
+    constexpr auto selects_args = TensorAccessorArgs<tap3_args.next_compile_time_args_offset()>();
+    constexpr auto scalars_args = TensorAccessorArgs<selects_args.next_compile_time_args_offset()>();
 
-    const uint32_t p_addr = get_arg_val<uint32_t>(0);
-    const uint32_t h_addr = get_arg_val<uint32_t>(1);
-    const uint32_t t0_addr = get_arg_val<uint32_t>(2);
-    const uint32_t t1_addr = get_arg_val<uint32_t>(3);
-    const uint32_t t2_addr = get_arg_val<uint32_t>(4);
-    const uint32_t t3_addr = get_arg_val<uint32_t>(5);
-    const uint32_t s_addr = get_arg_val<uint32_t>(6);
-    const uint32_t c_addr = get_arg_val<uint32_t>(7);
+    const uint32_t projected_addr = get_arg_val<uint32_t>(0);
+    const uint32_t history_addr = get_arg_val<uint32_t>(1);
+    const uint32_t tap0_addr = get_arg_val<uint32_t>(2);
+    const uint32_t tap1_addr = get_arg_val<uint32_t>(3);
+    const uint32_t tap2_addr = get_arg_val<uint32_t>(4);
+    const uint32_t tap3_addr = get_arg_val<uint32_t>(5);
+    const uint32_t selects_addr = get_arg_val<uint32_t>(6);
+    const uint32_t scalars_addr = get_arg_val<uint32_t>(7);
     const uint32_t rows = get_arg_val<uint32_t>(8);
     const uint32_t units = get_arg_val<uint32_t>(9);
     uint32_t arg = 10;
-    const uint32_t last_chunk = (rows - 1) / TILE_ROWS;
-    const uint32_t partial = rows % TILE_ROWS;
+    const uint32_t last_chunk = (rows - 1) / tile_rows;
+    const uint32_t partial = rows % tile_rows;
 
-    const auto p = TensorAccessor(p_args, p_addr);
-    const auto h = TensorAccessor(h_args, h_addr);
-    const auto t0 = TensorAccessor(t0_args, t0_addr);
-    const auto t1 = TensorAccessor(t1_args, t1_addr);
-    const auto t2 = TensorAccessor(t2_args, t2_addr);
-    const auto t3 = TensorAccessor(t3_args, t3_addr);
-    const auto s = TensorAccessor(s_args, s_addr);
-    const auto k = TensorAccessor(c_args, c_addr);
+    const auto projected = TensorAccessor(projected_args, projected_addr);
+    const auto history = TensorAccessor(history_args, history_addr);
+    const auto tap0 = TensorAccessor(tap0_args, tap0_addr);
+    const auto tap1 = TensorAccessor(tap1_args, tap1_addr);
+    const auto tap2 = TensorAccessor(tap2_args, tap2_addr);
+    const auto tap3 = TensorAccessor(tap3_args, tap3_addr);
+    const auto selects = TensorAccessor(selects_args, selects_addr);
+    const auto k = TensorAccessor(scalars_args, scalars_addr);
 
     {  // the constants, once: nine selection tiles then the three small tiles, each into its own CB
-        cb_reserve_back(CB_SEL, SELECT_TILES);
-        const uint32_t l1 = get_write_ptr(CB_SEL);
-        for (uint32_t t = 0; t < SELECT_TILES; ++t) {
-            noc_async_read_page(t, s, l1 + t * BF16_TILE);
+        cb_reserve_back(cb_sel, select_tiles);
+        const uint32_t l1 = get_write_ptr(cb_sel);
+        for (uint32_t t = 0; t < select_tiles; ++t) {
+            noc_async_read_page(t, selects, l1 + t * bf16_tile_bytes);
         }
         noc_async_read_barrier();
-        cb_push_back(CB_SEL, SELECT_TILES);
-        read_one(CB_SCALER, k, SCALAR_REDUCE);
-        read_one(CB_EPS, k, SCALAR_EPS);
-        read_one(CB_SCALE, k, SCALAR_SCALE);
+        cb_push_back(cb_sel, select_tiles);
+        read_one(cb_scaler, k, reduce_scaler_page);
+        read_one(cb_eps, k, eps_page);
+        read_one(cb_scale, k, scale_page);
     }
 
     uint32_t previous_group = 0xFFFFFFFFu;
@@ -117,40 +117,42 @@ void kernel_main() {
         previous_group = group;
 
         if (fresh) {
-            // the group's tap weights: tap t's column tile d at CB_TAP index 4 d + t
-            cb_reserve_back(CB_TAP, CONV_KERNEL * HEAD_TILES);
-            const uint32_t tl1 = get_write_ptr(CB_TAP);
-            for (uint32_t d = 0; d < HEAD_TILES; ++d) {
-                noc_async_read_page(first + d, t0, tl1 + (HEAD_TILES * d + 0) * BF16_TILE);
-                noc_async_read_page(first + d, t1, tl1 + (HEAD_TILES * d + 1) * BF16_TILE);
-                noc_async_read_page(first + d, t2, tl1 + (HEAD_TILES * d + 2) * BF16_TILE);
-                noc_async_read_page(first + d, t3, tl1 + (HEAD_TILES * d + 3) * BF16_TILE);
+            // the group's tap weights: tap t's column tile d at cb_tap index 4 d + t
+            cb_reserve_back(cb_tap, conv_taps * head_tiles);
+            const uint32_t tl1 = get_write_ptr(cb_tap);
+            for (uint32_t d = 0; d < head_tiles; ++d) {
+                noc_async_read_page(first + d, tap0, tl1 + (head_tiles * d + 0) * bf16_tile_bytes);
+                noc_async_read_page(first + d, tap1, tl1 + (head_tiles * d + 1) * bf16_tile_bytes);
+                noc_async_read_page(first + d, tap2, tl1 + (head_tiles * d + 2) * bf16_tile_bytes);
+                noc_async_read_page(first + d, tap3, tl1 + (head_tiles * d + 3) * bf16_tile_bytes);
             }
             noc_async_read_barrier();
-            cb_push_back(CB_TAP, CONV_KERNEL * HEAD_TILES);
+            cb_push_back(cb_tap, conv_taps * head_tiles);
         }
 
-        // One whole window per unit, pushed and popped as one block of WINDOW tiles on a 2 * WINDOW page CB, so the
-        // compute's read never straddles the buffer's end (cb_api.h's contract). The previous tile row is re-read from
-        // DRAM rather than carried across the pop, the only way the window stays one contiguous block.
+        // One whole window per unit, pushed and popped as one block of window_tiles tiles on a CB of twice that many
+        // pages, so the compute's read never straddles the buffer's end (cb_api.h's contract). The previous tile row is
+        // re-read from DRAM rather than carried across the pop, the only way the window stays one contiguous block.
         {
-            cb_reserve_back(CB_IN, WINDOW);
-            const uint32_t l1 = get_write_ptr(CB_IN);
-            for (uint32_t d = 0; d < HEAD_TILES; ++d) {
+            cb_reserve_back(cb_in, window_tiles);
+            const uint32_t l1 = get_write_ptr(cb_in);
+            for (uint32_t d = 0; d < head_tiles; ++d) {
                 if (chunk == 0) {
-                    noc_async_read_page(first + d, h, l1 + d * BF16_TILE);
+                    noc_async_read_page(first + d, history, l1 + d * bf16_tile_bytes);
                 } else {
-                    noc_async_read_page((chunk - 1) * PROJECTION_TILES + first + d, p, l1 + d * BF16_TILE);
+                    noc_async_read_page(
+                        (chunk - 1) * projection_tiles + first + d, projected, l1 + d * bf16_tile_bytes);
                 }
-                noc_async_read_page(chunk * PROJECTION_TILES + first + d, p, l1 + (HEAD_TILES + d) * BF16_TILE);
+                noc_async_read_page(
+                    chunk * projection_tiles + first + d, projected, l1 + (head_tiles + d) * bf16_tile_bytes);
             }
             noc_async_read_barrier();
-            cb_push_back(CB_IN, WINDOW);
+            cb_push_back(cb_in, window_tiles);
         }
 
-        if (group >= QK_GROUPS) {  // a v group takes the chain's row-mask multiply, which is also its rows mask
-            const uint32_t keep = chunk > last_chunk ? 0 : (chunk == last_chunk && partial != 0 ? partial : TILE_ROWS);
-            build_row_mask(CB_MASK, keep);
+        if (group >= qk_groups) {  // a v group takes the chain's row-mask multiply, which is also its rows mask
+            const uint32_t keep = chunk > last_chunk ? 0 : (chunk == last_chunk && partial != 0 ? partial : tile_rows);
+            build_row_mask(cb_mask, keep);
         }
     }
 }
