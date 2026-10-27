@@ -2019,3 +2019,10 @@ bfp8 weights, MIMO_FL_FIDELITY=HiFi2, pure DRISC defaults:
   for 12 / 24 tile columns (TT_FATAL, flat_routed_expert_plan.cpp:486) - not pursued.
 Reading: at this shape both designs sit near half of HiFi2 peak; the shared expert is math-heavy (M 640), the flat
 expert is built for small-M, DRAM-bound experts. Levers stay inside the engine (fewer / bigger rounds, x arrival).
+- Engine alone re-run (same day, test_se_engine3 k3, 640 rows, MT 2, KB 16, x families 7 + 7, 3 gate / up + 6 down
+  passes, HiFi2): 316.8 us (317.7 with GUWAIT), PCC 0.9997 - unchanged since Oct 22-23. Zones, slowest chip, median
+  over the 110 cores (us from the first kernel start): SE-XLOAD 0-21 (max 34) | SE-XROUNDS 22-237 | SE-GU 0-238 |
+  SE-HX 237-252 | SE-DOWN 238-311 | NCRISC ends 313-316. HiFi2 math on 110 cores: gate / up 93, down 46 -> gate / up at
+  39%, down at 64%. GUWAIT (the unpacker's waits inside gate / up, a core): x 66 us median (26-112), W 62 (15-92) -
+  ~130 of gate / up's 238 us is waiting for data, x and W about evenly; edge columns (logical 0, 7, 10) wait most on x
+  (81-101), the others more on W (60-77). Flat expert at the same shape (above): 322 us.
