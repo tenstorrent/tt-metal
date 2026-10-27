@@ -1,0 +1,60 @@
+{
+ "used": [
+  {
+   "id": "DS41-124",
+   "how": "the golden keeps per-chunk window KV only for step_dump_layers: GoldenKV / golden_failures compare other layers' window KV at the ring snapshots' positions (same rule as kv_contract.golden_rows)",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the 10208 ring snapshot of a full-run golden is a separate reference run: equal to the final ring only to fp32 noise (max 7.7e-4 of 2.7, layer 39), not bit-identical; a consumer must pick one source per position",
+  "allowed paths: the contract role's brief does not list tests/bringup/contract, but OV-15 orders server_rules.py fixed there (orchestrator.allowed_paths gives that dir only to the serving role)",
+  "the contract's per-layer state limit (server_rules.state_threshold) is calibrated on the ring drift (last 128 positions) but applied to every position: deep layers on a full run fail it (DS41-125)",
+  "the tt-d-gen build on this Galaxy (a9701ce6675) is past DGEN_SHA: device_prefill_pipeline lost layers_per_chunk (tt-d-gen 1cf343887); the framework driver's positional call breaks (DS41-126)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding / inflated work added: test geometry and golden selection only"
+  },
+  {
+   "id": "OV-12",
+   "answer": "done",
+   "evidence": "kv_contract.golden_rows (attempt 3, kept) full vs last-window per layer, test_contract passed; the same golden gap fixed for test_adapter_acks / test_runner_contract / test_cache_starts via caches.GoldenKV.select + golden_failures (per-layer mode printed, coverage_failures fails any served layer never compared)"
+  },
+  {
+   "id": "OV-15",
+   "answer": "done",
+   "evidence": "server_rules.golden_geometry(): seed spec.yaml -> ('s4096', 2048, 4096) with every old plan / interleave unchanged (CPU check); 8x4 -> ('s10240', 5120, 10240). Edited tests/bringup/contract/{server_rules,caches,parts,test_adapter_acks,test_runner_contract,test_cache_starts}.py as the note orders, although the brief's allowed paths omit that dir (flagged)"
+  }
+ ],
+ "cited_only": [
+  "DS41-125",
+  "DS41-126"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "K.1",
+  "role": "contract",
+  "attempt": 5,
+  "agent": "bringup-engineer",
+  "t": "2026-10-27T19:41:45",
+  "head": "5161e706d64",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/K.1.contract.5.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/caches.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/parts.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/server_rules.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py"
+  ]
+ }
+}

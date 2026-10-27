@@ -10,8 +10,9 @@ Served configs, in this order (the names sort in it: KvChunkAddressTable's name 
 sorted key order), each present when at least one served layer has it (record = 32 token positions,
 tables.py:37; bf16 ROW_MAJOR; one record = one ND shard [1, 1, rows, width] in one DRAM bank):
 
-    name            layers                                  rows / record   width   golden (s4096 rung)
-    0_window_kv     every layer                             32              512     chunk_XX/layer_YY "kv"
+    name            layers                                  rows / record   width   golden (R.GOLDEN_RUNG)
+    0_window_kv     every layer                             32              512     chunk_XX/layer_YY "kv" (dumped
+                                                                                    layers), else the ring snapshots
     1_compress_kv_r2  KV sources, compress ratio 2        16              512     kv_cache "compress_kv"
     2_index_k_r2    the same layers                         16              128     kv_cache "index_k"
     3_compress_kv_r1  KV sources, compress ratio 1        32              512     kv_cache "compress_kv"
@@ -103,9 +104,20 @@ def rows_of(cfg: dict, lo_tok: int, hi_tok: int) -> tuple[int, int]:
 
 # ---------------------------------------------------------------- golden
 class GoldenKV:
-    """The s4096 golden (chunk 2048, full dumps): every position's window KV and block input, the final compressed
-    caches. The reference is chunk-invariant (DS41 reference docstring, "Determinism"), so a row at position p is the
-    golden of any chunk plan."""
+    """The R.GOLDEN_RUNG golden (the spec's shortest full-dump rung: s4096 / chunk 2048 on the seed, s10240 / 5120 on
+    galaxy_8x4). The reference is chunk-invariant (DS41 reference docstring, "Determinism"), so a row at position p is
+    the golden of any chunk plan, and position p's window KV depends on tokens [0, p] only.
+
+    What the golden holds per layer (a full run keeps per-chunk dumps only for the manifest's step_dump_layers; F164
+    dropped the other layers' "in", equal to the previous layer's "out"):
+      dumped layer (every chunk dumped)  window KV of every position ("kv"), block input ("in")         -> "full"
+      any other layer                    window KV only in its ring snapshots (kv_cache/layer_i[_at_p],
+                                         position q at ring row q % 128): the last 128 positions before
+                                         each snapshot (metadata state_snapshots) and before seq          -> "last-window"
+                                         block input = the previous layer's "out" when that one is dumped
+    Compressed KV / index keys: the layer's final state, every complete group ("full"). Every comparison goes through
+    ``select`` / ``golden_failures``, which counts what was compared per (config, layer, mode): ``coverage_failures``
+    fails a served (config, layer) never compared, so no layer is skipped."""
 
     def __init__(self):
         from models.demos.common.bringup.reference.golden import Golden
@@ -115,10 +127,17 @@ class GoldenKV:
         assert (rung["seq"], rung["chunk"]) == (R.MAX_SEQ, R.CHUNK), (rung, R.MAX_SEQ, R.CHUNK)
         self.g = Golden.for_rung(s, R.GOLDEN_RUNG)
         assert sorted(self.g.dumped_chunks) == list(range(self.g.n_chunks)), "the contract needs every chunk dumped"
-        self._cat = {}
+        self._cat, self._ring, self._dumped = {}, {}, {}
+        self.coverage = {}  # (config name, layer) -> {mode: rows compared}
 
     def tokens(self) -> torch.Tensor:
         return self.g.tokens()
+
+    def dumped(self, layer: int) -> bool:
+        """Every chunk of this layer dumped (per-position window KV and block input in the golden)."""
+        if layer not in self._dumped:
+            self._dumped[layer] = all(self.g.has_layer(c, layer) for c in range(self.g.n_chunks))
+        return self._dumped[layer]
 
     def _boundary(self, layer: int, name: str) -> torch.Tensor:
         key = (layer, name)
@@ -126,12 +145,52 @@ class GoldenKV:
             self._cat[key] = torch.cat([self.g.layer(c, layer)[name] for c in range(self.g.n_chunks)])
         return self._cat[key]
 
+    def has_block_input(self, layer: int) -> bool:
+        return self.dumped(layer) or (layer > 0 and self.dumped(layer - 1))
+
     def block_input(self, layer: int) -> torch.Tensor:
-        """[MAX_SEQ, 4 * 5120 + 4] the layer's block input (streams + pending pre), every position."""
-        return self._boundary(layer, "in")
+        """[MAX_SEQ, 4 * 5120 + 4] the layer's block input (streams + pending pre), every position: its own "in", or
+        the previous layer's "out" (F164: equal; the golden drops the "in" of a layer without dumps)."""
+        if self.dumped(layer):
+            return self._boundary(layer, "in")
+        if layer > 0 and self.dumped(layer - 1):
+            return self._boundary(layer - 1, "out")
+        raise KeyError(
+            f"golden {self.g.dir}: no block input of layer {layer} (neither it nor layer {layer - 1} dumped)"
+        )
+
+    def _window_ring(self, layer: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """(positions, rows) of a layer without dumps: every position some ring snapshot of the golden holds. A
+        position two snapshots hold takes the final state's row: the snapshot after a shorter prompt (at 10208 on
+        galaxy_8x4) is a separate reference run, equal to fp32 noise only (max |diff| 7.7e-4 of 2.7, layer 39)."""
+        if layer not in self._ring:
+            rows = {}
+            for at in sorted(set(self.g.meta.get("state_snapshots", [])) | {self.g.seq}, reverse=True):
+                ring = self.g.state(layer, at=None if at == self.g.seq else at)["window_kv"]
+                ring = ring.reshape(-1, ring.shape[-1])
+                n = ring.shape[0]
+                for q in range(max(0, at - n), at):
+                    rows.setdefault(q, ring[q % n])
+            pos = sorted(rows)
+            self._ring[layer] = (
+                torch.tensor(pos, dtype=torch.int64),
+                torch.stack([rows[q] for q in pos]) if pos else torch.zeros(0, 512),
+            )
+        return self._ring[layer]
+
+    def select(self, cfg: dict, layer: int, lo_tok: int, hi_tok: int) -> tuple[np.ndarray, np.ndarray, str]:
+        """(local row indices into the rows of the complete groups of [lo_tok, hi_tok), golden rows there float32,
+        mode "full" | "last-window")."""
+        a, b = rows_of(cfg, lo_tok, hi_tok)
+        if cfg["kind"] != "window" or self.dumped(layer):
+            return np.arange(b - a), self.rows(cfg, layer, lo_tok, hi_tok), "full"
+        pos, ring = self._window_ring(layer)
+        keep = (pos >= lo_tok) & (pos < hi_tok)
+        return (pos[keep] - lo_tok).numpy(), ring[keep].float().numpy(), "last-window"
 
     def rows(self, cfg: dict, layer: int, lo_tok: int, hi_tok: int) -> np.ndarray:
-        """Golden rows of config `cfg` for the complete groups in token range [lo_tok, hi_tok), float32."""
+        """Golden rows of config `cfg` for the complete groups in token range [lo_tok, hi_tok), float32 (every row:
+        the window KV of a dumped layer, or the compressed caches)."""
         if cfg["kind"] == "window":
             t = self._boundary(layer, "kv")[lo_tok:hi_tok]
         else:
@@ -139,6 +198,28 @@ class GoldenKV:
             a, b = rows_of(cfg, lo_tok, hi_tok)
             t = self.g.state(layer)[name][a:b]
         return t.float().numpy()
+
+    def note(self, cfg: dict, layer: int, mode: str, n: int) -> None:
+        c = self.coverage.setdefault((cfg["name"], layer), {})
+        c[mode] = c.get(mode, 0) + int(n)
+
+    def coverage_failures(self, cfgs: list[dict], what: str) -> list[str]:
+        """A served (config, layer) whose rows were never compared with the golden in this test."""
+        return [
+            f"{what}: {c['name']} layer {layer} never compared with the golden"
+            for c in cfgs
+            for layer in c["layers"]
+            if not sum(self.coverage.get((c["name"], layer), {}).values())
+        ]
+
+    def coverage_summary(self) -> str:
+        """Per config and mode: the layers and the rows compared (full: every row; last-window: the positions the
+        golden's ring snapshots hold)."""
+        by = {}
+        for (name, layer), modes in sorted(self.coverage.items()):
+            for mode, n in modes.items():
+                by.setdefault(f"{name}:{mode}", []).append(f"{layer}({n})")
+        return "; ".join(f"{k} layers(rows) {' '.join(v)}" for k, v in by.items())
 
 
 # ---------------------------------------------------------------- records
@@ -185,6 +266,21 @@ def pcc_failures(kvc, cfg: dict, got: np.ndarray, want: np.ndarray, layer: int, 
         if not f["passed"]:
             out.append(f"{what}: {cfg['name']} layer {layer} {f['channel']} pcc {f['pcc']} < {thr}")
     return out
+
+
+def golden_failures(kvc, gk: GoldenKV, cfg: dict, got: np.ndarray, layer: int, lo: int, hi: int, thr, what: str):
+    """``got`` (the rows of the complete groups of [lo, hi)) vs the golden rows ``gk.select`` has there: every row of a
+    dumped layer or a compressed cache; for another layer's window KV the positions in its ring snapshots. Counted in
+    ``gk.coverage``."""
+    idx, want, mode = gk.select(cfg, layer, lo, hi)
+    if mode == "full":
+        gk.note(cfg, layer, mode, want.shape[0])
+        return pcc_failures(kvc, cfg, got, want, layer, thr, what)
+    a, b = rows_of(cfg, lo, hi)
+    if got.shape[0] != b - a:
+        return [f"{what}: {cfg['name']} layer {layer}: {got.shape[0]} rows, expected {b - a}"]
+    gk.note(cfg, layer, mode, len(idx))
+    return pcc_failures(kvc, cfg, got[idx], want, layer, thr, f"{what} ({mode} {len(idx)} rows)")
 
 
 # ---------------------------------------------------------------- table (CPU, on the exported .pb)

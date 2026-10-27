@@ -96,17 +96,31 @@ def block_rows(gk: C.GoldenKV, layer: int, start: int) -> torch.Tensor:
 
 
 def run_chunk(model, state, gk: C.GoldenKV, layers: list[int], start: int, end: int) -> None:
-    """One chunk through `layers` (layer 0 from the embedding, the others from their golden block input); a model that
-    rejects the start fails as "not built"."""
+    """One chunk through `layers` (layer 0 from the embedding, the others from their golden block input; a layer whose
+    block input the golden does not hold (a full run dumps only its step layers) from the previous layer's device
+    output, which this chunk just ran); a model that rejects the start fails as "not built"."""
     toks = chunk_tokens(gk.tokens(), start, end)
+    for k, i in enumerate(layers):
+        if i and not gk.has_block_input(i) and (k == 0 or layers[k - 1] != i - 1):
+            pytest.fail(f"layer {i}: no golden block input and layer {i - 1} is not run before it", pytrace=False)
     try:
         if hasattr(model, "begin_chunk"):
             model.begin_chunk(toks, start)
+        prev = None  # (layer, device output) of the layer just run
         for i in layers:
-            h = model.embed(toks, start=start) if i == 0 else model.from_host(block_rows(gk, i, start), start=start)
+            if i == 0:
+                h = model.embed(toks, start=start)
+            elif gk.has_block_input(i):
+                h = model.from_host(block_rows(gk, i, start), start=start)
+            else:
+                h = prev[1]
             h2 = model.layer(i, h, start, state, end=end)
             model.free(h)
-            model.free(h2)
+            if prev is not None and prev[1] is not h:
+                model.free(prev[1])
+            prev = (i, h2)
+        if prev is not None:
+            model.free(prev[1])
         model.sync()
     except Exception as err:  # an assert / TT_FATAL on a start the server sends is "not built", not a test error
         pytest.fail(f"not built: chunk [{start}, {end}) was rejected: {type(err).__name__}: {err}", pytrace=False)
@@ -153,8 +167,7 @@ def check_turn(kvc, gk, layer: int, got: dict, held: dict | None, start: int, en
                     f"{cfg['name']} layer {layer}: {bad.numel()} rows below actual_start {start} changed (first rows "
                     f"{bad[:4].tolist()}); a chunk may only write its own positions"
                 )
-        want = gk.rows(cfg, layer, start, end)
-        fails += C.pcc_failures(kvc, cfg, t[a:b].float().numpy(), want, layer, thr, f"[{start}, {end})")
+        fails += C.golden_failures(kvc, gk, cfg, t[a:b].float().numpy(), layer, start, end, thr, f"[{start}, {end})")
         pad = t[b:pad_end]
         if pad.numel() and not torch.all(pad == 0):
             fails.append(

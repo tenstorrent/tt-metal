@@ -283,3 +283,23 @@ CPU only, layer 2, golden inputs (script /tmp/fix10diag/idx_ties.py; framework's
   launch; no model-side check (FIX.3's tt/rt_profiler_check.py was reverted by the overseer: a host fact is the framework's).
 - Other effect of the mismatch, not measured: chips 7 / 10 run dispatch over hugepage sysmem (identity), the other 30
   over IOMMU-mapped sysmem.
+
+## DS41-125: contract KV limit vs deep layers over every position (8x4, K.1 attempt 5)
+test_adapter_acks on galaxy_8x4 (40 layers, chunk 5120, golden s10240) failed only on window_kv "nope" PCC of the
+dumped deep layers (all other configs and layers passed, all acks on time, pad rows zero, replicas equal):
+
+| check | L20 | L21 | L24 | limit L20 / L21 / L24 |
+|---|---|---|---|---|
+| ack slot 0 [0, 2536) | 0.9810 | 0.9853 | 0.9805 | 0.9896 / 0.9886 / 0.9837 |
+| ack slot 1 [0, 5120) | 0.9873 | pass | pass | |
+| final slot 0 / 1 [0, 6072) | 0.9888 / 0.9886 | pass | pass | |
+
+The limit is `server_rules.state_threshold`: max(0.93, `e2e_limits.pcc_limit(drift-s10240, state_window_kv_Lxx)`),
+and that drift entry is measured on the ring state (positions 10112-10239). The ladder L.s10240 measures the device
+there at err 0.083 (L20), 0.096 (L21), 0.112 (L24). The window KV of a layer is kv_norm(wkv x) of the layer's input:
+for L20 that is L19's output, which the same ladder measures over every position at err 0.159 (limit 0.267). PCC grows
+with the range's length ([0, 2536) 0.981, [0, 5120) 0.987, [0, 6072) 0.989, ring about 0.997), so the earliest
+positions carry the largest relative error. That is the accumulated hidden-state error the ladder accepts. No index or
+layout error is visible: layers 0-3 and 14 and every compressed / index cache pass. No CPU diagnosis at device
+formats was possible 20 layers deep. The limit was not changed (OV-15: no rule, threshold or check). The owner's options:
+a waiver, or a per-position drift for the contract's window-KV limit (golden generation).
