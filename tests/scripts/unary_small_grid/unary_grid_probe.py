@@ -75,6 +75,25 @@ def make_input(ttnn, torch, device, dtype, op, tiles):
     return ttnn.from_torch(x, dtype=ttdt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
+def trace_ns(ttnn, device, calls, args):
+    """ns per pass over calls: one trace of trace_ops passes, replayed trace_replays times without blocking."""
+    ttnn.synchronize_device(device)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    outs = [c() for _ in range(args.trace_ops) for c in calls]
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    times = []
+    for _ in range(args.reps):
+        t0 = time.perf_counter_ns()
+        for _ in range(args.trace_replays):
+            ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(device)
+        times.append((time.perf_counter_ns() - t0) / (args.trace_replays * args.trace_ops))
+    ttnn.release_trace(device, tid)
+    del outs
+    return times
+
+
 def run(args):
     import torch
     import ttnn
@@ -85,6 +104,14 @@ def run(args):
     print(f"PROBE grid {grid.x}x{grid.y} workers={workers} mode={args.mode}", flush=True)
     if args.mode == "kernel":
         from tracy import signpost
+    filler = None
+    if args.filler and args.mode == "timing":
+        n = args.filler
+        a = ttnn.from_torch(torch.rand((1, 1, n, n)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        b = ttnn.from_torch(torch.rand((1, 1, n, n)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        filler = lambda: ttnn.matmul(a, b)
+        filler()  # into the program cache: a trace cannot compile it
+        print(f"PROBE filler matmul {n}x{n} trace_ns={statistics.median(trace_ns(ttnn, device, [filler], args)):.0f}")
 
     for dtype, op, tiles, grids in configs(args, workers):
         fn = getattr(ttnn, op)
@@ -128,24 +155,18 @@ def run(args):
                     eager.append((t2 - t0) / args.eager_calls)
                     del y
 
-                # Trace replay: one trace of K calls, replayed R times without blocking.
-                ttnn.synchronize_device(device)
-                tid = ttnn.begin_trace_capture(device, cq_id=0)
-                outs = [call() for _ in range(args.trace_ops)]
-                ttnn.end_trace_capture(device, tid, cq_id=0)
-                ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-                trace = []
-                for _ in range(args.reps):
-                    t0 = time.perf_counter_ns()
-                    for _ in range(args.trace_replays):
-                        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-                    ttnn.synchronize_device(device)
-                    trace.append((time.perf_counter_ns() - t0) / (args.trace_replays * args.trace_ops))
-                ttnn.release_trace(device, tid)
-                del outs
+                # Trace replay of back-to-back calls: every call's dispatch is exposed.
+                trace = trace_ns(ttnn, device, [call], args)
+                hidden = ""
+                if filler:
+                    # After a long full-grid op the dispatcher writes the unary's args while that op runs, so the
+                    # unary costs about its kernel time: time (filler, unary) pairs minus the filler alone.
+                    pair = trace_ns(ttnn, device, [filler, call], args)
+                    alone = trace_ns(ttnn, device, [filler], args)
+                    hidden = f" after_filler_ns={statistics.median(pair) - statistics.median(alone):.0f}"
                 print(
                     f"TIMING {tag} trace_ns={statistics.median(trace):.0f} trace_min={min(trace):.0f} "
-                    f"eager_ns={statistics.median(eager):.0f} host_ns={statistics.median(host):.0f} match={match}",
+                    f"eager_ns={statistics.median(eager):.0f} host_ns={statistics.median(host):.0f}{hidden} match={match}",
                     flush=True,
                 )
             except Exception as e:  # keep going; a failed config must not hide the rest
@@ -195,6 +216,7 @@ if __name__ == "__main__":
     p.add_argument("--trace-replays", type=int, default=10)
     p.add_argument("--kernel-reps", type=int, default=5)
     p.add_argument("--trace-region", type=int, default=64 << 20)
+    p.add_argument("--filler", type=int, default=0, help="also time each call after an NxN bf16 matmul (0: off)")
     a = p.parse_args()
     if a.parse:
         parse(a.parse)
