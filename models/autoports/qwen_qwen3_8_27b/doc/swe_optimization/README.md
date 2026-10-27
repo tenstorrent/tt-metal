@@ -1,6 +1,6 @@
 # Qwen3.8 SWE optimization — 27 October 2026
 
-Status: investigation active; no accepted optimization or SWE100/500 result yet.
+Status: local full-model decode improvement validated; clean SWE accuracy and SWE100/500 remain pending.
 
 Target: useful SWE-bench Verified throughput on one QB2 (four Blackhole chips),
 with correctness and small scored samples established before expansion to 100
@@ -144,3 +144,35 @@ are collected. No default-policy promotion or full-suite decision yet.
 
 Raw run artifacts and local logs stay under `/home/mvasiljev/build/qwen38-swe/`.
 Copy only compact evidence and provenance into this report after validation.
+
+## Collected evidence and current gates
+
+The B8 xhigh pilot finished with5/8 raw verifier successes, three agent timeouts,
+6363.34 seconds trial envelope and251874 saved output tokens. Medium finished
+with6/8 raw successes, all eight normal endings,3102.96 seconds and124375 saved
+output tokens. However, three successful medium tasks retrieved upstream fixes
+(sphinx8459, sympy18698/21612); failed astropy13398 also downloaded the exact fix.
+These network-enabled scores do not establish clean accuracy. Do not remove
+exposed tasks after observing outcomes to create a new denominator.
+
+An opt-in isolated-agent protocol now keeps setup/verifier egress while removing
+external connectivity during agent execution and retaining the host model API.
+A local Docker proof passed. The first CI smoke40536968443 is rejected: saved
+Harbor config proved that the canonical Docker driver discarded the isolation
+flag, despite a successful verifier result. Driver forwarding and provider/type
+guards are fixed. Repeat smoke40543287655 is queued with TTI18dc75300434736c2a3df1a23d54709c6ffe0f91.
+Actual saved network identities and phase transitions must pass before clean8.
+
+The default-off grouped recurrence passes paired local all64-layer token tests:
+B16 decode13.8087→17.5110 tokens/s/user (1.2681×), B32 clean8.88722→12.81941
+(1.44245×). Strict B32 state/logit continuation tests also pass exactly. See
+[details](GROUPED_RECURRENCE.md). These fixed-work measurements are independent
+of the untrusted SWE accuracy runs; no SWE throughput gain is claimed.
+
+The immutable source-overlay image receipt binds Metal805f873d19d8c21c90757420c8da76ad0308cd69:
+`ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:47319d8b11749575cc921bae9c03458d37be2667433d7e8e7e0faa3be7a3d895`.
+The prepared TTI candidate `mvasiljevic/qwen38-swe-grouped-b16-p512-20261027`
+uses resident16, block512, C8, grouped1, medium, and the same isolated protocol.
+Its44 focused isolation tests pass; it has not been dispatched or selected.
+Matched clean8 precedes the frozen25-task pilot, then100/500. Native262144
+admission and pinned weights/tokenizer are retained throughout.

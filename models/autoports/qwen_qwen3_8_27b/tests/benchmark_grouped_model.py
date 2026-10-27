@@ -18,11 +18,17 @@ def main():
     parser.add_argument("--checkpoint", default="/data/mvasiljev/weights/Qwen3.8-27B")
     parser.add_argument("--grouped", action="store_true")
     parser.add_argument("--batch", type=int, default=16)
+    parser.add_argument(
+        "--debug-layers", type=int, nargs="+", help="Reduced lifetime-debug fixture; never full-model evidence"
+    )
     parser.add_argument("--length", type=int, default=4096)
     parser.add_argument("--context", type=int, default=8192)
     parser.add_argument("--outputs", type=int, default=128)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--qualitative-output-tokens", type=int, default=512)
+    parser.add_argument(
+        "--skip-qualitative", action="store_true", help="Timing-only run; qualitative acceptance is separate"
+    )
     parser.add_argument("--state-checks", action="store_true")
     parser.add_argument("--continuation-prefix-length", type=int, default=4097)
     parser.add_argument("--prefill-chunk-size", type=int, default=256)
@@ -35,7 +41,12 @@ def main():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=128 * 1024**2)
     result = dict(
-        scope="all64-layer traced autoregressive token-out; fixed-work fixture, not SWE accuracy",
+        scope=(
+            "reduced lifetime-debug fixture; not full-model performance or SWE accuracy"
+            if args.debug_layers
+            else "all64-layer traced autoregressive token-out; fixed-work fixture, not SWE accuracy"
+        ),
+        layer_indices=args.debug_layers or list(range(64)),
         grouped=args.grouped,
         batch=args.batch,
         tested_cache_context=args.context,
@@ -77,6 +88,7 @@ def main():
             context_length=args.context,
             prepare=False,
             prefill_chunk_size=args.prefill_chunk_size,
+            layer_indices=args.debug_layers,
         )
         result["load_seconds"] = time.perf_counter() - started
         result["precision"] = gen.model.precision_config
@@ -94,9 +106,10 @@ def main():
             source_sha256=hashlib.sha256(suite_path.read_bytes()).hexdigest(),
             prompt_mode="checkpoint native chat template; default thinking and reasoning effort",
             max_output_tokens=args.qualitative_output_tokens,
+            skipped=args.skip_qualitative,
             outputs=[],
         )
-        for item in suite:
+        for item in [] if args.skip_qualitative else suite:
             messages = item["messages"]
             prompt = gen.tokenizer.apply_chat_template(
                 messages, tokenize=True, add_generation_prompt=True, return_dict=False
@@ -204,6 +217,7 @@ def main():
                         ],
                     )
                 )
+                del logits  # A materialized bridge return must not survive another replay.
             # Both groups are now aligned at prefix+7. Cross the public decode
             # bridge into an eager padded prefill tail without resetting state.
             start_position = args.continuation_prefix_length + 7
@@ -225,6 +239,7 @@ def main():
                     ],
                 )
             )
+            del logits
         assert trace_ids == [str(t) for t in gen.decode_traces.values()] + [
             str(gen.sample_trace),
             str(gen.buffered_sample_trace),

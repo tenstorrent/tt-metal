@@ -10,6 +10,12 @@ from pathlib import Path
 def compare(baseline, candidate, require_states=True):
     assert baseline["status"] == candidate["status"] == "pass"
     assert baseline["grouped"] is False and candidate["grouped"] is True
+    assert baseline["scope"].startswith("all64-layer")
+    assert (
+        baseline.get("layer_indices", list(range(64)))
+        == candidate.get("layer_indices", list(range(64)))
+        == list(range(64))
+    )
     for key in (
         "scope",
         "batch",

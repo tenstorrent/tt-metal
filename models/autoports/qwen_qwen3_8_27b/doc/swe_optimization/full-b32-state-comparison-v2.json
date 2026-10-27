@@ -1,0 +1,25 @@
+{
+  "status": "pass",
+  "scope": "Paired all64-layer fixed-work comparison; not SWE accuracy",
+  "batch": 32,
+  "states_compared": true,
+  "tokens_exact": true,
+  "continuation_logits_exact": true,
+  "medians": {
+    "baseline": {
+      "ttft_ms": 24012.443313142285,
+      "decode_seconds": 14.289465992012993,
+      "decode_tps_per_user": 8.887665926143486
+    },
+    "grouped": {
+      "ttft_ms": 24019.826726987958,
+      "decode_seconds": 9.906859684968367,
+      "decode_tps_per_user": 12.819400298229368
+    }
+  },
+  "decode_speedup": 1.4423809810988173,
+  "inputs_sha256": {
+    "/home/mvasiljev/build/qwen38-swe/grouped-recurrence/full-b32-baseline-state-tracked-v2.json": "a44fb0dfd7ba9da99bda11d5a41ac1ea07f423b15f58c47fdf7a3af3439f658c",
+    "/home/mvasiljev/build/qwen38-swe/grouped-recurrence/full-b32-grouped-state-tracked-v2.json": "a0812ae0af752c130466ba3c57809d9597439a15b2447cf050fc1738cde8b588"
+  }
+}

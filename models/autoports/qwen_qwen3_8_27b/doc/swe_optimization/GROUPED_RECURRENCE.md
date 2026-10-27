@@ -1,6 +1,6 @@
 # Grouped FP32 recurrent update candidate
 
-Status: experimental, disabled in the model and CI; real-layer validation in progress.
+Status: experimental, default off. Local full-model correctness and warmed timing pass; serving/SWE promotion remains pending.
 
 The prior reduced profile attributes about2037µs to a B32 linear-attention
 decoder versus1004µs for a full-attention decoder. There are48 linear layers.
@@ -111,3 +111,34 @@ minimal staged edits, while the new kernels retain formatter output. Subsequent
 full-stack acceptance runs use these fixed final sources. Black/isort are
 excluded for committing inherited compressed Python to avoid unrelated whole-file
 reformatting; new Python probes/helpers were checked with both.
+
+
+## Full64 B32 validation (2026-10-27)
+
+Clean paired runs used all64 layers, fixed4096 input/128 output, physical prefill256,
+private cache8192, three repeats, and the original262144 admission capability.
+Median decode rose from8.88722 to12.81941 tokens/s/user (**1.44245×**).
+TTFT was24.0095 versus24.0184 seconds. Tokens were exact in all repeats;
+ragged33/65/1 requests repeated exactly with four stable captures and no host
+refreshes/readbacks inside steady-state decode. See full-b32-clean-comparison.json.
+This fixed-work speedup is not an end-to-end SWE speedup.
+
+A separate strict allocation-tracking pair compared384 recurrent/convolution
+state receipts (48 linear layers ×2 fields ×4 chips) after repeats and mixed
+requests. It then independently advanced alternating row groups by7 tokens from
+prefix4097, followed by129 tokens from4104, crossing the120-token decode bridge
+and9-token padded eager prefill. Every state receipt and final logits on all four
+chips matched exactly. See full-b32-state-comparison-v2.json. The first attempt
+failed a harness lifetime check because materialized logits survived into the
+next replay; explicitly releasing them fixed the harness, with no exemption.
+
+All32 rows completed three shared prompts within512 tokens: sensible English,
+correct JSON counts {alice:4,bob:3}, and complete deduplication functions/examples.
+The clean timing pair skips this redundant qualitative pass. No persistent dtype,
+state layout, collective, or native context limit changed. These tests use a
+smaller cache fixture; peak serving memory/native-context acceptance is pending.
+
+The baseline reduced device profile completed. The grouped reduced profile failed
+production timestamp validation and supplies no accepted timing. AutoDebug found a
+probable Blackhole live-clock rollover tear; a targeted profiler repair and
+natural-rollover regression are under test. No profiler assertion is suppressed.
