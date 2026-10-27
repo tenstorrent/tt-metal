@@ -11,6 +11,7 @@
 #include "edm_fabric_utils.hpp"
 #include "fabric_edm_packet_header_validate.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_software_credit.hpp"
 #include "fabric_stream_regs.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "hostdevcommon/fabric_common.h"
@@ -82,6 +83,9 @@ struct WorkerToFabricEdmSenderBase {
     // two separate adapters (they've started diverging quite a bit by now)
     //  --> Not splitting yet though to avoid change conflict issues with some other in flight changes
     static constexpr bool IS_WORKER = !I_USE_STREAM_REG_FOR_CREDIT_RECEIVE;
+    static_assert(
+        IS_WORKER || connection_interface::kernel_stream_registers_available,
+        "a stream-register credit receiver needs stream registers; routers use RouterStaticSizedChannelWriterAdapter");
     static constexpr bool IS_POW2_NUM_BUFFERS = USER_DEFINED_NUM_BUFFER_SLOTS && is_power_of_2(EDM_NUM_BUFFER_SLOTS);
     static constexpr size_t BUFFER_SLOT_PTR_WRAP = EDM_NUM_BUFFER_SLOTS * 2;
     // HACK: Need a way to properly set this up
@@ -466,14 +470,23 @@ struct WorkerToFabricEdmSenderBase {
 
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             const uint64_t remote_producer_cursor_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
-            // Read back the whole SenderChannelProducerCursor block left by the previous producer on
-            // this channel. Both fields are full width, so the write index is taken verbatim in
+            // Read back the SenderChannelProducerCursor fields left by the previous producer on
+            // this channel. Both are full width, so the write index is taken verbatim in
             // open_finish() rather than re-derived from the counter.
             ASSERT(local_producer_cursor_addr % 16 == 0);
             noc_async_read(
                 remote_producer_cursor_addr,
                 local_producer_cursor_addr,
-                sizeof(tt::tt_fabric::SenderChannelProducerCursor),
+                offsetof(tt::tt_fabric::SenderChannelProducerCursor, align_pad_0),
+                WORKER_HANDSHAKE_NOC);
+            // The router's credit mode lands in the landing zone's first padding word, checked in
+            // open_finish().
+            noc_async_read(
+                dest_noc_addr_coord_only | reinterpret_cast<size_t>(
+                                               edm_worker_location_info_addr +
+                                               offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, credit_mode)),
+                local_producer_cursor_addr + offsetof(tt::tt_fabric::SenderChannelProducerCursor, align_pad_0),
+                sizeof(uint32_t),
                 WORKER_HANDSHAKE_NOC);
 
             const uint64_t edm_read_free_slots_or_read_counter_addr =
@@ -543,6 +556,9 @@ struct WorkerToFabricEdmSenderBase {
             invalidate_l1_cache();
             const auto* cursor = reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::SenderChannelProducerCursor*>(
                 local_producer_cursor_addr);
+            if (cursor->align_pad_0 != connection_interface::kernel_credit_mode) {
+                fabric_credit_mode_mismatch(cursor->align_pad_0);
+            }
             // Restores the bound the modulo used to provide implicitly.
             ASSERT(cursor->write_index < this->num_buffers_per_channel);
             this->buffer_slot_write_counter.reset();
@@ -687,6 +703,23 @@ private:
 
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = get_fabric_worker_noc()) {
+        if constexpr (!connection_interface::kernel_stream_registers_available) {
+            // Software credits: publish the write count that includes the packet just written, once
+            // that write has landed. Called before advance_buffer_slot_write_index() counts it.
+            // Posted payload writes are not covered by the flush.
+            noc_async_writes_flushed(noc);
+            noc_inline_dw_write<InlineWriteDst::L1>(
+                get_noc_addr(
+                    this->edm_noc_x,
+                    this->edm_noc_y,
+                    this->edm_copy_of_wr_counter_addr +
+                        offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter),
+                    noc),
+                this->buffer_slot_write_counter.counter + 1,
+                0xF,
+                noc);
+            return;
+        }
         if constexpr (stateful_api) {
 #if defined(FABRIC_WORKER_CREDIT_TO_LOCAL_STREAM)
             static_assert(!stateful_api, "FABRIC_WORKER_CREDIT_TO_LOCAL_STREAM has no stateful credit update");
@@ -825,8 +858,14 @@ private:
 namespace fabric_detail{
     template <bool STATEFUL_NOC>
     void update_credits_and_slots(WorkerToFabricEdmSender* conn){
-        conn->advance_buffer_slot_write_index();
-        conn->update_edm_buffer_free_slots<STATEFUL_NOC>();
+        if constexpr (connection_interface::kernel_stream_registers_available) {
+            conn->advance_buffer_slot_write_index();
+            conn->update_edm_buffer_free_slots<STATEFUL_NOC>();
+        } else {
+            // Software credits publish the count before it advances.
+            conn->update_edm_buffer_free_slots<STATEFUL_NOC>();
+            conn->advance_buffer_slot_write_index();
+        }
     }
 } // namespace fabric_detail
 
