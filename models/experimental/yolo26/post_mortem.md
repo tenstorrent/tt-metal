@@ -54,6 +54,7 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0032 | Batch 20 (all 20 cameras in one pass) on 1 chip: minimize its latency | 2026-10-27 | DONE: capture-to-results 61.7 → 44.0 ms (all cameras alike), on screen 66.0 → 52.4 ms with live view, 30.0 FPS; batch 4 also 10.9 → 9.4 ms / 23.2 → 20.7 ms |
 | YOLO26-0033 | How did batch 4 reach ~9.4 ms per camera group? Is it async? (summary of 0026-0032) | 2026-10-27 | ANSWERED: pipelined across processes and both command queues; no group queues behind another; chip work unchanged (~6 ms per batch of 4) |
 | YOLO26-0034 | Batch 20 before / after table; how batch 20 combines L1 and DRAM | 2026-10-27 | ANSWERED: 108.3 → 44.6 ms (all cameras), on screen 110.7 → 53.0 ms; every layer computes in L1 in groups (4 above 20×20, 8 at 20×20), DRAM only holds full-batch stage tensors |
+| YOLO26-0035 | Why on-screen latency exceeds capture-to-results, and by different amounts per configuration; synchronized batch 4 | 2026-10-27 | ANSWERED: ~9 ms fixed display work (panel ~2 ms, JPEG ~6 ms) plus up to one compose of waiting when the renderer is busy; synchronized batch 4 11.5 → 35.3 ms by set |
 
 ## Entries
 
@@ -1107,3 +1108,43 @@ DRAM only holds full-batch tensors between stages.
 - REFUTED earlier (YOLO26-0030 attempt 1): computing the large layers from DRAM (DRAM-sliced convs, DRAM adds /
   concats): batch 8 at 213.9 FPS, dominated by reshapes and DRAM ↔ L1 copies. Grouping: batch 8 731.3, batch 20
   716.4 FPS model-only (batch 4: 683.1), PCC unchanged.
+
+### YOLO26-0035 — the on-screen gap, and batch 4 with synchronized capture (appended 2026-10-27)
+
+Synchronized capture with the current code (MEASURED, `multistream_demo.py --batch-size 4 --synchronized-capture`,
+1 chip, 20 × 30 FPS, 60 s, live view on): 600.0 images/s = 30.0 FPS; capture-to-results CAM 01-04 11.5, 05-08 17.0,
+09-12 22.6, 13-16 28.3, 17-20 35.3 ms; on screen 34.2 ms (median over all cameras).
+| cameras (set in tick) | own capture time (staggered, default) | same capture time (synchronized) | batch 20 (one pass) |
+|---|---|---|---|
+| CAM 01-04 | 9.5 ms | 11.5 ms | 44.6 ms |
+| CAM 05-08 | 9.4 ms | 17.0 ms | 44.6 ms |
+| CAM 09-12 | 9.8 ms | 22.6 ms | 44.6 ms |
+| CAM 13-16 | 9.9 ms | 28.3 ms | 44.6 ms |
+| CAM 17-20 | 9.6 ms | 35.3 ms | 44.6 ms |
+| on screen (median) | 21.4 ms | 34.2 ms | 53.0 ms |
+| throughput | 600.0 images/s | 600.0 images/s | 599.9 images/s |
+INFERRED: with synchronized capture each set waits for the sets before it, ~5.7 ms (one pass) per set; set 1 is
+~2 ms above staggered because the 5 sets' prep and uploads coincide. The on-screen median sits near the middle sets
+because it is taken over all cameras' results.
+
+Why on screen is later than capture-to-results, and by different amounts. After a set's counts are decoded, the
+render process must receive them, draw them and encode a new live-view image (this is where "on screen" is taken):
+| step after results | time | source |
+|---|---|---|
+| hand-over to the render process (multiprocessing queue) | ~0.5 ms | INFERRED |
+| draw the updated tiles | ~0.2 ms per 4 tiles, ~0.7 ms for 20 | MEASURED, YOLO26-0026 host bench |
+| redraw the side panel | ~2 ms | MEASURED, YOLO26-0026 |
+| JPEG-encode the 2340×1152 mosaic | ~6 ms | MEASURED, YOLO26-0026 |
+| wait while the renderer finishes a previous image | 0 to ~8 ms | INFERRED |
+The first four are ~9 ms every time; the wait depends on how often results arrive:
+| configuration | results | on screen | gap | why (INFERRED) |
+|---|---|---|---|---|
+| batch 20 | 44.6 ms | 53.0 ms | ~8.4 ms | one update per tick; the renderer is idle when results arrive: one draw + encode, no wait |
+| batch 4, staggered | ~9.6 ms | 21.4 ms | ~12 ms | a set every 6.7 ms vs ~8 ms per draw + encode: the renderer is nearly always busy (~125 images/s composed), a set waits on average half a compose (~4 ms) and then its own |
+| batch 4, synchronized | 11.5 → 35.3 ms | 34.2 ms | ~12 ms vs the middle sets | as staggered; the 34.2 ms median over all cameras sits near the middle sets (22.6 + ~12) |
+So the gap is ~9 ms of fixed display work plus up to one compose of waiting when the renderer is busy; batch 20 has
+the smaller gap only because it updates the screen 5× less often.
+- "On screen" ends when the JPEG is ready to send; network transfer, the browser's decode and the monitor refresh are
+  not included.
+- To shrink it: the JPEG encode first (smaller live-view image or lower quality), then the panel (redraw it less
+  often than the tiles); both cut the fixed part and the waiting.
