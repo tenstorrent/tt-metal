@@ -215,6 +215,35 @@ def test_scatter_codegen_row_major_under_l1_pressure_stays_native(device):
     assert added == 0, "auto routed a ROW_MAJOR call whose sticks no longer fit live L1 to codegen; expected native"
 
 
+def test_scatter_codegen_row_major_sliced_source_counts_against_live_l1(device):
+    # A last-axis source wider than the index reaches the ROW_MAJOR factory as a slice allocated in
+    # the source's own placement. With the source in L1 that slice is pending when the route is
+    # chosen, so the live-L1 gate must charge it: an equal amount of L1 that is already allocated
+    # (the blocker) leaves the route on codegen, the same amount still pending must send it native.
+    # 180000 bf16 elements: an input and output stick of 360 kB each fit beside a 720 kB L1 source on
+    # Blackhole, but not beside that source plus its 360 kB slice.
+    width = 180000
+    xt, it, _ = _make_case([1, width], [1, width], -1, ttnn.ROW_MAJOR_LAYOUT, device)
+
+    def in_l1(t):
+        return ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+
+    st = in_l1(torch.rand([1, width], dtype=torch.bfloat16))
+    blocker = in_l1(torch.zeros([1, width], dtype=torch.bfloat16))
+    _, added = _run_auto_against_native(device, xt, it, st, -1)
+    ttnn.deallocate(blocker)
+    ttnn.deallocate(st)
+    assert added > 0, "auto fell back to native beside an allocated blocker; expected the codegen ROW_MAJOR factory"
+    wide = in_l1(torch.rand([1, 2 * width], dtype=torch.bfloat16))
+    _, added = _run_auto_against_native(device, xt, it, wide, -1)
+    ttnn.deallocate(wide)
+    assert (
+        added == 0
+    ), "auto routed a call whose pending source slice no longer fits live L1 to codegen; expected native"
+
+
 def test_scatter_codegen_tile_row_too_wide_for_interleaved_streams(device):
     # The interleaved TILE factory keeps a whole row of input and output tiles resident; a row the
     # per-core L1 cannot hold twice has to stream one tile at a time instead. The width comes from the
