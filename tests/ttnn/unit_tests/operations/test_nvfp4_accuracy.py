@@ -18,6 +18,36 @@ from models.common.utility_functions import is_blackhole
 
 pytestmark = pytest.mark.skipif(not is_blackhole(), reason="NVFP4 decoder requires Blackhole")
 
+SFPU_ACCURACY_GATE = {
+    "max_bf16_ulp": 2.0,
+    "mean_bf16_ulp": 1.0,
+    "median_bf16_ulp": 1.0,
+    "snr_db_exclusive_min": 46.0,
+}
+
+
+def _accuracy_gate_failures(metrics):
+    failures = []
+    for key in ("max_bf16_ulp", "mean_bf16_ulp", "median_bf16_ulp"):
+        value, limit = metrics[key], SFPU_ACCURACY_GATE[key]
+        if not math.isfinite(value) or value > limit:
+            failures.append(f"{key}={value} must be <= {limit}")
+    snr = metrics["snr_db"]
+    if snr is None:
+        # An all-zero reference has undefined SNR; require exact zeros.
+        if metrics["rmse"] != 0:
+            failures.append("zero-signal case must have zero reconstruction error")
+    elif snr != "inf" and not snr > SFPU_ACCURACY_GATE["snr_db_exclusive_min"]:
+        failures.append(f"snr_db={snr} must be > {SFPU_ACCURACY_GATE['snr_db_exclusive_min']}")
+    return failures
+
+
+def _flush_subnormals(values):
+    # FP32 and BF16 have the same minimum normal magnitude. This concerns
+    # reconstructed operands/results, not FP8 subnormal scale encodings,
+    # which decode to ordinary normal BF16 values and remain supported.
+    return torch.where(values.abs() < torch.finfo(torch.float32).tiny, torch.zeros_like(values), values)
+
 
 def _corpus():
     generator = torch.Generator().manual_seed(20261027)
@@ -47,7 +77,7 @@ def _corpus():
     return codes.reshape(4096, 128), scales.reshape(4096, 8)
 
 
-def _reference(codes, scales, global_scale):
+def _reference(codes, scales, global_scale, *, flush_subnormals=False):
     lut = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], dtype=torch.float64)
     values = lut[codes.long() & 7] * torch.where((codes & 8) != 0, -1.0, 1.0)
     exponent, mantissa = scales >> 3, scales & 7
@@ -57,7 +87,10 @@ def _reference(codes, scales, global_scale):
     # The API accepts FP32 tensor scales. Products need at most 30 significant
     # bits here, so FP64 reconstructs them exactly without intermediate rounding.
     tensor_scale = float(torch.tensor(global_scale, dtype=torch.float32))
-    return values * scale.repeat_interleave(16, dim=-1) * tensor_scale
+    if flush_subnormals and abs(tensor_scale) < torch.finfo(torch.float32).tiny:
+        tensor_scale = 0.0
+    result = values * scale.repeat_interleave(16, dim=-1) * tensor_scale
+    return _flush_subnormals(result) if flush_subnormals else result
 
 
 def _bf16_quantum(reference):
@@ -152,7 +185,7 @@ def test_nvfp4_accuracy_survey(device, tmp_path):
     report = {
         "kernel_sha256": hashlib.sha256(kernel.read_bytes()).hexdigest(),
         "torch_version": torch.__version__,
-        "reference": "Exact FP64 reconstruction of E2M1 x UE4M3 x original FP32 tensor scale",
+        "reference": "Exact FP64 reconstruction of E2M1 x UE4M3 x original FP32 tensor scale with operand/result FTZ",
         "storage_baseline": "TTNN host packer from FP32-staged reconstruction, aligned horizontal groups of 16",
         "ulp_unit": "BF16 spacing at exact magnitude, with BF16 subnormal spacing at zero",
         "seed": 20261027,
@@ -160,6 +193,7 @@ def test_nvfp4_accuracy_survey(device, tmp_path):
         "blocks_per_scale": 256,
         "structured_blocks_per_scale": 136,
         "random_blocks_per_scale": 120,
+        "accuracy_gate": {"path": "fast_sfpu_scale", "limits": SFPU_ACCURACY_GATE, "subnormals": "flush to zero"},
         "cases": [],
     }
     # Include exact BF16 scales, FP32 -> BF16 halfway cases and a non-dyadic
@@ -178,9 +212,10 @@ def test_nvfp4_accuracy_survey(device, tmp_path):
         2**-40,
         2**40,
     ]
+    gate_failures = []
     try:
         for tensor_scale in tensor_scales:
-            reference = _reference(codes, scales, tensor_scale)
+            reference = _reference(codes, scales, tensor_scale, flush_subnormals=True)
             selected = reference.flatten()[:valid_count]
             outputs = {"bf16_exact_rne": _round_bf16_exact(selected).float()}
             # Storage-format baselines use TTNN's actual host quantizer. FP32
@@ -235,20 +270,41 @@ def test_nvfp4_accuracy_survey(device, tmp_path):
                 assert (
                     entries["precise"]["max_bf16_ulp"] == 0
                 ), "Precise decoder must reconstruct scale-one samples exactly"
+            failures = _accuracy_gate_failures(entries["fast_sfpu_scale"])
+            gate_failures.extend(f"tensor_scale={tensor_scale}: {failure}" for failure in failures)
             report["cases"].append(
-                {"tensor_scale_fp32": float(torch.tensor(tensor_scale, dtype=torch.float32)), "metrics": entries}
+                {
+                    "tensor_scale_fp32": float(torch.tensor(tensor_scale, dtype=torch.float32)),
+                    "metrics": entries,
+                    "sfpu_accuracy_gate": {"passed": not failures, "failures": failures},
+                }
             )
     finally:
         for tensor in uploaded:
             ttnn.deallocate(tensor)
     output_path = Path(os.environ.get("NVFP4_ACCURACY_REPORT", tmp_path / "nvfp4_accuracy.json"))
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    gate_metrics = [case["metrics"]["fast_sfpu_scale"] for case in report["cases"]]
+    finite_snrs = [metrics["snr_db"] for metrics in gate_metrics if isinstance(metrics["snr_db"], (int, float))]
+    report["accuracy_gate"].update(
+        {
+            "passed": not gate_failures,
+            "observed": {
+                **{
+                    key: max(metrics[key] for metrics in gate_metrics)
+                    for key in ("max_bf16_ulp", "mean_bf16_ulp", "median_bf16_ulp")
+                },
+                "minimum_snr_db": min(finite_snrs) if finite_snrs else None,
+            },
+        }
+    )
     output_path.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     print(f"NVFP4_ACCURACY_REPORT={output_path}")
+    assert not gate_failures, "SFPU accuracy gate failed:\n" + "\n".join(gate_failures)
 
 
 def test_nvfp4_accuracy_boundaries(device, tmp_path):
-    """Classify admitted extreme scales separately from the normal-value budget."""
+    """Check the accepted FTZ contract and retain IEEE differences as diagnostics."""
     codes = torch.arange(16, dtype=torch.int32).repeat(256).reshape(32, 128)
     scales = torch.arange(128, dtype=torch.int32).clamp_max(126).repeat_interleave(2).reshape(32, 8)
     valid_count = 127 * 2 * 16
@@ -271,6 +327,8 @@ def test_nvfp4_accuracy_boundaries(device, tmp_path):
         for tensor_scale in [2**-149, 2**-134, 2**-133, 2**-127, 2**-126, 2**120, 2**127]:
             reference = _reference(codes, scales, tensor_scale).flatten()[:valid_count]
             oracle = _round_bf16_exact(reference)
+            ftz_reference = _reference(codes, scales, tensor_scale, flush_subnormals=True).flatten()[:valid_count]
+            ftz_oracle = _round_bf16_exact(ftz_reference)
             metrics = {}
             for name, fast, fpu in [
                 ("precise", False, True),
@@ -297,8 +355,16 @@ def test_nvfp4_accuracy_boundaries(device, tmp_path):
                     "nonfinite_classification_mismatches": int(
                         (torch.isfinite(actual) != torch.isfinite(oracle)).sum()
                     ),
+                    "ftz_reference_mismatches": int((actual != ftz_oracle).sum()),
                 }
                 assert metrics[name]["nan_count"] == 0, f"Unexpected NaN in {name} at scale {tensor_scale}"
+                # Only the SFPU paths share this exact arithmetic oracle.
+                # The HiFi4 FPU path remains diagnostic near underflow.
+                if name != "fast_fpu_scale":
+                    assert (
+                        metrics[name]["ftz_reference_mismatches"] == 0
+                    ), f"FTZ mismatch in {name} at scale {tensor_scale}"
+
             cases.append(
                 {"tensor_scale_fp32": float(torch.tensor(tensor_scale, dtype=torch.float32)), "metrics": metrics}
             )

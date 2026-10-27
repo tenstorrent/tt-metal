@@ -24,12 +24,13 @@ details the two scale levels.
 
 ## Reconstruction accuracy
 
-See [the accuracy survey and proposed verification contract](ACCURACY.md)
+See [the accuracy survey and accepted verification gate](ACCURACY.md)
 for exhaustive scalar coverage, BF16/BFP8/BFP4 comparisons, and simulator
-findings. The relaxed path can exceed BFP8's aggregate error on targeted
-tensor scales. All paths, including the precise path, can flush BF16
-subnormal results at extreme tensor scales; the ordinary rounding results
-assume no such underflow or overflow.
+findings. The all-SFPU fast path must satisfy max BF16 ULP <= 2, mean and
+median ULP <= 1, and SNR > 46 dB in each fixed tensor-scale test case.
+Subnormal operands/results follow a flush-to-zero contract. BFP8 comparisons
+remain diagnostic; the relaxed path can exceed BFP8's aggregate error on
+targeted tensor scales. The separate FPU tensor-scale path uses HiFi4.
 
 ## Preparing and converting data
 

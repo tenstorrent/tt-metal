@@ -8,13 +8,55 @@ The important result is that the relaxed decoder is not uniformly as accurate
 as the BFP8 baseline. At tensor scale `1.02734375`, its error energy is 1.05482
 times BFP8's on the declared corpus (about 0.232 dB lower SNR), despite
 remaining within one BF16 encoding step of exact nearest-even reconstruction.
-The precise path also has an underflow limitation described below.
+The accepted gate below permits flush-to-zero behavior for subnormal operands
+and results; the IEEE underflow differences remain diagnostic.
+
+## Accepted accuracy gate
+
+The gate applies to `experimental_fast=True, fpu_tensor_scale=False` with
+BF16 DEST. All decoding and scale multiplication in this path use the SFPU;
+FPU HiFi/LoFi fidelity settings do not change that arithmetic. The separate
+`fpu_tensor_scale=True` survey uses **HiFi4** for its tensor-scale multiply.
+Both paths still use the normal unpack, transpose, and pack pipeline.
+
+For **each tensor-scale case** in the fixed verification corpus, require:
+
+| Metric | Requirement |
+| --- | ---: |
+| Maximum continuous BF16-ULP error | <= 2 |
+| Mean continuous BF16-ULP error | <= 1 |
+| Median continuous BF16-ULP error | <= 1 |
+| Aggregate SNR | > 46 dB |
+
+The ULP requirements are inclusive; the SNR requirement is strict. Cases
+must pass individually, rather than pooling their statistics. An exact
+nonzero reconstruction has infinite SNR and passes. An all-zero reference
+has undefined SNR and must reconstruct zero exactly. Existing routing,
+layout, and encoding-correctness tests remain in force. BFP8 error and
+encoding-distance/P99 metrics remain diagnostic; BFP8 dominance is not an
+additional acceptance requirement.
+
+The selected subnormal policy is **flush to zero**. The reference flushes
+subnormal FP32 tensor-scale operands and subnormal reconstructed results
+below `2**-126`, preserving normal results for accuracy scoring. FP8 scale
+subnormal encodings remain supported: they decode to normal BF16 values
+and are not flushed merely because their FP8 exponent field is zero.
+Boundary tests explicitly check this FTZ behavior and expected infinities.
+Signed zero is compared numerically in these tests.
+
+The ordinary device survey writes the gate limits, per-case pass/fail and
+failures, and overall extrema to its JSON artifact. It writes the artifact
+before asserting the aggregate gate result, so failed threshold checks retain
+numerical diagnostics. Performance promotion uses hardware measurements.
 
 ## Reference and supported values
 
 For each datum, reconstruct `x = decode_e2m1(d) * decode_ue4m3(s) * g32`.
 Decode the stored datum and block scale exactly; first cast the API tensor
-scale to FP32, then perform the reconstruction in FP64. This evaluates the
+scale to FP32, then perform the reconstruction in FP64. Apply the accepted
+operand/result FTZ policy for gating; retain unflushed reconstruction for
+IEEE boundary diagnostics. None of the ordinary survey's nonzero values
+are subnormal, so the policy does not change the tables below. This evaluates the
 mathematical value of the already-quantized NVFP4 tensor, not the unknown
 original tensor before NVFP4 quantization. That earlier quantization loss
 cannot be measured without the original tensor.
@@ -172,54 +214,63 @@ variant has about 0.346 times BFP8's total error energy, while roughly 17.8%
 of individual values have larger error than BFP8. These are different
 acceptance questions; neither follows from the other.
 
-## Extreme scales and an existing limitation
+## Extreme scales and accepted FTZ behavior
 
 A separate device survey crosses all scalar encodings with tensor scales
 `2**-149`, `2**-134`, `2**-133`, `2**-127`, `2**-126`, `2**120`, and `2**127`.
 Each case has 4,064 reported values, including two placements per scalar
 encoding. It compares result classifications with directly rounded BF16
-reconstruction and records finite errors separately.
+reconstruction and records finite errors separately as IEEE diagnostics.
+It also compares every decoder output with an FTZ reference and asserts
+that the all-SFPU and precise paths have no mismatches for these boundary
+cases. The HiFi4 FPU path remains diagnostic: at `g = 2**-126`, it differs
+from that oracle in 180 normal-valued results, consistent with extra loss
+in its internal multiplication phases near underflow. It is outside the
+all-SFPU accuracy gate.
 
 All three kernels, including the precise path, exhibit SFPU flush-to-zero.
 At tensor scale `2**-127`, **3,456 of 4,064** results whose exact BF16
 reconstruction is finite and nonzero are instead zero; at `2**-126`, the
 count is **1,288**. Their maximum continuous BF16 ULP errors are 240 and
 120 respectively. Thus the ordinary-rounding budgets do not describe the
-full currently admitted global-scale range. Choosing exact BF16 tensor
-scales alone does not solve underflow. The tested large-scale cases produced
+full currently admitted global-scale range under IEEE semantics. These
+flushes are accepted by the chosen FTZ policy. Choosing exact BF16 tensor
+scales alone does not preserve subnormals. The tested large-scale cases produced
 the expected infinities with no classification mismatches or NaNs; this is
 not an exhaustive overflow-boundary test.
 
-An acceptance contract must explicitly choose supported underflow behavior:
-require IEEE-style subnormal reconstruction and implement a fallback, or
-restrict the fast path's numerical domain and document flushing. The current
-validation allows these small tensor scales; this survey does not change
-that validation or silently count the flushed results as acceptable.
+Under the chosen FTZ contract, a subnormal tensor-scale operand is treated
+as zero before multiplication, even when multiplication by a large block
+value could otherwise produce a normal result. Subnormal product results
+also flush to zero. The boundary test retains IEEE differences in the JSON
+and checks the FTZ reference separately; these are accepted flushes rather
+than errors charged against the ordinary rounding gate.
 
-## Suggested agent evaluator contract
+## Agent evaluator contract
 
-- Keep FP64 truth and independent immutable format baselines outside editable
-  kernel files. Fix packing, scales, output ordering, and zero-sign policy.
+- Keep the FTZ-aware FP64 reference and independent storage-format baselines
+  outside editable kernel files. Fix packing, scales, output ordering, and
+  numerical zero-sign policy.
 - Run exhaustive scalar, structured block, packing, layout, and tensor-scale
-  boundary tests, then add held-out random seeds and representative real
-  tensors when available. Compare errors per tensor scale, not only pooled
-  across scales. Include the custom E2M1-scale mode separately if optimizing it.
-- Require zero arithmetic error at tensor scale 1. In the normal domain,
-  track a declared BF16-ULP/encoding-distance cap and P99/relative-error tails.
-  The measured 1.4375 ULP and one-encoding-step behavior characterize the
-  current relaxed SFPU path; they are not a chosen universal acceptance
-  policy for every future decoder or the FPU path.
-- If BFP8 sets the quality target, require its declared SNR/error-energy
-  budget on each fixed workload, with separate handling for BFP8-exact groups.
-  Use a fixed absolute/BF16-ULP allowance when dividing by zero baseline
-  error would otherwise be undefined. Report group and element regressions.
-- Classify underflow, overflow, NaN, signed zero, and invalid scale encodings
-  separately. Do not allow performance improvements to hide failures there.
+  boundary tests, then add held-out seeds and representative real tensors
+  when available. The accepted gate applies per fixed tensor-scale case,
+  with the corpus/seed recorded. Include the custom E2M1-scale mode separately
+  if optimizing it; this survey covers standard UE4M3 block scales.
+- Enforce max ULP <= 2, mean ULP <= 1, median ULP <= 1, and SNR > 46 dB
+  for the all-SFPU decoder. Keep the FPU-scale path's results separate and
+  labelled HiFi4. These thresholds replace a strict BFP8-or-better gate.
+- Continue reporting BFP8 energy comparisons, P99 and relative-error tails,
+  encoding distance, and per-group/element regressions as diagnostics.
+  Do not pool tensor-scale cases in a way that hides a failed case.
+- Check FTZ behavior and nonfinite classifications separately. Preserve
+  invalid-scale and layout checks. Use hardware measurements to promote
+  performance improvements after accuracy passes.
 
-These rules separate unavoidable storage loss, accepted reconstruction
-approximation, and implementation/routing errors. The numerical budget must
-be chosen explicitly; the current code does not yet meet a strict BFP8-or-
-better budget on all demonstrated inputs.
+The existing all-SFPU path passes this gate on the declared corpus. Its
+worst measured ordinary case has max 1.4375 ULP, mean 0.81677 ULP, median
+0.75 ULP, and minimum SNR 46.23565 dB. These results characterize the fixed
+corpus and do not guarantee the same aggregate statistics on every possible
+input distribution. In particular, the SNR margin is about 0.236 dB.
 
 ## Simulator and performance evaluation
 
