@@ -1,4 +1,5 @@
 name: "Custom test dispatch"
+# Probe-only branch (not for merge): commit 8f68675 = last good P100a perf night (2026-10-16).
 
 on:
   workflow_dispatch:
@@ -82,51 +83,14 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      # 4-D matrix: board x dtype x shape x 5 shards, with P100a limited by
-      # `exclude` to ONE combo (bf16 x 32x32). Grid = 20 N150 cells + 5 P100a
-      # cells = 25, all off the ONE arch-agnostic build. include entries attach
-      # per-board (runner label, arch), per-dtype (perf_dtype) and per-shape
-      # (perf_shape); GitHub merges an include entry into every cell whose
-      # existing keys it matches. inputs.arch / inputs.runner-label are unused.
-      #
-      # The board/dtype/shape VALUES are load-bearing: the dashboard globs the
-      # artifact name below to decide which combo directory a result lands in,
-      # and re-checks it against the metadata.perf_dtype/perf_shape/perf_arch
-      # the harness stamps from PERF_DTYPE/PERF_SHAPE/ARCH_NAME. They must stay
-      # in step with COMBOS in the dashboard's daily-eltwise-perf.yml. N150 is
-      # the implicit board there (no prefix in the artifact name) so the four
-      # original combos' names, directories and history never had to change.
-      #
-      # `label` rides on the board entries and runs-on reads matrix.label: the
-      # container block keys off contains(matrix.label, ...) to pick the viommu
-      # paths (harbor image prefix, /nohugepages, no /mnt/MLPerf). Hard-coding
-      # the runner would silently take the non-viommu branch and mount paths
-      # that do not exist on the pod.
+      # Probe: last-known-good commit 8f68675 on today's P150b pool. 4 samples to spread over
+      # the boards; each records firmware first, then times one op (abs) with ttperf.
       matrix:
-        board: [n150, p100a]
-        dtype: [bf16, fp32]
-        shape: [32x32, 256x256]
-        shard: [1, 2, 3, 4, 5]
-        exclude:
-          - board: p100a
-            dtype: fp32
-          - board: p100a
-            shape: 256x256
-        include:
-          - board: n150
-            label: tt-ubuntu-2204-N150-viommu-stable
-            arch: wormhole_b0
-          - board: p100a
-            label: tt-ubuntu-2204-P100a-viommu-stable
-            arch: blackhole
-          - dtype: bf16
-            perf_dtype: bfloat16
-          - dtype: fp32
-            perf_dtype: float32
-          - shape: 32x32
-            perf_shape: "1,1,32,32"
-          - shape: 256x256
-            perf_shape: "1,1,256,256"
+        sample: [1, 2, 3, 4]
+        label: [tt-ubuntu-2204-P150b-stable]
+        arch: [blackhole]
+        perf_shape: ["1,1,32,32"]
+        perf_dtype: [bfloat16]
     runs-on: ${{ matrix.label }}
     container:
       image: ${{ contains(matrix.label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
@@ -185,31 +149,22 @@ jobs:
           echo "📦 Installing $WHEEL_FILENAME"
           uv pip install "$WHEEL_FILENAME"
         shell: bash
-      - name: Run regression in loop
-        env:
-          SHARD: ${{ matrix.shard }}
-          SHARD_TOTAL: "5"
+      - name: 🔎 Firmware snapshot
         run: |
-          uv pip install pytest-repeat
-          ${{ inputs.command }}
+          cat /sys/class/tenstorrent/*/tt_serial 2>/dev/null || true
+          uv pip install -q tt-smi
+          tt-smi -s > /tmp/smi.json 2>/dev/null || true
+          grep -E '"(fw_bundle_version|Driver|CM_FW_VERSION|DM_APP_FW_VERSION|ETH_FW_VERSION|eth_fw|board_id)"' /tmp/smi.json || echo "tt-smi gave no output"
         shell: bash
-      - name: 🏷️ Name shard result
-        if: always()
-        working-directory: /work
+      - name: ⏱️ ttperf abs x5
         run: |
-          f=$(ls -1 eltwise_perf_results_*_final.json 2>/dev/null | head -1)
-          if [ -n "$f" ]; then mv "$f" "shard-${{ matrix.shard }}.json"; fi
+          set -euo pipefail
+          uv pip install -q pytest-repeat ttperf==0.2.1
+          curl -fsSL https://raw.githubusercontent.com/Aswincloud/ttnn-performance-dashboard/main/test_eltwise_operations.py -o /work/test_eltwise_operations.py
+          cd /work
+          for i in 1 2 3 4 5; do
+            ttperf test_eltwise_operations.py::TestEltwiseOperations::test_abs 2>&1 | grep -E "DEVICE KERNEL DURATION" | sed "s/^/run $i: /" || true
+          done
         shell: bash
-      - name: 📤 Upload shard result JSON
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          # Per-board, per-shape, per-shard artifact so the combine job can
-          # group by (board, shape).
-          # N150 keeps the un-prefixed name it always had; other boards get a
-          # `<board>-` prefix. Mirrors the dashboard's COMBOS key rule.
-          name: eltwise-perf-results-${{ matrix.board != 'n150' && format('{0}-', matrix.board) || '' }}${{ matrix.dtype }}-${{ matrix.shape }}-shard-${{ matrix.shard }}
-          path: /work/shard-${{ matrix.shard }}.json
-          if-no-files-found: error
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
