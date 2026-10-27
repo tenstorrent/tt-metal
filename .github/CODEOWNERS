@@ -460,6 +460,8 @@ ttnn/cpp/ttnn/operations/experimental/rgb_to_yuv/ @cglagovichTT @jonathansuTT
 ttnn/cpp/ttnn/operations/experimental/rgb_to_yuv/**/CMakeLists.txt @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/slice_write/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement
 ttnn/cpp/ttnn/operations/experimental/slice_write/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/ @tenstorrent/metalium-developers-sdpa
+ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/topk_large_indices/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/ @tenstorrent/metallium-maintainers-llama-models

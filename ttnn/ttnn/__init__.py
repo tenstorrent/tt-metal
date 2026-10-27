@@ -603,6 +603,10 @@ experimental.rgb_to_yuv = rgb_to_yuv
 experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
 experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
 
+from ttnn._ttnn.operations.experimental import sparse_kv_push_packet_shape
+
+experimental.sparse_kv_push_packet_shape = sparse_kv_push_packet_shape
+
 # PrefetcherPipe (Metal 2.0 durable cross-program remote DFB). Experimental-only surface.
 from ttnn._ttnn import prefetcher_pipe as _prefetcher_pipe
 
