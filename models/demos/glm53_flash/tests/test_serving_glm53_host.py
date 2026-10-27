@@ -258,3 +258,23 @@ def test_override_registration_names_cover_the_tt_prefixed_forms():
     }
     assert all(t == "models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForCausalLM" for t in entries.values())
     assert torch.tensor(1).item() == 1  # torch stays importable next to the adapter (no ttnn needed)
+
+
+def test_adapter_satisfies_the_vllm_model_protocol():
+    """vLLM >= 0.30 admits the generate runner only for classes that pass ``is_vllm_model``: an ``__init__`` accepting
+    ``vllm_config`` (``**kwargs`` counts, as for the tt_transformers adapters), ``embed_input_ids``, a ``forward`` with
+    ``input_ids`` and ``positions``, plus ``compute_logits`` for ``VllmModelForTextGeneration``. Signature-only check:
+    the plugin never calls these (the 0.30 boot died with "This model does not support `--runner generate`")."""
+    import inspect
+
+    from models.demos.glm53_flash.tt.generator_vllm import GLM53FlashForCausalLM
+
+    def accepts(fn, name):
+        params = inspect.signature(fn).parameters
+        return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+    assert accepts(GLM53FlashForCausalLM.__init__, "vllm_config")
+    assert callable(getattr(GLM53FlashForCausalLM, "embed_input_ids", None))
+    assert callable(getattr(GLM53FlashForCausalLM, "compute_logits", None))
+    forward = inspect.signature(GLM53FlashForCausalLM.forward).parameters
+    assert "input_ids" in forward and "positions" in forward
