@@ -41,17 +41,11 @@ class Fpu:
     def __init__(
         self, l1: L1Support, *, mantissa_split: Optional[Tuple[int, int]] = None
     ) -> None:
-        #: Explicit mantissa bits the multiplier takes from each operand per
-        #: fidelity phase, as (srcA, srcB). ``None`` means this architecture's
-        #: multiplier is not modelled, so a multiply is computed exactly and
-        #: ``math_fidelity`` is ignored -- which warns rather than passing
-        #: quietly.
-        #:
-        #: Quasar multiplies 7x7 bits per phase, so a src datum's 10 explicit
-        #: bits split 7 high / 3 low on **both** operands. That symmetry is a
-        #: Quasar property: Wormhole and Blackhole split 4/6, and their SrcA
-        #: additionally drops its least significant bit at every fidelity, so
-        #: even HiFi4 is not the exact product there.
+        # Explicit mantissa bits the multiplier takes from each operand per
+        # fidelity phase, as (srcA, srcB). ``None`` means this architecture's
+        # multiplier is not modelled, so a multiply is computed exactly and
+        # ``math_fidelity`` is ignored -- which warns rather than passing
+        # quietly.
         self.mantissa_split = mantissa_split
 
         self.l1 = l1
@@ -95,23 +89,18 @@ class Fpu:
         The FPU's sum-of-products network takes products in at the combined
         width of both significands and sums them in wide fixed point with guard
         bits, so within a single instruction there is no per-product rounding
-        to model. ``float64`` rather than ``float32`` for exactly that reason:
-        a float32 accumulation would introduce an error the hardware does not
-        have.
+        to model. Wider than the operands for exactly that reason: accumulating
+        at their own width would introduce an error the hardware does not have.
 
-        Exact for the integer path too, where the operands reach 2**15 and a
-        32-term sum of their products stays far inside float64's 2**53. The
-        rounding the hardware *does* take, between one instruction and the
-        next, belongs to the Dest write and is modelled by whoever calls this
-        once per pass.
-
-        Operands in register order, which is not the caller's argument order:
-        ``Dest = SrcB * SrcA``. The matrix each register contributes -- which
-        rows, which columns, how a face-ordered register becomes a matrix at
-        all -- is the operation's business, because it is the operation that
-        knows which slice of the inner dimension this instruction covers.
+        Wider in the operands' *own kind*. An integer matmul accumulates in
+        ``int64`` and never touches a float: a 32-term sum of two 2**15 values
+        reaches 2**35, which wraps int16 and int32 alike but is nowhere near
+        int64. The rounding the hardware does take, between one instruction and
+        the next, belongs to the Dest write and is modelled by whoever calls
+        this once per pass.
         """
-        return srcB_rows.double() @ srcA_cols.double()
+        wide = torch.float64 if srcB_rows.dtype.is_floating_point else torch.int64
+        return srcB_rows.to(wide) @ srcA_cols.to(wide)
 
     # ------------------------------------------------------------------
     # The multiplier's fidelity decomposition
@@ -123,8 +112,8 @@ class Fpu:
         Two conditions. The architecture's split has to be modelled at all, and
         the operands have to be **floats**: the decomposition slices a mantissa,
         and an integer datum has none to slice. Applying it anyway truncates the
-        operand's low bits -- an Int16 ``3 * 10922`` came back 32640 instead of
-        32766 -- and the FPU's integer path does not decompose into phases.
+        operand's low bits: an Int16 ``3 * 10922`` came back 32640 instead of
+        32766 and the FPU's integer path does not decompose into phases.
 
         Takes the format rather than a tensor because an operation asks this
         while it is *building* its pipeline, before any register holds a value.
@@ -211,43 +200,31 @@ class Fpu:
         """
         self.l1.check_dest_format(dest_format)
         if current is not None:
-            values = self._accumulate(values, current, dest_format)
+            values = self._accumulate(values, current)
         return to_dest_storage(values, dest_format)
 
     @staticmethod
-    def _accumulate(
-        values: torch.Tensor, current: torch.Tensor, dest_format: DataFormat
-    ) -> torch.Tensor:
+    def _accumulate(values: torch.Tensor, current: torch.Tensor) -> torch.Tensor:
         """Add a new result to what Dest holds, in a type exact for both.
 
-        Three cases, because the operands are not always the same kind:
+        Two cases, because an integer op is integer the whole way down and a
+        float op is float the whole way down -- the unpacker lands an integer
+        input as an integer, and every unit from there keeps it one.
 
-        * **Both integer** -- an integer op, whose operands the unpacker landed
-          as integers and whose result stayed integer. Add as integers, which
-          is what the device does. ``int64`` because the narrow types *wrap*:
-          ``int8`` 100 + 100 is -56, and the saturation below would then clamp
-          the wrong number.
-        * **A float result into an integer Dest** -- reachable from a matmul on
-          integer inputs, and from a caller naming an integer ``dest_format``
-          explicitly. ``float64``, because float32 holds integers exactly only
-          to 2**24 and an Int32 Dest reaches 2**31; a value past that would
-          lose its low bits here, before the narrow, so ``16777217 + 1`` would
-          come back 16777216.
-        * **A float Dest** -- ``float32``, the width the rest of the float path
-          uses.
+        * **Integer** -- ``int64``, because the narrow types *wrap*: ``int8``
+          100 + 100 is -56, and the saturation below would then clamp the
+          wrong number. int64 covers every sum reachable here, a matmul's
+          2**35 included.
+        * **Float** -- ``float32``, the width the rest of the float path uses.
+
+        The width follows the values, not `dest_format`. An integer Dest can
+        only ever be handed an integer result, so a float arriving with one is
+        a bug in whatever produced it rather than a case to widen around.
 
         The narrowing and the saturation happen once, afterwards, in
         :func:`..storage.to_dest_storage`.
         """
-        both_integer = (
-            not values.dtype.is_floating_point and not current.dtype.is_floating_point
-        )
-        if both_integer:
-            wide = torch.int64
-        elif dest_format.is_integer():
-            wide = torch.float64
-        else:
-            wide = torch.float32
+        wide = torch.float32 if values.dtype.is_floating_point else torch.int64
         return current.to(wide) + values.to(wide)
 
     def dest_to_src(
