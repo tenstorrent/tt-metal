@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa: F401  (pytest fixture)
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import (
     BF16,
     DRAFT_VOCAB,
     DRAFT_WIDTH,
@@ -49,7 +49,6 @@ from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa:
     source_methods,
     source_segment,
     u32_scalar,
-    verify_fake,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn import contracts as contracts_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import embedding as embedding_module

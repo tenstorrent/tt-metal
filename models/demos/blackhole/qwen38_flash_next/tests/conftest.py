@@ -91,6 +91,37 @@ def chat_template(checkpoint_dir):
 
 
 @pytest.fixture
+def rows_fake(monkeypatch):
+    from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import install_rows_fake
+
+    return install_rows_fake(monkeypatch)
+
+
+@pytest.fixture
+def verify_fake(monkeypatch):
+    from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import install_verify_fake
+
+    return install_verify_fake(monkeypatch)
+
+
+@pytest.fixture(scope="module")
+def gdn_weights():
+    """The oracle GDN weights and their device form (helpers/torch_ttnn.py)."""
+
+    from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import device_gdn_weights, gdn_oracle_weights
+
+    oracle = gdn_oracle_weights()
+    return oracle, device_gdn_weights(oracle)
+
+
+@pytest.fixture
+def prefill_fakes(monkeypatch):
+    from models.demos.blackhole.qwen38_flash_next.tests.helpers.prefill import install_prefill_fakes
+
+    return install_prefill_fakes(monkeypatch)
+
+
+@pytest.fixture
 def tp_harness(mesh_device, tmp_path, device_checkpoint_dir):
     """The device-side harness on the root ``mesh_device`` fixture; imported here so no-device tests load without ttnn."""
 

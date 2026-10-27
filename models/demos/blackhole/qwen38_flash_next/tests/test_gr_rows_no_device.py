@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa: F401  (pytest fixture)
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import (
     BF16,
     FP32,
     TILE,
@@ -26,8 +26,10 @@ from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa:
     assert_rows_bitwise,
     bf16_randn,
     function_calls,
-    gr_fake,
+    make_gr_ttnn,
+    use_tile_padding,
 )
+from models.demos.blackhole.qwen38_flash_next.ttnn import decode_matmul as decode_matmul_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import gr as gr_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROWS, LONG_CHUNK_ROWS
 from models.demos.blackhole.qwen38_flash_next.ttnn.gr import (
@@ -35,6 +37,15 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.gr import (
     RESIDUAL_ROWS_LOCAL_SHAPE,
     Qwen38TTNNGatedResidual,
 )
+
+
+@pytest.fixture
+def gr_fake(monkeypatch):
+    use_tile_padding(monkeypatch)
+    fake_ttnn = make_gr_ttnn()
+    monkeypatch.setattr(gr_module, "ttnn", fake_ttnn)
+    monkeypatch.setattr(decode_matmul_module, "ttnn", fake_ttnn)
+    return fake_ttnn
 
 
 def test_gr_rows_shapes_follow_the_row_count_and_keep_the_chunk_constants(expect_error) -> None:

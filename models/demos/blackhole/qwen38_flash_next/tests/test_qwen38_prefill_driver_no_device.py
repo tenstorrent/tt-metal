@@ -10,10 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_prefill import (  # noqa: F401
-    prefill_context_after,
-    prefill_fakes,
-)
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.prefill import prefill_context_after
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_prefill_driver as driver_module
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_prefill_driver import (
     CHUNK_PAD_TOKEN_ID,

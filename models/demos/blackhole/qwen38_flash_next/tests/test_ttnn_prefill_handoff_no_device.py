@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa: F401  (pytest fixtures)
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import (
     BF16,
     ROW_MAJOR,
     TILE,
@@ -25,12 +25,10 @@ from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa:
     gdn_output_tolerance,
     gdn_ring_history,
     gdn_rows_selectors,
-    gdn_weights,
     hidden_sharded,
     make_gdn_module,
     make_ple_module,
     residual_rows,
-    rows_fake,
     run_gdn_steps,
     seed_gdn_state,
     seed_ple_state,

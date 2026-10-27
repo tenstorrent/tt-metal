@@ -15,7 +15,7 @@ import inspect
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import (
     BF16,
     FP32,
     I32,

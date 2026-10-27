@@ -19,7 +19,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa: F401  (pytest fixture)
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import (
     BF16,
     DRAFT_WIDTH,
     FP32,
@@ -47,7 +47,6 @@ from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa:
     eager_draft_rows,
     fp32_lanes,
     gdn_rows_selectors,
-    gdn_weights,
     hidden_sharded,
     make_gdn_module,
     make_mtp_lanes_ttnn,

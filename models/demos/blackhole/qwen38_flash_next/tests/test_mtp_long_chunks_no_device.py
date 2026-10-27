@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa: F401  (pytest fixture)
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import (
     BF16,
     FP32,
     FakeContract,
@@ -20,7 +20,6 @@ from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa:
     bf16_randn,
     cat_shards,
     sharded,
-    verify_fake,
 )
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_session as session_module
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_prefill_driver as driver_module

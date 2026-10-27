@@ -6,8 +6,8 @@
 Every namespace starts from one base (constants, config tags, tensor plumbing) and adds the arithmetic and aliasing
 of the device paths it stands in for: the fp32 row-serial ops of the rows paths (``make_rows_ttnn`` and its variants)
 and the exact ops of the lanes and the QSA layer (``make_qsa_ttnn``: UINT32 arithmetic wraps, float ops run in fp64
-rounded once, so no result depends on the shape a row sits in).  The model stand-ins and fixtures several test files
-share follow the namespaces.
+rounded once, so no result depends on the shape a row sits in).  The model stand-ins several test files share and
+the installers of conftest.py's fake fixtures follow the namespaces.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ import math
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 import torch
 import torch.nn.functional as F
 
@@ -30,7 +29,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn import decode_matmul as decod
 from models.demos.blackhole.qwen38_flash_next.ttnn import embedding as embedding_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import final_mixer as final_mixer_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
-from models.demos.blackhole.qwen38_flash_next.ttnn import gr as gr_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import layer as layer_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import mtp as mtp_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import mtp_v2
@@ -1643,7 +1641,7 @@ def function_calls(function) -> list[str]:
     return [ast.unparse(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)]
 
 
-# --------------------------------------------------------------------------- fixtures
+# --------------------------------------------------------------------------- installing the fakes
 
 
 def patch_ttnn(monkeypatch, fake_ttnn, *modules) -> None:
@@ -1654,8 +1652,7 @@ def patch_ttnn(monkeypatch, fake_ttnn, *modules) -> None:
         monkeypatch.setattr(module, "replicate_tensor_2d_mesh_mapper", lambda device: "replicate", raising=False)
 
 
-@pytest.fixture
-def rows_fake(monkeypatch):
+def install_rows_fake(monkeypatch):
     """The rows ttnn on the GDN, PLE, layer and decode-matmul modules, and its chunk kernel model."""
 
     chunk = FakeChunk()
@@ -1664,26 +1661,10 @@ def rows_fake(monkeypatch):
     return SimpleNamespace(ttnn=fake_ttnn, chunk=chunk)
 
 
-@pytest.fixture(scope="module")
-def gdn_weights():
-    oracle = gdn_oracle_weights()
-    return oracle, device_gdn_weights(oracle)
-
-
-@pytest.fixture
-def verify_fake(monkeypatch):
+def install_verify_fake(monkeypatch):
     """The rows ttnn on the QSA, GDN, embedding, final mixer and MTP modules, with the torch partial RoPE."""
 
     fake_ttnn = make_rows_ttnn(FakeChunk())
     patch_ttnn(monkeypatch, fake_ttnn, qsa_module, gdn_module, embedding_module, final_mixer_module, mtp_module, mtp_v2)
     monkeypatch.setattr(qsa_module, "apply_partial_rope_prefill", partial_rope_reference)
-    return fake_ttnn
-
-
-@pytest.fixture
-def gr_fake(monkeypatch):
-    use_tile_padding(monkeypatch)
-    fake_ttnn = make_gr_ttnn()
-    monkeypatch.setattr(gr_module, "ttnn", fake_ttnn)
-    monkeypatch.setattr(decode_matmul_module, "ttnn", fake_ttnn)
     return fake_ttnn

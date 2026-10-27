@@ -15,10 +15,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_prefill import (  # noqa: F401
-    prefill_context_after,
-    prefill_fakes,
-)
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.prefill import prefill_context_after
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_prefill_driver as driver_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import contracts as contracts_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import decode_matmul as decode_matmul_module

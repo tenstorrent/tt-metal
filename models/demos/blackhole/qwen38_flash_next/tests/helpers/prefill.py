@@ -8,8 +8,6 @@ from __future__ import annotations
 import itertools
 from types import SimpleNamespace
 
-import pytest
-
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_prefill_driver as driver_module
 
 
@@ -61,8 +59,7 @@ class PrefillFakeModel:
         self.calls.append(("eager", chunk_state.rows, gdn_step_anchor, mtp))
 
 
-@pytest.fixture
-def prefill_fakes(monkeypatch):
+def install_prefill_fakes(monkeypatch):
     """A ``PrefillFakeModel`` whose ``calls`` (also ``log``) record the driver's ttnn calls on the mesh ``"mesh"``
     (replays, numbered events, synchronizes) and trace verifications too, and a ``forced_step`` that logs each
     alignment step."""

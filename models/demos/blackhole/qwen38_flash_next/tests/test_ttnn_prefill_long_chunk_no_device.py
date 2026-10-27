@@ -14,11 +14,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_prefill import (  # noqa: F401  (pytest fixture)
-    prefill_fakes,
-    prefill_next_context,
-)
-from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa: F401  (pytest fixtures)
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.prefill import prefill_next_context
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import (
     FP32,
     TILE,
     TP,
@@ -33,7 +30,6 @@ from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa:
     make_gdn_module,
     make_ple_module,
     residual_rows,
-    rows_fake,
     seed_gdn_state,
     seed_ple_state,
 )
