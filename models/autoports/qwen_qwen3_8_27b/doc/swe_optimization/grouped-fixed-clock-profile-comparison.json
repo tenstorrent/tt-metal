@@ -1,0 +1,63 @@
+{
+  "status": "pass",
+  "scope": "Reduced real layers0/3 plus embedding/norm/head/sampler/feedback; not all64-layer or SWE timing",
+  "batch": 16,
+  "logical_input": 4096,
+  "physical_prefill_chunk": 256,
+  "fixture_cache_context": 8192,
+  "native_context": 262144,
+  "instrumentation": "Same isolated fixed Blackhole classic clock reader; all profiler validation intact",
+  "collector_sha256": "2e8452ffa53c2bdb6f1940528719b85fd1539a1a371401b13f3d104b3cf56602",
+  "arms": {
+    "baseline": {
+      "prefill": {
+        "device_us": 408072.79703703703,
+        "device_ops": 17804,
+        "per_device_us": {
+          "0": 407831.32074074075,
+          "1": 407994.8325925926,
+          "2": 408072.79703703703,
+          "3": 407633.53925925924
+        }
+      },
+      "decode": {
+        "device_us": 3725.5844444444447,
+        "device_ops": 948,
+        "per_device_us": {
+          "0": 3721.442962962963,
+          "1": 3722.3074074074075,
+          "2": 3725.5844444444447,
+          "3": 3719.9088888888887
+        }
+      },
+      "timing_json_sha256": "bb29a162cda891f3436610fcc4601745a0d81b1f1e43aa9425ce70a2bd0c2efa",
+      "scope_json_sha256": "3536618ef75f1942c27c60261b22b72e04c6f3207b0b511aa71b023373a3b3d0"
+    },
+    "grouped": {
+      "prefill": {
+        "device_us": 409591.09555555554,
+        "device_ops": 17804,
+        "per_device_us": {
+          "0": 409154.24888888886,
+          "1": 409255.30518518516,
+          "2": 409591.09555555554,
+          "3": 409219.3437037037
+        }
+      },
+      "decode": {
+        "device_us": 3398.417037037037,
+        "device_ops": 828,
+        "per_device_us": {
+          "0": 3398.417037037037,
+          "1": 3397.3074074074075,
+          "2": 3396.445185185185,
+          "3": 3390.5133333333333
+        }
+      },
+      "timing_json_sha256": "40eab7d80d689bc09899ce0f19823be155277345275e6c8be839ea5e21c0a892",
+      "scope_json_sha256": "820e9d82048722ea6f3c34be2ae9418bcd05717e52b9792bdc05159ec9fd0752"
+    }
+  },
+  "decode_speedup": 1.0962705294382156,
+  "decode_saved_us": 327.1674074074076
+}

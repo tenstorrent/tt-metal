@@ -89,8 +89,9 @@ The candidate is now wired through a validated, default-off
 `QWEN38_GROUPED_RECURRENCE=1` policy. Only non-prefill length1 decode with
 batch greater than cores/12 and at most32 uses the grouped helper; small
 batches and prefill retain their original path. No dynamic source rewriting is
-used by the runtime or the full-model benchmark. Candidate full-stack evidence
-is pending; this is not yet a promoted serving configuration.
+used by the runtime or the full-model benchmark. The full-model and matched
+repaired-clock results below complete local validation; serving promotion
+remains pending.
 
 
 The initial full64 B16 candidate completed with exactly matching tokens in all
@@ -124,8 +125,9 @@ refreshes/readbacks inside steady-state decode. See full-b32-clean-comparison.js
 This fixed-work speedup is not an end-to-end SWE speedup.
 
 A separate strict allocation-tracking pair compared384 recurrent/convolution
-state receipts (48 linear layers ×2 fields ×4 chips) after repeats and mixed
-requests. It then independently advanced alternating row groups by7 tokens from
+state receipts (48 linear layers ×2 fields ×4 chips) after one fixed-work
+request and mixed requests. This strict pair uses one timed repeat per arm; the
+separate clean pair above uses three. It then independently advanced alternating row groups by7 tokens from
 prefix4097, followed by129 tokens from4104, crossing the120-token decode bridge
 and9-token padded eager prefill. Every state receipt and final logits on all four
 chips matched exactly. See full-b32-state-comparison-v2.json. The first attempt
@@ -138,7 +140,69 @@ The clean timing pair skips this redundant qualitative pass. No persistent dtype
 state layout, collective, or native context limit changed. These tests use a
 smaller cache fixture; peak serving memory/native-context acceptance is pending.
 
-The baseline reduced device profile completed. The grouped reduced profile failed
-production timestamp validation and supplies no accepted timing. AutoDebug found a
-probable Blackhole live-clock rollover tear; a targeted profiler repair and
-natural-rollover regression are under test. No profiler assertion is suppressed.
+The first grouped reduced profile failed production timestamp validation and
+supplies no accepted timing. It is retained as a failed historical attempt.
+AutoDebug identified a probable Blackhole clock rollover tear; the focused
+natural-rollover regression reproduced the defect, the repair passed, and both
+repaired-clock profiles completed as reported below. No profiler assertion is
+suppressed.
+
+### Fused-op profiler fidelity metadata
+
+The independent final review traced a baseline report labeling discrepancy:
+`MatmulReduceScatter` row9359360 says HiFi4, although its nested raw
+`compute_kernel_config` requests LoFi. The retained importer overwrites one
+`MATH FIDELITY` field for each compute kernel; this fused op lists the LoFi
+matmul kernel first and the HiFi4 ring reduction last. The matching cached
+matmul `chlkc_descriptors.h` sets `MATH_FIDELITY=0` (LoFi), and factory propagation
+matches the nested attributes. This is a report-label limitation, not a selected
+precision fallback. Use per-kernel descriptors/raw attributes for this op;
+the aggregate report column alone does not identify its matmul fidelity.
+
+
+### Signpost boundary gaps
+
+The raw profiler row for each ASIC's first measured operation includes time since
+an operation before the signpost. In grouped decode this is about4.56 seconds of
+profiler-drain/setup idle time, outside the measured3.398ms firmware envelope.
+The full report incorrectly charged this external edge to Embeddings and assigned
+it99.9% of decode time. Even a measured-row subset retains that scalar, and host
+row sorting does not reliably select the first device operation.
+
+The collector preserves raw CSVs and produces a separate derived report input.
+It blanks only the two predecessor-gap fields on the minimum firmware-start row
+of each ASIC, records all four affected IDs/original gaps plus raw/derived hashes,
+and preserves every row, timestamp, kernel duration, and later gap. The resulting
+`*_window_perf_report` is labeled within-window gap accounting. The headline stays
+the maximum complete per-ASIC envelope computed from raw endpoints; merged advice
+is diagnostic rather than an exact max-chip wall time. Earlier unadjusted reports
+are retained locally. No timestamp repair or profiler assertion change is involved.
+
+
+## Matched repaired-clock device profile
+
+Both reduced real-layer0/3 plus embedding/norm/head/sampler/feedback profiles
+completed with all production profiler assertions enabled. Both use the same
+fixed Blackhole clock reader, selected policy, real weights, batch16,
+4096-input/one-decode work, physical prefill256 and private cache8192.
+Source and precision receipts match. All measured operations have complete
+firmware endpoints on every ASIC, and all next positions equal4097.
+
+| Phase | Split maximum per-ASIC envelope | Grouped | Device operations across4 ASICs |
+|---|---:|---:|---:|
+| Decode |3725.584µs|3398.417µs|948→828|
+| Prefill |408072.797µs|409591.096µs|17804→17804|
+
+Decode saves327.167µs (1.09627× in this reduced fixture). The unchanged prefill
+path varies0.37% in these single windows; no prefill gain is claimed. The reduced
+fixture has one linear and one full-attention layer and pays terminal sampling
+once; its ratio is not the all64-layer gain or a SWE speedup. Full-model warmed
+measurements remain independently1.2681× at B16 and1.44245× at B32.
+See grouped-fixed-clock-profile-comparison.json for compact provenance.
+
+The complete captures, raw and derived window CSVs, reports, source-overlay
+manifests, and failed earlier attempts remain local. Large CSVs are retained
+losslessly compressed. An unused masked trace1 is prepared but not replayed by
+this all-active profile; measured decode executes unmasked trace0 and sampler3.
+The disabled WASM UI's default-path copy warning does not affect the actual
+capture stored in each profile root. Neither warning omits measured operations.

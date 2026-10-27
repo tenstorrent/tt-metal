@@ -1135,7 +1135,9 @@
         "swe_optimization/full-b32-state-comparison-v2.json",
         "swe_optimization/GROUPED_RECURRENCE.md"
       ],
-      "memory_scope": "No new persistent model allocation. Peak serving memory and B16/block512 capacity remain pending; no batch/native-context Cartesian-product claim."
+      "memory_scope": "No new persistent model allocation. Peak serving memory and B16/block512 capacity remain pending; no batch/native-context Cartesian-product claim.",
+      "independent_review": "swe_optimization/GROUPED_FINAL_REVIEW.md",
+      "local_profile": "swe_optimization/grouped-fixed-clock-profile-comparison.json"
     }
   },
   "stage05_prefill_policy": {

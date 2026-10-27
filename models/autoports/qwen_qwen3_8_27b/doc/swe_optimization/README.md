@@ -160,8 +160,15 @@ external connectivity during agent execution and retaining the host model API.
 A local Docker proof passed. The first CI smoke40536968443 is rejected: saved
 Harbor config proved that the canonical Docker driver discarded the isolation
 flag, despite a successful verifier result. Driver forwarding and provider/type
-guards are fixed. Repeat smoke40543287655 is queued with TTI18dc75300434736c2a3df1a23d54709c6ffe0f91.
-Actual saved network identities and phase transitions must pass before clean8.
+guards are fixed. Repeat smoke40543287655 passes with TTI18dc75300434736c2a3df1a23d54709c6ffe0f91:
+actual internal primary, separate public setup, transitions [true,false,true],
+settled workloads and removed networks. Astropy14309 submitted normally and
+passed its verifier in308.155s,18responses/zero missing calls, with no upstream-
+fix retrieval. This is a protocol smoke, not an accuracy estimate. The auxiliary
+post-cleanup exporter rejected the new exact overlay digest; its narrow allowlist
+fix passes59 focused tests. Clean B8/C8 SWE8 now runs as CI40554052639 at
+TTIb3c86734fd2311fd0be73afc307be15bffbd0ed0; fixed exporter runtime acceptance
+and the complete clean8 score still need collection.
 
 The default-off grouped recurrence passes paired local all64-layer token tests:
 B16 decode13.8087→17.5110 tokens/s/user (1.2681×), B32 clean8.88722→12.81941
@@ -176,3 +183,10 @@ uses resident16, block512, C8, grouped1, medium, and the same isolated protocol.
 Its44 focused isolation tests pass; it has not been dispatched or selected.
 Matched clean8 precedes the frozen25-task pilot, then100/500. Native262144
 admission and pinned weights/tokenizer are retained throughout.
+
+The [fresh independent local review](GROUPED_FINAL_REVIEW.md) passes all grouped
+correctness/quality/trace/watcher and matched repaired-clock profiler gates.
+The artifact-only tests/audit_swe_isolation.py fails closed on absent flags,
+wrong/missing task identities, public primaries, incomplete phase transitions
+or unsettled/unclean resources. It passes the actual repeat smoke and rejects
+the earlier nonisolated one; protocol success remains separate from rewards.

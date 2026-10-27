@@ -1,3 +1,5 @@
+Historical initial review; superseded by [final local review](GROUPED_FINAL_REVIEW.md).
+
 # Stage Review
 
 Verdict: more-work-needed

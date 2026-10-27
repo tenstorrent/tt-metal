@@ -55,8 +55,10 @@ original HIGH/store/LOW versus fixed HIGH/LOW/HIGH/retry before stores. Push/flu
 branches are source-audited, not separately forced by this regression.
 
 Local logs and raw captures are under `/home/mvasiljev/build/qwen38-swe/clock-rollover-*`.
-The grouped reduced workload is being repeated with the fixed reader and intact
-assertions; no accepted grouped device timing exists yet. An initial retry was
+The repeated grouped reduced workload and same-clock split control both pass
+all assertions. Reduced decode envelopes are3398.417 versus3725.584µs, with
+828 versus948 device ops across four ASICs; prefill is unchanged within single-
+window variation. These are two-layer/terminal profiles, not full-model timing. An initial retry was
 interrupted during uncaptured startup after compile paths revealed that this
 backend needs `TT_METAL_RUNTIME_ROOT` as well as `TT_METAL_HOME`; it closed normally.
 The subsequent run uses the explicit runtime root and a fresh cache, with compile
