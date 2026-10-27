@@ -126,6 +126,7 @@ void kernel_main() {
         return xown + ((m * nown + slot) * MT) * KB * 2048;
     };
 #ifdef SE_RTR
+    auto rtrx = [&]() {  // (SE_XFIRST: after my own-shard x load - the gather's ports wait on every core's)
     if (cx == 0) {  // the router's x: the row's first core reads the row's x (MT row tiles, the chip's K slice) a K chunk
         // a round into RX and multicasts it along the row on NOC0 (the NCRISC's W_r^T goes down the columns on NOC1),
         // then sets the round on the row's RX-ready word (from my own source word RXS: the NCRISC re-arms the ready word)
@@ -153,6 +154,10 @@ void kernel_main() {
             noc_async_atomic_barrier();
         }
     }
+    };
+#ifndef SE_XFIRST
+    rtrx();
+#endif
 #endif
     const auto xg = TensorAccessor(x_args, x_addr, 2048);
     const uint32_t xports = get_arg_val<uint32_t>(ord0 + g);  // (the gather's ports read my own shard from here)
@@ -222,6 +227,9 @@ void kernel_main() {
         noc_async_atomic_barrier();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(np0 + 2 + 2 * nports))) = 1;
     }
+#if defined(SE_RTR) && defined(SE_XFIRST)
+    rtrx();
+#endif
 #ifdef SE_BRW
     volatile tt_l1_ptr uint32_t* wsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
     uint32_t wn = 0, wbk = 0, wnext = 0;
@@ -1430,6 +1438,7 @@ def _probes():
     import os
 
     out = "".join(f"#define SE_PROBE_{p}\n" for p in os.environ.get("SE_PROBE", "").split(",") if p)
+    out += "\n" * int(os.environ.get("SE_PAD", "0"))  # (profiling: shift the source lines - a zone hash collision)
     if os.environ.get(
         "SE_WPF"
     ):  # (timing probe: the W prefetch window, blocks in flight a core; <= 13 transaction ids)
@@ -2085,6 +2094,8 @@ class SeEngine3:
             nd += "#define GROW(m, lr) ((m) * CR + (lr))\n"
         if self.WRING:
             nd += f"#define SE_WRING {self.WRING}\n"
+        if os.environ.get("SE_XFIRST") == "1":  # (A/B: the row leads load their own x before the router's x)
+            nd += "#define SE_XFIRST\n"
         if os.environ.get("SE_XPIPE") == "1":  # (A/B: the x owners send a step as soon as its own load landed)
             nd += f"#define SE_XPIPE\n#define SE_XL {int(os.environ.get('SE_XL', '3'))}u\n"
         if os.environ.get("SE_HXINC") == "1":  # (A/B, no RS: the down starts on h columns as they land)

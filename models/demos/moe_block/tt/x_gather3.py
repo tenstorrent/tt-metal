@@ -18,6 +18,12 @@ from ttnn.bringup.combine_rf.fabric_all_gather_py import _OPP, NOC0, NOC1, plan
 
 import ttnn
 from models.demos.moe_block.tt.router_stream import LSTREAM
+
+# (the port cores' roles: the sender (Ethernet writes) on the NCRISC / NOC0, the reader on the BRISC / NOC1. The ports
+# sit in one column: NOC1 (north, then west) funnels all of them through the same Ethernet-row links (~75 GB/s for all
+# four, the gather 138 us vs a 69 us floor); NOC0 (east, then south) takes each port's own row toward its own Ethernet
+# column (82 us). Head K3 ring of 4 452-459 -> 439-443 us, GLM 2x4 1084 -> 967. SE_PORT_NOC0=0: the old roles (A/B))
+PORT_NOC0 = __import__("os").environ.get("SE_PORT_NOC0", "1") == "1"
 from models.demos.moe_block.tt.routing_stream import RA_SEND
 from models.demos.moe_block.tt.se_engine3 import _probes
 
@@ -1065,7 +1071,7 @@ class XGather3:
                 core_ranges=cs(list(ports.values())),
                 compile_time_args=ct + x_ct,
                 runtime_args=rd_rt,
-                config=dm("RISCV_1", NOC0),
+                config=dm("RISCV_0", NOC1) if PORT_NOC0 else dm("RISCV_1", NOC0),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=f"#define LS_FIRST {int(bool(router and router.prio_first))}\n"
@@ -1077,7 +1083,7 @@ class XGather3:
                 core_ranges=cs(list(ports.values())),
                 compile_time_args=ct,
                 runtime_args=sd_rt,
-                config=dm("RISCV_0", NOC1),
+                config=dm("RISCV_1", NOC0) if PORT_NOC0 else dm("RISCV_0", NOC1),
             ),
         ]
         ecores = [virt(ttnn.CoreCoord(e.cx0 + c, cy)) for c in range(e.GX) for cy in range(e.GY)]

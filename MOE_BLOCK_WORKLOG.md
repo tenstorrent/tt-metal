@@ -2114,3 +2114,24 @@ sending). DRAM reads ~40 MB a call (~90 GB/s average). The mover column is not w
 - KB 14 in the head: arena 1388 KB > 1344 (xown 224, wown 297 (ring), win 178, hall 220, acc 164, xin 112, ...).
 Next candidates: the router matmul (52 us for ~10 us of math), fewer / lighter rounds in the head's gate / up (L1 for
 KB 14: ~44 KB to find), the down tail (106-140 us for ~49 of math).
+
+### The ports' Ethernet-row funnel (2026-10-27): port senders on NOC0 by default
+Why: the head's x gather took 50-190 us (140) vs a ~69-86 us floor. NoC trace (traced K3 head replay): the 4 port
+BRISCs (mover column, x 15) write the EDMs on NOC1 - north one hop, then west along the Ethernet row (y 1) - so all
+four share the row links (15,1)->(12,1): 70-76 GB/s sustained there in the gather and in the RS (~86 raw), the four
+ports together never above ~75 GB/s (13-21 GB/s each). Distance did not matter, the shared links did.
+Standalone (zz_scratch_port_place.py: fabric_all_gather_py, K3's 640 x 1792 bf16 shard, ring of 4, 2 links, floor 69):
+| ports | sender NOC1 | sender NOC0 (roles swapped) |
+| one column, right edge (the head) | 138.1 us | 82.0 |
+| one column, left edge | 138.4 | 81.7 |
+| each under its Ethernet core ("auto") | 83.3 | 91.2 |
+Any single column funnels on NOC1; swapping the port cores' roles (sender NCRISC / NOC0: east, then south - each port
+its own row toward its own Ethernet column; reader BRISC / NOC1) matches ports under the Ethernet cores, no move.
+- Head: x_gather3 PORT_NOC0 (default on; SE_PORT_NOC0=0 the old roles). test_head_se3 K3 traced 449-454 -> 436-438,
+  eager 503 -> 484. Block traced: K3 ring4 640 head 452-459 -> 439-443; GLM-5.3-Flash 2x4 5120 fused head 1084-1085 ->
+  967-968 (-117 us, -11%; its TP is a line); other programs unchanged; PCC unchanged (0.99612 / 0.98686), replays
+  still bit-identical. GLM 56k prefill: 4.88 s / 11544 tok/s (4.93 s / 11421 before), top1 0.8699 / top5 0.980.
+- fabric_all_gather_py: the swap by default when a chip's ports share a column (FAG_PORT_NOC0=0/1 forces).
+- Also tried: the row leads' own-x load before the router's x (SE_XFIRST): the gather starts at ~9 instead of ~50 us
+  but the head does not move (452-455) - gate / up's rounds bind it. SE_PAD=n: blank lines in the engine's kernels
+  (a profiler zone-hash collision workaround).

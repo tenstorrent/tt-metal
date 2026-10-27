@@ -938,6 +938,13 @@ def create_mesh_program_descriptor(
         port_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in port_cores])
         copy_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in ch["copy"]])
         src = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+        # (ports in one column - a sub_core_grid column, "simple" placement: their roles swapped, the sender on the
+        # NCRISC / NOC0 (east, then south: ports in different rows toward Ethernet cores in different columns share no
+        # link), the reader on the BRISC / NOC1 - on NOC1 (north, then west) one column funnels every port through the
+        # same Ethernet-row links: K3's 640 x 1792 ring-of-4 gather 138 -> 82 us. Ports under their Ethernet cores
+        # ("auto" over the grid) stay on NOC1 (83 us; 91 swapped). FAG_PORT_NOC0=0 / 1 forces either (A/B))
+        env_ = os.environ.get("FAG_PORT_NOC0")
+        swap = (len({c.x for c in port_cores}) == 1) if env_ is None else env_ == "1"
         program.kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=_READER_SOURCE,
@@ -945,7 +952,7 @@ def create_mesh_program_descriptor(
                 core_ranges=port_set,
                 compile_time_args=ct + in_ct + out_ct,
                 runtime_args=reader_rt,
-                config=dm("RISCV_1", NOC0),
+                config=dm("RISCV_0", NOC1) if swap else dm("RISCV_1", NOC0),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=_SENDER_SOURCE,
@@ -953,7 +960,7 @@ def create_mesh_program_descriptor(
                 core_ranges=port_set,
                 compile_time_args=ct + out_ct,
                 runtime_args=sender_rt,
-                config=dm("RISCV_0", NOC1),
+                config=dm("RISCV_1", NOC0) if swap else dm("RISCV_0", NOC1),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=_READER_SOURCE,
