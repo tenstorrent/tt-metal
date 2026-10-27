@@ -59,6 +59,7 @@ def test_bevformer_perf(device, reset_seeds):
     expected_first = expected_last = torch_prev = None
     for frame_index, metas in enumerate(frames):
         outputs = torch_model(img, metas, prev_bev=torch_prev)
+        logger.info(f"Reference frame {frame_index}/{NUM_PROFILED_FRAMES} completed outside measurements")
         if frame_index == 1:
             expected_first = outputs
         if frame_index == NUM_PROFILED_FRAMES:

@@ -213,11 +213,11 @@ def run_demo(args):
 
     if args.dataset_format == "synthetic":
         generator = torch.Generator().manual_seed(args.seed)
-        metas = frame_metas(1, args.num_frames + 1, generator)
+        synthetic_metas = frame_metas(1, args.num_frames + 1, generator)
 
         def load_frame(index):
             # Unlike the numerical perf test, the demo presents a fresh camera batch per frame.
-            return random_image_batch(), metas[index], f"synthetic-{index}"
+            return random_image_batch(), synthetic_metas[index], f"synthetic-{index}"
 
         frame_count = args.num_frames + 1
     else:
