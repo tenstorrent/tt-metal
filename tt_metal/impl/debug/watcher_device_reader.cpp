@@ -17,7 +17,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
@@ -28,13 +27,10 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
-#include <tt-umd/types/xy_pair.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "core_descriptor.hpp"
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
-#include "dispatch_core_common.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "hal_types.hpp"
 #include "hostdev/debug_ring_buffer_common.h"

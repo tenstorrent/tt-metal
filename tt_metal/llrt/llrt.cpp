@@ -6,7 +6,6 @@
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
-#include <unistd.h>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>

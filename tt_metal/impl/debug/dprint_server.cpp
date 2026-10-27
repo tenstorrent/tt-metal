@@ -30,7 +30,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
-#include <tt-umd/soc_descriptor.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 
 #include "core_coord.hpp"

@@ -33,7 +33,6 @@
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
 
-#include <tt-umd/types/xy_pair.hpp>
 #include "debug/inspector/data.hpp"
 #include "debug/watcher_server.hpp"
 #include "debug/noc_debugging.hpp"
@@ -51,6 +50,7 @@
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
+#include <tt-metalium/math.hpp>
 
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_core_manager.hpp>

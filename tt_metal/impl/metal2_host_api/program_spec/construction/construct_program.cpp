@@ -7,23 +7,10 @@
 #include <memory>
 #include <utility>
 
-#include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>  // HalMemType, for the borrowed-DFB per-bank sizing check
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <hostdevcommon/tensor_accessor/arg_config.hpp>
 
 #include "impl/kernels/kernel.hpp"
-#include "impl/metal2_host_api/helpers.hpp"
-#include "impl/metal2_host_api/llk_metadata.hpp"
 #include "impl/metal2_host_api/program_spec/construction/kernel_lowering.hpp"
 #include "impl/metal2_host_api/program_spec/construction/processor_assignment/processor_assignment.hpp"
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
