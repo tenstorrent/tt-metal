@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "config_id": "base_bfp8_hifi2",
+  "description": "Safe baseline (E5a text policy): bfp8 weights, HiFi2 + fp32 accumulation matmuls, every activation bf16, HiFi2 + fp32 SDPA without exp_approx, HiFi4 norms, bf16 residual, bfp4 masks. Use with EMBEDDING_GEMMA2_PRECISION=<this file> or precision=<this file>.",
+  "text": {
+    "weights": {
+      "attn_qkv": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "attn_o": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "mlp_gate_up": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "mlp_down": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "ple_proj": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "ple_block": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "final_proj": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"}
+    },
+    "layer_exceptions": [],
+    "sdpa": {"fidelity": "HiFi2", "fp32_acc": true, "exp_approx": false},
+    "norms": {"fidelity": "HiFi4", "fp32_acc": true},
+    "residual_dtype": "bf16",
+    "mask_dtype": "bfp4"
+  },
+  "vision": {"status": "recorded, not consumed in E6a; see selected_precision_config.json"},
+  "audio": {"status": "recorded, not consumed in E6a; see selected_precision_config.json"},
+  "kv_cache_dtype": "n/a: encoder, single chip (no KV cache)",
+  "ccl_dtype": "n/a: encoder, single chip (no CCL)",
+  "logits_dtype": "n/a: encoder, single chip (pooled fp32 embedding, no logits)",
+  "sampling": "n/a: encoder, single chip (no sampling)"
+}

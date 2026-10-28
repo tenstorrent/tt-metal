@@ -31,6 +31,7 @@ Per candidate, in one device session:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import statistics
 import subprocess
@@ -554,6 +555,21 @@ def _chart(recs, metric_key, ylabel, bar, path, selected, title):
     plt.close(fig)
 
 
+def _compact(rec: dict) -> dict:
+    """Report copy of a record: per-layer construction evidence grouped by identical content
+    ({"layers": [i, ...], **evidence}), traceback trimmed."""
+    r = copy.deepcopy(rec)
+    con = r.get("construction")
+    if con and "layers" in con:
+        groups = {}
+        for i, ev in con["layers"].items():
+            groups.setdefault(json.dumps(ev, sort_keys=True), []).append(int(i))
+        con["layers"] = [{"layers": ls, **json.loads(k)} for k, ls in groups.items()]
+    if "traceback" in r:
+        r["traceback"] = r["traceback"][-600:]
+    return r
+
+
 def cmd_report(args) -> None:
     import csv
 
@@ -561,7 +577,7 @@ def cmd_report(args) -> None:
     doc = Path(args.doc_dir)
     doc.mkdir(parents=True, exist_ok=True)
     recs.sort(key=lambda r: r.get("perf", {}).get("rank_ms", 1e9))
-    (doc / "sweep_results.json").write_text(json.dumps(recs, indent=1) + "\n")
+    (doc / "sweep_results.json").write_text(json.dumps([_compact(r) for r in recs], indent=1) + "\n")
     cols = ["id", "description", "screen_pass", "failing", "rank_ms"]
     cols += [f"burst_{b}x{s}" for b, s in PERF_SHAPES] + [f"sustained_{b}x{s}" for b, s in PERF_SHAPES]
     cols += ["layer_pcc_gated", "layer_pcc_gated_at", "layer_pcc_all", "module_pcc", "module_pcc_at"]
