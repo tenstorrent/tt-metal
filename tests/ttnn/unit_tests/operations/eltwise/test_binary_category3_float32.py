@@ -123,7 +123,7 @@ _SCALAR_VALUES = [
 ]
 
 
-@pytest.mark.parametrize("ttnn_op", BINARY_LOGICAL_OPS)
+@pytest.mark.parametrize("ttnn_op", BINARY_LOGICAL_OPS + BINARY_LOGICAL_INPLACE_OPS)
 @pytest.mark.parametrize("scalar", _SCALAR_VALUES)
 def test_logical_ops_scalar(device, ttnn_op, scalar):
     """Tensor-scalar coverage of the logical ops: the stratified grid,
