@@ -300,9 +300,20 @@ KernelDescriptor merge_kernel(
         merged.buffer_bindings.push_back(
             tt::tt_metal::BufferBinding{binding.core, binding.arg_idx + fused_block, binding.buffer});
     }
-    TT_FATAL(
-        unified.common_runtime_args.empty() && fused.common_runtime_args.empty(),
-        "a half grew common runtime args; the merge does not rebase them yet");
+    // Common runtime args are not rebased: both halves read the same per-expert weight and bias bases from one block
+    // of one layout (expert_weight_common_args), so the merged kernel keeps a single copy -- `merged` already holds the
+    // fused half's. A role that only one half carries (the compute kernels carry none) contributes its own.
+    if (merged.common_runtime_args.empty()) {
+        merged.common_runtime_args = unified.common_runtime_args;
+        merged.common_buffer_bindings = unified.common_buffer_bindings;
+    } else if (!unified.common_runtime_args.empty()) {
+        TT_FATAL(
+            unified.common_runtime_args == fused.common_runtime_args,
+            "the two halves carry different common runtime args ({} vs {} words); the merged kernel has one block "
+            "both read unrebased",
+            unified.common_runtime_args.size(),
+            fused.common_runtime_args.size());
+    }
 
     reconcile_config(fused, unified, merged);
     // Both halves of a dataflow kernel sit in one binary and the kernel config ring, not instruction

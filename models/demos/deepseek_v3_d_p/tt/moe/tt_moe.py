@@ -1181,9 +1181,10 @@ class TtMoe(LightweightModule):
         # is independent of the result and can be freed here, unless the PCC check
         # needs it to compare against the bfloat16 torch reference.
         squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
-        # Overlapped only when this forward is traced. Eager, the overlapped program costs ~2 ms of host time per
-        # call -- it is 32 per-chip programs, each carrying the routed expert's ~11k buffer bindings -- which makes
-        # an untraced prefill host-bound; a trace replays it for free. A traced model attaches its controller
+        # Overlapped only when this forward is traced. Eager, the overlapped program still costs ~1 ms of host time
+        # per call -- it is 32 per-chip programs, each one patched and enqueued on its own -- against ~0.65 ms for the
+        # routed expert then combine, which leaves an untraced prefill more host-bound than the device time saves; a
+        # trace replays it for free. A traced model attaches its controller
         # before the warm-up forward, so the warm-up compiles the same programs the capture records.
         overlap_combine = self.overlap_routed_expert_with_combine and self._trace_controller is not None
         if overlap_combine and not TtMoe._overlap_forward_logged:
