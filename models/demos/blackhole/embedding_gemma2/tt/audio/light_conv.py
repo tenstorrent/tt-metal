@@ -25,9 +25,10 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.blackhole.embedding_gemma2.tt.audio.attention import block_context
+from models.demos.blackhole.embedding_gemma2.tt.audio.attention import CTX, block_context
 from models.demos.blackhole.embedding_gemma2.tt.audio.clippable_linear import ClippableLinear
 from models.demos.blackhole.embedding_gemma2.tt.audio.config import ATTN_BLOCK, AudioConfig
+from models.demos.blackhole.embedding_gemma2.tt.audio.program_configs import block_bmm_config
 from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, substate
@@ -114,13 +115,17 @@ class AudioLightConv1d(LightweightModule):
         nb = S // ATTN_BLOCK
         taps = len(self.taps) - 1
         ctx = block_context(h)  # [B, nb, 64, D]
+        # both operands batched, so the block matmul config spreads the blocks over the grid
+        sel = ttnn.repeat(self.selection, ttnn.Shape([B, nb, 1, 1]))
         shifted = ttnn.matmul(
-            self.selection,
+            sel,
             ctx,
             dtype=ttnn.float32,
+            program_config=block_bmm_config(h.device(), taps * ATTN_BLOCK, CTX, D, per_core_M=2),
             compute_kernel_config=self.compute_kernel_config,
             memory_config=dram,
         )  # [B, nb, taps*32, D]
+        ttnn.deallocate(sel)
         ttnn.deallocate(ctx)
         acc = ttnn.multiply(h, self.taps[taps], dtype=ttnn.float32, memory_config=dram)  # k = taps: h_t itself
         acc = ttnn.reshape(acc, (B, nb, ATTN_BLOCK, D))

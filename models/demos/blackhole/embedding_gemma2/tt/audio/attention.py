@@ -42,6 +42,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.audio.clippable_linear import ClippableLinear
 from models.demos.blackhole.embedding_gemma2.tt.audio.config import ATTN_BLOCK, AudioAttentionConfig
+from models.demos.blackhole.embedding_gemma2.tt.audio.program_configs import block_bmm_config
 from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_norm
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, substate
 
@@ -241,7 +242,15 @@ class AudioAttention(LightweightModule):
         v_ctx = block_context(v)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
-        ac = ttnn.matmul(qb, k_ctx, transpose_b=True, compute_kernel_config=ckc, memory_config=dram)
+        dev = x.device()
+        ac = ttnn.matmul(
+            qb,
+            k_ctx,
+            transpose_b=True,
+            program_config=block_bmm_config(dev, ATTN_BLOCK, hd, CTX),
+            compute_kernel_config=ckc,
+            memory_config=dram,
+        )
         ttnn.deallocate(q)
         ttnn.deallocate(k_ctx)
 
@@ -262,7 +271,13 @@ class AudioAttention(LightweightModule):
         ttnn.deallocate(masked)
         probs = ttnn.reshape(probs, (B, H * nb, ATTN_BLOCK, CTX))
 
-        o = ttnn.matmul(probs, v_ctx, compute_kernel_config=ckc, memory_config=dram)  # [B, H*nb, 32, hd]
+        o = ttnn.matmul(
+            probs,
+            v_ctx,
+            program_config=block_bmm_config(dev, ATTN_BLOCK, CTX, hd),
+            compute_kernel_config=ckc,
+            memory_config=dram,
+        )  # [B, H*nb, 32, hd]
         ttnn.deallocate(probs)
         ttnn.deallocate(v_ctx)
         o = ttnn.reshape(o, (B, H, S, hd))
