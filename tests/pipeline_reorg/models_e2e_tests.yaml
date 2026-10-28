@@ -1323,13 +1323,17 @@
     # #58835: since #52893 the read-only pinned upload of ttnn.load_tensor mmaps makes the per-call
     # weight swaps 2.7x slower on QB2 (34 s -> 94 s per 12 cached loads); keep the copy path like the Wan2.2 legs.
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
-    pytest --timeout 1200 models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py
+    # The edit tests stay out: each edit checkpoint converts its own weights.
+    pytest --timeout 1200 models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py::test_qwenimage_pipeline \
+      models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py::test_qwenimage_inpaint
     pytest --timeout 720 models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py
   model: qwenimage
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 20
+      # 19 min on job 122484104973 (10-27), mostly the weight conversion into an empty cache, plus
+      # ~2 min of inpainting.
+      timeout: 25
       tier: 2
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee

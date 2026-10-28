@@ -1221,7 +1221,9 @@
     wh_llmbox:
       # 37m26s of pytest on run 39317745110 (10-19), plus ~11.5 min of tests added by #57208 (FIBO-vlm,
       # smollm3, vision injection; timed on job 118869109132), so ~49 min. +~22% margin.
-      timeout: 60
+      # The Qwen2.5-VL vision tower and the edit text encoder add ~17 min (job 122427949493 against
+      # 122484092124, 10-27), so ~66 min.
+      timeout: 80
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1555,12 +1557,15 @@
     export TT_METAL_WATCHER=30
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     pytest --timeout 1500 models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair
-    pytest --timeout 900 models/tt_dit/tests/models/qwenimage/test_transformer_qwenimage.py -k "not not_traced"
+    # One size per edit checkpoint: each case loads the torch reference and converts the weights.
+    pytest --timeout 900 models/tt_dit/tests/models/qwenimage/test_transformer_qwenimage.py \
+      -k "not not_traced and (not test_transformer_edit or (1024 and 2x2sp0tp1))"
   model: qwenimage
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 45
+      # 16 min on job 122484280884 (10-27), plus ~11 min per edit checkpoint (job 122427488829).
+      timeout: 60
       tier: 2
   owner_id: U0ATR08RCQ0 # James Lee
   team: models

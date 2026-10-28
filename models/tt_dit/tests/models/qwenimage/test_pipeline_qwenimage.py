@@ -12,11 +12,17 @@ from loguru import logger
 from PIL import Image, ImageFilter
 
 import ttnn
-from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
+from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
 
 from .device_params import EDIT_MESH_DEVICE_PARAMS, MESH_DEVICE_PARAMS
 
 DOG_IMAGE_PATH = Path(__file__).resolve().parents[4] / "demos" / "multimodal" / "gemma3" / "dog.jpg"
+
+
+def create_1024_pipeline(mesh_device: ttnn.MeshDevice) -> QwenImagePipeline:
+    """A text-to-image pipeline that only warms up 1024x1024, the size these tests generate."""
+    config = QwenImagePipelineConfig.default(mesh_shape=mesh_device.shape, resolutions=[(1024, 1024)])
+    return QwenImagePipeline(device=mesh_device, config=config)
 
 
 @pytest.mark.parametrize(
@@ -45,7 +51,7 @@ def test_qwenimage_pipeline(
 
     width, height = 1024, 1024
 
-    pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device)
+    pipeline = create_1024_pipeline(mesh_device)
 
     prompts = [
         'A coffee shop entrance features a chalkboard sign reading "Qwen Coffee 😊 $2 per cup," with a neon light '
@@ -111,7 +117,7 @@ def test_qwenimage_inpaint(*, mesh_device: ttnn.MeshDevice, is_ci_env: bool, mon
     if is_ci_env:
         monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
 
-    pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device)
+    pipeline = create_1024_pipeline(mesh_device)
 
     image = Image.open(DOG_IMAGE_PATH).convert("RGB")
     # Repaints the dog, with a margin around it.
