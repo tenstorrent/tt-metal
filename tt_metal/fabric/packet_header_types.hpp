@@ -91,17 +91,8 @@ struct PacketHeaderConfig {
     }
 };
 
-// Calls f once for every packet header type fabric can choose, in order: each LowLatencyPacketHeaderT in
-// PKT_HDR_1D_EXTENSION_WORDS, then each HybridMeshPacketHeaderT in PKT_HDR_2D_ROUTE_BUFFER_SIZES.
-//
-// Each call to f is f(std::type_identity<H>{}, config). H is the header type itself, passed as an empty
-// std::type_identity tag since a type can't be passed as a value; f takes it as std::type_identity<H> to use H. config
-// is the PacketHeaderConfig that picks H, so f can relate a run's choice to its type. Use this wherever every header
-// has to be handled, so a size added to the lists is handled with no other edit. It works at compile time, for example
-// to check every header's struct layout:
-//   for_each_packet_header_type([]<typename H>(std::type_identity<H>, const PacketHeaderConfig&) {
-//       static_assert(check_struct_layout<H>());
-//   });
+// Calls f once for every packet header type fabric can choose, passing in the header type as well as the corresponding
+// PacketHeaderConfig.
 template <typename F>
 constexpr void for_each_packet_header_type(const F& f) {
     [&]<std::size_t... I>(std::index_sequence<I...>) {
@@ -117,12 +108,7 @@ constexpr void for_each_packet_header_type(const F& f) {
     }(std::make_index_sequence<PKT_HDR_2D_ROUTE_BUFFER_SIZES.size()>{});
 }
 
-// Turns a run's PacketHeaderConfig, known only at run time, into its header type H, which code needs at compile time
-// to take sizeof(H) or read H's layout. It calls f(std::type_identity<H>{}) for the one header type config picks, and
-// returns what f returns. For example, the size of a run's header:
-//   visit_packet_header_type(config, []<typename H>(std::type_identity<H>) { return sizeof(H); });
-// It walks for_each_packet_header_type and calls f for the header whose config matches, so it can't name a header the
-// lists don't hold. A config that matches none, such as the disabled 80 B 2D header, fails with TT_FATAL.
+// Finds the appropriate packet header type based on config, calls f with the header type, and returns what f returns.
 template <typename F>
 auto visit_packet_header_type(const PacketHeaderConfig& config, const F& f) {
     // Dummy call to f just to figure out what type f returns
