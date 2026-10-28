@@ -20,12 +20,12 @@ NOTE: per-layer LayerAck channel + scheduler-driven migration are NOT here
 from dataclasses import dataclass
 from typing import Optional
 
+from loguru import logger
+
 import ttnn
-from models.demos.common.prefill.runners.migration import (
-    allgather_kv_stage_layout,
-    serialize_kv_chunk_table,
-    serialize_prebuilt_kv_chunk_table,
-)
+from models.demos.common.prefill.runners.cache_layout import publish_kv_chunk_table
+from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, serialize_prebuilt_kv_chunk_table
+from models.demos.deepseek_v3_d_p.tt.runners.cache_layout import deepseek_cache_layout_model
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_TOKENS,
@@ -39,6 +39,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     populate_kv_chunk_address_table_dflash,
     populate_kv_chunk_address_table_kda,
 )
+
+# Set to 1 to publish the table derived from the KVPE cache's CacheLayoutModel without walking the classic one.
+LAYOUT_MODEL_ENV = "DEEPSEEK_KV_TABLE_FROM_LAYOUT_MODEL"
 
 # A KV chunk is one DRAM bank's worth of tokens (NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK=32) x head_dim.
 _TILE_DIM = 32  # bfp8 is tiled 32x32
@@ -202,7 +205,12 @@ def build_and_serialize_kv_chunk_table(
     stage while the collectives ran on all ranks. Leave it None to gather inline (single-rank / tests).
 
     KV dedup is read from the KVPE cache's declared topology (is_tp_deduped_kv_cache), so the table cannot
-    disagree with the allocation. ``tp_axis`` is the dflash head-count geometry, not the dedup switch."""
+    disagree with the allocation. ``tp_axis`` is the dflash head-count geometry, not the dedup switch.
+
+    The single-config table is also derived from the KVPE cache's declared layout (``cache_layout.py``, a
+    ``CacheLayoutModel`` over the gathered stages) with ``to_chunk_map``. Until that replaces the walk
+    (``DEEPSEEK_KV_TABLE_FROM_LAYOUT_MODEL=1``), the walked table is published and the derived one is checked
+    against it; the model is written next to the table (``<path>.cache_layout.pb``) only when the two agree."""
     assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
         f"create_kv_chunk_address_table_block_cyclic assumes a block-cyclic period of "
         f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "
@@ -248,7 +256,15 @@ def build_and_serialize_kv_chunk_table(
     stage_layout = stage_layouts[0] if stage_layouts else None
     kv_dedup = is_tp_deduped_kv_cache(primary_cache, mesh_shape)
 
-    def _builder(*, config, chunk_size_bytes, num_users):
+    chunk_size_bytes = _dram_chunk_size_bytes(primary_cache)
+
+    def walk():
+        config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+        config.num_layers = num_layers
+        config.max_sequence_length = seq_len
+        config.num_slots = num_users
+        config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+        config.chunk_size_bytes = chunk_size_bytes
         return create_kv_chunk_address_table_block_cyclic(
             config=config,
             mesh_device=mesh_device,
@@ -265,15 +281,36 @@ def build_and_serialize_kv_chunk_table(
             tp_axis=tp_axis if kv_dedup else None,
         )
 
-    return serialize_kv_chunk_table(
-        table_builder=_builder,
-        num_layers=num_layers,
-        max_seq_len=seq_len,
-        num_users=num_users,
-        chunk_n_tokens=NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-        chunk_size_bytes=_dram_chunk_size_bytes(primary_cache),
+    def layout_model():
+        return deepseek_cache_layout_model(
+            kvpe_cache=primary_cache,
+            stage_layout=stage_layout,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_users=num_users,
+            seq_len=seq_len,
+            chunk_size=chunk_size_global,
+            kv_dedup=kv_dedup,
+            layer_rows=layer_rows,
+        )
+
+    # The walk names each stage's chips' host from its gathered tag.
+    hosts = [
+        (fid, f"host-{stage['host_tag']:08x}")
+        for stage in (stage_layout or [])
+        for row in stage["fnids"]
+        for fid in row
+    ]
+    publish_kv_chunk_table(
         path=path,
+        walk=walk,
+        layout_model=layout_model,
+        hosts=hosts,
+        enable_env=LAYOUT_MODEL_ENV,
+        model_name="DeepSeek-V3",
     )
+    logger.info(f"[migration] KV chunk address table serialized to {path} (configs=1)")
+    return path
 
 
 def _build_and_serialize_merged_kv_chunk_table(

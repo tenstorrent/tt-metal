@@ -1023,6 +1023,21 @@ def populate_kv_chunk_address_table_kda(
     return lookup_table
 
 
+def kvpe_cache_memory_config(kvpe_cache_head_dim, num_dram_banks):
+    """The KVPE cache's DRAM memory config: 32-token ``[1, 1, 32, head_dim]`` shards round-robin over the
+    ``num_dram_banks`` DRAM banks."""
+    core_ranges = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
+    ]
+    kv_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim],
+        grid=ttnn.CoreRangeSet(core_ranges),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=kv_nd_shard_spec)
+
+
 def init_kvpe_cache(
     kvpe_cache_head_dim,
     mesh_device,
@@ -1079,22 +1094,7 @@ def init_kvpe_cache(
     )
     seq_len_local = seq_len // stripes
 
-    num_dram_banks = get_num_dram_banks(mesh_device)
-    core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
-    ]
-    grid = ttnn.CoreRangeSet(core_ranges)
-
-    kv_nd_shard_spec = ttnn.NdShardSpec(
-        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim],
-        grid=grid,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-    )
-    kv_mem_config = ttnn.MemoryConfig(
-        buffer_type=ttnn.BufferType.DRAM,
-        nd_shard_spec=kv_nd_shard_spec,
-    )
+    kv_mem_config = kvpe_cache_memory_config(kvpe_cache_head_dim, get_num_dram_banks(mesh_device))
 
     # Allocate + zero on device. The host from_torch path packs the full replicated
     # cache as bfp8 on host, overflowing pack_as_bfp8_tiles' 32-bit page index at high
