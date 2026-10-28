@@ -1619,20 +1619,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Smoke) {
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_NoIntermediates) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // The RETURN_INTERMEDIATES-less compiles, without and with the gate, each with one explicit chunking
-    // checked against the references.
-    run_chunk_knob_sweep(
-        SDPATestConfig{
-            .batch_size = 1U,
-            .sequence_length = 256U,
-            .query_dim = 128U,
-            .key_value_dim = 128U,
-            .num_query_heads = 2U,
-            .num_key_heads = 2U,
-            .mask_type = ttml::metal::AttentionMaskType::Causal,
-            .return_intermediates = false,
-            .test_name = "ChunkKnobs_NoIntermediates"},
-        {{128, 256, 1}});
+    // The RETURN_INTERMEDIATES-less compile with the gate and an explicit chunking, checked against the
+    // references (ValidationTest_IntermediateReturnModes covers it without the gate at the default pick).
     run_chunk_knob_sweep(
         SDPATestConfig{
             .batch_size = 1U,
@@ -1664,9 +1652,10 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Arbitrary_NonPow2) {
         {{96, 64, 1}, {96, 96, 1}});
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Arbitrary_HeadStacking) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Arbitrary_HeadStacking) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // The (1, 1, S, S) mask is read once per step and shared by the stacked heads.
+    // The (1, 1, S, S) mask is read once per step and shared by the stacked heads; the blocking case of
+    // this is the {64, 64, 2} row of ChunkKnobs_Smoke_Arbitrary.
     run_chunk_knob_sweep(
         SDPATestConfig{
             .batch_size = 1U,
