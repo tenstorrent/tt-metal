@@ -111,7 +111,9 @@ class NemotronReranker:
         self.mm_ckc_lofi_bf16acc = cfg.compute_config(ttnn.MathFidelity.LoFi, fp32_acc=False)
         self.mm_ckc_bf16acc = cfg.compute_config(cfg.mm_fidelity, fp32_acc=False)
         # packer_l1_acc off: SDPA accumulates in its own CBs; with it on, 32x512 SDPA took 2.5 vs 1.6 M cycles.
-        self.sdpa_ckc = cfg.compute_config(cfg.sdpa_fidelity, fp32_acc=False, packer_l1_acc=False)
+        self.sdpa_ckc = cfg.compute_config(
+            cfg.sdpa_softmax_fidelity or cfg.sdpa_fidelity, fp32_acc=False, packer_l1_acc=False
+        )
         self.norm_ckc = cfg.compute_config(ttnn.MathFidelity.HiFi4)
         self.one_tile = ttnn.from_torch(
             torch.ones(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
@@ -355,6 +357,10 @@ class NemotronReranker:
                 q_chunk_size=qc,
                 k_chunk_size=kc,
                 exp_approx_mode=cfg.sdpa_exp_approx,
+                matmul_math_fidelity=cfg.sdpa_fidelity,
+                max_cores_per_head_batch=cfg.sdpa_max_cores_per_head_batch,
+                k_splits=cfg.sdpa_k_splits,
+                segmented_accumulation=cfg.sdpa_segmented_accumulation,
             ),
         )
         for t in (q_r, k_r, v):

@@ -145,6 +145,13 @@ class RerankConfig:
     bf16_acc_kinds: str = "ff2,ff13s"
     # HiFi2 SDPA raised the MIRACL mean score error 0.23 -> 0.30 at no measurable speed gain.
     sdpa_fidelity: object = ttnn.MathFidelity.HiFi4
+    # Fidelity of SDPA's non-matmul math (softmax scaling); None = sdpa_fidelity. The matmuls always run
+    # at sdpa_fidelity (SDPAProgramConfig.matmul_math_fidelity). 32x512 SDPA: HiFi2 14.73, LoFi 14.92 vs
+    # 14.24 M cycles (slower); max_cores_per_head_batch 32 and segmented_accumulation: no change.
+    sdpa_softmax_fidelity: object = None
+    sdpa_max_cores_per_head_batch: int = 16
+    sdpa_k_splits: int = 1
+    sdpa_segmented_accumulation: bool = False
     # SDPA softmax exp in the SFPU's approximate mode.
     sdpa_exp_approx: bool = False
     # SDPA q / k chunk sizes; 0 = the sdpa_chunks table.
@@ -239,7 +246,7 @@ def config_from_overrides(items):
             new = int(float(val))
         elif isinstance(cur, float):
             new = float(val)
-        elif isinstance(cur, ttnn.MathFidelity):
+        elif isinstance(cur, ttnn.MathFidelity) or key.endswith("fidelity"):
             new = getattr(ttnn.MathFidelity, val)
         elif isinstance(cur, str):
             new = val
