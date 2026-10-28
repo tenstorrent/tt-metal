@@ -30,6 +30,7 @@ def main():
 
     import ttnn
     from models.autoports.qwen_qwen3_8_27b.tests.full_model_evidence import runtime_build
+    from models.autoports.qwen_qwen3_8_27b.tests.native_fixture_cleanup import finalize_run
     from models.autoports.qwen_qwen3_8_27b.tt.generator import Generator
     from models.autoports.qwen_qwen3_8_27b.tt.model import Model
 
@@ -85,7 +86,12 @@ def main():
     root = Path(__file__).resolve().parents[1]
     result["source_sha256"] = {
         str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in [Path(__file__), *sorted((root / "tt").glob("*.py"))]
+        for p in [
+            Path(__file__),
+            root / "tests/native_fixture_cleanup.py",
+            root / "tests/full_model_evidence.py",
+            *sorted((root / "tt").glob("*.py")),
+        ]
     }
     target = Path(args.output)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -215,12 +221,14 @@ def main():
         result.update(status="fail", error_type=type(error).__name__, error=str(error))
         raise
     finally:
-        target.write_text(json.dumps(result, indent=2) + "\n")
-        if gen is not None:
-            for trace in list(gen.decode_traces.values()) + [gen.sample_trace, gen.buffered_sample_trace]:
-                if trace is not None:
-                    ttnn.release_trace(mesh, trace)
-        ttnn.close_mesh_device(mesh)
+
+        def release():
+            if gen is not None:
+                for trace in list(gen.decode_traces.values()) + [gen.sample_trace, gen.buffered_sample_trace]:
+                    if trace is not None:
+                        ttnn.release_trace(mesh, trace)
+
+        finalize_run(result, target, release, lambda: ttnn.close_mesh_device(mesh))
 
 
 if __name__ == "__main__":

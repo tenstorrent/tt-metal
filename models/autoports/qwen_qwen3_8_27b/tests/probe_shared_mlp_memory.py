@@ -21,7 +21,7 @@ def main():
     p.add_argument("--output", required=True)
     p.add_argument("--full-stack", action="store_true")
     p.add_argument("--batch", type=int, default=32)
-    p.add_argument("--lengths", type=int, nargs="+", default=[1, 33, 255, 256, 257, 511, 512])
+    p.add_argument("--lengths", type=int, nargs="+", default=[1, 33, 255, 256, 257, 511, 512, 513])
     p.add_argument("--outputs", type=int, default=8)
     p.add_argument("--repeats", type=int, default=3)
     a = p.parse_args()
@@ -29,6 +29,7 @@ def main():
 
     import ttnn
     from models.autoports.qwen_qwen3_8_27b.tests.full_model_evidence import runtime_build
+    from models.autoports.qwen_qwen3_8_27b.tests.native_fixture_cleanup import finalize_run
     from models.autoports.qwen_qwen3_8_27b.tests.physical_memory_inventory import AllocationLedger, tensor_aliases
     from models.autoports.qwen_qwen3_8_27b.tt.generator import Generator
     from models.autoports.qwen_qwen3_8_27b.tt.model import Model
@@ -60,7 +61,13 @@ def main():
     root = Path(__file__).resolve().parents[1]
     result["source_sha256"] = {
         str(f.relative_to(root)): hashlib.sha256(f.read_bytes()).hexdigest()
-        for f in [Path(__file__), *sorted((root / "tt").glob("*.py"))]
+        for f in [
+            Path(__file__),
+            root / "tests/physical_memory_inventory.py",
+            root / "tests/native_fixture_cleanup.py",
+            root / "tests/full_model_evidence.py",
+            *sorted((root / "tt").glob("*.py")),
+        ]
     }
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=0)
     gen = None
@@ -205,9 +212,8 @@ def main():
         result.update(status="fail", error_type=type(e).__name__, error=str(e))
         raise
     finally:
-        body_passed = result["status"] == "pass"
-        cleanup_error = None
-        try:
+
+        def release():
             if gen is not None:
                 ttnn.synchronize_device(mesh)
                 before_release = memory()
@@ -224,14 +230,8 @@ def main():
                     configured_trace_region_bytes=0,
                     scope="Standalone dynamic traces: allocator delta after releasing only traces at final teardown; not a serving128MiB arena payload measurement",
                 )
-        except BaseException as error:
-            cleanup_error = error
-            result.update(status="fail", cleanup_error=f"{type(error).__name__}: {error}")
-        finally:
-            target.write_text(json.dumps(result, indent=2) + "\n")
-            ttnn.close_mesh_device(mesh)
-        if cleanup_error is not None and body_passed:
-            raise cleanup_error
+
+        finalize_run(result, target, release, lambda: ttnn.close_mesh_device(mesh))
 
 
 if __name__ == "__main__":
