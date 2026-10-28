@@ -50,6 +50,7 @@ def matmul_qkv_rope(
     fidelity=ttnn.MathFidelity.HiFi2,
     out_dtype=ttnn.bfloat16,
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    rope_fidelity=None,
 ):
     """x ``[1, 1, B * S, K]``, w ``[K, (n_heads + 2 * n_kv_heads) * head_dim]`` (Q, K, V column blocks)
     -> q ``[B, n_heads, S, head_dim]``, k and v ``[B, n_kv_heads, S, head_dim]``; RoPE applied to q, k.
@@ -147,7 +148,7 @@ def matmul_qkv_rope(
             core_ranges=all_cores,
             compile_time_args=compute_ct,
             runtime_args=compute_rt,
-            defines=[],
+            defines=[("ROPE_FIDELITY", rope_fidelity)] if rope_fidelity else [],
             config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=fidelity,
                 math_approx_mode=False,

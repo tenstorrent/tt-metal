@@ -24,7 +24,11 @@ constexpr uint32_t acc_cb = tt::CBIndex::c_3;
 constexpr uint32_t cs_cb = tt::CBIndex::c_4;
 // The rotation's multiplies run at HiFi4 whatever the matmul's fidelity (mul_tiles takes the
 // kernel's MATH_FIDELITY); these mirror mul_init / mul_tiles with the fidelity fixed.
+#ifdef ROPE_FIDELITY
+constexpr auto EPI_FIDELITY = MathFidelity::ROPE_FIDELITY;
+#else
 constexpr auto EPI_FIDELITY = MathFidelity::HiFi4;
+#endif
 }  // namespace
 
 ALWI void mul_hifi_init(uint32_t icb0, uint32_t icb1) {

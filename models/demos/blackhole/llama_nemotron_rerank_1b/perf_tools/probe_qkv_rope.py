@@ -58,6 +58,7 @@ def main():
     ap.add_argument("--block", default="8,8,4,1,4", help="mb,kb,nb,sh,sw")
     ap.add_argument("--xdtype", default="bfloat8_b")
     ap.add_argument("--no-time", action="store_true")
+    ap.add_argument("--rope-fidelity", default=None)
     args = ap.parse_args()
     block = tuple(int(v) for v in args.block.split(","))
     B, S = args.batch, args.seq
@@ -75,7 +76,9 @@ def main():
     table = make_rope_table(cos, sin, device)
 
     def new():
-        return matmul_qkv_rope(tx, tw, table, batch=B, n_heads=H, n_kv_heads=KV, block=block)
+        return matmul_qkv_rope(
+            tx, tw, table, batch=B, n_heads=H, n_kv_heads=KV, block=block, rope_fidelity=args.rope_fidelity
+        )
 
     q, k, v = new()
     xr = ttnn.to_torch(tx).float()

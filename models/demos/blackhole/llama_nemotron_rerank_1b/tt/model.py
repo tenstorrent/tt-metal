@@ -31,6 +31,7 @@ from models.demos.blackhole.llama_nemotron_rerank_1b.tt.model_config import (
     MM_CONFIGS,
     PAD_TOKEN_ID,
     QKV_ROPE_CONFIGS,
+    QKV_ROPE_FIDELITY,
     SEQ_BUCKETS,
     RerankConfig,
     mm_block_config,
@@ -308,6 +309,7 @@ class NemotronReranker:
                 block=QKV_ROPE_CONFIGS[keys[-1]],
                 grid=self.grid,
                 fidelity=cfg.mm_fidelity,
+                rope_fidelity=QKV_ROPE_FIDELITY,
                 out_dtype=cfg.heads_out_dtype,
                 memory_config=self._mem(rows, (cfg.n_heads + 2 * cfg.n_kv_heads) * cfg.head_dim),
             )
