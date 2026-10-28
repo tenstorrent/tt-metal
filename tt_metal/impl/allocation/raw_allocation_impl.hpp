@@ -67,6 +67,9 @@ struct RawAllocationImpl {
     // Release allocation
     ~RawAllocationImpl() = default;
 
+    // Return the common base address across the allocated SRAM banks.
+    DeviceAddr address() const;
+
     // Return whether the allocation kind, per-bank size, and node set exactly match the given properties.
     bool matches_properties(const RawAllocationProperties& properties) const;
 
