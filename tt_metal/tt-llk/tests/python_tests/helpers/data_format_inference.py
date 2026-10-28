@@ -372,6 +372,9 @@ def infer_pack_in(
     # Sub-byte BFP formats cannot be used as pack_src (packer in_data_format).
     # The packer reads 16-bit (or 32-bit with dest_acc) data from dest and converts to BFP for L1.
     if output_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
+        # production (data_format.cpp) packs block float output from a 32-bit DEST through Bfp8_b unless bfp8_pack_precise is set
+        if pack_src_from_output and is_fp32_dest_acc_en == DestAccumulation.Yes:
+            return DataFormat.Bfp8_b
         return (
             DataFormat.Float32
             if is_fp32_dest_acc_en == DestAccumulation.Yes
