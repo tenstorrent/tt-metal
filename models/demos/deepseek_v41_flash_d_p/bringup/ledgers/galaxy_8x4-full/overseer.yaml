@@ -303,6 +303,68 @@ fixes:
   paths:
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
   placed: '2026-10-28T07:43:45'
+- id: FIX.7
+  title: 'OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses): every GEMM inpu'
+  gate:
+  - W.1
+  - M.1
+  - L.s10240
+  - L.last
+  - L.s56320
+  - L.smoke
+  - K.1
+  status: placed
+  t: '2026-10-28T13:59:43'
+  text: 'OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses): every GEMM input the reference
+    quantizes to fp8 (reference/ds41_ref.py ''official'' numerics, lines ~89-91: the fp8 act q-dq of every fp8 linear''s
+    input) is fed to the device matmul as bfloat8_b, the device''s own 8-bit format (stored and computed in it: never a
+    parity-only rounding, agents'' rule 17). Inputs: attention q_a, wkv (tt/q_a.py), wq_b, wo_a (its input = the attention
+    output, which the reference rounds to fp8 before wo_a), wo_b (tt/attention.py), the indexer''s wq_b (tt/indexer.py),
+    the engram wkv (tt/engram_kv.py: the engram rows), and the shared expert''s x and h - check them on the BLOCK MoE path
+    (the default since FIX.6: models/demos/moe_block, MOE_HEAD/MOE_TAIL fused; the routed experts'' x/h are already bfp8
+    there?) and fix any that are wider. The producing op writes bfloat8_b TILE where it can (output dtype), else one typecast;
+    the weights stay as they are (bfp8 / bfp4); keep the matmul fidelity settings unchanged (HiFi2; LoFi is a separate later
+    pick). One setting in tt/settings.py, e.g. GEMM_INPUTS ''bfp8'' (default) | ''bf16'' (the old path), with this decision
+    and the reference lines in its text. Out of scope: the KV caches and the index query/keys (step 2, needs the owner''s
+    cache decisions), any limit, golden or frozen test. Report per matmul: the input dtype before/after, the ladder''s err
+    per layer / err_final_hidden / top5 before/after, and the device time per chunk before/after (one plain profile).'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-28T13:59:50'
+- id: FIX.8
+  title: 'CKV_FORMAT=bfp4_rows: the compressed KV attention table in 4 bits (bfloat4_b rows, 288 B)'
+  gate:
+  - W.1
+  - M.1
+  - L.s10240
+  - L.last
+  - L.s56320
+  - L.smoke
+  - K.1
+  status: held
+  t: '2026-10-28T18:17:08'
+  text: 'OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses): the compressed KV (reference:
+    fp4 e2m1 + e4m3 scale per 16, RoPE before quantization; ds41_ref.py:797-799) is stored in 4 bits instead of bf16. Design
+    and evidence: bringup/CKV_4BIT_DERISK.md (option B: row-packed bfloat4_b, 288 B a row, attention output 1-11 % above
+    the reference''s own fp4; truncation would be 4-5x worse, so the write rounds to nearest even: on the SFPU before the
+    pack if the packer truncates - the overseer''s packer test result is in the note). Scope, owner 2026-10-28: (1) ONLY
+    the attention table (AttnTable, tt/compressor.py:153, read by sparse_sdpa) goes to bfp4 rows; the SERVED records (TtServedRows,
+    tt/compressor.py:264, shipped by tt-d-gen) stay bf16 rows holding the bfp4-rounded values (exact), so the serving contract
+    and tt-d-gen are unchanged; load_served / load_host repack the bf16 records into the bfp4 table (exact: they are on
+    the bfp4 grid). (2) Write: a fork op (ttnn.bringup, INDEX.md first) packing ckv bf16 TILE -> bfloat4_b -> 288 B row
+    records. (3) Read: a sparse_sdpa fork option kv_format=ROW_BFP4 that gathers 288 B rows and shuffles 32 rows into 16
+    bfloat4_b tiles for the matmuls (no tilize, no scale multiply); the window rows stay a separate bf16 tensor (two KV
+    tensors; keep SparseIndexTables'' window chunk and top-k chunks apart for starts < 128). (4) Behind the setting CKV_FORMAT=bf16|bfp4_rows
+    in tt/settings.py, default bfp4_rows once the gates pass; bf16 = today''s stock path, kept. Start from the CPU codec
+    in tests/tools (tt/ckv_codec.py, tests/test_ckv_codec.py) and the L1 single-card tests 0-5 of the report before any
+    full-model run; work in small loops (single card, the 3-layer repro behind CKV_FORMAT) and run the ladder / K.1 only
+    as the gate. Report: per-step accuracy vs the bf16 path, sparse_sdpa kernel time bf16 vs bfp4 rows, the warm wall and
+    device time per chunk, DRAM per chip of the attention tables.'
+  hold: the overseer's single-card bfp4/bfp8 packer rounding test (L1 test 1) and the de-risk files in the repo (after P.6
+    and the resident-engram profile)
+  paths:
+  - models/demos/deepseek_v41_flash_d_p
+  - ttnn/ttnn/bringup
 classified:
   L.smoke:
     kind: framework
