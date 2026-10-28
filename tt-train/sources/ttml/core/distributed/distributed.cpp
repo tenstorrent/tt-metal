@@ -21,11 +21,33 @@ namespace {
 // fp32 sums of at least this many elements per device (1 MiB of bf16) go through a reduce-scatter in fp32 and an
 // all-gather in bf16; smaller ones through one fp32 all-reduce. Measured on a Blackhole LoudBox (8x p150b) in 2026-10:
 // below about 1 MiB a call costs host dispatch, and the reduce-scatter route issues more ops; above it, the route moves
-// a quarter fewer bytes because the all-gather carries the bf16 result. Both routes give bit-identical results.
+// a quarter fewer bytes because the all-gather carries the bf16 result.
 constexpr uint64_t kFp32ReduceScatterMinElements = 1ULL << 19U;
 
-// The innermost dim that a reduce-scatter can split into `num_devices` whole-tile slices, if any. For a tensor of whole
-// tiles it is the dim all_reduce scatters on internally, so both routes add the same values in the same order.
+// Whether `tensor`'s topology splits tensor dim `dim` across the devices of some mesh axis (a tensor-parallel weight's
+// gradient, say).
+bool is_split_by_a_mesh_axis(const ttnn::Tensor& tensor, int dim) {
+    const auto& topology = tensor.tensor_topology();
+    const auto& placements = topology.placements();
+    const auto& axis_sizes = topology.distribution_shape();
+    const int rank = static_cast<int>(tensor.logical_shape().rank());
+    for (size_t axis = 0; axis < placements.size(); ++axis) {
+        const auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&placements[axis]);
+        if (shard == nullptr || (axis < axis_sizes.dims() && axis_sizes[axis] == 1U)) {
+            continue;
+        }
+        if ((shard->dim < 0 ? shard->dim + rank : shard->dim) == dim) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The innermost dim that a reduce-scatter can split into `num_devices` whole-tile slices, if any. A dim another mesh
+// axis already splits is skipped: scattering it again leaves no topology label that describes the result. On a
+// single-axis mesh this is the dim all_reduce scatters on internally, so both routes add the same values in the same
+// order and give the same bits (checked on 8 devices); all_reduce picks its dim from the total device count, so on a
+// multi-axis mesh the last bit can differ.
 std::optional<int> whole_tile_scatter_dim(const ttnn::Tensor& tensor, uint32_t num_devices) {
     const auto& shape = tensor.logical_shape();
     const int rank = static_cast<int>(shape.rank());
@@ -39,35 +61,13 @@ std::optional<int> whole_tile_scatter_dim(const ttnn::Tensor& tensor, uint32_t n
     if (shape[-1] % tile_width != 0 || shape[-2] % tile_height != 0) {
         return std::nullopt;
     }
-    if (shape[-1] % (tile_width * num_devices) == 0) {
+    if (shape[-1] % (tile_width * num_devices) == 0 && !is_split_by_a_mesh_axis(tensor, rank - 1)) {
         return rank - 1;
     }
-    if (shape[-2] % (tile_height * num_devices) == 0) {
+    if (shape[-2] % (tile_height * num_devices) == 0 && !is_split_by_a_mesh_axis(tensor, rank - 2)) {
         return rank - 2;
     }
     return std::nullopt;
-}
-
-ttnn::Tensor sum_in_fp32(const ttnn::Tensor& tensor, const ttsl::SmallVector<uint32_t>& cluster_axes, uint32_t scaler) {
-    const auto dtype = tensor.dtype();
-    const float inv_scaler = 1.0F / static_cast<float>(scaler);
-    // Both routes sum in fp32, and the x1/N writes the tensor's dtype directly: one op instead of a multiply and a
-    // typecast, with the same bits.
-    const auto fp32 = dtype == ttnn::DataType::FLOAT32 ? tensor : ttnn::typecast(tensor, ttnn::DataType::FLOAT32);
-    const auto scatter_dim = cluster_axes.size() == 1U && tensor.logical_volume() >= kFp32ReduceScatterMinElements
-                                 ? whole_tile_scatter_dim(tensor, scaler)
-                                 : std::nullopt;
-    if (scatter_dim.has_value()) {
-        const auto slice = ttnn::multiply(
-            ttml::ttnn_fixed::distributed::reduce_scatter(fp32, *scatter_dim, cluster_axes[0]), inv_scaler, dtype);
-        return ttml::ttnn_fixed::distributed::all_gather(slice, *scatter_dim, cluster_axes[0]);
-    }
-
-    auto result = fp32;
-    for (const auto& cluster_axis : cluster_axes) {
-        result = ttml::ttnn_fixed::distributed::all_reduce(result, cluster_axis);
-    }
-    return ttnn::multiply(result, inv_scaler, dtype);
 }
 
 }  // namespace
@@ -93,16 +93,25 @@ ttnn::Tensor synchronize_tensor(
     if (scaler == 1U) {
         return tensor;
     }
-    if (reduce_dtype == ttnn::DataType::FLOAT32) {
-        return sum_in_fp32(tensor, cluster_axes, scaler);
+    const auto dtype = tensor.dtype();
+    const float inv_scaler = 1.0F / static_cast<float>(scaler);
+    // FLOAT32 sums a narrower tensor in fp32. The x1/N writes the tensor's dtype directly, which gives the same bits as
+    // a multiply and then a typecast. Each reassignment of `result` frees the previous intermediate.
+    const bool sum_in_fp32 = reduce_dtype == ttnn::DataType::FLOAT32 && dtype != ttnn::DataType::FLOAT32;
+    ttnn::Tensor result = sum_in_fp32 ? ttnn::typecast(tensor, ttnn::DataType::FLOAT32) : tensor;
+    const auto scatter_dim =
+        sum_in_fp32 && cluster_axes.size() == 1U && tensor.logical_volume() >= kFp32ReduceScatterMinElements
+            ? whole_tile_scatter_dim(tensor, scaler)
+            : std::nullopt;
+    if (scatter_dim.has_value()) {
+        result = ttml::ttnn_fixed::distributed::reduce_scatter(result, *scatter_dim, cluster_axes[0]);
+        result = ttnn::multiply(result, inv_scaler, dtype);
+        return ttml::ttnn_fixed::distributed::all_gather(result, *scatter_dim, cluster_axes[0]);
     }
-    auto result = tensor;
     for (const auto& cluster_axis : cluster_axes) {
         result = ttml::ttnn_fixed::distributed::all_reduce(result, cluster_axis);
     }
-
-    result = ttnn::multiply(result, 1.0F / static_cast<float>(scaler));
-    return result;
+    return ttnn::multiply(result, inv_scaler, dtype);
 }
 
 namespace {

@@ -67,7 +67,6 @@ std::optional<ttnn::DataType> apply_precision_config(
     if (param_dtype) {
         store_trainable_parameters_as(parameters, *param_dtype);
     }
-    // Unset leaves the default as it is, as an unset param_dtype leaves the parameters as they are.
     if (reduce_dtype) {
         autograd::ctx().set_gradient_reduce_dtype(reduce_dtype);
     }

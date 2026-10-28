@@ -10,6 +10,7 @@ cancel partly, which is where a bf16 sum loses bits.
 
 from __future__ import annotations
 
+import ml_dtypes
 import numpy as np
 import ttnn
 import ttml
@@ -17,9 +18,7 @@ import ttml
 
 def to_bf16(values: np.ndarray) -> np.ndarray:
     """Round float32 to the nearest bf16 (ties to even), returned as float32."""
-    bits = np.asarray(values, dtype=np.float32).view(np.uint32)
-    bits = (bits + np.uint32(0x7FFF) + ((bits >> 16) & np.uint32(1))) & np.uint32(0xFFFF0000)
-    return bits.view(np.float32)
+    return np.asarray(values, dtype=np.float32).astype(ml_dtypes.bfloat16).astype(np.float32)
 
 
 def make_gradients(rows: int, cols: int, seed: int) -> np.ndarray:

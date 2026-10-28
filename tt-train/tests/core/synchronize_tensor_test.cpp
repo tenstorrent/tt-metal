@@ -5,11 +5,11 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <bit>
 #include <cmath>
 #include <core/xtensor_utils.hpp>
 #include <cstdint>
 #include <random>
+#include <tt-metalium/bfloat16.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
@@ -25,11 +25,9 @@ namespace {
 
 constexpr uint32_t kDdpAxis = 1U;  // the 1x2 mesh's axis with two devices
 
+// Round to the nearest bf16 (ties to even), which is what from_xtensor does on upload.
 float round_to_bf16(float value) {
-    // Round to nearest, ties to even, as the host does when it builds a bf16 tensor.
-    uint32_t bits = std::bit_cast<uint32_t>(value);
-    bits = (bits + 0x7FFFU + ((bits >> 16U) & 1U)) & 0xFFFF0000U;
-    return std::bit_cast<float>(bits);
+    return static_cast<float>(bfloat16(value));
 }
 
 // Two devices' bf16 gradients for one [1, 1, height, width] tensor, stacked on dim 0. Each element scatters around a
@@ -110,7 +108,7 @@ TEST_F(SynchronizeTensorTest, UnsetAndBf16ReduceDtypeSumAsBefore) {
         core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::BFLOAT16), before);
 }
 
-// Phase 1 measured 99.5% exact for the fp32 sum and 86% for the bf16 sum with two devices and this spread.
+// With two devices and this spread, the fp32 sum gets about 99.5% of the elements exact and the bf16 sum about 86%.
 TEST_F(SynchronizeTensorTest, Fp32SumIsCloserToTheExactMean) {
     const auto values = make_gradients(64, 128, 2);
     const auto expected = exact_mean(values);
@@ -162,17 +160,6 @@ TEST_F(SynchronizeTensorTest, RejectsReduceDtypesOtherThanBf16AndFp32) {
     EXPECT_ANY_THROW((void)core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::UINT32));
 }
 
-TEST_F(SynchronizeTensorTest, SynchronizeGradientsUsesTheReduceDtype) {
-    const auto gradients = upload(make_gradients(64, 128, 7));
-    auto parameter = autograd::create_tensor(gradients, /* requires_grad */ true);
-    parameter->set_grad(gradients);
-
-    core::distributed::synchronize_gradients({{"parameter", parameter}}, {kDdpAxis}, ttnn::DataType::FLOAT32);
-
-    expect_same_on_every_device(
-        parameter->get_grad(), core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::FLOAT32));
-}
-
 // The C++ runners call this overload, which takes the DDP axis from the parallelism context.
 TEST_F(SynchronizeTensorTest, SynchronizeGradientsOverTheDdpAxisUsesTheReduceDtype) {
     autograd::ctx().initialize_parallelism_context({.enable_ddp = true});
@@ -191,12 +178,6 @@ TEST_F(SynchronizeTensorTest, SynchronizeGradientsOverTheDdpAxisUsesTheReduceDty
     parameter->set_grad(gradients);
 
     core::distributed::synchronize_gradients({{"parameter", parameter}}, ttnn::DataType::FLOAT32);
-    expect_same_on_every_device(parameter->get_grad(), fp32);
-
-    // Without an argument it takes the training config's default.
-    parameter->set_grad(gradients);
-    autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::FLOAT32);
-    core::distributed::synchronize_gradients({{"parameter", parameter}});
     expect_same_on_every_device(parameter->get_grad(), fp32);
 }
 

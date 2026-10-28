@@ -294,18 +294,6 @@ class TestAllGatherTopology:
 # ---------------------------------------------------------------------------------------------------------------------
 
 
-@pytest.fixture
-def strict_ccl_topology():
-    """Promote the CCL topology helper's refusals from warnings to errors (what CI runs). Applied to every test in
-    this module through ``pytestmark``, so a refusal surfaces as the helper's reason rather than as a label mismatch."""
-    previous = ttnn.CONFIG.strict_ccl_topology
-    ttnn.CONFIG.strict_ccl_topology = True
-    try:
-        yield
-    finally:
-        ttnn.CONFIG.strict_ccl_topology = previous
-
-
 def _collapsed_tensor(shape: tuple[int, ...], make_mapper, *, seed: int = 0):
     """Tensor distributed by a 1-D mapper (``ttnn.shard_tensor_to_mesh_mapper`` / ``ttnn.replicate_tensor_to_mesh_mapper``
     -- the raw ``TensorToMesh`` that ``Tensor.from_numpy`` takes, not the ``ttnn.ReplicateTensorToMesh`` Python

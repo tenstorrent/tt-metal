@@ -22,8 +22,7 @@ void store_trainable_parameters_as(const serialization::NamedParameters& paramet
 // Applies training_config.precision. precision.param_dtype ("bfloat16" or "float32"; any other name is a TT_FATAL)
 // stores the parameters in that dtype; unset, or set to null, leaves them in the dtype the model builds them in.
 // precision.reduce_dtype (same names) becomes the dtype the gradient syncs sum in when a call passes none
-// (autograd::AutoContext::set_gradient_reduce_dtype); unset or null leaves that default as it is (each gradient's
-// own dtype, bf16, unless something set it).
+// (autograd::AutoContext::set_gradient_reduce_dtype); unset or null leaves that default as it is.
 // Called right before the optimizer is created by ttml.common.utils.create_optimizer() (given the whole config), the
 // nano_gpt runner and the 3-tier optimizer worker. Returns the param dtype it applied, if any.
 std::optional<ttnn::DataType> apply_precision_config(

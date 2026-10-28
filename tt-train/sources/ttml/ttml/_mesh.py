@@ -253,14 +253,12 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",), reduce_dty
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
         axis_names: Tuple of mesh axis names to reduce over.
-        reduce_dtype: The dtype the gradients are summed in. ``ttnn.DataType.BFLOAT16`` sums in each gradient's own
-            dtype, as before. ``ttnn.DataType.FLOAT32`` sums in fp32 and casts the mean back to the gradient's dtype
-            (``ttml.core.distributed.synchronize_tensor``), which keeps the low bits a bf16 sum loses. ``None`` takes
+        reduce_dtype: The dtype the gradients are summed in, as ``ttml.core.distributed.synchronize_tensor`` takes
+            it: ``ttnn.DataType.FLOAT32`` sums in fp32 and casts the mean back to the gradient's dtype. ``None`` takes
             the training config's ``precision.reduce_dtype``, which ``create_optimizer`` stores
             (``AutoContext.get_gradient_reduce_dtype``); with no default set, it sums as before.
     """
-    if reduce_dtype not in (None, ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32):
-        raise ValueError(f"reduce_dtype must be None, BFLOAT16 or FLOAT32, got {reduce_dtype}")
+    _check_reduce_dtype(reduce_dtype)
     m = maybe_mesh()
     if m is None or not axis_names:
         return
@@ -280,25 +278,18 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",), reduce_dty
         if not axes_for_param:
             continue
 
-        scaler = prod(m.shape[axis] for axis in axes_for_param)
-        if scaler == 1:
+        if prod(m.shape[axis] for axis in axes_for_param) == 1:
             continue
 
-        if reduce_dtype == ttnn.DataType.FLOAT32:
-            # The C++ helper picks the cheaper fp32 route for the gradient's size; both routes give the same result.
-            param.set_grad(
-                ttml.core.distributed.synchronize_tensor(
-                    param.get_grad(), list(axes_for_param), reduce_dtype=reduce_dtype
-                )
-            )
-            continue
+        param.set_grad(
+            ttml.core.distributed.synchronize_tensor(param.get_grad(), list(axes_for_param), reduce_dtype=reduce_dtype)
+        )
 
-        inv_scaler = 1.0 / float(scaler)
-        grad = param.get_grad()
-        for axis in axes_for_param:
-            grad = ttml.core.distributed.all_reduce(grad, cluster_axis=axis)
-        grad = ttnn.multiply(grad, inv_scaler)
-        param.set_grad(grad)
+
+def _check_reduce_dtype(reduce_dtype) -> None:
+    """Raise unless ``reduce_dtype`` is ``None``, ``ttnn.DataType.BFLOAT16`` or ``ttnn.DataType.FLOAT32``."""
+    if reduce_dtype not in (None, ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32):
+        raise ValueError(f"reduce_dtype must be None, BFLOAT16 or FLOAT32, got {reduce_dtype}")
 
 
 def _param_is_fsdp_sharded(param, axis_index: int) -> bool:

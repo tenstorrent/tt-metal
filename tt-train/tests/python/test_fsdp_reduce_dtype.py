@@ -8,16 +8,13 @@ The two devices of the ``[1, 2]`` ``fsdp_mesh`` hold different bf16 gradients, a
 ``test_sync_gradients_reduce_dtype.py`` covers the same setting on the DDP sync.
 """
 
-import importlib
-import os
-import sys
-
 import numpy as np
 import pytest
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, ModuleList
 
+from train_example import import_train_example
 from two_device_gradients import device, exact_mean, make_gradients, per_device, per_device_tensor
 
 _FSDP_AXIS = 1
@@ -66,7 +63,7 @@ def test_unset_and_bf16_reduce_dtype_reduce_as_before(fsdp_mesh, reduce_dtype):
     np.testing.assert_array_equal(reduced, _gathered(before, shard_dim))
 
 
-# Phase 1 of the PR 4 measurements: 99.5% exact for the fp32 sum and 86% for the bf16 sum with two devices.
+# With two devices and this spread, the fp32 sum gets about 99.5% of the elements exact and the bf16 sum about 86%.
 @pytest.mark.requires_device
 def test_fp32_reduce_dtype_is_closer_to_the_exact_mean(fsdp_mesh):
     values = make_gradients(64, 128, seed=2)
@@ -147,19 +144,6 @@ def test_rejects_reduce_dtypes_other_than_bf16_and_fp32(expect_error):
         ttml.fsdp.fully_shard(object(), reduce_dtype=ttnn.DataType.UINT32)
 
 
-def _train_example_module():
-    """``examples/train/train.py`` as a module (not part of the installed ``ttml``), as test_train_helpers loads it."""
-    train_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "..", "sources", "examples", "train"))
-    if train_dir in sys.path:
-        sys.path.remove(train_dir)
-    sys.path.insert(0, train_dir)
-    for name in ("train", "callbacks"):
-        cached = sys.modules.get(name)
-        if cached is not None and not os.path.realpath(getattr(cached, "__file__", "") or "").startswith(train_dir):
-            del sys.modules[name]
-    return importlib.import_module("train")
-
-
 # train.py shards before create_optimizer applies the config, so it reads precision.reduce_dtype for FSDP itself.
 @pytest.mark.requires_device
 @pytest.mark.parametrize(
@@ -167,7 +151,7 @@ def _train_example_module():
     [({"reduce_dtype": "float32"}, ttnn.DataType.FLOAT32), ({}, None)],
 )
 def test_train_py_passes_the_configured_reduce_dtype_to_fully_shard(fsdp_mesh, precision, expected):
-    train = _train_example_module()
+    train = import_train_example()
     model = _Model(64)
 
     train.shard_model(model, [], {"training_config": {"precision": precision}})

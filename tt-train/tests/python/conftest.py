@@ -196,6 +196,18 @@ def fresh_device_mesh():
     return _fresh_device_mesh
 
 
+@pytest.fixture
+def strict_ccl_topology():
+    """Promote the CCL topology helper's refusals from warnings to errors (what CI runs), so a refusal surfaces as the
+    helper's reason rather than as a label mismatch."""
+    previous = ttnn.CONFIG.strict_ccl_topology
+    ttnn.CONFIG.strict_ccl_topology = True
+    try:
+        yield
+    finally:
+        ttnn.CONFIG.strict_ccl_topology = previous
+
+
 # ---------------------------------------------------------------------------
 # Shared [1, 2] tensor-parallel mesh
 # ---------------------------------------------------------------------------
