@@ -102,7 +102,7 @@ struct ComputeHardwareConfig {
     //  - You want to preserve the full precision
     //  - The data will be consumed by the SFPU (not the FPU)
     //
-    // On 2nd-gen architecture (2xx), there is NO performance penalty for unpacking directly to
+    // On 2nd-gen architectures (2xx), there is NO performance penalty for unpacking directly to
     // Dest, so UnpackMode=UnpackToDest is the preferred mode for any SFPU-consumed data.
     //
     // If no mode is specified for a (consumed-from) DFB, UnpackToSrc is assumed.
@@ -128,9 +128,20 @@ struct ComputeHardwareConfig {
     };
     std::optional<Compute1XXConfig> config_1xx = std::nullopt;
 
+    // ---- TT-1.2.x specific (Blackhole) ----
+    struct Compute12XConfig {
+        // Enable the RISC-V vector extension when compiling the compute kernel's Pack binary.
+        // Use this only if you need vector intrinsics in kernel code.
+        bool enable_pack_rvv = false;
+    };
+    std::optional<Compute12XConfig> config_12x = std::nullopt;
+
     // ---- TT-2.x.x specific (Quasar and derivatives) ----
-    // Empty today.
-    struct Compute2XXConfig {};
+    struct Compute2XXConfig {
+        // Enable the RISC-V vector extension when compiling the compute kernel's Unpack binary.
+        // Use this only if you need vector intrinsics in kernel code.
+        bool enable_unpack_rvv = false;
+    };
     std::optional<Compute2XXConfig> config_2xx = std::nullopt;
 };
 

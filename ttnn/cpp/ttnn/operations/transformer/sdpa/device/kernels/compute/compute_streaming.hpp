@@ -15,6 +15,7 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
@@ -22,7 +23,7 @@
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -104,6 +105,13 @@ constexpr uint32_t sliding_q_plan_max_source_ranges = SLIDING_MAX_SOURCE_RANGES;
 constexpr uint32_t sliding_q_plan_max_source_ranges =
     ttnn::operations::transformer::sdpa::ring_joint::sliding_q_work_plan_source_ranges(
         ttnn::operations::transformer::sdpa::ring_joint::sliding_max_halo_hops, 1);
+#endif
+
+// Set by ring joint SDPA: put the local slab first only when the halo spans several hops (see the program factory).
+#ifdef SLIDING_LOCAL_FIRST
+constexpr bool sliding_local_first = SLIDING_LOCAL_FIRST;
+#else
+constexpr bool sliding_local_first = false;
 #endif
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
@@ -188,6 +196,8 @@ struct RingAccumulatorState {
     AccumulatorHalf prev, cur;
     // K chunks the last single-Q-chunk sdpa_ring_v2 call accumulated (0: it left no state in prev).
     uint32_t last_call_k_chunks = 0;
+    // Sliding only: work items in the last Q chunk's plan, which a K split divides into bands.
+    uint32_t sliding_plan_k_chunks = 0;
 };
 
 // Ring-streaming lightweight-mask context. Field NAMES match LightweightMaskContext so sdpa_ring_v2's
@@ -246,10 +256,9 @@ struct RingStreamingMaskCtx {
 
 // Sentinel for "no CB" — beyond the valid 0-31 range.
 constexpr uint32_t INVALID_CB = 32;
-// BH benefits from blocked pack at width 4; WH keeps the threshold at 8 because
-// width-4 blocked-pack reconfiguration costs more than it saves there.
+// WH keeps 8: blocked pack reconfiguration costs more than it saves at smaller widths.
 #ifdef ARCH_BLACKHOLE
-constexpr uint32_t MIN_BLOCKED_PACK_TILES = 4;
+constexpr uint32_t MIN_BLOCKED_PACK_TILES = 2;
 #else
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
 #endif
@@ -834,6 +843,10 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 // DST[1] = exp((sink[s] - max[row_offset+s]) * scale); DST[0] += DST[1].
                 // max - sink with a negated scale is equivalent and avoids expanding the sink
                 // scalar to a first-column vector for every Q tile.
+                // The sink can have its own format (e.g. bfloat8_b): unpack from max/sink, then restore
+                // the matmul formats that the next row's folded reconfig assumes. scratch_cb stands in
+                // for cur_max: every caller allocates both in the intermediate format.
+                sdpa_maybe_reconfig_data_format<col_identity_cb, scratch_cb, scratch_cb, cb_attention_sink>();
                 if constexpr (sink_per_row) {
                     // Sparse SDPA packs different heads in each row; both inputs hold a first-column vector.
                     sub_init(cur_max_cb_rt, cb_attention_sink);
@@ -842,6 +855,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                     sub_bcast_scalar_init(cur_max_cb_rt, cb_attention_sink);
                     sub_tiles_bcast_scalar(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, 0, 1);
                 }
+                sdpa_maybe_reconfig_data_format<scratch_cb, col_identity_cb, cb_attention_sink, scratch_cb>();
                 // The custom first-column exp needs generic unary SFPU addrmod state, but not the
                 // Blackhole approximate exp_init macro/replay setup used by exp_tile<true>.
                 MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, DST_ACCUM_MODE>()));
@@ -1461,7 +1475,10 @@ static void sdpa_inner_loop_step(
     // ring passes, where cb_q_in holds one resident Q chunk per pass and is popped once at the end.
     const uint32_t q_base_tiles = 0,
     // Packed split-KV K chunk: its column layout and mask runs. Contiguous for every other caller.
-    [[maybe_unused]] const ring_joint::PackedKVChunkMask& packed_mask = {}) {
+    [[maybe_unused]] const ring_joint::PackedKVChunkMask& packed_mask = {},
+    // K/V retention: the next Q chunk on this core uses the same K and V, so leave them at the
+    // front of cb_kt_in / cb_v_in; the reader does not push them again.
+    const bool keep_kv = false) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1706,7 +1723,9 @@ static void sdpa_inner_loop_step(
     // In-place latent-V reads K^T again in Phase 2, so defer the K^T pop until after the
     // softmax@V matmul (handled where the materialized-V pop would normally fire).
     if constexpr (!kt_inplace_v) {
-        CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
+        if (!keep_kv) {
+            CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
+        }
     }
 
     // Q is no longer needed after Phase 1. On the last K chunk, pop early so the
@@ -2115,7 +2134,9 @@ static void sdpa_inner_loop_step(
         // For kt_inplace_v this is the deferred K^T pop: cb_v_in aliases cb_kt_in (v_shares_k_buffer),
         // and v_cb_physical_width_t == DHt, so this pops the same Sk_chunk_t*DHt entry that Phase 1
         // skipped. For the materialized path it pops the V entry as usual. Either way: one entry/chunk.
-        CircularBuffer(cb_v_in).pop_front(KT_stride * v_cb_physical_width_t);
+        if (!keep_kv) {
+            CircularBuffer(cb_v_in).pop_front(KT_stride * v_cb_physical_width_t);
+        }
         CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT_stride);
     }
 }
@@ -2181,7 +2202,10 @@ void sdpa_standard_v2(
     const uint32_t chunked_q_chunk_offset = 0,
     const LightweightMaskContext& lw_mask = {},
     const uint32_t q_num_chunks = 0,
-    const bool use_zigzag_balancing = false) {
+    const bool use_zigzag_balancing = false,
+    // K/V retention (one K chunk): Q heads per retention key, used to tell whether consecutive Q
+    // chunks of this core share (batch, retention key) and so the same K and V. 0 = off.
+    const uint32_t kv_reuse_group = 0) {
     init_sdpa_streaming_semaphores();
 
     // use_padded_mask + is_causal_sdpa is handled at the host level (mutually exclusive).
@@ -2237,6 +2261,11 @@ void sdpa_standard_v2(
         // centered windows, an upper bound around the Q chunk.
         uint32_t q_chunk_local = local_q_start + q;
         uint32_t q_start_tile = 0;
+        // Keep K/V for the next Q chunk when it shares (batch, KV head) with this one (flat index b * NQH *
+        // q_num_chunks + h * q_num_chunks + c, so its KV key is the flat index / (q_num_chunks * group)).
+        const bool keep_kv =
+            kv_reuse_group != 0 && q + 1 < q_chunks_per_core &&
+            q_chunk_local / (q_num_chunks * kv_reuse_group) == (q_chunk_local + 1) / (q_num_chunks * kv_reuse_group);
         uint32_t k_loop_start = 0;
         uint32_t k_loop_end = k_num_chunks;
         if constexpr (is_causal_sdpa || has_sliding_window) {
@@ -2341,7 +2370,13 @@ void sdpa_standard_v2(
                 lw_mask.sliding_leading_prev_tile_idx,
                 lw_mask.sliding_leading_tile_idx,
                 lw_mask.sliding_trailing_next_tile_idx,
-                apply_sliding_window);
+                apply_sliding_window,
+                0,   // mask_straddle_col
+                0,   // mask_straddle_jump
+                {},  // kv_pad_rotation
+                0,   // q_base_tiles
+                {},  // packed_mask
+                keep_kv && is_last);
         };
 
         for (uint32_t k_chunk = k_loop_start; k_chunk < k_loop_end; k_chunk++) {
@@ -2577,10 +2612,15 @@ void sdpa_ring_v2(
     // K split only: the local K chunks this core attends to (the reader skips the same).
     const uint32_t k_split_begin = 0,
     const uint32_t k_split_end = 0xFFFFFFFFu,
+    // Sliding K split only: this core's band of the work plan (ring_joint_ksplit.hpp).
+    const uint32_t sliding_split_idx = 0,
+    const uint32_t sliding_split_count = 1,
     const uint32_t* packed_source_ids = nullptr,
     const uint32_t packed_source_count = 0,
     // Rows of newest slabs this pass appends (packed_kv_pass_rows).
-    const uint32_t packed_newest_rows = 0) {
+    const uint32_t packed_newest_rows = 0,
+    // Padded multicast slots the reader runs after this core's Q chunks; their K/V entries are drained.
+    const uint32_t padded_q_slots = 0) {
     init_sdpa_streaming_semaphores();
     const bool packed_sources = packed_kv_enabled && packed_source_count > 1;
     const ring_joint::PackedKVGroupPlan packed_kv = ring_joint::packed_kv_pass_plan(
@@ -2802,14 +2842,18 @@ void sdpa_ring_v2(
                 Sk_chunk_t,
                 logical_nt,
                 circular_kv_slab_count,
-                kv_pad_rotation_enabled ? &q_mapping : nullptr);
+                kv_pad_rotation_enabled ? &q_mapping : nullptr,
+                sliding_local_first && sliding_split_count == 1);
             ASSERT(sliding_q_plan.is_valid);
+            acc_state.sliding_plan_k_chunks = sliding_q_plan.total_k_chunk_count;
             ASSERT(sliding_q_plan.total_k_chunk_count > 0);
         }
         // Per-Q pre-scan: count K chunks that will actually be processed.
         // Placed after balanced-skip guards so skipped Q chunks don't pay for the scan.
+        const auto sliding_band = ttnn::operations::transformer::sdpa::ring_joint::sliding_ksplit_range(
+            sliding_q_plan.total_k_chunk_count, sliding_split_idx, sliding_split_count);
         uint32_t per_q_valid_kv =
-            packed_sources ? packed_kv.chunk_count() : (has_sliding_window ? sliding_q_plan.total_k_chunk_count : 0);
+            packed_sources ? packed_kv.chunk_count() : (has_sliding_window ? sliding_band.end - sliding_band.begin : 0);
         for (uint32_t k = 0; !packed_sources && !has_sliding_window && k < num_kv_chunks; ++k) {
             const uint32_t source_ring_id = ring_id;
             const uint32_t source_k_chunk = k;
@@ -2861,8 +2905,8 @@ void sdpa_ring_v2(
                 });
         }
 
-        const uint32_t q_k_loop_count = has_sliding_window ? per_q_valid_kv : num_kv_chunks;
-        for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
+        const uint32_t q_k_loop_count = has_sliding_window ? sliding_band.end : num_kv_chunks;
+        for (uint32_t k_chunk = has_sliding_window ? sliding_band.begin : 0; k_chunk < q_k_loop_count; ++k_chunk) {
             const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
             // Circular cache: the mask's K origin is the plan's absolute K-chunk index (inverting local
             // cache rows is ambiguous once several chunk groups alias one local slab); unbounded caches
@@ -3228,6 +3272,36 @@ void sdpa_ring_v2(
             sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
         }
         // On last ring_iter: normalized output already in cb_out from normalize_row_streaming
+    }
+
+    // Padded multicast slots: the reader pushes every K (and V) entry it receives so this core's CB
+    // advances with the injector's. Drain them in reader order with the same skips as a real Q chunk;
+    // padded_slot_flat_q decodes the chunk each slot stands for, exactly as the reader does.
+    if constexpr (!has_sliding_window) {
+        for (uint32_t slot = 0; slot < padded_q_slots; ++slot) {
+            const uint32_t owned = global_q_end - global_q_start;
+            const uint32_t q_flat = padded_slot_flat_q<rotated_q_split_enabled>(
+                rotated_slots, global_q_start, owned, owned + slot, use_zigzag_balancing ? 2 : 1);
+            const uint32_t q_chunk = remap_q_index(q_flat, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+            if constexpr (is_balanced_sdpa) {
+                if (skip_first_half_q && q_chunk < num_q_chunks / 2) {
+                    continue;
+                }
+            }
+            const uint32_t padded_k_chunks = packed_sources ? packed_kv.chunk_count() : num_kv_chunks;
+            for (uint32_t k_chunk = 0; k_chunk < padded_k_chunks; ++k_chunk) {
+                if (!packed_sources && try_skip_oob_kv(ring_id, k_chunk, k_chunk >= num_local_k_chunks)) {
+                    continue;
+                }
+                CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
+                sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+                if constexpr (!kt_inplace_v) {
+                    CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                    sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                }
+                KV_chunks_processed_in_iter++;
+            }
+        }
     }
 
     // Dummy KV traffic exists only to align chained readers. Sliding mode uses independent

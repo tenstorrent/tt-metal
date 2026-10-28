@@ -175,7 +175,9 @@ inline __attribute__((always_inline)) void noc_restore_default_atomic_ret_addr(u
 // Expects overlay_cmd_buff_init to have set on OVERLAY_RD_CMD_BUF:
 //   MISC = CMD_BUF_MISC_READ
 //   TR_ID / WR_SENT_TR_ID / TR_ACK_TR_ID = NOC_OVERLAY_TRID_STATIC (0)
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+//
+// src_in_cmd_buf: the address generator already pushed the source address into SRC_ADDR (src_addr is ignored).
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool src_in_cmd_buf = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -189,8 +191,10 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, read_req_vc);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_OVERLAY_RD_RESP_VC);
-    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_addr);
+    if constexpr (!src_in_cmd_buf) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_addr);
+    }
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, noc_v3_local_operand(dest_addr));
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -215,7 +219,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool update_counter = true>
+// dest_in_cmd_buf: the address generator already pushed the destination address into DEST_ADDR (dest_addr is ignored;
+// unicast only).
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    bool use_trid = false,
+    bool update_counter = true,
+    bool dest_in_cmd_buf = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -265,8 +275,10 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
 
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, noc_v3_local_operand(src_addr));
-    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, dest_addr);
+    if constexpr (!dest_in_cmd_buf) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, dest_addr);
+    }
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, len_bytes);
     if (mcast) {
@@ -422,6 +434,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     // instruction. LEN is the transfer size. The INLINE_WR/BYTE_ENABLE MISC bits
     // with a byte-enable mask in LEN never complete on this NIU (no ack, no
     // data), and one such issue wedges every later barrier on the core.
+    // Quasar-only: byte-enabled writes bypass the security fence (checks 64 B of 256 B).
     ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
     uint32_t num_dests = 1;
     uint32_t mcast_coord = 0;
@@ -487,6 +500,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
     // Same recipe as noc_fast_write_dw_inline (see there); the caller supplies
     // the destination count. The sender is not included, so a rectangle that
     // contains it has one destination fewer than its area.
+    // Quasar-only: byte-enabled writes bypass the security fence (checks 64 B of 256 B).
     ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
     uint32_t mcast_coord = 0;
     if (mcast) {
@@ -721,6 +735,7 @@ template <uint8_t noc_mode = DM_DEDICATED_NOC, bool one_packet = false, bool use
 inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t src_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    noc_cmd_buf_assert_rd_resp_vc(cmd_buf);
 
     if constexpr (use_vc) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
@@ -840,6 +855,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t be, uint32_t static_vc, uint32_t val = 0) {
     // Reference recipe (cmdbuff_api.hpp): plain write, LEN = dword; see
     // noc_fast_write_dw_inline for why the INLINE_WR/BYTE_ENABLE form is wrong.
+    // Quasar-only: byte-enabled writes bypass the security fence (checks 64 B of 256 B).
     ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
     if constexpr (set_val) {
         noc_v3_inline_write_state_val = val;
@@ -1099,6 +1115,7 @@ template <uint32_t cmd_buf>
 inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_READ);
+    noc_cmd_buf_assert_rd_resp_vc(cmd_buf);
 }
 
 // src_addr carries the whole source: a full ATT address, or, when only the
@@ -1364,7 +1381,8 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
         }
     }
     if constexpr (flags & CQ_NOC_INLINE_FLAG_BE) {
-        ASSERT(be == 0xF);
+        // Quasar-only: byte-enabled writes bypass the security fence (checks 64 B of 256 B).
+        ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
     }
     if constexpr (send) {
         const uint32_t data = (flags & CQ_NOC_INLINE_FLAG_VAL) ? val : noc_v3_cq_state[cmd_buf].inline_val;

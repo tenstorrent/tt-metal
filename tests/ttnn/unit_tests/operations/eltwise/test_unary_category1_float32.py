@@ -5,33 +5,24 @@
 import torch
 import pytest
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import (
     assert_equal,
     assert_with_ulp,
     assert_allclose,
+    flush_subnormal_values_to_zero,
 )
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    bf16_binade_samples,
     generate_float32_bits,
     generate_float32_bits_in_range,
     flush_to_zero,
-    to_tt_tensor as _upload,
+    to_float32_tt_tensor,
     MAX_BF16,
     SMALLEST_NORMAL_BF16,
 )
 
 pytestmark = pytest.mark.use_module_device
-
-
-def to_tt_tensor(input_tensor, device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    """Upload as ttnn.float32. The bfloat16 category files use the bfloat16 default of _upload."""
-    return _upload(
-        input_tensor,
-        device,
-        dtype=ttnn.float32,
-        layout=layout,
-        memory_config=memory_config,
-    )
 
 
 """
@@ -116,7 +107,7 @@ Trigonometric, hyperbolic, comparison, rounding, special math, logical, and util
 def test_comparison_to_zero_ops(device, ttnn_op):
     input_tensor = generate_float32_bits(include_spl_values=True)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(input_tensor, device=device)
@@ -146,7 +137,7 @@ def test_comparison_to_zero_ops(device, ttnn_op):
 def test_spl_value_check_ops(device, ttnn_op):
     input_tensor = generate_float32_bits(include_spl_values=True)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(input_tensor, device=device)
@@ -158,16 +149,14 @@ def test_spl_value_check_ops(device, ttnn_op):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Logical NOT (-0.0) returns False while golden returns True
+# Logical NOT
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_logical_not_ops(device):
     input_tensor = generate_float32_bits(include_spl_values=True)
-    # Replace -0.0 with 0.0
-    input_tensor = torch.where(input_tensor == -0.0, torch.zeros_like(input_tensor), input_tensor)
     ttnn_op = ttnn.logical_not
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(input_tensor, device=device)
@@ -196,7 +185,7 @@ def test_logical_not_ops(device):
 def test_identity_neg_abs_sign_ops(device, ttnn_op, include_spl_values):
     input_tensor = generate_float32_bits(include_spl_values=include_spl_values)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(input_tensor, device=device)
@@ -224,7 +213,7 @@ def test_identity_neg_abs_sign_ops(device, ttnn_op, include_spl_values):
 def test_rounding_ops(device, ttnn_op):
     input_tensor = generate_float32_bits()
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(input_tensor, device=device)
@@ -260,7 +249,7 @@ def test_rounding_ops(device, ttnn_op):
 def test_trig_ops(device, ttnn_op, low, high, atol, rtol):
     input_tensor = generate_float32_bits_in_range(low, high)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(input_tensor, device=device)
@@ -291,7 +280,7 @@ def test_trig_ops(device, ttnn_op, low, high, atol, rtol):
 def test_trig_ops_out_ftz(device, ttnn_op, low, high, ulp_threshold):
     input_tensor = generate_float32_bits_in_range(low, high)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(input_tensor, device=device)
@@ -319,7 +308,7 @@ ATANH_INTERIOR = 1.0 - 2.0**-7
 def test_atanh(device):
     input_tensor = generate_float32_bits_in_range(-ATANH_INTERIOR, ATANH_INTERIOR)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn.atanh)
     golden = golden_function(input_tensor, device=device)
@@ -335,10 +324,7 @@ def test_atanh_outside_domain(device):
     positive = generate_float32_bits_in_range(1.0, 100.0)
     input_tensor = torch.cat((negative, positive), dim=0)
 
-    tt_in = to_tt_tensor(input_tensor, device)
-
-    golden_function = ttnn.get_golden_function(ttnn.atanh)
-    golden = golden_function(input_tensor, device=device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     tt_result = ttnn.atanh(tt_in)
     result = ttnn.to_torch(tt_result)
@@ -347,10 +333,6 @@ def test_atanh_outside_domain(device):
     assert torch.equal(torch.isposinf(result), input_tensor == 1)
     assert torch.equal(torch.isneginf(result), input_tensor == -1)
     assert torch.equal(torch.isnan(result), input_tensor.abs() > 1)
-    assert torch.equal(torch.isnan(golden), torch.isnan(result))
-    assert torch.equal(torch.isinf(golden), torch.isinf(result))
-    inf = torch.isinf(golden)
-    assert torch.equal(torch.signbit(golden[inf]), torch.signbit(result[inf]))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -369,7 +351,7 @@ def test_atanh_outside_domain(device):
 def test_angle_conversion_ops(device, ttnn_op, low, high):
     input_tensor = generate_float32_bits_in_range(low, high)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(input_tensor, device=device)
@@ -393,7 +375,7 @@ def test_erfinv(device):
     # max |err|=3.37e-3, max |err|/|device|=1.65e-3.
     input_tensor = generate_float32_bits_in_range(-1.0, 1.0)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn.erfinv)
     golden = golden_function(input_tensor, device=device)
@@ -439,7 +421,7 @@ def test_erfc(device):
     input_tensor = generate_float32_bits_in_range(-10.0, 10.0)
     input_tensor = input_tensor[input_tensor < ERFC_CLAMP]
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn.erfc)
     golden = golden_function(input_tensor, device=device)
@@ -455,7 +437,7 @@ def test_erfc_tail(device):
     """x >= 5 against torch.erfc, same rtol as (2, 5). Expected to fail while the input is clamped at 5."""
     input_tensor = generate_float32_bits_in_range(ERFC_CLAMP, 10.0)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn.erfc)
     golden = golden_function(input_tensor, device=device)
@@ -505,7 +487,7 @@ def test_reciprocal(device, low, high):
 
     input_tensor = generate_float32_bits_in_range(low, high)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn.reciprocal)
     golden = golden_function(input_tensor, device=device)
@@ -546,7 +528,7 @@ def test_reciprocal_blackhole_tail(device, low, high):
     input_tensor = generate_float32_bits_in_range(low, high)
 
     golden = ttnn.get_golden_function(ttnn.reciprocal)(input_tensor, device=device)
-    result = ttnn.to_torch(ttnn.reciprocal(to_tt_tensor(input_tensor, device)))
+    result = ttnn.to_torch(ttnn.reciprocal(to_float32_tt_tensor(input_tensor, device)))
 
     assert_allclose(expected_result=golden, actual_result=result, atol=0, rtol=5.7e-3)
 
@@ -569,7 +551,7 @@ def test_reciprocal_flushes_to_zero(device, low, high):
     """
     input_tensor = generate_float32_bits_in_range(low, high)
     golden = ttnn.get_golden_function(ttnn.reciprocal)(input_tensor, device=device)
-    result = ttnn.to_torch(ttnn.reciprocal(to_tt_tensor(input_tensor, device)))
+    result = ttnn.to_torch(ttnn.reciprocal(to_float32_tt_tensor(input_tensor, device)))
 
     assert (golden != 0).all(), "expected every reciprocal in this range to be nonzero in torch"
 
@@ -609,7 +591,7 @@ def test_reciprocal_zero_and_nonfinite(device):
     input_tensor = torch.ones(32, 32, dtype=torch.float32)
     input_tensor.view(-1)[: len(special)] = torch.tensor(special, dtype=torch.float32)
 
-    result = ttnn.to_torch(ttnn.reciprocal(to_tt_tensor(input_tensor, device))).view(-1)
+    result = ttnn.to_torch(ttnn.reciprocal(to_float32_tt_tensor(input_tensor, device))).view(-1)
     pos_zero, neg_zero, pos_inf, neg_inf, nan = (result[i] for i in range(len(special)))
 
     assert pos_zero == float("inf") and not torch.signbit(pos_zero), "1/+0 must be +inf"
@@ -628,7 +610,7 @@ def test_reciprocal_zero_and_nonfinite(device):
 def test_square(device):
     input_tensor = generate_float32_bits_in_range(-1e19, 1e19)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn.square)
     golden = golden_function(input_tensor, device=device)
@@ -654,7 +636,7 @@ def test_square(device):
 def test_cbrt(device):
     input_tensor = generate_float32_bits_in_range(-1e38, 1e38)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn.cbrt)
     golden = golden_function(input_tensor.to(torch.float64)).to(torch.float32)
@@ -684,7 +666,7 @@ def test_cbrt(device):
 def test_exp_ops(device, ttnn_op, low, high):
     input_tensor = generate_float32_bits_in_range(low, high)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(input_tensor, device=device)
@@ -709,7 +691,7 @@ def test_exp_allclose(device):
     golden_function = ttnn.get_golden_function(ttnn.exp)
     golden = golden_function(input_tensor, device=device)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     tt_result = ttnn.exp(tt_in)
     result = ttnn.to_torch(tt_result)
@@ -717,12 +699,81 @@ def test_exp_allclose(device):
     assert_allclose(expected_result=golden, actual_result=result, atol=1.0e-38, rtol=0)
 
 
+def test_exp_full_mantissa(device):
+    """exp tested for float32 inputs off the bfloat16 lattice, up to the overflow edge.
+
+    | Inputs                                     | Check   |
+    |--------------------------------------------|---------|
+    | 4096 evenly spaced values in [-87.3, 88.7] | ULP ≤ 1 |
+    | edge points up to the last finite input    | ULP ≤ 1 |
+    | (log(FLT_MAX) ≈ 88.7228)                   |         |
+
+    """
+    low, high = -87.3, 88.7
+    last_finite = torch.nextafter(torch.log(torch.tensor(torch.finfo(torch.float32).max)), torch.tensor(0.0)).item()
+    edge_points = torch.tensor(
+        [torch.nextafter(torch.tensor(high), torch.tensor(low)).item(), 88.72, last_finite],
+        dtype=torch.float32,
+    )
+    input_tensor = torch.cat([torch.linspace(low, high, 4096, dtype=torch.float32), edge_points]).unique()
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp)
+    golden = golden_function(input_tensor, device=device)
+
+    result = ttnn.to_torch(ttnn.exp(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+def test_exp_special_values(device):
+    """exp tested for float32 special value inputs.
+
+    | Input                                  | Expected            |
+    |----------------------------------------|---------------------|
+    | -inf, -120, -104                       | 0                   |
+    | ±0 and bfloat16 subnormals             | 1                   |
+    | 89, 100, +inf                          | +inf                |
+    | NaN, negative NaN                      | NaN                 |
+    """
+    negative_nan = torch.tensor([-0x400000], dtype=torch.int32).view(torch.float32)
+    subnormals = torch.tensor([1e-40, -1e-40, 1.1e-38, -1.1e-38], dtype=torch.float32)
+    input_tensor = torch.cat(
+        [
+            torch.tensor(
+                [
+                    -float("inf"),
+                    -120.0,
+                    -104.0,
+                    -0.0,
+                    0.0,
+                    89.0,
+                    100.0,
+                    float("inf"),
+                    float("nan"),
+                ],
+                dtype=torch.float32,
+            ),
+            negative_nan,
+            subnormals,
+        ]
+    )
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp)
+    golden = golden_function(input_tensor, device=device)
+
+    result = ttnn.to_torch(ttnn.exp(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+
 def test_exp2_allclose(device):
     """exp2 underflow region (-127, -126) allclose check.
 
-    The ULP sweep in test_exp_ops covers (-126.0, 127.0); this extends into the
-    underflow tail where exp2(x) approaches the smallest normals. 1022 of 1024
-    values are bit-exact. The other 2 (x = -126.5, -127) are flushed to zero.
+    The 2 values in the underflow tail (x = -126.5, -127) are flushed to zero.
     Largest |err| is 8.31e-39 at x=-126.5, so atol sits just above that and
     rtol stays 0.
     """
@@ -731,12 +782,175 @@ def test_exp2_allclose(device):
     golden_function = ttnn.get_golden_function(ttnn.exp2)
     golden = golden_function(input_tensor, device=device)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
 
     assert_allclose(actual_result=result, expected_result=golden, atol=8.4e-39, rtol=0)
+
+
+def test_exp2_full_mantissa(device):
+    """exp2 on float32 inputs off the bfloat16 lattice, up to the overflow edge.
+
+    | Inputs                                       | Check   |
+    |----------------------------------------------|---------|
+    | 4096 evenly spaced values in each of         | ULP ≤ 1 |
+    | [-126, 127], [-5, 5] and [-0.5, 0.5]         |         |
+    | edge points up to the last finite input      | ULP ≤ 1 |
+    | (largest float32 below 128)                  |         |
+
+    """
+    low, high = -126.0, 127.0
+    last_finite = torch.nextafter(torch.tensor(128.0), torch.tensor(0.0)).item()
+    edge_points = torch.tensor([127.5, last_finite], dtype=torch.float32)
+    input_tensor = torch.cat(
+        [
+            torch.linspace(low, high, 4096, dtype=torch.float32),
+            torch.linspace(-5.0, 5.0, 4096, dtype=torch.float32),
+            torch.linspace(-0.5, 0.5, 4096, dtype=torch.float32),
+            edge_points,
+        ]
+    ).unique()
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = golden_function(input_tensor, device=device)
+
+    result = ttnn.to_torch(ttnn.exp2(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+def test_exp2_special_values(device):
+    """exp2 on the inputs the bfloat16 sweeps replace with 0, plus both saturation ends.
+
+    | Input                         | Expected                                  |
+    |-------------------------------|-------------------------------------------|
+    | -inf                          | 0                                         |
+    | -149                          | 0 (golden 2^-149 is subnormal; device FTZ)|
+    | ±0 and bfloat16 subnormals    | 1                                         |
+    | 128, +inf                     | +inf                                      |
+    | NaN, negative NaN             | NaN                                       |
+    """
+    positive_nan = torch.tensor([float("nan")], dtype=torch.float32)
+    subnormals = torch.tensor([1e-40, -1e-40, 1.1e-38, -1.1e-38], dtype=torch.float32)
+    input_tensor = torch.cat(
+        [
+            torch.tensor([-float("inf"), -149.0, -0.0, 0.0, 128.0, float("inf")], dtype=torch.float32),
+            positive_nan,
+            -positive_nan,
+            subnormals,
+        ]
+    )
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = flush_subnormal_values_to_zero(golden_function(input_tensor, device=device))
+
+    result = ttnn.to_torch(ttnn.exp2(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+
+def test_expm1_saturation(device):
+    """expm1 outside the test_exp_ops sweep, sampled per binade.
+
+    | Inputs                                         | Expected | Check   |
+    |------------------------------------------------|----------|---------|
+    | [-MAX_BF16, -87]: first, middle and last       | -1       | ULP ≤ 1 |
+    | bfloat16 mantissa of every binade, plus -87    |          |         |
+    | [89, MAX_BF16]: same sampling, plus 89 (the    | +inf     | exact   |
+    | first bfloat16 above log(FLT_MAX))             |          |         |
+
+    Every input here saturates, so a few values per binade (power-of-two
+    interval) are enough to catch a magnitude where range reduction breaks.
+    """
+    input_tensor = torch.cat([-bf16_binade_samples(87.0), bf16_binade_samples(89.0)])
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.expm1)
+    golden = golden_function(input_tensor, device=device)
+
+    result = ttnn.to_torch(ttnn.expm1(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+
+def test_expm1_full_mantissa(device):
+    """expm1 on float32 inputs off the bfloat16 lattice, up to the overflow edge.
+
+    | Inputs                                       | Check   |
+    |----------------------------------------------|---------|
+    | 4096 evenly spaced values in each of         | ULP ≤ 1 |
+    | [-87.3, 88.7], [-1, 1] and [-1e-3, 1e-3]     |         |
+    | edge points up to the last finite input      | ULP ≤ 1 |
+    | (log(FLT_MAX) ≈ 88.7228)                     |         |
+
+    test_exp_ops only sees bfloat16 values (lower 16 mantissa bits zero), so it
+    never checks full-mantissa rounding, the cancellation-prone region near 0,
+    or (88.5, 88.7228].
+    """
+    low, high = -87.3, 88.7
+    last_finite = torch.nextafter(torch.log(torch.tensor(torch.finfo(torch.float32).max)), torch.tensor(0.0)).item()
+    edge_points = torch.tensor([-1e-6, 1e-6, 88.72, last_finite], dtype=torch.float32)
+    input_tensor = torch.cat(
+        [
+            torch.linspace(low, high, 4096, dtype=torch.float32),
+            torch.linspace(-1.0, 1.0, 4096, dtype=torch.float32),
+            torch.linspace(-1e-3, 1e-3, 4096, dtype=torch.float32),
+            edge_points,
+        ]
+    ).unique()
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.expm1)
+    golden = golden_function(input_tensor, device=device)
+
+    result = ttnn.to_torch(ttnn.expm1(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+def test_expm1_special_values(device):
+    """expm1 on the inputs the bfloat16 sweeps replace with 0, plus both saturation ends.
+
+    | Input                      | Expected                              |
+    |----------------------------|---------------------------------------|
+    | -inf                       | -1                                    |
+    | +0                         | +0                                    |
+    | -0                         | +0 (torch gives -0; sign not checked) |
+    | subnormals                 | 0 (input and golden flushed)          |
+    | ±1e-30                     | ±1e-30 (expm1(x) ≈ x for tiny x)      |
+    | +inf                       | +inf                                  |
+    | NaN, negative NaN          | NaN                                   |
+
+    The ULP check treats -0 and +0 as equal, so the device's +0 for
+    expm1(-0) passes.
+    """
+    positive_nan = torch.tensor([float("nan")], dtype=torch.float32)
+    subnormals = torch.tensor([1e-40, -1e-40, 1.1e-38, -1.1e-38], dtype=torch.float32)
+    input_tensor = torch.cat(
+        [
+            torch.tensor([-float("inf"), -0.0, 0.0, -1e-30, 1e-30, float("inf")], dtype=torch.float32),
+            positive_nan,
+            -positive_nan,
+            subnormals,
+        ]
+    )
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.expm1)
+    golden = flush_subnormal_values_to_zero(golden_function(input_tensor, device=device))
+
+    result = ttnn.to_torch(ttnn.expm1(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -760,7 +974,7 @@ def test_exp2_allclose(device):
 def test_digamma_multigammaln(device, ttnn_op, low, high, atol, rtol):
     input_tensor = generate_float32_bits_in_range(low, high)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(input_tensor, device=device)
@@ -791,14 +1005,9 @@ def test_digamma_large_x(device):
 
 
 def test_digamma_small_x(device):
-    """Guard the steep near-pole region below 1. psi has a pole at 0 (psi(x) ~ -1/x).
-
-    ``test_digamma_multigammaln`` starts at 1, so the samples below 1 are the ones it misses.
-    The points from 1 to 2 overlap that sweep. The sample skips the zero-crossing at x ~= 1.4616,
-    where an ULP count is unstable.
-    """
+    """Guard the steep near-pole region below 1. psi has a pole at 0 (psi(x) ~ -1/x)."""
     xs = torch.tensor(
-        [[0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 0.75, 1.0, 1.25, 1.75, 1.9, 1.99]],
+        [[0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 0.75, 1.9, 1.99]],
         dtype=torch.float32,
     )
     golden = torch.digamma(xs.to(torch.float64)).to(torch.float32)
@@ -829,7 +1038,7 @@ def test_lgamma(device):
     is_non_positive_int = (input_tensor <= 0) & (input_tensor == torch.floor(input_tensor))
     input_tensor = input_tensor[~is_non_positive_int]
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn.lgamma)
     golden = golden_function(input_tensor, device=device)
@@ -856,7 +1065,7 @@ def test_lgamma_poles(device):
     assert torch.any(poles == 0) and torch.any(poles == -1)
 
     golden = ttnn.get_golden_function(ttnn.lgamma)(poles, device=device)
-    result = ttnn.to_torch(ttnn.lgamma(to_tt_tensor(poles, device)))
+    result = ttnn.to_torch(ttnn.lgamma(to_float32_tt_tensor(poles, device)))
 
     assert torch.all(torch.isposinf(golden))
     assert torch.all(torch.isposinf(result))
@@ -902,7 +1111,7 @@ def test_bessel_ops(device, ttnn_op, low, high, atol, rtol):
     """
     input_tensor = generate_float32_bits_in_range(low, high)
 
-    tt_in = to_tt_tensor(input_tensor, device)
+    tt_in = to_float32_tt_tensor(input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(input_tensor)

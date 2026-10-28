@@ -20,6 +20,12 @@ void kernel_main() {
     DataflowBuffer cb_post_lhs(HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id);
     DataflowBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
     DataflowBuffer cb_out(tt::CBIndex::c_2);
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer cb_pre_lhs(cb_pre_lhs_id);
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer cb_pre_rhs(cb_pre_rhs_id);
+#endif
 
     compute_kernel_hw_startup(cb_post_lhs.get_id(), cb_post_rhs.get_id(), cb_out.get_id());
 #ifdef PACK_RELU
@@ -30,12 +36,12 @@ void kernel_main() {
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_id(), cb_post_rhs.get_id());
 #endif
 
-    PREPROCESS(RHS, DataflowBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, 1);
+    PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, 1);
     cb_post_rhs.wait_front(1);
 
     // Inline lambda to process n tiles with the scalar value
     auto process_tiles = [&](uint32_t n) {
-        PREPROCESS(LHS, DataflowBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
+        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n);
         cb_post_lhs.wait_front(n);
 
         cb_out.reserve_back(n);

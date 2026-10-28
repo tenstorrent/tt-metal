@@ -41,10 +41,12 @@
   budget_type: unit
 
 - name: tt-train cpp distributed unit tests
+  # NIGHTLY tests already run in the nightly legs on bh_p100 and bh_p150b_civ2, so this leg skips them.
+  # Multi-device tests must therefore not be named NIGHTLY, or they run nowhere.
   cmd: |
     mkdir -p generated/test_reports
     export TT_MESH_GRAPH_DESC_PATH=${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_1_2_line_line.textproto
-    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
   skus:
     bh_quietbox_2:
       timeout: 25

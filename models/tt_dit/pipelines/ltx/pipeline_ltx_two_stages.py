@@ -20,6 +20,7 @@ from ...models.vae.vae_ltx import upsample_latent
 from ...utils.fuse_loras import LoraSpec
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
+from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from ...utils.video import export_video_audio
 from .pipeline_ltx import DEFAULT_NEGATIVE_PROMPT, SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, latent_grid
 
@@ -55,6 +56,7 @@ class LTXTwoStagesPipeline(LTXPipeline):
         self._distilled_lora_strength = distilled_lora_strength
         super().__init__(*args, **kwargs)
 
+    @cap_torch_threads_to_half_the_cpus()
     def warmup_buffers(
         self,
         *,
@@ -156,6 +158,7 @@ class LTXTwoStagesPipeline(LTXPipeline):
         self._prepare_transformer(0)
         logger.info(f"warmup (2-stage) done in {time.time() - t0:.1f}s")
 
+    @cap_torch_threads_to_half_the_cpus()
     def generate(
         self,
         prompt: str,

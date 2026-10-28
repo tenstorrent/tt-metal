@@ -6,10 +6,11 @@
 # You also need to install everything needed to run tt-triage.py in that environment
 # Run manually ./tools/tt-triage.py --help to see if it works and install requirements
 
-from collections import deque
+from collections import Counter, deque
 from dataclasses import fields
 from datetime import timedelta
 import os
+import re
 import signal
 import struct
 import subprocess
@@ -201,6 +202,10 @@ def wait_for_simulated_hang(proc: subprocess.Popen, output: AppOutput, app: str,
 
 @pytest.fixture(scope="class")
 def cause_hang_with_app(request):
+    # Reset the device state after the hang if set in environment
+    if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
+        subprocess.run(["tt-smi", "-r"], check=True)
+
     global metal_home
 
     app, args, app_configuration, timeout = request.param
@@ -272,10 +277,6 @@ def cause_hang_with_app(request):
             proc.kill()
             proc.wait()
         output.print()
-
-        # Reset the device state after the hang if set in environment
-        if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
-            subprocess.run(["tt-smi", "-r"], check=True)
 
 
 @pytest.mark.parametrize(
@@ -524,7 +525,7 @@ class TestTriage:
         assert counts == {0: (1, 0), 1: (1, 0), 2: (0, 0)}, f"Unexpected CB state on (0,0): {counts}"
 
     def test_dump_circular_buffers_content(self):
-        result = self.run_triage_script("dump_circular_buffers.py", argv=["--dump-cb-content"])
+        result = self.run_triage_script("dump_circular_buffers.py", argv=["--include-cb-content"])
         self.skip_unless_circular_buffers(result)
         assert result is not None, "Expected CB rows for the hung core"
         location = OnChipCoordinate.create("0,0", result[0].device_description.device)
@@ -535,6 +536,9 @@ class TestTriage:
             assert len(data) == rows[cb].size
             values = [struct.unpack("<f", struct.pack("<I", u << 16))[0] for (u,) in struct.iter_unpack("<H", data)]
             assert all(0.0 <= v <= limit for v in values), f"CB{cb} does not hold the input tile"
+
+    def test_dump_fabric_stream_regs(self):
+        self.run_triage_script("dump_fabric_stream_regs.py")
 
     def test_dump_fast_dispatch(self):
         self.run_triage_script("dump_fast_dispatch.py")
@@ -733,6 +737,7 @@ class TestTriage:
 
             check = results_by_risc[risc_name]
             assert check.result is not None, f"Expected non-None result for {risc_name}"
+            assert hasattr(check.result, "frame_locals"), f"{risc_name}: Expected a Locals column with --full-callstack"
 
             # Verify core is halted (stuck on ebreak)
             risc_debug = check.location.noc_block.get_risc_debug(risc_name, check.neo_id)
@@ -742,6 +747,17 @@ class TestTriage:
             callstack_with_message = check.result.kernel_callstack_with_message
             callstack = callstack_with_message.callstack
             assert len(callstack) > 0, f"{risc_name}: Callstack is empty"
+
+            # Every local the debugger returned a value for must appear in the Locals column, once per frame it is in
+            frame_locals = check.result.frame_locals or ""
+            expected_locals = Counter(
+                var.name for frame in callstack for var in frame.locals if var.value is not None and var.name
+            )
+            for name, count in expected_locals.items():
+                shown = len(re.findall(rf"\b{re.escape(name)}\b", frame_locals))
+                assert (
+                    shown >= count
+                ), f"{risc_name}: local '{name}' has a value in {count} frame(s) but is shown {shown} time(s)"
 
             # Verify callstack contains expected file and line
             expected_file = expected_data.get("file")

@@ -19,9 +19,8 @@ by a multi-config table (one config per (tensor, head-shard); see ``tt/runners/k
 with a pipeline the gathered stage layouts merge every stage's layers into one table at global layer
 indices (one layout per cache — k, v, index_k — via ``kv_migration_stages``).
 
-Limitation: the block-cyclic SP cache and the MSA cache read address the prefix in whole chunks, so M3
-does not support multi-turn continuation from a prefix that is not chunk-aligned (the producer's
-``PREFILL_PRODUCER_MULTI_TURN_PROB`` mode resumes at a 32-token boundary); ``prefill_chunk`` asserts on it.
+A multi-turn continuation may resume mid-chunk at any 32-token boundary (the KV-cache writer's tile grid),
+as the producer's ``PREFILL_PRODUCER_MULTI_TURN_PROB`` mode does.
 
 Import-safety: the heavy stack (TtPrefillRuntime / Model / transformers AutoConfig / weight loading) is
 imported lazily inside the methods that need it, so ``import ...adapters.minimax_m3`` stays cheap enough
@@ -138,6 +137,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             sp_axis=params.sp_axis,
             num_users=params.num_users,
             head_dim=hf_config.head_dim,
+            bank_aligned=True,
         )
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):

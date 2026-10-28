@@ -14,7 +14,6 @@ import math
 import struct
 
 import torch
-from conftest import blackhole_only
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -72,8 +71,6 @@ _EXCLUDED_PAIRS = {
     (DataFormat.UInt32, DataFormat.Int32),
 }
 
-_BLOCK_FLOAT_FORMATS = (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b)
-
 # Formats the current architecture's data-format enum actually supports. Used to
 # drop unsupported pairs at collection time so we never generate tests we would
 # otherwise have to skip in the test body.
@@ -94,10 +91,6 @@ TYPECAST_PAIRS = [
     and in_fmt in _ARCH_SUPPORTED_FORMATS
     and out_fmt in _ARCH_SUPPORTED_FORMATS
 ]
-
-
-def _is_block_float(fmt: DataFormat) -> bool:
-    return fmt in _BLOCK_FLOAT_FORMATS
 
 
 def _whole_number_float_spec(high: int) -> StimuliSpec:
@@ -172,8 +165,8 @@ def test_eltwise_unary_typecast(
     #  * float / block-float input: whole numbers so int conversions are exact and
     #    bf16 is lossless; small range when a block-float is involved so the
     #    shared-exponent quantization is (near-)exact per 16-elem block.
-    bfp_involved = _is_block_float(formats.input_format) or _is_block_float(
-        formats.output_format
+    bfp_involved = (
+        formats.input_format.is_block_float() or formats.output_format.is_block_float()
     )
     if formats.input_format.is_integer():
         spec_A = (
@@ -234,6 +227,7 @@ def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
 _FP32_EXP_BIAS = 127
 _FP32_MANTISSA_BITS = 23
 _FP32_SIGN_BIT = 1 << 31
+_UINT32_WRAP = 1 << 32
 
 
 def _fp32_bits(unbiased_exp: int, mantissa: int) -> int:
@@ -279,9 +273,6 @@ def _fp32_to_uint8_wide_exponent_bits() -> list[int]:
     return patterns
 
 
-# Blackhole only: the Wormhole calculate_typecast_fp32_to_uint8 still shifts by
-# (exp - 23) & 31 (https://github.com/tenstorrent/tt-llk/issues/1701 item 15).
-@blackhole_only
 def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
     # SFPSHFT uses (amount & 31); without a bound on the large side, exponents
     # 55..62, 87..94 and 119..126 shift the mantissa back into the low byte.
@@ -302,7 +293,10 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
     assert len(patterns) <= src_A.numel()
     bits = patterns + [0] * (src_A.numel() - len(patterns))
     src_A = (
-        torch.tensor([b - (1 << 32) if b >> 31 else b for b in bits], dtype=torch.int32)
+        torch.tensor(
+            [b - _UINT32_WRAP if b & _FP32_SIGN_BIT else b for b in bits],
+            dtype=torch.int32,
+        )
         .view(torch.float32)
         .to(src_A.dtype)
     )
@@ -413,7 +407,7 @@ def _build_typecast_config(
     if dest_acc == DestAccumulation.No:
         pack_src = (
             DataFormat.Float16_b
-            if _is_block_float(formats.output_format)
+            if formats.output_format.is_block_float()
             else formats.output_format
         )
         for fmt_config in configuration.formats_config:

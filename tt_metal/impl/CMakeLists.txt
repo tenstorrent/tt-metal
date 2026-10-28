@@ -129,7 +129,7 @@ target_include_directories(
         debug
         profiler
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
-        # tools/profiler/perf_counters.hpp includes the shared tt-llk counter headers
+        # internal/profiler/perf_counters.hpp includes the shared tt-llk counter headers
         ${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tools/include
         ${CMAKE_CURRENT_BINARY_DIR}
 )

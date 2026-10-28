@@ -88,6 +88,9 @@ uint32_t get_estimated_size_of_cbs(
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a);
 
+// L1 per worker core the allocator can ever hand out, independent of current occupancy.
+uint32_t get_static_l1_space(const Tensor& input_tensor_a);
+
 // One set of buffers, sized for a single block width.
 //
 // The `_multi_core_block[_interleaved]` tilize and untilize factories split work into blocks and
@@ -436,5 +439,7 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor);
 
 // B/W-sh → shard_W*E (feeds split branch); other sharded → buffer->aligned_page_size() (16-aligned L1 stride).
 uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_bytes);
+
+bool codegen_supported_on_arch(const ttnn::Tensor& input);
 
 }  // namespace ttnn::operations::data_movement

@@ -182,6 +182,7 @@ class TtCombine2dModule(LightweightModule):
         experts_per_chip: int,
         num_experts_per_tok: int,
         seq_len_per_chip: int,
+        fwd_reduction: int,
         cluster_axis: int = 0,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
@@ -195,6 +196,10 @@ class TtCombine2dModule(LightweightModule):
             experts_per_chip: Number of experts hosted on each device.
             num_experts_per_tok: Number of experts each token is routed to (top-k).
             seq_len_per_chip: Number of tokens on each source device (output token dimension size).
+            fwd_reduction: Divisor on the op's forwarding region, from the model's
+                COMBINE_FWD_REDUCTION. No value can deadlock the ring, so this trades DRAM against
+                throughput and nothing else; where that curve bends is what differs per model, which
+                is why it is passed in rather than fixed in the op.
             cluster_axis: Mesh axis the ring runs along (0 = SP/dispatch axis).
             num_links: Number of fabric links per chip-to-chip connection. Each (link, direction)
                 pair is one stream, so the op runs 2 * num_links streams per chip.
@@ -209,6 +214,7 @@ class TtCombine2dModule(LightweightModule):
         self.experts_per_chip = experts_per_chip
         self.num_experts_per_tok = num_experts_per_tok
         self.seq_len_per_chip = seq_len_per_chip
+        self.fwd_reduction = fwd_reduction
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.topology = topology
@@ -228,7 +234,7 @@ class TtCombine2dModule(LightweightModule):
         Args:
             dispatched_buffer: Expert-processed token embeddings produced by TtRoutedExpert.
                 A chip's page range for one expert holds that expert's tokens grouped by the chip
-                they ORIGINATED on. BFLOAT16.
+                they ORIGINATED on. BFLOAT16 (ROW_MAJOR or TILE) or BFLOAT8_B (TILE).
             dispatched_metadata: Per-token routing metadata produced by TtDispatchModule.forward().
                 3 int32 per token: (linearized_mesh_coord, token_idx, topk_idx). INT32 ROW_MAJOR.
             expert_token_counts: Number of tokens dispatched to each expert; also closes the last
@@ -243,6 +249,9 @@ class TtCombine2dModule(LightweightModule):
         Returns:
             output: Combined token embeddings, shape per device
                 (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim), BFLOAT16 ROW_MAJOR.
+                A slot whose pick went to another dispatch group, or that dispatch dropped because its
+                page fell past the end of dispatched_buffer, is not written and holds whatever the
+                buffer held before; the output is never zeroed.
         """
         return ttnn.experimental.deepseek_prefill.combine_fabric2d(
             dispatched_buffer,
@@ -255,6 +264,7 @@ class TtCombine2dModule(LightweightModule):
             seq_len_per_chip=self.seq_len_per_chip,
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
+            fwd_reduction=self.fwd_reduction,
             topology=self.topology,
             memory_config=self.memory_config,
         )

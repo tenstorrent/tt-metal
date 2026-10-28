@@ -38,17 +38,7 @@ SPECIAL_VALUE_DTYPES = (
 SPECIAL_VALUE_CASES = (
     pytest.param(ttnn.GeluVariant.Accurate, "none", float("inf"), "one", id="none-pos-inf"),
     pytest.param(ttnn.GeluVariant.Accurate, "none", float("-inf"), "zero", id="none-neg-inf"),
-    pytest.param(
-        ttnn.GeluVariant.Accurate,
-        "none",
-        float("nan"),
-        "nan",
-        id="none-nan",
-        marks=pytest.mark.xfail(
-            reason="GELU polynomial backward currently treats NaN as a large positive value and returns 1.0",
-            strict=True,
-        ),
-    ),
+    pytest.param(ttnn.GeluVariant.Accurate, "none", float("nan"), "nan", id="none-nan"),
     pytest.param(ttnn.GeluVariant.Tanh, "tanh", float("inf"), "one", id="tanh-pos-inf"),
     pytest.param(ttnn.GeluVariant.Tanh, "tanh", float("-inf"), "zero", id="tanh-neg-inf"),
     pytest.param(ttnn.GeluVariant.Tanh, "tanh", float("nan"), "nan", id="tanh-nan"),
@@ -134,15 +124,28 @@ def test_gelu_bw_shape_coverage(device, variant, approximate, shape):
     assert_allclose(_gelu_bw_reference(input_data, grad_data, approximate), actual, rtol=rtol, atol=atol)
 
 
+def _special_value_xfail_reason(approximate, input_value, ttnn_dtype):
+    if approximate == "tanh" and torch.isinf(torch.tensor(input_value)) and ttnn_dtype == ttnn.float32:
+        return "FP32 tanh GELU backward overflows for infinite inputs and produces NaN"
+    if torch.isnan(torch.tensor(input_value)) and ttnn_dtype == ttnn.bfloat16:
+        return (
+            "BF16 GELU backward treats NaN as a large positive value and returns 1.0 "
+            "(https://github.com/tenstorrent/tt-llk/issues/1701)"
+        )
+    return None
+
+
 @pytest.mark.parametrize("torch_dtype,ttnn_dtype,rtol,atol", SPECIAL_VALUE_DTYPES)
 @pytest.mark.parametrize("variant,approximate,input_value,expected", SPECIAL_VALUE_CASES)
 def test_gelu_bw_special_values(
-    device, variant, approximate, input_value, expected, torch_dtype, ttnn_dtype, rtol, atol
+    request, device, variant, approximate, input_value, expected, torch_dtype, ttnn_dtype, rtol, atol
 ):
-    if approximate == "tanh" and torch.isinf(torch.tensor(input_value)) and ttnn_dtype == ttnn.float32:
-        pytest.xfail("FP32 tanh GELU backward overflows for infinite inputs and produces NaN")
-    if approximate == "tanh" and torch.isnan(torch.tensor(input_value)) and ttnn_dtype == ttnn.bfloat16:
-        pytest.xfail("BF16 tanh GELU backward treats NaN as a large positive value and returns 1.0")
+    # Strict, and applied as a marker so the op still runs: a fix shows up as an XPASS. Every
+    # expected failure is a value assertion, so raises= keeps a crash in the op from passing
+    # as XFAIL.
+    xfail_reason = _special_value_xfail_reason(approximate, input_value, ttnn_dtype)
+    if xfail_reason is not None:
+        request.applymarker(pytest.mark.xfail(reason=xfail_reason, strict=True, raises=AssertionError))
 
     input_data = torch.tensor([input_value] + [0.0] * 31, dtype=torch_dtype)
     grad_data = torch.ones_like(input_data)

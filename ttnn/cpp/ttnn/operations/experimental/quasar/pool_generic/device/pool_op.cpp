@@ -32,6 +32,12 @@ void validate_pool2d(
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now. Tracked by issue #23338");
 
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
+    TT_FATAL(input.shard_spec().has_value(), "Pool2D input shard spec should not be empty");
+    const auto& shard_spec = input.shard_spec().value();
+    sliding_window::validate_sliding_window_shard_grid(
+        shard_spec.grid,
+        input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+        shard_spec.orientation);
 
     if (return_indices) {
         TT_FATAL(pool_type == Pool2DType::MAX_POOL2D, "Return_indices is only supported for MAX pool type");

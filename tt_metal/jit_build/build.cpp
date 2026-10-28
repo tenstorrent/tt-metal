@@ -55,7 +55,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace fs = std::filesystem;
@@ -375,7 +375,7 @@ void JitBuildEnv::init(
         // Streaming profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
         // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
         // DeviceZoneScopedN / DeviceTimestampedData site compiled; PROFILE_STREAMING makes
-        // tools/profiler/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of
+        // api/debug/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of
         // the DRAM one. No DRAM options (dispatch cores, trace-only, sum, accumulate) apply here.
         TT_FATAL(
             this->arch_ != tt::ARCH::QUASAR,
@@ -383,7 +383,7 @@ void JitBuildEnv::init(
             "drainer, which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
         this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
         if (rtoptions.get_streaming_profiler_sync_events_enabled()) {
-            // Enable synchronization-event instrumentation (tools/profiler/synchronization_event_profiler.hpp)
+            // Enable synchronization-event instrumentation (internal/profiler/synchronization_event_profiler.hpp)
             // Note: only enabled with streaming profiler.
             this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
         }
@@ -521,7 +521,6 @@ void JitBuildEnv::init(
         root_,
         root_ + "ttnn",
         root_ + "ttnn/cpp",
-        root_ + "tt_metal",
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/tt-llk/common",
         root_ + "tt_metal/tt-llk/tools/include",
@@ -594,9 +593,6 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     const auto& jit_build_query = hal.get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
-    this->is_compute_pack_ = build_config.core_type == HalProgrammableCoreType::TENSIX &&
-                             build_config.processor_class == HalProcessorClassType::COMPUTE &&
-                             build_config.processor_id == 2;
     // Per-kernel opt-in flags (applied in export_target_recipe); empty when unsupported.
     this->rvv_cflags_ = jit_build_query.rvv_compile_flags(params);
     // Includes
@@ -1182,15 +1178,10 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
     target.target_name = target_name_;
     target.cflags = cflags_;
     target.pch_umbrella = (fs::path(env_.root_) / jit_build::PCH_UMBRELLA).string();
-    // Per-kernel RVV opt-in: only the pack (TRISC2) compile of a kernel that set
-    // ComputeConfig::enable_trisc2_rvv gets the vector flags. Compile-only: lflags_ is
+    // Per-kernel RVV opt-in: only processors the HAL gives vector flags to (TRISC2 on Blackhole,
+    // TRISC0 on Quasar) change; the kernel's other compiles are unchanged. Compile-only: lflags_ is
     // untouched, so the link stays stock (the -fno-lto object simply opts out of LTO).
-    if (settings != nullptr && this->is_compute_pack_ && settings->get_trisc2_rvv_enabled()) {
-        TT_FATAL(
-            !this->rvv_cflags_.empty(),
-            "Kernel {} sets enable_trisc2_rvv, but this architecture does not support RVV code "
-            "generation on the pack processor",
-            settings->get_full_kernel_name());
+    if (settings != nullptr && settings->get_rvv_enabled()) {
         target.cflags += this->rvv_cflags_;
     }
     target.lflags = lflags_;

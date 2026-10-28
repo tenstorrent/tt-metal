@@ -21,6 +21,8 @@
 
 namespace tt::tt_metal {
 
+class MetalContext;
+
 enum class AnalysisType { PROGRAM_FIRST_TO_LAST_MARKER };
 
 enum class AnalysisDimension { PROGRAM };
@@ -113,12 +115,13 @@ struct ProgramsPerfResults {
 };
 
 ProgramsPerfResults generatePerfResultsForPrograms(
+    MetalContext& ctx,
     const std::vector<AnalysisConfig>& analysis_configs,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
     ThreadPool& thread_pool);
 
 void writeProgramsPerfResultsToCSV(
-    const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path);
+    MetalContext& ctx, const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path);
 
 std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::path& json_path);
 

@@ -10,6 +10,8 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 namespace ttnn::experimental::prim {
 void LlamaAllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
@@ -114,6 +116,25 @@ LlamaAllGatherMatmulAsyncDeviceOperation::create_output_tensors(
         args.matmul_struct, {{aggregated_tensor, input1}, {}})[0];
 
     return LlamaAllGatherMatmulAsyncResult{.mm = matmul_output_tensor, .aggregated = aggregated_tensor};
+}
+
+std::vector<tt::tt_metal::TensorTopology> LlamaAllGatherMatmulAsyncDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    using tt::tt_metal::TensorTopology;
+    // {mm, aggregated}. `aggregated` holds input0 gathered along `dim` on `cluster_axis`, laid out for the matmul's
+    // multicast cores: Replicate on the cluster axis, input0's placements elsewhere. The matmul of the gathered
+    // activation by input1 takes the union label of {aggregated, input1}, as launch() would give a plain matmul.
+    // `intermediate` is caller-owned scratch outside the return value. With no honest gather label (nullopt, already
+    // reported) `aggregated` keeps input0's label and the matmul takes the union over that.
+    const TensorTopology aggregated_topology =
+        ttnn::operations::ccl::common::all_gather_output_topology(
+            tensor_args.input0, args.cluster_axis, static_cast<int32_t>(args.dim))
+            .value_or(tensor_args.input0.tensor_topology());
+    const std::vector<std::reference_wrapper<const TensorTopology>> operands{
+        std::cref(aggregated_topology), std::cref(tensor_args.input1.tensor_topology())};
+    return {
+        ttnn::operations::ccl::common::union_topology(operands, tensor_args.input0.tensor_topology().mesh_coords()),
+        aggregated_topology};
 }
 
 ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_hash(
@@ -223,8 +244,6 @@ ttnn::experimental::prim::LlamaAllGatherMatmulAsyncDeviceOperation::tensor_retur
         rank - 1,
         dim);
 
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input0);
-
     auto matmul_struct = ttnn::prim::create_matmul_attributes(
         input0,
         input1,
@@ -247,7 +266,6 @@ ttnn::experimental::prim::LlamaAllGatherMatmulAsyncDeviceOperation::tensor_retur
 
     auto operation_attributes = ttnn::experimental::prim::LlamaAllGatherMatmulAsyncParams(
         matmul_struct,
-        devices,
         gather_dim,
         num_preferred_links.has_value() ? num_preferred_links.value() : 1,
         num_devices,

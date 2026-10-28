@@ -33,7 +33,7 @@ from . import golden_generators as golden_generators_module
 from .chip_architecture import (
     ChipArchitecture,
     get_chip_architecture,
-    quasar_arch_variant,
+    quasar_variant,
 )
 from .data_format_inference import data_formats, effective_dest_acc
 from .device import (
@@ -131,7 +131,7 @@ class TestConfig:
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
     QUASAR_VECTOR_MARCH: ClassVar[str] = (
-        "-march=rv32im_zmmul_zaamo_zve32x_zvl128b_xtttensixqsr_xttzbkb"
+        "-march=rv32im_zmmul_zaamo_zve32f_zvl128b_xtttensixqsr_xttzbkb"
     )
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
@@ -373,7 +373,7 @@ class TestConfig:
 
     @staticmethod
     def _quasar_variant_suffix() -> str:
-        variant = quasar_arch_variant()
+        variant = quasar_variant()
         return f"-{variant}" if variant else ""
 
     @staticmethod
@@ -519,8 +519,10 @@ class TestConfig:
                 "-I../../hw/ckernels/blackhole/metal/llk_api",
                 # Some SFPU kernels include their neighbours unqualified
                 # ("ckernel_sfpu_exp.h") rather than as "llk_sfpu/<name>.h", which only
-                # resolves with this on the path. Listed last so the tt-llk copy still
-                # wins the basenames that exist in both trees.
+                # resolves with this on the path. Its order against tt-llk's common/inc/sfpu
+                # no longer matters: tests/hardware_free/kernels/test_sfpu_header_location.py
+                # keeps each SFPU kernel in only one of the two, and the few basenames in both
+                # (its FORWARDED list) are plain forwards to the tt-llk copy.
                 "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
                 # Keep this list to include roots every Blackhole test needs: INCLUDES is a session-wide
                 # ClassVar, so anything added here lands in the compile command for every Blackhole test. A
@@ -727,7 +729,8 @@ class TestConfig:
         ``"cfg.h"``, ``"sfpu/..."`` — the same four roots ``setup_compilation_options``
         already adds for the in-tree copy.
 
-        For a ``tt_llk_quasar`` tree, prepend the selected variant's header root.
+        For a ``tt_llk_quasar`` tree, prepend the selected variant's header root
+        and expose the tree root for qualified includes of the base headers.
         """
         root = Path(arch_root)
         roots = [
@@ -737,7 +740,8 @@ class TestConfig:
             root / "common" / "inc" / "sfpu",
         ]
         if root.name == "tt_llk_quasar":
-            variant = quasar_arch_variant()
+            roots.append(root)
+            variant = quasar_variant()
             if variant:
                 # First, so the variant's headers shadow the base Quasar ones.
                 roots.insert(0, root / "arch" / variant)
@@ -955,7 +959,7 @@ class TestConfig:
         # (These used to default to a shared ``[]`` that the fold mutated, so a
         # variant constructed without explicit ``templates`` inherited the
         # previous variant's runtimes -- invisible until it changed what got
-        # compiled. Regression coverage: test_test_config.py.)
+        # compiled. Regression coverage: tests/hardware_free/harness/test_config.py.)
         templates = list(templates or [])
         runtimes = list(runtimes or [])
 
@@ -1921,6 +1925,21 @@ class TestConfig:
             else self.boot_mode
         )
 
+        VARIANT_ELF_DIR = (
+            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+        )
+
+        self.temp_elfs = [
+            str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
+            for trisc_name in TestConfig.KERNEL_COMPONENTS
+        ]
+
+        missing = [Path(elf).name for elf in self.temp_elfs if not Path(elf).is_file()]
+        if missing:
+            raise FileNotFoundError(
+                f"{VARIANT_ELF_DIR} has no {', '.join(missing)}: the variant did not compile, so it is not run"
+            )
+
         # Zero the device print buffer header before each kernel run so the
         # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock.
         if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
@@ -1996,17 +2015,9 @@ class TestConfig:
         else:
             commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
-        VARIANT_ELF_DIR = (
-            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
-        )
-
-        self.temp_elfs = [
-            str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
-            for trisc_name in TestConfig.KERNEL_COMPONENTS
-        ]
-
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
-            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
+            # A failed load or start address update leaves the TRISCs on two variants
+            TestConfig.LAST_LOADED_ELFS = Path()
 
             for i, elf_file_path in enumerate(self.temp_elfs):
                 if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
@@ -2044,7 +2055,10 @@ class TestConfig:
                     BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
                     timeout=brisc_cmd_timeout,
                 )
+                TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
                 return
+
+            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
 
         match boot_mode:
             case BootMode.BRISC:

@@ -15,7 +15,7 @@
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
@@ -141,7 +141,7 @@ int main() {
     deassert_all_reset();  // Bring all riscs on eth cores out of reset
     // Wait for all subordinate ERISCs to be ready before reporting the core is done initializing.
     wait_subordinate_eriscs(heartbeat);
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     // Cleanup profiler buffer in case we never get the go message
 
@@ -149,7 +149,7 @@ int main() {
     while (1) {
         // Wait...
         WAYPOINT("GW");
-        while (mailboxes->go_messages[0].signal != RUN_MSG_GO) {
+        while (mailboxes->go_messages[0].slot[0].signal != RUN_MSG_GO) {
             invalidate_l1_cache();
             RISC_POST_HEARTBEAT(heartbeat);
         };
@@ -188,10 +188,10 @@ int main() {
 
             wait_subordinate_eriscs(heartbeat);
 
-            mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+            mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
             DEVICE_PRINT_KERNEL_FINISHED();
             // Fast dispatch to ethernet is removed: no dispatcher done-notify / launch-ring advance.
-            // Slow (host) dispatch polls go_messages[0].signal and manages the read pointer itself.
+            // Slow (host) dispatch polls go_messages[0].slot[0].signal and manages the read pointer itself.
         }
     }
 
