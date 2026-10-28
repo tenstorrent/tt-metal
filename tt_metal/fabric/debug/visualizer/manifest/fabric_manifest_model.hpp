@@ -17,13 +17,13 @@
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <umd/device/types/arch.hpp>
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
-#include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
 
@@ -143,14 +143,6 @@ enum class ChannelStatus : uint32_t {
     MUX,
     // The applied channel trimming profile turned the channel off.
     TRIMMED,
-};
-
-// A NoC command buffer.
-enum class NocCmdBuf : uint32_t {
-    WR_CMD_BUF = FabricEriscDatamoverConfig::WR_CMD_BUF,
-    RD_CMD_BUF = FabricEriscDatamoverConfig::RD_CMD_BUF,
-    WR_REG_CMD_BUF = FabricEriscDatamoverConfig::WR_REG_CMD_BUF,
-    AT_CMD_BUF = FabricEriscDatamoverConfig::AT_CMD_BUF,
 };
 
 // A router's L1 credit counter arrays, shared by every VC that uses counter credits. The to_sender arrays are
