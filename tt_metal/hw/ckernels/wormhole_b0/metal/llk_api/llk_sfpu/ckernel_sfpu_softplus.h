@@ -298,13 +298,38 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
 // beta arrives as a vFloat the caller loads once, outside the loop: it is read
 // four times per iteration, and as a runtime float each read is two SFPLOADIs.
 // It takes the last free lreg. positive_beta picks the linear term (see below).
-template <bool is_fp32_dest_acc_en, bool positive_beta>
-sfpi_inline void softplus_body_bf16_x2(const sfpi::vFloat beta, const float beta_reciprocal, const float threshold) {
+// unit_beta (beta == 1 and 1/beta == 1) omits the beta and reciprocal
+// multiplies. That frees the loop-carried lreg to hold P3 and P2.
+template <bool unit_beta, typename B>
+sfpi_inline sfpi::vFloat softplus_scale_bf16(const B beta, const sfpi::vFloat x) {
+    if constexpr (unit_beta) {
+        return x;
+    } else {
+        return beta * x;
+    }
+}
+
+template <
+    bool is_fp32_dest_acc_en,
+    bool positive_beta,
+    bool unit_beta,
+    bool threshold_pred,
+    typename B,
+    typename CP3 = float,
+    typename CP2 = float>
+sfpi_inline void softplus_body_bf16_x2(
+    const B beta,
+    const float beta_reciprocal,
+    const float threshold,
+    CP3 cP3 = SOFTPLUS_BF16_P3,
+    CP2 cP2 = SOFTPLUS_BF16_P2) {
     // Constants are materialised once per iteration and shared by both vectors.
     // yh = y - 1/2 (see softplus_exp2_bf16 for the Wormhole rounding trick).
     sfpi::vFloat cBiasMinusHalf = SOFTPLUS_BF16_EXP_BIAS - SOFTPLUS_BF16_HALF;
-    sfpi::vFloat y0 = sfpi::setsgn(beta * sfpi::dst_reg[0], 0) * sfpi::vConstFloatPrgm0 + cBiasMinusHalf;
-    sfpi::vFloat y1 = sfpi::setsgn(beta * sfpi::dst_reg[1], 0) * sfpi::vConstFloatPrgm0 + cBiasMinusHalf;
+    sfpi::vFloat y0 = sfpi::setsgn(softplus_scale_bf16<unit_beta>(beta, sfpi::dst_reg[0]), 0) * sfpi::vConstFloatPrgm0 +
+                      cBiasMinusHalf;
+    sfpi::vFloat y1 = sfpi::setsgn(softplus_scale_bf16<unit_beta>(beta, sfpi::dst_reg[1]), 0) * sfpi::vConstFloatPrgm0 +
+                      cBiasMinusHalf;
     // Both vectors. sfpi::max(y1, 0) does not clamp on Wormhole; see softplus_clamp_nonneg.
     y0 = softplus_clamp_nonneg(y0);
     y1 = softplus_clamp_nonneg(y1);
@@ -316,10 +341,10 @@ sfpi_inline void softplus_body_bf16_x2(const sfpi::vFloat beta, const float beta
     f0 = f0 + cHalf;
     f1 = f1 + cHalf;
 
-    sfpi::vFloat cP3 = SOFTPLUS_BF16_P3;
-    sfpi::vFloat cP2 = SOFTPLUS_BF16_P2;
-    sfpi::vFloat p0 = f0 * cP3 + cP2;
-    sfpi::vFloat p1 = f1 * cP3 + cP2;
+    sfpi::vFloat vP3 = cP3;
+    sfpi::vFloat vP2 = cP2;
+    sfpi::vFloat p0 = f0 * vP3 + vP2;
+    sfpi::vFloat p1 = f1 * vP3 + vP2;
     p0 = f0 * p0 + sfpi::vConstFloatPrgm1;
     p1 = f1 * p1 + sfpi::vConstFloatPrgm1;
     p0 = f0 * p0 + SOFTPLUS_BF16_P0;
@@ -349,9 +374,11 @@ sfpi_inline void softplus_body_bf16_x2(const sfpi::vFloat beta, const float beta
     // the single-vector form when beta == 1). x is re-read from dest (the swap consumes
     // its input, and the predicates below re-read it once more). beta_reciprocal is
     // materialised once and shared by both vectors.
-    sfpi::vFloat cRecip = beta_reciprocal;
-    h0 = h0 * cRecip;
-    h1 = h1 * cRecip;
+    if constexpr (!unit_beta) {
+        sfpi::vFloat cRecip = beta_reciprocal;
+        h0 = h0 * cRecip;
+        h1 = h1 * cRecip;
+    }
     sfpi::vFloat m0;
     sfpi::vFloat m1;
     if constexpr (positive_beta) {
@@ -368,23 +395,38 @@ sfpi_inline void softplus_body_bf16_x2(const sfpi::vFloat beta, const float beta
         r0 = sfpi::convert<sfpi::vFloat16b>(r0, sfpi::RoundMode::Nearest);
         r1 = sfpi::convert<sfpi::vFloat16b>(r1, sfpi::RoundMode::Nearest);
     }
-    sfpi::vFloat thr = threshold;
-    v_if(beta * sfpi::dst_reg[0] <= thr) { sfpi::dst_reg[0] = r0; }
-    v_endif;
-    v_if(beta * sfpi::dst_reg[1] <= thr) { sfpi::dst_reg[1] = r1; }
-    v_endif;
+    if constexpr (threshold_pred) {
+        sfpi::vFloat thr = threshold;
+        v_if(softplus_scale_bf16<unit_beta>(beta, sfpi::dst_reg[0]) <= thr) { sfpi::dst_reg[0] = r0; }
+        v_endif;
+        v_if(softplus_scale_bf16<unit_beta>(beta, sfpi::dst_reg[1]) <= thr) { sfpi::dst_reg[1] = r1; }
+        v_endif;
+    } else {
+        sfpi::dst_reg[0] = r0;
+        sfpi::dst_reg[1] = r1;
+    }
 }
 
 // BF16 main loop. beta is loaded into an lreg once here and stays live across the
 // iterations (softplus_body_bf16_x2 explains why); the sign of beta is decided once,
 // on the scalar side, so the loop body carries no per-iteration select.
-template <bool is_fp32_dest_acc_en, bool positive_beta, int ITERATIONS>
+template <bool is_fp32_dest_acc_en, bool positive_beta, bool unit_beta, bool threshold_pred, int ITERATIONS>
 sfpi_inline void softplus_loop_bf16_x2(const float beta, const float beta_reciprocal, const float threshold) {
     static_assert(ITERATIONS % SOFTPLUS_VECTORS_PER_ITER == 0);
-    const sfpi::vFloat beta_v = beta;
-    for (int d = 0; d < ITERATIONS / SOFTPLUS_VECTORS_PER_ITER; d++) {
-        softplus_body_bf16_x2<is_fp32_dest_acc_en, positive_beta>(beta_v, beta_reciprocal, threshold);
-        sfpi::dst_reg += SOFTPLUS_VECTORS_PER_ITER;
+    if constexpr (unit_beta) {
+        sfpi::vFloat cP3 = SOFTPLUS_BF16_P3;
+        sfpi::vFloat cP2 = SOFTPLUS_BF16_P2;
+        for (int d = 0; d < ITERATIONS / SOFTPLUS_VECTORS_PER_ITER; d++) {
+            softplus_body_bf16_x2<is_fp32_dest_acc_en, true, true, threshold_pred>(
+                beta, beta_reciprocal, threshold, cP3, cP2);
+            sfpi::dst_reg += SOFTPLUS_VECTORS_PER_ITER;
+        }
+    } else {
+        const sfpi::vFloat beta_v = beta;
+        for (int d = 0; d < ITERATIONS / SOFTPLUS_VECTORS_PER_ITER; d++) {
+            softplus_body_bf16_x2<is_fp32_dest_acc_en, positive_beta, false, true>(beta_v, beta_reciprocal, threshold);
+            sfpi::dst_reg += SOFTPLUS_VECTORS_PER_ITER;
+        }
     }
 }
 
@@ -399,10 +441,19 @@ inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::
         sfpi::dst_reg += SOFTPLUS_VECTORS_PER_ITER;
     }
 #else
-    if (beta > 0.0f) {
-        softplus_loop_bf16_x2<is_fp32_dest_acc_en, true, ITERATIONS>(beta, beta_reciprocal, threshold);
+    // Unit beta omits all beta/reciprocal multiplies. Above threshold 16 the
+    // residual rounds away in bf16, so its identity lanes can be stored directly.
+    // Test beta's bits: a scalar float comparison lowers to a soft-float call.
+    if (param0 == 0x3F800000u && param1 == 0x3F800000u) {
+        if (param2 - 0x41800000u <= 0x7F800000u - 0x41800000u) {
+            softplus_loop_bf16_x2<is_fp32_dest_acc_en, true, true, false, ITERATIONS>(beta, beta_reciprocal, threshold);
+        } else {
+            softplus_loop_bf16_x2<is_fp32_dest_acc_en, true, true, true, ITERATIONS>(beta, beta_reciprocal, threshold);
+        }
+    } else if (param0 - 1u < 0x7F800000u) {
+        softplus_loop_bf16_x2<is_fp32_dest_acc_en, true, false, true, ITERATIONS>(beta, beta_reciprocal, threshold);
     } else {
-        softplus_loop_bf16_x2<is_fp32_dest_acc_en, false, ITERATIONS>(beta, beta_reciprocal, threshold);
+        softplus_loop_bf16_x2<is_fp32_dest_acc_en, false, false, true, ITERATIONS>(beta, beta_reciprocal, threshold);
     }
 #endif
 }
