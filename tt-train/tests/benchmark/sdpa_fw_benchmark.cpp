@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SDPA forward on the consumer shapes: the program factory's default chunking against the fixed
-// chunking main used (one query tile-row, four K/V tiles per step), plus any config given on the
-// command line. Prints device microseconds per launch and the speedup.
+// SDPA forward on the consumer shapes: the program factory's default chunking against this same kernel
+// pinned to the chunking main used (one query tile-row, four K/V tiles per step), plus any config given
+// on the command line. Prints host microseconds per launch (the timed loop sits between two device
+// syncs) and the speedup. main's own kernel is not timed here: build the merge-base to compare.
 //
 // Usage: sdpa_fw_benchmark [scenario-name-substring] [q_chunk_size,k_chunk_size,heads_per_item ...]
 // Env:   TTML_SDPA_BENCH_WARMUP (default 2), TTML_SDPA_BENCH_MEASURE (default 10)
@@ -52,14 +53,14 @@ const std::vector<Scenario> kScenarios = {
     {"tinyllama_s2048_causal_gate", 1U, 32U, 4U, 2048U, 64U, ttml::metal::AttentionMaskType::Causal, true},
 };
 
-// What main ran: one query tile-row per item, four K/V tiles per step, no head stacking.
+// The chunking main ran: one query tile-row per item, four K/V tiles per step, no head stacking.
 const ttml::metal::SDPAForwardProgramConfig kMainConfig{
     .q_chunk_size = 32U, .k_chunk_size = 128U, .heads_per_item = 1U};
 
 struct Row {
     std::string label;
     double device_us = 0.0;
-    double speedup = 0.0;  // main_us / device_us
+    double speedup = 0.0;  // main_us / device_us, both this kernel
     float max_abs_diff = 0.0F;
     std::string skipped;
 };
@@ -144,7 +145,7 @@ void run_scenario(
         sc.mask_type == metal::AttentionMaskType::Causal      ? (sc.gate ? "causal+gate" : "causal")
         : sc.mask_type == metal::AttentionMaskType::Arbitrary ? "arbitrary"
                                                               : "none");
-    fmt::print("main chunking (q=32, k=128, h=1): {:.1f} us\n", main_us);
+    fmt::print("this kernel at main's chunking (q=32, k=128, h=1): {:.1f} us\n", main_us);
     fmt::print("{:<20} {:>12} {:>9} {:>12}\n", "config", "device_us", "speedup", "max_abs_diff");
     for (const Row& row : rows) {
         if (row.skipped.empty()) {
@@ -175,7 +176,7 @@ int main(int argc, char** argv) {
         ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 1));
         ttml::autograd::ctx().get_device().enable_program_cache();
         fmt::print(
-            "SDPA forward benchmark (warmup={} measure={}, device us per launch, one sync after the timed loop)\n",
+            "SDPA forward benchmark (warmup={} measure={}, host us per launch between two device syncs)\n",
             num_warmup,
             num_measure);
         for (const auto& sc : kScenarios) {
