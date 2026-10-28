@@ -137,8 +137,8 @@ struct BinaryNgDeviceOperation {
     };
 
     // Quasar-native DFB factory. Starts as a mechanical copy of ProgramFactoryMetalV2 so later commits
-    // read as a diff of what "native" means (>2 of 6 DM cores, >1 of 4 Tensix). Opt-in via
-    // TTNN_QSR_NATIVE, so the metal_v2 path stays live as the A/B reference arm, except for DRAM shards,
+    // read as a diff of what "native" means (>2 of 6 DM cores, >1 of 4 Tensix). The default on Quasar;
+    // TTNN_QSR_NATIVE=0 runs the metal_v2 path instead, as the A/B reference arm, except for DRAM shards,
     // which only this factory runs on Quasar.
     // Must stay a stateless literal type -- the framework default-constructs it into static storage.
     struct ProgramFactoryQuasarNative {
@@ -151,7 +151,7 @@ struct BinaryNgDeviceOperation {
     // APPEND-ONLY: the index is persisted per cache entry, so reordering mis-resolves existing entries.
     using program_factory_t = std::variant<ProgramFactory, ProgramFactoryMetalV2, ProgramFactoryQuasarNative>;
 
-    // Returns ProgramFactoryQuasarNative{} when the op matches the (opt-in) Quasar-native slice,
+    // Returns ProgramFactoryQuasarNative{} when the op matches the Quasar-native slice,
     // ProgramFactoryMetalV2{} when it matches the Metal 2.0 slice, and ProgramFactory{} otherwise.
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -160,8 +160,8 @@ struct BinaryNgDeviceOperation {
     static bool matches_metal_v2_slice(const operation_attributes_t&, const tensor_args_t&);
 
     // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards, which
-    // that slice sends to the descriptor. Needs TTNN_QSR_NATIVE. Checked first; its leading test is the
-    // cached env bool, so the non-native hot-path cost is a load and a branch.
+    // that slice sends to the descriptor. Off when TTNN_QSR_NATIVE=0. Checked first; its leading tests are the
+    // arch and the cached env bool, so off Quasar it costs one arch read and a branch.
     static bool matches_quasar_native_slice(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

@@ -33,10 +33,16 @@ namespace tt::tt_fabric::detail {
 // walk at minutes, not tens of minutes.
 static constexpr int kDefaultConflictCap = 300'000;
 
+// Zero-link maximization (#56762): budget-exhausted probes tolerated before keeping the best model found.
+static constexpr int kZeroLinkMaximizeMaxUndecidedSolves = 2;
+
 struct SatSearchBackend::Impl {
     TopologySatSolver solver;
     TopologySatHardEncoding enc;
     bool cap_active = false;
+    // Soft-capable encoding (wide domains, realized literals); seams_hard => assume prune + every realized literal.
+    bool soft_encoded = false;
+    bool seams_hard = false;
     // Per-solve conflict budget applied uniformly to every solve() call. Default 1M; adjustable per session.
     int conflict_cap = kDefaultConflictCap;
     size_t solve_calls = 0;
@@ -46,6 +52,11 @@ struct SatSearchBackend::Impl {
     std::vector<std::vector<int>> stages;
     size_t stage = 0;
     bool unique_shapes = false;
+    // Zero-link tolerance: edge_threshold_lits[j] assumed => at least j+1 of enc.edge_realized_lits true.
+    std::vector<int> edge_threshold_lits;
+    // Owned by the session's GraphIndexData (the TopologySatGraphView passed to start() is a temporary).
+    const std::vector<std::vector<size_t>>* global_adj_idx = nullptr;
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED;
 };
 
 SatSearchBackend::SatSearchBackend() = default;
@@ -419,12 +430,9 @@ void topology_sat_emit_combinations_indices(size_t n, size_t r, EmitCombination&
     dfs(dfs, 0);
 }
 
-// Sequential counter encoding for at-least-k: O(m*k) clauses + O(m*k) auxiliary variables.
-// c[i][j] represents "at least j+1 of lits[0..i] are true"; assert c[m-1][k-1].
-// If extra_lit != 0 it is added only to the final assertion, so extra_lit => at-least-k without making the
-// cardinality hard (used for the optional preferred objective).
-inline void topology_sat_add_at_least_k_counter(
-    TopologySatSolver& solver, const std::vector<int>& lits, size_t k, int extra_lit = 0) {
+// Sequential counter matrix: c[i][j] <=> "at least j+1 of lits[0..i] are true"; O(m*k) clauses and aux vars.
+inline std::vector<std::vector<int>> topology_sat_build_counter_matrix(
+    TopologySatSolver& solver, const std::vector<int>& lits, size_t k) {
     const size_t m = lits.size();
     std::vector<std::vector<int>> c(m);
     for (size_t i = 0; i < m; ++i) {
@@ -484,11 +492,32 @@ inline void topology_sat_add_at_least_k_counter(
             }
         }
     }
+    return c;
+}
+
+// At-least-k via the counter: assert c[m-1][k-1]. extra_lit != 0 is added only to that assertion, so
+// extra_lit => at-least-k without making the cardinality hard (used for the optional preferred objective).
+inline void topology_sat_add_at_least_k_counter(
+    TopologySatSolver& solver, const std::vector<int>& lits, size_t k, int extra_lit = 0) {
+    const size_t m = lits.size();
+    const auto c = topology_sat_build_counter_matrix(solver, lits, k);
     if (extra_lit != 0) {
         solver.add(extra_lit);
     }
     solver.add(c[m - 1][k - 1]);
     solver.add(0);
+}
+
+// Full-width counter, no final assertion: thresholds_out[j] assumed => at least j+1 of `lits` are true.
+inline void topology_sat_build_at_least_threshold_lits(
+    TopologySatSolver& solver, const std::vector<int>& lits, std::vector<int>& thresholds_out) {
+    thresholds_out.clear();
+    const size_t m = lits.size();
+    if (m == 0) {
+        return;
+    }
+    const auto c = topology_sat_build_counter_matrix(solver, lits, /*k=*/m);
+    thresholds_out.assign(c[m - 1].begin(), c[m - 1].end());
 }
 
 // At-least-k on independent literals.  Uses the small combinatorial encoding when affordable (O(C(m,m-k+1))
@@ -823,7 +852,8 @@ bool topology_sat_build_initial_domains(
             if (!constraint_data.is_valid_mapping(t, g)) {
                 continue;
             }
-            if (graph_data.global_deg[g] < graph_data.target_deg[t]) {
+            // Soft target edges: a low-degree global may still host a high-degree target.
+            if (!constraint_data.allow_unmatched_target_edges && graph_data.global_deg[g] < graph_data.target_deg[t]) {
                 continue;
             }
             domain_out[t].push_back(g);
@@ -853,6 +883,10 @@ bool topology_sat_apply_arc_consistency(
     ConnectionValidationMode validation_mode,
     TopologySatHardEncoding& enc,
     std::vector<std::vector<size_t>>& domain) {
+    // Soft target edges need no adjacent support, so AC-3 pruning would hide zero-link placements.
+    if (constraint_data.allow_unmatched_target_edges) {
+        return true;
+    }
     const size_t nt = graph_data.n_target;
 
     // Build membership sets for fast O(1) domain lookup during support checks.
@@ -1082,14 +1116,22 @@ bool topology_sat_encode_bijection_completeness(
 void topology_sat_encode_adjacency_support(
     TopologySatSolver& solver,
     const TopologySatGraphView& graph_data,
-    const TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode) {
+    TopologySatHardEncoding& enc,
+    ConnectionValidationMode validation_mode,
+    bool allow_unmatched_target_edges) {
     const size_t nt = enc.assign_lit.size();
 
     for (size_t t1 = 0; t1 < nt; ++t1) {
         for (size_t t2 : graph_data.target_adj_idx[t1]) {
             if (t2 <= t1) {
                 continue;
+            }
+            // Soft edge: its support clauses are guarded by a realized literal (false => zero-link edge).
+            int realized_lit = 0;
+            if (allow_unmatched_target_edges) {
+                realized_lit = solver.declare_one_more_variable();
+                enc.edge_realized_lits.push_back(realized_lit);
+                enc.edge_realized_edges.emplace_back(t1, t2);
             }
             const auto& gidx1 = enc.allowed_global_idx[t1];
             const auto& lit1 = enc.assign_lit[t1];
@@ -1127,6 +1169,9 @@ void topology_sat_encode_adjacency_support(
             };
             // Forward direction: if t1 is assigned g_a, t2 must map to some compatible g_b.
             for (size_t i1 = 0; i1 < gidx1.size(); ++i1) {
+                if (realized_lit != 0) {
+                    solver.add(-realized_lit);
+                }
                 solver.add(-lit1[i1]);
                 for (size_t i2 = 0; i2 < gidx2.size(); ++i2) {
                     if (is_compatible(gidx1[i1], gidx2[i2])) {
@@ -1137,6 +1182,9 @@ void topology_sat_encode_adjacency_support(
             }
             // Backward direction: if t2 is assigned g_b, t1 must map to some compatible g_a.
             for (size_t i2 = 0; i2 < gidx2.size(); ++i2) {
+                if (realized_lit != 0) {
+                    solver.add(-realized_lit);
+                }
                 solver.add(-lit2[i2]);
                 for (size_t i1 = 0; i1 < gidx1.size(); ++i1) {
                     if (is_compatible(gidx1[i1], gidx2[i2])) {
@@ -1312,6 +1360,36 @@ bool topology_sat_encode_hard_constraints(
     // 3. Create assignment variables (preferred globals listed first in each row).
     topology_sat_create_assignment_variables(solver, constraint_data, enc, domain);
 
+    // 3b. Soft-capable: the hard (pruned) domains sit behind prune_active_lit so a session can flip to hard seams.
+    if (constraint_data.allow_unmatched_target_edges) {
+        TopologySatConstraintView hard_view = constraint_data;
+        hard_view.allow_unmatched_target_edges = false;
+        TopologySatHardEncoding scratch;
+        scratch.allowed_global_idx.resize(nt);
+        scratch.assign_lit.resize(nt);
+        std::vector<std::vector<size_t>> narrow;
+        const bool hard_feasible =
+            topology_sat_build_initial_domains(graph_data, hard_view, scratch, narrow) &&
+            topology_sat_apply_arc_consistency(graph_data, hard_view, validation_mode, scratch, narrow);
+        if (!hard_feasible) {
+            narrow.assign(nt, {});
+        }
+        enc.prune_active_lit = solver.declare_one_more_variable();
+        for (size_t t = 0; t < nt; ++t) {
+            std::vector<bool> keep(graph_data.n_global, false);
+            for (size_t g : narrow[t]) {
+                keep[g] = true;
+            }
+            for (size_t k = 0; k < enc.allowed_global_idx[t].size(); ++k) {
+                if (!keep[enc.allowed_global_idx[t][k]]) {
+                    solver.add(-enc.prune_active_lit);
+                    solver.add(-enc.assign_lit[t][k]);
+                    solver.add(0);
+                }
+            }
+        }
+    }
+
     // 4. Exactly one global choice per target.
     topology_sat_encode_exactly_one_per_target(solver, enc);
 
@@ -1329,7 +1407,8 @@ bool topology_sat_encode_hard_constraints(
     }
 
     // 6. Adjacency preservation via support encoding.
-    topology_sat_encode_adjacency_support(solver, graph_data, enc, validation_mode);
+    topology_sat_encode_adjacency_support(
+        solver, graph_data, enc, validation_mode, constraint_data.allow_unmatched_target_edges);
 
     // 7. Same-rank target groups.
     topology_sat_encode_same_rank_groups(solver, graph_data, constraint_data, enc);
@@ -1645,6 +1724,10 @@ bool SatSearchBackend::start(
     s.conflict_cap = conflict_cap_;
     s.solver.configure_for_blocking_clause_enumeration();
     s.unique_shapes = unique_shapes;
+    s.global_adj_idx = &graph_data.global_adj_idx;
+    s.validation_mode = validation_mode;
+    s.soft_encoded = constraint_data.allow_unmatched_target_edges;
+    s.seams_hard = false;
     s.enc = {};
     if (!topology_sat_encode_hard_constraints(s.solver, graph_data, constraint_data, s.enc, validation_mode)) {
         if (error_out != nullptr) {
@@ -1780,6 +1863,11 @@ bool SatSearchBackend::start(
         }
     }
 
+    // Threshold literals over the realized-edge indicators drive the maximization (also under unique_shapes).
+    if (!s.enc.edge_realized_lits.empty()) {
+        topology_sat_build_at_least_threshold_lits(s.solver, s.enc.edge_realized_lits, s.edge_threshold_lits);
+    }
+
     s.symmetry_lit = topology_sat_symmetry_assumption_lit(graph_data, s.enc);
     const int min_lit = s.minimize_lit;
     const int pref = s.preferred_lit;
@@ -1833,6 +1921,16 @@ bool SatSearchBackend::refresh_constraints(const TopologySatConstraintView& cons
             return false;
         }
     }
+    // In-session seam toggle (#56762): a soft-capable encoding flips to hard seams and back by assumption.
+    auto& s = *impl_;
+    const bool want_hard = !constraint_data.allow_unmatched_target_edges;
+    if (!s.soft_encoded) {
+        return want_hard;  // encoded with hard edges: soft edges need a new session
+    }
+    if (want_hard != s.seams_hard) {
+        s.seams_hard = want_hard;
+        s.stage = 0;  // an optional objective dropped under one mode may hold under the other
+    }
     return true;
 }
 
@@ -1868,10 +1966,22 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
         return false;
     }
     auto& s = *impl_;
+    // Hard seams on a soft-capable encoding: pruned pairs off, every realized literal on.
+    auto assume_mode = [&]() {
+        if (s.soft_encoded && s.seams_hard) {
+            if (s.enc.prune_active_lit != 0) {
+                s.solver.assume(s.enc.prune_active_lit);
+            }
+            for (int r : s.enc.edge_realized_lits) {
+                s.solver.assume(r);
+            }
+        }
+    };
     auto solve_and_decode = [&]() -> bool {
         for (; s.stage < s.stages.size(); ++s.stage) {
             const auto& optional_lits = s.stages[s.stage];
             auto solve_once = [&](bool with_symmetry_hint) -> bool {
+                assume_mode();
                 if (with_symmetry_hint) {
                     s.solver.assume(s.symmetry_lit);
                 }
@@ -1891,6 +2001,87 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
     };
     if (!solve_and_decode()) {
         return false;
+    }
+    // Zero-link tolerance: maximize the realized soft edges on the warm session, best effort.
+    if (!s.edge_threshold_lits.empty() && !s.seams_hard) {
+        // The realized literal can under-count; under RELAXED also credit physically adjacent endpoints.
+        const auto count_realized = [&]() -> size_t {
+            size_t realized = 0;
+            for (size_t i = 0; i < s.enc.edge_realized_lits.size(); ++i) {
+                if (s.solver.val(s.enc.edge_realized_lits[i]) > 0) {
+                    ++realized;
+                    continue;
+                }
+                if (s.validation_mode == ConnectionValidationMode::RELAXED && s.global_adj_idx != nullptr &&
+                    i < s.enc.edge_realized_edges.size()) {
+                    const auto [t1, t2] = s.enc.edge_realized_edges[i];
+                    if (t1 < mapping_out.size() && t2 < mapping_out.size() && mapping_out[t1] >= 0 &&
+                        mapping_out[t2] >= 0) {
+                        const auto g1 = static_cast<size_t>(mapping_out[t1]);
+                        const auto g2 = static_cast<size_t>(mapping_out[t2]);
+                        if (g1 < s.global_adj_idx->size()) {
+                            const auto& adj = (*s.global_adj_idx)[g1];
+                            if (std::binary_search(adj.begin(), adj.end(), g2)) {
+                                ++realized;
+                            }
+                        }
+                    }
+                }
+            }
+            return realized;
+        };
+        const size_t n_soft_edges = s.enc.edge_realized_lits.size();
+        const auto& optional_lits = s.stages[std::min(s.stage, s.stages.size() - 1)];
+        // The symmetry hint can make an achievable threshold UNSAT: try with it, then without, drop it once it fails.
+        bool symmetry_hint_usable = s.symmetry_lit != 0;
+        const auto solve_threshold = [&](int threshold_lit) -> int {
+            auto attempt = [&](bool with_symmetry_hint) -> int {
+                assume_mode();
+                if (with_symmetry_hint) {
+                    s.solver.assume(s.symmetry_lit);
+                }
+                for (int lit : optional_lits) {
+                    s.solver.assume(lit);
+                }
+                s.solver.assume(threshold_lit);
+                ++s.solve_calls;
+                return s.solver.solve_limited(s.conflict_cap);
+            };
+            if (symmetry_hint_usable) {
+                if (attempt(/*with_symmetry_hint=*/true) == TopologySatSolver::kSat) {
+                    return TopologySatSolver::kSat;
+                }
+                symmetry_hint_usable = false;
+            }
+            return attempt(/*with_symmetry_hint=*/false);
+        };
+        // Binary search on the (monotone) threshold; an undecided probe counts as UNSAT.
+        size_t realized = count_realized();
+        size_t hi = n_soft_edges;
+        int undecided = 0;
+        while (realized < hi) {
+            const size_t mid = realized + (hi - realized + 1) / 2;
+            const int status = solve_threshold(s.edge_threshold_lits[mid - 1]);  // forces >= mid
+            if (status == TopologySatSolver::kSat) {
+                if (!topology_sat_decode_hard_solution(s.solver, s.enc, mapping_out)) {
+                    break;
+                }
+                realized = std::max(count_realized(), mid);
+                continue;
+            }
+            hi = mid - 1;
+            if (status != TopologySatSolver::kUnsat && ++undecided >= kZeroLinkMaximizeMaxUndecidedSolves) {
+                break;  // out of budget: keep the best model found
+            }
+        }
+        if (realized < n_soft_edges) {
+            log_warning(
+                tt::LogFabric,
+                "Relaxed mode: {} of {} soft target edge(s) mapped with ZERO physical links (traffic on those "
+                "edges must use the host interconnect)",
+                n_soft_edges - realized,
+                n_soft_edges);
+        }
     }
     (void)block(mapping_out);
     return true;

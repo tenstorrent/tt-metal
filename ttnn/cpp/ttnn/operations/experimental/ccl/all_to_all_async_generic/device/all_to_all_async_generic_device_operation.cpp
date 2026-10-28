@@ -6,6 +6,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 
@@ -239,6 +240,37 @@ AllToAllAsyncGenericDeviceOperation::tensor_return_value_t AllToAllAsyncGenericD
     }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> AllToAllAsyncGenericDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // all_to_all along `cluster_axis` (or over the whole mesh) is an all_gather of `in_dim` followed by each device
+    // keeping its own ring-index piece of `out_dim`, so the label is composed the same way: the all_gather label for
+    // in_dim (Replicate on the cluster axis; a gather that would interleave a 1-D-mapped tensor's shards is refused),
+    // then Shard{out_dim} on the cluster axis through the reduce_scatter-shaped alias, which also collapses an N-D
+    // [Shard{out_dim}, Shard{in_dim}] exchanged along axis 1 to the row-major {N}, [Shard{out_dim}]. The caller's
+    // persistent output buffer is the result; in_dim / out_dim are stored unsigned as given and the helper normalises.
+    // Without a cluster_axis the program factory ranks the whole-mesh ring by the input's device-storage coordinates
+    // (get_linearized_index_from_physical_coord), so that label is spelled over them (over_storage_ring_order); with
+    // a cluster_axis the ring rank is the coordinate value and the label is kept as is. With no honest label (nullopt,
+    // already reported) the output keeps the input's label.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    const auto gathered = ttnn::operations::ccl::common::all_gather_output_topology(
+        tensor_args.input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.in_dim));
+    if (!gathered.has_value()) {
+        return {input_topology};
+    }
+    const auto output_topology = ttnn::operations::ccl::common::over_storage_ring_order(
+        ttnn::operations::ccl::common::all_to_all_output_topology(
+            *gathered,
+            operation_attributes.cluster_axis,
+            tensor_args.input_tensor.device()->shape(),
+            static_cast<uint32_t>(tensor_args.input_tensor.logical_shape().rank()),
+            static_cast<int32_t>(operation_attributes.out_dim)),
+        tensor_args.input_tensor,
+        operation_attributes.cluster_axis,
+        "all_to_all_async_generic");
+    return {output_topology.value_or(input_topology)};
 }
 
 ttsl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(

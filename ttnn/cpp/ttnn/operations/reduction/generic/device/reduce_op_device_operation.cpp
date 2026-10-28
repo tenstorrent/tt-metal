@@ -135,12 +135,12 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         // in compute_kernel_lib::reduce). See common.hpp.
         const bool is_int32_sfpu_reduce = tensor_args.dtype() == DataType::INT32 &&
                                           use_sfpu_reduce_path(tensor_args.dtype(), operation_attributes.math_op);
+        // UINT32 is not accepted here. ttnn.sum/max/min convert UINT32 to INT32 before reaching this op.
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
-                tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32 ||
-                is_int32_sfpu_reduce,
-            "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction "
-            "(INT32 is supported for MAX/MIN/SUM) - got {}.",
+                tensor_args.dtype() == DataType::BFLOAT8_B || is_int32_sfpu_reduce,
+            "Only FLOAT32, BFLOAT16 and BFLOAT8_B are supported for generic reduction "
+            "(INT32 is supported for MAX/MIN/SUM; ttnn.sum/max/min route UINT32 through INT32) - got {}.",
             tensor_args.dtype());
     }
     validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");
@@ -193,8 +193,12 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             tile_width);
     }
 
-    if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
+    if (operation_attributes.output_mem_config.is_sharded()) {
         const auto out_spec = compute_output_specs(operation_attributes, tensor_args);
+        TT_FATAL(
+            out_spec.memory_config().nd_shard_spec().has_value(),
+            "Sharded reduce output spec must have an nd_shard_spec (output memory layout {})",
+            operation_attributes.output_mem_config.memory_layout());
         const auto& output_nd_shard_spec = *out_spec.memory_config().nd_shard_spec();
         const auto& output_shard_grid = output_nd_shard_spec.grid;
         const uint32_t output_tile_height = out_spec.tile().get_height();

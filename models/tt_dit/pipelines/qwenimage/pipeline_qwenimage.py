@@ -43,14 +43,13 @@ if TYPE_CHECKING:
 
 _DEFAULT_CHECKPOINT = "Qwen/Qwen-Image"
 
-# The encoder is currently hardcoded to always be FSDP as it is the most memory efficient
-# configuration with little to no performance penalty.
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
     (2, 4): {
         "cfg": (2, 0),
         "sp": (1, 0),
         "tp": (4, 1),
         "encoder_tp": (4, 1),
+        "encoder_fsdp": None,
         "vae_tp": (4, 1),
         "num_links": 1,
         "is_fsdp": False,
@@ -62,6 +61,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "sp": (4, 0),
         "tp": (4, 1),
         "encoder_tp": (4, 1),
+        "encoder_fsdp": (4, 0),
         "vae_tp": (4, 1),
         "num_links": 4,
         "is_fsdp": False,
@@ -85,6 +85,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp": (1, 0),
         "tp": (2, 1),
         "encoder_tp": (2, 1),
+        "encoder_fsdp": None,
         "vae_tp": (2, 1),
         "num_links": 1,
         "is_fsdp": False,
@@ -96,6 +97,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp": (1, 0),
         "tp": (4, 1),
         "encoder_tp": (4, 1),
+        "encoder_fsdp": None,
         "vae_tp": (4, 1),
         "num_links": 1,
         "is_fsdp": False,
@@ -107,6 +109,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp": (4, 0),
         "tp": (4, 1),
         "encoder_tp": (4, 1),
+        "encoder_fsdp": (4, 0),
         "vae_tp": (4, 1),
         "num_links": 4,
         "is_fsdp": False,
@@ -165,7 +168,9 @@ class QwenImagePipelineConfig:
             dit_parallel_config = DiTParallelConfig.from_tuples(cfg=preset["cfg"], sp=preset["sp"], tp=preset["tp"])
 
         if encoder_parallel_config is None:
-            encoder_parallel_config = EncoderParallelConfig.from_tuple(preset["encoder_tp"])
+            encoder_parallel_config = EncoderParallelConfig.from_tuples(
+                tp=preset["encoder_tp"], sp=None, fsdp=preset["encoder_fsdp"]
+            )
 
         if vae_parallel_config is None:
             vae_parallel_config = VAEParallelConfig.from_tuple(preset["vae_tp"])

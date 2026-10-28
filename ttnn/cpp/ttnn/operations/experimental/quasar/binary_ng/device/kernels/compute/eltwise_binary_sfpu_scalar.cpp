@@ -25,17 +25,14 @@
 #include "eltwise_utils_sfpu.hpp"
 
 // Process n LHS tiles against a scalar tile at index 0 in cb_post_rhs
+template <typename PreLhsDFB, typename PostLhsDFB, typename PostRhsDFB, typename OutDFB>
 FORCE_INLINE void process_sfpu_scalar_tiles(
     uint32_t n,
-    uint32_t cb_pre_lhs_id,
-    uint32_t cb_post_lhs_id,
-    uint32_t cb_post_rhs_id,
-    uint32_t cb_out_id ISCLOSE_RT_ARG_PARAMS) {
-    DataflowBuffer cb_post_lhs(cb_post_lhs_id);
-    DataflowBuffer cb_post_rhs(cb_post_rhs_id);
-    DataflowBuffer cb_out(cb_out_id);
-
-    PREPROCESS(LHS, DataflowBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
+    PreLhsDFB& cb_pre_lhs,
+    PostLhsDFB& cb_post_lhs,
+    PostRhsDFB& cb_post_rhs,
+    OutDFB& cb_out ISCLOSE_RT_ARG_PARAMS) {
+    PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n);
     cb_post_lhs.wait_front(n);
 
     cb_out.reserve_back(n);
@@ -92,7 +89,17 @@ void kernel_main() {
 
     constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
 
+    DataflowBuffer cb_pre_lhs(cb_pre_lhs_id);
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer cb_post_lhs(cb_post_lhs_id);
+#else
+    auto& cb_post_lhs = cb_pre_lhs;
+#endif
     DataflowBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer cb_pre_rhs(cb_pre_rhs_id);
+#endif
+    DataflowBuffer cb_out(cb_out_id);
 
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
     copy_init(cb_post_lhs_id);
@@ -104,21 +111,19 @@ void kernel_main() {
     BINARY_SFPU_INIT
 #endif
 
-    PREPROCESS(RHS, DataflowBuffer(cb_pre_rhs_id), cb_post_rhs, DataflowBuffer(cb_out_id), 1);
+    PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, 1);
     cb_post_rhs.wait_front(1);
 
     // Process full chunks
     uint32_t full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < full_chunks; ++chunk) {
-        process_sfpu_scalar_tiles(
-            num_tiles_per_cycle, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs.get_id(), cb_out_id ISCLOSE_RT_ARG_FWD);
+        process_sfpu_scalar_tiles(num_tiles_per_cycle, cb_pre_lhs, cb_post_lhs, cb_post_rhs, cb_out ISCLOSE_RT_ARG_FWD);
     }
 
     // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_scalar_tiles(
-            remainder, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs.get_id(), cb_out_id ISCLOSE_RT_ARG_FWD);
+        process_sfpu_scalar_tiles(remainder, cb_pre_lhs, cb_post_lhs, cb_post_rhs, cb_out ISCLOSE_RT_ARG_FWD);
     }
 
     // Pop the scalar tile from RHS CB

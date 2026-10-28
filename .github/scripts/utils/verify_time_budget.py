@@ -85,8 +85,9 @@ def resolve_budget_key(budgets, team, budget_type, tier):
 def load_tests(tests_dir):
     """Yield (basename, entries) for each test-list yaml under tests_dir.
 
-    Files whose top level is not a list (e.g. ttsim-skip-list.yaml) are not test
-    lists and are skipped.
+    Files whose top level is not a list (e.g. ttsim-skip-list.yaml and
+    models_trace_config.yaml) are configuration mappings and are skipped.
+    Generated trace jobs in models_sweep_tests.yaml are still charged.
     """
     for path in sorted(glob.glob(os.path.join(tests_dir, "*.yaml"))):
         with open(path, "r") as f:

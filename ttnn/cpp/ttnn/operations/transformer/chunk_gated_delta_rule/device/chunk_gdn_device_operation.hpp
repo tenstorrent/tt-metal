@@ -21,6 +21,7 @@
 #pragma once
 
 #include "chunk_gdn_compute_config.hpp"
+#include "kernels/dataflow/chunk_gdn_fused_rt_args.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -29,6 +30,9 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule_config.hpp"
@@ -43,7 +47,9 @@ enum class ChunkGdnImpl : uint8_t { Mono, Fused };
 // geometry. Mono uses the shape block and the state flags only; it rejects the flat forms in validate.
 struct ChunkGdnParams {
     ChunkGdnImpl impl = ChunkGdnImpl::Fused;
-    uint32_t BH = 0;
+    uint32_t BH = 0;           // heads this program computes
+    uint32_t head_offset = 0;  // first of them in the [rows, ...] tensors (Fused only; Mono requires 0)
+    uint32_t rows = 0;         // heads in the inputs (and the preallocated outputs); head_offset + BH <= rows
     uint32_t num_chunks = 0;
     uint32_t chunk_size = 0;
     uint32_t key_dim = 0;
@@ -57,19 +63,19 @@ struct ChunkGdnParams {
     // Every geometry/transport field below is resolved from the ChunkGdnFusedProgramConfig (or the
     // cost model, for the fields it leaves free) at attrs construction — never in the factory: these
     // fields being hashed is what keeps the program cache honest. Mono leaves them at their defaults.
-    // Producers per head (NP). Producer p of a head owns chunks c = p, p+NP, ... and NoC-
-    // writes them into the head's receivers in order (receiver-driven rotating ready credits).
-    // Clamped to num_chunks.
+    // Producers per head (NP) in placements 0 and 1: producer j of a head owns chunks c = j, j+NP, ... and
+    // NoC-writes them into the head's receivers in order (receiver-driven rotating ready credits);
+    // clamped to num_chunks. In placement 2 the SIZE of the producer pool P (at most BH * num_chunks).
     uint32_t np = 1;
     // Receivers per head (NV): a head's NV receiver cores form a 1xNV row rectangle and each carries a
     // V-slice of Vt/NV tiles (the phased scan's V-block split, fed over the NoC).
     uint32_t nv = 1;
     // Hand-off CB depth (slots per CB): how many chunks a producer may run ahead of a receiver's
-    // consumption, and how early a receiver can reserve+credit the next chunk. Deeper rings hide more
-    // of the per-chunk handshake round trip at +76 KB of L1 per slot on every core. The receiver keeps
-    // nbuf-1 hand-offs in flight (per-slot VALID flags, BH x nbuf credit words), so 3 hides the unicast
-    // round trip (5.8-6.1 us) behind two receiver steps at NV=2 and NV=4.
-    uint32_t nbuf = 2;  // measured: 3 and 4 are slower than 2 in every transport
+    // consumption, and how early a receiver can reserve+credit the next chunk. The receiver keeps nbuf-1
+    // hand-offs in flight (per-slot VALID flags, BH x nbuf credit words) at +76 KB of L1 per slot on
+    // every core. The config's handoff_depth, or the cost model's pick (2, or 3 where the depth-2 round
+    // trip is exposed: Vtl=1, or the supply within 10 % of the step).
+    uint32_t nbuf = 2;
     // Ship the six shared tensors and the v_beta slices as NV plain unicast writes per item instead of
     // a linked multicast chain. Multicasts reserve router ports along their path; the zone captures show
     // sporadic 20-120 us multicast-issue stalls on individual producers. The default; unicast=false
@@ -80,12 +86,24 @@ struct ChunkGdnParams {
     // on one (source, destination, VC, command buffer) — the argument tt-metal's matmul multicast
     // sender uses. Requires unicast.
     bool posted = false;
+    // Debug: compile the hand-off protocol's run-time checks into the fused writer and receiver (see
+    // chunk_gdn_handoff_protocol.md, "Runtime checks"); adds one canary tile to the u/mask CB.
+    bool handoff_checks = false;
+    // Test-only fault injection with handoff_checks (gdn_handoff::HandoffFault); 0 = none.
+    uint32_t handoff_fault = 0;
     // Placement: 0 = receivers row-major from row 0, producers fill the rest;
     // 1 = ROW-LOCAL: one head per row (receivers in columns 0..NV-1, its NP producers to their east in
     // the same row), heads beyond grid.y in the leftover columns as vertical blocks. NOC_1 routes -x
     // then -y, so a head's hand-off traffic never leaves its own row (or column block) and heads do not
     // share NoC links. The config's row_local, or row-local whenever it is feasible.
+    // 2 = PRODUCER POOL: the row-local layout of NV receivers + NPH home producers per head for the
+    // largest NPH with BH*NPH <= np, plus np - BH*NPH EXTRA producers on the remaining cores; the
+    // extras serve every head (the item map of kernels/dataflow/chunk_gdn_fused_map.hpp).
     uint32_t placement = 0;
+    // Placement 2: the extras' share of each head's chunks, pool_extra_num / pool_extra_den (0 / 1
+    // without extras).
+    uint32_t pool_extra_num = 0;
+    uint32_t pool_extra_den = 1;
     // WY-inverse method of the producer's prep compute (GdnTinv, chunk_gdn_compute_config.hpp).
     GdnTinv tinv = GdnTinv::HORNER;
     bool output_final_state = false;
@@ -93,18 +111,25 @@ struct ChunkGdnParams {
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
+// rows = heads in the tensors (params.rows); the program computes BH of them from head_offset. On a flat path
+// rows = B * HV, T = NC * C.
 struct ChunkGdnInputs {
-    Tensor q;        // [BH, NC, C, K] bf16 (or FLAT [B, T, Hk*K] bf16 when params.qk_flat)
-    Tensor k;        // [BH, NC, C, K] bf16 (or FLAT, as q)
-    Tensor v;        // [BH, NC, C, V] bf16 (or FLAT [B, T, HV*V] bf16 when params.v_flat)
-    Tensor g;        // [BH, NC, C, 1] fp32 (column)
-    Tensor beta;     // [BH, NC, C, 1] fp32 (column)
+    Tensor q;        // [rows, NC, C, K] bf16 (or FLAT [B, T, Hk*K] bf16 when params.qk_flat)
+    Tensor k;        // [rows, NC, C, K] bf16 (or FLAT, as q)
+    Tensor v;        // [rows, NC, C, V] bf16 (or FLAT [B, T, HV*V] bf16 when params.v_flat)
+    Tensor g;        // [B, T, HV] fp32 or bf16, token-major as the model produces it (B * HV == rows)
+    Tensor beta;     // [B, T, HV] fp32 or bf16, as g
     Tensor eye_c;    // [1,1,C,C] fp32
     Tensor tril_c;   // [1,1,C,C] fp32
     Tensor ones_c;   // [1,1,C,C] fp32
     Tensor masks_c;  // [1,1,32,96] fp32 — three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10); Fused only
-    Tensor
-        initial_state;  // [BH, K, V] fp32, REQUIRED: both programs read it unconditionally (zeros for a fresh sequence)
+    Tensor initial_state;  // [rows, K, V] fp32, REQUIRED: both programs read it unconditionally (zeros for a fresh
+                           // sequence)
+    // Fused only, both or neither: outputs o [rows, NC, C, V] fp32 and final_state [rows, K, V] fp32 that the
+    // program writes its head range into. Absent: [BH, ...] outputs are allocated and the program writes them
+    // at rows 0..BH-1 (the inputs are still read at rows head_offset..head_offset+BH-1).
+    std::optional<Tensor> o_out;
+    std::optional<Tensor> final_state_out;
 };
 
 // One core per head, all chunks in sequence (chunk_gdn_mono_program_factory.cpp).
@@ -119,6 +144,19 @@ struct ChunkGdnFusedProgramFactory {
         const ChunkGdnParams&, const ChunkGdnInputs&, std::vector<Tensor>&);
 };
 
+// The fused program's runtime args that carry head_offset, by kernel (the factory's push order) and
+// position; the factory emits them and get_dynamic_runtime_args re-applies them on cache hits.
+// The arg positions live in kernels/dataflow/chunk_gdn_fused_rt_args.hpp (global ::fused_rt), which the kernels
+// include too; they are pulled in here so the host addresses them by the same names.
+namespace fused_rt {
+constexpr uint32_t kPrepReaderKernel = 0;
+constexpr uint32_t kReceiverReaderKernel = 3;
+constexpr uint32_t kScanWriterKernel = 5;
+using ::fused_rt::kPrepReaderHeadOffsetArg;
+using ::fused_rt::kReceiverHeadOffsetArg;
+using ::fused_rt::kScanWriterHeadArg;
+}  // namespace fused_rt
+
 struct ChunkGdnDeviceOperation {
     using operation_attributes_t = ChunkGdnParams;
     using tensor_args_t = ChunkGdnInputs;
@@ -130,27 +168,52 @@ struct ChunkGdnDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    // Every attribute but head_offset, and the tensors' specs: the waves of one plan share a program.
+    static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    // The head_offset-carrying runtime args of the fused program (fused_rt), re-applied on every cache hit.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>&);
 };
 
 // ---------------------------------------------------------------------------------------------------
-// Fused geometry: the per-head row-local cost model, calibrated on QB2:
-//   T_fused(NV, NP) = NC * max(w_p / NP, t_step(Vt / NV)) + fill   over (NV | Vt, NP) with a feasible
-//   row-local layout, ties -> fewer cores, then smaller NV; T_phased(BH) from the measured table.
-// The op host uses it for whichever of num_receivers / num_producers / row_local the fused program
-// config leaves free, and to decide fused vs phased when no program config is given;
-// test_chunk_gdn_fused_geometry.py checks it against a Python oracle on several grids.
+// Fused geometry: the row-local cost model, calibrated on QB2:
+//   T_fused = fill(BH, producers) + max(chain, home, extra) * (1 + balance) + tail, with chain = (NC-1) steps
+//   plus the head skew, home / extra = the remaining items of the busiest home / extra producer, and balance
+//   the bump two near-equal bounds cost each other (Vtl <= 2); over (NV | Vt, NP, depth in {2, 3}) with a
+//   feasible layout (the row-major fallback is link-bound), and for a pool of P serving every head
+//   (placement 2) over the extras' share from the balanced NX / P down to 0. Ties -> fewer cores, then
+//   smaller NV, then the shallower ring. T_phased(BH) from the measured table.
+// The op host uses it for whichever of num_receivers / num_producers / row_local / handoff_depth /
+// pool_extra_share the fused program config leaves free, and to decide fused vs phased when no program
+// config is given; test_chunk_gdn_fused_geometry.py checks it against a Python oracle on several grids.
 // ---------------------------------------------------------------------------------------------------
 struct FusedGeometryChoice {
     uint32_t nv = 0;  // 0 => no fused geometry fits this grid
-    uint32_t np = 0;
-    uint32_t placement = 0;  // 1 row-local, 0 row-major fallback
+    uint32_t np = 0;  // producers per head; the pool size P when placement == 2
+    uint32_t placement = 0;  // 1 row-local, 0 row-major fallback, 2 producer pool
+    uint32_t nbuf = 2;       // hand-off depth
+    uint32_t pool_extra_num = 0;  // placement 2 with extras: the extras' share of the items, num / den
+    uint32_t pool_extra_den = 1;
     float t_fused_us = 0.0f;
     float t_phased_us = 0.0f;
     bool fused_pays = false;
 };
+// Which geometries the model considers: NP producers per head (placements 0/1), the producer pool
+// (placement 2: P = every core the receivers leave), or both (the default dispatch).
+enum class FusedCandidates : uint8_t { PerHead = 0, Pool = 1, Both = 2 };
 bool fused_row_local_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP);
-// fixed_nv / fixed_np = 0 -> free; a non-zero value pins that field (an env override) and the model
-// chooses the other one so the pair still fits (and prefers a row-local layout for it).
+// Producer pool of P for NV receivers per head: the home producers per head — the largest NPH with
+// BH*NPH <= P that has a row-local layout — or 0 when the pool does not fit.
+uint32_t fused_pool_home_producers(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t P);
+bool fused_pool_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t P);
+// fixed_nv / fixed_np / fixed_nbuf = 0 -> free; a non-zero value pins that field and the model chooses
+// the others so the pair still fits (and prefers a row-local layout for it). With the pool candidates
+// fixed_np pins the pool size and fixed_share >= 0 the extras' share (< 0 -> the model's choice).
+// fixed_placement pins a per-head placement (0 row-major, 1 row-local; < 0 -> free) and excludes the pool, so
+// the calibration can price a row-major capture whose geometry also has a row-local layout.
 FusedGeometryChoice choose_fused_geometry(
     uint32_t grid_x,
     uint32_t grid_y,
@@ -158,16 +221,51 @@ FusedGeometryChoice choose_fused_geometry(
     uint32_t NC,
     uint32_t Vt,
     uint32_t fixed_nv = 0,
-    uint32_t fixed_np = 0);
+    uint32_t fixed_np = 0,
+    uint32_t fixed_nbuf = 0,
+    FusedCandidates candidates = FusedCandidates::Both,
+    float fixed_share = -1.0f,
+    int32_t fixed_placement = -1);
+
+// Heads per fused launch. A batch's BH heads run as a sequence of waves, one fused program each (its
+// placement, credit table and head table sized to the wave), writing into shared outputs. One program
+// up to kMaxSingleWaveHeads heads when a geometry fits; above that the fewest waves of at most max_wave
+// heads (0 = kMaxWaveHeads), sizes within one of each other, more waves only if a size does not fit. Both
+// limits are the measured per-head optimum of the fused program; the cost model prices the waves for
+// fused_pays and decides nothing else here. The pins (fixed_nv / fixed_np / fixed_nbuf / candidates /
+// fixed_share, as choose_fused_geometry takes them) are the program config's, so each wave is priced at the
+// geometry the prim re-derives for it.
+struct FusedWavePlan {
+    std::vector<uint32_t> waves;  // heads per launch, in order; empty = no fused geometry fits
+    float t_fused_us = 0.0f;      // modelled, summed over the waves
+    float t_phased_us = 0.0f;
+    bool fused_pays = false;
+};
+FusedWavePlan plan_fused_waves(
+    uint32_t grid_x,
+    uint32_t grid_y,
+    uint32_t BH,
+    uint32_t NC,
+    uint32_t Vt,
+    uint32_t max_wave = 0,
+    uint32_t fixed_nv = 0,
+    uint32_t fixed_np = 0,
+    uint32_t fixed_nbuf = 0,
+    FusedCandidates candidates = FusedCandidates::Both,
+    float fixed_share = -1.0f);
+// BH heads in n waves, sizes within one of each other, the larger first.
+std::vector<uint32_t> fused_even_waves(uint32_t BH, uint32_t n);
 
 // Design D9: the fused program's core map, a pure function of its arguments (no device), shared by
 // the program factory and the nanobind geometry oracle. placement 0 = row-major 1xNV receiver
 // rectangles with the producers on the remaining cores row-major; 1 = row-local (a head's receivers
-// and producers in one row segment, leftover heads as column blocks). FATALs when the layout does
-// not fit, exactly as the factory would.
+// and producers in one row segment, leftover heads as column blocks); 2 = producer pool (NP is the
+// pool size: the row-local map of home_per_head producers per head, then the extras row-major on
+// the remaining cores). FATALs when the layout does not fit, exactly as the factory would.
 struct FusedPlacement {
     std::vector<tt::tt_metal::CoreCoord> receivers;  // index h*NV + v (logical coordinates)
-    std::vector<tt::tt_metal::CoreCoord> producers;  // index h*NP + j
+    std::vector<tt::tt_metal::CoreCoord> producers;  // index h*home_per_head + j, then the extras
+    uint32_t home_per_head = 0;                      // NP in placements 0/1
 };
 FusedPlacement fused_placement(
     uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement);
@@ -184,6 +282,9 @@ using ChunkGdnDeviceProgramConfig =
 // this path (choose_fused_geometry(...).nv == 0 means no geometry fits). Mono needs BH cores, does not
 // accept flat q/k/v, and computes the WY inverse with Horner only: wy_inverse=AUTO resolves to Horner there
 // and an explicit FORWARD_SUBSTITUTION TT_FATALs.
+// num_heads / head_offset (Fused only): compute heads [head_offset, head_offset + num_heads) of the inputs
+// (num_heads = 0: all of them) and, when o_out / final_state_out are given, write them into those full
+// tensors at the same rows instead of allocating [num_heads, ...] outputs.
 std::vector<Tensor> chunk_gdn(
     const Tensor& q,
     const Tensor& k,
@@ -206,6 +307,10 @@ std::vector<Tensor> chunk_gdn(
     bool qk_norm = false,
     float scale = 1.0f,
     bool qk_flat = false,
-    uint32_t Hk = 0);
+    uint32_t Hk = 0,
+    uint32_t num_heads = 0,
+    uint32_t head_offset = 0,
+    const std::optional<Tensor>& o_out = std::nullopt,
+    const std::optional<Tensor>& final_state_out = std::nullopt);
 
 }  // namespace ttnn::prim

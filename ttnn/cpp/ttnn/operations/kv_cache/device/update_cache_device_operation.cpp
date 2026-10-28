@@ -132,6 +132,13 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             "Cache tensor batch size ({}) must be <= input tensor height ({})",
             cache_tensor.padded_shape()[0],
             input_tensor.padded_shape()[-2]);
+        const auto Bcache = cache_tensor.padded_shape()[0];
+        const auto Binput = input_tensor.padded_shape()[-2];
+        TT_FATAL(
+            Binput == ((Bcache + TILE_HEIGHT - 1) / TILE_HEIGHT) * TILE_HEIGHT,
+            "Input batch height ({}) must equal cache batch ({}) rounded up to a tile",
+            Binput,
+            Bcache);
         // batch offset is only valid if num_user less than 32 and batch_offset + num_user <= 32
         if (cache_tensor.padded_shape()[0] < 32) {
             TT_FATAL(

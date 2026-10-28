@@ -28,11 +28,18 @@ class KimiK27Config:
     # chunk while the fused op's rises with the count. 320 is a 2.9% tie, 384 goes to the composite
     # by 8.0%, and the composite holds the band outright from there -- 11% at 640, 22% at 768.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
+    # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced only). Every
+    # config that does not name it runs the routed expert then combine as separate ops.
+    ROUTED_EXPERT_COMBINE_OVERLAP = True
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 
     # MoE configuration
     NUM_ROUTED_EXPERTS = 384
     NUM_EXPERTS_PER_TOKEN = 8
+    # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
+    # what it trades. Measured 8x4 over 1x-64x: 16 costs this model 2.0% on hot_expert traffic and
+    # nothing on balanced, the flattest of the eight, for 47 -> 23 MB a chip.
+    COMBINE_FWD_REDUCTION = 16
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1

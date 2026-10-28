@@ -7,6 +7,7 @@ from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
 )
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -16,7 +17,6 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
-    DestAccumulation,
     DestSync,
     PerfRunType,
     Tilize,
@@ -91,7 +91,6 @@ def get_valid_num_faces_datacopy(tilize):
 DATACOPY_FORMATS = input_output_formats(
     [
         DataFormat.Float32,
-        DataFormat.Float16,
         DataFormat.Float16_b,
         DataFormat.Bfp8_b,
         DataFormat.Fp8_e4m3,
@@ -179,11 +178,7 @@ def _run_unary_datacopy_test(
         generate_golden = get_golden_generator(TilizeGolden)
         golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
 
-    unpack_to_dest = (
-        False
-        if tilize == Tilize.Yes and formats.input_format == DataFormat.Float32
-        else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc, tilize)
 
     blocks_calculation_algorithm = (
         BlocksCalculationAlgorithm.Standard

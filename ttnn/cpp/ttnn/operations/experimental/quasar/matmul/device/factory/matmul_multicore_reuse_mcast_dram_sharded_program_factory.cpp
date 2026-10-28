@@ -12,6 +12,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -338,6 +339,11 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         in1_sender_writer_compile_time_args.push_back(bias_buffer_page_size);
         in1_sender_writer_compile_time_args.push_back(bias_buffer_num_pages);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
+    }
+    // in1 (then bias) TensorAccessorArgs for the BankView reads: CTA 9 without bias, CTA 12 with bias.
+    tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
+    if (bias.has_value()) {
+        tt::tt_metal::TensorAccessorArgs(*bias).append_to(in1_sender_writer_compile_time_args);
     }
 
     std::map<std::string, std::string> mm_kernel_defines;

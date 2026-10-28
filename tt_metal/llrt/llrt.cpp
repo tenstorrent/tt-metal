@@ -30,8 +30,8 @@
 #include "binary_metadata.hpp"
 #include "tt_elffile.hpp"
 #include "zone_meta.hpp"
-#include <umd/device/driver_atomics.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/driver_atomics.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
 
 // llrt = lower-level runtime
@@ -82,18 +82,17 @@ const CachedBinary& get_cached_binary(
         ll_api::ElfFile elf;
         elf.ReadImage(path);
         ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
+        // Every device-executed image, kernel or firmware, passes through here before it can run, so
+        // harvesting .tt_zone_meta registers a zone's name strictly before that zone can reach the host.
+        // Not gated on the streaming profiler: only ELFs built with PROFILE_STREAMING (part of the JIT build key)
+        // carry .tt_zone_meta, and ingest_elf returns immediately for the rest. Must run before from_elf, which may
+        // XIP-transform the ELF in place.
+        ZoneMetaRegistry::instance().ingest_elf(elf, path);
         ll_api::memory image = ll_api::memory::from_elf(elf, path, loading);
         if (update_callback) {
             update_callback(image);
         }
         auto* mutable_ptr = new CachedBinary{.image = std::move(image), .metadata = std::move(metadata)};
-        // Every device-executed image, kernel or firmware, passes through here before it can run, so
-        // harvesting .tt_zone_meta registers a zone's name strictly before that zone can reach the host.
-        // Streaming only: the DRAM profiler's ELFs carry no .tt_zone_meta and resolve names its own way.
-        // TODO(op2op): fold this harvest into parse_binary_metadata above so it shares the single open.
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_streaming_profiler_enabled()) {
-            ZoneMetaRegistry::instance().ingest_elf(path);
-        }
 
         lock.lock();
         // maps have iterator stability, so SLOT is still valid.
@@ -185,8 +184,14 @@ void send_reset_go_signal(
     cluster.write_core_immediate(
         reset_msg.data(), reset_msg.size(), {static_cast<size_t>(chip), virtual_core}, go_signal_addr);
     cluster.l1_barrier(chip);
-    uint64_t go_message_index_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
+    // The reset is in slot 0 of row 0. Point the core there: it may be waiting on another launch message slot or row
+    // after fast dispatch.
     uint32_t zero = 0;
+    uint64_t launch_msg_rd_ptr_addr =
+        hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+    cluster.write_core_immediate(
+        &zero, sizeof(uint32_t), {static_cast<size_t>(chip), virtual_core}, launch_msg_rd_ptr_addr);
+    uint64_t go_message_index_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
     cluster.write_core_immediate(
         &zero, sizeof(uint32_t), {static_cast<size_t>(chip), virtual_core}, go_message_index_addr);
 }

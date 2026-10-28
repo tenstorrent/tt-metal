@@ -10,16 +10,12 @@ from quasar.test_unpack_reduce_col_tilizeA_strided_quasar import (
 from quasar.test_unpack_reduce_col_tilizeA_strided_quasar import (
     test_unpack_reduce_col_tilizeA_strided_quasar as run_unpack_reduce_col_tilizeA_strided,
 )
-from quasar.test_unpack_reduce_col_tilizeA_strided_quasar import (
-    unpack_reduce_col_tilizeA_strided_implied_math_formats,
-)
 
 
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=PERF_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
-    implied_math_format=unpack_reduce_col_tilizeA_strided_implied_math_formats,
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
@@ -27,14 +23,12 @@ from quasar.test_unpack_reduce_col_tilizeA_strided_quasar import (
 def test_perf_unpack_reduce_col_tilizeA_strided_quasar(
     perf_report,
     formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
-    implied_math_format,
     run_types,
     loop_factor,
     is_perf,
 ):
     run_unpack_reduce_col_tilizeA_strided(
         formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
-        implied_math_format,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

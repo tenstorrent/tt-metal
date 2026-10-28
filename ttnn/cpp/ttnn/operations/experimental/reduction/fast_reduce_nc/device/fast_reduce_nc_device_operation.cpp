@@ -70,11 +70,13 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
 
     // validate input dim
     const auto input_rank = input.logical_shape().rank();
+    TT_FATAL(input_rank > 2, "FastReduceNC input rank must be greater than 2, but has {}", input_rank);
+    // The program factory treats shape[dim] as a count of whole H*W tile planes, so H and W cannot be reduced here.
     TT_FATAL(
-        (args.dim >= 0 && args.dim <= ttnn::MAX_NUM_DIMENSIONS - 2),
-        "dim must be between 0 and {}.",
-        ttnn::MAX_NUM_DIMENSIONS - 2);
-    TT_FATAL((args.dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
+        args.dim >= 0 && args.dim <= static_cast<int32_t>(input_rank) - 3,
+        "FastReduceNC reduces only outer dims: dim must be between 0 and {}, but has {}",
+        static_cast<int32_t>(input_rank) - 3,
+        args.dim);
     TT_FATAL(
         input_rank <= ttnn::MAX_NUM_DIMENSIONS,
         "FastReduceNC input rank {} exceeds maximum {}",

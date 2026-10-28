@@ -216,9 +216,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
 
     // Compute kernel(s) — full + cliff (cliff only for interleaved input).
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
     auto make_compute = [&](const KernelSpecName& id) {
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
