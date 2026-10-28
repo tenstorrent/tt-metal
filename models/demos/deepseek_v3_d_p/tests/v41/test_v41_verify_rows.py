@@ -79,7 +79,7 @@ def test_v41_verify_rows(mesh_device, device_params):
     from transformers import AutoTokenizer
 
     sp, tp = tuple(mesh_device.shape)
-    max_seq = -(-(prompt_len + 8 * n_tokens + 64) // chunk) * chunk
+    max_seq = -(-(prompt_len + n_tokens + max(ks) + 2) // chunk) * chunk  # the prefill state's capacity
     assert cap % chunk == 0 and cap >= max_seq, (cap, chunk, max_seq)
     tokenizer = AutoTokenizer.from_pretrained(orc.HF_SNAPSHOT)
     need = prompt_len + 8
