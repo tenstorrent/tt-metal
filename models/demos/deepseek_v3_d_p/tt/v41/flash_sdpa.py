@@ -277,7 +277,7 @@ def flash_sdpa(fs: FlashSdpa, q, kv, rows, scaled: bool, scale: float, sink, liv
         cb(CB["pm"], bf, UMAX, _BF16_TILE),
         cb(CB["ps"], bf, UMAX, _BF16_TILE),
         cb(CB["pa"], bf, UMAX, _BF16_TILE),
-        cb(CB["mM"], bf, 1, _BF16_TILE),
+        cb(CB["mM"], bf, 2, _BF16_TILE),  # the running max ping-pong, then the final tile
         cb(CB["mw"], bf, UMAX, _BF16_TILE),
         cb(CB["mws"], bf, 1, _BF16_TILE),
         cb(CB["mS"], bf, 1, _BF16_TILE),

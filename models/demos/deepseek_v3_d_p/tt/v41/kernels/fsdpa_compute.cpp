@@ -315,7 +315,9 @@ void kernel_main() {
         colid.wait_front(1);
         sink_cb.wait_front(1);
 
-        // M = max_j m_j (the first column)
+        // M = max_j m_j (the first column): the running max ping-pongs through cb_mM's two pages. No FPU op follows
+        // an SFPU op inside one DST acquire anywhere in the merge (the SFPU's reads and the FPU's writes of a DST
+        // tile are not ordered against each other): every step is FPU loads, then SFPU, then pack.
         reconfig_data_format(cb_pm, cb_pm);
         pack_reconfig_data_format(cb_mM);
         copy_init(cb_pm);
@@ -323,16 +325,26 @@ void kernel_main() {
         mM.reserve_back(1);
         tile_regs_acquire();
         copy_tile(cb_pm, 0, 0);
-        for (uint32_t j = 1; j < U; ++j) {
-            copy_tile(cb_pm, j, 1);
-            binary_max_tile(0, 1, 0, VectorMode::C);
-        }
         tile_regs_commit();
         tile_regs_wait();
         configure_single_tile_pack(cb_mM);
         pack_tile(0, cb_mM);
         tile_regs_release();
         mM.push_back(1);
+        for (uint32_t j = 1; j < U; ++j) {
+            mM.wait_front(1);
+            mM.reserve_back(1);
+            tile_regs_acquire();
+            copy_tile(cb_pm, j, 0);
+            copy_tile(cb_mM, 0, 1);
+            binary_max_tile(0, 1, 0, VectorMode::C);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_mM);
+            tile_regs_release();
+            mM.push_back(1);
+            mM.pop_front(1);
+        }
         mM.wait_front(1);
 
         // w_j = exp((m_j - M) * scale), w_sink = exp((sink - M) * scale) (first columns)
@@ -370,38 +382,38 @@ void kernel_main() {
         mws.wait_front(1);
         mM.pop_front(1);  // cb_mM is the final tile's CB below
 
-        // S = sum_j w_j (x) s_j ; A = sum_j w_j (x) a_jv  (column broadcast, accumulated in DST)
+        // S = sum_j w_j (x) s_j ; A = sum_j w_j (x) a_jv  (column broadcast; the sums L1-accumulated by the packer,
+        // as salad_correct_fused accumulates the running state)
         reconfig_data_format(cb_ps, cb_mw);
         mul_bcast_cols_init(cb_ps, cb_mw);
-        add_binary_tile_init();
         mS.reserve_back(1);
-        tile_regs_acquire();
-        mul_tiles_bcast_cols(cb_ps, cb_mw, 0, 0, 0);
-        for (uint32_t j = 1; j < U; ++j) {
-            mul_tiles_bcast_cols(cb_ps, cb_mw, j, j, 1);
-            add_binary_tile(0, 1, 0);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
         configure_single_tile_pack(cb_mS);
-        pack_tile(0, cb_mS);
-        tile_regs_release();
+        for (uint32_t j = 0; j < U; ++j) {
+            tile_regs_acquire();
+            mul_tiles_bcast_cols(cb_ps, cb_mw, j, j, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_l1_acc(j > 0 ? 1 : 0);
+            pack_tile<true>(0, cb_mS, 0);
+            tile_regs_release();
+        }
+        pack_reconfig_l1_acc(0);
         mS.push_back(1);
 
         reconfig_data_format(cb_pa, cb_mw);
         mul_bcast_cols_init(cb_pa, cb_mw);
         mA.reserve_back(1);
-        tile_regs_acquire();
-        mul_tiles_bcast_cols(cb_pa, cb_mw, 0, 0, 0);
-        for (uint32_t j = 1; j < U; ++j) {
-            mul_tiles_bcast_cols(cb_pa, cb_mw, j, j, 1);
-            add_binary_tile(0, 1, 0);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
         configure_single_tile_pack(cb_mA);
-        pack_tile(0, cb_mA);
-        tile_regs_release();
+        for (uint32_t j = 0; j < U; ++j) {
+            tile_regs_acquire();
+            mul_tiles_bcast_cols(cb_pa, cb_mw, j, j, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_l1_acc(j > 0 ? 1 : 0);
+            pack_tile<true>(0, cb_mA, 0);
+            tile_regs_release();
+        }
+        pack_reconfig_l1_acc(0);
         mA.push_back(1);
         mS.wait_front(1);
         mA.wait_front(1);

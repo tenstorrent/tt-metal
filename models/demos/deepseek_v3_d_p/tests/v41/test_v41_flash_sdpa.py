@@ -73,7 +73,7 @@ def test_v41_flash_sdpa(mesh_device, device_params):
     calls = int(os.environ.get("V41_SL_CALLS", 16))
     cache_rows = int(os.environ.get("V41_SL_CACHE", 4096))
     width = int(os.environ.get("V41_SL_WIDTH", C.SLIDING_WINDOW + C.INDEX_TOPK))  # the index rows' width
-    patterns = os.environ.get("V41_FS_PATTERNS", "c1,k2,k3,full").split(",")
+    patterns = os.environ.get("V41_FS_PATTERNS", "c1,k2,k3,f8,f16,full").split(",")
     sp, tp = tuple(mesh_device.shape)
     heads, head_dim, rope_dim, groups = C.NUM_ATTENTION_HEADS, C.HEAD_DIM, C.QK_ROPE_HEAD_DIM, C.O_GROUPS
     local_heads, sdpa_heads = heads // tp, max(heads // tp, SDPA_MIN_HEADS)
@@ -105,10 +105,13 @@ def test_v41_flash_sdpa(mesh_device, device_params):
     padded = torch.cat([local, torch.zeros(tp, sdpa_heads - local_heads, dtype=local.dtype)], 1)
     sink_local = rm(padded.reshape(1, 1, 1, tp * sdpa_heads), (None, 3))
 
+    host = {}  # the host copies for the diagnostic: the bf16 cache per mesh row, the index rows, the sinks
+
     def kv_cache(fmt: MlaKvCacheFormat, seed: int):
         gen = torch.Generator().manual_seed(seed)
         rows = torch.randn(1, 1, sp * cache_rows, head_dim, generator=gen)
         if fmt == MlaKvCacheFormat.BF16_RM:
+            host["cache"] = rows.to(torch.bfloat16).float().view(sp, cache_rows, head_dim)
             return rm(rows.to(torch.bfloat16), (2, None))
         latent = ttnn.from_torch(
             rows.to(torch.bfloat16),
@@ -126,8 +129,8 @@ def test_v41_flash_sdpa(mesh_device, device_params):
     def index_rows(pattern: str, seed: int):
         """``[1, 1, 32, width]`` uint32 per mesh row and the live rows per mesh row: ``c1`` one live row (a random
         one, every key), ``kK`` the live row and K draft rows (rows 28.. as the verify step's c1 layout: each draft
-        row sees the user's keys and the drafts before it, at a random valid count), ``full`` every row live with a
-        random valid count (a sentinel tail)."""
+        row sees the user's keys and the drafts before it, at a random valid count), ``fK`` the first K rows live
+        and ``full`` every row live, with random valid counts (a sentinel tail)."""
         gen = torch.Generator().manual_seed(seed)
         rows = torch.full((1, sp, ROWS, width), SENTINEL, dtype=torch.int64)
         live_rows = []
@@ -137,6 +140,8 @@ def test_v41_flash_sdpa(mesh_device, device_params):
                 live = [u]
             elif pattern.startswith("k"):
                 live = [u] + list(range(ROWS - 4, ROWS - 4 + int(pattern[1:])))
+            elif pattern.startswith("f"):
+                live = list(range(int(pattern[1:])))  # the first K rows live, random valid counts
             else:
                 live = list(range(ROWS))
             keys = torch.randperm(cache_rows, generator=gen)
@@ -151,7 +156,68 @@ def test_v41_flash_sdpa(mesh_device, device_params):
                     n = int(torch.randint(1, width + 1, (1,), generator=gen))
                 rows[0, mesh_row, r, :n] = torch.randperm(cache_rows, generator=gen)[:n]
             live_rows.append(live)
+        host["rows"] = rows[0]
         return rm(rows.to(torch.int32), (1, None), ttnn.uint32), live_rows, fs.live_page(live_rows[0])
+
+    def diagnose(qh, out_flash, out_sparse, u: int, chip: int = 0):
+        """The c1 BF16 case on one chip against a torch reference: the flash output, the sparse output, and the
+        partials read back from the scratch (each unit's max, sum tile and acc against the same arithmetic in
+        torch, then the merge in torch) -> a dict of PCCs."""
+        q = ttnn.to_torch(ttnn.get_device_tensors(qh)[chip]).float()[0, :, u, :]  # [32 heads, 512]
+        idx = host["rows"][chip // tp, u]
+        nv = int((idx != SENTINEL).sum())
+        keys = host["cache"][chip // tp][idx[:nv].long()]  # [nv, 512]
+        sink_t = padded[chip % tp].float()  # [32]
+        scores = q @ keys.T  # [32, nv]
+        full = torch.cat([scores * scale, sink_t[:, None]], 1)
+        p = torch.softmax(full, dim=1)[:, :nv]
+        ref = p @ keys  # [32, 512]
+        fl = ttnn.to_torch(ttnn.get_device_tensors(out_flash)[chip]).float()[0, :, u, :]
+        sr = ttnn.to_torch(ttnn.get_device_tensors(out_sparse)[chip]).float()[0, :, u, :]
+        d = {
+            "torch_vs_flash": _pcc(ref[:local_heads], fl[:local_heads]),
+            "torch_vs_sparse": _pcc(ref[:local_heads], sr[:local_heads]),
+        }
+        d["flash_head_pcc"] = [round(_pcc(ref[h], fl[h]), 4) for h in range(local_heads)]
+        # the partials of live rank 0 (slot j at tiles j * slot_tiles ..)
+        scratch = ttnn.to_torch(ttnn.get_device_tensors(fs.scratch)[chip]).float()[0, 0]  # [tiles * 32, 32]
+        U = -(-nv // fs.kpu)
+        pm, ps, pa, pr = [], [], [], []
+        M = None
+        merged_num = torch.zeros(32, v_dim)
+        merged_den = torch.zeros(32)
+        ms = []
+        for j in range(U):
+            base = j * fs.slot_tiles
+            tile = lambda t: scratch[(base + t) * 32 : (base + t + 1) * 32]
+            s_j = scores[:, j * fs.kpu : (j + 1) * fs.kpu]
+            m_ref = s_j.max(dim=1).values
+            p_ref = torch.exp((s_j - m_ref[:, None]) * scale)
+            a_ref = p_ref @ keys[j * fs.kpu : (j + 1) * fs.kpu]
+            pm.append(_pcc(m_ref[:local_heads], tile(0)[:local_heads, 0]))
+            n = s_j.shape[1]
+            ps.append(_pcc(p_ref[:local_heads], tile(1)[:local_heads, :n]))
+            acc = torch.cat([tile(2 + v) for v in range(fs.vt)], 1)
+            pa.append(_pcc(a_ref[:local_heads], acc[:local_heads]))
+            ms.append(tile(0)[:, 0])
+        d["partial_max_pcc_min"] = min(pm)
+        d["partial_sum_pcc_min"] = min(ps)
+        d["partial_acc_pcc_min"] = min(pa)
+        # the merge in torch from the device partials
+        ms = torch.stack(ms)  # [U, 32]
+        M = ms.max(dim=0).values
+        w = torch.exp((ms - M[None]) * scale)  # [U, 32]
+        num = torch.zeros(32, v_dim)
+        den = torch.exp((sink_t - M) * scale)
+        for j in range(U):
+            base = j * fs.slot_tiles
+            acc = torch.cat([scratch[(base + 2 + v) * 32 : (base + 3 + v) * 32] for v in range(fs.vt)], 1)
+            num += w[j][:, None] * acc
+            den += w[j] * scratch[(base + 1) * 32 : (base + 2) * 32].sum(dim=1)
+        hm = num / den[:, None]
+        d["torch_merge_of_partials_vs_flash"] = _pcc(hm[:local_heads], fl[:local_heads])
+        d["torch_merge_of_partials_vs_torch"] = _pcc(hm[:local_heads], ref[:local_heads])
+        return d
 
     def queries(seed: int):
         gen = torch.Generator().manual_seed(seed)
@@ -213,6 +279,8 @@ def test_v41_flash_sdpa(mesh_device, device_params):
                     "pcc_min": pcc_min,
                     "dead_nonzero": dead_nonzero,
                 }
+                if pattern == "c1" and fmt == MlaKvCacheFormat.BF16_RM and trial == 0:
+                    entry["diag"] = diagnose(qh, out, ref, live_rows[0][0])
                 result["trials"].append(entry)
                 logger.info(f"flash sdpa trial {json.dumps(entry)}")
                 if pcc_min < PCC_FLOOR or dead_nonzero:
