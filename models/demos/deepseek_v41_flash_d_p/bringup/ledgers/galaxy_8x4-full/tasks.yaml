@@ -657,9 +657,13 @@ tasks:
       ENGRAM_ROWS=bfp8, commits up to c3d41c620db; bringup/engram_handoff.md, ENGRAM_HOST_PATH.md 3e). STEP 1, measure
       first, with DS41_ENGRAM_TABLE=resident (pytest defaults to random, F222): per chunk and engram layer (1, 14) the host
       ms of hash + gather + pack, the upload of the rows to the mesh (from_torch / copy to device, the PCIe part, which has
-      never been measured), and when the device first needs them; report the numbers before changing code. STEP 2: layer
-      1''s rows looked up and uploaded first (as today); layer 14''s lookup started on a background thread at the start of
-      the chunk and its upload issued as soon as it is ready, so lookup and PCIe overlap layers 1-13 on the device. A
+      never been measured), and when the device first needs them; report the numbers before changing code. Today begin_chunk (tt/model.py:736) does
+      BOTH layers'' hash + lookup + pack + upload synchronously on the main thread BEFORE embed and layer 0 are
+      dispatched, and the run is host-bound (wall 544 vs device 220 ms), so every ms there adds to the wall. STEP 2: take
+      it off the main thread: begin_chunk starts both lookups on background threads and returns; the main thread keeps
+      dispatching embed, layer 0, ...; take_engram_rows(i) joins layer i''s job (and its upload) just before layer i''s
+      engram op (layer 1 overlaps layer 0, layer 14 overlaps layers 0-13). Measure how much of the lookup releases the
+      GIL (torch indexing does, Python loops do not). A
       write on the same command queue as the layers runs in queue order (serialized, not hidden): use a second command
       queue with an event that layer 14''s first engram op waits on, if the mesh has one (check how tt-d-gen opens the
       mesh: num_command_queues); else say what is possible. Prefetching the NEXT chunk''s rows is better (hides layer 1
