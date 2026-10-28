@@ -7,9 +7,12 @@
     y_t = sum_{k=0..4} w[:, k] * h_{t-4+k}                       causal depthwise conv, h_{<0} = 0, no bias
     out = x + ClippableLinear_end( silu( RMSNorm_conv(y) ) )      (clamp +-1e10 before conv_norm: a no-op)
 
-Causal shift on device: per 32-row block, ctx = [previous block, own block] (64 rows, attention.block_context)
-and one matmul with a constant 0/1 selection matrix Sel [4*32, 64] gives h_{t-4}, ..., h_{t-1} for every
-row (exact: one nonzero per row, fp32 output). The k = 4 tap is h itself. Taps are accumulated in fp32.
+Causal shift on device (exact: 0/1 matrices, one nonzero per row, bf16 output). Batch 1 (E5c): four
+[S, S] shift matrices per token bucket (load_causal_shifts, shared by the layers), one 2D-multicast
+matmul each. Batch > 1: per 32-row block, ctx = [previous block, own block] (64 rows,
+attention.block_context) and one batched matmul with a constant selection matrix Sel [4*32, 64] gives
+h_{t-4}, ..., h_{t-1} for every row. The k = 4 tap is h itself. Taps are accumulated in fp32, in
+the same order on both paths.
 
 Contract
     input   x [B, 1, S, 1024] bf16 TILE DRAM, S a multiple of 32
@@ -27,11 +30,38 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.audio.attention import CTX, block_context
 from models.demos.blackhole.embedding_gemma2.tt.audio.clippable_linear import ClippableLinear
-from models.demos.blackhole.embedding_gemma2.tt.audio.config import ATTN_BLOCK, AudioConfig
+from models.demos.blackhole.embedding_gemma2.tt.audio.config import ATTN_BLOCK, TOKEN_BUCKETS, AudioConfig
+from models.demos.blackhole.embedding_gemma2.tt.audio.linear import audio_linear
 from models.demos.blackhole.embedding_gemma2.tt.audio.program_configs import block_bmm_config
 from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, substate
+
+
+def causal_shift_matrix(seq_len: int, shift: int) -> torch.Tensor:
+    """[1, 1, S, S] 0/1 matrix M with (M h)_t = h_{t - shift} (0 for t < shift)."""
+    m = torch.zeros(seq_len, seq_len)
+    t = torch.arange(shift, seq_len)
+    m[t, t - shift] = 1.0
+    return m.reshape(1, 1, seq_len, seq_len)
+
+
+def load_causal_shifts(device, kernel: int, cache_dir: Path | None = None) -> dict[int, list[ttnn.Tensor]]:
+    """Per token bucket S, the kernel - 1 shift matrices (shift kernel-1 .. 1, i.e. tap k = 0 .. kernel-2),
+    bf16 on device. Shared by the 12 lconv layers (AudioModel builds them once): 7.5 MB in all."""
+    taps = kernel - 1
+    return {
+        S: [
+            as_weight(
+                causal_shift_matrix(S, taps - k),
+                device,
+                cache_dir=cache_dir,
+                name=f"audio.causal_shift_s{S}_{taps - k}",
+            )
+            for k in range(taps)
+        ]
+        for S in TOKEN_BUCKETS
+    }
 
 
 def causal_selection(kernel: int) -> torch.Tensor:
@@ -54,6 +84,7 @@ class AudioLightConv1d(LightweightModule):
         selection: ttnn.Tensor,
         conv_norm: RMSNorm,
         linear_end: ClippableLinear,
+        shifts: dict[int, list[ttnn.Tensor]],
     ):
         super().__init__()
         self.config = config
@@ -61,6 +92,7 @@ class AudioLightConv1d(LightweightModule):
         self.linear_start = linear_start
         self.taps = taps
         self.selection = selection
+        self.shifts = shifts
         self.conv_norm = conv_norm
         self.linear_end = linear_end
         self.compute_kernel_config = compute_kernel_config_hifi4()
@@ -75,9 +107,11 @@ class AudioLightConv1d(LightweightModule):
         cache_dir: Path | None = None,
         name: str = "audio.lconv1d",
         act_dtype=ttnn.bfloat16,
+        shifts: dict[int, list[ttnn.Tensor]] | None = None,
     ) -> "AudioLightConv1d":
         """`state_dict` holds the HF `layers.<i>.lconv1d.` sub-state (`.linear.` folded). `act_dtype`:
-        output dtype of linear_start / linear_end, see AudioModel."""
+        output dtype of linear_start / linear_end, see AudioModel. `shifts`: load_causal_shifts()
+        output to share between layers (loaded here when None)."""
         H, K = config.hidden_size, config.conv_kernel_size
         kw = dict(cache_dir=cache_dir)
         pre = RMSNorm.from_state_dict(
@@ -106,12 +140,35 @@ class AudioLightConv1d(LightweightModule):
             for k in range(K)
         ]
         sel = as_weight(causal_selection(K), device, cache_dir=cache_dir, name=f"audio.causal_sel_k{K}")
-        return cls(config, pre, start, taps, sel, cnorm, end)
+        if shifts is None:
+            shifts = load_causal_shifts(device, K, cache_dir)
+        return cls(config, pre, start, taps, sel, cnorm, end, shifts)
+
+    def _causal_depthwise_full(self, h: ttnn.Tensor) -> ttnn.Tensor:
+        """Batch 1: h_{t-s} = M_s h with the [S, S] shift matrices (2D multicast matmul, exact in bf16),
+        then the same fp32 tap products and sums in the same order as the block path."""
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        S = h.shape[2]
+        taps = len(self.taps) - 1
+        acc = ttnn.multiply(h, self.taps[taps], dtype=ttnn.float32, memory_config=dram)  # k = taps: h_t itself
+        for k in range(taps):
+            sk = audio_linear(
+                self.shifts[S][k], h, dtype=ttnn.bfloat16, compute_kernel_config=self.compute_kernel_config
+            )
+            term = ttnn.multiply(sk, self.taps[k], dtype=ttnn.float32, memory_config=dram)
+            ttnn.deallocate(sk)
+            nxt = ttnn.add(acc, term, memory_config=dram)
+            ttnn.deallocate(term)
+            ttnn.deallocate(acc)
+            acc = nxt
+        return acc
 
     def _causal_depthwise(self, h: ttnn.Tensor) -> ttnn.Tensor:
         """h [B, 1, S, D] bf16 -> fp32 [B, 1, S, D] causal depthwise conv."""
         dram = ttnn.DRAM_MEMORY_CONFIG
         B, _, S, D = h.shape
+        if B == 1 and S in self.shifts:
+            return self._causal_depthwise_full(h)
         nb = S // ATTN_BLOCK
         taps = len(self.taps) - 1
         ctx = block_context(h)  # [B, nb, 64, D]

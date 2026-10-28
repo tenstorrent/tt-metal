@@ -29,6 +29,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.audio.config import AudioConfig
 from models.demos.blackhole.embedding_gemma2.tt.audio.conformer_layer import AudioConformerLayer
 from models.demos.blackhole.embedding_gemma2.tt.audio.embedder import AudioEmbedder, AudioOutputProj
+from models.demos.blackhole.embedding_gemma2.tt.audio.light_conv import load_causal_shifts
 from models.demos.blackhole.embedding_gemma2.tt.audio.subsample import AudioSubsample
 from models.demos.blackhole.embedding_gemma2.tt.weights import substate
 
@@ -88,9 +89,16 @@ class AudioModel(LightweightModule):
         sub = AudioSubsample.from_state_dict(
             substate(tower, "subsample_conv_projection"), config, device, cache_dir=cache_dir, act_dtype=act_dtype
         )
+        shifts = load_causal_shifts(device, config.conv_kernel_size, cache_dir)  # shared by the lconv layers
         layers = [
             AudioConformerLayer.from_state_dict(
-                substate(tower, f"layers.{i}"), config, i, device, cache_dir=cache_dir, act_dtype=act_dtype
+                substate(tower, f"layers.{i}"),
+                config,
+                i,
+                device,
+                cache_dir=cache_dir,
+                act_dtype=act_dtype,
+                shifts=shifts,
             )
             for i in range(n)
         ]

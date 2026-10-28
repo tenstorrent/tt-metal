@@ -66,8 +66,10 @@ class AudioConformerLayer(LightweightModule):
         *,
         cache_dir: Path | None = None,
         act_dtype=ttnn.bfloat16,
+        shifts: dict | None = None,
     ) -> "AudioConformerLayer":
-        """`state_dict` holds the HF `audio_tower.layers.<i>.` sub-state (`.linear.` folded)."""
+        """`state_dict` holds the HF `audio_tower.layers.<i>.` sub-state (`.linear.` folded). `shifts`:
+        the lconv shift matrices shared by all layers (light_conv.load_causal_shifts)."""
         name = f"audio.layers.{layer_idx}"
         kw = dict(cache_dir=cache_dir)
         akw = dict(act_dtype=act_dtype, **kw)
@@ -86,7 +88,7 @@ class AudioConformerLayer(LightweightModule):
             ),
             norm("norm_post_attn"),
             AudioLightConv1d.from_state_dict(
-                substate(state_dict, "lconv1d"), config, device, name=f"{name}.lconv1d", **akw
+                substate(state_dict, "lconv1d"), config, device, name=f"{name}.lconv1d", shifts=shifts, **akw
             ),
             AudioFeedForward.from_state_dict(
                 substate(state_dict, "feed_forward2"), config, device, name=f"{name}.ffn2", **akw
