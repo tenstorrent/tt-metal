@@ -362,6 +362,14 @@ public:
 
     using Participants = ttsl::SmallVector<NumaAwareExecutor*, 32>;  // 32: one per Galaxy device
 
+    // A use of a job is the job's generation in the high half of a word: the pool publishes it with the job's slot
+    // in the low half, and state_ keeps it with the holder count there.
+    static constexpr uint64_t pack(uint32_t generation, uint32_t low) {
+        return (static_cast<uint64_t>(generation) << GENERATION_SHIFT) | low;
+    }
+    static constexpr uint32_t generation_of(uint64_t word) { return static_cast<uint32_t>(word >> GENERATION_SHIFT); }
+    static constexpr uint32_t slot_of(uint64_t published) { return static_cast<uint32_t>(published & LOW_HALF); }
+
     // Sized for a pool of `capacity` workers; `slot` is the job's place in the pool's ring.
     ParallelJob(size_t capacity, uint32_t slot) :
         slot_(slot), claims_(capacity), participant_of_worker_(capacity, NONE) {}
@@ -375,21 +383,21 @@ public:
     // Caller: takes the job if nobody holds it, starting its next generation in the same step.
     bool try_acquire() noexcept {
         uint64_t state = state_.load(std::memory_order_relaxed);
-        if ((state & HOLDERS) != 0) {
+        if ((state & LOW_HALF) != 0) {
             return false;
         }
-        const uint64_t next = (((state >> 32) + 1) << 32) | 1;
+        const uint64_t next = pack(generation_of(state) + 1, /*holders=*/1);
         if (!state_.compare_exchange_strong(state, next, std::memory_order_acquire, std::memory_order_relaxed)) {
             return false;
         }
-        generation_ = static_cast<uint32_t>(next >> 32);
+        generation_ = generation_of(next);
         use_++;
         return true;
     }
 
     // Worker: holds the job if `generation` is still its current use; a held job is not reused.
     bool hold(uint32_t generation) noexcept {
-        if ((state_.fetch_add(1, std::memory_order_acq_rel) >> 32) == generation) {
+        if (generation_of(state_.fetch_add(1, std::memory_order_acq_rel)) == generation) {
             return true;
         }
         release();
@@ -446,8 +454,8 @@ public:
         remaining_.add(static_cast<int64_t>(next_call_.size()));
     }
 
-    // What the pool publishes for this use of the job: (generation << 32) | slot.
-    uint64_t published() const { return (static_cast<uint64_t>(generation_) << 32) | slot_; }
+    // What the pool publishes for this use of the job.
+    uint64_t published() const { return pack(generation_, slot_); }
 
     // Worker, holding the job: wakes its children, runs its calls and releases the job. A finished job is only
     // released: its executors may be stopping.
@@ -511,7 +519,8 @@ private:
         std::atomic<uint64_t> use = 0;
     };
 
-    static constexpr uint64_t HOLDERS = 0xffffffffULL;
+    static constexpr unsigned GENERATION_SHIFT = 32;
+    static constexpr uint64_t LOW_HALF = (uint64_t{1} << GENERATION_SHIFT) - 1;
 
     // (generation << 32) | holders: the caller that acquired the job and the workers taking part.
     std::atomic<uint64_t> state_ = 0;
@@ -556,8 +565,8 @@ inline void NumaAwareExecutor::worker_loop() {
         }
         if (const uint64_t published = pool_published_job_.load(std::memory_order_acquire); published != seen_) {
             seen_ = published;
-            auto* job = pool_jobs_[published & 0xffffffffULL].get();
-            if (job->hold(static_cast<uint32_t>(published >> 32))) {
+            auto* job = pool_jobs_[ParallelJob::slot_of(published)].get();
+            if (job->hold(ParallelJob::generation_of(published))) {
                 job->participate(this);
             }
             continue;
