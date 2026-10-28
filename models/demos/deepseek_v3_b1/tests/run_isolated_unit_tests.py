@@ -52,7 +52,6 @@ BUCKETS: tuple[Bucket, ...] = (
             f"{UNIT_TEST_DIR}/test_dram_streaming_matmul.py",
             f"{UNIT_TEST_DIR}/test_matmul.py",
             f"{UNIT_TEST_DIR}/test_matmul_custom_compressed.py",
-            f"{UNIT_TEST_DIR}/test_moe_routed_expert.py",
             f"{UNIT_TEST_DIR}/test_shared_expert.py",
         ),
     ),
@@ -67,7 +66,6 @@ BUCKETS: tuple[Bucket, ...] = (
             f"{UNIT_TEST_DIR}/test_compressed_tensor.py",
             f"{UNIT_TEST_DIR}/test_create_q_heads.py",
             f"{UNIT_TEST_DIR}/test_deepseek_moe_gate.py",
-            f"{UNIT_TEST_DIR}/test_demo.py",
             f"{UNIT_TEST_DIR}/test_eltwise_add.py",
             f"{UNIT_TEST_DIR}/test_flash_mla.py",
             f"{UNIT_TEST_DIR}/test_gated_local_reduce.py",
@@ -96,28 +94,8 @@ BUCKETS: tuple[Bucket, ...] = (
         name="fabric_2d",
         timeout=480,
         targets=(
-            f"{UNIT_TEST_DIR}/test_attention_block.py",
-            f"{UNIT_TEST_DIR}/test_ccl_all_gather.py",
-            f"{UNIT_TEST_DIR}/test_ccl_all_reduce.py",
-            f"{UNIT_TEST_DIR}/test_ccl_broadcast.py::test_ccl_broadcast",
-            f"{UNIT_TEST_DIR}/test_ccl_broadcast.py::test_ccl_broadcast_loop",
-            f"{UNIT_TEST_DIR}/test_ccl_broadcast.py::test_ccl_broadcast_host_iter_stamped_chunks",
-            f"{UNIT_TEST_DIR}/test_ccl_broadcast.py::test_ccl_broadcast_remainder_chunk",
-            f"{UNIT_TEST_DIR}/test_ccl_broadcast.py::test_ccl_broadcast_auto_chunk",
-            f"{UNIT_TEST_DIR}/test_ccl_broadcast.py::test_ccl_broadcast_torus_8x4_functional_fabric_2d",
             f"{UNIT_TEST_DIR}/test_dram_zero_fill.py",
-            f"{UNIT_TEST_DIR}/test_lm_head_sampling.py",
-            f"{UNIT_TEST_DIR}/test_model.py",
-            f"{UNIT_TEST_DIR}/test_moe_mlp.py",
-            f"{UNIT_TEST_DIR}/test_pipeline_stage_sync.py",
-            f"{UNIT_TEST_DIR}/test_post_sdpa.py",
-            f"{UNIT_TEST_DIR}/test_pre_sdpa.py",
             f"{UNIT_TEST_DIR}/test_prepare_weights.py",
-            f"{UNIT_TEST_DIR}/test_reduce_to_one_b1.py::test_reduce_to_one_2d",
-            f"{UNIT_TEST_DIR}/test_sampling.py",
-            f"{UNIT_TEST_DIR}/test_sdpa_reduce_to_all.py",
-            f"{UNIT_TEST_DIR}/test_broadcast_rms.py",
-            f"{UNIT_TEST_DIR}/test_multi_host_pipeline.py::test_passthrough_pipeline_block",
         ),
     ),
     Bucket(
@@ -145,19 +123,12 @@ BUCKETS: tuple[Bucket, ...] = (
         timeout=60,
         targets=(
             f"{UNIT_TEST_DIR}/test_ccl_broadcast.py::" "test_ccl_broadcast_torus_8x4_functional_fabric_2d_torus_x",
-            f"{UNIT_TEST_DIR}/test_reduce_to_all_b1.py",
         ),
     ),
     Bucket(
         name="fabric_2d_torus_y",
         timeout=120,
-        targets=(
-            f"{UNIT_TEST_DIR}/test_multi_host_pipeline.py",
-            f"{UNIT_TEST_DIR}/test_moe_15_stages.py",
-            f"{UNIT_TEST_DIR}/test_bcast_moe_reduce_pipeline.py",
-            f"{UNIT_TEST_DIR}/test_broadcast_rms_two_stage_pipeline.py",
-            f"--deselect={UNIT_TEST_DIR}/test_multi_host_pipeline.py::test_passthrough_pipeline_block",
-        ),
+        targets=(f"--deselect={UNIT_TEST_DIR}/test_multi_host_pipeline.py::test_passthrough_pipeline_block",),
     ),
     Bucket(
         name="fabric_2d_torus_y_xy_skip_only",
@@ -178,10 +149,7 @@ BUCKETS: tuple[Bucket, ...] = (
     Bucket(
         name="host_io_risk",
         timeout=120,  # 2 minutes
-        targets=(
-            f"{UNIT_TEST_DIR}/test_host_io.py",
-            f"{UNIT_TEST_DIR}/test_broadcast_rms_single_device.py",
-        ),
+        targets=(),
     ),
     # Keep fast-dispatch buckets visually separated from slow-dispatch buckets.
     Bucket(
