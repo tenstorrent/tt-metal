@@ -34,6 +34,14 @@ all-gather-and-sum of step 11 counts it once) and adds it to the local routed pa
 reduce-scatter, which is what the 32-row tail does with it. That replaces the shared expert's own reduce-scatter
 (~16 us) and the final add with a one-hot matmul and an add (~4 us).
 
+``rows`` above 1 (the speculative verify step, ``tt/v41/spec_verify.py``: ``1 + K`` rows of one user) runs the same chain on ``T <= rows`` live rows at rows ``0 .. T - 1`` of the tile: ``sel`` picks them,
+the SP gather-sum keeps row ``j`` of every rank (the ``sum8`` matrix is the identity repeated), ``router_select``
+ranks ``T`` real rows, ``c1_select`` (``T`` a runtime argument) marks an expert of any row with count ``T`` and writes
+row ``t``'s weight at ``(t, 32 l)``, ``R`` puts all the rows at the head of every region (the FFN computes a selected
+expert on the ``T`` rows at once: one tile of M, the same cost as one row; a row that did not select the expert
+has weight 0), the shared expert runs row-wise, and ``put`` places rows ``0 .. T - 1``. The composite FFN carries
+the rows (``C1FfnMatvec`` is one row's); the one-row call is unchanged.
+
 With ``V41_DECODE_C1_SHARED=split`` the c1 path runs the shared expert itself on a 32-way
 split of its intermediate instead of the chip's TP slice: :class:`C1SharedSplit` holds, per chip, the SP rank's
 tile-aligned piece of the chip's TP shard of ``gate_proj`` / ``up_proj`` (columns) and ``down_proj`` (rows), cut on
@@ -85,16 +93,21 @@ def _accessors(*tensors) -> list:
     return args
 
 
-def c1_select(indices, weights, table, num_experts: int, w=None):
-    """``indices``: uint16 TILE ``[T, K]`` (``T <= 32``; row 0 the live row), ``weights``: bf16 row-major
-    ``[T, K]``, ``table``: this chip's ``global_expert_idx_table`` (uint32 row-major, ``EPC`` words). Returns
-    ``(counts, w)``: uint32 row-major ``[1, E]`` (1 at the row's experts that are this chip's) and bf16 TILE
-    ``[32, 32 * EPC]`` (row 0, column ``32 l`` = the row's weight of local expert ``l``, else 0). ``w``: a
-    persistent, zeroed tensor of that shape to write the ``EPC`` head words into (only those; the kernel's
-    ``PERSIST``), instead of a fresh tensor zeroed by the kernel."""
+C1_SELECT_ROWS = 4  # the most live rows c1_select handles (the verify step's 1 + K, K <= 3)
+
+
+def c1_select(indices, weights, table, num_experts: int, w=None, rows: int = 1):
+    """``indices``: uint16 TILE ``[T, K]`` (``T <= 32``; rows ``0 .. rows - 1`` the live rows), ``weights``: bf16
+    row-major ``[T, K]``, ``table``: this chip's ``global_expert_idx_table`` (uint32 row-major, ``EPC`` words).
+    Returns ``(counts, w)``: uint32 row-major ``[1, E]`` (``rows`` at the experts some live row selected that are
+    this chip's) and bf16 TILE ``[32, 32 * EPC]`` (row ``t``, column ``32 l`` = row ``t``'s weight of local expert
+    ``l``, else 0). ``w``: a persistent, zeroed tensor of that shape to write the head words into (rows
+    ``0 .. C1_SELECT_ROWS - 1`` of column ``32 l``; the kernel's ``PERSIST``), instead of a fresh tensor zeroed by
+    the kernel."""
     E = num_experts
     T, K = int(indices.shape[-2]), int(indices.shape[-1])
     assert T <= _TILE and K <= 16, (T, K)
+    assert 1 <= rows <= min(T, C1_SELECT_ROWS), (rows, T)
     assert indices.dtype == ttnn.uint16 and indices.layout == ttnn.TILE_LAYOUT, (indices.dtype, indices.layout)
     assert weights.dtype == ttnn.bfloat16 and weights.layout == ttnn.ROW_MAJOR_LAYOUT, (weights.dtype, weights.layout)
     assert tuple(weights.shape)[-2:] == (T, K), tuple(weights.shape)
@@ -120,15 +133,17 @@ def c1_select(indices, weights, table, num_experts: int, w=None):
         table.buffer_address(),
         counts.buffer_address(),
         w.buffer_address(),
+        rows,
     ]
     kernel = ttnn.KernelDescriptor(
         kernel_source=f"{_KERNELS}/c1_select.cpp",
         core_ranges=cores,
-        compile_time_args=[0, E, K, epc, int(persist)] + _accessors(indices, weights, table, counts, w),
+        compile_time_args=[0, E, K, epc, int(persist), C1_SELECT_ROWS] + _accessors(indices, weights, table, counts, w),
         runtime_args=args,
         config=ttnn.ReaderConfigDescriptor(),
     )
-    scratch = 64 + 2048 + 64 + (epc * 4 + 63) // 64 * 64 + (E * 4 + 63) // 64 * 64 + epc * (64 if persist else 2048)
+    w_stride = C1_SELECT_ROWS * 32 if persist else 2048
+    scratch = 64 + 2048 + 64 * C1_SELECT_ROWS + (epc * 4 + 63) // 64 * 64 + (E * 4 + 63) // 64 * 64 + epc * w_stride
     fmt = ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=scratch)
     cbs = [ttnn.CBDescriptor(total_size=scratch, core_ranges=cores, format_descriptors=[fmt])]
     ttnn.generic_op(
@@ -400,10 +415,13 @@ class C1Moe:
     """The c1 MoE of one decode layer's ``TtV41Moe`` (its gate a :class:`DecodeGate`): see the module docstring.
     ``ccl``: the model's ``V41Collectives``; ``pool``: the decoder's ``V41DecodePool`` (its ``tt_ccl``)."""
 
-    def __init__(self, v41_moe, ccl, pool):
+    def __init__(self, v41_moe, ccl, pool, rows: int = 1):
+        """``rows``: the most live rows a call takes (1: the served c1 step; the verify step's ``1 + K``, the
+        module docstring); above 1 the composite FFN's entry is built beside the matvec one."""
         moe = v41_moe.moe
         assert isinstance(moe.gate, DecodeGate), "the c1 MoE needs the decode routing (V41_DECODE_ROUTING=1)"
-        self.moe, self.ccl, self.pool = moe, ccl, pool
+        assert 1 <= rows <= C1_SELECT_ROWS, rows
+        self.moe, self.ccl, self.pool, self.rows = moe, ccl, pool, rows
         self.gate: DecodeGate = moe.gate
         self.routed = moe.routed_expert
         self.k = moe.num_experts_per_tok
@@ -431,20 +449,24 @@ class C1Moe:
             mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=device.shape, dims=(0, 1)),
         )
         self.region = ttnn.reshape(self.region, (1, self.E))
-        # R[32 l, 0] = 1: ``R @ x_full`` puts the row at the head of each expert's region
+        # R[32 l + j, j] = 1 (j < rows): ``R @ x_full`` puts the live rows at the head of each expert's region
         R = torch.zeros(self.epc * _TILE, _TILE)
-        R[::_TILE, 0] = 1.0
+        for j in range(rows):
+            R[j::_TILE, j] = 1.0
         self.R = self._replicated(R.view(1, 1, self.epc * _TILE, _TILE), ttnn.bfloat16)
-        # row 0 all ones: ``sum8 @ gathered`` sums the SP column's tiles (their rows 1..31 zero) into row 0
+        # sum8[j, 32 r + j] = 1 (j < rows): ``sum8 @ gathered`` sums the SP column's tiles (their other rows zero)
+        # row by row
         sum8 = torch.zeros(_TILE, _TILE * pool.sp)
-        sum8[0] = 1.0
+        for j in range(rows):
+            sum8[j, j::_TILE] = 1.0
         self.sum8 = self._replicated(sum8.view(1, 1, _TILE, _TILE * pool.sp), ttnn.bfloat16)
         # sp0[0, 0] = 1 on the chips of SP rank 0 (mesh row 0), zero elsewhere: ``sp0 @ partial`` keeps a
         # replicated row-0 partial on one SP rank only, so the SP all-gather-and-sum of step 11 counts it once
         # (the shared expert's partial under V41_SHARED_IN_FFN, the module docstring)
         sp, tp = tuple(device.shape)
         sp0 = torch.zeros(sp, tp, _TILE, _TILE)
-        sp0[0, :, 0, 0] = 1.0
+        for j in range(rows):
+            sp0[0, :, j, j] = 1.0
         self.sp0 = ttnn.from_torch(
             sp0,
             device=device,
@@ -485,7 +507,7 @@ class C1Moe:
             row = self._replicated(torch.zeros(1, 1, _TILE, hidden), ttnn.bfloat16)
             self.matvec(row, none)
             ttnn.deallocate(row)
-        else:
+        if self.matvec is None or rows > 1:  # the composite FFN carries the multi-row calls
             ttnn.deallocate(self._ffn(ttnn.reshape(zeros, (self.epc * _TILE, hidden)), none))
         ttnn.deallocate(none)
 
@@ -593,11 +615,12 @@ class C1Moe:
         ttnn.deallocate(gathered)
         return out
 
-    def __call__(self, h, sel, put):
+    def __call__(self, h, sel, put, rows: int = 1):
         """``h``: bf16 TILE ``[1, 1, 32, hidden/tp]`` (the normed residual tile), ``sel`` / ``put`` of
         :meth:`onehots` -> the MoE output of the live row at its row of the live rank's tile, the other rows zero;
-        the same shape as ``h``."""
+        the same shape as ``h``. ``rows``: the live rows (``sel`` picks them into rows ``0 .. rows - 1``)."""
         moe, gate, cfg = self.moe, self.gate, self.gate.config
+        assert 1 <= rows <= self.rows, (rows, self.rows)
         # 1, 2: the live row's TP shard to every chip
         picked = ttnn.matmul(sel, h, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         xs = self._sp_all_reduce(picked)
@@ -615,11 +638,11 @@ class C1Moe:
         score = ttnn.add(l32, zero, input_tensor_a_activations=activations, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(l32)
         rank = ttnn.add(score, bias32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        weights, indices = router_select(rank, score, self.k, 1e-20, cfg.route_scale, 1)
+        weights, indices = router_select(rank, score, self.k, 1e-20, cfg.route_scale, rows)
         ttnn.deallocate(rank)
         ttnn.deallocate(score)
         # 5: the row's experts that are this chip's
-        counts, W = c1_select(indices, weights, self.table, self.E, self.W0)
+        counts, W = c1_select(indices, weights, self.table, self.E, self.W0, rows)
         if self.debug is not None:
             self.debug.update(counts=counts, indices=indices, weights=weights)
         else:
@@ -655,7 +678,8 @@ class C1Moe:
         folded = self.shared_fold in ("pending", "split")
         if self.debug is not None:
             self.debug["x_full"] = x_full  # the experts' input row (tests build the reference from it)
-        if self.matvec is not None:
+        matvec = self.matvec is not None and rows == 1
+        if matvec:
             # 8', 9': the decode-shaped FFN reads the bf16 row itself (no bfp8 region buffer) into its persistent y
             y = self.matvec(x_full, counts)
             if self.debug is None:
@@ -677,7 +701,7 @@ class C1Moe:
             ttnn.deallocate(counts)
         # 10: the local weighted sum (row 0)
         part = ttnn.matmul(W, y, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if self.matvec is None:
+        if not matvec:
             ttnn.deallocate(y)
         if self.W0 is None:
             ttnn.deallocate(W)

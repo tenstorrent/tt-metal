@@ -370,6 +370,7 @@ class DeviceSampler:
 
 class TtV41BatchDecoder(TtV41Decoder):
     POOL_RING_SLOTS = RING  # the pool's ring slots per layer (a subclass with verify rows takes more)
+    C1_ROWS = 1  # the most live rows a c1 MoE call takes (the verify rows' subclass: 1 + K)
 
     def __init__(
         self,
@@ -464,7 +465,7 @@ class TtV41BatchDecoder(TtV41Decoder):
         if self.c1:
             assert MOE_ROWS == ROWS, "V41_DECODE_C1_MOE=1 needs V41_DECODE_ROUTING=1 (the 32-row MoE tile)"
             ccl = model.blocks[0].attn.ccl
-            self.c1_moes = [C1Moe(moe, ccl, self.pool) for moe in self.moes]
+            self.c1_moes = [C1Moe(moe, ccl, self.pool, rows=self.C1_ROWS) for moe in self.moes]
             self.c1_table = C1Moe.identity_table(self.mesh_device)
         # V41_DECODE_C1_INDEX=1: in the c1 capture the index sources select for the live
         # user alone (``_index_c1``): its user index, newest row and block page are per-step host rows (``c1usr``,

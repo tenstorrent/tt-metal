@@ -36,6 +36,12 @@ verify row's tap (computed in the step) is written to the drafter's rings at the
 on every accept outcome's block at once, so ``decode`` also returns, in ``drafts[slot][a]``, the five drafts that
 follow accepting ``a`` of the block; the round's host side is the accept,
 the commit and the next step's inputs.
+
+Under ``V41_DECODE_C1_MOE=1`` (the c1 capture) the MoEs run the live
+slot's ``1 + K`` rows through ``C1Moe`` (``rows=1 + K``: the rows gathered to every chip, a selected expert computed
+on all of them at once, the weights masking the rows that did not select it) instead of the 32-row tile; the
+sublayer norms follow ``V41_DECODE_NORM`` and the host inputs ``V41_DECODE_HOST_INPUTS`` as the batched step's. The
+index selection is per live row either way (``V41_DECODE_C1_INDEX``'s pages are not read).
 """
 
 from __future__ import annotations
@@ -52,6 +58,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.head_layout import o_heads, q_heads
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import DecodePins, TtV41Indexer
 from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import range_scores
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
+from models.demos.deepseek_v3_d_p.tt.v41.moe_c1 import C1_SELECT_ROWS, C1Moe
 from models.demos.deepseek_v3_d_p.tt.v41.pool import RING, scatter_rows
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
 from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
@@ -59,17 +66,19 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 SENTINEL32 = -1  # int32 host value of the uint32 sentinel
+C1_ONEHOT_SENTINEL = 32  # the identity table's zero row (moe_c1._SENTINEL)
 
 
 class TtV41VerifyDecoder(TtV41BatchDecoder):
     POOL_RING_SLOTS = RING + ROWS
+    C1_ROWS = C1_SELECT_ROWS  # the c1 MoE on 1 + K rows, K <= 3
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert self.single_query, "verify rows need V41_DECODE_SINGLE_QUERY=1 (one scorer per live row)"
-        assert self.packer is not None, "verify rows need V41_DECODE_HOST_INPUTS=packed"
+        assert self.packer is not None, "verify rows need V41_DECODE_HOST_INPUTS=packed or one"
         assert self.sample_on_device, "verify rows take every row's argmax on device"
-        assert not self.c1, "verify rows run the 32-row MoE path (V41_DECODE_C1_MOE unset)"
+        self.live_rows = 1  # the live slot's rows this step (one layout on every live rank)
         self.pool.position_rings = True
         self.ring_slots = self.pool.ring_slots
         self.rows: dict[int, list[int]] = {}  # slot -> its tile rows this step
@@ -139,6 +148,9 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         carry_rows = {src: torch.full((sp, ROWS), SENTINEL32, dtype=torch.int32) for src in pool.carry}
         self.rows, self.live = {}, []
         taken = set()
+        c1sel = torch.full((sp, ROWS), C1_ONEHOT_SENTINEL, dtype=torch.int32)
+        c1put = torch.full((sp, ROWS), C1_ONEHOT_SENTINEL, dtype=torch.int32)
+        self.live_rows = max((len(block) for block in tokens.values()), default=1)
         for slot in sorted(tokens):
             block = tokens[slot]
             r, u = divmod(slot, users)
@@ -146,10 +158,12 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             assert 0 <= k and u + k < users, f"slot {slot}: {k} drafts need rows {u}..{u + k} within {users}"
             p = self.slots[slot].position
             rows = []
+            assert len(block) == self.live_rows, "one (user, rows) layout on every live rank"
             for j, token in enumerate(block):
                 row = u + j
                 assert (r, row) not in taken, f"slot {slot}: row {row} of rank {r} already live"
                 taken.add((r, row))
+                c1sel[r, j], c1put[r, row] = row, j  # the c1 MoE: rows u .. u + K to 0 .. K and back
                 ids[r, 0, row] = int(token)
                 positions[r, row] = p + j
                 active[r, row] = True
@@ -164,6 +178,9 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
                     carry_rows[src][r, committed] = u  # scratch row ``committed`` -> the slot's carry row u
         tick("rows")
         ints = {"token": ids.view(sp, ROWS)}
+        if self.c1:
+            assert self.live_rows <= self.C1_ROWS, (self.live_rows, self.C1_ROWS)
+            ints["c1sel"], ints["c1put"] = c1sel, c1put
         floats, rope, visible_cols = {}, {}, {}
         if self.sample_on_device:
             ints["k"] = torch.ones(sp, ROWS, dtype=torch.int32)
@@ -286,7 +303,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
                 self.capture_taps[variant] = self.taps
             capture = self.captures[variant]
             self.taps = self.capture_taps.get(variant)
-            ttnn.synchronize_device(self.mesh_device)
+            if self.replay_sync:
+                ttnn.synchronize_device(self.mesh_device)
             t3 = time.time()
             capture.controller.replay(blocking=False)
             t4 = time.time()
@@ -347,7 +365,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
                 ttnn.deallocate(dst_rows)
 
     def _forward(self, on_block, c1: bool = False):
-        assert not c1
+        c1 = self.c1
         model = self.model
         self.inputs = dict(self.packer.unpack(self.buffers), engram=self.buffers.get("engram", {}))
         self.inputs["token"] = ttnn.reshape(self.inputs["token"], (1, 1, ROWS))
@@ -361,16 +379,25 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         x = mhc_expand(ttnn.typecast(h, ttnn.float32), self.config.HC_MULT)
         pre = self.pre_mix
         taps = []
-        for layer, block, moe in zip(model.layers, model.blocks, self.moes):
+        if c1:
+            sel, put = C1Moe.onehots(self.inputs["c1sel"], self.inputs["c1put"], self.c1_table)
+            rows = self.live_rows
+        moes = self.c1_moes if c1 else self.moes
+        for layer, block, moe in zip(model.layers, model.blocks, moes):
             if layer in model.engram:
                 x = model.engram[layer](x, self.inputs["engram"][layer])
             if model.dspark is not None and layer in self.config.DSPARK_TARGET_LAYER_IDS:
                 taps.append(model.dspark.tap(x))  # the block's input: the tap of every row
+            attn_norm, ffn_norm = self.decode_norms.get(layer, (block.attn_norm, block.ffn_norm))
             x, pre = block.residual(
                 x,
                 pre,
-                attention=lambda h, a=block.attn, n=block.attn_norm: self._attention(a, n(h), {}, selection),
-                ffn=lambda h, m=moe, n=block.ffn_norm: self._ffn(m, n(h)),
+                attention=lambda h, a=block.attn, n=attn_norm: self._attention(a, n(h), {}, selection),
+                ffn=(
+                    (lambda h, m=moe, n=ffn_norm: m(n(h), sel, put, rows))
+                    if c1
+                    else (lambda h, m=moe, n=ffn_norm: self._ffn(m, n(h)))
+                ),
             )
             if on_block is not None:
                 on_block(layer, x)
