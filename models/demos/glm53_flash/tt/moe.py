@@ -315,9 +315,12 @@ def regions_keep_stacked() -> bool:
 # prefill carries it as a persistent per-length input refreshed per prompt). ``0`` disables it (the discriminating
 # run: the eager guard below then names the offending rows). Read per call: a captured trace replays its mode.
 ROUTER_PAD_MASK_ENV = "GLM53_ROUTER_PAD_MASK"
-# GLM53_DISPATCH_GUARD (default 1): an eager (not captured) dispatch call reads the per-expert counts back (one 2 KB
-# tile per chip) and refuses a routing over the top-k budget with the call site, the chip and the offending rows;
-# ``0`` skips the readback. Never inside a trace capture (``ttnn.is_trace_capture_active``).
+# GLM53_DISPATCH_GUARD (default 0 since 2026-10-28; 1 = on): an eager (not captured) dispatch call reads the per-expert
+# counts back (one 2 KB tile per chip, every chip) and refuses a routing over the top-k budget with the call site, the
+# chip and the offending rows. The readback is a host sync in every MoE layer of every eager chunk: with it on, a
+# 45-layer 128-token eager prefill took 1548 ms instead of 879 ms on the 8x4 (e2e_8x4_B4_base_f87 vs _noguard_r2).
+# The pad mask above makes an over-budget routing impossible by construction; the guard is the discriminating-run
+# aid (``GLM53_ROUTER_PAD_MASK=0 GLM53_DISPATCH_GUARD=1``). Never inside a trace capture.
 DISPATCH_GUARD_ENV = "GLM53_DISPATCH_GUARD"
 
 
@@ -328,7 +331,7 @@ def pad_mask_enabled(env=None) -> bool:
 
 def dispatch_guard_enabled(env=None) -> bool:
     env = os.environ if env is None else env
-    return env.get(DISPATCH_GUARD_ENV, "1") != "0"
+    return env.get(DISPATCH_GUARD_ENV, "0") != "0"
 
 
 def pad_row_mask_host(T: int, seq_len: int) -> torch.Tensor:
