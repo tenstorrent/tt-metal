@@ -21,7 +21,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_heaviside(std::uint32_t value) {
     vFloat s = Converter::as_float(value);
 
-#pragma GCC unroll 8
+#pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
 
