@@ -112,10 +112,13 @@ namespace ttnn {
 // ln(Gamma_4(a)) = 3*ln(pi) + ln(Gamma(a)) + ln(Gamma(a - 0.5)) + ln(Gamma(a - 1.0)) + ln(Gamma(a - 1.5))
 // Valid domain: a > 1.5
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
-// lgamma(a - 1) = lgamma(a) - ln(a - 1) and lgamma(a - 1.5) = lgamma(a - 0.5) - ln(a - 1.5), so
-//   ln(Gamma_4(a)) = 2 * (ln(Gamma(a)) + ln(Gamma(a - 0.5))) - ln((a - 1) * (a - 1.5)) + 3*ln(pi)
-// which needs two lgamma evaluations instead of four; the shifts, the log and the final scale/offset are
-// fused into the two binary ops as activations.
+// lgamma(a - 1) = lgamma(a) - ln|a - 1| and lgamma(a - 1.5) = lgamma(a - 0.5) - ln|a - 1.5|, so
+//   ln(Gamma_4(a)) = 2 * (ln(Gamma(a)) + ln(Gamma(a - 0.5))) - (ln|a - 1| + ln|a - 1.5|) + 3*ln(pi)
+// which needs two lgamma evaluations instead of four; the shifts, the logs and the final scale/offset are
+// fused into the binary ops as activations. Since lgamma is ln|Gamma|, the identities also hold below the
+// domain, which keeps the result equal to the four-lgamma sum there too. The logs are taken separately
+// because (a - 1) * (a - 1.5) overflows fp32 above ~1.8e19, and a = +inf is passed through because the
+// difference of the two infinite terms would otherwise be NaN.
 Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     using operations::unary::EltwiseUnaryWithParam;
     using operations::unary::UnaryOpType;
@@ -127,16 +130,22 @@ Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_m
         std::nullopt,
         output_mem_config);
 
-    const std::array minus_one{EltwiseUnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.0f}};
-    const std::array minus_one_and_half{EltwiseUnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.5f}};
-    const std::array then_log{EltwiseUnaryWithParam{UnaryOpType::LOG}};
-    Tensor log_shift_product =
-        ttnn::multiply(x, x, std::nullopt, output_mem_config, std::nullopt, then_log, minus_one, minus_one_and_half);
+    const std::array log_minus_one{
+        EltwiseUnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.0f},
+        EltwiseUnaryWithParam{UnaryOpType::ABS},
+        EltwiseUnaryWithParam{UnaryOpType::LOG}};
+    const std::array log_minus_one_and_half{
+        EltwiseUnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.5f},
+        EltwiseUnaryWithParam{UnaryOpType::ABS},
+        EltwiseUnaryWithParam{UnaryOpType::LOG}};
+    Tensor log_shift_sum =
+        ttnn::add(x, x, std::nullopt, output_mem_config, std::nullopt, {}, log_minus_one, log_minus_one_and_half);
 
     const std::array times_two{EltwiseUnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, 2.0f}};
     const std::array plus_three_ln_pi{EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, three_ln_pi}};
-    return ttnn::subtract(
-        lgamma_sum, log_shift_product, std::nullopt, output_mem_config, std::nullopt, plus_three_ln_pi, times_two);
+    Tensor result = ttnn::subtract(
+        lgamma_sum, log_shift_sum, std::nullopt, output_mem_config, std::nullopt, plus_three_ln_pi, times_two);
+    return ttnn::where(ttnn::isposinf(x, output_mem_config), x, result, output_mem_config);
 }
 
 Tensor var_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {

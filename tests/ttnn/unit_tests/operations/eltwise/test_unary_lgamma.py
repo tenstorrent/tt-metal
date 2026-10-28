@@ -65,3 +65,21 @@ def test_multigammaln_fp32(device, low, high, ulp_threshold):
     result = ttnn.to_torch(ttnn.multigammaln(tt_x))
     expected = torch.special.multigammaln(x.double(), 4).float()
     assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=ulp_threshold)
+
+
+# The ln((a - 1)(a - 1.5)) correction overflowed fp32 above ~1.8e19 and gave -inf, and a = +inf gave
+# inf - inf = NaN; the reference is finite for the first and +inf for the second.
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+def test_multigammaln_large_and_infinite_inputs(device, dtype):
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    values = torch.tensor([1e10, 1e19, 1e20, 1e30, float("inf")], dtype=torch.float32)
+    x = values.repeat(32 * 32 // len(values) + 1)[: 32 * 32].reshape(1, 1, 32, 32).to(torch_dtype)
+    tt_x = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.multigammaln(tt_x)).float()
+    expected = torch.special.multigammaln(x.double(), 4)
+
+    assert torch.equal(torch.isposinf(result), torch.isposinf(expected)), result
+    finite = torch.isfinite(expected)
+    assert torch.isfinite(result[finite]).all(), result
+    rel = ((result[finite].double() - expected[finite]) / expected[finite]).abs().max().item()
+    assert rel < (1e-5 if dtype == ttnn.float32 else 2e-2), rel
