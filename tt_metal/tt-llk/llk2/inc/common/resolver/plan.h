@@ -53,6 +53,15 @@ enum class Broadcast : std::uint8_t
     Scalar ///< one datum everywhere
 };
 
+/// A modifier that is one config bit: fixed off, fixed on, or chosen at run time by an argument of the call
+/// (compute_api/modifiers.h has the rules). Defined here, beside Broadcast, because Plans carry it.
+enum class Toggle : std::uint8_t
+{
+    Off,    ///< always off: no run-time argument, the bit is written as an immediate
+    On,     ///< always on: no run-time argument, the bit is written as an immediate
+    Runtime ///< the call takes the value as an argument; compile-time checks treat the feature as possibly on
+};
+
 /// How a tensor sits in L1.
 enum class Layout : std::uint8_t
 {
@@ -153,7 +162,7 @@ struct PackPlan
     std::uint32_t tile_bytes; ///< one tile in L1, in bytes
     std::uint32_t tiles;      ///< tiles to pack
     bool relu;                ///< clamp negatives to 0 on the way out
-    bool l1_acc;              ///< add into what is in L1 instead of overwriting it
+    Toggle l1_acc;            ///< add into what is in L1 instead of overwriting it (Runtime: the pack call's argument)
     bool untilize;            ///< write rows instead of tiles
     DataFormat in_format;     ///< the packer's input format (In_data_format): the format the packer converts from
     bool dest_fp32;           ///< Dest holds 32-bit datums

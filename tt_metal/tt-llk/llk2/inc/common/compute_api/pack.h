@@ -7,7 +7,11 @@
 //
 //   pack(src, dst);                                     // dst = src; src: a Dest tensor, dst: an L1 tensor
 //   pack<pack_modifiers{.relu = true}>(src, dst);       // dst = max(src, 0)
-//   pack<pack_modifiers{.l1_acc = true}>(src, dst);     // dst += src (in dst's format, in L1)
+//   pack<pack_modifiers{.l1_acc = Toggle::On}>(src, dst);              // dst += src (in dst's format, in L1)
+//   pack<pack_modifiers{.l1_acc = Toggle::Runtime}>(src, dst, accumulate);
+//                                                        // dst += src if accumulate, else dst = src; one build
+//                                                        // for both (the bit is written from the argument)
+//   With Toggle::Off or Toggle::On the argument may be left out; if given, it is ignored.
 //
 // Packs every tile of src: tile i of src (row-major) to tile i of dst. src and dst have the same shape (tile grid
 // and 32x32 tiles); dst is dense in L1 and its address is the byte address of its first tile. The packer converts
@@ -32,9 +36,11 @@
 namespace llk2
 {
 
-/// dst = src (with Mods' ReLU, or added into dst with l1_acc): every tile of the Dest tensor src to the L1 tensor dst.
-template <pack_modifiers Mods = pack_modifiers {}, const TensorSpec<tensor_rank>& D, class RD, const TensorSpec<tensor_rank>& O, class RO>
-inline __attribute__((always_inline)) void pack(const Tensor<D, RD>& src, const Tensor<O, RO>& dst)
+namespace detail
+{
+/// The checks and the per-thread call both pack forms share.
+template <pack_modifiers Mods, const TensorSpec<tensor_rank>& D, const TensorSpec<tensor_rank>& O>
+inline __attribute__((always_inline)) void pack_checked(std::uint32_t src_address, std::uint32_t dst_address, bool l1_acc)
 {
     static_assert(D.storage == Storage::Dest, "pack reads a Dest tensor");
     static_assert(O.storage == Storage::L1, "pack writes an L1 tensor");
@@ -42,10 +48,29 @@ inline __attribute__((always_inline)) void pack(const Tensor<D, RD>& src, const 
     static_assert(
         accepted<pack_op, D, O, Mods>,
         "pack takes a Dest tensor and a dense L1 tensor of the same shape in 32x32 tiles, a Dest format that matches the kernel's Dest "
-        "mode, an L1 format the packer can convert to, and l1_acc only into Float32, Float16_b or Float16");
+        "mode, an L1 format the packer can convert to, and l1_acc (On or Runtime) only into Float32, Float16_b or Float16");
 
     constexpr const Resolved& r = resolved<pack_op, D, O, Mods>;
-    llk_lib::pack<Thread::Pack, r.plan>(src.address, dst.address);
+    llk_lib::pack<Thread::Pack, r.plan>(src_address, dst_address, l1_acc);
+}
+} // namespace detail
+
+/// dst = src (with Mods' ReLU, or added into dst with l1_acc = Toggle::On): every tile of the Dest tensor src to the L1
+/// tensor dst. Mods.l1_acc must not be Toggle::Runtime here: that form takes the l1_acc argument (below).
+template <pack_modifiers Mods = pack_modifiers {}, const TensorSpec<tensor_rank>& D, class RD, const TensorSpec<tensor_rank>& O, class RO>
+inline __attribute__((always_inline)) void pack(const Tensor<D, RD>& src, const Tensor<O, RO>& dst)
+{
+    static_assert(Mods.l1_acc != Toggle::Runtime, "pack: l1_acc = Toggle::Runtime needs the run-time l1_acc argument");
+    detail::pack_checked<Mods, D, O>(src.address, dst.address, false /* unused: l1_acc is Off or On */);
+}
+
+/// As above, with the run-time l1_acc argument. With l1_acc = Toggle::Runtime, src is added into dst when l1_acc is true
+/// and written over dst when it is false. With Toggle::Off or Toggle::On the modifier decides and the argument is
+/// ignored (no code reads it), so a kernel can pick Off or Runtime from a compile-time setting and keep one call.
+template <pack_modifiers Mods, const TensorSpec<tensor_rank>& D, class RD, const TensorSpec<tensor_rank>& O, class RO>
+inline __attribute__((always_inline)) void pack(const Tensor<D, RD>& src, const Tensor<O, RO>& dst, bool l1_acc)
+{
+    detail::pack_checked<Mods, D, O>(src.address, dst.address, l1_acc);
 }
 
 } // namespace llk2

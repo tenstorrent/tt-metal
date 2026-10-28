@@ -28,7 +28,7 @@
 // Accumulating over K blocks, two ways (as the 1.0 kernel):
 //   spill (default)  each block but the last packs its sum to the partials buffer, and the next block copies it back
 //                    into Dest before its matmul adds to it
-//   L1 acc           the packer adds into the partials buffer in L1 (pack<{.l1_acc = true}>) from the second block on.
+//   L1 acc           the packer adds into the partials buffer in L1 (pack<{.l1_acc = Toggle::Runtime}>, on from the second block).
 //                    The partials buffer holds one block, so popping it and reserving again gives the same pages
 //                    back. Without FUSE_BIAS the last block still reloads the sum (one copy) and packs to the output;
 //                    with FUSE_BIAS every block packs into the partials buffer and the bias stage reads it
@@ -91,26 +91,6 @@ inline __attribute__((always_inline)) void bmm_fused_activation(const Tensor<D, 
     }
 }
 
-/// Packs acc into dst, adding into what dst holds when accumulate is set. accumulate is a run-time choice (the K block),
-/// pack_modifiers a compile-time one, so both packs are spelled out; every thread takes the same branch. CanAccumulate
-/// false: accumulate is never set, and only the plain pack is instantiated (dst may be in a format L1 acc rejects).
-template <pack_modifiers Mods, bool CanAccumulate, const TensorSpec<tensor_rank>& D, class RD, const TensorSpec<tensor_rank>& O, class RO>
-inline __attribute__((always_inline)) void pack_maybe_accumulate(const Tensor<D, RD>& acc, const Tensor<O, RO>& dst, [[maybe_unused]] bool accumulate)
-{
-    if constexpr (!CanAccumulate)
-    {
-        pack<Mods>(acc, dst);
-    }
-    else if (accumulate)
-    {
-        pack<pack_modifiers {.relu = Mods.relu, .l1_acc = true}>(acc, dst);
-    }
-    else
-    {
-        pack<pack_modifiers {.relu = Mods.relu, .l1_acc = false}>(acc, dst);
-    }
-}
-
 /// The kernel body. DestFormat is the kernel's Dest format; the buffers are the 1.0 kernel's in0, in1, bias,
 /// mm_partials (intermed0) and out CBs. Bias is unused without fuse_bias.
 template <
@@ -157,13 +137,13 @@ inline __attribute__((always_inline)) void bmm_large_block_zm_fused_bias_activat
                 {
                     bmm_fused_activation<C>(acc);
                 }
-                pack_maybe_accumulate<pack_modifiers {.relu = relu_on_matmul_out}, C.l1_acc && C.fuse_bias>(acc, out, block > 0);
+                pack<pack_modifiers {.relu = relu_on_matmul_out, .l1_acc = C.l1_acc && C.fuse_bias ? Toggle::Runtime : Toggle::Off}>(acc, out, block > 0);
                 release(out);
             }
             else
             {
                 const auto partial = reserve_back<Partials, C.rt_dim, C.ct_dim>();
-                pack_maybe_accumulate<pack_modifiers {}, C.l1_acc>(acc, partial, block > 0);
+                pack<pack_modifiers {.l1_acc = C.l1_acc ? Toggle::Runtime : Toggle::Off}>(acc, partial, block > 0); // add from the second K block on
                 release(partial);
             }
             dest_release(acc);
