@@ -6859,6 +6859,33 @@ class TestReportModesDuringTraceCapture:
         ttnn.synchronize_device(device)
 
 
+@pytest.mark.parametrize("logging_device_sync, expected_syncs", [(True, 2), (False, 0)], ids=["sync_on", "sync_off"])
+def test_logging_device_sync_can_be_turned_off(device, monkeypatch, logging_device_sync, expected_syncs):
+    """With enable_logging, a top-level operation synchronizes its device before and after it runs, unless
+    enable_logging_device_sync is off, as multi-host runs need it to be: there each synchronization is a barrier across
+    hosts. The operation is still captured either way."""
+    x = ttnn.from_torch(torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    synchronized = []
+    synchronize_device = ttnn.synchronize_device
+
+    def recording_synchronize_device(device, *args, **kwargs):
+        synchronized.append(device)
+        return synchronize_device(device, *args, **kwargs)
+
+    monkeypatch.setattr(ttnn, "synchronize_device", recording_synchronize_device)
+    with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+        "enable_logging", True
+    ), ttnn.manage_config("enable_logging_device_sync", logging_device_sync):
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            ttnn.relu(x)
+        finally:
+            captured_graph = ttnn.graph.end_graph_capture()
+    assert len(synchronized) == expected_syncs
+    operation_names = [node["params"].get("name") for node in captured_graph if node["node_type"] == "function_start"]
+    assert "ttnn.relu" in operation_names
+
+
 # mesh_device depends on silicon_arch_name, which conftest only parametrizes for tests that name it at collection.
 @pytest.mark.usefixtures("silicon_arch_name")
 def test_multihost_graph_report(request):

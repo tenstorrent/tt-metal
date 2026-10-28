@@ -1589,9 +1589,14 @@ class Operation:
                     # Synchronizing with or reading from a device is illegal while a metal trace is being captured
                     # on it, so logging and comparison mode both have to stay off the device there.
                     host_sync_allowed = not any(ttnn.is_trace_capture_active(device) for device in devices)
+                # Logging synchronizes around each operation so its timing covers device execution. Multi-host runs
+                # turn this off: there every synchronization is a barrier across hosts (see enable_logging_device_sync).
+                logging_device_sync = (
+                    ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_logging_device_sync and host_sync_allowed
+                )
 
                 if ttnn.CONFIG.enable_logging:
-                    if host_sync_allowed:
+                    if logging_device_sync:
                         for device in devices:
                             ttnn.synchronize_device(device)
 
@@ -1632,7 +1637,7 @@ class Operation:
                         ) = output
 
                     if ttnn.CONFIG.enable_logging:
-                        if host_sync_allowed:
+                        if logging_device_sync:
                             for device in devices:
                                 ttnn.synchronize_device(device)
                         logger.debug(f"Finished {self.python_fully_qualified_name:50}")

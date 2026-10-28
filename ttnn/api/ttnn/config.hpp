@@ -52,6 +52,13 @@ struct Config {
         // logical region of both shards when a padded tensor's padding bytes differ; turn off only when replicas are
         // known to legitimately differ, in which case the first replica is the one written.
         bool verify_replicated_shards_on_dump = true;
+        // With enable_logging, every top-level operation synchronizes its devices before and after it runs, so log
+        // lines and the graph report's operation durations cover device execution, not only host dispatch. On a mesh
+        // that spans hosts each synchronization is also a barrier across them: a multi-host run slows to a barrier
+        // pair per operation, and hangs if its ranks run different operations or keep persistent kernels running.
+        // Turn this off to log and capture graph reports without the synchronization; durations then cover host
+        // dispatch only. Appended last, as the note on strict_ccl_topology explains.
+        bool enable_logging_device_sync = true;
     };
 
 private:

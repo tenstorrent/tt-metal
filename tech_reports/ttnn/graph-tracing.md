@@ -239,6 +239,8 @@ python -m ttnn.graph_report --svg my_report.json ./visualizer_db/
 
 When reports are generated automatically by the `ttnn_graph_report` fixture, the capture and config files use `graph_capture.json` / `config.json` for single-process runs, and `graph_capture_<rank>_of_<world_size>.json` / `config_<rank>_of_<world_size>.json` for distributed runs.
 
+The fixture needs `enable_logging`, which synchronizes the devices before and after every top-level operation so that operation durations cover device execution. On a mesh that spans hosts, each of those synchronizations is a barrier across all of them. A multi-host model then pays two barriers per operation, and hangs if its ranks run different operations (pipeline stages) or keep persistent kernels running. For those runs, set `"enable_logging_device_sync": false` alongside the other report settings, for example in `TTNN_CONFIG_OVERRIDES` (`tt-run` forwards it to every rank). Reports are captured the same way, but operation durations then cover host dispatch only. The setting is saved in each rank's `config.json`, so a report records which kind of durations it holds.
+
 The importer creates these database tables:
 - `operations`: Operations with names and durations (IDs start at 1)
 - `operation_arguments`: Python-level arguments (from `python_io`), falling back to C++ arguments
