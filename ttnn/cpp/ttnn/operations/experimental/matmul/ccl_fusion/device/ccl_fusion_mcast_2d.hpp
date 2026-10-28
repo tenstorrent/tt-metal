@@ -22,8 +22,9 @@
 namespace ttnn::prim::ccl_fusion {
 
 // Appends the matmul's kernels, CBs and semaphores to `desc`. Tensor addresses are recorded as buffer bindings, so a
-// WorkloadDescriptor op built from it needs no matmul-specific cache-hit refresh. output_column_offset is linear's: the
-// N output columns go into that tile-aligned column of a wider interleaved output_tensor.
+// WorkloadDescriptor op built from it needs no matmul-specific cache-hit refresh. With output_column_offset (the KDA
+// projections beside the relay and the final carry), the N output columns go into that tile-aligned column of a wider
+// interleaved output_tensor.
 void matmul_multi_core_reuse_mcast_2d_optimized_helper(
     tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& a,

@@ -1610,7 +1610,8 @@ static void matmul_multi_core_reuse_mcast_2d_optimized_descriptor_(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> output_column_offset = std::nullopt) {
     using namespace tt;
     using namespace operations::matmul::utilities;
 
@@ -1843,8 +1844,8 @@ static void matmul_multi_core_reuse_mcast_2d_optimized_descriptor_(
         fused_matmul_bias_row_broadcastable(bias),
         sub_device_start_core,
         // With an output column window the output's rows keep their full width (0: N tiles).
-        operation_attributes.output_column_offset.has_value() ? output.padded_shape()[-1] / output_tile.get_width() : 0,
-        operation_attributes.output_column_offset.value_or(0) / output_tile.get_width());
+        output_column_offset.has_value() ? output.padded_shape()[-1] / output_tile.get_width() : 0,
+        output_column_offset.value_or(0) / output_tile.get_width());
 }
 
 void matmul_multi_core_reuse_mcast_2d_optimized_helper(
@@ -1862,11 +1863,15 @@ void matmul_multi_core_reuse_mcast_2d_optimized_helper(
     auto attributes = ttnn::prim::MatmulParams{.program_config = program_config, .bcast_batch = broadcast_batch};
     attributes.compute_kernel_config = compute_kernel_config;
     attributes.untilize_out = untilize_out;
-    attributes.output_column_offset = output_column_offset;
 
     auto output_tensors = std::vector<ttnn::Tensor>{output_tensor};
     matmul_multi_core_reuse_mcast_2d_optimized_descriptor_(
-        desc, attributes, ttnn::prim::MatmulInputs{{a, b}, {bias}, {}}, output_tensors, fused_op_signaler);
+        desc,
+        attributes,
+        ttnn::prim::MatmulInputs{{a, b}, {bias}, {}},
+        output_tensors,
+        fused_op_signaler,
+        output_column_offset);
 }
 
 }  // namespace ttnn::prim::ccl_fusion
