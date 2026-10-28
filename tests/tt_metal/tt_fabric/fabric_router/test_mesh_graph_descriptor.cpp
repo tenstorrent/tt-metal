@@ -4108,6 +4108,60 @@ TEST(MeshGraphDescriptorTests, TierBRejectsStagesThatOnlyFitOneMesh) {
             ::testing::HasSubstr("pipeline stages that only fit mesh 'M0' need 5 slices and it declares 4")));
 }
 
+namespace {
+
+// Two meshes in one FABRIC graph with no connections, and one pipeline of unconnected stages.
+std::string two_meshes_with_stages(
+    const std::string& m0_device,
+    const std::string& m0_host,
+    const std::string& m1_device,
+    const std::string& m1_host,
+    const std::vector<std::string>& stage_dims) {
+    std::ostringstream text_proto;
+    const auto mesh = [&](const std::string& name, const std::string& device, const std::string& host) {
+        text_proto << "mesh_descriptors { name: \"" << name << "\" arch: BLACKHOLE device_topology { dims: " << device
+                   << " } host_topology { dims: " << host << " } channels { count: 1 policy: RELAXED } }\n";
+    };
+    mesh("M0", m0_device, m0_host);
+    mesh("M1", m1_device, m1_host);
+    text_proto << "graph_descriptors { name: \"G0\" type: \"FABRIC\" "
+                  "instances { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } } "
+                  "instances { mesh { mesh_descriptor: \"M1\" mesh_id: 1 } } }\n";
+    text_proto << "top_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }\n";
+    text_proto << "pipeline_descriptors { name: \"packed\"\n";
+    for (std::size_t stage = 0; stage < stage_dims.size(); ++stage) {
+        text_proto << "  stages { id: \"s" << stage << "\" shape { dims: " << stage_dims[stage] << " } }\n";
+    }
+    text_proto << "}\n";
+    return text_proto.str();
+}
+
+}  // namespace
+
+// A [2,4] stage is one slice on M0 and two on M1. Five of them need at least 5 of the 6 slices, so the count
+// passes, but M0 holds two and M1 holds two: no combination of meshes fits all five.
+TEST(MeshGraphDescriptorTests, TierBRejectsWhenNoCombinationOfMeshesFits) {
+    const std::vector<std::string> five(5, "[ 2, 4 ]");
+    EXPECT_THAT(
+        ([&]() {
+            MeshGraphDescriptor desc(two_meshes_with_stages("[ 2, 8 ]", "[ 1, 2 ]", "[ 2, 8 ]", "[ 1, 4 ]", five));
+        }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("no assignment of stages to meshes fits the declared slices and channels")));
+    const std::vector<std::string> four(4, "[ 2, 4 ]");
+    EXPECT_NO_THROW(
+        MeshGraphDescriptor desc(two_meshes_with_stages("[ 2, 8 ]", "[ 1, 2 ]", "[ 2, 8 ]", "[ 1, 4 ]", four)));
+}
+
+// Two meshes of six slices and stages of 3, 3, 2, 2, 2 slices that fit either. Largest first onto the emptiest
+// mesh puts a 3 on each and leaves no room for the third 2; only 3 + 3 and 2 + 2 + 2 fits, which the search
+// finds by trying the other mesh.
+TEST(MeshGraphDescriptorTests, TierBTriesEveryMeshAStageFits) {
+    const std::vector<std::string> stages = {"[ 2, 12 ]", "[ 2, 12 ]", "[ 2, 8 ]", "[ 2, 8 ]", "[ 2, 8 ]"};
+    EXPECT_NO_THROW(
+        MeshGraphDescriptor desc(two_meshes_with_stages("[ 2, 24 ]", "[ 1, 6 ]", "[ 2, 24 ]", "[ 1, 6 ]", stages)));
+}
+
 // A connection between two pods is a connection between the meshes under them.
 TEST(MeshGraphDescriptorTests, TierBCountsConnectionsBetweenPods) {
     EXPECT_NO_THROW(MeshGraphDescriptor desc(two_pods_with_pipelines(R"proto(
