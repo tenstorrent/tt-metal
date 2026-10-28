@@ -2,13 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import functools
 import itertools
 import math
 import os
 import shutil
-import subprocess
-import sys
 import tempfile
 import time
 
@@ -32,6 +29,7 @@ from models.tt_dit.utils.ltx import (
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.test import skip_if_unsupported_num_links
+from models.tt_dit.utils.video_quality import assert_clip_alignment, decoded_frames, ffmpeg_exe, first_frame_pcc
 
 from .ltx_mesh_params import (
     LTX_DISTILLED_AUDIO_MESH_PARAMS_DL,
@@ -231,7 +229,7 @@ def test_pipeline_distilled(
     if run_vbench and not export_dir:
         __import__("vbench")
     if run_clip:
-        __import__("decord")
+        __import__("open_clip")
 
     def check_output_with_vbench(prompt, number, seed, num_seeds=1):
         if not run_vbench:
@@ -279,49 +277,21 @@ def test_pipeline_distilled(
                 vbench_bundle.evaluate(bundle)
 
     def check_output_with_clip(prompt, number, clip_threshold=None):
-        # Mirrors wan2.2's check_output_with_clip: sample ~8 evenly-spaced frames, score each
-        # against the prompt with CLIP, assert the mean clears a floor. LTX writes the video to
-        # disk (generate() returns only the path), so frames are read back from the mp4.
+        # LTX writes the video to disk (generate() returns only the path), so frames are read back
+        # from the mp4.
         if not run_clip:
             logger.info("RUN_CLIP=0, skipping CLIP score check")
             return
         if int(ttnn.distributed_context_get_rank()) != 0:
             return
-        try:
-            from decord import VideoReader
-            from PIL import Image
-
-            from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
-        except ImportError as e:
-            pytest.skip(f"CLIP deps unavailable ({e})")
 
         # LTX baseline mean ~31.3 (vs wan2.2's ~37): the LTX prompt exceeds CLIP's 77-token limit
         # so only its head is scored, and frames are read back re-encoded (CRF=25). 28.0 leaves
         # ~3pt headroom for run-to-run variance. Override with CLIP_THRESHOLD.
         threshold = float(os.environ.get("CLIP_THRESHOLD", "28.0")) if clip_threshold is None else clip_threshold
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
-
-        vr = VideoReader(output_filename)
-        total_frames = len(vr)
-        indices = np.linspace(0, total_frames - 1, min(8, total_frames), dtype=int)
-
-        clip_encoder = CLIPEncoder()
-        scores = []
-        for i in indices:
-            frame = vr[int(i)].asnumpy()  # (H, W, 3) uint8 RGB
-            pil_img = Image.fromarray(frame.astype(np.uint8))
-            score = clip_encoder.get_clip_score(prompt, pil_img).item() * 100.0
-            scores.append(score)
-
-        clip_min = min(scores)
-        clip_max = max(scores)
-        clip_mean = sum(scores) / len(scores)
-        logger.info(f"CLIP scores: min={clip_min:.2f}, max={clip_max:.2f}, mean={clip_mean:.2f}")
-
-        assert clip_mean >= threshold, (
-            f"Mean CLIP score {clip_mean:.2f} is below threshold {threshold:.2f}. "
-            f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
-        )
+        frames = decoded_frames(output_filename, 8, height=height, width=width, luma=False)
+        assert_clip_alignment(frames, prompt, threshold)
 
     def check_steady_state_timing(timings):
         # Rank 0 generates, so only it has timings; I2V and uncalibrated configs are not gated.
@@ -375,60 +345,7 @@ def test_pipeline_distilled(
         pipeline.release_traces()
 
 
-@functools.lru_cache(maxsize=1)
-def _ffmpeg():
-    """An ffmpeg executable. Prefer the system binary; fall back to imageio-ffmpeg's
-    bundled static build (pip-installed on demand) so a host without ffmpeg still runs
-    the frame-decode checks. The static build is real ffmpeg, so decoded pixels — and
-    thus the calibrated seam thresholds — are unchanged."""
-    exe = shutil.which("ffmpeg")
-    if exe:
-        return exe
-    try:
-        import imageio_ffmpeg
-    except ImportError:
-        pip_install = [sys.executable, "-m", "pip", "install", "-q", "imageio-ffmpeg"]
-        if subprocess.run(pip_install).returncode != 0:
-            # uv-managed venvs ship without pip; bootstrap it from the stdlib, then retry.
-            subprocess.run([sys.executable, "-m", "ensurepip", "--upgrade"], check=True)
-            subprocess.run(pip_install, check=True)
-        import imageio_ffmpeg
-    return imageio_ffmpeg.get_ffmpeg_exe()
-
-
-def _ffmpeg_frames(path, n):
-    """Sample ``n`` luma frames evenly across ``path`` (via ffmpeg) as float ndarrays."""
-    import io
-
-    from PIL import Image
-
-    frames = []
-    for t in np.linspace(0.1, 5.5, n):
-        raw = subprocess.run(
-            [
-                _ffmpeg(),
-                "-v",
-                "error",
-                "-ss",
-                f"{t}",
-                "-i",
-                path,
-                "-vframes",
-                "1",
-                "-f",
-                "image2pipe",
-                "-vcodec",
-                "png",
-                "-",
-            ],
-            capture_output=True,
-        ).stdout
-        if raw:
-            frames.append(np.asarray(Image.open(io.BytesIO(raw)).convert("L")).astype(float))
-    return frames
-
-
-def _temporal_seam_score(path):
+def _temporal_seam_score(path, height, width):
     """Grid-seam strength at the 2x4 mesh boundaries (W/4,W/2,3W/4 vertical; H/2 horizontal).
     Per-column/row TEMPORAL MEDIAN of the gradient isolates a static seam from moving content.
     Each boundary is scored against its LOCAL neighbour gradient (a ring +/-12 px, skipping
@@ -436,8 +353,7 @@ def _temporal_seam_score(path):
     low-gradient background inflates (the subject straddles W/2, not a mesh line). A baked seam
     is a thin gradient spike pinned to the boundary, so it stands well above its flat local
     ring; clean content scores ~1."""
-    fs = _ffmpeg_frames(path, 16)
-    assert fs, f"no frames decoded from {path}"
+    fs = decoded_frames(path, 16, height=height, width=width).astype(float)
     h, w = fs[0].shape
     gx = np.median(np.stack([np.abs(np.diff(f, axis=1)).mean(0) for f in fs]), 0)
     gy = np.median(np.stack([np.abs(np.diff(f, axis=0)).mean(1) for f in fs]), 0)
@@ -529,7 +445,7 @@ def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynami
         # lands on the true final frame without buffering the whole clip into memory.
         cond = tmp_path / "cond_lastframe.png"
         subprocess.run(
-            [_ffmpeg(), "-v", "error", "-sseof", "-3", "-i", str(t2v), "-update", "1", "-y", str(cond)],
+            [ffmpeg_exe(), "-v", "error", "-sseof", "-3", "-i", str(t2v), "-update", "1", "-y", str(cond)],
             check=True,
         )
         if os.environ.get("LTX_T2V_OUT"):
@@ -569,7 +485,7 @@ def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynami
         chained = os.environ.get("LTX_CHAINED_OUT") or str(tmp_path / "chained.mp4")
         subprocess.run(
             [
-                _ffmpeg(),
+                ffmpeg_exe(),
                 "-v",
                 "error",
                 "-i",
@@ -591,44 +507,16 @@ def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynami
 
     # (a) conditioning works: i2v frame-0 reproduces the conditioning frame (VAE roundtrip + CRF,
     # so not identity — but a far tighter correlation than an unconditioned gen of the same prompt).
-    def _luma0(path):
-        raw = subprocess.run(
-            [_ffmpeg(), "-v", "error", "-i", path, "-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
-            capture_output=True,
-        ).stdout
-        return Image.open(__import__("io").BytesIO(raw)).convert("L")
-
-    def _vec(im):
-        return torch.from_numpy(np.asarray(im).astype("float32")).flatten()
-
-    f0_img = _luma0(str(i2v))
-    cond_img = _luma0(str(cond))
-    # Compare a matched field of view: an external LTX_I2V_IMAGE can differ in resolution/aspect
-    # from the generated frame (the pipeline center-crops the conditioning image to the target
-    # aspect before encoding). Mirror that — center-crop cond to the frame's aspect, then resize.
-    # No-op when cond is a same-size/same-aspect frame (the self-conditioned t2v-last-frame case).
-    fw, fh = f0_img.size
-    cw, ch = cond_img.size
-    aspect = fw / fh
-    if cw / ch > aspect:
-        nw = round(ch * aspect)
-        x0 = (cw - nw) // 2
-        cond_img = cond_img.crop((x0, 0, x0 + nw, ch))
-    elif cw / ch < aspect:
-        nh = round(cw / aspect)
-        y0 = (ch - nh) // 2
-        cond_img = cond_img.crop((0, y0, cw, y0 + nh))
-    if cond_img.size != f0_img.size:
-        cond_img = cond_img.resize(f0_img.size)
-
-    c, f0 = _vec(cond_img), _vec(f0_img)
-    pcc = torch.corrcoef(torch.stack([c, f0]))[0, 1].item()
+    # first_frame_pcc center-crops an external LTX_I2V_IMAGE to the frame's aspect, as the pipeline
+    # does before encoding it; a no-op for the self-conditioned t2v-last-frame case.
+    frame0 = decoded_frames(str(i2v), 1, height=height, width=width)[0]
+    pcc = first_frame_pcc(frame0, Image.open(cond), luma=True)
     print(f"\nI2V_E2E frame0-vs-cond PCC={pcc:.4f}", flush=True)
 
     # (b) seam-free at the uneven 1088x1920 (the i2v grid-seam fix). Local-ring ratios sit at
     # ~1.0 on clean content (measured 0.85-1.16 across all boundaries); a baked seam spikes
     # well above its flat neighbourhood. Threshold 1.5 clears the clean band with margin.
-    v, hh = _temporal_seam_score(str(i2v))
+    v, hh = _temporal_seam_score(str(i2v), height, width)
     print(f"I2V_E2E seam V={v:.2f} H={hh:.2f} (clean~1.0, seam>>1)", flush=True)
 
     if traced:
