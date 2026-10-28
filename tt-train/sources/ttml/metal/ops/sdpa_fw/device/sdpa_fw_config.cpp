@@ -121,13 +121,14 @@ SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChun
         .attention_weights = rows * Sk,
         .stat = rows,
         .mm_out = rows * shape.vWt,
-        .output = rows * shape.vWt};
+        .output = rows * shape.vWt,
+        .reduction_scaler = 1U,
+        .matmul_reduce = 1U};
 }
 
 uint64_t l1_bytes(const SDPAForwardCbTiles& t) {
-    constexpr uint32_t kScalerTiles = 2U;  // reduction scaler + matmul reduce tile
-    const uint64_t bf16_tiles =
-        t.query + t.key + t.value + t.attn_mask + t.gate + kScalerTiles + 2U * t.stat + t.output;
+    const uint64_t bf16_tiles = t.query + t.key + t.value + t.attn_mask + t.gate + t.reduction_scaler +
+                                t.matmul_reduce + 2U * t.stat + t.output;
     const uint64_t fp32_tiles = t.intermediate + t.attention_weights + 3U * t.stat + 2U * t.mm_out;
     return bf16_tiles * kBf16TileBytes + fp32_tiles * kFp32TileBytes;
 }
