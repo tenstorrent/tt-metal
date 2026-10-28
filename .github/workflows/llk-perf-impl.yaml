@@ -188,6 +188,7 @@ jobs:
         shell: bash
         env:
           RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
+          RUN_TYPES: ${{ inputs.perf-run-types }}
         run: |
           RUN_LABEL="${RUN_ON_LABELS%% *}"
           if [[ "$RUN_LABEL" =~ N150 ]]; then
@@ -199,6 +200,10 @@ jobs:
             exit 1
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
+          # A Wormhole TRISC keeps its branch-predictor state from the previous kernel. A MATH_ISOLATE kernel
+          # before each L1_TO_L1 kernel leaves the same state whatever test ran before it.
+          if [[ $CHIP_ARCH == wormhole && $RUN_TYPES == L1_TO_L1 ]]; then RUN_TYPES=MATH_ISOLATE,L1_TO_L1; fi
+          echo "LLK_PERF_RUN_TYPES=$RUN_TYPES" >> "$GITHUB_ENV"
       - name: Compile
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
@@ -206,7 +211,6 @@ jobs:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
           LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
-          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           LLK_PERF_PHASE: compile
           LLK_PERF_COMPILE_WORKERS: ${{ inputs.shadow-compile-workers }}
           MATRIX_CMD: ${{ matrix.test-group.cmd }}
@@ -223,7 +227,6 @@ jobs:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
           LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
-          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           MATRIX_CMD: ${{ matrix.test-group.cmd }}
         run: |
           python3 tests/llk_perf_offload.py pack --cmd "$MATRIX_CMD" \
@@ -310,10 +313,11 @@ jobs:
           cd tests
           ./setup_testing_env.sh
           cd ..
-      - name: Set CHIP_ARCH and the run tag
+      - name: Set CHIP_ARCH, the run types and the run tag
         shell: bash
         env:
           RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
+          RUN_TYPES: ${{ inputs.perf-run-types }}
         run: |
           RUN_LABEL="${RUN_ON_LABELS%% *}"
           if [[ "$RUN_LABEL" =~ N150 ]]; then
@@ -324,6 +328,10 @@ jobs:
             CHIP_ARCH=unknown
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
+          # A Wormhole TRISC keeps its branch-predictor state from the previous kernel. A MATH_ISOLATE kernel
+          # before each L1_TO_L1 kernel leaves the same state whatever test ran before it.
+          if [[ $CHIP_ARCH == wormhole && $RUN_TYPES == L1_TO_L1 ]]; then RUN_TYPES=MATH_ISOLATE,L1_TO_L1; fi
+          echo "LLK_PERF_RUN_TYPES=$RUN_TYPES" >> "$GITHUB_ENV"
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
       - name: Download the node list
         if: ${{ inputs.node-list-artifact != '' }}
@@ -361,7 +369,6 @@ jobs:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
           LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
-          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           MATRIX_CMD: ${{ matrix.test-group.cmd }}
         run: |
           python3 tests/llk_perf_offload.py unpack --cmd "$MATRIX_CMD" \
@@ -390,7 +397,6 @@ jobs:
           LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
           PIPELINE: ${{ inputs.pipeline }}
-          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           LLK_PERF_PHASE: ${{ steps.offload-unpack.outcome == 'success' && 'run' || 'all' }}
         run: |
           ${{ matrix.test-group.cmd }}
@@ -449,7 +455,6 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           TIMEOUT_MINUTES: ${{ matrix.test-group.timeout }}
-          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           THRESHOLD: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].threshold }}
           MODULE_THRESHOLDS: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].module_thresholds }}
         run: |
@@ -520,7 +525,6 @@ jobs:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
           LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
-          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           MATRIX_CMD: ${{ matrix.test-group.cmd }}
         run: |
           python3 tests/llk_perf_offload.py unpack --cmd "$MATRIX_CMD" \
@@ -537,7 +541,6 @@ jobs:
           LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
           PIPELINE: ${{ inputs.pipeline }}
-          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           LLK_PERF_PHASE: run
           LLK_PERF_EXITFIRST: "false"
           LLK_PERF_REPORT_TAG: "-shadow"
