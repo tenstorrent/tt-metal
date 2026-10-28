@@ -234,7 +234,7 @@ void kernel_main() {
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
     if constexpr (in_program_local_l1) {
-        // Clients wait for a non-zero value here (wait_for_fabric_mux_l1_base); dispatch zeroes the semaphore at
+        // Clients wait for a non-zero value here (poll_fabric_mux_l1_base); dispatch zeroes the semaphore at
         // every launch, so they cannot see a previous launch's address.
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(l1_base_semaphore_id)) = l1_base;
     }

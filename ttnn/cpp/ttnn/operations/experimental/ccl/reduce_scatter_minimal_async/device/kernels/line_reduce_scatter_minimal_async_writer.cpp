@@ -186,23 +186,25 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
     uint32_t fabric_mux_l1_base = 0;
     if (mux_connection_valid) {
-        // Waits for the mux to be ready to accept connections, which is also when it publishes its map's address.
-        fabric_mux_l1_base = tt::tt_fabric::wait_for_fabric_mux_l1_base(
-            fabric_mux_x, fabric_mux_y, fabric_mux_l1_base_semaphore_id, local_fabric_mux_status_address);
-        mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
-            fabric_mux_x,
-            fabric_mux_y,
-            fabric_mux_channel_id,
-            fabric_mux_num_buffers_per_channel,
-            fabric_mux_channel_buffer_size_bytes,
-            fabric_mux_l1_base + fabric_mux_channel_base_offset,
-            fabric_mux_l1_base + fabric_mux_connection_info_offset,
-            fabric_mux_l1_base + fabric_mux_connection_handshake_offset,
-            fabric_mux_l1_base + fabric_mux_flow_control_offset,
-            fabric_mux_l1_base + fabric_mux_buffer_index_offset,
-            local_flow_control_address,
-            local_teardown_address,
-            local_buffer_index_address);
+        // Waits for the mux to be ready to accept connections.
+        mux_connection =
+            tt::tt_fabric::build_connection_to_program_local_fabric_mux<fabric_mux_num_buffers_per_channel>(
+                fabric_mux_x,
+                fabric_mux_y,
+                fabric_mux_channel_id,
+                fabric_mux_num_buffers_per_channel,
+                fabric_mux_channel_buffer_size_bytes,
+                fabric_mux_l1_base_semaphore_id,
+                fabric_mux_channel_base_offset,
+                fabric_mux_connection_info_offset,
+                fabric_mux_connection_handshake_offset,
+                fabric_mux_flow_control_offset,
+                fabric_mux_buffer_index_offset,
+                local_flow_control_address,
+                local_teardown_address,
+                local_buffer_index_address,
+                local_fabric_mux_status_address,
+                fabric_mux_l1_base);
         mux_connection_handle = &mux_connection;
     } else {
         mux_connection_handle = nullptr;

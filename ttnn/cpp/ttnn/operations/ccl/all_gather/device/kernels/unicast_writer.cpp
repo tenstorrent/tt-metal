@@ -117,23 +117,26 @@ void kernel_main() {
     // Multiple workers per direction share one fabric link through a fabric mux. Connect to our channel on the
     // mux instead of opening a direct connection to the neighbor's ERISC.
     using SenderT = tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>;
-    // Waits for the mux to be ready to accept connections, which is also when it publishes its map's address.
-    const uint32_t fabric_mux_l1_base = tt::tt_fabric::wait_for_fabric_mux_l1_base(
-        fabric_mux_x, fabric_mux_y, fabric_mux_l1_base_semaphore_id, local_fabric_mux_status_address);
-    SenderT mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
-        fabric_mux_x,
-        fabric_mux_y,
-        fabric_mux_channel_id,
-        fabric_mux_num_buffers_per_channel,
-        fabric_mux_channel_buffer_size_bytes,
-        fabric_mux_l1_base + fabric_mux_channel_base_offset,
-        fabric_mux_l1_base + fabric_mux_connection_info_offset,
-        fabric_mux_l1_base + fabric_mux_connection_handshake_offset,
-        fabric_mux_l1_base + fabric_mux_flow_control_offset,
-        fabric_mux_l1_base + fabric_mux_buffer_index_offset,
-        local_flow_control_address,
-        local_teardown_address,
-        local_buffer_index_address);
+    uint32_t fabric_mux_l1_base = 0;
+    // Waits for the mux to be ready to accept connections.
+    SenderT mux_connection =
+        tt::tt_fabric::build_connection_to_program_local_fabric_mux<fabric_mux_num_buffers_per_channel>(
+            fabric_mux_x,
+            fabric_mux_y,
+            fabric_mux_channel_id,
+            fabric_mux_num_buffers_per_channel,
+            fabric_mux_channel_buffer_size_bytes,
+            fabric_mux_l1_base_semaphore_id,
+            fabric_mux_channel_base_offset,
+            fabric_mux_connection_info_offset,
+            fabric_mux_connection_handshake_offset,
+            fabric_mux_flow_control_offset,
+            fabric_mux_buffer_index_offset,
+            local_flow_control_address,
+            local_teardown_address,
+            local_buffer_index_address,
+            local_fabric_mux_status_address,
+            fabric_mux_l1_base);
     tt::tt_fabric::fabric_client_connect(mux_connection);
     SenderT* sender = &mux_connection;
 #else

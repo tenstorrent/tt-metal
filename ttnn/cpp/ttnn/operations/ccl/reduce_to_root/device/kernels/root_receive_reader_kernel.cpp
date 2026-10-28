@@ -147,23 +147,25 @@ void kernel_main() {
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
-    // Waits for the mux to be ready to accept connections, which is also when it publishes its map's address.
-    const uint32_t fabric_mux_l1_base = tt::tt_fabric::wait_for_fabric_mux_l1_base(
-        fabric_mux_x, fabric_mux_y, fabric_mux_l1_base_semaphore_id, local_fabric_mux_status_address);
-    mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+    uint32_t fabric_mux_l1_base = 0;
+    // Waits for the mux to be ready to accept connections.
+    mux_connection = tt::tt_fabric::build_connection_to_program_local_fabric_mux<fabric_mux_num_buffers_per_channel>(
         fabric_mux_x,
         fabric_mux_y,
         fabric_mux_channel_id,
         fabric_mux_num_buffers_per_channel,
         fabric_mux_channel_buffer_size_bytes,
-        fabric_mux_l1_base + fabric_mux_channel_base_offset,
-        fabric_mux_l1_base + fabric_mux_connection_info_offset,
-        fabric_mux_l1_base + fabric_mux_connection_handshake_offset,
-        fabric_mux_l1_base + fabric_mux_flow_control_offset,
-        fabric_mux_l1_base + fabric_mux_buffer_index_offset,
+        fabric_mux_l1_base_semaphore_id,
+        fabric_mux_channel_base_offset,
+        fabric_mux_connection_info_offset,
+        fabric_mux_connection_handshake_offset,
+        fabric_mux_flow_control_offset,
+        fabric_mux_buffer_index_offset,
         local_flow_control_address,
         local_teardown_address,
-        local_buffer_index_address);
+        local_buffer_index_address,
+        local_fabric_mux_status_address,
+        fabric_mux_l1_base);
     mux_connection_handle = &mux_connection;
 
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
@@ -284,22 +286,24 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle2;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection2;
 
-    const uint32_t fabric_mux_l1_base2 = tt::tt_fabric::wait_for_fabric_mux_l1_base(
-        fabric_mux_x2, fabric_mux_y2, fabric_mux_l1_base_semaphore_id, local_fabric_mux_status_address);
-    mux_connection2 = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+    uint32_t fabric_mux_l1_base2 = 0;
+    mux_connection2 = tt::tt_fabric::build_connection_to_program_local_fabric_mux<fabric_mux_num_buffers_per_channel>(
         fabric_mux_x2,
         fabric_mux_y2,
         fabric_mux_channel_id2,
         fabric_mux_num_buffers_per_channel,
         fabric_mux_channel_buffer_size_bytes,
-        fabric_mux_l1_base2 + fabric_mux_channel_base_offset2,
-        fabric_mux_l1_base2 + fabric_mux_connection_info_offset2,
-        fabric_mux_l1_base2 + fabric_mux_connection_handshake_offset2,
-        fabric_mux_l1_base2 + fabric_mux_flow_control_offset2,
-        fabric_mux_l1_base2 + fabric_mux_buffer_index_offset2,
+        fabric_mux_l1_base_semaphore_id,
+        fabric_mux_channel_base_offset2,
+        fabric_mux_connection_info_offset2,
+        fabric_mux_connection_handshake_offset2,
+        fabric_mux_flow_control_offset2,
+        fabric_mux_buffer_index_offset2,
         local_flow_control_address2,
         local_teardown_address2,
-        local_buffer_index_address2);
+        local_buffer_index_address2,
+        local_fabric_mux_status_address,
+        fabric_mux_l1_base2);
     mux_connection_handle2 = &mux_connection2;
 
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle2);

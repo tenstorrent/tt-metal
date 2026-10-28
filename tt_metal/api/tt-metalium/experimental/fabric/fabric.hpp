@@ -297,8 +297,9 @@ public:
     // cores, such as a PrefetcherPipe ring, then stays below the map instead of under it.
     //
     // The config must be built with base_l1_address = 0, so every address getter returns an offset into the map.
-    // A client gets the map's address from wait_for_fabric_mux_l1_base() (tt_fabric_mux_interface.hpp) and adds it
-    // to those offsets before it connects; get_l1_base_semaphore_id() replaces get_status_address() for that wait.
+    // A client passes those offsets and get_l1_base_semaphore_id(), in place of get_status_address(), to
+    // build_connection_to_program_local_fabric_mux() (tt_fabric_mux_interface.hpp), which waits for the map's address
+    // and adds it to them.
     // Worker muxes only. Call before get_fabric_mux_compile_time_args().
     void place_in_program_local_l1(tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores);
     void place_in_program_local_l1(tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores);

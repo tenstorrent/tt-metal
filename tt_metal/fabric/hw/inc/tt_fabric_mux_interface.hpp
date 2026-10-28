@@ -71,19 +71,46 @@ FORCE_INLINE void wait_for_fabric_endpoint_ready(
     } while (local_fabric_ep_status_ptr[0] != tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC);
 }
 
-// For a mux in program-local L1 (FabricMuxConfig::place_in_program_local_l1): waits until the mux is ready for
-// traffic, in place of wait_for_fabric_endpoint_ready, and returns the L1 address of its memory map. The mux's
-// addresses from the host are offsets from it. fabric_mux_l1_base_semaphore_id is
-// FabricMuxConfig::get_l1_base_semaphore_id(); a semaphore id has the same address on every core of the program.
-// local_scratch_address is a word of this core's L1 to read into.
-FORCE_INLINE uint32_t wait_for_fabric_mux_l1_base(
+// build_connection_to_fabric_endpoint for a mux in program-local L1 (FabricMuxConfig::place_in_program_local_l1),
+// whose addresses from the host are offsets from the L1 address of its memory map. Waits until the mux is ready for
+// traffic, in place of wait_for_fabric_endpoint_ready: the mux then publishes that address in semaphore
+// fabric_mux_l1_base_semaphore_id (FabricMuxConfig::get_l1_base_semaphore_id(); a semaphore id has the same address on
+// every core of the program). Stores the address in fabric_mux_l1_base; the termination signal's offset is from it
+// too. local_scratch_address is a word of this core's L1 to read into.
+template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
+WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_program_local_fabric_mux(
     uint8_t fabric_mux_x,
     uint8_t fabric_mux_y,
+    uint8_t fabric_mux_channel_id,
+    uint8_t fabric_mux_num_buffers_per_channel,
+    size_t fabric_mux_channel_buffer_size_bytes,
     uint32_t fabric_mux_l1_base_semaphore_id,
-    uint32_t local_scratch_address) {
-    // The mux publishes its map's address once it is ready for traffic.
-    return poll_fabric_mux_l1_base(
+    size_t fabric_mux_channel_base_offset,
+    size_t fabric_mux_connection_info_offset,
+    size_t fabric_mux_connection_handshake_offset,
+    size_t fabric_mux_flow_control_offset,
+    size_t fabric_mux_buffer_index_offset,
+    uint32_t local_flow_control_address,
+    uint32_t local_teardown_address,
+    uint32_t local_buffer_index_address,
+    uint32_t local_scratch_address,
+    uint32_t& fabric_mux_l1_base) {
+    fabric_mux_l1_base = poll_fabric_mux_l1_base(
         fabric_mux_x, fabric_mux_y, fabric_mux_l1_base_semaphore_id, local_scratch_address, noc_index);
+    return build_connection_to_fabric_endpoint<FABRIC_MUX_CHANNEL_NUM_BUFFERS>(
+        fabric_mux_x,
+        fabric_mux_y,
+        fabric_mux_channel_id,
+        fabric_mux_num_buffers_per_channel,
+        fabric_mux_channel_buffer_size_bytes,
+        fabric_mux_l1_base + fabric_mux_channel_base_offset,
+        fabric_mux_l1_base + fabric_mux_connection_info_offset,
+        fabric_mux_l1_base + fabric_mux_connection_handshake_offset,
+        fabric_mux_l1_base + fabric_mux_flow_control_offset,
+        fabric_mux_l1_base + fabric_mux_buffer_index_offset,
+        local_flow_control_address,
+        local_teardown_address,
+        local_buffer_index_address);
 }
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>

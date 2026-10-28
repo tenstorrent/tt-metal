@@ -1024,30 +1024,27 @@ void kernel_main() {
     detail::zero_buffer_barrier();
 
 #ifdef USE_MUX
-    // Wait for each mux to be ready, which is also when it publishes its map's address, then build and connect
+    // Wait for mux to be ready and connect
     for (uint32_t dir = 0; dir < num_directions; dir++) {
         if (directions[dir] && mux_connection_valid_arr[dir]) {
-            const uint32_t l1_base = tt::tt_fabric::wait_for_fabric_mux_l1_base(
-                fabric_mux_x_arr[dir],
-                fabric_mux_y_arr[dir],
-                fabric_mux_l1_base_semaphore_id,
-                local_fabric_mux_status_address_arr[dir]);
-            fabric_mux_l1_base_arr[dir] = l1_base;
             fabric_connections[dir] =
-                tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+                tt::tt_fabric::build_connection_to_program_local_fabric_mux<fabric_mux_num_buffers_per_channel>(
                     fabric_mux_x_arr[dir],
                     fabric_mux_y_arr[dir],
                     fabric_mux_channel_id_arr[dir],
                     fabric_mux_num_buffers_per_channel,
                     fabric_mux_channel_buffer_size_bytes,
-                    l1_base + fabric_mux_channel_base_offset_arr[dir],
-                    l1_base + fabric_mux_connection_info_offset_arr[dir],
-                    l1_base + fabric_mux_connection_handshake_offset_arr[dir],
-                    l1_base + fabric_mux_flow_control_offset_arr[dir],
-                    l1_base + fabric_mux_buffer_index_offset_arr[dir],
+                    fabric_mux_l1_base_semaphore_id,
+                    fabric_mux_channel_base_offset_arr[dir],
+                    fabric_mux_connection_info_offset_arr[dir],
+                    fabric_mux_connection_handshake_offset_arr[dir],
+                    fabric_mux_flow_control_offset_arr[dir],
+                    fabric_mux_buffer_index_offset_arr[dir],
                     local_flow_control_address_arr[dir],
                     local_teardown_address_arr[dir],
-                    local_buffer_index_address_arr[dir]);
+                    local_buffer_index_address_arr[dir],
+                    local_fabric_mux_status_address_arr[dir],
+                    fabric_mux_l1_base_arr[dir]);
             tt::tt_fabric::fabric_client_connect(fabric_connections[dir]);
         }
     }
