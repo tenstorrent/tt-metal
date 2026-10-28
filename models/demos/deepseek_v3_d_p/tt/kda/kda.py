@@ -271,10 +271,10 @@ class ttKDA:
         )
         # With the SP relay, the output gate's columns become their own matmul, run beside the relay on the worker
         # columns left of the relay's; the input projection keeps Q, K, V, the decay rank, beta and the first output-gate
-        # heads that fit in its per-core width anyway. The weights are split that way when they are prepared. The relay's
-        # final carry (its own program on the last worker column, mostly waiting on the fabric) then runs beside the
-        # output projection, on the other columns, after the gated norm. All three are ttnn.linear's 2D multicast matmul
-        # on worker blocks.
+        # heads that fit in its per-core width anyway. load_kda_weights cuts the stored fused weight that way. The
+        # relay's final carry (its own program on the last worker column, mostly waiting on the fabric) then runs beside
+        # the output projection, on the other columns, after the gated norm. All three are ttnn.linear's 2D multicast
+        # matmul on worker blocks.
         self._relay = self.recurrence.uses_affine_relay
         self.input_projection_gate_columns = (
             self._input_projection_gate_tiles(mm_grid, program_config) * ttnn.TILE_SIZE if self._relay else None
