@@ -97,7 +97,7 @@ void validate_in0_row_major_height_sharded(
         batched ? "batch * M" : "M",
         expected_shard_h,
         a_shard.shape[0]);
-    if (operation_attributes.M > 1) {
+    if (!batched && operation_attributes.M > 1) {
         log_warning(
             tt::LogOp,
             "matmul_decode with ROW_MAJOR input A and M={} is not yet optimized for this case",
@@ -331,10 +331,6 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!partial, "matmul_decode output_core_grid is not supported with partial_width_sharded");
         if (batched) {
             TT_FATAL(
-                operation_attributes.M == 1,
-                "batched matmul_decode output_core_grid requires M = 1, but got M={}",
-                operation_attributes.M);
-            TT_FATAL(
                 operation_attributes.b_blocks == operation_attributes.batch,
                 "batched matmul_decode output_core_grid requires Bc = 1 (b_blocks == batch), but got batch={}, "
                 "b_blocks={}",
@@ -382,15 +378,17 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
                 input_tensor_a.memory_config().shard_spec().has_value(),
                 "ROW_MAJOR width-sharded input A requires a shard spec");
             const auto& a_shard = input_tensor_a.memory_config().shard_spec().value();
-            // Each row is its own 1x32-tile row. Only the full-width two-hub gather restripes several of them
-            // into whole K rows for custom_mm (see reader_full_width_sharded.cpp's IN0_ROW_RESTRIPE).
+            // Each row is its own 1x32-tile row. The full-width two-hub gather and the batched gather
+            // restripe several of them into whole K rows for custom_mm (reader_full_width_sharded.cpp's
+            // IN0_ROW_RESTRIPE, reader_batched_width_sharded.cpp's USE_CUSTOM_MM).
             TT_FATAL(
-                operation_attributes.M == 1 || (!batched && !partial && !operation_attributes.ring_gather),
-                "ROW_MAJOR width-sharded input A with M > 1 is only supported by the full-width two-hub gather "
-                "(not batched, partial_width_sharded or ring_gather), but got M={}",
+                operation_attributes.M == 1 || (!partial && !operation_attributes.ring_gather),
+                "ROW_MAJOR width-sharded input A with M > 1 is only supported by the full-width two-hub gather and "
+                "the batched factory (not partial_width_sharded or ring_gather), but got M={}",
                 operation_attributes.M);
-            const uint32_t expected_shard_h = batched ? static_cast<uint32_t>(operation_attributes.batch)
-                                                      : static_cast<uint32_t>(operation_attributes.M);
+            const uint32_t expected_shard_h =
+                batched ? static_cast<uint32_t>(operation_attributes.batch * operation_attributes.M)
+                        : static_cast<uint32_t>(operation_attributes.M);
             TT_FATAL(
                 a_shard.shape[0] == expected_shard_h,
                 "ROW_MAJOR width-sharded input A shard height {} must equal {}, but got {}",

@@ -74,7 +74,6 @@ void kernel_main() {
     constexpr bool dense_packing = true;
     constexpr bool finalize = true;
 
-    static_assert(M_tiles == 1, "custom_mm batched path requires a single in0 tile row");
     static_assert(K_tiles >= 2 && K_tiles <= 256 && K_tiles % 2 == 0);
     static_assert(Nc_tiles >= 1 && Nc_tiles <= 16);
     // Every custom_mm_block call needs an even kt_dim, which a batch split across a page boundary
@@ -92,14 +91,26 @@ void kernel_main() {
         in1_cb.wait_front(in1_page_tiles);
         for (uint32_t i = 0; i < batches_per_page; ++i) {
             const uint32_t bc_i = page * batches_per_page + i;
-            tile_regs_acquire();
-            // in1 is indexed within the page currently at the front of the CB.
-            custom_mm_block<finalize, false>(
-                full_in0_cb_id, in1_cb_id, bc_i * K_tiles, i * K_tiles * Nc_tiles, 0, K_tiles, Nc_tiles);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_block_contiguous(0, out_cb_id, Nc_tiles);
-            tile_regs_release();
+            // full_in0 is [bc][m][k] and the output [bc][m][nc], so the packs stay contiguous.
+            // TODO: with 1x32 ROW_MAJOR rows every row is its own call and re-reads the whole in1
+            // slab, so compute grows linearly with M (o_a: ~3.6 us per row). Packing the rows into
+            // one 8x32 in0 tile would read in1 once for up to 8 rows.
+            for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+                tile_regs_acquire();
+                // in1 is indexed within the page currently at the front of the CB.
+                custom_mm_block<finalize, false>(
+                    full_in0_cb_id,
+                    in1_cb_id,
+                    (bc_i * M_tiles + mt) * K_tiles,
+                    i * K_tiles * Nc_tiles,
+                    0,
+                    K_tiles,
+                    Nc_tiles);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_block_contiguous(0, out_cb_id, Nc_tiles);
+                tile_regs_release();
+            }
         }
 #ifdef ENABLE_GLOBAL_CB
         // This page has been read in full; release the local alias and let the reader ack it.

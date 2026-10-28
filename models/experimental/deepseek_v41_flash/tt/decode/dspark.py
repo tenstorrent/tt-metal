@@ -47,6 +47,7 @@ import ttnn
 
 from models.experimental.deepseek_v41_flash.tt.config import dspark_expert_provider, dspark_weights
 from models.experimental.deepseek_v41_flash.tt.decode.attention import DECODE_LAYOUTS as ATTENTION_LAYOUTS
+from models.experimental.deepseek_v41_flash.tt.decode.attention import _rope_tail
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DECODE_LAYOUTS as MOE_LAYOUTS
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v4_flash.tt.common import (
@@ -111,20 +112,6 @@ def dspark_prefetch_rings(tp_size: int) -> dict:
         "o_b_proj": PrefetchRing("dspark.o_b", (o_b, {**o_b, "K": 512}), DSPARK_GCB_PAGES),
         "shared_down_proj": PrefetchRing("dspark.shared_down", (down,), DSPARK_GCB_PAGES),
     }
-
-
-def _rope_tail(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Tensor) -> ttnn.Tensor:
-    """Interleaved RoPE on the trailing ``Rd`` columns of every row of ``x`` ``[1, 1, R, W]`` (TILE).
-
-    ``cos`` / ``sin`` are ``[1, 1, R, Rd]`` (one position per row); passing ``-sin`` undoes the rotation.
-    """
-    r, w = x.shape[2], x.shape[3]
-    rd = rot.shape[-1]
-    nope = ttnn.slice(x, [0, 0, 0, 0], [1, 1, r, w - rd])
-    tail = ttnn.slice(x, [0, 0, 0, w - rd], [1, 1, r, w])
-    rotated = ttnn.matmul(tail, rot, compute_kernel_config=_HIFI4)
-    tail = ttnn.add(ttnn.multiply(tail, cos), ttnn.multiply(rotated, sin))
-    return ttnn.concat([nope, tail], dim=-1)
 
 
 def _rms(x: ttnn.Tensor, gamma: ttnn.Tensor, eps: float) -> ttnn.Tensor:
@@ -466,35 +453,33 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
     def moe(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Routed experts plus the shared expert: ``[1, 1, T, D]`` -> ``[1, 1, T, D]`` (all-reduced).
 
-        ``fused_experts`` runs once per row, on the ROW_MAJOR single-token path decode uses. A multi-row
-        call would take TILE rows padded to 32, whose circular buffers do not fit beside the decode model's
-        L1 buffers on the output stage.
+        ``fused_experts`` takes the block's ``T`` rows ROW_MAJOR in one call: it computes them in one
+        ``bit_ceil(T)``-row tile row (TILE rows would be padded to 32, whose circular buffers do not fit
+        beside the decode model's L1 buffers on the output stage) and fetches each expert of the rows'
+        union once. ``num_experts`` is the union's bound ``T * top_k``, so the program, and the trace
+        holding it, does not depend on how much the rows' selections overlap.
         """
         t, d = x.shape[2], x.shape[3]
         experts = self.experts
         logits = ttnn.linear(x, self.gate.weight, dtype=ttnn.float32, compute_kernel_config=_HIFI4)
         scores = ttnn.typecast(ttnn.sqrt(ttnn.softplus(logits)), ttnn.bfloat16)
         ranking = ttnn.add(scores, self.gate_bias)
-        e = scores.shape[3]
-        routed = []
-        for i in range(t):
-            row = ttnn.to_layout(ttnn.slice(x, [0, 0, i, 0], [1, 1, i + 1, d]), ttnn.ROW_MAJOR_LAYOUT)
-            out = ttnn.experimental.deepseek.moe.fused_experts(
-                row,
-                routing_scores=ttnn.slice(scores, [0, 0, i, 0], [1, 1, i + 1, e]),
-                ranking_scores=ttnn.slice(ranking, [0, 0, i, 0], [1, 1, i + 1, e]),
-                gate_up_weights=experts.gate_up_weights,
-                down_weights=experts.down_weights,
-                num_experts=experts.top_k,
-                intermediate_size=experts.intermediate,
-                swiglu_limit=experts.limit,
-                top_k=experts.top_k,
-                routed_scaling_factor=experts.routed_scaling_factor,
-                routing_eps=experts.routing_eps,
-                experts_block_size=min(experts.experts_block_size, experts.top_k),
-            )
-            routed.append(ttnn.to_layout(ttnn.reshape(out, [1, 1, 1, d]), ttnn.ROW_MAJOR_LAYOUT))
-        routed = ttnn.to_layout(ttnn.concat(routed, dim=2), ttnn.TILE_LAYOUT)
+        num_experts = min(t * experts.top_k, scores.shape[3])
+        out = ttnn.experimental.deepseek.moe.fused_experts(
+            ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT),
+            routing_scores=scores,
+            ranking_scores=ranking,
+            gate_up_weights=experts.gate_up_weights,
+            down_weights=experts.down_weights,
+            num_experts=num_experts,
+            intermediate_size=experts.intermediate,
+            swiglu_limit=experts.limit,
+            top_k=experts.top_k,
+            routed_scaling_factor=experts.routed_scaling_factor,
+            routing_eps=experts.routing_eps,
+            experts_block_size=min(experts.experts_block_size, num_experts),
+        )
+        routed = ttnn.to_layout(ttnn.reshape(out, [1, 1, t, d]), ttnn.TILE_LAYOUT)
         x_rep = _decode_activation(self.shared_w1, x)
         gate = ttnn.clamp(self.shared_w1(x_rep), max=self.limit)
         up = ttnn.clamp(self.shared_w3(_decode_activation(self.shared_w3, x_rep)), min=-self.limit, max=self.limit)

@@ -50,6 +50,9 @@ ProgramDescriptor create_gather_descriptor(
     const uint32_t full_tensor_bytes = output_shard.shape[0] * full_width_bytes;
     const uint32_t bbox_num_cores = output_bbox.grid_size().x * output_bbox.grid_size().y;
     const bool skip_untilize = input.layout() == Layout::ROW_MAJOR;
+    const uint32_t rows_per_slice = input.logical_shape()[-2];
+    const uint32_t padded_rows_per_slice = input.padded_shape()[-2];
+    const uint32_t num_slices = output_shard.shape[0] / rows_per_slice;
 
     ProgramDescriptor desc;
 
@@ -120,7 +123,9 @@ ProgramDescriptor create_gather_descriptor(
         cb_untilized,
         tiles_per_core,
         static_cast<uint32_t>(skip_untilize),
-        output_shard.shape[0],
+        num_slices,
+        rows_per_slice,
+        padded_rows_per_slice,
         shard_width_bytes,
         full_width_bytes,
         gather_semaphore_id,
@@ -216,6 +221,9 @@ ProgramDescriptor create_mcast_descriptor(
     const uint32_t full_tensor_bytes = output_shard.shape[0] * full_width_bytes;
     const uint32_t bbox_num_cores = output_bbox.grid_size().x * output_bbox.grid_size().y;
     const bool skip_untilize = input.layout() == Layout::ROW_MAJOR;
+    const uint32_t rows_per_slice = input.logical_shape()[-2];
+    const uint32_t padded_rows_per_slice = input.padded_shape()[-2];
+    const uint32_t num_slices = output_shard.shape[0] / rows_per_slice;
 
     ProgramDescriptor desc;
 
@@ -225,7 +233,7 @@ ProgramDescriptor create_mcast_descriptor(
 
     if (skip_untilize) {
         desc.cbs.push_back(CBDescriptor{
-            .total_size = full_tensor_bytes,
+            .total_size = shard_height * full_width_bytes,
             .core_ranges = input_shard.grid,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(cb_in),
@@ -279,7 +287,9 @@ ProgramDescriptor create_mcast_descriptor(
         cb_untilized,
         tiles_per_core,
         static_cast<uint32_t>(skip_untilize),
-        output_shard.shape[0],
+        num_slices,
+        rows_per_slice,
+        padded_rows_per_slice,
         full_width_bytes,
         bbox_num_cores,
         static_cast<uint32_t>(mcast_start_physical.x),

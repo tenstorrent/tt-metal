@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <bit>
 #include <optional>
 #include <variant>
 
@@ -20,17 +21,6 @@
 #include <tt-metalium/tile.hpp>
 
 namespace ttnn::operations::experimental::deepseek::moe::fused_experts {
-
-// Decode ROW_MAJOR [1,1,1,H] is physically a sequence of 1x32 faces (same packing as
-// rms_norm / matmul_decode). Compute uses that tile instead of tilize/untilize.
-inline bool fused_experts_rm_as_1x32(const Tensor& x) { return x.layout() == tt::tt_metal::Layout::ROW_MAJOR; }
-
-inline tt::tt_metal::Tile fused_experts_compute_tile(const Tensor& x) {
-    if (fused_experts_rm_as_1x32(x)) {
-        return tt::tt_metal::Tile({1, tt::constants::TILE_WIDTH});
-    }
-    return x.tensor_spec().tile();
-}
 
 // ROW_MAJOR + L1 + HEIGHT_SHARDED with a shard spec: the replicated activation row that
 // `all_gather_for_matmul` multicasts onto every matmul core and that `matmul_decode` consumes in
@@ -54,6 +44,23 @@ inline uint32_t fused_experts_input_rows(const Tensor& x) {
         return static_cast<uint32_t>(x.memory_config().shard_spec()->shape[0]);
     }
     return static_cast<uint32_t>(x.logical_shape()[-2]);
+}
+
+// A ROW_MAJOR input of several token rows (the DSpark block, or a batched decode step). A row-major
+// [B, H] buffer is not a run of tiles once B > 1, so every core's writer restripes it into
+// (fused_experts_compute_tile) tiles in cb_input before compute starts; see write_gate_up.cpp.
+inline bool fused_experts_rm_rows(const Tensor& x) {
+    return x.layout() == tt::tt_metal::Layout::ROW_MAJOR && fused_experts_input_rows(x) > 1;
+}
+
+// One ROW_MAJOR row [1, H] is physically a sequence of 1x32 faces (same packing as rms_norm /
+// matmul_decode), so compute uses that tile with no tilize. Several rows share one tile row of the
+// smallest tile height that holds them (8x32 for 5 rows), exactly like a TILE input of that tile.
+inline tt::tt_metal::Tile fused_experts_compute_tile(const Tensor& x) {
+    if (x.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        return tt::tt_metal::Tile({std::bit_ceil(fused_experts_input_rows(x)), tt::constants::TILE_WIDTH});
+    }
+    return x.tensor_spec().tile();
 }
 
 // Fuses the per-expert routed-FFN loop

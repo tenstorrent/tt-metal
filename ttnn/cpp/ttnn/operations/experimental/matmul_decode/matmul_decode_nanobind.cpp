@@ -63,8 +63,10 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 A is rank-4 with leading dims that multiply to a batch > 1. A ROW_MAJOR
                 HEIGHT_SHARDED replica is also accepted: shard shape is the actual 2D operand
                 (`[M, K]`, or `[batch * M, K]` when batched), M is `shard_height / batch`, and
-                compute treats each row as a 1x32 tile. That output is ROW_MAJOR as well, so it
-                can feed the next decode without a relayout.
+                compute treats each row as a 1x32 tile. A batched replica's rows are ordered
+                `[M][batch]`, i.e. the bytes of a row-major `[M, batch * K]` (row m holds every
+                batch's K side by side); at M = 1 that is just `[batch, K]`. That output is
+                ROW_MAJOR as well, so it can feed the next decode without a relayout.
             input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Either L1
                 width-sharded on the weight cores, or a DRAM ND-sharded tensor laid out exactly as
                 `global_cb` requires (one contiguous slab per weight core, see the table under
@@ -140,7 +142,7 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 Not supported with `global_cb` or the batched factory. Defaults to False.
             output_core_grid (ttnn.CoreRangeSet, optional): multicast a replica of the
                 full output row onto every core of this filled rectangle (HEIGHT_SHARDED).
-                Full-width: ``[M, N]``. Batched (``M == 1``, ``Bc == 1``): packed
+                Full-width: ``[M, N]``. Batched (``Bc == 1``): packed
                 ``[M, b_blocks * N]``. Mutually exclusive with `output_mem_config`,
                 `all_gather`, and `ring_gather`.
             output_mcast_two_hub (bool, optional): with `output_core_grid`, gather each

@@ -29,17 +29,27 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
         x.layout());
 
     // Two ROW_MAJOR shapes are accepted. Interleaved (the decode path that came off DRAM): one token
-    // row, broadcast to every core by the {1,0} input sender. Replicated onto every compute core in
-    // L1 (the `all_gather_for_matmul` replica that matmul_decode also consumes in place): each core
-    // already holds the row, so there is nothing to read or broadcast -- see
-    // fused_experts_input_is_replicated.
+    // row is broadcast to every core by the {1,0} input sender, several rows are read by every core's
+    // writer. Replicated onto every compute core in L1 (the `all_gather_for_matmul` replica that
+    // matmul_decode also consumes in place): each core already holds the rows, so there is nothing
+    // to read or broadcast -- see fused_experts_input_is_replicated.
     const bool input_replicated = fused_experts_input_is_replicated(x);
     const uint32_t batch = fused_experts_input_rows(x);
     if (x.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
         TT_FATAL(
-            batch == 1,
-            "fused_experts: ROW_MAJOR input is the decode 1x32 path and requires a single token row, got {}",
+            batch >= 1 && batch <= tt::constants::TILE_HEIGHT,
+            "fused_experts: ROW_MAJOR input rows must share one tile row, so there must be 1 to {}, got {}",
+            tt::constants::TILE_HEIGHT,
             batch);
+        TT_FATAL(
+            x.dtype() == tt::tt_metal::DataType::BFLOAT16,
+            "fused_experts: ROW_MAJOR input must be BFLOAT16 (its rows are 32-element bf16 faces), got {}",
+            x.dtype());
+        TT_FATAL(
+            input_replicated || batch == 1 || !x.memory_config().is_sharded(),
+            "fused_experts: a several-row ROW_MAJOR input must be interleaved or the L1 HEIGHT_SHARDED replica, "
+            "got {}",
+            x.memory_config());
     }
     if (input_replicated) {
         const auto& in_shard = x.memory_config().shard_spec().value();
@@ -58,8 +68,9 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             "is replicated on every core",
             in_shard.shape[1],
             x.logical_shape()[-1]);
-        // Each core's shard is handed to the compute as k_tiles 1x32 tiles by aliasing cb_input over
-        // the buffer, so the row has to be a whole number of them and carry no padding.
+        // A one-row shard is handed to the compute as k_tiles 1x32 tiles by aliasing cb_input over the
+        // buffer, and several rows are restriped 32 columns at a time, so either way a row has to be a
+        // whole number of tile widths and carry no padding.
         TT_FATAL(
             in_shard.shape[1] % tt::constants::TILE_WIDTH == 0,
             "fused_experts: replicated input row width ({}) must be divisible by the 1x32 tile width ({})",
@@ -87,19 +98,12 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             "fused_experts: exactly one of routing_indices (the router's selected ids) or ranking_scores "
             "(an E-wide row to top-k on device) must be provided");
 
-        // Scores may be TILE (prefill) or ROW_MAJOR decode (B == 1), where LinearDecode's stick is a
-        // linear [1, E] row and is indexed as e*2 rather than tilized.
+        // Scores may be TILE (prefill) or ROW_MAJOR (decode), where each token's LinearDecode stick is
+        // a linear [1, E] page and is indexed as b * page_stride + e*2 rather than tilized.
         TT_FATAL(
             scores.layout() == tt::tt_metal::Layout::TILE || scores.layout() == tt::tt_metal::Layout::ROW_MAJOR,
             "fused_experts: routing_scores must be TILE or ROW_MAJOR, got {}",
             scores.layout());
-        if (scores.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-            TT_FATAL(
-                batch == 1,
-                "fused_experts: ROW_MAJOR routing_scores is the decode path and requires a single token row, got "
-                "height {}",
-                scores.logical_shape()[-2]);
-        }
         TT_FATAL(
             scores.dtype() == tt::tt_metal::DataType::BFLOAT16,
             "fused_experts: routing_scores must be BFLOAT16, got {}",
@@ -200,13 +204,6 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
                 ranking.layout() == tt::tt_metal::Layout::TILE || ranking.layout() == tt::tt_metal::Layout::ROW_MAJOR,
                 "fused_experts: ranking_scores must be TILE or ROW_MAJOR, got {}",
                 ranking.layout());
-            if (ranking.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-                TT_FATAL(
-                    batch == 1,
-                    "fused_experts: ROW_MAJOR ranking_scores is the decode path and requires a single token "
-                    "row, got height {}",
-                    ranking.logical_shape()[-2]);
-            }
             TT_FATAL(
                 ranking.dtype() == tt::tt_metal::DataType::BFLOAT16,
                 "fused_experts: ranking_scores must be BFLOAT16, got {}",

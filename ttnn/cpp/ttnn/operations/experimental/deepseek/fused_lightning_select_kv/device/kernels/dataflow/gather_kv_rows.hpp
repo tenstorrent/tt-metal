@@ -51,3 +51,47 @@ FORCE_INLINE void gather_kv_rows(
     }
     noc.async_write_barrier();
 }
+
+// Same staging as gather_kv_rows, for keys selected by several query rows: kv_cache row rows[i] is read
+// once and written to the next output page of every query row j set in masks[i] (out_pages[j], which
+// advances). rows and masks are in local key order, so each query row's pages fill in key order.
+template <uint32_t stage_rows, uint32_t num_queries, typename KvCache, typename Output>
+FORCE_INLINE void gather_selected_kv_rows(
+    const Noc& noc,
+    const KvCache& kv_cache,
+    const Output& output,
+    DataflowBuffer& stage,
+    volatile tt_l1_ptr uint32_t* rows,
+    volatile tt_l1_ptr uint32_t* masks,
+    uint32_t first,
+    uint32_t last,
+    uint32_t (&out_pages)[num_queries]) {
+    static_assert(stage_rows >= 2 && stage_rows % 2 == 0, "stage_rows must be even so it splits into two banks");
+    constexpr uint32_t bank_rows = stage_rows / 2;
+    const uint32_t row_bytes = stage.get_entry_size();
+    stage.reserve_back(stage_rows);
+    uint32_t bank = 0;
+    for (uint32_t row = first; row < last; row += bank_rows, bank ^= 1) {
+        const uint32_t n = std::min(bank_rows, last - row);
+        const uint32_t base = bank * bank_rows;
+        for (uint32_t j = 0; j < n; ++j) {
+            noc.async_read(
+                kv_cache, stage, row_bytes, {.page_id = rows[row + j]}, {.offset_bytes = (base + j) * row_bytes});
+        }
+        noc.async_read_barrier();
+        // Drains the other bank's writes, which were overlapping these reads, so it can be read into next.
+        noc.async_writes_flushed();
+        for (uint32_t j = 0; j < n; ++j) {
+            for (uint32_t mask = masks[row + j]; mask != 0; mask &= mask - 1) {
+                const uint32_t query = __builtin_ctz(mask);
+                noc.async_write(
+                    stage,
+                    output,
+                    row_bytes,
+                    {.offset_bytes = (base + j) * row_bytes},
+                    {.page_id = out_pages[query]++});
+            }
+        }
+    }
+    noc.async_write_barrier();
+}
