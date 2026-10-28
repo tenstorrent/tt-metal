@@ -21,6 +21,11 @@ Protobuf note: ``import_from_protobuf`` rebuilds configs via ``std::map`` (lexic
 order). The list constructor auto-names configs ``"0".."N-1"``, which reorders for ``N>10``
 (``"10"`` before ``"2"``) and breaks producer/H2D lookups by integer ``config_id``. We therefore
 build with zero-padded names so map order == intended config_id order across export/import.
+
+The caches' declared layout (``cache_layout.py``, a ``CacheLayoutModel`` of the same caches) derives the
+same table with ``to_chunk_map``. Until that replaces the walk (``GPT_OSS_KV_TABLE_FROM_LAYOUT_MODEL=1``), the
+walked table is published and the derived one is checked against it; the model is written next to the table
+(``<path>.cache_layout.pb``), for a consumer that derives the table itself, only when the two agree.
 """
 
 from __future__ import annotations
@@ -30,8 +35,13 @@ import socket
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.runners.cache_layout import publish_kv_chunk_table
 from models.demos.common.prefill.runners.migration import get_num_dram_banks
 from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+from models.demos.gpt_oss_d_p.tt.runners.cache_layout import gpt_oss_cache_layout_model
+
+# Set to 1 to publish the table derived from the caches' CacheLayoutModel without walking the classic one.
+LAYOUT_MODEL_ENV = "GPT_OSS_KV_TABLE_FROM_LAYOUT_MODEL"
 
 # bf8_b / bf16 TILE byte sizes (32x32 tile). bf8_b = 1024 mantissa + 64 exponent; bf16 = 2048.
 _TILE_BYTES = {ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
@@ -190,22 +200,50 @@ def build_and_serialize_kv_chunk_table(
     head_dim,
     path,
 ) -> str:
-    """Build the GPT-OSS multi-config table and serialize it to ``path`` for SET_TABLE. Returns ``path``."""
-    table = build_kv_chunk_address_table(
-        mesh_device=mesh_device,
-        kv_cache=kv_cache,
-        seq_len=seq_len,
-        num_layers=num_layers,
-        mesh_shape=mesh_shape,
-        sp_axis=sp_axis,
-        num_users=num_users,
-        chunk_size=chunk_size,
-        num_kv_heads=num_kv_heads,
-        head_dim=head_dim,
+    """Publish the GPT-OSS multi-config table to ``path`` for SET_TABLE (see ``publish_kv_chunk_table``).
+    Returns ``path``."""
+    tp_axis = 1 - sp_axis
+    sp = mesh_shape[sp_axis]
+    cols = mesh_shape[tp_axis]
+
+    def walk():
+        return build_kv_chunk_address_table(
+            mesh_device=mesh_device,
+            kv_cache=kv_cache,
+            seq_len=seq_len,
+            num_layers=num_layers,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_users=num_users,
+            chunk_size=chunk_size,
+            num_kv_heads=num_kv_heads,
+            head_dim=head_dim,
+        )
+
+    def layout_model():
+        return gpt_oss_cache_layout_model(
+            mesh_device=mesh_device,
+            kv_cache=kv_cache,
+            sp_axis=sp_axis,
+            sp=sp,
+            cols=cols,
+            num_users=num_users,
+            num_layers=num_layers,
+            seq_len=seq_len,
+            chunk_size=chunk_size,
+            num_kv_heads=num_kv_heads,
+            head_dim=head_dim,
+        )
+
+    host_name = socket.gethostname()
+    hosts = [
+        (mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c)), host_name) for r in range(sp) for c in range(cols)
+    ]
+    publish_kv_chunk_table(
+        path=path, walk=walk, layout_model=layout_model, hosts=hosts, enable_env=LAYOUT_MODEL_ENV, model_name="GPT-OSS"
     )
-    ttnn.experimental.disaggregation.export_to_protobuf_file(table, path)
     logger.info(
         f"[migration] GPT-OSS KV chunk address table serialized to {path} "
-        f"(configs={table.num_configs()}, entries={table.total_entries()})"
+        f"(configs={2 * num_kv_heads}, layers={num_layers}, slots={num_users}, max_seq_len={seq_len})"
     )
     return path

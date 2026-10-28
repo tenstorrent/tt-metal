@@ -164,6 +164,21 @@ class GptOssKVCache(KvCaches):
         return self.k, self.v, batch_idx, self.max_seq_len, False
 
 
+def cache_memory_config(head_dim, num_dram_banks):
+    """The DRAM ND-shard memory config of every GPT-OSS prefill cache: NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK-token
+    blocks of one head, round-robin over the ``num_dram_banks`` banks."""
+    core_ranges = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
+    ]
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
+        grid=ttnn.CoreRangeSet(core_ranges),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=nd_shard_spec)
+
+
 def allocate_kv_cache(
     mesh_device,
     *,
@@ -209,17 +224,7 @@ def allocate_kv_cache(
     ), f"max_seq_len ({max_seq_len}) must be a multiple of TILE_SIZE*sp ({ttnn.TILE_SIZE * sp}); seq_local must be tile-aligned"
     seq_local = max_seq_len // sp
 
-    core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0))
-        for bank_id in range(get_num_dram_banks(mesh_device))
-    ]
-    nd_shard_spec = ttnn.NdShardSpec(
-        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
-        grid=ttnn.CoreRangeSet(core_ranges),
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-    )
-    mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=nd_shard_spec)
+    mem_config = cache_memory_config(head_dim, get_num_dram_banks(mesh_device))
 
     def _alloc(batch_slots, slot_seq_local, dtype=cache_dtype):
         # Per-chip cache is one head ([.., 1, ..]); WHICH head a chip holds is decided at write time by
