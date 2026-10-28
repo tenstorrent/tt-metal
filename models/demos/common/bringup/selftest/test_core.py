@@ -429,3 +429,25 @@ def test_attempt_and_ab_histories_live_beside_state_json(sandbox):
     assert st["agent_runs"] == [{"attempt": 1, "role": "fix"}] and st["ab"] == {"decision": "accept"}
     led.update("A.1", agent_runs=st["agent_runs"] + [{"attempt": 2, "role": "fix"}])
     assert len(led.state()["A.1"]["agent_runs"]) == 2
+
+
+def test_a_spec_rule_that_contradicts_realistic_precision_is_refused():
+    """F208: DeepSeek-V4.1's 2026-10-14 line 'HiFi4, fp32 accumulation, bf16 KV cache' survived F123 in agents.rules and
+    the serving contract followed it (bf16 KV caches where the reference stores fp8 / fp4)."""
+    from models.demos.common.bringup.core.spec import stale_precision_rules
+
+    stale = {
+        "agents": {"rules": ["Use 2D fabric.", "Precision during bring-up: HiFi4, fp32 accumulation, bf16 KV cache."]}
+    }
+    errs = stale_precision_rules(stale)
+    assert len(errs) == 1 and errs[0].startswith("agents.rules[1]")
+    ok = {
+        "agents": {
+            "rules": [
+                "SDPA at HiFi4 for the streaming path (owner exception, measured).",
+                "fp32 accumulation only where measured to matter.",
+            ]
+        }
+    }
+    assert stale_precision_rules(ok) == []
+    assert stale_precision_rules({}) == []

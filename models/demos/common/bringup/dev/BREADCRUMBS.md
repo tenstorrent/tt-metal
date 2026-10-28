@@ -2267,3 +2267,24 @@ failed (rc 1, no metrics) and the owner got a table with no comparison. Gate uni
 Fix: PROCESS_CRASH (Fatal Python error: Bus error / Segmentation fault / Aborted, "(core dumped)"); a side item that
 exits non-zero with it runs once more (the crashed log kept as <name>.crashed.log, the results reset). A second crash
 is recorded as the side's result. Selftest test_perf_ab.py::test_a_side_whose_process_crashed_runs_once_more.
+
+## F208: realistic precision covers every tensor the reference rounds; a spec rule that contradicts it is refused (owner, 2026-10-28)
+Problem: DeepSeek-V4.1's KV caches (window fp8, compressed fp4, index keys fp4 in the reference) and its GEMM activation
+inputs (fp8 in the reference) run in bf16 on the device. Cause: the 2x2 intake spec (2026-10-14) carried "Precision
+during bring-up: HiFi4, fp32 accumulation, bf16 KV cache" in agents.rules; SC.1 wrote the serving contract to it ("the
+owner's rule is a bf16 KV cache"); F123 (2026-10-20) changed agents' rule 7 but neither the spec line nor the contract;
+the seeded Galaxy spec copied the line. Rule 7 spelled out weights only, rule 17 only permits low-bit caches; nothing
+checked. Owner: "realistic precision = whatever the reference uses".
+Fix: agents' rule 7 names caches and GEMM inputs at the reference's width (device 8-/4-bit formats), a narrower
+reference makes bf16 wrong even where a contract or spec says otherwise; core/spec.py stale_precision_rules refuses
+agents.rules entries with HiFi4 / "fp32 accumulation" / "bf16 KV cache" / full or maximum precision / "precision during
+bring-up" unless marked 'owner exception' (selftest test_core.py::test_a_spec_rule_that_contradicts_realistic_precision_is_refused).
+Not done: an automated audit of the device's stored / GEMM-input formats against the reference's rounding list (needs a
+model hook; see the DS41 fix plan). Flags today on other models: glm53_flash_d_p(_lb) ("HiFi4 during functional
+bring-up"), xing40_a4b_d_p(_8x4) (SDPA "still HiFi4": an owner decision?) - owner to decide.
+
+## F209 (pending): a rejected perf pick reverts its fork changes too, and keeps its knowledge notes (DeepSeek-V4.1 P.3)
+Problem: `decide --reject` reverted P.3's model paths but left ~230 lines in ttnn/ttnn/bringup/prepared_program (C++,
+bindings, test, docs) and INDEX.md - forks every agent may write (F48) are outside the pick's paths; and a full revert
+would also drop the pick's finding (known_issues DS41-131, BREADCRUMBS). Overseer reverted the fork code by hand and
+kept the notes. To do: reject reverts every file the pick changed except the knowledge files.

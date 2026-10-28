@@ -163,8 +163,7 @@ agents:
       chunk's forward and their rows go to the device as an input. Read the tables from the checkpoint files on demand
       (memory-mapped): never hold the 203 GB of tables in host RAM. Everything after the lookup runs on the device."
     - "Host RAM is shared (503 GB): load and dequantize weights one layer (or one expert) at a time."
-    - "Precision during bring-up: HiFi4, fp32 accumulation, bf16 KV cache. Routed experts on the device in the format
-      that holds the checkpoint's fp4 values exactly (measure it; expected bfp8); a lossy format only by owner decision."
+    - "Precision (owner, 2026-10-28; replaces the 2026-10-14 bring-up line 'HiFi4, fp32 accumulation, bf16 KV cache', superseded by F123 on 2026-10-20): realistic = whatever the reference uses, as agents' rule 7. Every weight, every cache (window KV fp8, compressed KV fp4, index keys fp4) and every GEMM input the reference rounds is stored and computed at that width in the device's own format (fp8 -> bfp8, fp4 -> bfp4); never above the reference, never a parity-only rounding (rule 17). Routed experts bfp4 (owner 2026-10-22)."
     - "Accuracy is judged against the noise floor, not against exactness: a value after the model's own fp8 / fp4
       rounding may differ from the CPU by one rounding step where a correct bf16 device step would too (the checks'
       limits follow the bf16 precision model). Never trade speed for exactness (kernels that emulate the CPU's summation

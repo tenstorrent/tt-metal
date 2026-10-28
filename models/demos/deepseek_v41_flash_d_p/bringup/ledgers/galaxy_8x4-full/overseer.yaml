@@ -168,6 +168,14 @@ notes:
     PASSED 23:18 on this tree (Paris through tt-d-gen; the stand-in decode hang was the test''s mesh opened without the
     fabric router config, fixed by harness.open_mesh F202): do not touch test_runner_smoke.py; test_contract / test_kv_layout
     passed before (19:20).'
+- id: OV-17
+  tasks:
+  - P.4
+  status: open
+  t: '2026-10-28T13:47:22'
+  text: 'The overseer stopped attempt 1 (perf): Held by the owner: P.4/P.5 wait until the precision fixes (KV caches and
+    GEMM activations at the reference''s width) land, then they are re-measured on that model. The overseer''s resume dropped
+    its pause (resume clears PAUSE); not a fault of this attempt.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
