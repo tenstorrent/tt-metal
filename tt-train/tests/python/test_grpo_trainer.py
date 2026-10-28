@@ -1537,6 +1537,34 @@ def test_async_rollout_server_walks_prompts_with_the_newest_weights(monkeypatch)
     assert not getattr(sampler, "closed", False)
 
 
+def test_async_rollout_server_atexit_backstop_is_unregistered_after_clean_exit(monkeypatch):
+    monkeypatch.setattr(async_rollout, "_require_distributed_context", lambda owner: TTT_RANK)
+    monkeypatch.setattr(async_rollout, "exit_on_error", contextlib.nullcontext)
+    registrations = []
+
+    def register(fn, *args):
+        registrations.append((fn, args))
+
+    def unregister(fn):
+        for i, (registered_fn, _args) in enumerate(registrations):
+            if registered_fn is fn:
+                registrations.pop(i)
+                break
+
+    monkeypatch.setattr(async_rollout.atexit, "register", register)
+    monkeypatch.setattr(async_rollout.atexit, "unregister", unregister)
+
+    bridge = _ScriptedBridge([])
+    queue_ = _RecordingQueue()
+    server = _async_rollout_server(bridge, queue_, _EchoSampler(), [lambda completions, **_: [0.0] * len(completions)])
+    assert registrations == [(async_rollout.os._exit, (1,))]
+
+    server.serve_forever()
+
+    assert registrations == []
+    assert bridge.closed and queue_.closed
+
+
 def test_async_rollout_client_and_server_check_their_rank(monkeypatch, expect_error):
     bridge, queue_ = _ScriptedBridge([]), _RecordingQueue()
     monkeypatch.setattr(async_rollout, "_require_distributed_context", lambda owner: TTT_RANK)
