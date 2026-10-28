@@ -1668,6 +1668,10 @@ void DeviceProfiler::readRiscProfilerResults(
 
             bool newRunStart = false;
             bool oneStartFound = false;
+            // tmp-diag: raw words around a PROFILER-NOC-QUICK-PUSH marker whose 12-bit time_H differs from the
+            // previous quick-push marker of this risc (the corrupted ones carry the chunk's ID_LH word there).
+            std::optional<uint32_t> qp_time_h;
+            std::size_t lastRunStartIndex = 0;
 
             uint32_t opTime_H = 0;
             uint32_t opTime_L = 0;
@@ -1690,6 +1694,7 @@ void DeviceProfiler::readRiscProfilerResults(
                     oneStartFound = true;
                     opTime_H = 0;
                     opTime_L = 0;
+                    lastRunStartIndex = index;
                 } else if (!oneStartFound) {
                     // Pre-sentinel data: capture TS_DATA and advance past its 4-slot layout.
                     uint32_t timer_id = (data_buffer.at(index) >> kernel_profiler::PROFILER_MARKER_TIMER_ID_SHIFT) &
@@ -1759,6 +1764,38 @@ void DeviceProfiler::readRiscProfilerResults(
                             uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
                             if (timer_id || time_H) {
                                 uint32_t time_L = data_buffer.at(index + 1);
+                                // tmp-diag (39900 = Hash16 of "PROFILER-NOC-QUICK-PUSH")
+                                if ((timer_id & kernel_profiler::PROFILER_TIMER_STATIC_ID_MASK) == 39900) {
+                                    if (qp_time_h.has_value() && *qp_time_h != time_H) {
+                                        std::string words;
+                                        const std::size_t lo = index >= 16 ? index - 16 : 0;
+                                        const std::size_t hi = std::min(index + 8, bufferRiscShift + bufferEndIndex);
+                                        for (std::size_t w = lo; w < hi; w++) {
+                                            words += fmt::format(
+                                                "{}{:08x}", (w == index ? " >" : " "), data_buffer.at(w));
+                                        }
+                                        log_warning(
+                                            tt::LogMetal,
+                                            "tmp-diag: quick-push {} time_H {} -> {} (time_L {}) device {} core ({},{}) "
+                                            "{} at word {} = {} words into the chunk starting at {}, risc region [{}, "
+                                            "+{}):{}",
+                                            packet_type == kernel_profiler::ZONE_START ? "START" : "END",
+                                            *qp_time_h,
+                                            time_H,
+                                            time_L,
+                                            device_id,
+                                            worker_core.x,
+                                            worker_core.y,
+                                            enchantum::to_string(riscType),
+                                            index - bufferRiscShift,
+                                            index - lastRunStartIndex,
+                                            lastRunStartIndex - bufferRiscShift,
+                                            bufferRiscShift,
+                                            bufferEndIndex,
+                                            words);
+                                    }
+                                    qp_time_h = time_H;
+                                }
 
                                 if (opTime_H == 0) {
                                     opTime_H = time_H;
