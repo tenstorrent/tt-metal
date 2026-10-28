@@ -604,27 +604,28 @@ class GLM53FlashForCausalLM:
         programs) and as the continuation of a full device chunk (``chunk + bucket``: the same programs with history, the conv / KDA / index
         maintenance variants of a second chunk), so no chunk shape of any prompt compiles after the captures (a
         1590-token prompt = a 1024 chunk + a 566-token continuation padded to the 1024 bucket: the 2026-10-28
-        served APC seal hit). A comma-separated list walks exactly those lengths (the old ``128,32768`` catalog
-        form). Lengths are clamped to ``max_seq_len``; duplicates and empty entries dropped; the shortest comes
+        served APC seal hit). A comma-separated list adds its lengths to that set (the ``128,32768`` catalog form). Lengths are clamped to ``max_seq_len``; duplicates and empty entries dropped; the shortest comes
         first (it is the one prefilled into every slot)."""
         raw = os.environ.get("GLM53_VLLM_WARMUP_PREFILL", "auto").strip().lower()
         chunk = self.geometry.device_prefill_chunk
-        if raw in ("", "auto"):
-            try:  # the served branches' bucket set (GLM53_PREFILL_BUCKETS); the base pads to the traced lengths
-                from models.demos.glm53_flash.tt.vllm_config import prefill_buckets
+        try:  # the served branches' bucket set (GLM53_PREFILL_BUCKETS); the base pads to the traced lengths
+            from models.demos.glm53_flash.tt.vllm_config import prefill_buckets
 
-                buckets = list(prefill_buckets())
-            except ImportError:
-                buckets = list(self.geometry.traced_prefill_lengths)
-            buckets = [b for b in buckets if b <= chunk]
-            # every bucket full AND ragged (b - 1: the rows-past-the-prompt paths, e.g. the router's pad mask),
-            # lone and as the continuation of a full chunk
-            cand = sorted(
-                {n for b in buckets for n in (b, max(1, b - 1), chunk + b, chunk + max(1, b - 1))}
-                | {chunk, max(1, chunk - 1)}
-            )
-        else:
-            cand = [int(part) for part in raw.split(",") if part.strip()]
+            buckets = list(prefill_buckets())
+        except ImportError:
+            buckets = list(self.geometry.traced_prefill_lengths)
+        buckets = [b for b in buckets if b <= chunk]
+        # every bucket full AND ragged (b - 1: the rows-past-the-prompt paths, e.g. the router's pad mask), lone
+        # and as the continuation of a full chunk; an explicit list ADDS its lengths (it cannot drop this coverage:
+        # the served APC test's "128,2048" walked 2048 full only and its 1590-token prompt compiled the ragged
+        # pad-mask matmul at that bucket under the sealed cache)
+        cand = {n for b in buckets for n in (b, max(1, b - 1), chunk + b, chunk + max(1, b - 1))} | {
+            chunk,
+            max(1, chunk - 1),
+        }
+        if raw not in ("", "auto"):
+            cand |= {int(part) for part in raw.split(",") if part.strip()}
+        cand = sorted(cand)
         out: list[int] = []
         for n in cand:
             n = min(int(n), self.geometry.max_seq_len)
