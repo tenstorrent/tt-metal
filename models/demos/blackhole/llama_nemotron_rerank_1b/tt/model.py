@@ -456,12 +456,14 @@ class NemotronReranker:
         )
 
     def _padding_mask(self, valid, S):
-        """valid [B, 1, 32, S] (1 real / 0 pad) -> additive mask [B, 1, S, S]: 0 on real keys, MASK_NEG on padding."""
-        rows = ttnn.repeat(valid, ttnn.Shape([1, 1, S // 32, 1]))
-        mask = ttnn.multiply(
-            ttnn.subtract(rows, 1.0), -MASK_NEG, dtype=self.cfg.mask_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        """valid [B, 1, 32, S] (1 real / 0 pad) -> additive mask [B, 1, S, S]: 0 on real keys, MASK_NEG on padding.
+        The arithmetic runs on the 32-row tensor (its rows are identical); only the bfp4 result is
+        repeated to S rows."""
+        row = ttnn.multiply(
+            ttnn.subtract(valid, 1.0), -MASK_NEG, dtype=self.cfg.mask_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        ttnn.deallocate(rows)
+        mask = ttnn.repeat(row, ttnn.Shape([1, 1, S // 32, 1]), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(row)
         return mask
 
     def forward(self, tokens, valid, block_map):
