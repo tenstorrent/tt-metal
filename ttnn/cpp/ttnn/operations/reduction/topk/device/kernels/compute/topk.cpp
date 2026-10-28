@@ -32,9 +32,8 @@ FORCE_INLINE void transpose_and_pack(InputDfb& input_dfb, DestDfb& dest_dfb, con
     reconfig_data_format_srca(input_dfb_index);
     transpose_init(input_dfb_index);
     pack_reconfig_data_format(dest_dfb_index);
-    // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's SRAM
-    // destination (BFD) is set by pack_init. Retarget it before every pack-target switch, else pack_tile
-    // keeps writing into the previously programmed buffer.
+    // On Quasar, pack_reconfig_data_format does not change the buffer that pack_tile writes to; only
+    // pack_init does (#58488). Every switch of the pack target needs a pack_init.
 #ifdef ARCH_QUASAR
     pack_init(dest_dfb_index);
 #endif

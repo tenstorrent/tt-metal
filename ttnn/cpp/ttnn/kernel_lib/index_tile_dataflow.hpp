@@ -19,6 +19,28 @@
 
 namespace dataflow_kernel_lib {
 
+namespace detail {
+// Stores all 1024 entries of the index tile at width position wt with the RISC. Ptr is a pointer to
+// the index type, or a CoreLocalMem of it.
+template <typename Ptr>
+FORCE_INLINE void store_index_tile(Ptr ptr, const uint32_t wt) {
+    constexpr uint32_t tile_faces = 2;
+    constexpr uint32_t face_size = 16;
+    const uint32_t w = wt << 5;  // wt * 32
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < tile_faces; ++i) {
+        for (uint32_t j = 0; j < tile_faces; ++j) {
+            for (uint32_t k = 0; k < face_size; ++k) {
+                for (uint32_t l = 0; l < face_size; ++l) {
+                    ptr[count] = l + face_size * j + w;
+                    count++;
+                }
+            }
+        }
+    }
+}
+}  // namespace detail
+
 /**
  * Generate one index tile for the sorting ops (top-k, sort, moe, sampling).
  *
@@ -51,34 +73,21 @@ namespace dataflow_kernel_lib {
 template <typename T = uint16_t, typename DFB, std::enable_if_t<is_dataflow_buffer_v<std::remove_cv_t<DFB>>, int> = 0>
 FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
     constexpr uint32_t one_tile = 1;
-    constexpr uint32_t tile_faces = 2;
-    constexpr uint32_t face_size = 16;
 
     dfb.reserve_back(one_tile);
 
 #ifdef ARCH_QUASAR
     // The NoC replication below orders its seed stores with ckernel::load_blocking, which Quasar does
-    // not provide, and it reads this node's own SRAM through the NoC, which the Quasar emulator does not
-    // handle reliably. Store all 1024 entries with the RISC instead, under a write lock so that the
-    // stores are ordered before the push.
+    // not provide. Store all 1024 entries with the RISC instead, under a write lock so that the stores
+    // are ordered before the push.
     {
-        const uint32_t w = wt << 5;  // wt * 32
         auto lock = dfb.scoped_write_lock(one_tile);
-        auto ptr = lock.template get_ptr<volatile T>();
-        uint32_t count = 0;
-        for (uint32_t i = 0; i < tile_faces; ++i) {
-            for (uint32_t j = 0; j < tile_faces; ++j) {
-                for (uint32_t k = 0; k < face_size; ++k) {
-                    for (uint32_t l = 0; l < face_size; ++l) {
-                        ptr[count] = l + face_size * j + w;
-                        count++;
-                    }
-                }
-            }
-        }
+        detail::store_index_tile(lock.template get_ptr<volatile T>(), wt);
     }
     dfb.push_back(one_tile);
 #else
+    constexpr uint32_t tile_faces = 2;
+    constexpr uint32_t face_size = 16;
     const uint32_t tile_addr = dfb.get_write_ptr();
     const uint32_t w = wt << 5;  // wt * 32
 
@@ -151,18 +160,7 @@ FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
         return;
     }
 
-    volatile tt_l1_ptr T* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(tile_addr);
-    uint32_t count = 0;
-    for (uint32_t i = 0; i < tile_faces; ++i) {
-        for (uint32_t j = 0; j < tile_faces; ++j) {
-            for (uint32_t k = 0; k < face_size; ++k) {
-                for (uint32_t l = 0; l < face_size; ++l) {
-                    ptr[count] = l + face_size * j + w;
-                    count++;
-                }
-            }
-        }
-    }
+    detail::store_index_tile(reinterpret_cast<volatile tt_l1_ptr T*>(tile_addr), wt);
     dfb.push_back(one_tile);
 #endif
 }

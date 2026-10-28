@@ -395,7 +395,7 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             can_run = ttnn::prim::verify_single_core_cost(input_tensor, args.k, uint16_output);
         }
     } else {
-        // Dimension too small for multi-core, check single-core feasibility
+        // Multi-core is not used (architecture or dimension), check single-core feasibility
         can_run = ttnn::prim::verify_single_core_cost(input_tensor, args.k, uint16_output);
     }
 
