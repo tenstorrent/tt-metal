@@ -136,7 +136,7 @@ inline __attribute__((always_inline)) void bmm_large_block_zm_fused_bias_activat
         bool reload = false;
         for (std::uint32_t block = 0; block < C.k_blocks; ++block)
         {
-            const bool last_out = block == C.k_blocks - 1;
+            const bool last_k_block = block == C.k_blocks - 1;
 
             const auto x   = wait_front<In0, C.rt_dim, C.kb_dim>();
             const auto w   = wait_front<In1, C.kb_dim, C.ct_dim>();
@@ -150,7 +150,7 @@ inline __attribute__((always_inline)) void bmm_large_block_zm_fused_bias_activat
             matmul(x, w, acc); // acc += x * w
             dest_commit(acc);
 
-            if (last_out)
+            if (last_k_block)
             {
                 const auto out = reserve_back<MmOut, C.rt_dim, C.ct_dim>();
                 if constexpr (!C.fuse_bias)
@@ -170,14 +170,17 @@ inline __attribute__((always_inline)) void bmm_large_block_zm_fused_bias_activat
 
             if constexpr (C.l1_acc)
             {
+                const std::uint32_t next_block = block + 1;
+                const bool next_to_last        = next_block == C.k_blocks - 1; // the next block is the last
+                const bool before_next_to_last = next_block < C.k_blocks - 1;  // the next block is not the last either
                 // Pop the partials so the next block reserves the same pages and accumulates into them. Without
                 // FUSE_BIAS the one before last keeps them for the last block's reload.
-                const bool pop = C.fuse_bias ? block + 1 < C.k_blocks : block + 2 < C.k_blocks;
+                const bool pop = C.fuse_bias ? !last_k_block : before_next_to_last;
                 if (pop)
                 {
                     release(wait_front<Partials, C.rt_dim, C.ct_dim>());
                 }
-                reload = !C.fuse_bias && block + 2 == C.k_blocks;
+                reload = !C.fuse_bias && next_to_last;
             }
             else
             {
@@ -190,7 +193,7 @@ inline __attribute__((always_inline)) void bmm_large_block_zm_fused_bias_activat
         if constexpr (C.fuse_bias)
         {
             // The bias is pushed once and never popped (1.0, num_blocks_w_dim == 1): waiting again returns the same pages.
-            const auto bias    = wait_front<Bias, 1, C.ct_dim>();
+            const auto bias    = wait_front<Bias, 1 /* one tile row: the bias */, C.ct_dim>();
             const auto partial = wait_front<Partials, C.rt_dim, C.ct_dim>();
             const auto acc     = dest_acquire<acc_spec>();
             add<add_modifiers {.bcast = Broadcast::Row}>(partial, bias, acc); // acc = partial + bias's row 0

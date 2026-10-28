@@ -29,8 +29,9 @@
 //                                   and executes only when this build is for thread On (the unpack thread)
 //
 // Unpack to Dest. A stream whose Plan says Where::Dest goes through unpacker 0 to Dest instead of SrcA (32-bit
-// formats with a 32-bit Dest; see unpack_tile_to_dest and dest_write_begin below). Its tiles land one after another from a Dest row the math
-// thread names, so unpack and math hand off around the whole call (dest_write_begin / dest_write_end):
+// formats with a 32-bit Dest; see unpack_tile_to_dest and dest_write_begin below). Its tiles land one after another
+// from a Dest row the math thread names, so unpack and math hand off around the whole call (dest_write_begin /
+// dest_write_end):
 //   math    waits until its earlier Dest writes are done, then sends the absolute Dest row through the mailbox
 //   unpack  takes the row, points both contexts at it, unpacks every tile (each UNPACR moves its Dest address on by
 //           one tile through the channel 1 Z counter), then posts semaphore UNPACK_TO_DEST once the unpacker is idle
@@ -38,8 +39,8 @@
 // No Src bank changes hands on the way to Dest: those UNPACRs keep the bank (no data valid).
 //
 // Transpose. A stream with `transpose` set is transposed inside each 16x16 face by unpacker 0 (Haloize_mode). The
-// face order is the consumer's to fix (matmul's address modifiers, copy's MOVA2Ds). Unpacker 0 cannot transpose on
-// the way to Dest.
+// face order is the consumer's to fix (copy's MOVA2Ds; matmul transpose is not ported). Unpacker 0 cannot transpose
+// on the way to Dest.
 //
 // Two config contexts: each unpacker keeps its L1 base address in a config register per context. The unpack thread
 // writes the next run's addresses into one context while the unpackers still work from the other, and flips
@@ -49,9 +50,11 @@
 // configure assumes nothing about what ran before; removing writes an earlier op already made is left to the
 // compiler (config folding). There is no init, uninit or reconfig.
 //
-// Not HAL yet: the format helpers (masked_data_format, datum_size_in_bytes, canonical_unpA_y_stride, from
-// cunpack_common.h), the software state ckernel keeps (unp_cfg_context), and the thread mailboxes (mailbox_read,
-// ckernel.h) the unpack-to-Dest handoff reads the Dest row from.
+// Not HAL yet: the format helpers (masked_data_format through reg_fmt, llk_lib/formats.h; datum_size_in_bytes and
+// canonical_unpA_y_stride, from cunpack_common.h), the software state ckernel keeps (unp_cfg_context), the thread
+// mailboxes (mailbox_read, ckernel.h) the unpack-to-Dest handoff reads the Dest row from, L1_ADDRESS and
+// is_valid_L1_address (llk_memory_checks.h) with LLK_ASSERT, and the GPR indices p_gpr_unpack::TMP0, TILE_SIZE_A and
+// TILE_SIZE_B (ckernel_gpr_map.h).
 
 #pragma once
 
@@ -66,6 +69,7 @@
 #include "hal/sync.h"
 #include "hal/tensix_counters.h"
 #include "hal/unpack.h"
+#include "llk_lib/formats.h"
 #include "llk_lib/semaphores.h"
 #include "llk_lib/thread.h"
 #include "llk_memory_checks.h"
@@ -86,13 +90,18 @@ using hal::sync::StallTarget;
 
 // ---- constants -----------------------------------------------------------------------------------------------------
 
-inline constexpr std::uint32_t max_contexts_in_flight = 2;            ///< two config contexts
-inline constexpr std::uint32_t mop_zmask_context1     = 0xff;         ///< MOP zmask that selects the shadow (context 1) op on every iteration
-inline constexpr std::uint32_t gpr_half_mask          = 0xffff;       ///< scalar::set_low writes the low 16 bits of a GPR
-inline constexpr std::uint32_t unpacker_throttle_mode = 2;            ///< Throttle_mode 2: the 512-bit L1 read interface, as configure_unpack_AB
-inline constexpr std::uint32_t src_write_base         = 4 * 16;       ///< Src row the unpackers start writing at, both contexts; the value configure_unpack_AB uses
-inline constexpr std::uint32_t replay_ops_per_stream  = 6;            ///< UNPACR, RDCFG, ADDDMAREG, STALLWAIT, WRCFG, NOP (record_streamed_tile)
-inline constexpr std::uint32_t dest_row_bytes_32bit   = dest_row_datums * sizeof(std::uint32_t); ///< one Dest row of 32-bit datums
+inline constexpr std::uint32_t max_contexts_in_flight = 2;      ///< two config contexts
+inline constexpr std::uint32_t mop_zmask_context0     = 0;      ///< MOP zmask that selects the plain (context 0) op on every iteration
+inline constexpr std::uint32_t mop_zmask_context1     = 0xff;   ///< MOP zmask that selects the shadow (context 1) op on every iteration
+inline constexpr std::uint32_t gpr_half_mask          = 0xffff; ///< scalar::set_low writes the low 16 bits of a GPR
+inline constexpr std::uint32_t unpacker_throttle_mode = 2;      ///< Throttle_mode 2: the 512-bit L1 read interface, as configure_unpack_AB
+/// Rows UNPACR skips: it takes its output row from the output address, then subtracts 4 before writing Src or Dest
+/// (tt-isa-documentation, WormholeB0/TensixTile/TensixCoprocessor/UNPACR_Regular.md, functional model, "Row -= 4").
+inline constexpr std::uint32_t unpacr_skipped_rows = 4;
+/// The output address (in datums) that lands on row 0 of Src or Dest, both contexts; the value configure_unpack_AB uses.
+inline constexpr std::uint32_t src_write_base        = unpacr_skipped_rows * dest_row_datums;
+inline constexpr std::uint32_t replay_ops_per_stream = 6; ///< UNPACR, RDCFG, ADDDMAREG, STALLWAIT, WRCFG, NOP (record_streamed_tile)
+inline constexpr std::uint32_t dest_row_bytes_32bit  = dest_row_datums * sizeof(std::uint32_t); ///< one Dest row of 32-bit datums
 
 // ---- parameters ----------------------------------------------------------------------------------------------------
 
@@ -104,7 +113,7 @@ struct unpack_stream
     DataFormat reg_format;    ///< format written to the register (OutDataFormat)
     std::uint32_t face_r_dim; ///< rows per face
     std::uint32_t num_faces;  ///< faces per tile
-    std::uint32_t tile_size;  ///< one tile in L1
+    std::uint32_t tile_words; ///< one tile in L1, in L1 words
     Layout layout;            ///< how the operand sits in L1
     Broadcast broadcast;      ///< how a smaller operand is spread over the tile
     bool transpose;           ///< transpose inside each face on the way in (unpacker 0 to SrcA only)
@@ -119,9 +128,10 @@ struct unpack_params
 {
     unpack_stream src_a; ///< unpacker 0 -> SrcA
     unpack_stream src_b; ///< unpacker 1 -> SrcB
-    UnpackWalk walk;
+    UnpackWalk walk;     ///< the loop nest over the two streams (resolver/plan.h)
 };
 
+/// One operand's UnpackPlan as an unpacker stream: address steps from tiles to L1 words.
 constexpr unpack_stream stream_from(const UnpackPlan& u)
 {
     return {
@@ -156,26 +166,25 @@ constexpr unpack_params unpack_params_from(const Plan& p)
     return {stream_from(a), stream_from(b), p.walk};
 }
 
-constexpr std::uint32_t fmt(DataFormat f)
-{
-    return static_cast<std::uint32_t>(f);
-}
-
+/// SrcA's operand is the held one (unpacked once per run).
 constexpr bool held_is_a(const unpack_params& p)
 {
     return p.walk.held == Where::SrcA;
 }
 
+/// SrcB's operand is the held one (unpacked once per run).
 constexpr bool held_is_b(const unpack_params& p)
 {
     return p.walk.held == Where::SrcB;
 }
 
+/// Unpacker 0 is in use and streams (its operand is unpacked every MOP iteration).
 constexpr bool streams_a(const unpack_params& p)
 {
     return p.src_a.active && !held_is_a(p);
 }
 
+/// Unpacker 1 is in use and streams (its operand is unpacked every MOP iteration).
 constexpr bool streams_b(const unpack_params& p)
 {
     return p.src_b.active && !held_is_b(p);
@@ -194,17 +203,17 @@ constexpr std::uint32_t unpacked_faces(const unpack_stream& s)
     return s.broadcast == Broadcast::Row ? faces_per_face_row : s.num_faces;
 }
 
-/// The last datum index of a tile along X, for the unpacker's X counter: every face read, every row, FACE_C_DIM
+/// The last datum index of a tile along X, for the unpacker's X counter: every face read, every row, face_cols
 /// datums per row. 0 for an unused unpacker.
 constexpr std::uint32_t x_end(const unpack_stream& s)
 {
-    return s.active ? unpacked_faces(s) * s.face_r_dim * ckernel::FACE_C_DIM - 1 : 0;
+    return s.active ? unpacked_faces(s) * s.face_r_dim * face_cols - 1 : 0;
 }
 
 /// Bytes one face takes in Src: how far the unpacker's Src (ch1) address moves per Z step.
 constexpr std::uint32_t src_face_stride(const unpack_stream& s)
 {
-    return ckernel::FACE_C_DIM * ckernel::FACE_R_DIM * ckernel::datum_size_in_bytes(ckernel::masked_data_format(fmt(s.reg_format)));
+    return face_cols * max_face_rows * ckernel::datum_size_in_bytes(reg_fmt(s.reg_format));
 }
 
 /// Bytes one tile takes in a 32-bit Dest: how far a Dest stream's output (ch1) address moves per Z step, so the
@@ -221,7 +230,7 @@ constexpr std::uint32_t output_z_stride(const unpack_stream& s)
 }
 
 /// The unpacker's output address for Dest row `row`. The unpacker counts its output in datums, from the same
-/// src_write_base offset it uses for Src (ISA: UNPACR, "Row -= 4"), so a row is dest_row_datums further on.
+/// src_write_base offset it uses for Src (unpacr_skipped_rows), so a row is dest_row_datums further on.
 constexpr std::uint32_t dest_write_address(std::uint32_t row)
 {
     return src_write_base + row * dest_row_datums;
@@ -250,37 +259,36 @@ inline __attribute__((always_inline)) void set_unpack_context(std::uint32_t cont
 template <cfg::Sec S, unpack_stream St, std::uint32_t XDim>
 inline __attribute__((always_inline)) void configure_unpacker()
 {
-    using ckernel::masked_data_format;
     static_assert(St.layout == Layout::Tilized, "row-major (tilize) streams are not ported yet");
     static_assert(!St.to_dest || S == cfg::Sec::S0, "only unpacker 0 writes Dest");
     static_assert(!(St.to_dest && St.transpose), "the unpacker cannot transpose on the way to Dest (ISA: undefined)");
     static_assert(!St.to_dest || datum_bits(St.reg_format) == 32, "only 32-bit formats are unpacked to Dest (dest_tile_stride assumes them)");
     constexpr auto& td = cfg::Thcon[cfg::Reg0].TileDescriptor;
     cfg::write<cfg::Access::MMIO>(
-        cfg::set<td.InDataFormat, S, masked_data_format(fmt(St.l1_format))>(),
-        cfg::set<td.Uncompressed, S, 1>(),    // tiles in L1 are not zero-compressed
-        cfg::set<td.BlobsPerXyPlane, S, 0>(), // no blobs: compression is off
-        cfg::set<td.XDim, S, XDim>(),         // datums per face; unpacker 0 takes it per context instead (Tile_x_dim)
-        cfg::set<td.YDim, S, 1>(),            // one face row of XDim datums per Y
+        cfg::set<td.InDataFormat, S, reg_fmt(St.l1_format)>(),
+        cfg::set<td.Uncompressed, S, 1>(),     // tiles in L1 are not zero-compressed
+        cfg::set<td.BlobsPerXyPlane, S, 0>(),  // no blobs: compression is off
+        cfg::set<td.XDim, S, XDim>(),          // datums per face; unpacker 0 takes it per context instead (Tile_x_dim)
+        cfg::set<td.YDim, S, 1>(),             // one face row of XDim datums per Y
         cfg::set<td.ZDim, S, St.num_faces>()); // faces per tile
 
     using r2 = cfg::ThconReg2Fields;
     cfg::write<cfg::Access::MMIO>(
-        cfg::set<r2::Out_data_format, S, masked_data_format(fmt(St.reg_format))>(),
+        cfg::set<r2::Out_data_format, S, reg_fmt(St.reg_format)>(),
         cfg::set<r2::Throttle_mode, S, unpacker_throttle_mode>(),
-        cfg::set<r2::Context_count, S, 0>(),          // contexts are selected explicitly (set_unpack_context), not auto-incremented
+        cfg::set<r2::Context_count, S, 0>(), // contexts are selected explicitly (set_unpack_context), not auto-incremented
         cfg::set<r2::Haloize_mode, S, St.transpose ? 1u : 0u>(),
-        cfg::set<r2::Tileize_mode, S, 0>(),           // tilized input: no row-major tile making
-        cfg::set<r2::Unpack_Src_Reg_Set_Upd, S, 0>(),
-        cfg::set<r2::Unpack_If_Sel, S, 0>(),          // write Src, not Dest
-        cfg::set<r2::Upsample_rate, S, 0>(),          // no upsampling
-        cfg::set<r2::Ovrd_data_format, S, 0>(),       // formats from the descriptor and Out_data_format, not per context
-        cfg::set<r2::Upsample_and_interleave, S, 0>(),
-        cfg::set<r2::Shift_amount_cntx0, S, 0>(),     // no left shift into Src, any context
+        cfg::set<r2::Tileize_mode, S, 0>(),            // tilized input: no row-major tile making
+        cfg::set<r2::Unpack_Src_Reg_Set_Upd, S, 0>(),  // an UNPACR that keeps the bank does not move the Src row on
+        cfg::set<r2::Unpack_If_Sel, S, 0>(),           // unused: Unpack_if_sel_cntx* select Src or Dest per context
+        cfg::set<r2::Upsample_rate, S, 0>(),           // no upsampling
+        cfg::set<r2::Ovrd_data_format, S, 0>(),        // formats from the descriptor and Out_data_format, not per context
+        cfg::set<r2::Upsample_and_interleave, S, 0>(), // no upsampling, so nothing to interleave
+        cfg::set<r2::Shift_amount_cntx0, S, 0>(),      // no left shift into Src, any context (cntx0..3)
         cfg::set<r2::Shift_amount_cntx1, S, 0>(),
         cfg::set<r2::Shift_amount_cntx2, S, 0>(),
         cfg::set<r2::Shift_amount_cntx3, S, 0>(),
-        cfg::set<r2::Disable_zero_compress_cntx0, S, 1>(), // zero compression off in every context
+        cfg::set<r2::Disable_zero_compress_cntx0, S, 1>(), // zero compression off in every context (cntx0..7)
         cfg::set<r2::Disable_zero_compress_cntx1, S, 1>(),
         cfg::set<r2::Disable_zero_compress_cntx2, S, 1>(),
         cfg::set<r2::Disable_zero_compress_cntx3, S, 1>(),
@@ -288,7 +296,7 @@ inline __attribute__((always_inline)) void configure_unpacker()
         cfg::set<r2::Disable_zero_compress_cntx5, S, 1>(),
         cfg::set<r2::Disable_zero_compress_cntx6, S, 1>(),
         cfg::set<r2::Disable_zero_compress_cntx7, S, 1>(),
-        cfg::set<r2::Unpack_if_sel_cntx0, S, St.to_dest ? 1u : 0u>(), // write Dest (1) or Src (0), per context
+        cfg::set<r2::Unpack_if_sel_cntx0, S, St.to_dest ? 1u : 0u>(), // write Dest (1) or Src (0), contexts 0 and 1
         cfg::set<r2::Unpack_if_sel_cntx1, S, St.to_dest ? 1u : 0u>(),
         cfg::set<r2::Force_shared_exp, S, 0>()); // exponents come from L1, not a fixed shared one
 }
@@ -301,8 +309,7 @@ inline __attribute__((always_inline)) void unpack_tile_to_dest()
 {
     static_assert(E == hal::unpack::Engine::Unpacker0, "only unpacker 0 writes Dest");
     constexpr std::uint8_t next_dest_tile = 1; // channel 1 Z += 1: one Dest tile further on
-    hal::unpack::run<hal::unpack::DataTransfer {
-        .engine = E, .increments = {.channel1 = {.z = next_dest_tile}}, .handoff = hal::unpack::SourceHandoff::Keep}>();
+    hal::unpack::run<hal::unpack::DataTransfer {.engine = E, .increments = {.channel1 = {.z = next_dest_tile}}, .handoff = hal::unpack::SourceHandoff::Keep}>();
 }
 
 /// Unpacks one tile of a stream. Broadcast and face-by-face variants add their UNPACR sequences here.
@@ -362,7 +369,6 @@ inline __attribute__((always_inline)) void record_context_body()
 template <unpack_params P>
 inline __attribute__((always_inline)) void unpack_configure()
 {
-    using namespace ckernel;
     using namespace hal::counters::adc;
     using ckernel::p_gpr_unpack;
     static_assert(!P.src_a.active || (P.src_a.num_faces == faces_per_full_tile && P.src_a.face_r_dim == max_face_rows), "32x32 tiles only, for now");
@@ -387,7 +393,8 @@ inline __attribute__((always_inline)) void unpack_configure()
     cfg::write<cfg::Access::MMIO>(
         cfg::set<cfg::Unpacker[1].AddrCtrl[UnpackerReg::Reg1].Zstride, cfg::Sec::S0, src_face_stride(P.src_b)>(),
         cfg::set<cfg::Unpacker[1].AddrCtrl[UnpackerReg::Reg1].Wstride, cfg::Sec::S0, 0>());
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::Unpacker[0].AddrCtrl[UnpackerReg::Reg1].Ystride, cfg::Sec::S0, ckernel::unpacker::canonical_unpA_y_stride(masked_data_format(fmt(P.src_a.reg_format)))>();
+    constexpr std::uint32_t src_a_y_stride = ckernel::unpacker::canonical_unpA_y_stride(reg_fmt(P.src_a.reg_format));
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Unpacker[0].AddrCtrl[UnpackerReg::Reg1].Ystride, cfg::Sec::S0, src_a_y_stride>();
 
     // ALU: unsigned Src for UINT8, no stochastic rounding; FP8 E4M3 per unpacker. The word is shared with other
     // threads, so the read-modify-write runs under the RMW mutex.
@@ -403,8 +410,8 @@ inline __attribute__((always_inline)) void unpack_configure()
     hal::sync::mutex::release<hal::sync::Mutex::M0>();
 
     // Descriptors and configs. Unpacker 0 takes its X dim from the per-context Tile_x_dim below, so 0 here.
-    constexpr std::uint32_t src_a_face_datums = P.src_a.face_r_dim * FACE_C_DIM;
-    constexpr std::uint32_t src_b_face_datums = P.src_b.face_r_dim * FACE_C_DIM;
+    constexpr std::uint32_t src_a_face_datums = P.src_a.face_r_dim * face_cols;
+    constexpr std::uint32_t src_b_face_datums = P.src_b.face_r_dim * face_cols;
     configure_unpacker<cfg::Sec::S0, P.src_a, 0>();
     configure_unpacker<cfg::Sec::S1, P.src_b, src_b_face_datums>();
 
@@ -434,7 +441,7 @@ inline __attribute__((always_inline)) void unpack_configure()
 
     // The MOP body, once per context: replay slots [0, n) for context 0 and [n, 2n) for context 1.
     constexpr std::uint32_t n = replay_ops_per_context(P);
-    constexpr hal::replay::BufferRange context0 {0, n}, context1 {n, n}, both {0, 2 * n};
+    constexpr hal::replay::BufferRange context0 {0, n}, context1 {n, n}, both {0, max_contexts_in_flight * n};
     hal::replay::record<both>(
         []
         {
@@ -486,7 +493,8 @@ inline __attribute__((always_inline)) void unpack_execute(std::uint32_t src_a_ad
     {
         const std::uint32_t src_a_base = src_a_step_base + run * P.src_a.run_step;
         const std::uint32_t src_b_base = src_b_step_base + run * P.src_b.run_step;
-        LLK_ASSERT((!P.src_a.active || is_valid_L1_address(src_a_base)) && (!P.src_b.active || is_valid_L1_address(src_b_base)), "unpack address is outside L1");
+        LLK_ASSERT(
+            (!P.src_a.active || is_valid_L1_address(src_a_base)) && (!P.src_b.active || is_valid_L1_address(src_b_base)), "unpack address is outside L1");
 
         // Take a free context and point the unpackers at this run's tiles. The STALLWAIT keeps the unpackers from
         // starting before the RISC-V's config writes have landed.
@@ -505,7 +513,7 @@ inline __attribute__((always_inline)) void unpack_execute(std::uint32_t src_a_ad
         {
             unpack_tile<hal::unpack::Engine::Unpacker1, P.src_b>();
         }
-        hal::mop::Runner<hal::mop::MopTemplate::Template0>::run(P.walk.tiles_per_run, unp_cfg_context == 0 ? 0 : mop_zmask_context1);
+        hal::mop::Runner<hal::mop::MopTemplate::Template0>::run(P.walk.tiles_per_run, unp_cfg_context == 0 ? mop_zmask_context0 : mop_zmask_context1);
 
         // The Tensix-side SEMGET runs after the unpacks above, so the context is freed only once they finish.
         hal::sync::semaphore::get<unpack_sync>();

@@ -20,7 +20,7 @@
 #pragma once
 
 #include "compute_api/modifiers.h"
-#include "resolver/matmul.h" // src_register_format, is_integer_format
+#include "resolver/formats.h" // src_register_format, is_integer_format, has_5bit_exponent
 #include "resolver/resolver.h"
 
 namespace llk2
@@ -34,13 +34,6 @@ constexpr bool copy_unpacks_to_dest(DataFormat l1, const copy_modifiers& m, cons
     return is_32bit_format(l1) && s.dest_fp32 && !m.transpose;
 }
 
-/// Formats with a 5-bit exponent (A formats): in a 16-bit Dest they stay FP16, the rest become BF16.
-constexpr bool is_exponent_a(DataFormat f)
-{
-    return f == DataFormat::Float16 || f == DataFormat::Bfp8 || f == DataFormat::Bfp4 || f == DataFormat::Bfp2 || f == DataFormat::Lf8 ||
-           f == DataFormat::Fp8_e4m3;
-}
-
 /// The Dest format a copy of l1 produces.
 constexpr DataFormat copy_dest_format(DataFormat l1, const copy_modifiers& m, const KernelSettings& s)
 {
@@ -52,9 +45,10 @@ constexpr DataFormat copy_dest_format(DataFormat l1, const copy_modifiers& m, co
     {
         return DataFormat::Float32; // MOVA2D widens BF16 / TF32 to FP32 when Dest is 32-bit
     }
-    return is_exponent_a(l1) ? DataFormat::Float16 : DataFormat::Float16_b;
+    return has_5bit_exponent(l1) ? DataFormat::Float16 : DataFormat::Float16_b;
 }
 
+/// accepts: one 32x32-tiled L1 tensor in a float format the unpacker can write to Src, or straight to Dest.
 constexpr bool copy_accepts(const TensorSpec<tensor_rank>& src, const TensorSpec<tensor_rank>&, const copy_modifiers& m, const KernelSettings& s)
 {
     const bool shape = src.storage == Storage::L1 && tile_rows(src.shape) == copy_tile_dim && tile_cols(src.shape) == copy_tile_dim;
@@ -64,6 +58,7 @@ constexpr bool copy_accepts(const TensorSpec<tensor_rank>& src, const TensorSpec
     return shape && format;
 }
 
+/// options: unpacker 0 to SrcA (math moves the tiles) or straight to Dest; the result is src's shape in Dest.
 constexpr OpConfig copy_options(const TensorSpec<tensor_rank>& src, const TensorSpec<tensor_rank>&, const copy_modifiers& m, const KernelSettings& s)
 {
     const bool to_dest = copy_unpacks_to_dest(src.format, m, s);
@@ -76,13 +71,14 @@ constexpr OpConfig copy_options(const TensorSpec<tensor_rank>& src, const Tensor
     };
 }
 
+/// work: one output tile per src tile; no K.
 constexpr Work copy_work(const TensorSpec<tensor_rank>& src, const TensorSpec<tensor_rank>&, const OpConfig&)
 {
-    return {src.shape.sizes[TileY], src.shape.sizes[TileX], 1, src.shape.sizes[DatumY], faces_per_tile(src.shape)};
+    return {src.shape.sizes[TileY], src.shape.sizes[TileX], no_k_steps, src.shape.sizes[DatumY], faces_per_tile(src.shape)};
 }
 
-// The unpack walk of one copy: one step, one run, every tile of src streamed in L1 order, each one tile further on.
-// Tile i of src lands in tile i of acc.
+/// plan: the unpack walk of one copy: one step, one run, every tile of src streamed in L1 order, each one tile further
+/// on. Tile i of src lands in tile i of acc.
 constexpr Plan copy_plan(const TensorSpec<tensor_rank>& src, const TensorSpec<tensor_rank>&, const copy_modifiers& m, const OpConfig& c, const Work& k)
 {
     constexpr std::uint32_t next_tile = 1; // tiles from src tile i to tile i + 1
@@ -101,8 +97,8 @@ constexpr Plan copy_plan(const TensorSpec<tensor_rank>& src, const TensorSpec<te
         0,         // step_step: one step
     };
     const UnpackPlan unused {}; // to = Where::None: unpacker 1 idles
-    const UnpackWalk walk {1, 1, k.rt_dim * k.ct_dim, Where::None};
-    const MathPlan math {c.unit, c.math_fidelity, is_32bit_format(c.result.format), c.in0.format, m.transpose, 0};
+    const UnpackWalk walk {1 /* steps */, 1 /* runs */, k.rt_dim * k.ct_dim, Where::None};
+    const MathPlan math {c.unit, c.math_fidelity, is_32bit_format(c.result.format), c.in0.format, m.transpose, 0 /* no function */};
     return {Op::Copy, src_plan, unused, walk, math, PackPlan {}, k};
 }
 

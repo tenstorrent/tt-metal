@@ -49,15 +49,16 @@ inline constexpr llk2::DataflowBufferSpec bias_buf     = LLK2_CB("cb_bias");
 inline constexpr llk2::DataflowBufferSpec partials_buf = LLK2_CB("cb_intermed0");
 inline constexpr llk2::DataflowBufferSpec out_buf      = LLK2_CB("cb_out");
 
-constexpr std::uint32_t in0_block_w       = get_compile_time_arg_val(0); // K tiles per block
-constexpr std::uint32_t in0_num_subblocks = get_compile_time_arg_val(1);
-constexpr std::uint32_t in1_num_subblocks = get_compile_time_arg_val(4);
-constexpr std::uint32_t k_blocks          = get_compile_time_arg_val(7); // num_blocks_inner_dim
-constexpr std::uint32_t num_blocks_w_dim  = get_compile_time_arg_val(8);
-constexpr std::uint32_t num_blocks_h_dim  = get_compile_time_arg_val(9);
-constexpr std::uint32_t out_subblock_h    = get_compile_time_arg_val(10);
-constexpr std::uint32_t out_subblock_w    = get_compile_time_arg_val(11);
-constexpr std::uint32_t batch             = get_compile_time_arg_val(13);
+// The 1.0 kernel's positional compile-time args this one reads; the others it ignores.
+constexpr std::uint32_t in0_block_w       = get_compile_time_arg_val(0);  // compile-time arg 0 of the 1.0 kernel: K tiles per block
+constexpr std::uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // compile-time arg 1 of the 1.0 kernel
+constexpr std::uint32_t in1_num_subblocks = get_compile_time_arg_val(4);  // compile-time arg 4 of the 1.0 kernel
+constexpr std::uint32_t k_blocks          = get_compile_time_arg_val(7);  // compile-time arg 7 of the 1.0 kernel: num_blocks_inner_dim
+constexpr std::uint32_t num_blocks_w_dim  = get_compile_time_arg_val(8);  // compile-time arg 8 of the 1.0 kernel
+constexpr std::uint32_t num_blocks_h_dim  = get_compile_time_arg_val(9);  // compile-time arg 9 of the 1.0 kernel
+constexpr std::uint32_t out_subblock_h    = get_compile_time_arg_val(10); // compile-time arg 10 of the 1.0 kernel
+constexpr std::uint32_t out_subblock_w    = get_compile_time_arg_val(11); // compile-time arg 11 of the 1.0 kernel
+constexpr std::uint32_t batch             = get_compile_time_arg_val(13); // compile-time arg 13 of the 1.0 kernel
 
 static_assert(in0_num_subblocks == 1 && in1_num_subblocks == 1, "LLK 2.0: one output subblock per block (out_subblock = the per-core block)");
 static_assert(num_blocks_w_dim == 1, "LLK 2.0: the bias is waited for once and kept, which needs num_blocks_w_dim == 1");
@@ -111,11 +112,9 @@ inline constexpr llk2::bmm_fused_config config {
     .activation_p1 = activation_p1,
 };
 
-constexpr DataFormat dest_format = llk2::kernel_settings.dest_fp32 ? DataFormat::Float32 : DataFormat::Float16_b;
-
 } // namespace
 
 void kernel_main()
 {
-    llk2::bmm_large_block_zm_fused_bias_activation<config, dest_format, in0_buf, in1_buf, bias_buf, partials_buf, out_buf>();
+    llk2::bmm_large_block_zm_fused_bias_activation<config, llk2::kernel_dest_format, in0_buf, in1_buf, bias_buf, partials_buf, out_buf>();
 }

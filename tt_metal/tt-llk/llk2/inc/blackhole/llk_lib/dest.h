@@ -20,7 +20,7 @@
 //                               section free again)
 //   dest_next_section()         every thread: move to the other section
 //
-// The handshake. Semaphore MATH_PACK counts the sections math has finished and the packer has not yet freed. Its
+// The handshake. Semaphore MATH_PACK (math_pack_sync, semaphores.h) counts the sections math has finished and the packer has not yet freed. Its
 // maximum is dest_sections (2): math waits while it is at the maximum, the packer waits while it is 0.
 //
 // How the threads agree on the section. There is no shared section register. Each TRISC keeps its own copy of the
@@ -73,15 +73,18 @@ using hal::sync::SemaphoreCondition;
 using hal::sync::StallCondition;
 using hal::sync::StallTarget;
 
-inline constexpr std::uint32_t dest_sections   = 2;                       ///< SyncHalf: math writes one section while pack reads the other
+inline constexpr std::uint32_t dest_sections     = 2;                       ///< SyncHalf: math writes one section while pack reads the other
 inline constexpr std::uint32_t dest_section_rows = DEST_REGISTER_HALF_SIZE; ///< rows from one section's start to the next, in either Dest mode
 static_assert(dest_sections * dest_section_rows == DEST_REGISTER_FULL_SIZE, "the sections split Dest");
 
-/// Rows a Dest tensor may use in one section: all of it with 16-bit datums, half with 32-bit ones (a 32-bit datum
-/// takes two 16-bit places; get_dest_max_tiles in ckernel.h).
+/// A 32-bit datum takes two 16-bit Dest places (get_dest_max_tiles in ckernel.h).
+inline constexpr std::uint32_t dest_places_per_32bit_datum = 2;
+
+/// Rows a Dest tensor may use in one section: all of it with 16-bit datums, 1 / dest_places_per_32bit_datum of it
+/// with 32-bit ones.
 constexpr std::uint32_t dest_section_capacity_rows(bool dest_fp32)
 {
-    return dest_fp32 ? dest_section_rows / 2 : dest_section_rows;
+    return dest_fp32 ? dest_section_rows / dest_places_per_32bit_datum : dest_section_rows;
 }
 
 /// Parameters of the Dest sync calls. The section is the same for every Dest tensor; the tensor only sets how many
