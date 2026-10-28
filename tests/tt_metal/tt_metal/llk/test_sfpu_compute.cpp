@@ -496,11 +496,23 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_BCAST_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "sfpu_mul_bcast_row_init();"},
       {"SFPU_OP_CHAIN_0", "sfpu_mul_bcast_row(0, 1);"}}},
-    // The compile-time-dispatched form, with the init ADD and the call SUB: one init serves every binop.
+    // The templated sfpu_bcast_init / sfpu_bcast front end.
     {"sfpu_bcast_col_sub",
      {{"SFPU_OP_BINARY_BCAST_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "sfpu_bcast_init<BroadcastType::COL>();"},
       {"SFPU_OP_CHAIN_0", "sfpu_bcast<BroadcastType::COL, EltwiseBinaryType::ELWSUB>(0, 1);"}}},
+    // Chains. One init serves both binops, so a call that ran a stale recording of the previous binop fails.
+    {"sfpu_bcast_col_add_mul",
+     {{"SFPU_OP_BINARY_BCAST_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "sfpu_bcast_col_init();"},
+      {"SFPU_OP_CHAIN_0", "sfpu_add_bcast_col(0, 1); sfpu_mul_bcast_col(0, 1);"}}},
+    // ROW clobbers the LREG6 mask and replay slots that COL uses, so the dim switches re-init (BH/WH need it).
+    {"sfpu_bcast_col_row_col_add",
+     {{"SFPU_OP_BINARY_BCAST_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "sfpu_bcast_col_init();"},
+      {"SFPU_OP_CHAIN_0",
+       "sfpu_add_bcast_col(0, 1); sfpu_bcast_row_init(); sfpu_add_bcast_row(0, 1); sfpu_bcast_col_init(); "
+       "sfpu_add_bcast_col(0, 1);"}}},
 };
 
 // ---- Tile-layout ops (goldens mirror the tt-llk SFPU tests' UnarySFPUGolden) --------------------
@@ -512,23 +524,38 @@ inline size_t tile_order_index(size_t row, size_t col) {
     return face * 256 + (row % 16) * 16 + (col % 16);
 }
 
-// SFPU binary broadcast ops: the binop, and whether the RHS's column 0 (else its row 0) is broadcast.
-bool is_sfpu_bcast_op(const std::string& op_name) {
-    return op_name.starts_with("sfpu_") && op_name.find("_bcast_") != std::string::npos;
-}
+// SFPU binary broadcast ops: the steps each applies in order to the LHS, broadcasting the RHS's
+// column 0 (COL) or row 0 (ROW).
+enum class BcastBinop { ADD, SUB, MUL };
+enum class BcastDim { COL, ROW };
 
-bool is_sfpu_bcast_col_op(const std::string& op_name) {
-    return op_name.ends_with("_col") || op_name.starts_with("sfpu_bcast_col_");
-}
+struct SfpuBcastStep {
+    BcastBinop binop;
+    BcastDim dim;
+};
 
-float sfpu_bcast_binop(const std::string& op_name, float lhs, float rhs) {
-    if (op_name.find("add") != std::string::npos) {
-        return lhs + rhs;
+const std::map<std::string, std::vector<SfpuBcastStep>> sfpu_bcast_op_steps = {
+    {"sfpu_add_bcast_col", {{BcastBinop::ADD, BcastDim::COL}}},
+    {"sfpu_sub_bcast_col", {{BcastBinop::SUB, BcastDim::COL}}},
+    {"sfpu_mul_bcast_col", {{BcastBinop::MUL, BcastDim::COL}}},
+    {"sfpu_add_bcast_row", {{BcastBinop::ADD, BcastDim::ROW}}},
+    {"sfpu_sub_bcast_row", {{BcastBinop::SUB, BcastDim::ROW}}},
+    {"sfpu_mul_bcast_row", {{BcastBinop::MUL, BcastDim::ROW}}},
+    {"sfpu_bcast_col_sub", {{BcastBinop::SUB, BcastDim::COL}}},
+    {"sfpu_bcast_col_add_mul", {{BcastBinop::ADD, BcastDim::COL}, {BcastBinop::MUL, BcastDim::COL}}},
+    {"sfpu_bcast_col_row_col_add",
+     {{BcastBinop::ADD, BcastDim::COL}, {BcastBinop::ADD, BcastDim::ROW}, {BcastBinop::ADD, BcastDim::COL}}},
+};
+
+bool is_sfpu_bcast_op(const std::string& op_name) { return sfpu_bcast_op_steps.contains(op_name); }
+
+float sfpu_bcast_binop(BcastBinop binop, float lhs, float rhs) {
+    switch (binop) {
+        case BcastBinop::ADD: return lhs + rhs;
+        case BcastBinop::SUB: return lhs - rhs;
+        case BcastBinop::MUL: return lhs * rhs;
     }
-    if (op_name.find("sub") != std::string::npos) {
-        return lhs - rhs;
-    }
-    return lhs * rhs;
+    TT_THROW("Unsupported sfpu bcast binop in test");
 }
 
 // reshuffle_rows: byte r of the mask is the row that input row r is added to; 0xFF skips the row, and so does
@@ -2616,16 +2643,21 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
             }
         }
         if (sfpu_util::is_sfpu_bcast_op(test_config.sfpu_op)) {
-            // Tiles are in face order: broadcast the RHS tile's column 0 (col) or row 0 (row).
-            const bool col = sfpu_util::is_sfpu_bcast_col_op(test_config.sfpu_op);
+            // Tiles are in face order: broadcast the RHS tile's column 0 (COL) or row 0 (ROW). Dest is
+            // 32-bit, so the steps chain in fp32 and only the result is rounded.
+            const auto& steps = sfpu_util::sfpu_bcast_op_steps.at(test_config.sfpu_op);
             for (size_t base = 0; base < golden.size(); base += 1024) {
                 for (size_t row = 0; row < 32; ++row) {
                     for (size_t c = 0; c < 32; ++c) {
                         const size_t i = base + sfpu_util::tile_order_index(row, c);
-                        const size_t b =
-                            base + (col ? sfpu_util::tile_order_index(row, 0) : sfpu_util::tile_order_index(0, c));
-                        golden[i] = bfloat16(sfpu_util::sfpu_bcast_binop(
-                            test_config.sfpu_op, static_cast<float>(lhs[i]), static_cast<float>(rhs[b])));
+                        float value = static_cast<float>(lhs[i]);
+                        for (const auto& step : steps) {
+                            const size_t b = base + (step.dim == sfpu_util::BcastDim::COL
+                                                         ? sfpu_util::tile_order_index(row, 0 /*col*/)
+                                                         : sfpu_util::tile_order_index(0 /*row*/, c));
+                            value = sfpu_util::sfpu_bcast_binop(step.binop, value, static_cast<float>(rhs[b]));
+                        }
+                        golden[i] = bfloat16(value);
                     }
                 }
             }
@@ -3936,7 +3968,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "sfpu_add_bcast_row"),
         std::make_tuple(1, "sfpu_sub_bcast_row"),
         std::make_tuple(1, "sfpu_mul_bcast_row"),
-        std::make_tuple(1, "sfpu_bcast_col_sub")),
+        std::make_tuple(1, "sfpu_bcast_col_sub"),
+        std::make_tuple(1, "sfpu_bcast_col_add_mul"),
+        std::make_tuple(1, "sfpu_bcast_col_row_col_add")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });

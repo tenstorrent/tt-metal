@@ -38,7 +38,7 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_(
 template <DstSync DST_SYNC>
 inline __attribute__((always_inline)) void _sfpu_binary_check_(
     std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_out, VectorMode vector_mode) {
-    _sfpu_binary_check_<DST_SYNC, false /* DST_ACCUM */>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    _sfpu_binary_check_<DST_SYNC, false /*DST_ACCUM*/>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
 }
 
 }  // namespace ckernel

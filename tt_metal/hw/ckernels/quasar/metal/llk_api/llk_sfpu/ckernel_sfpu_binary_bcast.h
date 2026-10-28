@@ -11,7 +11,6 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "llk_assert.h"
 #include "llk_defs.h"
 #include "sfpi.h"
 
@@ -286,14 +285,16 @@ inline void _calculate_sfpu_binary_bcast_full_tile_(
 }
 
 // The fused normalisation kernels (sfpu_*normalize_bcast_*) are not ported to Quasar. The Compute API
-// keeps their entry points on every arch, so they reject the call here.
+// keeps their entry points on every arch; a kernel that calls one fails to build.
+[[gnu::error("sfpu_*normalize_bcast_* is not supported on Quasar")]] void
+sfpu_normalize_bcast_is_not_supported_on_quasar();
 
 inline void _calculate_sfpu_normalize_bcast_col_full_tile_(
     [[maybe_unused]] const std::uint32_t dst_index_data,
     [[maybe_unused]] const std::uint32_t dst_index_mean,
     [[maybe_unused]] const std::uint32_t dst_index_out,
     [[maybe_unused]] const std::uint32_t dst_index_inv_std) {
-    LLK_ASSERT(false, "sfpu_normalize_bcast_col is not supported on Quasar");
+    sfpu_normalize_bcast_is_not_supported_on_quasar();
 }
 
 inline void _calculate_sfpu_normalize_bcast_col_two_tiles_(
@@ -302,7 +303,7 @@ inline void _calculate_sfpu_normalize_bcast_col_two_tiles_(
     [[maybe_unused]] const std::uint32_t dst_index_out,
     [[maybe_unused]] const std::uint32_t dst_index_mean,
     [[maybe_unused]] const std::uint32_t dst_index_inv_std) {
-    LLK_ASSERT(false, "sfpu_normalize_bcast_col_two_tiles is not supported on Quasar");
+    sfpu_normalize_bcast_is_not_supported_on_quasar();
 }
 
 inline void _calculate_sfpu_residual_normalize_bcast_col_full_tile_(
@@ -311,7 +312,7 @@ inline void _calculate_sfpu_residual_normalize_bcast_col_full_tile_(
     [[maybe_unused]] const std::uint32_t dst_index_out,
     [[maybe_unused]] const std::uint32_t dst_index_mean,
     [[maybe_unused]] const std::uint32_t dst_index_inv_std) {
-    LLK_ASSERT(false, "sfpu_residual_normalize_bcast_col is not supported on Quasar");
+    sfpu_normalize_bcast_is_not_supported_on_quasar();
 }
 
 inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
@@ -319,7 +320,7 @@ inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
     [[maybe_unused]] const std::uint32_t dst_index_mean,
     [[maybe_unused]] const std::uint32_t dst_index_out,
     [[maybe_unused]] const std::uint32_t dst_index_inv_std) {
-    LLK_ASSERT(false, "sfpu_normalize_bcast_scalar is not supported on Quasar");
+    sfpu_normalize_bcast_is_not_supported_on_quasar();
 }
 
 }  // namespace sfpu
