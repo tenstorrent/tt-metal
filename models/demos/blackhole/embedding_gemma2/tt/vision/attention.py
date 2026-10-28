@@ -19,8 +19,10 @@ Optimized path (E5b, doc/optimized_vision/README.md):
 
 Contract
     input   x [B, 1, S, 768] bf16 TILE DRAM, S a patch bucket (1280 / 2560)
-            mask [B, 1, S, S] additive TILE DRAM (bf16 or bfp4; 0 valid key, -1e9 padding key)
-            cos, sin: rope tables, [B, 1, S, 64] or the head-expanded form (AxialRope.expand)
+            mask [B, 1, S, S] additive TILE DRAM (bf16 or bfp4; 0 valid key, -1e9 padding key), or
+                 PaddingWindows (windowed path, WINDOWED_SEQ_LENS / WINDOWED_MIN_BATCH)
+            cos, sin: rope tables, [B, 1, S, 64] or the head-expanded form (AxialRope.expand);
+                 [1, 1, B*S, 64] with PaddingWindows
     output  [B, 1, S, 768] bf16 TILE, `memory_config` (DRAM when None)
 """
 
@@ -39,12 +41,12 @@ from models.demos.blackhole.embedding_gemma2.tt.vision.linear import vision_line
 from models.demos.blackhole.embedding_gemma2.tt.vision.rope import AxialRope
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight, substate
 
-# (seq_len, batch >= key) -> (q_chunk, k_chunk, grid). E5b `sdpa_sweep.py` (12 x 64 heads, bfp4 key
-# padding mask, HiFi2 + fp32 acc): S 2560 b1 0.98 ms (E2 config 2.01), b4 3.66 ms (E2 12.64);
-# S 1280 b8 2.67 ms (E2 6.24). q256 with k512 does not fit L1.
+# (seq_len, batch >= key) -> (q_chunk, k_chunk, grid). E5b `sdpa_sweep.py` / `sdpa_windowed.py`
+# (12 x 64 heads, HiFi2 + fp32 acc): S 2560 masked b1 0.98 ms (E2 config 2.01), b4 3.66 ms (E2
+# 12.64); S 1280 windowed b8 1.99 ms (E2 masked 6.24), masked b1 0.27 ms.
 _SDPA_TABLE = {
     2560: ((1, (128, 512, (13, 10))),),
-    1280: ((4, (256, 256, (12, 10))), (1, (128, 256, (13, 10)))),
+    1280: ((8, (128, 256, (12, 10))), (1, (128, 256, (12, 10)))),
 }
 
 
@@ -69,6 +71,42 @@ def vision_sdpa_program_config(seq_len: int, batch: int = 1, device_grid=None) -
         k_chunk_size=k_chunk,
         exp_approx_mode=False,
     )
+
+
+# Key padding as SDPA windows instead of a dense mask (E5b `sdpa_windowed.py`): the batch is
+# flattened into one sequence [1, H, B*S, 64] and `cu_window_seqlens` = [0, n_0, S, S + n_1, 2S, ...,
+# B*S] makes every image's valid patches attend only to themselves (block-diagonal attention;
+# the padding rows form their own windows and are never read back). This needs the valid patches
+# to be a prefix of each row (processor output always is). Measured per SDPA call: 8 x 1280
+# 1.99 ms windowed vs 2.63 ms masked; it loses at 1 x 1280 (0.40 vs 0.27 ms) and 4 x 2560
+# (3.77 vs 3.65 ms), so only these shapes use it:
+WINDOWED_SEQ_LENS = (1280,)
+WINDOWED_MIN_BATCH = 8
+
+
+def use_windowed_attention(batch: int, seq_len: int) -> bool:
+    return seq_len in WINDOWED_SEQ_LENS and batch >= WINDOWED_MIN_BATCH
+
+
+def padding_windows(num_valid: list[int], seq_len: int) -> torch.Tensor:
+    """Host: valid-patch counts per row -> cu_window_seqlens [2B + 1] int32 (see WINDOWED_SEQ_LENS).
+
+    Every n_b < seq_len for processor output (the buckets are not multiples of 9), so no window is empty.
+    """
+    cu = []
+    for b, n in enumerate(num_valid):
+        if not 0 < n < seq_len:
+            raise ValueError(f"row {b}: {n} valid patches; windowed attention needs 0 < n < {seq_len}")
+        cu += [b * seq_len, b * seq_len + n]
+    cu.append(len(num_valid) * seq_len)
+    return torch.tensor(cu, dtype=torch.int32)
+
+
+class PaddingWindows:
+    """Attention-mask argument for the windowed path: the device cu_window_seqlens tensor."""
+
+    def __init__(self, cu: ttnn.Tensor):
+        self.cu = cu
 
 
 def sdpa_compute_kernel_config():
@@ -141,9 +179,12 @@ class VisionAttention(LightweightModule):
         cfg = self.config
         B, S = x.shape[0], x.shape[2]
         dev = x.device()
+        windows = mask.cu if isinstance(mask, PaddingWindows) else None
         # the [B, H, S, 64] heads and the [B, 1, S, 768] SDPA output have the bytes of a [B, 1, S, 768] tensor
         mem = vision_act_memory_config(dev, B, S, cfg.width)
         xqkv = vision_linear(x, self.wqkv, memory_config=vision_act_memory_config(dev, B, S, 3 * cfg.width))
+        if windows is not None:  # one [1, H, B*S, 64] sequence; cos/sin are [1, 1, B*S, 64]
+            xqkv = ttnn.reshape(xqkv, (1, 1, B * S, 3 * cfg.width))
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv, num_heads=cfg.num_heads, num_kv_heads=cfg.num_heads, transpose_k_heads=False, memory_config=mem
         )
@@ -166,7 +207,8 @@ class VisionAttention(LightweightModule):
             k_r,
             v_n,
             is_causal=False,
-            attn_mask=mask,
+            attn_mask=None if windows is not None else mask,
+            cu_window_seqlens=windows,
             scale=cfg.scaling,
             program_config=vision_sdpa_program_config(S, B, dev.compute_with_storage_grid_size()),
             compute_kernel_config=self.sdpa_compute_kernel_config,
@@ -176,6 +218,8 @@ class VisionAttention(LightweightModule):
         ttnn.deallocate(q_r)
         ttnn.deallocate(k_r)
         ttnn.deallocate(v_n)
+        if windows is not None:
+            o = ttnn.reshape(o, (B, 1, S, cfg.width))
 
         out = vision_linear(o, self.wo, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(o)

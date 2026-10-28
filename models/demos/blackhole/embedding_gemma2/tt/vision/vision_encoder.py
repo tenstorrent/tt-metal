@@ -11,6 +11,7 @@ Host work lives here and only here. From the processor outputs (`pixel_values` [
     cos, sin      axial RoPE tables of the patch positions                 [B,1,S,64] bf16
     keep          1 for valid patches, 0 for padding                       [B,1,1,S] bf16
     pool          one-hot 3x3 block-membership matrix                      [B,1,S_out,S] bf16
+    windows       SDPA cu_window_seqlens of the valid prefixes (E5b)       [2B+1] uint32
 and the per-image soft-token counts used to strip the padded pooled rows after readback.
 The device forward (`VisionModel.forward`) issues no host ops.
 
@@ -31,6 +32,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.config import default_weight_cache_dir
+from models.demos.blackhole.embedding_gemma2.tt.vision.attention import padding_windows, use_windowed_attention
 from models.demos.blackhole.embedding_gemma2.tt.vision.config import VisionConfig, patch_bucket_for
 from models.demos.blackhole.embedding_gemma2.tt.vision.pooler import pooling_matrix
 from models.demos.blackhole.embedding_gemma2.tt.vision.rope import axial_cos_sin
@@ -107,6 +109,14 @@ class VisionEncoder(LightweightModule):
         cos, sin = axial_cos_sin(pos, cfg.rope_theta, cfg.head_dim)
         keep = valid.float().reshape(B, 1, 1, S)
         pool, n_out = pooling_matrix(position_ids.long(), cfg.pooling_kernel_size, S_out, S)
+        num_valid = valid.sum(-1).tolist()
+        prefix = all(bool(valid[b, :n].all()) for b, n in enumerate(num_valid))
+        if use_windowed_attention(B, S):
+            if not prefix:
+                raise ValueError("windowed attention (batch >= 8, bucket 1280) needs the valid patches to be a prefix")
+            windows = padding_windows(num_valid, S)
+        else:
+            windows = torch.zeros(2 * B + 1, dtype=torch.int32)  # unused by the masked path
 
         def tile(t, dt=ttnn.bfloat16):
             return ttnn.from_torch(t.contiguous(), dtype=dt, layout=ttnn.TILE_LAYOUT)
@@ -122,13 +132,14 @@ class VisionEncoder(LightweightModule):
             sin=tile(sin.reshape(B, 1, S, cfg.head_dim)),
             keep=tile(keep),
             pool=tile(pool),
+            windows=ttnn.from_torch(windows, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
         )
         return VisionHostInputs(
             tensors=tensors,
             batch=B,
             seq_len=S,
             num_patches=N,
-            num_valid=valid.sum(-1).tolist(),
+            num_valid=num_valid,
             num_soft_tokens=n_out,
         )
 

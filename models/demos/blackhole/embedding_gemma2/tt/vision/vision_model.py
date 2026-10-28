@@ -6,6 +6,7 @@
     h      = patch_embedder(pixel_values, pos_x, pos_y)                 [B,1,S,768]
     mask   = zeros[B,1,S,1] + (keep - 1) * 1e9                          [B,1,S,S]   key padding, bfp4
     cos, sin = AxialRope.expand(cos, sin)                               once per forward (B > 1)
+      (8+ video frames, bucket 1280: no mask; SDPA windows from `windows`, attention.PaddingWindows)
     for i in 0..15:  h = layer_i(h, mask, cos, sin)
     pooled = (P @ h) * sqrt(768) / 9                                    [B,1,S_out,768] fp32
     soft   = RMSNorm_noscale(pooled) @ W_embed_vision                   [B,1,S_out,512] bf16
@@ -13,7 +14,8 @@
 Contract (forward)
     `VisionDeviceInputs` built by `VisionEncoder.prepare_inputs` and uploaded (see vision_encoder.py):
         pixel_values [B,1,S,768] fp32 TILE, pos_x/pos_y [B,S] uint32 ROW_MAJOR, cos/sin [B,1,S,64]
-        bf16 TILE, keep [B,1,1,S] bf16 TILE (1 valid patch / 0 padding), pool [B,1,S_out,S] bf16 TILE.
+        bf16 TILE, keep [B,1,1,S] bf16 TILE (1 valid patch / 0 padding), pool [B,1,S_out,S] bf16 TILE,
+        windows [2B+1] uint32 ROW_MAJOR (cu_window_seqlens of the valid-patch prefixes).
     S is a patch bucket (1280 or 2560), S_out = config.pooled_rows(S).
     Returns (soft_tokens [B,1,S_out,512] bf16, pooled [B,1,S_out,768] fp32). Image b's soft tokens
     are rows 0..n_out[b]-1 (n_out = valid patches / 9). forward() issues device ops only, so it can
@@ -30,6 +32,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.config import MASK_NEG
+from models.demos.blackhole.embedding_gemma2.tt.vision.attention import PaddingWindows, use_windowed_attention
 from models.demos.blackhole.embedding_gemma2.tt.vision.config import VisionConfig
 from models.demos.blackhole.embedding_gemma2.tt.vision.embedder import VisionEmbedder
 from models.demos.blackhole.embedding_gemma2.tt.vision.encoder_layer import VisionEncoderLayer
@@ -48,9 +51,10 @@ class VisionDeviceInputs:
     sin: ttnn.Tensor
     keep: ttnn.Tensor
     pool: ttnn.Tensor
+    windows: ttnn.Tensor  # cu_window_seqlens [2B + 1] uint32 ROW_MAJOR (attention.padding_windows)
 
     def tensors(self) -> tuple[ttnn.Tensor, ...]:
-        return (self.pixel_values, self.pos_x, self.pos_y, self.cos, self.sin, self.keep, self.pool)
+        return (self.pixel_values, self.pos_x, self.pos_y, self.cos, self.sin, self.keep, self.pool, self.windows)
 
 
 MASK_DTYPE = ttnn.bfloat4_b
@@ -128,17 +132,23 @@ class VisionModel(LightweightModule):
 
     def forward_hidden(self, x: VisionDeviceInputs) -> ttnn.Tensor:
         """Patch embedding + 16 encoder layers. [B,1,S,768] bf16 (padding rows not meaningful)."""
-        mask = key_padding_mask(x.keep)
-        cos, sin = self.rope.expand(x.cos, x.sin, self.config.num_heads)  # once per forward
+        B, _, S, D = x.cos.shape
+        if use_windowed_attention(B, S):
+            mask = PaddingWindows(x.windows)
+            cos, sin = (ttnn.reshape(t, (1, 1, B * S, D)) for t in (x.cos, x.sin))  # views
+        else:
+            mask = key_padding_mask(x.keep)
+            cos, sin = self.rope.expand(x.cos, x.sin, self.config.num_heads)  # once per forward
         h = self.patch_embedder(x.pixel_values, x.pos_x, x.pos_y)
         for layer in self.layers:
             h_next = layer(h, mask, cos, sin)
             ttnn.deallocate(h)
             h = h_next
-        ttnn.deallocate(mask)
-        if cos is not x.cos:
-            ttnn.deallocate(cos)
-            ttnn.deallocate(sin)
+        if not isinstance(mask, PaddingWindows):
+            ttnn.deallocate(mask)
+            if cos is not x.cos:
+                ttnn.deallocate(cos)
+                ttnn.deallocate(sin)
         return h
 
     def forward(self, x: VisionDeviceInputs) -> tuple[ttnn.Tensor, ttnn.Tensor]:
