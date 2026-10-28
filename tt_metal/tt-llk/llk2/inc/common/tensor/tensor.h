@@ -188,6 +188,12 @@ constexpr std::uint32_t datum_bits(DataFormat f)
     }
 }
 
+/// 32-bit datums: FP32, INT32, UINT32 (the formats a 32-bit Dest holds and the unpacker can write straight to Dest).
+constexpr bool is_32bit_format(DataFormat f)
+{
+    return datum_bits(f) == 32;
+}
+
 constexpr std::uint32_t tile_rows(const TensorShape<6>& s)
 {
     return s.sizes[FaceY] * s.sizes[DatumY];

@@ -14,7 +14,8 @@
 //   dest_acquire<Math, P>()     math: on the first call only, set up MATH_PACK; then wait for a free section
 //   dest_commit<Math, P>()      math: wait for math and the SFPU to finish writing, then post MATH_PACK (one more
 //                               section for the packer)
-//   dest_commit<Pack, P>()      pack: wait while MATH_PACK is 0 (nothing to pack yet)
+//   dest_commit<Pack, P>()      pack: hold every later pack-thread instruction while MATH_PACK is 0 (nothing to
+//                               pack yet)
 //   dest_release<Pack, P>()     pack: wait for the packer to finish, zero the section, then get MATH_PACK (one
 //                               section free again)
 //   dest_next_section()         every thread: move to the other section
@@ -161,9 +162,15 @@ inline __attribute__((always_inline)) void dest_commit()
     }
     if constexpr (On == Thread::Pack && runs_on<On>)
     {
-        // Sync is blocked too, so the packer's later sync instructions (mutexes, the release's SEMGET) cannot pass
-        // this wait (see _llk_packer_wait_for_math_done_).
-        hal::sync::wait::semaphore<StallTarget::Tdma | StallTarget::Sync, SemaphoreCondition::WhileZero, math_pack>();
+        // Every instruction class waits here (block mask All), so any pack-thread work after dest_commit runs only
+        // once math has handed the section over: PACR, ADC and THCON (Tdma), mutexes and the release's SEMGET (Sync,
+        // see _llk_packer_wait_for_math_done_), config writes (Config: RMWCIB, WRCFG, SETC16), SFPU instructions
+        // (Sfpu: activations run from the pack thread) and ZEROACC (Math). The SEMWAIT's block mask names the
+        // instruction classes held at the Wait Gate; a class not named passes it while the wait is latched
+        // (tt-isa-documentation, BlackholeA0/TensixTile/TensixCoprocessor/SEMWAIT.md, block-mask bits in
+        // STALLWAIT.md). RISC-V MMIO writes do not go through the Wait Gate, so pack-thread code after dest_commit
+        // must write config through the Tensix config unit, not MMIO, or wait on MATH_PACK itself.
+        hal::sync::wait::semaphore<StallTarget::All, SemaphoreCondition::WhileZero, math_pack>();
     }
 }
 
