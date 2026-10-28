@@ -69,7 +69,7 @@ struct bmm_fused_config
 
 /// The activation on acc, driven from the pack thread between dest_commit and pack (the 1.0 kernel's
 /// apply_activation_from_pack).
-template <const bmm_fused_config& C, const TensorSpec<6>& D, class R>
+template <const bmm_fused_config& C, const TensorSpec<tensor_rank>& D, class R>
 inline __attribute__((always_inline)) void bmm_fused_activation(const Tensor<D, R>& acc)
 {
     constexpr vec_modifiers mods {.thread = Thread::Pack};
@@ -94,7 +94,7 @@ inline __attribute__((always_inline)) void bmm_fused_activation(const Tensor<D, 
 /// Packs acc into dst, adding into what dst holds when accumulate is set. accumulate is a run-time choice (the K block),
 /// pack_modifiers a compile-time one, so both packs are spelled out; every thread takes the same branch. CanAccumulate
 /// false: accumulate is never set, and only the plain pack is instantiated (dst may be in a format L1 acc rejects).
-template <pack_modifiers Mods, bool CanAccumulate, const TensorSpec<6>& D, class RD, const TensorSpec<6>& O, class RO>
+template <pack_modifiers Mods, bool CanAccumulate, const TensorSpec<tensor_rank>& D, class RD, const TensorSpec<tensor_rank>& O, class RO>
 inline __attribute__((always_inline)) void pack_maybe_accumulate(const Tensor<D, RD>& acc, const Tensor<O, RO>& dst, [[maybe_unused]] bool accumulate)
 {
     if constexpr (!CanAccumulate)
@@ -126,7 +126,7 @@ inline __attribute__((always_inline)) void bmm_large_block_zm_fused_bias_activat
     static_assert(
         Partials.pages * Partials.page_bytes == C.rt_dim * C.ct_dim * buffer_tile_bytes<Partials>,
         "the partials buffer holds exactly one output block: L1 acc relies on reserving the same pages again");
-    static constexpr const TensorSpec<6>& acc_spec = dst_spec<C.rt_dim * default_tile_dim, C.ct_dim * default_tile_dim, DestFormat>;
+    static constexpr const TensorSpec<tensor_rank>& acc_spec = dst_spec<C.rt_dim * default_tile_dim, C.ct_dim * default_tile_dim, DestFormat>;
     // The last K block packs to the output, or with FUSE_BIAS to the partials the bias stage reads (1.0's mm_out_dfb).
     static constexpr const DataflowBufferSpec& MmOut = C.fuse_bias ? Partials : Out;
     constexpr bool relu_on_matmul_out                = C.pack_relu && !C.fuse_bias;

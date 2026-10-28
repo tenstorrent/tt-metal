@@ -66,7 +66,7 @@ inline constexpr std::uint32_t buffer_tile_bytes = tile_bytes(B.format, B.tile_r
 
 /// The spec of TilesY x TilesX of B's tiles, dense in L1.
 template <const DataflowBufferSpec& B, std::uint32_t TilesY, std::uint32_t TilesX>
-inline constexpr TensorSpec<6> buffer_tensor_spec = make_spec<TilesY * B.tile_rows, TilesX * B.tile_cols, B.format, B.tile_rows, B.tile_cols>(Storage::L1);
+inline constexpr TensorSpec<tensor_rank> buffer_tensor_spec = make_spec<TilesY * B.tile_rows, TilesX * B.tile_cols, B.format, B.tile_rows, B.tile_cols>(Storage::L1);
 
 /// Pages of B that TilesY x TilesX tiles take. Checks the tensor fits the buffer without wrapping.
 template <const DataflowBufferSpec& B, std::uint32_t TilesY, std::uint32_t TilesX>

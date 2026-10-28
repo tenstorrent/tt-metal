@@ -55,7 +55,7 @@ constexpr DataFormat copy_dest_format(DataFormat l1, const copy_modifiers& m, co
     return is_exponent_a(l1) ? DataFormat::Float16 : DataFormat::Float16_b;
 }
 
-constexpr bool copy_accepts(const TensorSpec<6>& src, const TensorSpec<6>&, const copy_modifiers& m, const KernelSettings& s)
+constexpr bool copy_accepts(const TensorSpec<tensor_rank>& src, const TensorSpec<tensor_rank>&, const copy_modifiers& m, const KernelSettings& s)
 {
     const bool shape = src.storage == Storage::L1 && tile_rows(src.shape) == copy_tile_dim && tile_cols(src.shape) == copy_tile_dim;
     // Integer data is not ported yet: through SrcA it needs the integer datapath, to Dest only INT32 / UINT32 work.
@@ -64,7 +64,7 @@ constexpr bool copy_accepts(const TensorSpec<6>& src, const TensorSpec<6>&, cons
     return shape && format;
 }
 
-constexpr OpConfig copy_options(const TensorSpec<6>& src, const TensorSpec<6>&, const copy_modifiers& m, const KernelSettings& s)
+constexpr OpConfig copy_options(const TensorSpec<tensor_rank>& src, const TensorSpec<tensor_rank>&, const copy_modifiers& m, const KernelSettings& s)
 {
     const bool to_dest = copy_unpacks_to_dest(src.format, m, s);
     return {
@@ -76,14 +76,14 @@ constexpr OpConfig copy_options(const TensorSpec<6>& src, const TensorSpec<6>&, 
     };
 }
 
-constexpr Work copy_work(const TensorSpec<6>& src, const TensorSpec<6>&, const OpConfig&)
+constexpr Work copy_work(const TensorSpec<tensor_rank>& src, const TensorSpec<tensor_rank>&, const OpConfig&)
 {
     return {src.shape.sizes[TileY], src.shape.sizes[TileX], 1, src.shape.sizes[DatumY], faces_per_tile(src.shape)};
 }
 
 // The unpack walk of one copy: one step, one run, every tile of src streamed in L1 order, each one tile further on.
 // Tile i of src lands in tile i of acc.
-constexpr Plan copy_plan(const TensorSpec<6>& src, const TensorSpec<6>&, const copy_modifiers& m, const OpConfig& c, const Work& k)
+constexpr Plan copy_plan(const TensorSpec<tensor_rank>& src, const TensorSpec<tensor_rank>&, const copy_modifiers& m, const OpConfig& c, const Work& k)
 {
     constexpr std::uint32_t next_tile = 1; // tiles from src tile i to tile i + 1
     const UnpackPlan src_plan {

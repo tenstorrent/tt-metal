@@ -26,7 +26,7 @@
 namespace llk2
 {
 
-template <copy_modifiers Mods = copy_modifiers {}, const TensorSpec<6>& S, class RS, const TensorSpec<6>& D, class RD>
+template <copy_modifiers Mods = copy_modifiers {}, const TensorSpec<tensor_rank>& S, class RS, const TensorSpec<tensor_rank>& D, class RD>
 inline __attribute__((always_inline)) void copy(const Tensor<S, RS>& src, const Tensor<D, RD>& acc)
 {
     static_assert(D.storage == Storage::Dest, "copy writes Dest");

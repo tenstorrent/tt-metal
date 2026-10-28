@@ -70,7 +70,7 @@ struct OpConfig // negotiation's result for one op
     Exu unit;
     Rep in0, in1;
     std::uint32_t math_fidelity;
-    TensorSpec<6> result; // what it produces
+    TensorSpec<tensor_rank> result; // what it produces
 };
 
 struct Work // work allocation's result for one op
