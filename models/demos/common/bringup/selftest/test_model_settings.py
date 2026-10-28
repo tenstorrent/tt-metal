@@ -27,6 +27,23 @@ def test_settings_default_override_and_choices(monkeypatch):
         raise AssertionError("an unknown value was accepted")
 
 
+def test_a_test_value_applies_only_under_pytest_and_the_environment_still_wins(monkeypatch):
+    """F222: DeepSeek-V4.1 ENGRAM_TABLE: the served default builds the engram tables in RAM at start (~1 min a layer);
+    tests read them from disk instead (rows bit-identical). A setting's ``test`` value is what a pytest process gets;
+    a process without pytest gets the default; the environment variable overrides both."""
+    import sys
+
+    S = Settings("XT_", {"TABLE": Setting("resident", ("resident", "random"), "why", test="random"), "N": Setting(8)})
+    monkeypatch.delenv("XT_TABLE", raising=False)
+    assert S.get("TABLE") == "random" and S.get("N") == 8  # this process runs under pytest
+    monkeypatch.delitem(sys.modules, "pytest")
+    assert S.get("TABLE") == "resident"
+    monkeypatch.setenv("XT_TABLE", "resident")
+    import pytest as _  # noqa: F401  (back under pytest)
+
+    assert S.get("TABLE") == "resident"
+
+
 def test_lint_flags_env_reads_outside_settings(tmp_path):
     def put(rel, text):
         p = tmp_path / rel
