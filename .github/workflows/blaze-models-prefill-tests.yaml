@@ -226,6 +226,9 @@ jobs:
             title: "(Kimi-K2.7-1T) disaggregated prefill SC4 vs SC1 scaling"
           - model: glm53
             title: "(GLM-5.3-744B) disaggregated prefill SC4 vs SC1 scaling"
+          # sc1 measures 55k and sc4 1M, so gains are reported only at the probes both measured.
+          - model: glm53_mtp_kv_share
+            title: "(GLM-5.3-744B) MTP KV share prefill SC4 vs SC1 scaling"
           # sc4 alone: K3's sc1 leg runs 24 of 93 layers, so there is no sc1 baseline to scale from.
           - model: kimi_k3
             title: "(Kimi-K3-2.8T) disaggregated prefill SC4 perf"
