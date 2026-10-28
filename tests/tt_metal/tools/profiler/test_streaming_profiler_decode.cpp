@@ -215,7 +215,7 @@ int main() {
     }
     {
         Harness h;
-        h.feed({record(2, profiler::kSpscStallZoneId), 40, 8, event(), 50});
+        h.feed({record(2, TT_STALL_CALL_SITE_ID), 40, 8, event(), 50});
         check(h.stalls == 1, "a stall is a record of the stall id");
     }
     {

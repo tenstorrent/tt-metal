@@ -369,7 +369,7 @@ StreamDecoder::Produced StreamDecoder::decode(
                         if (route.short_length != 0 && !full_form) {
                             lane.cursor = timestamp;
                         }
-                        stalls += id == kSpscStallZoneId ? 1u : 0u;
+                        stalls += id == TT_STALL_CALL_SITE_ID ? 1u : 0u;
                         if (timestamp < lane.last_ts) [[unlikely]] {
                             order_regressions += !repair_last(lane, timestamp);
                         }

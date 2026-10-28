@@ -98,12 +98,14 @@ CallSite make_stall_site() {
 }
 
 struct Registry {
-    Registry() { by_id[TT_ZONE_STALL_ID].store(&sites.emplace_back(make_stall_site()), std::memory_order_release); }
+    Registry() {
+        by_id[TT_STALL_CALL_SITE_ID].store(&sites.emplace_back(make_stall_site()), std::memory_order_release);
+    }
 
     std::mutex mutex;
     uint32_t next_id = 0;
     std::deque<CallSite> sites;  // a record may hold its site's address for the life of the process
-    std::array<std::atomic<const CallSite*>, TT_ZONE_ID_COUNT> by_id{};
+    std::array<std::atomic<const CallSite*>, TT_CALL_SITE_ID_COUNT> by_id{};
     TypeLayouts types;
 };
 
@@ -381,12 +383,12 @@ void load_call_sites(const std::string& elf_path, ll_api::ElfFile& elf) {
     {
         const std::lock_guard lock(registry.mutex);
         TT_FATAL(
-            uint64_t{registry.next_id} + count <= TT_ZONE_STALL_ID,
+            uint64_t{registry.next_id} + count <= TT_STALL_CALL_SITE_ID,
             "streaming profiler: '{}' has {} call sites, and only {} of the process's {} call-site ids remain",
             elf_path,
             count,
-            TT_ZONE_STALL_ID - registry.next_id,
-            TT_ZONE_STALL_ID);
+            TT_STALL_CALL_SITE_ID - registry.next_id,
+            TT_STALL_CALL_SITE_ID);
         base = std::exchange(registry.next_id, registry.next_id + static_cast<uint32_t>(count));
     }
     elf.RebaseCallSiteIds(base);
