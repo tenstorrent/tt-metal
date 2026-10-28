@@ -104,22 +104,182 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     return y;
 }
 
+constexpr std::uint32_t RECIP_SEQ_NEG_MANT = 0x0084;
+constexpr std::uint32_t RECIP_SEQ_SCALE_BF16 = 0x2705;
+constexpr std::uint32_t RECIP_SEQ_SCALE_FP32_A = 0x3705;
+constexpr std::uint32_t RECIP_SEQ_SCALE_FP32_B = 0x3f05;
+constexpr std::uint32_t RECIP_SEQ_SIGN_STORE_LO = 0x00c6;
+constexpr std::uint32_t RECIP_SEQ_SIGN_STORE_HI = 0x4b00;
+// UnitDelayKind = elapsed instructions; set on entry and cleared on exit of each call (see #46751).
+constexpr std::uint32_t RECIP_MACRO_MISC = 0xf40;
+
+inline void reciprocal_bf16_macro_config() {
+    TTI_SFPSETMAN(0, p_sfpu::LCONST_neg1, 12, 0);
+    TTI_SFPNOT(0, 0, 13, 0);
+    TTI_SFPSETSGN(0, p_sfpu::LREG3, 14, 0);
+    TTI_SFPMULI(0x3f00, 15, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, RECIP_SEQ_NEG_MANT);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
+    TTI_SFPCONFIG(0, 4 + 0, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, RECIP_SEQ_SCALE_BF16);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
+    TTI_SFPCONFIG(0, 4 + 1, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, RECIP_SEQ_SIGN_STORE_LO);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, RECIP_SEQ_SIGN_STORE_HI);
+    TTI_SFPCONFIG(0, 4 + 2, 0);
+}
+
+inline void reciprocal_bf16_macro_head() {
+    TTI_SFPLOADMACRO((0 << 2) | 0, 0, ADDR_MOD_3, 0);
+    TTI_SFPLOADMACRO((0 << 2) | 0, 0, ADDR_MOD_3, 2 | 1);
+    TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, 0);
+    TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG4, p_sfpu::LREG13, p_sfpu::LREG6, 0);
+    TTI_SFPLOADMACRO((1 << 2) | 1, 0, ADDR_MOD_3, 0);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG2, 0);
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG4, p_sfpu::LREG14, p_sfpu::LREG6, 0);
+    TTI_SFPSETMAN(0, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG0, 0);
+    TTI_SFPLOADMACRO((1 << 2) | 1, 0, ADDR_MOD_3, 2 | 1);
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG4, 0);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG2, 0);
+    TTI_SFPSETMAN(0, p_sfpu::LREG5, p_sfpu::LREG5, 1);
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG4, p_sfpu::LREG6, p_sfpu::LREG6, 0);
+    TTI_SFP_STOCH_RND(
+        sfpi::SFPSTOCHRND_RND_EVEN,
+        0,
+        p_sfpu::LREG0,
+        p_sfpu::LREG2,
+        p_sfpu::LREG2,
+        sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFP_STOCH_RND(
+        sfpi::SFPSTOCHRND_RND_EVEN,
+        0,
+        p_sfpu::LREG0,
+        p_sfpu::LREG6,
+        p_sfpu::LREG6,
+        sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+}
+
+inline void reciprocal_bf16_macro_tail() {
+    TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+    TTI_SFPLOADMACRO((2 << 2) | 1, 0, ADDR_MOD_3, 0);
+    TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+    TTI_SFPLOADMACRO((2 << 2) | 1, 0, ADDR_MOD_2, 2 | 1);
+}
+
+inline void reciprocal_fp32_macro2_config() {
+    TTI_SFPSETMAN(0, p_sfpu::LCONST_neg1, 12, 0);
+    TTI_SFPNOT(0, 0, 13, 0);
+    TTI_SFPSETSGN(0, p_sfpu::LREG3, 14, 0);
+    TTI_SFPMULI(0x3f00, 15, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, RECIP_SEQ_NEG_MANT);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
+    TTI_SFPCONFIG(0, 4 + 0, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, RECIP_SEQ_SCALE_FP32_A);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
+    TTI_SFPCONFIG(0, 4 + 1, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, RECIP_SEQ_SIGN_STORE_LO);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, RECIP_SEQ_SIGN_STORE_HI);
+    TTI_SFPCONFIG(0, 4 + 2, 0);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, RECIP_SEQ_SCALE_FP32_B);
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
+    TTI_SFPCONFIG(0, 4 + 3, 0);
+}
+
+inline void reciprocal_fp32_macro2_head() {
+    TTI_SFPLOADMACRO((0 << 2) | 0, 0, ADDR_MOD_3, 2 | 1);
+    TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, 0);
+    TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG4, p_sfpu::LREG13, p_sfpu::LREG6, 0);
+    TTI_SFPLOADMACRO((1 << 2) | 1, 0, ADDR_MOD_3, 0);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG2, 0);
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG4, p_sfpu::LREG14, p_sfpu::LREG6, 0);
+    TTI_SFPSETMAN(0, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, 0);
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG7, 0);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG2, 0);
+    TTI_SFPLOADMACRO((3 << 2) | 1, 0, ADDR_MOD_3, 2 | 1);
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpu::LREG6, 0);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, 0);
+    TTI_SFPSETMAN(0, p_sfpu::LREG5, p_sfpu::LREG5, 1);
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG7, 0);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG2, 0);
+}
+
+inline void reciprocal_fp32_macro2_tail_a() {
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpu::LREG6, 0);
+    TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+    TTI_SFPLOADMACRO((2 << 2) | 1, 0, ADDR_MOD_3, 0);
+}
+
+inline void reciprocal_fp32_macro2_tail_b() {
+    TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+    TTI_SFPLOADMACRO((2 << 2) | 1, 0, ADDR_MOD_2, 2 | 1);
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void _calculate_reciprocal_internal_(const int iterations) {
+#ifdef DISABLE_SFPLOADMACRO
+    constexpr bool use_macro = false;
+#else
+    constexpr bool use_macro = true;
+#endif
+    if constexpr (APPROXIMATION_MODE || (ITERATIONS & 1) || !use_macro) {
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat out;
-
-        if constexpr (APPROXIMATION_MODE) {
-            out = sfpu_reciprocal_iter<0>(in);
-        } else if constexpr (is_fp32_dest_acc_en) {
-            out = sfpu_reciprocal_iter<2>(in);
-        } else {
-            out = sfpu_reciprocal_iter<1 /*max_iter*/, true /*round_to_bf16*/>(in);
+        for (int d = 0; d < iterations; d++) {
+            sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat out;
+            if constexpr (APPROXIMATION_MODE) {
+                out = sfpu_reciprocal_iter<0>(in);
+            } else if constexpr (is_fp32_dest_acc_en) {
+                out = sfpu_reciprocal_iter<2>(in);
+            } else {
+                out = sfpu_reciprocal_iter<1 /*max_iter*/, true /*round_to_bf16*/>(in);
+            }
+            sfpi::dst_reg[0] = out;
+            sfpi::dst_reg++;
         }
-        sfpi::dst_reg[0] = out;
-        sfpi::dst_reg++;
+    } else if constexpr (is_fp32_dest_acc_en) {
+        TTI_SFPCONFIG(RECIP_MACRO_MISC, 8, 1);
+        TTI_SFPNOP;
+        TTI_SFPLOADMACRO((0 << 2) | 0, 0, ADDR_MOD_3, 0);
+        TTI_REPLAY(0, 16, 1, 1);
+        reciprocal_fp32_macro2_head();
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS / 2 - 1; d++) {
+            if (d > 0) {
+                TTI_REPLAY(0, 16, 0, 0);
+            }
+            reciprocal_fp32_macro2_tail_a();
+            TTI_SFPLOADMACRO((0 << 2) | 0, 0, ADDR_MOD_3, 4);
+            reciprocal_fp32_macro2_tail_b();
+        }
+        if constexpr (ITERATIONS / 2 > 1) {
+            TTI_REPLAY(0, 16, 0, 0);
+        }
+        reciprocal_fp32_macro2_tail_a();
+        TTI_SFPNOP;
+        reciprocal_fp32_macro2_tail_b();
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPCONFIG(0, 8, 1);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+    } else {
+        TTI_SFPCONFIG(RECIP_MACRO_MISC, 8, 1);
+        TTI_SFPNOP;
+        TTI_REPLAY(0, 16, 1, 1);
+        reciprocal_bf16_macro_head();
+        reciprocal_bf16_macro_tail();
+#pragma GCC unroll 8
+        for (int d = 1; d < ITERATIONS / 2; d++) {
+            TTI_REPLAY(0, 16, 0, 0);
+            reciprocal_bf16_macro_tail();
+        }
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        TTI_SFPCONFIG(0, 8, 1);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
     }
 }
 
@@ -163,11 +323,22 @@ void recip_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // reciprocal setup below -- one self-contained init, matching exp_init. SDPA runs reciprocal in its
     // softmax after matmul/exp, so the general SFPU state is re-established here, not just reset.
-    // Reciprocal uses only ADDR_MOD_7 on Wormhole (no op-specific ADDR_MOD_6).
+    // Also programs ADDR_MOD_6 and the load macros; call it again after another op's init.
     sfpu::_init_sfpu_config_reg();
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE, round_to_bf16>();
+#ifndef DISABLE_SFPLOADMACRO
+    if constexpr (!APPROXIMATION_MODE && (round_to_bf16 || is_fp32_dest_acc_en)) {
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+    }
+    if constexpr (!APPROXIMATION_MODE && round_to_bf16) {
+        reciprocal_bf16_macro_config();
+    }
+    if constexpr (!APPROXIMATION_MODE && is_fp32_dest_acc_en) {
+        reciprocal_fp32_macro2_config();
+    }
+#endif
 }
 
 }  // namespace sfpu
