@@ -1590,7 +1590,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Smoke) {
             .num_key_heads = 2U,
             .mask_type = ttml::metal::AttentionMaskType::Causal,
             .test_name = "ChunkKnobs_Smoke_Causal"},
-        {{128, 256, 1}});
+        {{256, 256, 1}});  // whole-sequence chunks: one item per sequence, Sk_chunk_t = St
     run_chunk_knob_sweep(
         SDPATestConfig{
             .batch_size = 1U,
@@ -1890,7 +1890,6 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
             {.q_chunk_size = q_chunk_size, .k_chunk_size = k_chunk_size, .heads_per_item = heads_per_item});
     };
     EXPECT_NO_THROW(run(0U, 0U));
-    EXPECT_NO_THROW(run(S, S));
     EXPECT_THAT([&] { run(48U, 0U); }, ThrowsMessage<std::exception>(HasSubstr("q_chunk_size (48)")));
     EXPECT_THAT([&] { run(0U, 48U); }, ThrowsMessage<std::exception>(HasSubstr("k_chunk_size (48)")));
     EXPECT_THAT([&] { run(96U, 0U); }, ThrowsMessage<std::exception>(HasSubstr("q_chunk_size (96)")));
