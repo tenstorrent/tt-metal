@@ -19,7 +19,7 @@ $E2E/run_craq.sh --grid 8x4            # craq-sim, full grid
 $E2E/run_emu.sh                        # emulator (needs NNG_SOCKET_ADDR from your IRD reservation)
 ```
 
-The emulator backs only 64 MiB of DRAM per channel although its descriptor says 1 GiB; larger allocations silently overwrite earlier ones, and the e2e (~1.3 GiB of weights) does not fit (QUASAR_GAPS S7, #55417).
+The emulator backs only 64 MiB of DRAM per channel although its descriptor says 1 GiB; larger allocations silently overwrite earlier ones, and the e2e (~1.3 GiB of weights) does not fit (QUASAR_GAPS S7, #55417). Since #60444 tt-metal clamps each emulator channel to those 64 MiB, so the e2e fails at weight upload with an OOM. To run every stage anyway, pass a copy of the emulator build dir under a name tt-metal does not recognise as `QWEN_EMU_DIR` (`/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-2x3-uncapped/`, identical except `EMULATOR_TIMEOUT=14400`): tt-metal then uses the descriptor's 1 GiB, DRAM wraps, and PCC is wrong from `vision.block0.attn` on. Whether to keep this workaround or drop the emulator e2e is an open decision.
 
 Script defaults: `--size tiny --vision-layers 2 --text-layers 2 --decode-steps 1 --deepstack-at 0 --debug default` (`--debug fast` on craq-sim, where the watcher slows each op 150-300x).
 
@@ -154,7 +154,7 @@ Wall time is the first-to-last-op span from `progress.log` (setup and weight loa
 | craq-sim (staged .so md5 74c8eb33), main 5285b13d773 with the DFB destructor drain (no #57646 revert, no tensor_layout droppable) | 8x4 | PASS (prefill 0.99710, decode0 0.99915) | 14 min | 2026-10-26 | `craq_8x4/20261026T213739Z` |
 | craq-sim (staged .so md5 74c8eb33), main fb6d34ceaed | 2x1 | PASS (prefill 0.99727, decode0 0.99918) | 42 min | 2026-10-26 | `craq_2x3/20261026T164502Z` |
 | craq-sim (same) | 8x4 | PASS (prefill 0.99710, decode0 0.99915) | 14 min | 2026-10-26 | `craq_8x4/20261026T172737Z` |
-| emu-quasar-2x3, DRAM clamp bypassed (`emu-quasar-2x3-uncapped`, see the plan's open decision) | 2x1 | runs every stage (1212 device ops, no hang or crash); FAIL on PCC from `vision.block0.attn` on, the accepted DRAM-wrap effect (S7) | 203 min ops (3 h 38 min pytest; 13 min Zebu queue before it) | 2026-10-26 | `emu_2x3/20261026T154632Z` |
+| emu-quasar-2x3, DRAM clamp bypassed (`emu-quasar-2x3-uncapped`, see Run) | 2x1 | runs every stage (1212 device ops, no hang or crash); FAIL on PCC from `vision.block0.attn` on, the accepted DRAM-wrap effect (S7) | 203 min ops (3 h 38 min pytest; 13 min Zebu queue before it) | 2026-10-26 | `emu_2x3/20261026T154632Z` |
 | emu-quasar-2x3, with the #60444 DRAM clamp | 2x1 | FAIL at weight upload: OOM (2 x ~41 MiB usable) | 4 min | 2026-10-26 | `emu_2x3/20261026T151437Z` |
 | craq-sim (a928410c / staged .so md5 74c8eb33) | 2x1 | PASS (prefill logits 0.99727, decode0 0.99918) | 41 min | 2026-10-22 | `craq_2x3/20261022T134319Z` |
 | craq-sim (same) | 8x4 | PASS (prefill 0.99710, decode0 0.99915) | 14 min | 2026-10-22 | `craq_8x4/20261022T142425Z` |
