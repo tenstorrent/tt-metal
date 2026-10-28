@@ -8,7 +8,6 @@ last four are partial-face tiles) and the one-face 16x16 tile, two, four and eig
   * the per-tile _llk_pack_ (mode 2),
   * the closed block _llk_pack_block_closed_, one close per tile (mode 1),
   * the dense replay block _llk_pack_block_dense_, one close per run (mode 3),
-  * the closed replay block _llk_pack_block_closed_replay_ (mode 4),
   * the experimental contiguous block (mode 0) for plain formats.
 Float16_b and Float32 (16-bit and 32-bit DEST), and Bfp8_b output for the 16-row faces, the only block-float tiles the packer writes correctly."""
 
@@ -37,7 +36,7 @@ TINY_PERF_RUN_TYPES = [PerfRunType.PACK_ISOLATE, PerfRunType.L1_TO_L1]
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=TINY_PERF_DIMS,
     num_tiles=[2, 4, 8],
-    pack_mode=[0, 1, 2, 3, 4],
+    pack_mode=[0, 1, 2, 3],
     loop_factor=[32],
 )
 def test_perf_pack_tiny_tile_block(perf_report, formats, dest_acc, tile_dims, num_tiles, pack_mode, loop_factor):

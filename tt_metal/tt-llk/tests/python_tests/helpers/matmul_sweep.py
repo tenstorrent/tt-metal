@@ -118,8 +118,7 @@ def matmul_pack_form(
 ) -> int:
     """Output pack form of the Blackhole matmul kernels, the rule ttnn's matmul kernels apply at compile time
     (llk_matmul_block_pack): 0 per tile, 1 one block run, 2 the closed block (padded pages), 4 the dense run of small tiles
-    (only with dense_pages: the perf sweep, where the output address does not change the pack timing; the functional tests keep a 32x32 page per tile, which a dense run cannot write),
-    5 the closed run of small tiles from a replay buffer."""
+    (only with dense_pages: the perf sweep, where the output address does not change the pack timing; the functional tests keep a 32x32 page per tile, which a dense run cannot write)."""
     small = in0_tile_r_dim < 32 or in1_tile_c_dim < 32
     if rt_dim * ct_dim < 2 or (math_fidelity == MathFidelity.LoFi and kt_dim > 1):
         return 0
@@ -138,9 +137,6 @@ def matmul_pack_form(
     if dense_pages and small and in1_tile_c_dim == 32 and not formats.output_format.is_block_float():
         # eight small tiles at half sync hide the pack behind the math: the closed form stays
         return 2 if dest_sync == DestSync.Half and rt_dim * ct_dim >= 8 else 4
-    if small and in1_tile_c_dim == 32 and (not formats.output_format.is_block_float() or in0_tile_r_dim == 16):
-        # block-float tiles need 16-row faces
-        return 5
     return 2 if small or formats.output_format.is_block_float() else 1
 
 

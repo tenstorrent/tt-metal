@@ -161,7 +161,7 @@ def _make_config(
         (32, 32),  # face_r_dim=16, num_faces=4 (baseline)
     ],
     num_tiles=[1, 2, 4, 8],
-    pack_mode=[0, 1, 2, 3, 4],
+    pack_mode=[0, 1, 2, 3],
 )
 def test_pack_tiny_tile_block(
     formats,
@@ -170,8 +170,8 @@ def test_pack_tiny_tile_block(
     num_tiles,
     pack_mode,
 ):
-    if pack_mode >= 3 and tile_dims == (32, 32):
-        pytest.skip("The replay block packs record at most eight PACRs per tile")
+    if pack_mode == 3 and tile_dims == (32, 32):
+        pytest.skip("The dense block pack records at most eight PACRs per tile")
     configuration, golden_tensor, torch_format = _make_config(
         tile_dims, num_tiles, formats, dest_acc, pack_mode
     )
@@ -192,7 +192,7 @@ def test_pack_tiny_tile_block(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=[(16, 32)],  # face_r_dim=16, num_faces=2: block-float faces need 16 rows
     num_tiles=[2, 4, 8],
-    pack_mode=[1, 2, 4],
+    pack_mode=[1, 2],
 )
 def test_pack_tiny_tile_block_bfp(
     formats,
@@ -201,7 +201,7 @@ def test_pack_tiny_tile_block_bfp(
     num_tiles,
     pack_mode,
 ):
-    """Block-float small tiles keep the tile close: the closed MOP run (1), _llk_pack_ per tile (2) and the closed replay run (4)."""
+    """Block-float small tiles keep the tile close: the closed MOP run (1) and _llk_pack_ per tile (2)."""
     configuration, golden_tensor, torch_format = _make_config(
         tile_dims, num_tiles, formats, dest_acc, pack_mode
     )
