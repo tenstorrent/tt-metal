@@ -445,6 +445,34 @@ def test_save_checkpoint_header_records_given_learning_rate(monkeypatch, tmp_pat
     assert headers[0]["learning_rate"] == 0.5
 
 
+def test_setup_records_num_generation_batches(monkeypatch):
+    class _SetupTokenizer:
+        pad_token_id = 0
+        eos_token_id = 2
+
+        def encode(self, text, add_special_tokens=False):
+            return [1, 2, 3]
+
+    monkeypatch.setattr(grpo_trainer_module, "create_optimizer", lambda *args, **kwargs: object())
+    monkeypatch.setattr(grpo_trainer_module, "_build_lr_scheduler", lambda *args, **kwargs: None)
+
+    trainer = object.__new__(GRPOTrainer)
+    trainer.config = GRPOConfig(**{**_HOST_GRPO_CONFIG, "prompts_to_train": 8})
+    trainer.model = SimpleNamespace(parameters=lambda: {})
+    trainer.tokenizer = _SetupTokenizer()
+    trainer._batch_layout = SimpleNamespace(num_shards=1)
+    trainer.optimizer_dict = {}
+    trainer.callbacks = []
+    trainer.reward_funcs = [lambda completions, **_: [0.0] * len(completions)]
+    trainer.rollout_sampler = _EchoSampler()
+    trainer._rollout_client = None
+
+    dataset = Dataset.from_dict({"prompt": ["hello"] * trainer.config.prompts_to_train})
+    trainer._setup(dataset)
+
+    assert trainer._num_generation_batches == 4
+
+
 def _save_old_format_checkpoint(directory):
     save_file({"Llama/fc/weight": np.zeros((2, 2), np.float32)}, str(directory / "model.safetensors"))
 

@@ -1365,6 +1365,7 @@ class GRPOTrainer:
         self._pad_token = int(pad_token)
         self._optimizer = optimizer
         self._completions_per_microbatch = completions_per_microbatch
+        self._num_generation_batches = total_prompts // generation_batch_prompts
         self._monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
         self.rollout_batch_source = build_rollout_batch_source(
             grpo_cfg,
