@@ -65,7 +65,9 @@ void PreparedProgramFactory::override_runtime_arguments(
     }
     const auto& io = tensor_args.io_tensors;
     // (an io tensor's slots are always written together, so its first slot tells whether this program already holds
-    // its address - the usual case, the same buffers every call: one lookup instead of every slot)
+    // its address - the usual case, the same buffers every call: one lookup instead of every slot. Safe across
+    // descriptors: the cache key (prepare) holds every slot's io tensor, so a program cached under it was last run
+    // with this same slot -> io map, each io tensor's slots written together)
     for (size_t j = 0; j < io.size(); ++j) {
         const uint32_t a = address_of(io[j]);
         const auto& rts = p.rt_of_io[pi][j];
