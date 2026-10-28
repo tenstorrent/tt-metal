@@ -111,6 +111,10 @@ class LoraColumnParallelLinear(AbstractModuleBase):
 
     lora_A is replicated (full in_features).
     lora_B is column-sharded on dim 2 (out_features split across TP devices).
+
+    Each device back-propagates only its own lora_B columns into ``h = x @ lora_A``, so ``h`` passes
+    through ``broadcast``: its backward all-reduces that partial grad, which keeps the replicated
+    lora_A grad complete and identical on every TP device.
     """
 
     def __init__(self, base_layer: ColumnParallelLinear, config: LoraConfig):
@@ -139,6 +143,9 @@ class LoraColumnParallelLinear(AbstractModuleBase):
 
     def forward(self, x):
         bias_t = self.bias.tensor if self.bias is not None else None
+        lora_input = x
+        if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
+            lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
         x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
         base = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
@@ -148,10 +155,8 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         # lora_A is replicated so it operates on the full input; lora_B is
         # column-sharded, producing a sharded update that must be gathered
         # whenever the base path is gathered.
-        lora_input = x
-        if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
         h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
+        h = ttml.ops.distributed.broadcast(h, self.cluster_axis)
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.gather_output:
             lora_update = ttml.ops.distributed.all_gather(
