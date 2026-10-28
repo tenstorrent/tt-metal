@@ -4,6 +4,8 @@
 
 #include "moreh_mean.hpp"
 
+#include <mutex>
+
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_mean/device/moreh_mean_device_operation.hpp"
 
@@ -17,6 +19,8 @@ Tensor moreh_mean(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    static std::once_flag deprecation_warned;
+    std::call_once(deprecation_warned, [] { log_warning(tt::LogOp, "ttnn.moreh_mean is deprecated; use ttnn.mean."); });
     ttsl::SmallVector<int64_t> dims = operations::get_dim(dim, input.logical_shape().rank());
     std::sort(dims.begin(), dims.end());
 

@@ -133,7 +133,8 @@ inline void bind_generic_reductions(nb::module_& mod) {
         "ttnn.mean",
         /*int32_supported=*/false,
         /*has_output_layout=*/true,
-        /*has_fast_approximate_mode=*/true);
+        /*has_fast_approximate_mode=*/true,
+        /*has_output=*/true);
     ttnn::bind_function<"mean">(
         mod,
         mean_doc.c_str(),
@@ -149,7 +150,8 @@ inline void bind_generic_reductions(nb::module_& mod) {
         // fast_and_approximate_mode=false (default) selects the accurate fp32 SFPU reduce; true selects the FPU. No
         // effect for non-fp32.
         nb::arg("fast_and_approximate_mode") = false,
-        nb::arg("output_layout") = nb::none());
+        nb::arg("output_layout") = nb::none(),
+        nb::arg("output") = nb::none());
 
     const auto max_doc = get_generic_reduction_doc(
         "max", "ttnn.max", /*int32_supported=*/true, /*has_output_layout=*/false, /*has_fast_approximate_mode=*/true);

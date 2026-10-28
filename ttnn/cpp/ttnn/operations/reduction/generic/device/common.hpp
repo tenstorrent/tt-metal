@@ -120,8 +120,12 @@ inline ScalerMode derive_scaler_mode(
     if (math_op == ReduceOpMath::SUM && dtype == tt::tt_metal::DataType::INT32) {
         return ScalerMode::PostMul;
     }
-    const bool sfpu_fp32_scalar = use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&
-                                  (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::AVG);
+    // A bf16 scaler tile truncates 1/N; the post-multiply applies it in fp32.
+    if (math_op == ReduceOpMath::AVG) {
+        return ScalerMode::PostMul;
+    }
+    const bool sfpu_fp32_scalar =
+        use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 && math_op == ReduceOpMath::SUM;
     return sfpu_fp32_scalar ? ScalerMode::PostMul : ScalerMode::ScalerTile;
 }
 
