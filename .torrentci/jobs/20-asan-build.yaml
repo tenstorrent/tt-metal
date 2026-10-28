@@ -15,11 +15,11 @@ jobs:
         arch: amd64
         image: {from-job: ci-build-image, image: tt-metal-ci-build}
         resources:
-          # First-run guess; resize from the resource summary.
-          requests: {cpu: '32', memory: 96Gi, ephemeral-storage: 100Gi}
-          limits: {cpu: '32', memory: 128Gi, ephemeral-storage: 150Gi}
+          # Sized to fit civ2's shared CI nodes; resize from the resource summary.
+          requests: {cpu: '16', memory: 48Gi, ephemeral-storage: 100Gi}
+          limits: {cpu: '16', memory: 64Gi, ephemeral-storage: 150Gi}
     env:
-      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '32'}
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
       - {name: CCACHE_DIR, value: /workspace/.cache/ccache}
       - {name: CCACHE_BASEDIR, value: /workspace}
       - {name: CCACHE_TEMPDIR, value: /tmp/ccache}
