@@ -2259,15 +2259,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         const char* v = std::getenv(name);
         return v && std::string(v) == value;
     };
+    // A short row (one shard: the slice is the whole row) leaves no room for the records: a page per chunk then.
     const uint32_t sol_res_rec_words = sol_resident ? tt::div_up(sol_nb, 32u) + 3 : 0;
-    const uint32_t sol_res_plan_rec_base = (sol_resident && !env_is("TT_SOL_RES_PLAN1", "0")) ? 16 + sol_nb_pad : 0;
-    TT_FATAL(
-        sol_res_plan_rec_base == 0 ||
-            (sol_res_plan_rec_base + max_q_per_core * sol_res_rec_words) * sizeof(uint32_t) <= 64 + sol_mask_row_bytes,
-        "sol resident: {} plan records of {} words do not fit the plan page ({} B)",
-        max_q_per_core,
-        sol_res_rec_words,
-        64 + sol_mask_row_bytes);
+    const bool sol_res_plan_fits =
+        (16 + sol_nb_pad + max_q_per_core * sol_res_rec_words) * sizeof(uint32_t) <= 64 + sol_mask_row_bytes;
+    const uint32_t sol_res_plan_rec_base =
+        (sol_resident && sol_res_plan_fits && !env_is("TT_SOL_RES_PLAN1", "0")) ? 16 + sol_nb_pad : 0;
     const bool sol_res_no_dummies = sol_resident && !env_is("TT_SOL_RES_DUMMIES", "1");
     // One pooled chunk of bias tiles in flight (bias is read once per pooled chunk, 4 pooled chunks per Q chunk per
     // layer); 2*Sk_chunk_t pushed the static CB region past the L1 buffers at the 10 s / 15 s shapes.
