@@ -354,7 +354,8 @@
 # on these single-/dual-chip SKUs (the real coverage needs galaxy/box topologies),
 # and point_to_point is 12 tests.
 - name: ttnn nightly data_movement tests (post-commit suite)
-  # Measured: bh_p100 ~28 min, bh_p150b ~57 min, wh_n300 ~66 min, wh_n150 ~89 min.
+  # Measured 2026-10-27: bh_p100 ~52 min, bh_p150b 72-84 min, wh_n300 ~76 min, wh_n150 ~82 min
+  # (2026-08-05: bh_p100 ~28, bh_p150b ~57, wh_n300 ~66, wh_n150 ~89).
   cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=300'
   ai_summary:
     authoritative_job_status: true
@@ -364,9 +365,9 @@
     wh_n300_civ2:
       timeout: 95
     bh_p100:
-      timeout: 45
+      timeout: 70
     bh_p150b_civ2:
-      timeout: 80
+      timeout: 100
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   budget_type: unit
