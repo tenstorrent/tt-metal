@@ -274,7 +274,10 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
         spec.scratchpads.push_back(ScratchpadSpec{.unique_id = PS_SCRATCH, .size_per_node = scratch_page * kNumTrids});
     }
     // Zero source for the pad-row tails: one row of zeros plus room to match the destination's L1
-    // misalignment. Declared unconditionally for the same name-check reason as above; tiny when unused.
+    // misalignment. The kernel reads [unpadded % l1_alignment, + stick_size_offset - unpadded), which ends at or
+    // before stick_size_offset == output_row_size_bytes (the sharded-L1 row is l1-aligned, asserted above), so
+    // this size leaves at least l1_alignment to spare. Declared unconditionally for the same name-check reason
+    // as above; tiny when unused.
     spec.scratchpads.push_back(ScratchpadSpec{
         .unique_id = PS_ZERO,
         .size_per_node =

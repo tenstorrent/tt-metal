@@ -160,7 +160,9 @@ void kernel_main() {
             }
             if constexpr (pad_output_row) {
                 if (pad_size_bytes > 0) {
-                    // All slots are idle here; zero the tails of this batch's rows, tagged like the reads above.
+                    // Each core runs one batch (the factory passes num_read_per_barrier == num_sticks_per_core),
+                    // so the loop above exits only once every issued read has completed: all slots are idle.
+                    // Zero the tails of this batch's rows, tagged like the reads above.
                     for (uint32_t i = 0; i < sticks_completed; ++i) {
                         noc.async_read<NocOptions::TXN_ID>(
                             zero_buf,
