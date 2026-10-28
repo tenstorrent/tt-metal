@@ -264,6 +264,16 @@ single-device paths ignore `start_pos` and recompute from 0.
 | `QWEN36_PREFIX_SNAPSHOT_MIN_LEN` | `8192` | minimum prompt length for the end-of-prompt snapshot (a prefill split); shorter prompts save at the last full-chunk boundary instead |
 | `QWEN36_PREFIX_SNAPSHOT_STRIDE` | `8192` | snapshot every N tokens (chunk boundaries, relative to the resume point) |
 | `QWEN36_PREFIX_CACHE_DEBUG` | `0` | `1` logs one line per prefix-cached prefill (hit position, saves, stats) |
+| `QWEN36_PREFIX_CACHE_VALUE_EVICT` | `0` | `1`: value-aware eviction. End-of-prompt checkpoints (and the last-full-chunk point of shorter prompts) and snapshots hit >= `QWEN36_PREFIX_CACHE_PROTECT_HITS` (`2`) times are evicted only after every other unpinned snapshot; at most `QWEN36_PREFIX_CACHE_PROTECT_FRAC` (`0.5`) of the slots are protected (the most recently used ones). Pure stride snapshots still go first |
+| `QWEN36_PREFIX_HOST_SLOTS` | `0` | `N > 0`: host-RAM spill tier of N snapshots (about 150 MB of host RAM each at TP=8, per DP rank). An evicted snapshot is read to host (exact bytes of every device) before its slot is reused; a later hit writes it back through one extra device staging slot (allocated before trace capture). A spill is a blocking device read inside the prefill |
+| `QWEN36_PREFIX_HOST_SPILL_MIN_POS` | `2048` | only snapshots at positions >= this are spilled (shorter ones are cheaper to recompute) |
+| `QWEN36_PREFIX_HOST_MIN_GAIN` | `1024` | a host snapshot is used only when it resumes at least this many tokens later than the best device snapshot (or than 0) |
+| `QWEN36_PREFIX_HOST_SPILL_LOW` | `0` | `1` also spills pure stride snapshots |
+| `QWEN36_PREFIX_SUMMARY_EVERY` | `1000` | spec engine: one INFO summary line every N prefills, with the true resume metrics: `vllm_cached_tok` (what vLLM counts as cached), `gdn_resumed_tok` (where the GDN state really resumed), `hidden_recompute_tok` (cached by vLLM but recomputed), `below_cap_tok` (recomputed because no snapshot existed at the MTP-safe cap), and the tier (`from_device` / `from_host` / `from_0`) |
+
+`QWEN36_PREFIX_SNAPSHOT_MIN_LEN` also controls end-of-prompt checkpoints for chat-sized prompts: e.g. `512` takes the
+`((L-3)//128)*128` snapshot for every prompt >= 512 tokens (one extra short-trace segment per prefill), so the next turn
+of the conversation resumes within its own new tokens instead of at the last 2048-token chunk boundary or at 0.
 
 ## Chunked prefill (vLLM serving, batched TP path)
 

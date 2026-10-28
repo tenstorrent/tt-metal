@@ -1021,7 +1021,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             from models.demos.blackhole.qwen36.tt.prefix_cache import GdnPrefixStateCache
 
             n = int(os.environ.get("QWEN36_CHUNK_STATE_SLOTS", "4"))
-            model._chunk_state_cache = GdnPrefixStateCache(model, num_slots=n, name="chunked-prefill continuation")
+            model._chunk_state_cache = GdnPrefixStateCache(
+                model, num_slots=n, name="chunked-prefill continuation", host_slots=0
+            )
             model._chunk_budget = chunked
             logger.info(
                 f"chunked prefill: continuation store {n} slots, (budget, long_prefill_threshold, align)={chunked}"

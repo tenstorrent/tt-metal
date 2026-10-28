@@ -10,11 +10,22 @@ The model (Qwen36Model.prefill_paged_slots) decides WHERE to snapshot and where 
 
 conv_states (the decode conv window) need no snapshot: capture_state=True rebuilds all K of them from the last chunk's
 conv_new_state at the end of every GDN layer's prefill.
+
+Opt-in policy knobs (all default OFF = the plain LRU + low-priority strides above):
+  * QWEN36_PREFIX_CACHE_VALUE_EVICT=1: value-aware eviction. End-of-prompt checkpoints and snapshots hit
+    >= QWEN36_PREFIX_CACHE_PROTECT_HITS times are evicted only after every other unpinned entry (at most
+    QWEN36_PREFIX_CACHE_PROTECT_FRAC of the slots are protected; older protected entries beyond that count as normal).
+  * QWEN36_PREFIX_HOST_SLOTS=N > 0: a host-RAM spill tier. An evicted snapshot (pos >= QWEN36_PREFIX_HOST_SPILL_MIN_POS,
+    not a pure stride point unless QWEN36_PREFIX_HOST_SPILL_LOW=1) is read to host (ttnn.from_device: the exact device
+    bytes, every device of the mesh) before its slot is reused; a later hit writes it back (copy_host_to_device_tensor
+    into one staging slot allocated at construction, then the same device copy as a device hit). A restore is a byte
+    copy, so a host hit resumes from exactly the state a device hit would have. Host LRU of N entries.
 """
 
 import bisect
 import hashlib
 import os
+import time
 from collections import OrderedDict
 
 import numpy as np
@@ -82,15 +93,48 @@ def spec_learn_positions(start_pos, prompt_len, align=SPEC_PREFIX_ALIGN, min_tai
     return out
 
 
+def _env_int(name, default):
+    return int(os.environ.get(name, str(default)))
+
+
+def prefix_value_evict():
+    """QWEN36_PREFIX_CACHE_VALUE_EVICT (default 0): 1 protects end-of-prompt checkpoints and multi-hit snapshots from
+    eviction (see the module docstring)."""
+    return os.environ.get("QWEN36_PREFIX_CACHE_VALUE_EVICT", "0") == "1"
+
+
+def host_spill_min_pos():
+    """QWEN36_PREFIX_HOST_SPILL_MIN_POS (default 2048): shorter snapshots are cheaper to recompute than to spill."""
+    return _env_int("QWEN36_PREFIX_HOST_SPILL_MIN_POS", 2048)
+
+
+def host_min_gain():
+    """QWEN36_PREFIX_HOST_MIN_GAIN (default 1024): a host snapshot is used only when it resumes at least this many tokens
+    later than the best device snapshot (a host restore costs a PCIe write of the whole snapshot)."""
+    return _env_int("QWEN36_PREFIX_HOST_MIN_GAIN", 1024)
+
+
+class HostSnap:
+    """Lookup handle of a snapshot in the host tier: key (pos, digest) + per GDN layer (rec, conv_carry) host tensors.
+    The handle keeps the tensors alive even if the host LRU drops the entry before the restore."""
+
+    __slots__ = ("key", "tensors")
+
+    def __init__(self, key, tensors):
+        self.key, self.tensors = key, tensors
+
+
 def prefix_stride_low_prio():
     """QWEN36_PREFIX_CACHE_STRIDE_LOW_PRIO (default 1): pure stride snapshots are evicted first; 0 = pure LRU."""
     return os.environ.get("QWEN36_PREFIX_CACHE_STRIDE_LOW_PRIO", "1") == "1"
 
 
 class SpecPoints(list):
-    """Sorted save points; ``low`` = the subset that is a pure stride point (low cache priority)."""
+    """Sorted save points; ``low`` = the subset that is a pure stride point (low cache priority); ``end`` = the
+    end-of-prompt checkpoint (or the last-full-chunk point that stands in for it), protected under value-aware eviction."""
 
     low = frozenset()
+    end = frozenset()
 
 
 def spec_save_points(
@@ -105,16 +149,20 @@ def spec_save_points(
     """
     pts = {p for p in learn if s < p <= prompt_len - 3}
     b_end = ((prompt_len - 3) // align) * align
+    end = set()
     if not end_point:
         pass
     elif prompt_len >= min_len:
         if b_end > max(s, max(pts, default=0)):
             pts.add(b_end)
+            end.add(b_end)
     elif not pts:
         p = s + ((prompt_len - s) // chunk) * chunk
         if s < p <= prompt_len - 3:
             pts.add(p)
+            end.add(p)
     out = SpecPoints()
+    out.end = frozenset(end)
     if stride > 0 and stride % chunk == 0:
         strided = set(range(s + stride, prompt_len - 2, stride))
         out.low = frozenset(strided - pts)
@@ -130,7 +178,7 @@ class GdnPrefixStateCache:
     prefill/decode trace is captured (allocating behind captured traces is unsafe). save/restore copy between a slot and
     the GDN state currently bound on the layers (the persistent B=1 prefill scratch inside prefill_paged_slots)."""
 
-    def __init__(self, model, num_slots=None, name="GDN prefix-state cache"):
+    def __init__(self, model, num_slots=None, name="GDN prefix-state cache", host_slots=None):
         self.model = model
         self.name = name
         self.num_slots = int(num_slots if num_slots is not None else os.environ.get("QWEN36_PREFIX_CACHE_SLOTS", "32"))
@@ -148,6 +196,32 @@ class GdnPrefixStateCache:
         self._positions = []  # sorted positions present
         self.stats = dict(lookups=0, hits=0, tokens_skipped=0, saves=0, evictions=0, evictions_low=0)
         logger.info(f"{self.name}: {self.num_slots} slots x {len(self._dns)} GDN layers allocated.")
+        # Host spill tier (QWEN36_PREFIX_HOST_SLOTS, default 0 = off): one device staging set, allocated here (before any
+        # trace capture), receives a host snapshot; restore then copies staging -> bound state like a device hit.
+        self.host_slots = int(host_slots if host_slots is not None else os.environ.get("QWEN36_PREFIX_HOST_SLOTS", "0"))
+        self._host = OrderedDict()  # (pos, digest) -> [(host rec, host conv_carry)] per GDN layer, LRU first
+        self._staging = None
+        if self.host_slots > 0:
+            self._staging = [self._alloc_pair(dn) for dn in self._dns]
+            mb = self._snapshot_mb()
+            logger.info(
+                f"{self.name}: host spill tier {self.host_slots} slots x ~{mb:.0f} MB = ~{self.host_slots * mb / 1024:.1f} GB "
+                f"host RAM at most (spill pos >= {host_spill_min_pos()}, min gain {host_min_gain()} tokens)"
+            )
+
+    def _snapshot_mb(self):
+        """Host bytes of one snapshot (every device of the mesh), from the slot shapes; an estimate (tile padding)."""
+        try:
+            tot = 0
+            for rec, carry in self._slots[0]:
+                for t in (rec, carry):
+                    n = 1
+                    for d in t.shape:
+                        n *= int(d)
+                    tot += n * (4 if t.dtype == ttnn.float32 else 2)
+            return tot * int(self._dns[0].mesh.get_num_devices()) / 2**20
+        except Exception:  # noqa: BLE001 - logging aid only
+            return 0.0
 
     def _alloc_pair(self, dn):
         scratch = next(s for s in self.model._gdn_prefill_scratch if s[0] is dn)
@@ -173,13 +247,27 @@ class GdnPrefixStateCache:
                 found[pos] = dig
         if not found:
             return 0, None
-        pos = max(found)
+        host = self._host_tier()
+        pos = max((p for p in found if (p, found[p]) in self._lru), default=0)
+        hpos = max((p for p in found if (p, found[p]) in host), default=0)
+        if hpos > pos and hpos - pos >= host_min_gain():
+            pos = hpos
+        if pos == 0:
+            return 0, None
         key = (pos, found[pos])
-        self._lru.move_to_end(key)
-        self._low().discard(key)  # a hit proves value
+        if key in host:
+            host.move_to_end(key)
+            handle = HostSnap(key, host[key])
+            self.bump("host_hits")
+        else:
+            self._lru.move_to_end(key)
+            self._low().discard(key)  # a hit proves value
+            hits = self._hit_counts()
+            hits[key] = hits.get(key, 0) + 1
+            handle = self._lru[key]
         self.stats["hits"] += 1
         self.stats["tokens_skipped"] += pos
-        return pos, self._lru[key]
+        return pos, handle
 
     # --- pinning (MTP chunked prefill Option B): a chunk-end snapshot is kept until its request's next chunk consumed it ---
     _STAT_KEYS = ("pinned_saves", "skipped_saves", "exact_resumes", "refusals")
@@ -191,6 +279,30 @@ class GdnPrefixStateCache:
     def _low(self):
         """Keys saved at low priority (pure stride snapshots, evicted first), lazy like _pins."""
         return self.__dict__.setdefault("_low_keys", set())
+
+    def _end(self):
+        """Keys saved as end-of-prompt checkpoints (protected under QWEN36_PREFIX_CACHE_VALUE_EVICT), lazy like _pins."""
+        return self.__dict__.setdefault("_end_keys", set())
+
+    def _hit_counts(self):
+        """Device key -> lookup hits since it was saved (multi-hit = shared prefix), lazy like _pins."""
+        return self.__dict__.setdefault("_hit_map", {})
+
+    def _host_tier(self):
+        return self.__dict__.setdefault("_host", OrderedDict())
+
+    def _host_cap(self):
+        return int(self.__dict__.get("host_slots", 0) or 0)
+
+    def _protected(self, pinned):
+        """Unpinned device keys protected from eviction (value-aware policy): end-of-prompt checkpoints and keys hit
+        >= QWEN36_PREFIX_CACHE_PROTECT_HITS times, at most QWEN36_PREFIX_CACHE_PROTECT_FRAC * num_slots of them (the most
+        recently used ones)."""
+        need = _env_int("QWEN36_PREFIX_CACHE_PROTECT_HITS", 2)
+        cap = int(self.num_slots * float(os.environ.get("QWEN36_PREFIX_CACHE_PROTECT_FRAC", "0.5")))
+        end, hits = self._end(), self._hit_counts()
+        prot = [k for k in self._lru if k not in pinned and (k in end or hits.get(k, 0) >= need)]
+        return set(prot[len(prot) - cap :]) if cap > 0 else set()
 
     def bump(self, name, n=1):
         self.stats[name] = self.stats.get(name, 0) + n
@@ -236,13 +348,54 @@ class GdnPrefixStateCache:
     def summary(self):
         """Compact counters line (INFO, once per 1000 prefills from the engine)."""
         st = self.stats
-        return (
+        out = (
             f"pinned={self.pinned_count()}/{self.max_pinned_limit()} pinned_saves={st.get('pinned_saves', 0)} "
             f"skipped_saves={st.get('skipped_saves', 0)} evictions={st.get('evictions', 0)} "
             f"evictions_low={st.get('evictions_low', 0)} low={len(self._low())} "
             f"exact_resumes={st.get('exact_resumes', 0)} refusals={st.get('refusals', 0)} "
             f"saves={st.get('saves', 0)} entries={len(self._lru)}/{self.num_slots}"
         )
+        vc = st.get("vllm_cached_tokens", 0)
+        if st.get("resume_prefills", 0):
+            hidden = st.get("hidden_recompute_tokens", 0)
+            out += (
+                f" | resume: prefills={st.get('resume_prefills', 0)} vllm_cached_tok={vc} "
+                f"gdn_resumed_tok={st.get('gdn_resumed_tokens', 0)} hidden_recompute_tok={hidden} "
+                f"({100.0 * hidden / max(vc, 1):.1f}% of vLLM-cached) below_cap_tok={st.get('below_cap_tokens', 0)} "
+                f"from_device={st.get('resume_device', 0)} from_host={st.get('resume_host', 0)} "
+                f"from_0={st.get('resume_none', 0)}"
+            )
+        if self._host_cap() > 0:
+            n_sp, n_rs = st.get("spills", 0), st.get("host_restores", 0)
+            out += (
+                f" | host: entries={len(self._host_tier())}/{self._host_cap()} spills={n_sp} "
+                f"spill_ms_avg={st.get('spill_ms', 0.0) / max(n_sp, 1):.1f} host_hits={st.get('host_hits', 0)} "
+                f"restore_ms_avg={st.get('host_restore_ms', 0.0) / max(n_rs, 1):.1f} "
+                f"host_evictions={st.get('host_evictions', 0)}"
+            )
+        if prefix_value_evict():
+            out += f" | protected={len(self._protected(set(self._pins().values())))}"
+        return out
+
+    def record_resume(self, start_pos, cap, s, src_slot):
+        """Account one prefill that vLLM reported ``start_pos`` cached tokens for (true resume metrics): the GDN resume
+        position s actually used, the tokens recomputed although vLLM counts them as cached (start_pos - s), the part of
+        that below the MTP-safe cap (cap - s: a missing snapshot, not structural), and the tier the state came from."""
+        start_pos, cap, s = int(start_pos), int(cap), int(s)
+        if start_pos <= 0:
+            return
+        self.bump("resume_prefills")
+        self.bump("vllm_cached_tokens", start_pos)
+        self.bump("gdn_resumed_tokens", s)
+        self.bump("hidden_recompute_tokens", max(start_pos - s, 0))
+        self.bump("below_cap_tokens", max(cap - s, 0))
+        tier = "none" if s <= 0 else ("host" if isinstance(src_slot, HostSnap) else "device")
+        self.bump(f"resume_{tier}")
+        if self.debug:
+            logger.info(
+                f"[prefix-cache] resume vllm_start={start_pos} cap={cap} gdn_resume={s} tier={tier} "
+                f"hidden_recompute={max(start_pos - s, 0)} below_cap={max(cap - s, 0)}"
+            )
 
     def _evict_victim(self):
         """Least recently used UNPINNED low-priority key (QWEN36_PREFIX_CACHE_STRIDE_LOW_PRIO), else the LRU UNPINNED
@@ -253,15 +406,22 @@ class GdnPrefixStateCache:
             for k in self._lru:
                 if k in low and k not in pinned:
                     return k
+        if prefix_value_evict():
+            prot = self._protected(pinned)
+            for k in self._lru:
+                if k not in pinned and k not in prot:
+                    return k
         for k in self._lru:
             if k not in pinned:
                 return k
         return None
 
-    def save(self, tokens, pos, low_prio=False):
+    def save(self, tokens, pos, low_prio=False, protect=False):
         """Snapshot the currently bound GDN state (the state AFTER tokens[:pos]) into a slot. ``low_prio``: a new key is
-        evicted before normal ones (an existing normal key is never downgraded; a normal save upgrades a low key). Eviction
-        skips pinned snapshots; when no slot is free and none is evictable the save is skipped (counted, debug log).
+        evicted before normal ones (an existing normal key is never downgraded; a normal save upgrades a low key).
+        ``protect``: an end-of-prompt checkpoint (kept longer under QWEN36_PREFIX_CACHE_VALUE_EVICT). Eviction
+        skips pinned snapshots; when no slot is free and none is evictable the save is skipped (counted, debug log). The
+        evicted snapshot moves to the host tier when it is on and the snapshot qualifies (_spill_ok).
         Returns True when the snapshot is in the cache afterwards."""
         buf = _tokens_np(tokens)
         key = (int(pos), self._digest(buf, int(pos)))
@@ -269,6 +429,8 @@ class GdnPrefixStateCache:
             self._lru.move_to_end(key)
             if not low_prio:
                 self._low().discard(key)
+            if protect:
+                self._end().add(key)
             return True
         if self._free:
             slot = self._free.pop()
@@ -279,17 +441,32 @@ class GdnPrefixStateCache:
                 logger.debug(f"{self.name}: every slot is pinned: save at {key[0]} skipped")
                 return False
             slot = self._lru.pop(old_key)
-            self._drop_pos(old_key)
+            spilled = False
+            if self._spill_ok(old_key):
+                try:
+                    self._spill(old_key, slot)  # reads the slot BEFORE the copies below overwrite it; index entry kept
+                    spilled = True
+                except Exception as e:  # noqa: BLE001 - a failed spill only loses the snapshot (as without the tier)
+                    self.bump("spill_errors")
+                    logger.warning(f"{self.name}: host spill of the snapshot at {old_key[0]} failed: {e!r}")
+            if not spilled:
+                self._drop_pos(old_key)
             if old_key in self._low():
                 self._low().discard(old_key)
                 self.bump("evictions_low")
+            self._end().discard(old_key)
+            self._hit_counts().pop(old_key, None)
             self.stats["evictions"] += 1
+        # the same state may sit in the host tier: it moves back to this device slot (one tier per key)
+        self._host_tier().pop(key, None)
         for dn, (rec, carry) in zip(self._dns, self._slots[slot]):
             ttnn.copy(dn.rec_state, rec)
             ttnn.copy(dn.conv_carry, carry)
         self._lru[key] = slot
         if low_prio:
             self._low().add(key)
+        if protect:
+            self._end().add(key)
         if key[0] not in self._by_pos:
             self._by_pos[key[0]] = set()
             bisect.insort(self._positions, key[0])
@@ -304,9 +481,41 @@ class GdnPrefixStateCache:
             del self._by_pos[pos]
             self._positions.pop(bisect.bisect_left(self._positions, pos))
 
+    def _spill_ok(self, key):
+        if self._host_cap() <= 0 or key[0] < host_spill_min_pos():
+            return False
+        return key not in self._low() or os.environ.get("QWEN36_PREFIX_HOST_SPILL_LOW", "0") == "1"
+
+    def _spill(self, key, slot):
+        """Copy device slot ``slot`` (snapshot ``key``) to host (blocking ttnn.from_device: waits for the queued work,
+        then reads every device's bytes) and insert it into the host LRU; over capacity the LRU host entry is dropped."""
+        t0 = time.perf_counter()
+        snap = [(ttnn.from_device(rec), ttnn.from_device(carry)) for rec, carry in self._slots[slot]]
+        host = self._host_tier()
+        host[key] = snap
+        host.move_to_end(key)
+        while len(host) > self._host_cap():
+            old, _ = host.popitem(last=False)
+            if old not in self._lru:
+                self._drop_pos(old)
+            self.bump("host_evictions")
+        self.bump("spills")
+        self.bump("spill_ms", (time.perf_counter() - t0) * 1e3)
+
     def restore(self, slot):
-        """Copy a slot's state into the currently bound GDN state (rec_state + conv_carry of every GDN layer)."""
-        for dn, (rec, carry) in zip(self._dns, self._slots[slot]):
+        """Copy a snapshot into the currently bound GDN state (rec_state + conv_carry of every GDN layer). ``slot``: a
+        device slot index, or a HostSnap (host tier hit: host -> staging slot (PCIe write), then the device copy)."""
+        if isinstance(slot, HostSnap):
+            t0 = time.perf_counter()
+            for (srec, scarry), (hrec, hcarry) in zip(self._staging, slot.tensors):
+                ttnn.copy_host_to_device_tensor(hrec, srec)
+                ttnn.copy_host_to_device_tensor(hcarry, scarry)
+            pairs = self._staging
+            self.bump("host_restores")
+            self.bump("host_restore_ms", (time.perf_counter() - t0) * 1e3)
+        else:
+            pairs = self._slots[slot]
+        for dn, (rec, carry) in zip(self._dns, pairs):
             ttnn.copy(rec, dn.rec_state)
             ttnn.copy(carry, dn.conv_carry)
 
