@@ -964,7 +964,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         """
         U = self.U
         resume = self.m.__dict__.get("pf_resume", {})
-        return {p // U for p, (end, _) in self.inprog.users.items() if p not in self.pf_done and resume.get(p) == end}
+        return {
+            p // U for p, (end, _) in tuple(self.inprog.users.items()) if p not in self.pf_done and resume.get(p) == end
+        }
 
     def prefill_row_capacity(self):
         """Prompts the mesh rows can still take into prefill right now: rows without an in-progress prompt that have a free user. None when the row-aware placement is off (the plugin's
