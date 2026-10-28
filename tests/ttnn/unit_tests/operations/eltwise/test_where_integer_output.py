@@ -52,6 +52,9 @@ def test_where_float_values_integer_output(
         assert torch.equal(ttnn.to_torch(control).float(), expected)
         result = ttnn.where(p, lhs, rhs, output_tensor=out)
         assert result.buffer_address() == out.buffer_address()
-        # UINT16 follows the existing WH/BH typecast rounding; INT32 truncates.
-        converted = torch.floor(expected + 0.5) if output_dtype == ttnn.uint16 else torch.trunc(expected)
-        assert torch.equal(ttnn.to_torch(result).to(torch.int32), converted.to(torch.int32))
+        # Integer outputs convert like ttnn.typecast of the FP32 control, whatever its UINT16 rounding mode;
+        # INT32 also has to truncate like torch.
+        converted = ttnn.to_torch(ttnn.typecast(control, output_dtype)).to(torch.int32)
+        if output_dtype == ttnn.int32:
+            assert torch.equal(converted, torch.trunc(expected).to(torch.int32))
+        assert torch.equal(ttnn.to_torch(result).to(torch.int32), converted)
