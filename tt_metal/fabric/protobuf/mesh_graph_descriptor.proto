@@ -506,14 +506,16 @@ message TorusTopology {
 // PipelineDescriptor
 // How many stages a pipeline has, how big each one is, and how they connect.
 // Validation (unique names and ids, rank-2 shapes, edges that name real stages,
-// no self-edges) lives in MeshGraphDescriptor, not in protobuf.
+// no self-edges, loopback marks, one host I/O stage) lives in MeshGraphDescriptor,
+// not in protobuf.
 //
 // A stage's shape is (rows, cols) in logical mesh orientation. It is not
 // transposed, and it does not name a mesh. Repeating an edge declares another
-// channel on that hop. Stage topology (in-degree, out-degree, number of roots,
-// whether a branch is a chain) is not limited. A cycle needs one edge marked
-// loopback: the edge back toward the stage that owns host I/O, as in s3 -> s0
-// of a four-stage ring. The edges not marked loopback must have no cycle.
+// channel on that hop. A cycle needs one edge marked loopback, as in s3 -> s0
+// of a four-stage ring. The edges not marked loopback must have no cycle, and
+// exactly one stage has no incoming edge besides loopbacks: it owns host I/O.
+// Otherwise stage topology (in-degree, out-degree, whether a branch is a
+// chain) is not limited.
 //
 // Every edge rides a fabric link. policy may be omitted or STRICT. RELAXED is
 // rejected by MeshGraphDescriptor validation.

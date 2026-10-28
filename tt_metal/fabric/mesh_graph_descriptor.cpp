@@ -2970,7 +2970,7 @@ void MeshGraphDescriptor::validate_pipeline_descriptors(
             }
         }
 
-        // In-degree, out-degree, roots, forks, and dead ends are not text errors. A repeated edge is another
+        // In-degree, out-degree, forks, and dead ends are not text errors. A repeated edge is another
         // channel, and feasibility counts each copy against the declared channels.
         for (const auto& edge : pipeline.edges()) {
             // An edge must name stages declared in the same pipeline.
@@ -3040,6 +3040,28 @@ void MeshGraphDescriptor::validate_pipeline_descriptors(
                 "pipeline '{}': cycle {} has no loopback edge; mark one of its edges loopback: true",
                 pipeline.name(),
                 *cycle));
+        } else {
+            // Exactly one stage has no incoming edge besides loopbacks. The resolver starts its stage order there
+            // and gives that stage host I/O, so a second such stage would leave the choice to its id.
+            std::unordered_set<std::string> fed;
+            for (const auto& [src, dsts] : forward) {
+                fed.insert(dsts.begin(), dsts.end());
+            }
+            std::unordered_set<std::string> seen;
+            std::string roots;
+            std::size_t root_count = 0;
+            for (const auto& stage : pipeline.stages()) {
+                if (!fed.contains(stage.id()) && seen.insert(stage.id()).second) {
+                    roots += (root_count++ == 0 ? "'" : ", '") + stage.id() + "'";
+                }
+            }
+            if (root_count > 1) {
+                error_messages.push_back(fmt::format(
+                    "pipeline '{}': stages {} have no incoming edge besides loopbacks; exactly one may, the stage "
+                    "that owns host I/O",
+                    pipeline.name(),
+                    roots));
+            }
         }
 
         // A loopback edge must close a cycle: its dst reaches its src over the other edges.
