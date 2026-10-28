@@ -2764,7 +2764,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         TT_FATAL(
             device.arch() == tt::ARCH::WORMHOLE_B0 || ring_size >= in1_tensor.shard_spec()->grid.num_cores(),
             "matmul gather_in0: the input A shard grid ({} cores) must have at least as many cores as B's DRAM "
-            "shard grid ({} banks)",
+            "shard grid ({} cores)",
             ring_size,
             in1_tensor.shard_spec()->grid.num_cores());
         num_receiver_cores_per_dram = ring_size / in1_tensor.shard_spec()->grid.num_cores();

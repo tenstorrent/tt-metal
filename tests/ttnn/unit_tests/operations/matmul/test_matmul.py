@@ -5308,3 +5308,13 @@ def test_attn_matmul_rejects_zero_grid(device, expect_error, grid):
     b = ttnn.from_torch(torch.randn(32, 1, 64, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "compute_with_storage_grid_size must be non-zero"):
         ttnn.experimental.attn_matmul(a, b, compute_with_storage_grid_size=ttnn.CoreCoord(*grid))
+
+
+def test_group_attn_matmul_rejects_zero_kv_heads(device, expect_error):
+    # Validate takes q_heads % kv_heads.
+    a = ttnn.from_torch(torch.randn(1, 32, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(32, 0, 64, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Number of q_heads must be divisible by kv_heads"):
+        ttnn.experimental.group_attn_matmul(
+            a, b, compute_with_storage_grid_size=device.compute_with_storage_grid_size()
+        )
