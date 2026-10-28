@@ -471,7 +471,7 @@ inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
     // Keep machine interrupts enabled so an FDS machine-external go interrupt can reach DM0.
 }
 #else
-inline __attribute__((interrupt, hot)) void handle_interrupt() {
+extern "C" __attribute__((noinline, used, hot)) void handle_interrupt() {
     uint32_t trisc_id = internal_::get_trisc_id();
     uint32_t error_code = RISC_PIC_BRISC_EX_REG_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
     if (error_code == trisc_id || (35 - error_code) == trisc_id ||
@@ -491,9 +491,90 @@ inline __attribute__((interrupt, hot)) void handle_interrupt() {
 #endif
 }
 
+// Quasar NEO TRISC error interrupt handler naked entry. Saves caller-saved registers around handle_interrupt.
+// A Quasar NEO TRISC can skip an mret if the branch predictor holds a predicted-taken entry whose hashed PC
+// matches mret's address. The trailing jump retries mret after the predictor entry is cleared.
+__attribute__((naked)) void trisc_error_irq_entry() {
+    asm volatile(
+        "addi sp, sp, -(16 * 4)
+"
+        "sw ra, 0 * 4(sp)
+"
+        "sw t0, 1 * 4(sp)
+"
+        "sw t1, 2 * 4(sp)
+"
+        "sw t2, 3 * 4(sp)
+"
+        "sw t3, 4 * 4(sp)
+"
+        "sw t4, 5 * 4(sp)
+"
+        "sw t5, 6 * 4(sp)
+"
+        "sw t6, 7 * 4(sp)
+"
+        "sw a0, 8 * 4(sp)
+"
+        "sw a1, 9 * 4(sp)
+"
+        "sw a2, 10 * 4(sp)
+"
+        "sw a3, 11 * 4(sp)
+"
+        "sw a4, 12 * 4(sp)
+"
+        "sw a5, 13 * 4(sp)
+"
+        "sw a6, 14 * 4(sp)
+"
+        "sw a7, 15 * 4(sp)
+"
+        "call handle_interrupt
+"
+        "lw ra, 0 * 4(sp)
+"
+        "lw t0, 1 * 4(sp)
+"
+        "lw t1, 2 * 4(sp)
+"
+        "lw t2, 3 * 4(sp)
+"
+        "lw t3, 4 * 4(sp)
+"
+        "lw t4, 5 * 4(sp)
+"
+        "lw t5, 6 * 4(sp)
+"
+        "lw t6, 7 * 4(sp)
+"
+        "lw a0, 8 * 4(sp)
+"
+        "lw a1, 9 * 4(sp)
+"
+        "lw a2, 10 * 4(sp)
+"
+        "lw a3, 11 * 4(sp)
+"
+        "lw a4, 12 * 4(sp)
+"
+        "lw a5, 13 * 4(sp)
+"
+        "lw a6, 14 * 4(sp)
+"
+        "lw a7, 15 * 4(sp)
+"
+        "addi sp, sp, 16 * 4
+"
+        "1: mret
+"
+        "j 1b
+");
+}
+
 inline __attribute__((always_inline)) void setup_isr_csrs() {
     uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
-    RISC_PIC_BRISC_HW_IVT_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] = reinterpret_cast<uint32_t>(handle_interrupt);
+    RISC_PIC_BRISC_HW_IVT_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] = reinterpret_cast<uint32_t>(trisc_error_irq_entry);
     *(RISC_PIC_BRISC_HW_INT_EN(trisc_id)) = 1 << HW_ERROR_INTERRUPT_INDEX;
     RISCV_DEBUG_REGS->ERR_MASK = 0xFFFF;  // enable all errors
 }
