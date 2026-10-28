@@ -125,11 +125,6 @@ jobs:
             echo "::warning::S3 connectivity probe failed; ccache will degrade remote misses to local. Continuing."
           fi
 
-      - name: Print clang-tidy version
-        run: |
-          clang-tidy-23 --version
-          echo "CLANG_TIDY_BIN=clang-tidy-23" >> "$GITHUB_ENV"
-
       - name: Configure ctcache
         # Same fork gate as ccache: forks have no secrets so skip silently.
         # ctcache is writable from all non-fork refs (including PR branches)
@@ -141,7 +136,7 @@ jobs:
           uv pip install --quiet "ctcache @ git+https://github.com/matus-chochlik/ctcache.git@e33c063ca6e52b48bcefbc45d46d8c150ffa81ca" boto3  # 1.2.0
 
           # Namespace encodes the clang-tidy version so a toolchain upgrade auto-invalidates
-          CT_VERSION=$("${CLANG_TIDY_BIN:-clang-tidy-23}" --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "23")
+          CT_VERSION="23"
           {
             echo "CTCACHE_S3_BUCKET=ctcache"
             echo "CTCACHE_S3_FOLDER=ct${CT_VERSION}"

@@ -41,34 +41,14 @@
 #
 # === v23 additions ===
 #
-# Checks new in clang-tidy 23, kept disabled rather than enabling + fixing
-# as part of the version bump; revisit individually. Diffed via
-# --list-checks on both binaries.
+# Checks new in, or with a stricter matcher since, clang-tidy 23 — kept
+# disabled rather than enabling + fixing as part of the version bump;
+# revisit individually.
 #
-# Two deliberate exceptions, not caught by (or overridden despite) the diff:
-#   portability-no-assembler — left ENABLED. It's where v20's
-#     hicpp-no-assembler landed after hicpp was removed with no alias;
-#     disabling it would drop coverage v20 already had.
-#   performance-faster-string-find — left DISABLED though not "new". v23
-#     errors on this deprecated name itself under --warnings-as-errors=*.
-#
-# Everything else below is a check that exists under the same name in both
-# versions but got a stricter/changed matcher in v21-23 — invisible to a
-# plain --list-checks diff, found by a/b testing both binaries on real code:
-#   bugprone-fold-init-type — widened std::accumulate matcher (4-arg +
-#     transparent functor, no functor type check)
-#   bugprone-optional-value-conversion — also matches std::make_optional()
-#   cppcoreguidelines-missing-std-forward — rewritten forwarding detection,
-#     false-positives on C++20 lambdas with explicit template params
-#     (open upstream regression, llvm/llvm-project#228393)
-#   modernize-redundant-void-arg — one matcher now also catches void(void)
-#     inside template args, e.g. std::function<void(void)> (upstream #173340)
-#   modernize-type-traits — flags ::type on dependent specializations inside
-#     decltype, not just direct uses
-#   modernize-use-default-member-init — also matches constexpr/static
-#     constant references, not just literals (upstream #129425)
-#   readability-else-after-return — also catches if/else directly under an
-#     unbraced switch case label
+# Exceptions: portability-no-assembler stays enabled (carries v20's
+# hicpp-no-assembler coverage); performance-faster-string-find stays
+# disabled though not new (v23 errors on the deprecated name itself
+# under --warnings-as-errors=*).
 Checks: >
   *,
   -bugprone-easily-swappable-parameters,
