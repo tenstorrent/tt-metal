@@ -153,8 +153,8 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
   partial sums of squares over the NoC). It is correct (y PCC 0.99996 vs torch) but slower than the two ops it
   replaces (WO 1110-1135 vs 1135 us, FF2 1745-1789 vs 1686 us at 16384 rows): the matmul starves once the
   epilogue's residual / output traffic runs. Not the cause: flush coupling, in0 / in1 buffer depth, DRAM
-  locality, posted writes, y in L1, issuing the traffic only while the weight relay waits. A multicast in1 path
-  (`IN1_MCAST`) hung the device and is unfinished.
+  locality, posted writes, y in L1, issuing the traffic only while the weight relay waits. Multicasting in1 from
+  the x = 0 column instead of relaying it core to core (`IN1_MCAST`, correct) does not help either (WO 1110 us, FF2 1734 us).
 * Tried and rejected: bfp8 Q / K / V into SDPA (Pearson 0.99927), approximate silu in the SwiGLU (no change),
   bf16 accumulation with 8-tile subblocks on FF1+FF3 (-1.8 %).
 * bs1 (35 %): the matmuls at 512 rows run at 27-52 % of their limit; FF2 at LoFi is bound by its weight

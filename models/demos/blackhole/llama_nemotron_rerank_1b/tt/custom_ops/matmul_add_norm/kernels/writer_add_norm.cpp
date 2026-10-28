@@ -333,7 +333,8 @@ void kernel_main() {
                     pump();
                 }
                 in1_sender_semaphore.set(0);
-                noc_async_write_set_trid(FWD_TRID);
+                // Not linked: a linked multicast holds the NOC path for the next multicast, and the
+                // flush below sits between this and the flag multicast.
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(in1_start_address),
                     MulticastEndpoint{},
@@ -345,10 +346,12 @@ void kernel_main() {
                      .noc_x_end = mcast_x1,
                      .noc_y_end = mcast_y1,
                      .addr = in1_start_address},
-                    true);
-                noc_async_write_flushed_with_trid(FWD_TRID);
-                noc_async_write_set_trid(0);
-                in1_valid_semaphore.set_multicast(noc, mcast_x0, mcast_y0, mcast_x1, mcast_y1, mcast_n);
+                    false);
+                noc.async_writes_flushed();
+                // The flag goes into the receivers' receiver semaphore (what they poll): multicast this
+                // core's own receiver semaphore, set to VALID.
+                in1_receiver_semaphore.set(VALID);
+                in1_receiver_semaphore.set_multicast(noc, mcast_x0, mcast_y0, mcast_x1, mcast_y1, mcast_n);
             }
             if (false) {
 #else
