@@ -310,3 +310,23 @@ Then, with no override: `gates.sh c_p2_12x10` and `gates.sh c_p2_13x10` (153 + 1
 each), 10-bucket contract gate at 12 x 10 with alloc tracking (10 passed), soak 2000 replays at
 1 x 2048 on 12 x 10 (0 mismatches), `perf.py` default at 13 x 10 new / `p3_qkv_gu` control / new
 (7.099 / 6.857 / 7.098 ms text 1 x 512). Values: README "E9.1-r re-selection".
+
+## 19. Amendment E9.1-r2a (2026-10-28): default `p2_sdpa_fast` -> `sdpa_nofp32acc`
+
+Sections 17 and 18 stay as the record of the E9.1-r choice. The E9.1-r review (verdicts.md row
+E9.1-r, finding 4) and the orchestrator changed the tie-break: the two configs tie within noise
+(41.843 / 41.845 ms), `sdpa_nofp32acc` has the wider worst-case margin (short probe 0.99240 vs
+0.99094) and no `exp_approx`; `p3_qkv_gu` had failed a new input after a 1.1e-3 probe margin.
+Run folder `tt-ops/runs/embeddinggemma-2/e9/01r2a/` (`$A`), scripts copied from `$G/scripts/`
+(`run.sh` waits while the card is held instead of exiting), one device command at a time.
+
+1. `selected_precision_config.json`: text section = `$G/precision/precision_sdpa_nofp32acc.json`
+   text section (JSON compare: equal; vision / audio equal to the previous file); `config_id`
+   `sdpa_nofp32acc`; description amended. The only text field that changes: `sdpa.exp_approx`
+   true -> false. `dtype_sweep.candidate_dict("sdpa_nofp32acc")["text"]` equals the new default text.
+2. `chain_r2a.sh`: `gates.sh r2a_12x10`, `gates.sh r2a_13x10` (153 + 1 + 2 passed each); contract
+   gate 10 buckets at 12 x 10 with alloc tracking (10 passed, min 0.99424 / 0.99834 at b1_s128);
+   `dtype_probe.py --inputs short / mid / e9` for `sdpa_nofp32acc` (all pass, worst 0.99240 at
+   `[511]`); soaks 2000 replays at 1 x 512 / 2048 / 4096 on 12 x 10 (0 mismatches each); `perf.py`
+   at 13 x 10 new / `p3_qkv_gu` control / new (7.078 / 6.861 / 7.091 ms text 1 x 512).
+   Values: README "Amendment E9.1-r2a".

@@ -1,10 +1,67 @@
 # EmbeddingGemma 2: datatype sweep (E6a text tower, E6b vision and audio towers)
 
-Selected defaults (`selected_precision_config.json`): text `p2_sdpa_fast` (E9.1-r re-selection at
-the 12 x 10 grid, next section; it replaces the E6a choice `p3_qkv_gu`), vision `v_exp_bfp8w4` and
-audio `a_h2b8_qkvbf16_shift2_sharded` (E6b, [Vision and audio towers (E6b)](#vision-and-audio-towers-e6b)).
+Selected defaults (`selected_precision_config.json`): text `sdpa_nofp32acc` (E9.1-r re-selection at
+the 12 x 10 grid, next section, as amended by E9.1-r2a; it replaces the E6a choice `p3_qkv_gu`),
+vision `v_exp_bfp8w4` and audio `a_h2b8_qkvbf16_shift2_sharded` (E6b,
+[Vision and audio towers (E6b)](#vision-and-audio-towers-e6b)).
 
-## E9.1-r re-selection (2026-10-28): text `p2_sdpa_fast`
+## E9.1-r re-selection (2026-10-28): text `p2_sdpa_fast`, amended to `sdpa_nofp32acc`
+
+### Amendment E9.1-r2a (2026-10-28): default switched to `sdpa_nofp32acc`
+
+The E9.1-r record below is kept as written: it selected `p2_sdpa_fast`. The orchestrator then
+changed the tie-break, and the text default is now `sdpa_nofp32acc` (the same policy without SDPA
+`exp_approx`; `selected_precision_config.json` text section = `$G/precision/precision_sdpa_nofp32acc.json`
+text section, checked equal by a JSON compare; vision / audio unchanged).
+
+**Why the switch.** The two configs tie within noise on time (ranking aggregate 41.845 vs 41.843 ms
+at 12 x 10; the baseline control moved 5 us in the same process). `sdpa_nofp32acc` has the wider
+worst-case margin (short probe last-hidden PCC 0.99240 vs 0.99094) and no `exp_approx`.
+`p3_qkv_gu` passed the E6 probe with a 1.1e-3 margin and then failed a new input (b1_s256), so the
+tie-break within noise is the wider worst-case margin, not the 2 us.
+
+**Gates with `sdpa_nofp32acc` as the default** (no override; run folder
+`tt-ops/runs/embeddinggemma-2/e9/01r2a/` (`$A`), `$A/scripts/chain_r2a.sh`, `logs/chain_r2a.log`) **[M]**:
+
+| gate | 12 x 10 | 13 x 10 (P150 default path) |
+|---|---|---|
+| text tests + `test_trace` + `test_precision_config` + `test_full_model` + `test_full_model_trace` + `test_generator_vllm` (`gates.sh`, `-k "not s32768"`) | 153 passed | 153 passed |
+| `test_text_model[b1_s32768]` | 1 passed | 1 passed |
+| `demo/demo.py` | 2 passed | 2 passed |
+| min logged `last_hidden_pcc` (12 values) / `embedding_cosine` (22 values) | 0.99240 / 0.99605 | 0.99240 / 0.99605 |
+| min per-layer PCC (`layer_pcc`, 72 values) | 0.99983 | 0.99983 |
+| text -> audio near-tie row (`caption_speech2s`) TT margin | 0.00094 | 0.00094 |
+| serving wrapper (`test_generator_vllm`) min embedding cosine, 18 rows | 0.99433 | 0.99433 |
+
+`test_precision_config`: `default precision sdpa_nofp32acc ...: 1211 checks passed`. Logs:
+`$A/logs/gates_r2a_{12x10,13x10}_{text,s32768,demo}.log`.
+
+Contract gate, 10 buckets, traced replay vs cached HF fp32 (`e9/refs/`) at 12 x 10,
+`TT_METAL_TRACE_ALLOC_TRACKING=1` (`$A/logs/gate_12x10.log`, `$A/run_gate_12x10/prefill.jsonl`)
+**[M]**, last-hidden PCC / embedding cosine (bars 0.99 / 0.99), replay == eager bitwise on all 10:
+
+| bucket | 128 | 256 | 512 | 1024 | 2048 | 4096 | 8192 | 16384 | 32768 | 65536 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| PCC | 0.99424 | 0.99432 | 0.99537 | 0.99577 | 0.99574 | 0.99581 | 0.99628 | 0.99706 | 0.99693 | 0.99724 |
+| cosine | 0.99834 | 0.99861 | 0.99912 | 0.99939 | 0.99952 | 0.99961 | 0.99965 | 0.99967 | 0.99965 | 0.99958 |
+
+Probe at 12 x 10 (`dtype_probe.py run --candidates sdpa_nofp32acc`; the candidate's text section
+equals the new default's, checked) **[M]**: short (E6 gate cases + probe) last 0.99240 (`[511]`) /
+cos 0.99565; mid 0.99631 / 0.99901; e9 (b1_s256 family) 0.99345 (L 160) / 0.99861. Worst case
+over the probe family and the contract inputs: last-hidden PCC 0.99240, embedding cosine 0.99565.
+Same values as the E9.1-r screen (`c4_probe_short`, `c4_probe_mid`, `c_probe_e9`). Logs:
+`$A/logs/probe_{short,mid,e9}_12x10.log`.
+
+KNOWN HAZARDS soaks (the K / V `rms_norm` input is bf16 and sits in L1 at every bucket up to
+4096): 2000 trace replays each on 12 x 10 with the new default, output re-read every 100 replays
+and compared bitwise with the first **[M]**: 1 x 512 `wall_s 14.5 mismatches 0`, 1 x 2048
+`wall_s 50.7 mismatches 0`, 1 x 4096 `wall_s 89.5 mismatches 0`; no hang, exit 0 each
+(`$A/logs/soak_1x{512,2048,4096}_12x10.log`).
+
+Cost vs `p3_qkv_gu` **[M]**: 13 x 10, `perf.py` default, text 1 x 512 forward, mean of 20 after 3
+warm-up, order new / control / new in one session (`$A/run_perf_13x10_*`): `sdpa_nofp32acc` 7.078 /
+7.091 ms vs `p3_qkv_gu` 6.861 ms (+3.3 %). 12 x 10 ranking aggregate (1x512 + 8x512 burst, E9.1-r
+screen `$G/logs/c_rank_12x10.log`): 41.845 vs 38.234 ms (+9.4 %).
 
 **Why.** E9 stage 1 found the E6a default `p3_qkv_gu` below the hard gate on the b1_s256 contract
 input (offset 0, 192 tokens: last-hidden PCC 0.98872), and the person moved the target to a
@@ -47,7 +104,8 @@ Logs: rank `$G/logs/c_rank_12x10.log` (`c_rank_12x10.jsonl`); probes `c_probe_e9
 **Tie and the rule.** `p2_sdpa_fast` (41.843 ms) and `sdpa_nofp32acc` (41.845 ms) differ by 2 us,
 inside the run-to-run noise (the baseline control moved 5 us). The orchestrator's rule: pick the
 fastest measured, `p2_sdpa_fast`, unless its full gates disqualify it; then `sdpa_nofp32acc`.
-`p2_sdpa_fast` passed the full gates (below), so it is the default.
+`p2_sdpa_fast` passed the full gates (below), so it is the default. (Superseded on the same day:
+amendment E9.1-r2a above changed the tie-break to the wider worst-case margin, `sdpa_nofp32acc`.)
 
 **Selected `p2_sdpa_fast`.** The E5a policy with SDPA fp32 accumulation off and `exp_approx` on;
 the QKV and gate / up projection outputs go back to bf16 (they were bfp8 in `p3_qkv_gu`). The

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "config_id": "p2_sdpa_fast",
-  "description": "E9.1-r re-selection at the 12 x 10 grid (2026-10-28): text policy p2_sdpa_fast: bfp8 weights, HiFi2 + fp32 accumulation matmuls; every activation bf16; SDPA HiFi2 without fp32 accumulation, with exp_approx; HiFi4 norms; bf16 residual; bfp4 masks. Replaces E6a p3_qkv_gu (fails the b1_s256 contract input). Safe baseline: config_id base_bfp8_hifi2 (README; crashes at 12 x 10 in multi-bucket sessions <= 8192, open for E9 stage 5).",
+  "config_id": "sdpa_nofp32acc",
+  "description": "E9.1-r re-selection at the 12 x 10 grid (2026-10-28), amended E9.1-r2a (2026-10-28): text policy sdpa_nofp32acc: bfp8 weights, HiFi2 + fp32 accumulation matmuls; every activation bf16; SDPA HiFi2 without fp32 accumulation, exact exp (no exp_approx); HiFi4 norms; bf16 residual; bfp4 masks. E9.1-r picked p2_sdpa_fast (same policy plus SDPA exp_approx); the two tie within noise on time, and E9.1-r2a switched to sdpa_nofp32acc for its wider worst-case probe margin. Replaces E6a p3_qkv_gu (fails the b1_s256 contract input). Safe baseline: config_id base_bfp8_hifi2 (README; crashes at 12 x 10 in multi-bucket sessions <= 8192, open for E9 stage 5).",
   "text": {
     "weights": {
       "attn_qkv": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
@@ -13,7 +13,7 @@
       "final_proj": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"}
     },
     "layer_exceptions": [],
-    "sdpa": {"fidelity": "HiFi2", "fp32_acc": false, "exp_approx": true},
+    "sdpa": {"fidelity": "HiFi2", "fp32_acc": false, "exp_approx": false},
     "norms": {"fidelity": "HiFi4", "fp32_acc": true},
     "residual_dtype": "bf16",
     "mask_dtype": "bfp4"

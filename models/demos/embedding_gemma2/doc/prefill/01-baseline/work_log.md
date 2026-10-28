@@ -192,3 +192,11 @@ the override also caps the ops that pick their own grid (norms, eltwise, `minima
   full-attention SDPA); open for stage 5.
 - Stage-1 timing numbers (13 x 10, `p3_qkv_gu`) are not comparable with the new contract; the
   12 x 10 re-baseline is the next unit.
+
+### Contract change (E9.1-r2a, 2026-10-28; orchestrator decision, E9.1-r review finding 4)
+
+`doc/prefill/target_contract.json`: `checkout.precision_config` text `p2_sdpa_fast` ->
+`sdpa_nofp32acc`, `checkout.contract_changes` extended, `accuracy.resolved_decisions.b1_s256`
+gains the new default's value on the input (0.99432 / 0.99861). Reason, gates, soaks and cost:
+`doc/datatype_sweep/README.md`, "Amendment E9.1-r2a". Run folder
+`tt-ops/runs/embeddinggemma-2/e9/01r2a/`.

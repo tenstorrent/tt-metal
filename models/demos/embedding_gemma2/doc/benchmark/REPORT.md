@@ -7,7 +7,7 @@ This report covers traced latency and throughput for every tower and for the ful
 - **Labels:** every number below is **[M]** from `run/perf.jsonl` unless labelled otherwise.
 - **No accuracy benchmark:** there is no MTEB or lm-eval run, by decision of the person running the bring-up. The HF checks below only guard the timed path.
 
-## Addendum 2026-10-28 (E9.1-r): text default changed to `p2_sdpa_fast`
+## Addendum 2026-10-28 (E9.1-r): text default changed to `p2_sdpa_fast` (amended to `sdpa_nofp32acc`, below)
 
 The text precision default in `doc/datatype_sweep/selected_precision_config.json` changed from
 `p3_qkv_gu` to `p2_sdpa_fast` (re-selected on the 12 x 10 Galaxy grid because `p3_qkv_gu` fails
@@ -35,6 +35,25 @@ Served embeddings change with the precision: the tt-inference-server wrapper
 file, so it serves `p2_sdpa_fast` with no code change. `tests/pcc/test_generator_vllm.py` passes
 with the new default at 13 x 10 and 12 x 10 (6 passed each; min serving embedding cosine vs HF fp32
 0.99433 over 18 rows, bar 0.99).
+
+### Amendment 2026-10-28 (E9.1-r2a): text default now `sdpa_nofp32acc`
+
+The addendum above records the E9.1-r choice `p2_sdpa_fast`. The same day the orchestrator switched
+the text default to `sdpa_nofp32acc` (the same policy without SDPA `exp_approx`): the two tie within
+noise on time (12 x 10 ranking aggregate 41.845 vs 41.843 ms), and `sdpa_nofp32acc` has the wider
+worst-case probe margin (0.99240 vs 0.99094). `doc/datatype_sweep/README.md`, "Amendment E9.1-r2a".
+The `p2_sdpa_fast` rows above are superseded in turn. Re-measured, 13 x 10 P150 path, `pytest
+tests/perf/perf.py -s` (quick default), commit `87aa096ffe` + the new config, order new / control /
+new **[M]** (`tt-ops/runs/embeddinggemma-2/e9/01r2a/run_perf_13x10_*`):
+
+| shape, mode | `sdpa_nofp32acc` (new default) mean ms | `p3_qkv_gu` control mean ms | E8 report |
+|---|---|---|---|
+| text 1 x 512, forward | 7.078 / 7.091 (p50 7.073 / 7.091) | 6.861 (p50 6.862) | 6.869 (p50) |
+| full model text 1 x 512, forward | 7.097 / 7.092 | 6.871 | 6.869 (p50) |
+
+The new default costs +3.3 % at text 1 x 512 (141 vs 146 emb/s). The serving wrapper serves
+`sdpa_nofp32acc` with no code change; `test_generator_vllm.py` passes at 13 x 10 and 12 x 10 (min
+serving embedding cosine 0.99433 over 18 rows).
 
 ## Headline (batch 1)
 
