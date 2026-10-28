@@ -2172,7 +2172,7 @@ def run_chunked_transformer_updated(
         if kda_states is None:
             return
         for slot in range(kda_states.num_slots):
-            kda_states.reset(slot)
+            kda_states.zero_slot(slot)
         ttnn.synchronize_device(mesh_device)
         logger.info(f"[trace] reset {kda_states.num_slots} KDA carry slot(s) {reason}")
 

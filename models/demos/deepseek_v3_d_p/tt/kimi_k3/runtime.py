@@ -95,28 +95,25 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         return KimiK3LayerSchedule.build(KimiK3Config, first, count)
 
     def compile(self, kv_caches) -> None:
-        """Bind the engine-owned KDA state slabs to the model's carries, then warm up as usual.
+        """Hand the engine-owned KDA state slabs to the model, then warm up as usual.
 
-        The binding must precede the first forward: under trace `compile()` runs `_prepare_trace`,
-        whose warm pass is the first time a commit executes, and every commit from then on also
-        exports into the slabs. Binding later would leave the capture without the export.
+        The slabs are the KDA carries' only store, so they must be on the model before the first
+        forward: under trace `compile()` runs `_prepare_trace`, whose warm pass is the first time a
+        KDA layer loads and stores, and the capture bakes the slab addresses in. The shared runtime
+        passes the model only `kv_caches.kvpe`, which is why this is an attribute and not a forward
+        argument.
         """
-        self._bind_kda_states(kv_caches)
-        super().compile(kv_caches)
-
-    def _bind_kda_states(self, kv_caches) -> None:
         slabs = getattr(kv_caches, "kda_states", None)
-        carries = getattr(self.model, "kda_states", None)
-        if slabs is None and carries is None:
-            return
-        if slabs is None or carries is None:
+        has_kda_layers = self.model.kda_scratch is not None
+        if (slabs is None) != (not has_kda_layers):
             raise RuntimeError(
                 "Kimi-K3 KDA state is split: the engine allocated "
-                f"{'no' if slabs is None else 'the'} slabs and the model built "
-                f"{'no' if carries is None else 'its'} carries; allocate_kv_cache and build_runtime "
+                f"{'no' if slabs is None else 'the'} slabs and the model has "
+                f"{'no' if not has_kda_layers else 'its'} KDA layers; allocate_kv_cache and build_runtime "
                 "disagree on which layers are KDA"
             )
-        carries.bind_slabs(slabs)
+        self.model.kda_states = slabs
+        super().compile(kv_caches)
 
     def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
         """Three stages, always, in table-config order: kvpe, KDA recurrent, KDA convolution. Under DSpark
@@ -317,13 +314,11 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         # metadata must satisfy the same aligned-start, nonempty-interval contract.
         validate_kda_bounds(actual_start, bound.arguments.get("actual_end"))
         if actual_start == 0:
-            states = getattr(self.model, "kda_states", None)
-            if states is not None:
-                # This slot only. Zeroing every slot would wipe the in-flight carries of any OTHER
-                # user mid-prefill, and a recurrent carry cannot be rebuilt from the chunk in front
-                # of it -- the remaining chunks would be conditioned on nothing and the run would
-                # return a plausible answer computed from the wrong history, with no error.
-                slot_id = bound.arguments.get("slot_id", 0)
-                states.reset(slot_id)
-                logger.debug(f"KDA carries reset for slot {slot_id} at request head")
+            # This slot only. Zeroing every slot would wipe the in-flight carries of any OTHER
+            # user mid-prefill, and a recurrent carry cannot be rebuilt from the chunk in front
+            # of it -- the remaining chunks would be conditioned on nothing and the run would
+            # return a plausible answer computed from the wrong history, with no error.
+            slot_id = bound.arguments.get("slot_id", 0)
+            self.model.reset_streams(slot_id)
+            logger.debug(f"KDA carries reset for slot {slot_id} at request head")
         return super().prefill_chunk(*args, **kwargs)
