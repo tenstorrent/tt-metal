@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(0);
@@ -22,18 +23,26 @@ void kernel_main() {
 
     const auto output_accessor = TensorAccessor(output_args, dst_addr, page_bytes);
 
-    for (uint32_t done = 0; done < core_tiles; done += block_tiles) {
-        const uint32_t remaining = core_tiles - done;
-        const uint32_t valid = remaining < block_tiles ? remaining : block_tiles;
-        cb_wait_front(cb_output_tiles, block_tiles);
-        uint32_t l1_read_addr = get_read_ptr(cb_output_tiles);
-        const uint32_t page0 = start_tile + done;
-        for (uint32_t i = 0; i < valid; ++i) {
-            noc_async_write_page(page0 + i, output_accessor, l1_read_addr);
-            l1_read_addr += page_bytes;
+    // Permanent stage zones (free when the profiler is off). Kernel-level, never per block.
+    // writer_write is occupancy: includes cb_wait_front stalls on compute.
+    {
+        MaybeDeviceZoneScope("writer_write");
+        for (uint32_t done = 0; done < core_tiles; done += block_tiles) {
+            const uint32_t remaining = core_tiles - done;
+            const uint32_t valid = remaining < block_tiles ? remaining : block_tiles;
+            cb_wait_front(cb_output_tiles, block_tiles);
+            uint32_t l1_read_addr = get_read_ptr(cb_output_tiles);
+            const uint32_t page0 = start_tile + done;
+            for (uint32_t i = 0; i < valid; ++i) {
+                noc_async_write_page(page0 + i, output_accessor, l1_read_addr);
+                l1_read_addr += page_bytes;
+            }
+            noc_async_writes_flushed();  // L1 source reads done -> slot can be recycled
+            cb_pop_front(cb_output_tiles, block_tiles);
         }
-        noc_async_writes_flushed();  // L1 source reads done -> slot can be recycled
-        cb_pop_front(cb_output_tiles, block_tiles);
     }
-    noc_async_write_barrier();
+    {
+        MaybeDeviceZoneScope("writer_final_barrier");
+        noc_async_write_barrier();
+    }
 }

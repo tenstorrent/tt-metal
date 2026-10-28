@@ -6,8 +6,12 @@
 Blocking knobs (op_design.md -> Blocking Model), each defined once here:
   BLOCK_TILES_DEFAULT  - tiles per block (one CB handshake / NoC barrier / DEST window);
                          clamped by the DEST capacity and by the per-core assignment.
-  INPUT_DEPTH_BLOCKS   - cb_input_tiles capacity in blocks (2 = double-buffered).
+  INPUT_DEPTH_BLOCKS   - cb_input_tiles capacity in blocks.
   OUTPUT_DEPTH_BLOCKS  - cb_output_tiles capacity in blocks.
+                         Perf 1: 32 blocks deep (was 2) so compute hides under the DRAM-bound DM;
+                         each CB is capped at the per-core assignment rounded up to a whole block
+                         (a CB that holds the whole assignment never blocks its producer), so
+                         small shapes pay no extra L1. Max 2 x 256 bf16 tiles = 1 MiB per core.
   core_grid            - builder parameter; defaults to the full compute grid.
 """
 
@@ -19,8 +23,8 @@ import ttnn
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 BLOCK_TILES_DEFAULT = 8
-INPUT_DEPTH_BLOCKS = 2
-OUTPUT_DEPTH_BLOCKS = 2
+INPUT_DEPTH_BLOCKS = 32
+OUTPUT_DEPTH_BLOCKS = 32
 
 FP32_DEST_ACC_EN = False
 DST_FULL_SYNC_EN = False
@@ -69,8 +73,12 @@ def create_program_descriptor(
     block_tiles = max(1, min(block_tiles_default, dest_limit(FP32_DEST_ACC_EN, DST_FULL_SYNC_EN), core_tiles_g1))
 
     # ---- Circular buffers ----
+    # Depth in tiles, capped at the largest per-core assignment rounded up to a whole block.
+    assignment_tiles = -(-core_tiles_g1 // block_tiles) * block_tiles
+    input_cb_tiles = min(input_depth_blocks * block_tiles, assignment_tiles)
+    output_cb_tiles = min(output_depth_blocks * block_tiles, assignment_tiles)
     cb_input_tiles = ttnn.CBDescriptor(
-        total_size=input_depth_blocks * block_tiles * input_page_size,
+        total_size=input_cb_tiles * input_page_size,
         core_ranges=all_cores,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
@@ -79,7 +87,7 @@ def create_program_descriptor(
         ],
     )
     cb_output_tiles = ttnn.CBDescriptor(
-        total_size=output_depth_blocks * block_tiles * output_page_size,
+        total_size=output_cb_tiles * output_page_size,
         core_ranges=all_cores,
         format_descriptors=[
             ttnn.CBFormatDescriptor(

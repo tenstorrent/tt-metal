@@ -18,8 +18,8 @@ The schema and audits are defined in `.claude/references/l1-footprint-discipline
 |--------|-------|------------------------------------|
 | `tile_bytes` | 2048 | `ttnn.tile_size(ttnn.bfloat16)`. Phase 0 dtype gate. |
 | `block_tiles` | `1 ≤ block_tiles ≤ min(8, core_tiles_g1)` | Host clamp `min(BLOCK_TILES_DEFAULT=8, dest_limit(fp32_dest_acc_en=False, dst_full_sync_en=False)=8, core_tiles_g1)`. The FullBlock DEST cap is at `chain.hpp:504-508`. |
-| `input_depth_blocks` | 2 (Phase 0). Knob range 1–4. | Host constant (overlap lamp) |
-| `output_depth_blocks` | 2 (Phase 0). Knob range 1–4. | Host constant |
+| `input_depth_blocks` | 32 (Perf 1; was 2). Capacity = `min(32·block_tiles, ceil(core_tiles_g1/block_tiles)·block_tiles)` ≤ 256 tiles. | Host constant; Perf 1 measured that deep CBs hide compute under the DRAM-bound DM |
+| `output_depth_blocks` | 32 (Perf 1; was 2). Same cap as the input CB. | Host constant |
 | `core_tiles_g1` | `ceil(tensor_tiles / num_cores)`. This does not appear in any capacity, only in the clamp. | `ttnn.split_work_to_cores` |
 
 No op dimension (`tensor_tiles`, `H`, `W`) appears in any capacity, so the footprint is independent of tensor size.
@@ -32,7 +32,7 @@ L1_cb(block_tiles, input_depth_blocks, output_depth_blocks) =
     + output_depth_blocks · block_tiles · tile_bytes     # cb_output_tiles — scales with block_tiles × output depth
 ```
 
-Phase 0: `2·8·2048 + 2·8·2048 = 65 536 B` (64 KiB) per core. That is about 5% of usable L1 for any input size. The max over the knob ranges (`4·8·2048·2 = 128 KiB`) also fits trivially.
+Phase 0: `2·8·2048 + 2·8·2048 = 65 536 B` (64 KiB) per core. **Perf 1:** each CB is `min(32·block_tiles, assignment rounded up to a block)` tiles, so the worst case is `2·256·2048 = 1 MiB` per core, independent of tensor size (focus (1,1,4096,4096): 2·144 tiles = 576 KiB). That is about 5% of usable L1 for any input size. The max over the knob ranges (`4·8·2048·2 = 128 KiB`) also fits trivially.
 
 ---
 

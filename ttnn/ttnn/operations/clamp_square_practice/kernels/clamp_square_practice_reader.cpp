@@ -10,6 +10,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(0);
@@ -23,6 +24,9 @@ void kernel_main() {
 
     const auto input_accessor = TensorAccessor(input_args, src_addr, page_bytes);
 
+    // Permanent stage zone (free when the profiler is off). Kernel-level, never per block: the
+    // per-RISC marker budget is exhausted silently. Occupancy: includes cb_reserve_back stalls.
+    MaybeDeviceZoneScope("reader_read");
     for (uint32_t done = 0; done < core_tiles; done += block_tiles) {
         const uint32_t remaining = core_tiles - done;
         const uint32_t valid = remaining < block_tiles ? remaining : block_tiles;

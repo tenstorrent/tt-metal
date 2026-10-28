@@ -1,21 +1,117 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// clamp_square_practice compute — clamp_square_block.
-// ONE eltwise_chain call spans this core's whole assignment: Copy -> Clamp -> Square -> Pack,
-// blocked by block_tiles DEST lanes with FullBlock CB synchronization (nominal block_tiles
-// wait/pop/reserve/push even on the ragged last block; math/pack touch only valid tiles).
-// Element inits and format reconfig are therefore paid once per core.
+// clamp_square_practice compute — ONE eltwise_chain over the core's whole assignment:
+// CopyTile -> ClampSquareFused (one raw SFPU pass: y = RNE_bf16(clamp(x, min, max)^2)) -> PackTile,
+// blocked by block_tiles DEST lanes with FullBlock CB sync. Graduated in Perf 1 from experiment
+// perf_experiments/fused_sfpu_clamp_square (replaced the helper Clamp -> Square element pair).
 //
 // CT args: [cb_input_tiles, cb_output_tiles, block_tiles]
 // RT args: [core_tiles, min_bits (fp32), max_bits (fp32)]
+//
+// WHY RAW LLK (helper bypassed: compute_kernel_lib::Clamp + compute_kernel_lib::Square chain elements).
+// Measured, Blackhole p150b, bf16, fp32_dest_acc_en=False, compute stage isolated (reader/writer NoC
+// payload stubbed, (1,1,4096,4096) = 137 tiles/core, DEVICE KERNEL DURATION):
+//     helper Clamp->Square chain 78.6 us | raw fused (this file) 40.5 us (1.94x)
+//   whole op (real DM): 184-186 us -> 164-165 us (1.11-1.14x); DM-only floor (no SFPU) 154 us.
+// Mechanism: the helper runs two SFPU passes over DEST (load/store per row each); Clamp reprograms LREG12
+// via SFPLOADI+SFPCONFIG twice per row; Square does a 5-op software RNE; with two distinct SFPU
+// element types the chain re-runs both inits per block. Fused: per row load, 2x SFPSWAP against the
+// read-only const regs (no SFPMOV copies), SFPMUL, 4-op RNE, store; fully unrolled, no TTINCRWC.
+// SFPSWAP is 2 cycles on BH, so the pass is ~11 cycles/row vs ~22 for the helper. (An SFPLOADMACRO
+// schedule measured 37.6 us isolated but tied on the whole op; not graduated — see changelog Perf 1.)
+// Helper gap = CAPABILITY: there is no chain element computing clamp(x)^2 in one DEST pass (nor a way to
+// fuse two SFPU element bodies into one row loop); the chain walk itself is still the helper's.
+//
+// Precision: bit-identical to the helper chain for bf16-exact bounds (exhaustive 65536 bf16 inputs).
+// For non-bf16-exact bounds (e.g. -0.3/0.7) the helper squares the bf16-TRUNCATED bound (Clamp stores to
+// 16-bit DEST first) and is 1 ULP off the op's fp32 reference on every clamped element; this kernel
+// squares the fp32 bound and matches torch.clamp(x.float(), lo, hi)**2 -> bf16 exactly.
+//
+// Hazards (BH ISA, re-checked): SFPSWAP's next-cycle stall and SFPMAD/SFPMUL results are HW-scoreboarded
+// for explicit instructions; SFPSHFT/SFPIADD here read their source via VC (mod 4) or a register written
+// >= 2 instructions earlier, so the scoreboard's VD-read blind spot is not hit.
 
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/compute_kernel_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
+#ifdef TRISC_MATH
+#include "ckernel_sfpu_square.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
+
+namespace clamp_square_fused {
+
+using namespace ckernel;
+
+// The RNE below drops the 0xffff0000 mask because SFPSTORE into 16-bit DEST keeps the high half.
+// With fp32 DEST the rounding must be skipped instead (as calculate_square does) -> not expressible here.
+static_assert(!DST_ACCUM_MODE, "fused clamp-square kernel assumes 16-bit (bf16) DEST");
+
+// RNE fp32 -> bf16 on two registers: d += 0x7fff + ((d << 15) >> 31)   (LREG14 = 0x7fff)
+template <uint32_t R0, uint32_t R1, uint32_t T0, uint32_t T1>
+ALWI void rne_pair() {
+    TTI_SFPSHFT(15, R0, T0, 5);  // T = R << 15 (source VC=R, mod 4 | imm)
+    TTI_SFPSHFT(15, R1, T1, 5);
+    TTI_SFPSHFT((-31) & 0xfff, T0, T0, 5);  // T = bit 16 of R (the bf16 lsb)
+    TTI_SFPSHFT((-31) & 0xfff, T1, T1, 5);
+    TTI_SFPIADD(0, p_sfpu::LREG14, R0, 4);  // R += 0x7fff, no CC update
+    TTI_SFPIADD(0, p_sfpu::LREG14, R1, 4);
+    TTI_SFPIADD(0, T0, R0, 4);  // R += lsb
+    TTI_SFPIADD(0, T1, R1, 4);
+}
+
+// clamp: max against LREG12 (mod1=9: VD=max), min against LREG13 (VEC_MIN_MAX: VD=min). The const VC is
+// never written, so no copy is needed.
+template <uint32_t R0, uint32_t R1>
+ALWI void clamp_pair() {
+    TTI_SFPSWAP(0, p_sfpu::LREG12, R0, 9);
+    TTI_SFPSWAP(0, p_sfpu::LREG12, R1, 9);
+    TTI_SFPSWAP(0, p_sfpu::LREG13, R0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG13, R1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+}
+
+// ---- plain raw schedule: one face = 4 pairs of rows; 2nd store of a pair advances dest by 4 (ADDR_MOD_6)
+inline void raw_face() {
+#pragma GCC unroll 4
+    for (int d = 0; d < 4; d++) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2);
+        clamp_pair<p_sfpu::LREG0, p_sfpu::LREG1>();
+        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+        rne_pair<p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3>();
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 2);
+    }
+}
+
+inline void init(uint32_t lo_bits, uint32_t hi_bits) {
+    SFPU_UNARY_INIT(square);         // ADDR_MOD_7/6 (+4), counters, SFPU config
+    sfpi::vConstIntPrgm0 = lo_bits;  // LREG12
+    sfpi::vConstIntPrgm1 = hi_bits;  // LREG13
+    sfpi::vConstIntPrgm2 = 0x7fff;   // LREG14
+}
+
+inline void face(uint32_t, uint32_t) { raw_face(); }
+
+}  // namespace clamp_square_fused
+#endif  // TRISC_MATH
+
+// Custom DEST-only chain element (one SFPU pass per tile).
+struct ClampSquareFused : compute_kernel_lib::UnaryOp<ClampSquareFused, compute_kernel_lib::Dst::D0> {
+    uint32_t lo_bits;
+    uint32_t hi_bits;
+    constexpr ClampSquareFused(uint32_t lo, uint32_t hi) noexcept : lo_bits(lo), hi_bits(hi) {}
+    ALWI void init() const { MATH((clamp_square_fused::init(lo_bits, hi_bits))); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            clamp_square_fused::face, slot_offset, VectorMode::RC, lo_bits, hi_bits)));
+    }
+};
 
 void kernel_main() {
     constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(0);
@@ -34,12 +130,12 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_input_tiles, cb_output_tiles);
 
     using namespace compute_kernel_lib;
+    MaybeDeviceZoneScope("compute_chain");
     eltwise_chain(
         IterationShape::tiles(core_tiles).block_size(block_tiles, BlockTailSync::FullBlock),
         CopyTile<
             input(cb_input_tiles, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block),
             Dst::D0>{input_tiles},
-        Clamp<Dst::D0>{min_bits, max_bits},
-        Square<Dst::D0>{},
+        ClampSquareFused{min_bits, max_bits},
         PackTile<output(cb_output_tiles, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{output_tiles});
 }
