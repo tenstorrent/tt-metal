@@ -851,6 +851,13 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                             Mt,
                             per_core_M,
                             num_blocks_y);
+                        TT_FATAL(
+                            per_core_M <= Mt,
+                            "{}: per_core_M ({}) exceeds Mt ({}). Each core would compute more output row tiles "
+                            "than the tensor has. Reduce per_core_M to at most Mt.",
+                            config_name,
+                            per_core_M,
+                            Mt);
                     } else {
                         TT_FATAL(
                             num_blocks_x == 1,
