@@ -36,7 +36,9 @@ class FunctionContext:
             ...
 
     ctx.needs_input_grad holds one bool per input to forward(), True for each tensor that requires grad (always
-    False for non-tensors), as in PyTorch. backward() can use it to skip the grads nobody needs.
+    False for non-tensors), as in PyTorch. backward() can use it to skip the grads nobody needs. Unlike PyTorch,
+    backward() returns one grad per tensor input only, so its indices line up with needs_input_grad only while the
+    tensor inputs come first in forward().
     """
 
     def __init__(self):
