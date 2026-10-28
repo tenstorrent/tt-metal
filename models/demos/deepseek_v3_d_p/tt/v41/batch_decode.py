@@ -81,6 +81,10 @@ def c1_place(topk, put_row):
     return ttnn.to_layout(ttnn.typecast(ttnn.typecast(placed, ttnn.int32), ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
 
 
+NEG_SIN = os.environ.get("V41_DECODE_NEG_SIN", "layer")
+assert NEG_SIN in ("layer", "once"), NEG_SIN
+
+
 @dataclass
 class _User:
     position: int  # the position the next token goes to
@@ -834,6 +838,7 @@ class TtV41BatchDecoder(TtV41Decoder):
             self.inputs["token"] = ttnn.reshape(self.inputs["token"], (1, 1, ROWS))
         else:
             self.inputs = self.buffers
+        self._neg_sin = {}  # rope key -> -sin, computed once a step (V41_DECODE_NEG_SIN=once)
         masks = {ratio: None if self.single_query else self._mask(ratio) for ratio in self.iota}
         selection = {}
         h = model.embedding(self.inputs["token"])
@@ -901,7 +906,8 @@ class TtV41BatchDecoder(TtV41Decoder):
     def _attention(self, attn: TtV41Attention, x, masks: dict, selection: dict):
         """``TtV41Attention.forward`` for the tile of users (``x`` [1, 1, ROWS, hidden/tp] bf16)."""
         layer, pool, cfg = attn.layer, self.pool, self.config
-        cos, sin = self.inputs["ropec" if attn.ratio else "rope0"]
+        rope_key = "ropec" if attn.ratio else "rope0"
+        cos, sin = self.inputs[rope_key]
         xq = fp8_qdq(x)
         qr = ttnn.rms_norm(attn.ccl.tp_all_reduce(attn._dense(xq, "wq_a")), weight=attn.q_norm, epsilon=attn.eps)
         q = attn._dense(fp8_qdq(qr), "wq_b")  # [1, 1, ROWS, H/tp * head_dim]
@@ -969,7 +975,13 @@ class TtV41BatchDecoder(TtV41Decoder):
                 attention_sink=attn.sink_local,
             )
             out = o_heads(
-                out, cos, ttnn.neg(sin), attn.trans_mat, attn.o_groups // self.tp, attn.rope_dim, heads=attn.local_heads
+                out,
+                cos,
+                self._neg(rope_key, sin),
+                attn.trans_mat,
+                attn.o_groups // self.tp,
+                attn.rope_dim,
+                heads=attn.local_heads,
             )
             return attn._o_proj(out)
         q = attn.ccl.tp_all_gather(q, dim=3)
@@ -983,10 +995,21 @@ class TtV41BatchDecoder(TtV41Decoder):
             k_chunk_size=k_chunk,
             attention_sink=attn.sink,
         )
-        out = o_heads(out, cos, ttnn.neg(sin), attn.trans_mat, attn.o_groups, attn.rope_dim)
+        out = o_heads(out, cos, self._neg(rope_key, sin), attn.trans_mat, attn.o_groups, attn.rope_dim)
         if self.tp > 1:
             out = ttnn.mesh_partition(out, dim=1, cluster_axis=TP_AXIS)
         return attn._o_proj(out)
+
+    def _neg(self, key: str, sin):
+        """``-sin`` for ``o_heads``' inverse RoPE: one ``ttnn.neg`` a step per RoPE table under
+        ``V41_DECODE_NEG_SIN=once`` (the same ``sin`` serves every layer of the step; 40 one-tile ops a step
+        otherwise), one a layer otherwise."""
+        if NEG_SIN != "once":
+            return ttnn.neg(sin)
+        out = self._neg_sin.get(key)
+        if out is None:
+            out = self._neg_sin[key] = ttnn.neg(sin)
+        return out
 
     def _encode(self, rows, fmt: MlaKvCacheFormat):
         """Logical ``[1, 1, ROWS, 512]`` rows -> the row-major rows of ``fmt`` (as ``V41PrefillState._encode``)."""
