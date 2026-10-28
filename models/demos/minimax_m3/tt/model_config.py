@@ -10,30 +10,28 @@ import json
 import os
 from pathlib import Path
 
-import torch
 from loguru import logger
 from tqdm import tqdm
 from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
+from models.demos.minimax_m3.utils.checkpoint import read_text_backbone, text_config_of
+from models.demos.minimax_m3.utils.model_variant import VARIANTS, load_config, select_variant
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
-
-# Default locations of the MiniMax-M3 checkpoint and its tilized weight cache on the exabox weka filesystem.
-# The weights dir is read-only (root-owned), so the cache cannot live under the checkpoint as it used to on
-# NFS: TT_CACHE_PATH, else this cache root if it exists on the host, else the checkpoint dir (legacy layout).
-M3_DEFAULT_WEIGHTS_DIR = "/mnt/weka/model-weights/llm/minimax/MiniMax-M3"
-M3_DEFAULT_CACHE_ROOT = "/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill"
-M3_DEFAULT_GOLDEN_DIR = M3_DEFAULT_CACHE_ROOT + "/golden"
 
 
 def default_weight_cache_root(model_path) -> Path:
-    """Root under which ``tensor_cache_bfp8_{MeshShape}`` dirs live: ``TT_CACHE_PATH`` > ``M3_DEFAULT_CACHE_ROOT``
-    (when that directory exists) > the checkpoint dir itself (the legacy NFS layout)."""
+    """Root under which ``tensor_cache_bfp8_{MeshShape}`` dirs live: ``TT_CACHE_PATH`` > the variant's shared cache
+    root on weka (only for that variant's default checkpoint dir, when the root exists) > the checkpoint dir itself
+    (the legacy NFS layout). Cache files do not record their source, so another checkpoint never defaults to a
+    shared cache. The weights dirs are read-only, hence the separate cache roots."""
     cache_dir = os.getenv("TT_CACHE_PATH")
     if cache_dir:
         return Path(cache_dir)
-    if os.path.isdir(M3_DEFAULT_CACHE_ROOT):
-        return Path(M3_DEFAULT_CACHE_ROOT)
+    for variant in VARIANTS.values():
+        is_default_checkpoint = os.path.realpath(model_path) == os.path.realpath(variant.weights_dir)
+        if is_default_checkpoint and os.path.isdir(variant.cache_root):
+            return Path(variant.cache_root)
     return Path(model_path)
 
 
@@ -66,52 +64,47 @@ class ModelArgs:
         self.cache_hf = cache_hf
 
         # Weights come from the HF_MODEL environment variable (tt_transformers standard); there is
-        # no built-in default path. Dummy-weights mode needs no checkpoint, so a name-only
-        # placeholder is enough to satisfy the model-name check below.
+        # no built-in default path. Dummy-weights mode needs no checkpoint: the model is built from the
+        # selected variant's repo config (M3_MODEL_VARIANT, default MiniMax-M3; utils/model_variant.py).
         hf_model = os.getenv("HF_MODEL")
+        if hf_model is None and not self.dummy_weights:
+            raise ValueError(
+                "HF_MODEL is not set. Point it at a MiniMax-M3 checkpoint directory, "
+                "or construct ModelArgs with dummy_weights=True."
+            )
+        self.model_variant = select_variant(hf_model)
         if hf_model is None:
-            if not self.dummy_weights:
-                raise ValueError(
-                    "HF_MODEL is not set. Point it at a MiniMax-M3 checkpoint directory, "
-                    "or construct ModelArgs with dummy_weights=True."
-                )
-            hf_model = "MiniMax-M3"  # placeholder (dummy weights — no checkpoint load)
+            hf_model = self.model_variant.name  # placeholder (dummy weights — no checkpoint load)
         self.model_path = hf_model
         self.weights_path = hf_model
 
         logger.info(
-            f"Using MiniMax-M3 model from: {self.model_path}"
+            f"Using {self.model_variant.name} model from: {self.model_path}"
             f"{' (dummy weights — no checkpoint load)' if self.dummy_weights else ''}"
         )
 
         if self.dummy_weights:
-            # Skip loading HF config for testing - use default values
-            logger.info("Using dummy weights mode - skipping HuggingFace config loading")
+            from transformers import PretrainedConfig
 
+            logger.info(f"Using dummy weights mode - model config from {self.model_variant.config_path}")
+            self.vl_config = None
+            self.hf_config = text_config_of(PretrainedConfig(**load_config(self.model_variant.name)))
         else:
-            # Load HF config to get model parameters. M3's published config is VL-wrapped
-            # (model_type=minimax_m3_vl); the TEXT-backbone dims live under `.text_config`, so we
-            # unwrap it and keep the wrapper (vision dims etc.) as `self.vl_config` for later.
+            # M3's published config is VL-wrapped (model_type=minimax_m3_vl); the TEXT-backbone dims live
+            # under `.text_config`, so we unwrap it and keep the wrapper (vision dims etc.) as `self.vl_config`.
             cfg = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
             self.vl_config = cfg
-            self.hf_config = getattr(cfg, "text_config", cfg)
-            # Set key attributes that tt_transformers expects
-            self.vocab_size = self.hf_config.vocab_size
-            self.n_layers = getattr(self.hf_config, "num_hidden_layers", 32)
-            # head_dim (128) is set independently of hidden_size/num_attention_heads, so read it
-            # directly from the config.
-            self.head_dim = getattr(
-                self.hf_config, "head_dim", self.hf_config.hidden_size // self.hf_config.num_attention_heads
-            )
-            self.rope_theta = getattr(self.hf_config, "rope_theta", 10000.0)
-            self.rope_scaling = getattr(self.hf_config, "rope_scaling", None)
+            self.hf_config = text_config_of(cfg)
+        # Set key attributes that tt_transformers expects (text_config_of checked they are present).
+        self.vocab_size = self.hf_config.vocab_size
+        self.n_layers = self.hf_config.num_hidden_layers
+        self.head_dim = self.hf_config.head_dim
+        self.rope_theta = self.hf_config.rope_theta
+        self.rope_scaling = getattr(self.hf_config, "rope_scaling", None)
 
         # Add missing attributes that Generator expects
         self.max_prefill_chunk_size = 128 * 1024
         self.model_name = Path(self.model_path).name
-        assert self.model_name.startswith(
-            "MiniMax-M3"
-        ), f"Unrecognized model name {self.model_name} inferred from model path {self.model_path}. Expected a MiniMax-M3* checkpoint dir (e.g. MiniMax-M3 or MiniMax-M3-ref)."  # Model identifier
         self.max_context_len = max_seq_len  # Context length for tt_transformers compatibility
 
         if self.dummy_weights:
@@ -156,10 +149,12 @@ class ModelArgs:
         else:
             # M3 ships NO modeling code (the checkpoint carries only config + multimodal
             # processors; no AutoModel in auto_map), so AutoModelForCausalLM.from_pretrained
-            # CANNOT build it. Read the bf16 safetensors directly: keep only the text backbone
+            # CANNOT build it. Read the safetensors directly: keep only the text backbone
             # (`language_model.*`) and strip that prefix -> the plain keys the model expects
             # (`model.*` / `lm_head.*`); drop the multimodal tensors (vision_tower /
             # multi_modal_projector / patch_merge_mlp). The checkpoint has no mtp/nextn weights.
+            # Quantized (MXFP8 / NVFP4) weights are dequantized to bf16 here, before the
+            # name-keyed QKV conversion below (utils/checkpoint.py).
             state_dict = ModelArgs._load_text_backbone_safetensors(weights_path)
 
             # Convert HF QKV weights to Meta format for RoPE compatibility (if requested).
@@ -169,22 +164,19 @@ class ModelArgs:
             # weights.py / test_attention_vs_ref.py).
             if convert_to_meta_format:
                 logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE (partial rotary)")
-                cfg = AutoConfig.from_pretrained(weights_path, trust_remote_code=True)
-                tc = getattr(cfg, "text_config", cfg)
-                rotary_dim = getattr(tc, "rotary_dim", tc.head_dim)
-                state_dict = convert_hf_qkv_to_meta_format_partial(state_dict, tc.head_dim, rotary_dim)
+                tc = text_config_of(AutoConfig.from_pretrained(weights_path, trust_remote_code=True))
+                state_dict = convert_hf_qkv_to_meta_format_partial(state_dict, tc.head_dim, tc.rotary_dim)
             return state_dict
 
     @staticmethod
     def _load_text_backbone_safetensors(weights_path):
-        """Read the M3 bf16 safetensors and return the text-backbone state dict.
+        """Read the M3 safetensors and return the text-backbone state dict.
 
         Keeps `language_model.*` (the text backbone), strips that prefix so keys match what the
         model expects (`model.embed_tokens.weight`, `model.layers.N.*`, `model.norm.weight`,
-        `lm_head.weight`), and drops the multimodal tensors. Loads shards lazily from the index.
+        `lm_head.weight`), and drops the multimodal tensors. Quantized weights come back as bf16
+        under their plain `.weight` key, without their scale tensors. Reads one tensor at a time.
         """
-        from safetensors.torch import load_file
-
         weights_path = str(weights_path)
         index_path = os.path.join(weights_path, "model.safetensors.index.json")
         with open(index_path) as f:
@@ -209,6 +201,13 @@ class ModelArgs:
                 else:  # embed / norm / lm_head / non-layer
                     keep.add(shard)
             shards = sorted(keep)
+
+            # Shards also hold other layers' tensors: dequantize only this window's (and the non-layer ones).
+            def _in_window(k):
+                kk = k[len("language_model.") :] if k.startswith("language_model.") else k
+                return not kk.startswith("model.layers.") or start <= int(kk.split(".")[2]) < start + kln
+
+            weight_map = {k: v for k, v in weight_map.items() if _in_window(k)}
             logger.info(
                 f"M3_LOAD_NLAYERS={kln} M3_LOAD_LAYER_START={start}: loading {len(shards)} shards "
                 f"(of {len(set(weight_map.values()))}) for layers {start}..{start + kln - 1}"
@@ -216,16 +215,7 @@ class ModelArgs:
         else:
             shards = sorted(set(weight_map.values()))
 
-        PREFIX = "language_model."
-        state_dict = {}
-        for shard in tqdm(shards, desc="Loading M3 bf16 safetensors (text backbone)"):
-            shard_sd = load_file(os.path.join(weights_path, shard))
-            for k, v in shard_sd.items():
-                if not k.startswith(PREFIX):
-                    continue  # drop vision_tower / multi_modal_projector / patch_merge_mlp
-                new_k = k[len(PREFIX) :]  # language_model.model.X -> model.X ; language_model.lm_head -> lm_head
-                state_dict[new_k] = v.to(torch.bfloat16) if v.dtype == torch.float32 else v
-        return state_dict
+        return read_text_backbone(weights_path, weight_map, tqdm(shards, desc="Loading M3 safetensors (text backbone)"))
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""
