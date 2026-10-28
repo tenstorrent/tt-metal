@@ -65,10 +65,11 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
     ):
         """Build the fused ``fn`` projection and split the ``base`` / ``scale`` parameters.
 
-        ``row_major_streams`` builds for single-user (``T == 1``) streams that arrive ROW_MAJOR,
-        width-sharded as ``[hc, D / 8]`` over the 8 collapse cores: ``fn`` then runs on those
-        same cores and reads each core's shard in place as its ``hc * D / 8`` slice of the
-        flattened row, so its weight's K is stored in that core-major order.
+        ``row_major_streams`` builds for one session's ``T`` rows of streams that arrive ROW_MAJOR,
+        width-sharded as ``[T * hc, D / 8]`` over the 8 collapse cores (``T == 1`` in decode, ``T > 1``
+        in a DSpark verify block): ``fn`` then runs on those same cores and reads each core's shard
+        in place as its ``hc * D / 8`` slices of the flattened rows, so its weight's K is stored in
+        that core-major order.
 
         ``weights`` holds the checkpoint's packed ``fn`` ``[(2+hc)*hc, hc*D]`` and ``base``
         ``[(2+hc)*hc]`` tensors plus ``scale``, three host scalars. ``fn`` becomes one
@@ -182,7 +183,8 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         unweighted-RMSNorms each row inside the matmul and whose ``[1,1,T,(2+hc)*hc]`` output (padded to a tile's width) still carries
         the three parts concatenated. ``collapsed`` comes back in the input's layout -- the
         width-sharded L1 the single-token branch below builds -- while ``post`` / ``comb`` are
-        DRAM (and all three are DRAM on the ``T > 1`` branch).
+        DRAM (and all three are DRAM on the ``T > 1`` branches). ``row_major_streams`` with ``T > 1``
+        runs ``fn`` once over the rows and the single-user program once per row.
 
         ``pre_mix`` ``[B,S,1,hc]`` (bf16 TILE) collapses the streams in place of the ``pre`` this
         call computes (V4.1, where each sublayer collapses with its predecessor's ``pre``); that
@@ -192,26 +194,79 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         t = b * s
 
         if self.row_major_streams:
-            assert t == 1, f"row_major_streams supports single-user decode only, got T = {t}"
             assert hidden_streams.layout == ttnn.ROW_MAJOR_LAYOUT, hidden_streams.layout
-            # fn reads each collapse core's [hc, D/8] shard as its slice of the [1, hc*D] row, and the
-            # fused program gathers the same shards into its collapse tiles.
+            # fn reads each collapse core's [T*hc, D/8] shard as its slices of the T [1, hc*D] rows, and
+            # the fused program gathers a row's shards into its collapse tiles.
             fused_w = self.fn(hidden_streams)
             _profile(self.device)
-            return ttnn.experimental.deepseek.fused_hyperconnection(
-                hidden_streams,
-                fused_w=fused_w,
-                pre_bias=self.pre_b,
-                post_bias=self.post_b,
-                comb_bias=self.comb_b,
-                num_streams=hc,
-                sinkhorn_iters=self.iters,
-                pre_scale=self.pre_scale,
-                post_scale=self.post_scale,
-                comb_scale=self.comb_scale,
-                eps=self.eps,
-                pre_mix=pre_mix,
-            )
+            if t == 1:
+                return ttnn.experimental.deepseek.fused_hyperconnection(
+                    hidden_streams,
+                    fused_w=fused_w,
+                    pre_bias=self.pre_b,
+                    post_bias=self.post_b,
+                    comb_bias=self.comb_b,
+                    num_streams=hc,
+                    sinkhorn_iters=self.iters,
+                    pre_scale=self.pre_scale,
+                    post_scale=self.post_scale,
+                    comb_scale=self.comb_scale,
+                    eps=self.eps,
+                    pre_mix=pre_mix,
+                )
+            # Several rows (a DSpark verify block): the single-user program once per row, on the row's
+            # [hc, D] slab and fused_w row resharded from DRAM into the layouts it takes.
+            streams = ttnn.reshape(ttnn.to_memory_config(hidden_streams, ttnn.DRAM_MEMORY_CONFIG), [1, t, hc, d])
+            w = fused_w.shape[-1]
+            mixes = ttnn.reshape(ttnn.to_memory_config(fused_w, ttnn.DRAM_MEMORY_CONFIG), [1, t, 1, w])
+            ttnn.deallocate(fused_w)
+            if pre_mix is not None:
+                pre_mix = ttnn.reshape(pre_mix, [1, t, 1, hc])
+            collapse_config = width_sharded_l1_config(hc, d, self.device, num_cores=_HC_COLLAPSE_CORES, tile_height=1)
+            fused_w_config = width_sharded_l1_config(1, w, self.device, num_cores=1, tile_height=1)
+            per_row = []
+            for i in range(t):
+                row = ttnn.slice(streams, [0, i, 0, 0], [1, i + 1, hc, d])
+                row_streams = ttnn.to_memory_config(row, collapse_config)
+                ttnn.deallocate(row)
+                row = ttnn.slice(mixes, [0, i, 0, 0], [1, i + 1, 1, w])
+                row_w = ttnn.to_memory_config(row, fused_w_config)
+                ttnn.deallocate(row)
+                row_pre_mix = None if pre_mix is None else ttnn.slice(pre_mix, [0, i, 0, 0], [1, i + 1, 1, hc])
+                outputs = ttnn.experimental.deepseek.fused_hyperconnection(
+                    row_streams,
+                    fused_w=row_w,
+                    pre_bias=self.pre_b,
+                    post_bias=self.post_b,
+                    comb_bias=self.comb_b,
+                    num_streams=hc,
+                    sinkhorn_iters=self.iters,
+                    pre_scale=self.pre_scale,
+                    post_scale=self.post_scale,
+                    comb_scale=self.comb_scale,
+                    eps=self.eps,
+                    pre_mix=row_pre_mix,
+                )
+                ttnn.deallocate(row_streams)
+                ttnn.deallocate(row_w)
+                if row_pre_mix is not None:
+                    ttnn.deallocate(row_pre_mix)
+                parts = []
+                for out in outputs:
+                    parts.append(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))
+                    # collapsed comes back sharded beside the streams; post / comb / pre are already DRAM.
+                    if out.is_sharded():
+                        ttnn.deallocate(out)
+                per_row.append(parts)
+            ttnn.deallocate(streams)
+            ttnn.deallocate(mixes)
+            joined = []
+            for parts in zip(*per_row):
+                part = ttnn.concat(list(parts), dim=1)
+                joined.append(ttnn.reshape(part, [b, s, part.shape[2], part.shape[3]]))
+                for row_part in parts:
+                    ttnn.deallocate(row_part)
+            return tuple(joined)
 
         # Flatten streams to [1,1,T,hc*D]; fn applies the unweighted RMSNorm over hc*D itself.
         tile_height = hidden_streams.get_tile().tile_shape[0]

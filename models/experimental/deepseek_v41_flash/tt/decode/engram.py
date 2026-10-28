@@ -18,6 +18,9 @@ the device does the rest of the checkpoint's ``Engram.forward``::
 ``kv`` is bf16 out of the matmul; everything after it is one ``ttnn.experimental.deepseek.engram_gate``
 call (fp32 inside), on ROW_MAJOR WIDTH_SHARDED streams / kv.
 
+A DSpark verify block -- ``S`` consecutive positions of one session, streams ``[1, S, hc, D]`` -- goes
+through the same ops as ``S`` users: every row gets its own host lookup, and the gate is per row anyway.
+
 ``wkv`` is a ``matmul_decode`` whose weight streams through its own 80-receiver ring (see
 :mod:`.decode_prefetch`) and whose A is a ROW_MAJOR HEIGHT_SHARDED replica of the rows on every receiver,
 so ``kv`` comes out ROW_MAJOR WIDTH_SHARDED. The layer needs the prefetcher: split over 80 cores the
@@ -106,6 +109,7 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         socket_core: tuple = ROWS_SOCKET_CORE,
         sockets: Optional[list] = None,
         tp_size: int = 1,
+        verify_rows: int = 1,
     ):
         """``weights`` is :func:`~models.experimental.deepseek_v41_flash.tt.config.engram_weights` (tensors or
         thunks). One socket page is one user's rows, and a socket's L1 FIFO on ``socket_core`` holds
@@ -117,11 +121,16 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         ``wkv`` streams through the ``engram.wkv`` ring of ``prefetch_buffers``, the per-device mapping
         every other layer on ``device`` shares; call ``wkv.fetch_weights()`` ahead of each :meth:`forward`.
         ``tp_size > 1`` needs ``device`` to be a 1xTP mesh with fabric; ``wkv`` is then row-parallel over it.
+
+        ``verify_rows > 1`` also lets :meth:`forward` take one session's ``S == verify_rows`` rows
+        ``[1, S, hc, D]`` in :attr:`verify_streams_memory_config` (a DSpark verify block), with a second
+        rows buffer for them. The single-row step is unchanged.
         """
         cache = _as_cache(cache)
         self.layer_idx = layer_idx
         self.device = device
         self.batch = batch
+        self.verify_rows = verify_rows
         self.tp_size = tp_size
         self.hc, self.dim, self.eps = config.hc_mult, config.hidden_size, config.rms_norm_eps
         self.kin = (config.engram_max_ngram_size - 1) * config.engram_n_heads * config.engram_head_dim
@@ -168,6 +177,12 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         self.streams_memory_config = width_sharded_l1_config(
             batch * hc, d, device, num_cores=_HC_COLLAPSE_CORES, tile_height=1
         )
+        # A verify block's [1, S, hc, D] lies in L1 as S users' [S, 1, hc, D] do.
+        self.verify_streams_memory_config = (
+            width_sharded_l1_config(verify_rows * hc, d, device, num_cores=_HC_COLLAPSE_CORES, tile_height=1)
+            if verify_rows > 1
+            else None
+        )
 
         self.page_bytes = rows_page_bytes(config)
         alignment = active_system_config().pipeline.pcie_alignment
@@ -181,6 +196,17 @@ class DeepSeekV41Engram(DeepSeekV4Module):
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self.verify_rows_in = (
+            ttnn.from_torch(
+                torch.zeros(1, 1, verify_rows, self.kin),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if verify_rows > 1
+            else None
+        )
         if sockets is None:
             sockets = open_rows_sockets(device, self.page_bytes, fifo_pages, socket_core)
         if len(sockets) != device.get_num_devices():
@@ -188,15 +214,18 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         self.sockets = sockets
 
     def write_rows(self, rows: torch.Tensor) -> None:
-        """Push one step's rows ``[B, kin]`` (or ``[B, 1, kin]``, bf16) into every device's socket.
+        """Push one step's rows ``[B, kin]`` (or ``[B, 1, kin]``, bf16) into every device's socket; a verify
+        block's ``[S, kin]`` (or ``[1, S, kin]``), row ``j`` the lookup of position ``p + j``.
 
-        Each write is consumed by exactly one :meth:`forward` (eager call or trace replay). Write before
-        dispatching the step that runs it: its ``recv_async_h2d`` stalls the device queue until the rows
-        arrive, so a host sync anywhere in that step (a blocking write, a read, a CCL's first-call setup)
-        would wait forever on rows sent after it. A write blocks while the FIFO is full, until the device
-        drains a page an earlier, already dispatched step consumes.
+        Each write is consumed by exactly one :meth:`forward` (eager call or trace replay) of the same row
+        count. Write before dispatching the step that runs it: its ``recv_async_h2d`` stalls the device queue
+        until the rows arrive, so a host sync anywhere in that step (a blocking write, a read, a CCL's
+        first-call setup) would wait forever on rows sent after it. A write blocks while the FIFO is full,
+        until the device drains a page an earlier, already dispatched step consumes, so a step with more rows
+        than the FIFO has pages can only be written from a thread other than the one dispatching it.
         """
-        rows = rows.reshape(self.batch, self.kin).to(torch.bfloat16)
+        rows = rows.reshape(-1, self.kin).to(torch.bfloat16)
+        assert rows.shape[0] in (self.batch, self.verify_rows), (rows.shape[0], self.batch, self.verify_rows)
         for rank, socket in enumerate(self.sockets):
             # Under TP the sockets are in rank order along the 1xTP mesh, the order ShardTensorToMesh cuts wkv in.
             ranked = torch.roll(rows, -rank * self.local_kin, dims=-1) if self.tp_size > 1 else rows
@@ -205,29 +234,53 @@ class DeepSeekV41Engram(DeepSeekV4Module):
 
     def forward(self, streams: ttnn.Tensor) -> ttnn.Tensor:
         """``streams`` ``[B, 1, hc, D]`` bf16 ROW_MAJOR in :attr:`streams_memory_config` -> the same shape and
-        layout, with this step's rows written in."""
-        b, hc, d = self.batch, self.hc, self.dim
-        assert tuple(streams.shape) == (b, 1, hc, d), tuple(streams.shape)
+        layout, with this step's rows written in. A verify block ``[1, S, hc, D]`` (``S == verify_rows``) goes
+        in :attr:`verify_streams_memory_config`."""
+        b, s, hc, d = streams.shape
+        if s == 1:
+            assert tuple(streams.shape) == (self.batch, 1, self.hc, self.dim), tuple(streams.shape)
+            memory_config, rows_in = self.streams_memory_config, self.rows
+        else:
+            assert tuple(streams.shape) == (1, self.verify_rows, self.hc, self.dim), tuple(streams.shape)
+            memory_config, rows_in = self.verify_streams_memory_config, self.verify_rows_in
+        n = b * s
         assert streams.layout == ttnn.ROW_MAJOR_LAYOUT, streams.layout
-        assert streams.memory_config() == self.streams_memory_config, streams.memory_config()
+        assert streams.memory_config() == memory_config, streams.memory_config()
         for socket in self.sockets:
-            ttnn.experimental.recv_async_h2d(self.rows, socket)
-        local_rows = self.rows
+            ttnn.experimental.recv_async_h2d(rows_in, socket)
+        local_rows = rows_in
         if self.tp_size > 1:
-            local_rows = ttnn.slice(self.rows, [0, 0, 0, 0], [1, 1, b, self.local_kin])
+            local_rows = ttnn.slice(rows_in, [0, 0, 0, 0], [1, 1, n, self.local_kin])
         # ROW_MAJOR A, so kv comes out ROW_MAJOR WIDTH_SHARDED over the ring's receivers.
         rows = _decode_activation(self.wkv, local_rows)
         kv = self.wkv(rows)
         ttnn.deallocate(rows)
-        if local_rows is not self.rows:
+        if local_rows is not rows_in:
             ttnn.deallocate(local_rows)
         if self.tp_size > 1:
             partial = kv
-            kv = ttnn.experimental.deepseek.width_sharded_all_reduce(
-                partial, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY
-            )
+            if s == 1:
+                kv = ttnn.experimental.deepseek.width_sharded_all_reduce(
+                    partial, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY
+                )
+            else:
+                # width_sharded_all_reduce keeps a scratch for as long as its program is cached, and a block's
+                # does not fit L1_SMALL: left in L1 it sits under the S-row fused_experts' circular buffers.
+                rows_dram = ttnn.to_memory_config(partial, ttnn.DRAM_MEMORY_CONFIG)
+                tiles = ttnn.to_layout(rows_dram, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(rows_dram)
+                summed = ttnn.all_reduce(
+                    tiles, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY
+                )
+                ttnn.deallocate(tiles)
+                summed_rows = ttnn.to_layout(summed, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(summed)
+                kv = ttnn.to_memory_config(summed_rows, partial.memory_config())
+                ttnn.deallocate(summed_rows)
             ttnn.deallocate(partial)
 
-        out = ttnn.experimental.deepseek.engram_gate(streams, kv, self.gate_weight, self.eps)
+        # engram_gate takes users [N, 1, hc, D]; the views only relabel the block's shape.
+        users = streams if s == 1 else ttnn.experimental.view(streams, [n, 1, hc, d])
+        out = ttnn.experimental.deepseek.engram_gate(users, kv, self.gate_weight, self.eps)
         ttnn.deallocate(kv)
-        return out
+        return out if s == 1 else ttnn.experimental.view(out, [b, s, hc, d])

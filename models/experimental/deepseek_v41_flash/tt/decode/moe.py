@@ -177,6 +177,7 @@ class DeepSeekV41SparseMoeBlock(DeepSeekV4SparseMoeBlock):
     shared expert's: bfloat8_b by default, since at bfloat4_b its error is larger than the routed
     experts'. Under TP the router is replicated, the shared expert's ``I`` is split like the
     routed experts' (576 per rank at TP4), and the summed partials are all-reduced, as in V4.
+    ``verify_rows`` see :class:`DeepSeekV4SparseMoeBlock`.
     """
 
     router_cls = DeepSeekV41TopKRouter
@@ -193,6 +194,7 @@ class DeepSeekV41SparseMoeBlock(DeepSeekV4SparseMoeBlock):
         tp_size=1,
         use_prefetcher: bool = False,
         prefetch_buffers=None,
+        verify_rows: int = 1,
     ):
         if experts.tp_size != tp_size:
             raise ValueError(f"the experts were built for TP{experts.tp_size}, not TP{tp_size}")
@@ -207,4 +209,5 @@ class DeepSeekV41SparseMoeBlock(DeepSeekV4SparseMoeBlock):
             matmul_decode=True,
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
+            verify_rows=verify_rows,
         )

@@ -89,6 +89,9 @@ inline void publish_input(uint32_t cb_input_id, uint32_t k_tiles) {
 // in it once experts are blocked; see the program factory). The read itself is always slice_tiles,
 // leaving the pad at the end of the slot untouched -- and unread, since the consumer indexes tiles
 // from the front of the slot.
+//
+// A `reserve_tiles` below `slice_tiles` splits the slice: it goes in slice_tiles / reserve_tiles
+// consecutive pieces of reserve_tiles each (the serial path's K-halves of a gate_up slice).
 template <typename WeightArgs>
 inline void fetch_weight_one(
     const Noc& noc,
@@ -101,7 +104,8 @@ inline void fetch_weight_one(
     uint32_t shard_id,
     const WeightArgs& weight_args,
     uint32_t ct_w_addr_base) {
-    const uint32_t slice_bytes = slice_tiles * tile_bytes;
+    const uint32_t pieces = reserve_tiles < slice_tiles ? slice_tiles / reserve_tiles : 1u;
+    const uint32_t piece_bytes = slice_tiles / pieces * tile_bytes;
 
     CircularBuffer cb_bcast(cb_bcast_id);
     CoreLocalMem<volatile uint32_t> ids(cb_bcast.get_write_ptr());
@@ -112,11 +116,18 @@ inline void fetch_weight_one(
     const auto w = TensorAccessor(weight_args, w_addr);
 
     CircularBuffer cb_weights(cb_weights_id);
-    cb_weights.reserve_back(reserve_tiles);
     ShardView w_shard(w);
-    noc.async_read(w_shard, cb_weights, slice_bytes, {.shard_id = shard_id}, {.offset_bytes = 0});
-    noc.async_read_barrier();
-    cb_weights.push_back(reserve_tiles);
+    for (uint32_t p = 0; p < pieces; ++p) {
+        cb_weights.reserve_back(reserve_tiles);
+        noc.async_read(
+            w_shard,
+            cb_weights,
+            piece_bytes,
+            {.shard_id = shard_id, .offset_bytes = p * piece_bytes},
+            {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_weights.push_back(reserve_tiles);
+    }
 }
 
 // Which role a core plays in one block's activation gather + broadcast.
