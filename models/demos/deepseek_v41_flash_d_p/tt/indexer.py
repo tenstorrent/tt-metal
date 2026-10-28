@@ -54,7 +54,7 @@ import ttnn
 from . import ccl
 from . import mm_configs as mm
 from .ccl import dealloc
-from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, tp_sum
+from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, gemm_input, tp_sum
 from .rope import RopeTable, deinterleave_perm, indexer_glue, rope_heads, rope_stock
 from .settings import settings
 
@@ -205,7 +205,7 @@ class TtIndexer:
     def query(self, qr: ttnn.Tensor, start: int) -> ttnn.Tensor:
         """q_resid [1, 1, W, q_lora] fp32 -> the chip's index queries [1, nh, Sq, hd] bf16."""
         sub = self._sub(qr)
-        qq = cast(sub, ttnn.bfloat16)
+        qq = gemm_input(sub)  # GEMM_INPUTS (FIX.7): bfloat8_b, the reference's fp8 act quant of q_resid
         if qq is not sub:
             dealloc(sub)
         qdt = ttnn.bfloat16 if self.stock else ttnn.float32  # ROPE_IMPL=on: the bf16 heads the stock rope reads

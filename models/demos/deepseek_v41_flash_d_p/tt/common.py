@@ -27,6 +27,19 @@ def cast(x: ttnn.Tensor, dtype=ttnn.bfloat16) -> ttnn.Tensor:
     return x if x.dtype == dtype else ttnn.typecast(x, dtype, memory_config=DRAM)
 
 
+def gemm_dtype() -> ttnn.DataType:
+    """Setting GEMM_INPUTS (FIX.7, owner 2026-10-28, F208): the dtype a dense GEMM input gets where the reference
+    quantizes it to fp8 (fp8_linear's act quant, the attention output before wo_a): bfloat8_b, the device's own 8-bit
+    format; bf16 = the path before FIX.7. A producer writes it directly where it can (output dtype)."""
+    return ttnn.bfloat8_b if settings.get("GEMM_INPUTS") == "bfp8" else ttnn.bfloat16
+
+
+def gemm_input(x: ttnn.Tensor) -> ttnn.Tensor:
+    """x as an fp8-quantized GEMM's input (``gemm_dtype``): one typecast, or x itself when it already is that dtype.
+    Does not consume x; the caller frees the result only when it is not x."""
+    return cast(x, gemm_dtype())
+
+
 def bf16_activations() -> bool:
     """Setting BF16_ACTIVATIONS (P.20): the activations DeepSeek's GPU code keeps in bf16 are bf16 on the device."""
     return settings.get("BF16_ACTIVATIONS") == "on"

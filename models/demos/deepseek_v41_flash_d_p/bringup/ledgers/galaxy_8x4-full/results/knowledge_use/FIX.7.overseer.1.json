@@ -1,0 +1,48 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [
+  "which matmul inputs the reference fp8-quantizes and where each device producer can write bfloat8_b directly: the stock rotary_embedding_indexed has no output dtype (its output = x's), so wo_a's input needs one typecast (0.039 ms a call on 8x4); nlp_concat_heads and minimal_matmul accept bfp8",
+  "the block MoE fused head's shared expert reads x / h as bf16 tiles hard-coded in models/demos/moe_block/tt/se_engine3.py (now DS41-132)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.7",
+   "answer": "done",
+   "evidence": "Setting GEMM_INPUTS (default bfp8, bf16 = old path): q_a [wq_a|wkv], wq_b, wo_a, wo_b, indexer wq_b, engram wkv read bfloat8_b (profile ops: '640x1280 bfp8 . 1280x1792 bfp8' etc.); routed experts' x/h already bfp8 (EXPERTS_PRECISION=glm). Not done: shared expert x/h on the fused head (bf16 in se_engine3.py, outside this step's paths; DS41-132). Device 223.85 -> 222.75 ms a chunk (X.1 vs FIX.7 profile, rung last); numbers in BREADCRUMBS FIX.7."
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: dtype changes only (producer output dtypes + one typecast where no producer can write bfp8)"
+  }
+ ],
+ "cited_only": [
+  "DS41-132"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.7",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-28T15:45:29",
+  "head": "819d0f4dc78",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.7.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.7_runner_smoke.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.7_smoke.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.7.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/common.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
