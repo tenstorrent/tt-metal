@@ -323,6 +323,8 @@ def test_bw_tensor_prefetcher_streaming(device, op_name, shape):
     delivery is BW-neutral; byte correctness is covered by the validator + matmul PCC tests.
     """
     _apply_shape(shape)
+    if device.dram_grid_size().x != 8:
+        pytest.skip("DRAM-core bench expects 8 unharvested DRAM banks")
 
     trace_repeats = _bench_trace_repeats()
     num_dram_banks = device.dram_grid_size().x
