@@ -28,7 +28,8 @@ struct SDPAForwardShape {
     bool return_intermediates;
 };
 
-// The shape as the kernels see it (padded dims), and the L1 the circular buffers may use on a core.
+// The shape as the kernels see it (padded dims). The L1 the circular buffers may use on a core is
+// available_l1_bytes(device) from metal/common/program_utils.hpp.
 SDPAForwardShape shape_of(
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
@@ -36,7 +37,6 @@ SDPAForwardShape shape_of(
     AttentionMaskType mask_type,
     bool has_gate,
     bool return_intermediates);
-uint64_t l1_budget_bytes(const tt::tt_metal::IDevice* device);
 
 // Reader runtime args: the buffer addresses first, then the work list.
 constexpr uint32_t kReaderArgQuery = 0U;
