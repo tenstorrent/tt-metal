@@ -38,7 +38,7 @@
     "z_port_role": { "enum": ["none", "intermesh_boundary", "express_chord"] },
     "schema": {
       "type": "string",
-      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*|enum:[A-Za-z_][A-Za-z0-9_]*)$"
+      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*(<([0-9]+|true|false)(,([0-9]+|true|false))*>)?|enum:[A-Za-z_][A-Za-z0-9_]*|union:[A-Za-z_][A-Za-z0-9_]*)$"
     },
     "stream_register_layout": {
       "description": "A register's byte offset in a stream's block, and how many of the word's low bits hold its value.",
@@ -117,7 +117,12 @@
         },
         "topology": { "$ref": "#/$defs/name" },
         "is_2d_routing": { "type": "boolean" },
-        "packet_header_size_bytes": { "$ref": "#/$defs/count" },
+        "packet_header": {
+          "description": "The packet header type the run's routers use. Its layout is in types.structs.",
+          "$ref": "#/$defs/type_keys",
+          "properties": { "schema": { "pattern": "^struct:" } },
+          "unevaluatedProperties": false
+        },
         "max_payload_size_bytes": { "$ref": "#/$defs/count" },
         "channel_buffer_size_bytes": { "$ref": "#/$defs/count" },
         "routing_2d_route_buffer_size": { "$ref": "#/$defs/count" },
@@ -125,7 +130,7 @@
         "multi_txq": { "type": "boolean" }
       },
       "required": [
-        "config", "topology", "is_2d_routing", "packet_header_size_bytes", "max_payload_size_bytes",
+        "config", "topology", "is_2d_routing", "packet_header", "max_payload_size_bytes",
         "channel_buffer_size_bytes", "multi_txq"
       ],
       "if": { "properties": { "is_2d_routing": { "const": true } } },
@@ -167,18 +172,22 @@
     },
 
     "type_keys": {
-      "description": "A type's size and schema. An array also has num_elements and size_per_element.",
+      "description": "A type's size and schema. An array also has num_elements and size_per_element, and a tagged union tag_member, the enclosing struct's member that holds its tag.",
       "type": "object",
       "properties": {
         "size": { "$ref": "#/$defs/count" },
         "num_elements": { "$ref": "#/$defs/count" },
         "size_per_element": { "$ref": "#/$defs/count" },
-        "schema": { "$ref": "#/$defs/schema" }
+        "schema": { "$ref": "#/$defs/schema" },
+        "tag_member": { "type": "string", "minLength": 1 }
       },
       "required": ["size", "schema"],
       "dependentRequired": {
         "size_per_element": ["num_elements"]
-      }
+      },
+      "if": { "properties": { "schema": { "pattern": "^union:" } } },
+      "then": { "required": ["tag_member"] },
+      "else": { "not": { "required": ["tag_member"] } }
     },
     "region_keys": {
       "$ref": "#/$defs/type_keys",
@@ -296,7 +305,7 @@
     },
 
     "types": {
-      "description": "The type catalog. A struct:<Name> schema names an entry in structs, and an enum:<Name> schema one in enums.",
+      "description": "The type catalog. A struct:<Name> schema names an entry in structs, an enum:<Name> schema one in enums, and a union:<Name> schema one in tagged_unions.",
       "type": "object",
       "properties": {
         "structs": {
@@ -322,9 +331,40 @@
             "additionalProperties": false
           }
         },
-        "enums": { "type": "object", "additionalProperties": { "$ref": "#/$defs/enum" } }
+        "enums": { "type": "object", "additionalProperties": { "$ref": "#/$defs/enum" } },
+        "tagged_unions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "size": { "$ref": "#/$defs/count" },
+              "tag": {
+                "description": "The enum the tag member holds.",
+                "type": "object",
+                "properties": { "schema": { "$ref": "#/$defs/schema", "pattern": "^enum:" } },
+                "required": ["schema"],
+                "additionalProperties": false
+              },
+              "cases": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/type_keys",
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "offset": { "$ref": "#/$defs/count" },
+                    "tag_value": { "$ref": "#/$defs/name" }
+                  },
+                  "required": ["name", "offset", "tag_value"],
+                  "unevaluatedProperties": false
+                }
+              }
+            },
+            "required": ["size", "tag", "cases"],
+            "additionalProperties": false
+          }
+        }
       },
-      "required": ["structs", "enums"],
+      "required": ["structs", "enums", "tagged_unions"],
       "additionalProperties": false
     },
 
