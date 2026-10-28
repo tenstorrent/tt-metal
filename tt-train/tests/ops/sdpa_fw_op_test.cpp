@@ -667,7 +667,6 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
             std::nullopt,
             pinned);
         xt::xarray<float> ungated_xtensor = core::to_xtensor(ungated[0].value());
-        xt::xarray<float> ungated_interm_xtensor = core::to_xtensor(ungated[1].value());
 
         ASSERT_EQ(result_xtensor.shape(), ungated_xtensor.shape())
             << "Gated and ungated kernel outputs must have the same shape in " << config.test_name;
@@ -679,8 +678,11 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
             << " (MSE: " << compute_mse(expected_from_ungated, result_xtensor) << ")";
 
         // (2) the logsumexp is packed before the gate path runs, so it must be bit-identical.
-        EXPECT_TRUE(xt::all(xt::equal(interm_xtensor, ungated_interm_xtensor)))
-            << "Gate changed the intermediates (logsumexp) in " << config.test_name;
+        if (return_intermediates) {
+            xt::xarray<float> ungated_interm_xtensor = core::to_xtensor(ungated[1].value());
+            EXPECT_TRUE(xt::all(xt::equal(interm_xtensor, ungated_interm_xtensor)))
+                << "Gate changed the intermediates (logsumexp) in " << config.test_name;
+        }
     }
 
     // All results are now in split format (B, H, S, D) - heads NOT fused
@@ -1612,7 +1614,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Smoke) {
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_NoIntermediates) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // The RETURN_INTERMEDIATES-less compile with explicit chunking, checked against the references.
+    // The RETURN_INTERMEDIATES-less compiles, without and with the gate, each with one explicit chunking
+    // checked against the references.
     run_chunk_knob_sweep(
         SDPATestConfig{
             .batch_size = 1U,
@@ -1624,7 +1627,20 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_NoIntermediates) {
             .mask_type = ttml::metal::AttentionMaskType::Causal,
             .return_intermediates = false,
             .test_name = "ChunkKnobs_NoIntermediates"},
-        {{128, 256, 1}, {64, 64, 1}});
+        {{128, 256, 1}});
+    run_chunk_knob_sweep(
+        SDPATestConfig{
+            .batch_size = 1U,
+            .sequence_length = 256U,
+            .query_dim = 128U,
+            .key_value_dim = 128U,
+            .num_query_heads = 2U,
+            .num_key_heads = 2U,
+            .mask_type = ttml::metal::AttentionMaskType::Causal,
+            .use_gate = true,
+            .return_intermediates = false,
+            .test_name = "ChunkKnobs_NoIntermediates_Gate"},
+        {{64, 64, 1}});
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Arbitrary_NonPow2) {
