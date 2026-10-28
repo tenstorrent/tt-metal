@@ -5203,7 +5203,7 @@ def test_matmul_mcast_in1_rejects_misshaped_sharded_in0_grid(device, expect_erro
         out_block_w=per_core_n,
         out_subblock_w=1,
     )
-    with expect_error(RuntimeError, "must exactly match the factory core set"):
+    with expect_error(RuntimeError, "sharded in0 .* (outside allowed_worker_cores|must match factory core set)"):
         ttnn.matmul(a_t, b_t, program_config=program_config)
 
 
@@ -5266,7 +5266,7 @@ def test_matmul_mcast_in0_rejects_misshaped_sharded_in0_grid(device, expect_erro
         fused_activation=None,
         mcast_in0=True,
     )
-    with expect_error(RuntimeError, "must exactly match the factory core set"):
+    with expect_error(RuntimeError, "sharded in0 .* (outside allowed_worker_cores|must match factory core set)"):
         ttnn.matmul(a_t, b_t, program_config=program_config)
 
 
