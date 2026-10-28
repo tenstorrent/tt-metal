@@ -16,7 +16,7 @@
 // reserve_back never waits either. The pointer moves, the wrap at the end of each buffer, and the counter writes
 // (STOREREG to the stream registers) are the real ones.
 //
-// Math-to-pack Dest sync and the pack itself still use today's LLKs.
+// Dest sync and pack use the LLK 2.0 Dest sync API (compute_api/dest.h) and pack (compute_api/pack.h).
 
 #include <cstdint>
 
@@ -33,16 +33,10 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #define LLK2_DEST_FP32     is_fp32_dest_acc_en
 #define LLK2_MATH_FIDELITY static_cast<std::uint32_t>(MATH_FIDELITY)
+#include "compute_api/dest.h"
 #include "compute_api/matmul.h"
+#include "compute_api/pack.h"
 #include "tensor/dataflow_buffer.h"
-
-#ifdef LLK_TRISC_MATH
-#include "llk_math_common.h"
-#endif
-#ifdef LLK_TRISC_PACK
-#include "llk_lib_pack_wrappers.h"
-#include "llk_pack_common.h"
-#endif
 
 constexpr DataFormat in0_format  = static_cast<DataFormat>(UNPACK_A_IN);
 constexpr DataFormat in1_format  = static_cast<DataFormat>(UNPACK_B_IN);
@@ -63,28 +57,18 @@ inline constexpr llk2::DataflowBufferSpec in1_buf {
 inline constexpr llk2::DataflowBufferSpec out_buf {
     .id = 16, .format = out_format, .page_bytes = llk2::tile_bytes(out_format, tile_datums), .pages = OUT_BLOCKS * out_block_tiles};
 
+inline constexpr auto& acc_spec = llk2::dst_spec<RT_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, dest_format>; // [M, N] in Dest
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    // Test only: the harness has no data movement cores (see "What is emulated" above).
     llk2::preload_dataflow_buffer<in0_buf>(params.buffer_A[0], in0_buf.pages);
     llk2::preload_dataflow_buffer<in1_buf>(params.buffer_B[0], in1_buf.pages);
     llk2::setup_dataflow_buffer<out_buf>(params.buffer_Res[0]);
 
-    const auto acc = llk2::dst_tensor<RT_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, dest_format>(0); // [M, N] in Dest from row 0
-
-#ifdef LLK_TRISC_MATH
-    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-#endif
-#ifdef LLK_TRISC_PACK
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
-    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-#endif
-
     for (std::uint32_t block = 0; block < OUT_BLOCKS; ++block)
     {
-#ifdef LLK_TRISC_MATH
-        _llk_math_wait_for_dest_available_<dest_sync>();
-#endif
+        const auto acc = llk2::dest_acquire<acc_spec>(); // a zeroed Dest section
         for (std::uint32_t k = 0; k < K_BLOCKS; ++k)
         {
             const auto x = llk2::wait_front<in0_buf, RT_DIM, KB_DIM>(); // [RT, KB] tiles
@@ -93,19 +77,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             llk2::release(x);
             llk2::release(w);
         }
-#ifdef LLK_TRISC_MATH
-        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
-#endif
+        llk2::dest_commit(acc);
 
         const auto out = llk2::reserve_back<out_buf, RT_DIM, CT_DIM>(); // [RT, CT] tiles
-#ifdef LLK_TRISC_PACK
-        _llk_packer_wait_for_math_done_();
-        for (std::uint32_t i = 0; i < out_block_tiles; i++)
-        {
-            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(out.address + i * llk2::buffer_tile_bytes<out_buf>));
-        }
-        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
-#endif
+        llk2::pack(acc, out);
         llk2::release(out);
+        llk2::dest_release(acc);
     }
 }
