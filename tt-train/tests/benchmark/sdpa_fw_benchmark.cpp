@@ -5,8 +5,9 @@
 // SDPA forward on the consumer shapes: the program factory's default chunking and schedule against this
 // same kernel pinned to the chunking main used (one query tile-row, four K/V tiles per step, no cuts), plus
 // any config given on the command line. Prints host microseconds per launch (the timed loop sits between
-// two device syncs), the speedup and how many sender / merger units the schedule has, so a row that is
-// meant to split can be seen to split. main's own kernel is not timed here: build this file on the
+// two device syncs), the speedup, the DRAM peak of the first launch (the split units' scratch is allocated
+// then and lives with the cached program) and how many sender / merger units the schedule has, so a row
+// that is meant to split can be seen to split. main's own kernel is not timed here: build this file on the
 // merge-base with run() calling sdpa_fw(query, key, value, sc.mask_type, mask, 0.0F, true, gate) to
 // compare. Measured that way on Blackhole p150b (merge-base 0fff850f3c6 vs the chunk-knob branch, us per
 // launch), this kernel at main's chunking matches main's kernel, so the speedups are the chunking and
@@ -106,7 +107,8 @@ const ttml::metal::SDPAForwardProgramConfig kMainConfig{
 struct Row {
     std::string label;
     double device_us = 0.0;
-    double speedup = 0.0;  // main_chunking_us / device_us, both this kernel
+    double speedup = 0.0;  // main_us / device_us, both this kernel
+    double dram_peak_mib = 0.0;
     float max_abs_diff = 0.0F;
     std::string units;  // "<senders>S/<mergers>M" of the schedule
     std::string skipped;
@@ -192,6 +194,9 @@ void run_scenario(
     auto measure = [&](const std::string& label, const metal::SDPAForwardProgramConfig& cfg) {
         Row row{.label = label};
         row.units = schedule_units(sc, cfg);
+        row.dram_peak_mib =
+            static_cast<double>(benchmark_utils::capture_dram_peak(sc.name + "_" + label, [&]() { (void)run(cfg); })) /
+            (1024.0 * 1024.0);
         row.device_us = time_cfg(cfg);
         row.speedup = benchmark_utils::speedup_x(main_chunking_us, row.device_us);
         const xt::xarray<float> out = core::to_xtensor(run(cfg));
@@ -243,18 +248,34 @@ void run_scenario(
         picked.heads_per_item,
         grid.x * grid.y);
     fmt::print("this kernel at main's chunking (q=32, k=128, h=1, no cuts): {:.1f} us\n", main_us);
-    fmt::print("{:<24} {:>12} {:>9} {:>12} {:>10}\n", "config", "device_us", "speedup", "max_abs_diff", "units");
+    fmt::print(
+        "{:<24} {:>12} {:>9} {:>13} {:>12} {:>10}\n",
+        "config",
+        "device_us",
+        "speedup",
+        "dram_peak_MiB",
+        "max_abs_diff",
+        "units");
     for (const Row& row : rows) {
         if (row.skipped.empty()) {
             fmt::print(
-                "{:<24} {:>12.1f} {:>8.3f}x {:>12.3e} {:>10}\n",
+                "{:<24} {:>12.1f} {:>8.3f}x {:>13.1f} {:>12.3e} {:>10}\n",
                 row.label,
                 row.device_us,
                 row.speedup,
+                row.dram_peak_mib,
                 row.max_abs_diff,
                 row.units);
         } else {
-            fmt::print("{:<24} {:>12} {:>9} {:>12} {:>10}  skipped: {}\n", row.label, "-", "-", "-", "-", row.skipped);
+            fmt::print(
+                "{:<24} {:>12} {:>9} {:>13} {:>12} {:>10}  skipped: {}\n",
+                row.label,
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                row.skipped);
         }
     }
 }
