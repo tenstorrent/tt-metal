@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
@@ -17,10 +19,25 @@ namespace ckernel::sfpu
 template <typename T>
 constexpr bool is_supported_threshold_type_v = std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>;
 
+inline void _init_threshold_()
+{
+    // The loop body handles two dest rows; its second store walks dest through physical addr_mod
+    // slot 6 by the four counter steps those rows take, so the body needs no separate increment.
+    // Unary SFPU sets addr_mod_base, so the store names ADDR_MOD_2, which maps to physical slot 6.
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 4},
+    }
+        .set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS, typename T>
 inline void _calculate_threshold_(T threshold, T value)
 {
     static_assert(is_supported_threshold_type_v<T>, "Type T must be either float or uint32_t");
+    static_assert(ITERATIONS % 2 == 0, "_calculate_threshold_ processes dest rows in pairs.");
 
     sfpi::vFloat v_threshold;
     sfpi::vFloat v_value;
@@ -34,17 +51,28 @@ inline void _calculate_threshold_(T threshold, T value)
         v_threshold = Converter::as_float(threshold);
         v_value     = Converter::as_float(value);
     }
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++)
+    // Two rows per body: the second row's store carries the dest increment (see _init_threshold_),
+    // which drops the per-row TTINCRWC. The compare is left in the v_if on purpose: `in <= t` lowers
+    // to the SFPMAD `-1 * in + t` with the constant as the first multiplicand and a sign test on the
+    // result, and the sign of a NaN produced by that MAD (t = +-inf against in = +-inf, or a NaN
+    // threshold against a NaN input) depends on the operand order, so hoisting the difference into
+    // `t - in` (which the compiler emits as `in * -1 + t`) changes those lanes. Kept as is, the
+    // per-row instruction stream is exactly the one-row body's, so the result is bit-identical.
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d += 2)
     {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        v_if (in <= v_threshold)
+        sfpi::vFloat in0 = sfpi::dst_reg[0];
+        sfpi::vFloat in1 = sfpi::dst_reg[1];
+        v_if (in0 <= v_threshold)
         {
             sfpi::dst_reg[0] = v_value;
         }
         v_endif;
-
-        sfpi::dst_reg++;
+        v_if (in1 <= v_threshold)
+        {
+            sfpi::dst_reg[1].mode(ADDR_MOD_2) = v_value;
+        }
+        v_endif;
     }
 }
 
