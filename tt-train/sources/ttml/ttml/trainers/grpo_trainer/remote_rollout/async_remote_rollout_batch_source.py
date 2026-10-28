@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Iterator, Optional, Tuple
 
 from ..grpo_ttml_model import weights_ref_hf_dict
@@ -61,14 +62,16 @@ class AsyncRemoteRolloutBatchSource(RolloutBatchSource):
                 return scored, dropped
             dropped += 1
 
-    def update_weights(self, model: Any, step: int) -> None:
+    def update_weights(self, model: Any, step: int) -> float:
         self._step = step
         if self._batches_left == 0:
-            return
+            return 0.0
         if self._pushed_version is not None and step - self._pushed_version < self._weight_sync_every:
-            return
+            return 0.0
+        start = time.perf_counter()
         self._client.send_weights(weights_ref_hf_dict(model), version=step)
         self._pushed_version = step
+        return time.perf_counter() - start
 
     def close(self) -> None:
         self._client.shutdown()
