@@ -139,9 +139,9 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
             TT_FATAL(q.dtype() == DataType::BFLOAT16, "ROW_BFP4 sparse KV format requires a bf16 q");
             TT_FATAL(!attrs.has_block_cyclic(), "ROW_BFP4 sparse KV format does not support block_cyclic");
             TT_FATAL(
-                q.logical_shape()[3] % (2 * tt::constants::FACE_WIDTH) == 0,
-                "ROW_BFP4 needs K_DIM a multiple of {}",
-                2 * tt::constants::FACE_WIDTH);
+                q.logical_shape()[3] == 512,
+                "ROW_BFP4 needs K_DIM 512 (its two 32 B exponent copies cover a 64 B DRAM read line), got {}",
+                q.logical_shape()[3]);
             TT_FATAL(
                 t.indices.logical_shape()[3] > attrs.k_chunk_size,
                 "ROW_BFP4 needs TOPK > k_chunk_size (the first k_chunk is the window)");

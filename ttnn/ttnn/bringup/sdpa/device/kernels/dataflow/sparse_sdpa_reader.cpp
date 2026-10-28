@@ -68,11 +68,7 @@ void kernel_main() {
     // ROW_BFP4 (fork option): kv = bfloat4_b row records (chunks >= 1), kv_window = the bf16 rows of chunk 0
     constexpr uint32_t ct_rb = sparse_sdpa::reader_ct_arg::END;
     constexpr uint32_t cb_k4_rm = get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::CB_K4_RM);
-    constexpr uint32_t cb_k4 = get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::CB_K4);
-    constexpr uint32_t k4_stride = get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::K4_ROW_STRIDE);
-    constexpr uint32_t k4_row_bytes = sparse_sdpa::row_bfp4_bytes(k_dim);
-    constexpr uint32_t k4_DHt = k_dim / tt::constants::TILE_WIDTH;
-    constexpr uint32_t k4_tiles = (k_chunk / tt::constants::TILE_HEIGHT) * k4_DHt;
+    constexpr uint32_t k4_eb = sparse_sdpa::row_bfp4_exp_bytes(k_dim);
 #endif
     constexpr auto q_args = TensorAccessorArgs<
         sparse_sdpa::reader_ct_arg::END + sparse_sdpa::ROW_BFP4_CT_COUNT,
@@ -108,9 +104,7 @@ void kernel_main() {
     constexpr auto kvw_args =
         TensorAccessorArgs<idx_args.next_compile_time_args_offset(), idx_args.next_common_runtime_args_offset()>();
     const auto kvw = TensorAccessor(kvw_args, get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::END));
-    experimental::CB k4_rm_cb(cb_k4_rm), k4_cb(cb_k4);
-    k4_rm_cb.reserve_back(k_chunk);  // staging rows of one chunk, reused (never pushed)
-    const uint32_t k4_rm_l1 = k4_rm_cb.get_write_ptr();
+    experimental::CB k4_rm_cb(cb_k4_rm);  // one page = one chunk's staging block, consumed by compute
 #endif
     // Reader-internal scratch for one token's index row (reserved once, reused).
     idx_cb.reserve_back(1);
@@ -195,13 +189,15 @@ void kernel_main() {
 #ifdef SPARSE_SDPA_ROW_BFP4
             const uint32_t valid = chunk == 0 ? nv0 : ((nv - base) < k_chunk ? (nv - base) : k_chunk);
             if (chunk > 0) {
-                // bfloat4_b row records -> staging rows (stride k4_stride, DRAM-read aligned) -> tiles in cb_k4.
-                // The writer gathers and shuffles rows [0, half), this RISC [half, valid); the sentinel tail rows
-                // are zeroed in staging and shuffled as zero tiles rows (exponent 0, mantissa 0). The split is a
-                // multiple of 16 rows: a face's 16 exponent bytes (one per row) then come from one RISC only.
-                const uint32_t half = (valid >> 1) & ~(tt::constants::FACE_HEIGHT - 1);
-                k4_cb.reserve_back(k4_tiles);
-                const uint32_t tiles_l1 = k4_cb.get_write_ptr();
+                // bfloat4_b row records -> the staging block (exponents | nibbles, 64 B aligned within the page):
+                // the writer reads rows [0, half), this RISC [half, valid); the sentinel tail's exponents and nibbles
+                // are zeroed (NoC zero writes). Compute turns the block into tiles with the unpacker.
+                const uint32_t half = valid >> 1;
+                k4_rm_cb.reserve_back(1);
+                const uint32_t page_l1 = k4_rm_cb.get_write_ptr();
+                const uint32_t block_off = (sparse_sdpa::ROW_BFP4_ALIGN - (page_l1 % sparse_sdpa::ROW_BFP4_ALIGN)) %
+                                           sparse_sdpa::ROW_BFP4_ALIGN;
+                const uint32_t block_l1 = page_l1 + block_off;
                 kreq_cb.reserve_back(1);
                 {
                     volatile tt_l1_ptr uint32_t* request =
@@ -209,21 +205,24 @@ void kernel_main() {
                     request[sparse_sdpa::gather_request::BASE] = base;
                     request[sparse_sdpa::gather_request::SPLIT] = half;
                     request[sparse_sdpa::gather_request::IS_LAST] = chunk == n_active - 1;
-                    request[sparse_sdpa::gather_request::DST_L1] = k4_rm_l1;
-                    request[sparse_sdpa::gather_request::TILE_DST_L1] = tiles_l1;
+                    request[sparse_sdpa::gather_request::DST_L1] = block_l1;
                     request[sparse_sdpa::gather_request::KIND] = sparse_sdpa::gather_request::KIND_BFP4;
                 }
                 kreq_cb.push_back(1);
-                sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::SCALED_K_TRID_RING>(
-                    noc, kv, k4_rm_l1, idx_ptr, base, half, valid, k4_row_bytes, kv_batch_page_offset, k4_stride);
+                sparse_sdpa::gather_bfp4_rows<k_dim, k_chunk, sparse_sdpa::SCALED_K_TRID_RING>(
+                    noc, kv, block_l1, idx_ptr, base, half, valid, kv_batch_page_offset);
                 if (valid < k_chunk) {
-                    noc.async_write_zeros(k4_rm_cb, (k_chunk - valid) * k4_stride, {.offset_bytes = valid * k4_stride});
+                    noc.async_write_zeros(
+                        k4_rm_cb, (k_chunk - valid) * k4_eb, {.offset_bytes = block_off + valid * k4_eb});
+                    noc.async_write_zeros(
+                        k4_rm_cb,
+                        (k_chunk - valid) * (k_dim / 2),
+                        {.offset_bytes = block_off + k_chunk * k4_eb + valid * (k_dim / 2)});
                     noc.write_zeros_l1_barrier();
                 }
-                sparse_sdpa::shuffle_rows_to_bfp4_tiles<k4_DHt>(k4_rm_l1, k4_stride, tiles_l1, half, k_chunk);
-                kack_cb.wait_front(1);  // the writer's rows are gathered and shuffled
+                kack_cb.wait_front(1);  // the writer's rows landed
                 kack_cb.pop_front(1);
-                k4_cb.push_back(k4_tiles);
+                k4_rm_cb.push_back(1);
             } else {
                 // chunk 0: the window's bf16 rows (kv_window), tilized by compute as a BF16 kv
                 k_cb.reserve_back(k_chunk);

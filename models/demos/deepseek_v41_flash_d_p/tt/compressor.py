@@ -151,11 +151,11 @@ def static_tables() -> bool:
 
 
 def ckv_bfp4() -> bool:
-    """CKV_FORMAT=bfp4_rows (FIX.8): the attention table's history as 288 B bfloat4_b row records (``AttnTable``)."""
+    """CKV_FORMAT=bfp4_rows (FIX.8): the attention table's history as 320 B bfloat4_b row records (``AttnTable``)."""
     return settings.get("CKV_FORMAT") == "bfp4_rows"
 
 
-BFP4_ROW_BYTES = 288  # 512 values: 32 shared exponents + 256 bytes of nibbles (tt/ckv_codec.py format B)
+BFP4_ROW_BYTES = 320  # 512 values: the 32 shared exponents twice + 256 bytes of nibbles (ttnn.bringup.ckv_bfp4)
 
 
 class AttnTable:
@@ -173,7 +173,7 @@ class AttnTable:
     table row j as it is, and the window index lists are load-time lists offset by ``base`` (``index``). The shape
     never changes between chunks.
 
-    CKV_FORMAT=bfp4_rows (FIX.8): ``buf`` is the history alone, [1, 1, hist, 288] uint8 ROW_MAJOR bfloat4_b row records
+    CKV_FORMAT=bfp4_rows (FIX.8): ``buf`` is the history alone, [1, 1, hist, 320] uint8 ROW_MAJOR bfloat4_b row records
     written by ttnn.bringup.ckv_bfp4 (``append_tiles``: the compressor's gathered bf16 tiles, rounded to nearest even;
     it returns the rounded bf16 rows for the served cache), and ``win`` the window region [1, 1, 128 + S, 512] bf16
     (base 0): sparse_sdpa's ROW_BFP4 reads the two, the index list [window ids | top-k ids] as built, not compacted."""

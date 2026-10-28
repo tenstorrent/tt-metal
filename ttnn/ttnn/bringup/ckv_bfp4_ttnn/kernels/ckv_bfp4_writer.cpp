@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Per band of 32 rows (16 bfloat4_b tiles across 512 columns): each tile's bytes scattered into the band's 32 row
-// records in L1 (row = 32 exponent bytes, one per 16-value group, then 256 bytes of nibbles, value 2i in the low nibble
-// of byte i), then the 32 rows written as pages row0 + 32 band + i of the row table. With CKV_ROUNDED_OUT each tile's
-// bf16 copy (the same rounded values) goes to the rounded output at its tile id.
-// bfloat4_b tile bytes: 64 exponent bytes (face 0..3 x 16 rows), then 4 faces x 16 rows x 8 bytes.
+// records in L1 (row = 32 exponent bytes, one per 16-value group, twice, then 256 bytes of nibbles, value 2i in the low
+// nibble of byte i), then the 32 rows written as pages row0 + 32 band + i of the row table. With CKV_ROUNDED_OUT each
+// tile's bf16 copy (the same rounded values) goes to the rounded output at its tile id. bfloat4_b tile bytes: 64
+// exponent bytes (face 0..3 x 16 rows), then 4 faces x 16 rows x 8 bytes.
 
 #include <cstdint>
 
@@ -50,12 +50,14 @@ void kernel_main() {
                 volatile tt_l1_ptr uint8_t* rb = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(row);
                 rb[2 * c] = tb[face0 * 16 + fr];
                 rb[2 * c + 1] = tb[(face0 + 1) * 16 + fr];
+                rb[n_groups + 2 * c] = tb[face0 * 16 + fr];  // the second exponent copy
+                rb[n_groups + 2 * c + 1] = tb[(face0 + 1) * 16 + fr];
                 volatile tt_l1_ptr uint32_t* src0 =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile + 64 + face0 * 128 + fr * 8);
                 volatile tt_l1_ptr uint32_t* src1 =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile + 64 + (face0 + 1) * 128 + fr * 8);
                 volatile tt_l1_ptr uint32_t* dst =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row + n_groups + 16 * c);
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row + 2 * n_groups + 16 * c);
                 dst[0] = src0[0];
                 dst[1] = src0[1];
                 dst[2] = src1[0];
