@@ -686,11 +686,12 @@ def msa_chunks_pipelined(
     The join before C(i) covers both sub-devices, so C(i) and G(i+1), enqueued after it, start only once G(i)
     has landed and C(i-1) has released the buffer set G(i+1) overwrites; G(i+1) does not wait for C(i), which
     is the overlap (a program stalls only on its own sub-device's predecessors). A join over one sub-device
-    would race that overwrite. Only sub-device-confined ops may run inside the window: the runtime does not
-    reject a program that spans both sub-devices (a layout change, an allocation that runs as a program); it
-    stalls on one of them and runs the program on the gather strip beside the in-flight gather, silently
-    (program.cpp determine_sub_device_ids). test_msa_chunks_pipelined_vs_serial (bit-exact against the serial
-    chain) is the guard. The gather allocates nothing (persistent buffers, caller-owned semaphores), so a tensor
+    would race that overwrite. Only sub-device-confined ops may run inside the window: a program whose cores
+    span both sub-devices (a layout change, an allocation that runs as a program) is rejected at enqueue
+    (fd_mesh_command_queue.cpp, "Programs must be executed on a single sub-device"); one whose cores happen to
+    fit a single sub-device runs there, stalling only on that sub-device's predecessors.
+    test_msa_chunks_pipelined_vs_serial (bit-exact against the serial chain) is the guard. The gather
+    allocates nothing (persistent buffers, caller-owned semaphores), so a tensor
     freed on the compute side is only ever reused by a later compute-side program, after its reader. Eager only:
     the join is an event record, which trace capture rejects. Contract: tech_reports/SubDevices/SubDevices.md.
     """
