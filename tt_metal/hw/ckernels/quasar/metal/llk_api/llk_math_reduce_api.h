@@ -50,11 +50,14 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     // decoding 2x-packed SrcA as Float16_b. Program the ALU directly in that case; this is still the
     // DEFAULT config shape (no dest-format override), so the latched
     // DataFormatConfigSet::DEFAULT stays truthful and transpose-dest's restore contract holds.
-    if (srcA_2x) {
+    if (srcA_2x || swap_operands) {
         const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
                                           _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
         _configure_alu_formats_<EN_32BIT_DEST>(
             srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
+        if (swap_operands) {
+            data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
+        }
     } else {
         _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
     }
