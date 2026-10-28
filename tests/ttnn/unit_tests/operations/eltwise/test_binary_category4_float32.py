@@ -113,24 +113,48 @@ def _bias_gelu_golden(input_a, input_b):
     return x, F.gelu(x.double()).to(torch.float32)
 
 
+def _float32_result(result, desc):
+    """comp_ulp sizes the ULP from the result's dtype, so a bfloat16 output
+    would be measured in bfloat16 ULPs and pass float32 thresholds."""
+    assert result.dtype == torch.float32, f"{desc}: expected float32 output, got {result.dtype}"
+    return result
+
+
 def _run_f64(device, ttnn_op, fn, input_a, input_b):
     """run_binary with a float64 golden in place of the torch float32 one."""
     _, result = run_binary(device, ttnn_op, input_a, input_b, input_dtype=ttnn.float32)
     golden, reference = _golden_f64(fn, input_a, input_b)
-    return golden, reference, result
+    return golden, reference, _float32_result(result, ttnn_op.__name__)
 
 
-def _assert_ldexp(golden, reference, result):
+def _assert_ldexp(golden, reference, result, input_a, input_b):
     """ULP ≤ 1, with the flush band keyed on the float64 product.
 
-    Below 2^-126 the device flushes, but a float64 product just under 2^-126
-    can round up to it: for a = 2^-126 and b = -1.1e-16, 2**b is 1.0 in
-    float32. Depending on whether the device's 2**b lands on 1.0 or just
-    under it, the device returns 2^-126 or 0, so either is accepted there.
+    Below 2^-126 the device flushes, but the product can still land on
+    ±2^-126 in two ways. So the band accepts 0, or exactly ±2^-126 where
+    the golden or the float32 chain rounds there; any other nonzero value,
+    such as an unflushed 2^-127 from ldexp(2^-126, -1), fails:
+
+    | a       | b         | float32 2**b         | product                      | device               |
+    |---------|-----------|----------------------|------------------------------|----------------------|
+    | 2^-126  | -1.1e-16  | 1.0                  | golden itself rounds to      | 2^-126 or 0          |
+    |         |           |                      | 2^-126                       |                      |
+    | 2^-126  | ~ -2^-23  | 1 - 2^-24            | 2^-126 - 2^-150, the exact   | WH: 0 (flushed)      |
+    |         |           | (0x3F7FFFFF)         | halfway point; RNE gives     | BH: 2^-126 (rounded) |
+    |         |           |                      | 2^-126, golden stays 0x7FFFFF|                      |
+
+    Both architectures return the same float32 2**b; they differ only in
+    whether the multiply flushes the halfway product before or after rounding.
     """
     band = reference.abs() < FLOAT32_TINY
-    band_ok = (result[band] == 0) | (result[band] == golden[band])
-    assert band_ok.all(), f"ldexp: {int((~band_ok).sum())} results below 2^-126 are neither 0 nor the golden"
+    chained = input_a * torch.exp2(input_b.double()).to(torch.float32)
+    band_result = result[band]
+    rounded_up = (band_result.abs() == FLOAT32_TINY) & ((band_result == golden[band]) | (band_result == chained[band]))
+    band_ok = (band_result == 0) | rounded_up
+    assert band_ok.all(), (
+        f"ldexp: {int((~band_ok).sum())} results below 2^-126 are neither 0 nor a ±2^-126 that the golden "
+        "or a * float32(2**b) rounds to"
+    )
     assert_with_ulp(expected_result=golden[~band], actual_result=result[~band], ulp_threshold=1, allow_nonfinite=True)
 
 
@@ -171,6 +195,7 @@ def _assert_bias_gelu(x, golden, result):
     | x ≤ -1          | abs ≤ 1e-6 | 4.66e-7 / 8.66e-7; the device returns 0 once    |
     |                 |            | abs(gelu) < ~5.2e-8 (x ≈ -5.6 down to -8.4)     |
     """
+    _float32_result(result, "bias_gelu")
     flush = x.abs() < 2.0**-125
     assert_equal(torch.zeros_like(result[flush]), result[flush])
     non_negative = ~flush & (x >= 0)
@@ -224,7 +249,7 @@ def test_ldexp(device, ttnn_op):
 
     assert ((reference != 0) & (reference.abs() < FLOAT32_TINY)).any(), "expected the flush band in this sweep"
     assert torch.isinf(golden).any(), "expected overflowing products in this sweep"
-    _assert_ldexp(golden, reference, result)
+    _assert_ldexp(golden, reference, result, input_a, input_b)
 
 
 def test_ldexp_exponent_underflow(device):
@@ -260,6 +285,7 @@ def test_ldexp_exponent_overflow(device):
         binary_grid_values(low=LDEXP_MAX_EXPONENT + 0.5, include_zero=False, dtype=torch.float32),
     )
     result = ttnn.to_torch(ttnn.ldexp(to_float32_tt_tensor(input_a, device), to_float32_tt_tensor(input_b, device)))
+    result = _float32_result(result, "ldexp exponent overflow")
 
     saturated = input_b >= 128
     assert saturated.any() and (~saturated).any(), "expected both the saturated and the 127.5 scales"
@@ -334,7 +360,7 @@ def test_squared_difference(device, ttnn_op):
     golden, result = run_binary(device, ttnn_op, input_a, input_b, input_dtype=ttnn.float32)
 
     golden = flush_subnormal_values_to_zero(golden)
-    result = flush_subnormal_values_to_zero(result)
+    result = flush_subnormal_values_to_zero(_float32_result(result, ttnn_op.__name__))
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=0, allow_nonfinite=True)
 
 
@@ -429,6 +455,7 @@ def test_hypot_outside_square_range(device):
     """
     input_a, input_b = pairwise_from_values(binary_grid_values(dtype=torch.float32))
     result = ttnn.to_torch(ttnn.hypot(to_float32_tt_tensor(input_a, device), to_float32_tt_tensor(input_b, device)))
+    result = _float32_result(result, "hypot")
 
     squares = [flush_subnormal_values_to_zero(x * x) for x in (input_a, input_b)]
     expected = torch.sqrt(squares[0] + squares[1])
@@ -489,7 +516,7 @@ def test_prelu(device):
     result = ttnn.to_torch(ttnn.prelu(to_float32_tt_tensor(input_a, device), to_float32_tt_tensor(weight, device)))
 
     golden = flush_subnormal_values_to_zero(golden)
-    result = flush_subnormal_values_to_zero(result)
+    result = flush_subnormal_values_to_zero(_float32_result(result, "prelu"))
     assert torch.isinf(golden).any(), "expected overflowing products in this sweep"
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=0, allow_nonfinite=True)
 
@@ -599,13 +626,13 @@ def test_tensor_scalar(device, ttnn_op, kind, scalar):
         "prelu": binary_grid_values(dtype=torch.float32),
     }
     input_a = _tile_rows(domains[kind])
-    result = ttnn.to_torch(ttnn_op(to_float32_tt_tensor(input_a, device), scalar))
-    scalar_tensor = torch.tensor(scalar, dtype=torch.float32)
     desc = f"{ttnn_op.__name__}(tensor, {scalar})"
+    result = _float32_result(ttnn.to_torch(ttnn_op(to_float32_tt_tensor(input_a, device), scalar)), desc)
+    scalar_tensor = torch.tensor(scalar, dtype=torch.float32)
 
     if kind == "ldexp":
         golden, reference = _golden_f64(_ldexp_f64, input_a, scalar_tensor)
-        _assert_ldexp(golden, reference, result)
+        _assert_ldexp(golden, reference, result, input_a, scalar_tensor)
     elif kind in ("logaddexp", "logaddexp2"):
         golden_fn = torch.logaddexp if kind == "logaddexp" else torch.logaddexp2
         golden, _ = _golden_f64(golden_fn, input_a, scalar_tensor)
