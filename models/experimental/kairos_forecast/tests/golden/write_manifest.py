@@ -46,7 +46,12 @@ def main():
         "pip_freeze": (VENV / "pip_freeze.txt").read_text().split("\n"),
         "test_cases": test["cases"],
         "bench_cases": bench["cases"],
-        "sha256": {f"{d}/{p.name}": sha256(p) for d in ("test", "bench") for p in sorted((ROOT / d).glob("*.pt"))},
+        # D4 item 6: the two JSONs the golden jobs write are hashed too (19 files)
+        "sha256": {
+            f"{d}/{p.name}": sha256(p)
+            for d in ("test", "bench")
+            for p in sorted([*(ROOT / d).glob("*.pt"), ROOT / d / ("MANIFEST.json" if d == "test" else "cases.json")])
+        },
     }
     (ROOT / "MANIFEST.json").write_text(json.dumps(manifest, indent=1))
     print("wrote", ROOT / "MANIFEST.json", len(manifest["sha256"]), "golden files")
