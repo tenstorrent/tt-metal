@@ -23,6 +23,8 @@
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/program_spec_hw_fixture.hpp"
 
+#include "metal2_host_api/test_helpers/scratchpad_override.hpp"
+
 namespace tt::tt_metal::experimental {
 namespace {
 
@@ -46,6 +48,10 @@ using test_helpers::ProgramSpecHWTest;
 // base address and get_dataformat() to a host-known L1 address. The host reads the
 // reported values, then reads the scratchpad L1 and confirms the pattern landed — closing the loop on
 // the scratchpad being real, writable, node-local L1 and the framework delivering its metadata.
+TEST_F(ProgramSpecHWTest, ScratchpadPlacementOverrideGuardedAccess) {
+    test_helpers::CheckScratchpadPlacementOverride(*devices_.at(0), false);
+}
+
 TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     auto mesh_device = devices_.at(0);
 
