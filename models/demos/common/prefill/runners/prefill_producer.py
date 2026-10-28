@@ -104,7 +104,7 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     return manifest
 
 
-def _load_env_config() -> None:
+def _load_env_config(check_budget: bool = True) -> None:
     global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
     global MTP_DECODE_LEVELS, FORWARD_CHUNKS, CHUNK_METADATA_SIZE_BYTES
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
@@ -113,10 +113,10 @@ def _load_env_config() -> None:
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
     # Tokens per forward, a multiple of the chunk size; must match the runner's.
     forward_tokens_budget = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
-    assert (
+    assert not check_budget or (
         forward_tokens_budget >= CHUNK_SIZE and forward_tokens_budget % CHUNK_SIZE == 0
     ), f"PREFILL_FORWARD_TOKENS_BUDGET={forward_tokens_budget} must be a multiple of PREFILL_CHUNK_SIZE={CHUNK_SIZE}"
-    FORWARD_CHUNKS = forward_tokens_budget // CHUNK_SIZE
+    FORWARD_CHUNKS = max(forward_tokens_budget // CHUNK_SIZE, 1)
     CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
     # Decode's level count: the levels past MTP_LEVELS are table aliases of level 0's rows, acked with it.
@@ -130,7 +130,8 @@ def _load_env_config() -> None:
     NUM_ACK_LAYERS = NUM_LAYERS
 
 
-_load_env_config()
+# At import the manifest may still set the chunk size; the entry points reload and check after applying it.
+_load_env_config(check_budget=False)
 
 
 def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
@@ -638,6 +639,8 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
         else:
             order = list(active_slots)
             rng.shuffle(order)
+        # A forward can finish several requests; past max_requests the slots' initial requests stay unsent.
+        order = [s for s in order if s.req_id < cfg.max_requests]
         runs = []
         filled = 0
         for slot in order:
