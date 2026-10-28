@@ -92,32 +92,31 @@ and nDCG@10 within 0.015 of HF.
 
 ## Performance (one P150)
 
-Traced forward, inputs on device. "Sustained" is the median of the second half of 40 replays: under load the
-board holds its 150 W limit by lowering the clock from 1.35 GHz to about 0.95 GHz, so it is the number a
-loaded server sees; "best" is at full clock. The benchmark's pairs fill the bucket, so no pair is padded and
+Traced forward, inputs on device. Each time is the median of the second half of 30 back-to-back replays:
+under continuous load the board holds its 150 W limit by lowering the clock from 1.35 GHz to about 0.95 GHz,
+so this is the latency a loaded server sees. The benchmark's pairs fill the bucket, so no pair is padded and
 SDPA runs without a mask (the serving runner does the same for such a batch). "Padded" is a batch with any
 padded pair: SDPA reads and adds the padding mask on every K chunk it computes (`demo/bench.py --masked`,
 same full-length inputs, so it is the upper bound for a padded batch of that shape).
 
-| batch x tokens | after bring-up | now, sustained | now, best | padded, sustained | speed of light (kernel cycles) |
-|---|---|---|---|---|---|
-| 1 x 128 | 12.8 ms | 6.26 ms | 6.24 ms | 6.43 ms | |
-| 1 x 256 | | 6.45 ms | 6.44 ms | 6.72 ms | |
-| 1 x 512 | 15.6 ms | 7.70 ms | 7.68 ms | 8.05 ms | 33.7 % |
-| 1 x 1024 | | 15.2 ms | 15.1 ms | 16.6 ms | |
-| 8 x 512 | 76.2 ms | 38.8 ms | 35.4 ms | 41.6 ms | 58.6 % |
-| 32 x 512 | 329 ms | 175 ms | 109 ms | 180 ms | **75.9 %** (147.0 M cycles) |
-| 1 x 2048 | 46.5 ms | 24.9 ms | 24.3 ms | 27.7 ms | 51.9 % |
-| 1 x 4096 | | 63.8 ms | 51.9 ms | 74.8 ms | |
-| 1 x 8192 | 362 ms | 188 ms | 135 ms | 220 ms | 64.1 % |
+| batch x tokens | after bring-up | now | now, padded batch | speed of light (kernel cycles) |
+|---|---|---|---|---|
+| 1 x 128 | 12.8 ms | 6.26 ms | 6.43 ms | |
+| 1 x 256 | | 6.45 ms | 6.72 ms | |
+| 1 x 512 | 15.6 ms | 7.70 ms | 8.05 ms | 33.7 % |
+| 1 x 1024 | | 15.2 ms | 16.6 ms | |
+| 8 x 512 | 76.2 ms | 38.8 ms | 41.6 ms | 58.6 % |
+| 32 x 512 | 329 ms | 175 ms | 180 ms | **75.9 %** (147.0 M cycles) |
+| 1 x 2048 | 46.5 ms | 24.9 ms | 27.7 ms | 51.9 % |
+| 1 x 4096 | | 63.8 ms | 74.8 ms | |
+| 1 x 8192 | 362 ms | 188 ms | 220 ms | 64.1 % |
 
 Speed of light: ideal cycles for the matmuls and attention at the precision each op runs at
 (130 cores x 4096 FLOP/cycle LoFi, / 2 for HiFi2, / 4 for HiFi4), divided by the sum of the ops' device
 kernel cycles (`perf_tools/opsol.py`). Kernel durations, not firmware windows: an op that runs on fewer
 cores than the next lets the idle cores start the next op's firmware early, so firmware windows overlap
-and double count. The kernel-cycle totals match wall time at full clock (32x512: 148.4 M cycles in
-110 ms = 1.35 GHz). Each shape was benchmarked in its own process on an idle board; right after a large
-shape the board is still throttled and "best" can read 20-40 % higher.
+and double count. Cycles do not depend on the clock, so the speed-of-light figures hold at any clock. Each
+shape was benchmarked in its own process on an idle board.
 
 32 x 512 per op (share of cycles, % of that op's compute speed of light):
 

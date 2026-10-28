@@ -9,7 +9,7 @@ Each shape: build inputs (all sequences full length, so no pair is padded and
 SDPA runs without a mask, as the serving runner does for such a batch; ``--masked``
 applies the all-zero padding mask anyway, the cost of a batch with any padded
 pair), compile, capture a trace, then replay it
-``--iters`` times. Reported: median and min replay latency (host-synchronized,
+``--iters`` times. Reported: the median replay latency over the second half (host-synchronized,
 inputs already on device), sequences/s and tokens/s, and the trace output
 checked against an untraced forward. ``--signpost`` wraps one replay in
 tracy signposts for op-level profiling.
@@ -64,7 +64,7 @@ def bench_shape(model, device, B, S, iters, do_signpost, masked):
     # Sustained: the board settles its clock under load, so the median skips the first half.
     med = statistics.median(times[len(times) // 2 :])
     print(
-        f"B={B:<3} S={S:<5} {'masked  ' if masked else 'unmasked'} sustained {med:8.2f} ms  min {min(times):8.2f} ms  "
+        f"B={B:<3} S={S:<5} {'masked  ' if masked else 'unmasked'} {med:8.2f} ms  "
         f"{B / med * 1e3:8.1f} seq/s  {B * S / med * 1e3:10.0f} tok/s  trace-vs-eager {maxdiff:.2e}"
     )
     return med
