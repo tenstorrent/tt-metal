@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """CPU codec of the DeepSeek-V4.1 compressed-KV row formats (de-risk L0; the oracle for the L1 device tests).
 
-Intended repo path: models/demos/deepseek_v41_flash_d_p/tt/ckv_codec.py (moves in after FIX.7 commits).
-
 Row = 512 values (head_dim; RoPE already applied to the last 64). Both formats are 288 bytes per row.
 
 Format A (reference-exact, model.py fp4_act_quant(block 16, e4m3 scale) = reference/kernels.py:fp4_quant_dequant):

@@ -5,22 +5,18 @@
 (bfloat4_b, one exponent per 16) vs bf16 (today's device), against the reference's NATIVE rows (golden s10240,
 numerics native). Attention impact on the real attention queries of the dumped layers (chunk 1, positions 5120+).
 No ttnn import (it opens the cluster). Run:
-  PYTHONPATH=~/repos/tt-metal python -I /scratch/dnijemcevic/ckv_derisk/study.py"""
+  python -m models.demos.deepseek_v41_flash_d_p.tools.ckv_study (Galaxy paths below)"""
 
 import json
 import os
-import sys
 
 import torch
 from safetensors import safe_open
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.expanduser("~/repos/tt-metal"))
-import codec  # noqa: E402
-
 from models.demos.deepseek_v41_flash_d_p.reference import kernels as K  # noqa: E402
 from models.demos.deepseek_v41_flash_d_p.reference.ds41_ref import Config, rope, rope_table, yarn_freqs  # noqa: E402
 from models.demos.deepseek_v41_flash_d_p.reference.weights import Checkpoint  # noqa: E402
+from models.demos.deepseek_v41_flash_d_p.tt import ckv_codec as codec
 
 torch.set_num_threads(32)
 HF = "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/hf_full"
