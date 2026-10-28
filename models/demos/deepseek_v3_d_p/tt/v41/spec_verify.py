@@ -565,6 +565,24 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
                 compressed = selection["topk"]
         rows = self._index_rows(layer, compressed)
 
+        k_chunk = next(c for c in (128, 64, 32) if rows.shape[-1] % c == 0)
+        if self.sdpa_local and self.tp > 1:
+            # the batched step's V41_DECODE_SDPA=local: this chip's heads alone, padded with
+            # zero heads to sparse_sdpa's 32; no all-gather of the queries, no partition of the output
+            out = ttnn.transformer.sparse_sdpa(
+                q_heads(q, cos, sin, attn.trans_mat, attn.local_heads, attn.rope_dim, out_heads=attn.sdpa_heads),
+                kv_tensor,
+                rows,
+                attn.head_dim,
+                kv_format=kv_format.sparse_sdpa_format,
+                scale=attn.scale,
+                k_chunk_size=k_chunk,
+                attention_sink=attn.sink_local,
+            )
+            out = o_heads(
+                out, cos, ttnn.neg(sin), attn.trans_mat, attn.o_groups // self.tp, attn.rope_dim, heads=attn.local_heads
+            )
+            return attn._o_proj(out)
         q = attn.ccl.tp_all_gather(q, dim=3)
         out = ttnn.transformer.sparse_sdpa(
             q_heads(q, cos, sin, attn.trans_mat, attn.heads, attn.rope_dim),
@@ -573,7 +591,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             attn.head_dim,
             kv_format=kv_format.sparse_sdpa_format,
             scale=attn.scale,
-            k_chunk_size=next(c for c in (128, 64, 32) if rows.shape[-1] % c == 0),
+            k_chunk_size=k_chunk,
             attention_sink=attn.sink,
         )
         out = o_heads(out, cos, ttnn.neg(sin), attn.trans_mat, attn.o_groups, attn.rope_dim)
