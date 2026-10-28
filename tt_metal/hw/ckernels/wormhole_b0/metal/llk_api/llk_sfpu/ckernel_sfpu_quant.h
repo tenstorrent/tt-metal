@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "llk_defs.h"
 #include "lltt.h"
@@ -26,11 +27,25 @@ namespace ckernel::sfpu {
 // (INT32 = 4 vs INT32_2S_COMP = 12), and those load/store instructions are
 // outside the replay window. So one slot per kernel suffices.
 //
-// Distinct slots between kernels are required so a single compute kernel
-// can mix all three ops without each init clobbering the others' recordings.
-// Int8 output records a longer body (the offset-128 pack) into the same family
-// slot; slot spacing uses each family's max body length so the three ops can
-// still coexist.
+// Switching between quant-family ops always needs the matching init again, whatever the
+// slots say: every init loads its zero point into LREG2 (the int8 inits also load the sign
+// mask into LREG4) and the recorded bodies read those registers at replay time without
+// reloading them, so a quant tile issued after dequant_init would use dequant's zero point.
+// The separate slots therefore do not make the three ops mixable; what they protect is the
+// recording itself against the FPU. The math thread's replay buffer is shared with the FPU:
+// cmath_common.h splits it at ckernel::math::replay_buf_offset (slots [0, 16) for SFPU
+// bodies, [16, 32) for the FPU MOP bodies that reduce, matmul and transpose_dest record).
+// Every body recorded here must stay below that split, otherwise an FPU op issued between a
+// quant-family init and its tile calls silently corrupts whichever body was recorded first.
+// Only ops that record at or above the split are safe in between: native reduce, matmul and
+// transpose_dest. reduce_block_max_row (reduce_custom.h) records its MOP bodies from slot 0
+// and overwrites every window here, so the quant-family init must be issued again after it.
+// The windows are sized by the int32 bodies, with DEQUANT pinned to the top of the SFPU
+// half: QUANT [0, 3), REQUANT [3, 7), DEQUANT [11, 16). The int8-output quant body [0, 7)
+// is longer than its window and runs into REQUANT's; that is harmless for the reason above
+// (requant_init, which re-records its body, is required anyway), and it must still stay
+// below the FPU split, which quant_init checks. The int8-output requant body [3, 11) ends
+// exactly where DEQUANT starts (checked below).
 //
 // Body content (see the inits for the exact emission order):
 //   QUANT   (3)            : SFPMAD, SFPNOP, STOCH_RND
@@ -45,15 +60,24 @@ namespace ckernel::sfpu {
 constexpr std::uint32_t QUANT_REPLAY_SLOT = 0;
 constexpr std::uint32_t QUANT_REPLAY_LEN = 3;
 constexpr std::uint32_t QUANT_REPLAY_LEN_INT8_OUT = 7;
-constexpr std::uint32_t QUANT_REPLAY_LEN_MAX = QUANT_REPLAY_LEN_INT8_OUT;
 
-constexpr std::uint32_t REQUANT_REPLAY_SLOT = QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN_MAX;
+constexpr std::uint32_t REQUANT_REPLAY_SLOT = QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN;
 constexpr std::uint32_t REQUANT_REPLAY_LEN = 4;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT = 8;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_MAX = REQUANT_REPLAY_LEN_INT8_OUT;
 
-constexpr std::uint32_t DEQUANT_REPLAY_SLOT = REQUANT_REPLAY_SLOT + REQUANT_REPLAY_LEN_MAX;
 constexpr std::uint32_t DEQUANT_REPLAY_LEN = 5;
+static_assert(DEQUANT_REPLAY_LEN <= ckernel::math::replay_buf_offset, "dequant body longer than the SFPU half");
+constexpr std::uint32_t DEQUANT_REPLAY_SLOT = ckernel::math::replay_buf_offset - DEQUANT_REPLAY_LEN;
+
+// Both requant bodies must end before DEQUANT starts; the int8-output quant body is exempt (see
+// the banner).
+static_assert(
+    REQUANT_REPLAY_SLOT + REQUANT_REPLAY_LEN <= DEQUANT_REPLAY_SLOT &&
+        REQUANT_REPLAY_SLOT + REQUANT_REPLAY_LEN_INT8_OUT <= DEQUANT_REPLAY_SLOT,
+    "requant replay body runs into the DEQUANT window");
+static_assert(
+    DEQUANT_REPLAY_SLOT + DEQUANT_REPLAY_LEN <= ckernel::math::replay_buf_offset,
+    "dequant replay body crosses into the FPU half of the math replay buffer");
 
 // Int8 L1 pack path:
 // FP32_TO_INT8 rounding cannot be used here since it produces a sign-magnitude result
@@ -310,7 +334,11 @@ void quant_init(const uint zero_point) {
         _sfpu_load_imm32_(p_sfpu::LREG4, INT8_SIGN_MASK);
         _int8_bias_zero_point_();  // fold +128 into the fp32 zero-point in LREG2
         _quant_kernels_configure_dest_incr_addrmod_();
-        // Record the int8 body (MAD + offset-128 pack)
+        // Record the int8 body (MAD + offset-128 pack). It is longer than the QUANT window and
+        // runs into REQUANT's (see the slot banner); it must still stay below the FPU split.
+        static_assert(
+            QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN_INT8_OUT <= ckernel::math::replay_buf_offset,
+            "quant int8-out replay body crosses into the FPU half of the math replay buffer");
         lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT);
         {
             TTI_SFPMAD(
@@ -372,7 +400,8 @@ void requant_init(const uint zero_point) {
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
         _int8_bias_zero_point_();  // fold +128 into the fp32 zero-point in LREG2
         _quant_kernels_configure_dest_incr_addrmod_();
-        // Record the int8 body (CAST + MAD + offset-128 pack)
+        // Record the int8 body (CAST + MAD + offset-128 pack). It is longer than the REQUANT
+        // window but ends where DEQUANT starts (checked at the slot definitions).
         lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN_INT8_OUT);
         {
             TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);  // int32 -> fp32
