@@ -538,7 +538,13 @@ class GLM53SpecEngine:
             )
             dummy = torch.arange(seq_len, dtype=torch.long) % 1000 + 1000
             t0 = time.perf_counter()
-            self.prefill_fill(dummy, 1000, streams, 0, 0, seq_len)
+            # the shortest length fills EVERY per-row user slot: the drafter's per-user constants (its index cache's
+            # page-table / ring views, its KDA state writes) are built here, not at the first prompt into that slot
+            # after the captures (the 2026-10-28 8x4 run: +1.43 MiB per bank after the eager chunk [0, 32)'s fill
+            # into a slot the warm-up had not filled)
+            users = range(int(getattr(self.model, "max_batch", 1))) if not self.warmed_fill_lengths else range(1)
+            for u in users:
+                self.prefill_fill(dummy, 1000, streams, u, 0, seq_len)
             ttnn.deallocate(streams)
             ttnn.synchronize_device(mesh.device)
             self.warmed_fill_lengths.append(T)
