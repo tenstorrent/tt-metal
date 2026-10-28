@@ -3,7 +3,8 @@
 """QWEN36_LMHEAD_DSHARD: the DRAM-sharded LM head for decode-shaped head calls (tp_common.LMHeadDShard).
 
 Host tests (no device): the env parsing and the shard arithmetic (Qwen3.8 TP8: 970 vocab tiles per device in
-8 banks x 122 = 976 tiles, in0_block_w 2 like the plain head's auto 1D config).
+8 banks x 122 = 976 tiles, in0_block_w 2 like the plain head's auto 1D config; 2 readers/bank by default
+because 1 reader/bank needs ~1.8 MB of L1 per storage core for the fp32 drafter head).
 
 Device tests (one Blackhole chip, synthetic weights at the per-device TP shapes):
   * "exact" must reproduce the plain ``ttnn.linear(x, interleaved_weight)`` head BIT FOR BIT, for the base/verify
@@ -51,7 +52,7 @@ def test_host_plan_tp8_exact():
     assert (p.k_tiles, p.n_tiles) == (160, 970)
     assert (p.bank_tiles, p.padded_tiles) == (122, 976)  # the 976-tile padded vocab shard
     assert p.in0_block_w == 2  # = get_mcast_1d_config's K blocking for the plain head
-    assert (p.readers, p.multicore) == (1, False)
+    assert (p.readers, p.multicore) == (2, False)  # 1 reader/bank does not fit the fp32 head in L1
     assert (p.act_cores, p.act_shard_w, p.per_core_N) == (8, 640, 122)
     # Padding stays inside the last bank: 7 full banks + 116 real tiles.
     assert p.padded_tiles - p.n_tiles == 6 < p.bank_tiles
@@ -69,6 +70,26 @@ def test_host_plan_readers():
         tpc.LMHeadDShardPlan(K, N_TP8, 8, "exact", readers=4)
 
 
+def test_host_plan_l1_fits():
+    # Storage-core L1 (in1 + out/interm + in0 buffers + out shard + in shard) for the chosen readers, in bytes.
+    budget = tpc.LMHEAD_DSHARD_L1_BUDGET
+    assert budget <= 1400 * 1024
+    for readers in (2, 3):
+        p = tpc.LMHeadDShardPlan(K, N_TP8, 8, "exact", readers=readers)
+        for out in ("bfloat16", "float32"):
+            assert p.l1_bytes_per_core(out) < budget, (readers, out)
+        p.check_l1()
+    p2 = tpc.LMHeadDShardPlan(K, N_TP8, 8, "exact")
+    # 2 readers: 61 tiles/worker -> in1 366 bfp8 tiles + 64 fp32 out tiles + 122-tile fp32 shard + 20-tile input.
+    assert p2.l1_bytes_per_core("float32") == 366 * 1088 + 64 * 4096 + 4 * 2048 + 20 * 2048 + 122 * 4096
+    # 1 reader/bank: ~1.85 MB for the fp32 drafter head -> rejected at init, before the weight copy is made.
+    p1 = tpc.LMHeadDShardPlan(K, N_TP8, 8, "exact", readers=1)
+    assert p1.l1_bytes_per_core("float32") > 1536 * 1024
+    with pytest.raises(ValueError):
+        p1.check_l1()
+    tpc.LMHeadDShardPlan(K, N_TP8, 8, "mc").check_l1()  # mc: not modelled, never rejected
+
+
 def test_host_plan_mc_matches_qb2_rule():
     p = tpc.LMHeadDShardPlan(K, N_TP8, 8, "mc")
     assert p.multicore and p.bank_tiles == 122 and p.readers == 4  # min(4, max(2, (122 + 7) // 8))
@@ -79,7 +100,7 @@ def test_host_plan_mc_matches_qb2_rule():
 
 def test_host_plan_tp4_and_odd_k():
     p = tpc.LMHeadDShardPlan(K, N_TP4, 8, "exact")
-    assert (p.n_tiles, p.bank_tiles, p.padded_tiles) == (1940, 243, 1944)
+    assert (p.n_tiles, p.bank_tiles, p.padded_tiles) == (1940, 244, 1952)  # 2 readers x 122
     # K with an odd tile count: the plain head blocks K by 1 tile, so must we.
     q = tpc.LMHeadDShardPlan(9 * 32, N_TP8, 3, "exact")  # 9 K tiles over 3 banks
     assert q.in0_block_w == 1 and q.act_shard_w == 3 * 32
@@ -121,7 +142,7 @@ def _fp32_drafter_cfg(device):
 
 
 @pytest.mark.parametrize("rows", [1, 4, 8, 32])
-@pytest.mark.parametrize("readers", [1, 2])
+@pytest.mark.parametrize("readers", [2, 3])
 @pytest.mark.parametrize("n", [N_TP8], ids=["tp8"])  # TP4 doubles the L1 logits shard (fp32: ~1 MB/core)
 def test_device_exact_bit_identical(device, n, readers, rows):
     import ttnn
@@ -189,7 +210,7 @@ def test_device_perf(device, rows):
     w_tt, x_tt = _setup(device, N_TP8, rows, seed=2)
     plain = _time_ms(device, lambda: ttnn.linear(x_tt, w_tt))
     res = {"plain": plain}
-    for mode, readers in (("exact", 1), ("exact", 2), ("mc", None)):
+    for mode, readers in (("exact", 2), ("exact", 3), ("mc", None)):
         head = tpc.LMHeadDShard(w_tt, device, mode, readers)
         res[f"{mode}/r{readers}"] = _time_ms(device, lambda: head.linear(x_tt))
         ttnn.deallocate(head.weight)

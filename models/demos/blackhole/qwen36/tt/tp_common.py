@@ -379,7 +379,7 @@ def lm_head_dshard_mode():
 
 
 def lm_head_dshard_readers():
-    """QWEN36_LMHEAD_DSHARD_READERS: DRAM readers per bank. Unset = 1 for "exact", the qb2 rule for "mc"."""
+    """QWEN36_LMHEAD_DSHARD_READERS: DRAM readers per bank. Unset = 2 for "exact", the qb2 rule for "mc"."""
     raw = os.environ.get(LMHEAD_DSHARD_READERS_ENV, "").strip()
     return int(raw) if raw else None
 
@@ -387,6 +387,12 @@ def lm_head_dshard_readers():
 def dram_multicore_workers(bank_tiles):
     """qb2's workers per DRAM bank for the multi-core pipeline: about one per 8 tiles of a bank, 2 to 4."""
     return min(4, max(2, (bank_tiles + 7) // 8))
+
+
+# L1 the single-reader ("exact") program may take on one storage core (Blackhole: 1.5 MB per Tensix). The rest is
+# left for l1_small, the kernel config buffer and whatever the decode trace already holds in L1.
+LMHEAD_DSHARD_L1_BUDGET = 1400 * 1024
+_TILE_BYTES = {"bfloat16": 2048, "float32": 4096, "bfloat8_b": 1088, "bfloat4_b": 576}
 
 
 class LMHeadDShardPlan:
@@ -411,7 +417,11 @@ class LMHeadDShardPlan:
             if self.readers < 2:
                 raise ValueError("the multi-core pipeline needs at least 2 readers per bank")
         else:
-            self.readers = 1 if readers is None else readers
+            # 2 readers per bank by default: one reader per bank needs ~1.85 MB of L1 per storage core for the
+            # drafter's fp32 head (in1 triple buffer 732 bfp8 tiles + 124 fp32 out tiles + the 122-tile fp32 shard),
+            # more than a Blackhole core has. The bank shard stays 122 tiles (2 x 61) and the per-tile K order
+            # does not change, so the result is the same bits.
+            self.readers = 2 if readers is None else readers
             if not 1 <= self.readers <= 3:
                 raise ValueError(f"single-reader DRAM-sharded head takes 1-3 readers per bank, got {self.readers}")
             # Several readers per bank need the bank's shard to be readers x ceil(N / (banks x readers)) tiles.
@@ -428,6 +438,34 @@ class LMHeadDShardPlan:
             )
         self.act_shard_w = self.k_tiles // self.act_cores * TILE_SIZE
         self.per_core_N = self.bank_tiles
+
+    def l1_bytes_per_core(self, out_dtype="float32", act_dtype="bfloat16", weight_dtype="bfloat8_b"):
+        """Upper bound on one storage core's L1 for the single-reader program (matmul_multicore_reuse_mcast_dram_
+        sharded_program_factory): its buffers sit on every core of the worker/storage bounding box, and a storage
+        core also holds its input shard and its L1 output shard. Out/interm share one buffer (same format for the
+        fp32 head and for the bf16 head with packer L1 acc). Dtypes are ttnn dtype names."""
+        if self.multicore:
+            raise ValueError("the L1 bound models the single-reader program only")
+        out_b, act_b, w_b = _TILE_BYTES[out_dtype], _TILE_BYTES[act_dtype], _TILE_BYTES[weight_dtype]
+        per_worker = math.ceil(self.n_tiles / (self.banks * self.readers))
+        max_subblock_w = 4 if out_dtype == "float32" else 8
+        out_tiles = math.ceil(per_worker / max_subblock_w) * max_subblock_w  # subblock widening pads per_core_N
+        in1 = per_worker * self.in0_block_w * 3 * w_b  # triple-buffered K block
+        in0 = self.in0_block_w * 2 * act_b  # double-buffered K block
+        act_shard = (self.act_shard_w // TILE_SIZE) * act_b
+        out_shard = self.per_core_N * out_b
+        return in1 + out_tiles * out_b + in0 + act_shard + out_shard
+
+    def check_l1(self, weight_dtype="bfloat8_b", budget=LMHEAD_DSHARD_L1_BUDGET):
+        """Raise at init (not inside the decode trace) when the fp32 drafter head would not fit in L1."""
+        if self.multicore:
+            return
+        need = self.l1_bytes_per_core("float32", "bfloat16", weight_dtype)
+        if need > budget:
+            raise ValueError(
+                f"LM-head DRAM-shard with {self.readers} reader(s)/bank needs ~{need // 1024} KB of L1 per storage "
+                f"core for the fp32 head (budget {budget // 1024} KB); use {LMHEAD_DSHARD_READERS_ENV}=2 or 3"
+            )
 
 
 def lm_head_default_fidelity(a_dtype, b_dtype):
@@ -448,6 +486,8 @@ class LMHeadDShard:
         k, n = weight.shape[-2], weight.shape[-1]
         self.mesh_device = mesh_device
         self.plan = p = LMHeadDShardPlan(k, n, mesh_device.dram_grid_size().x, mode, readers)
+        _w_names = {ttnn.bfloat8_b: "bfloat8_b", ttnn.bfloat4_b: "bfloat4_b", ttnn.bfloat16: "bfloat16"}
+        p.check_l1(_w_names.get(weight.dtype, "bfloat16"))  # unknown dtype: assume the largest weight tile
         self.k = k
         self.weight_dtype = weight.dtype
         bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(p.banks - 1, 0))})
