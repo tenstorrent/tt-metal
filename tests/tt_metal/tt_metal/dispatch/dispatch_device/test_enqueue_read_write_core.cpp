@@ -10,6 +10,7 @@
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt::tt_metal;
 
@@ -232,7 +233,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, ActiveEthTestReadWriteEntireL1) {
 
     for (const auto& mesh_device : this->devices_) {
         auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "No active ethernet cores found";
         }
@@ -262,7 +263,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, ActiveEthTestReadWriteMultipleCoresL1)
 
     for (const auto& mesh_device : this->devices_) {
         auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "No active ethernet cores found";
         }
@@ -310,7 +311,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, IdleEthTestReadWriteEntireL1) {
 
     for (const auto& mesh_device : this->devices_) {
         auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         if (!does_device_have_idle_eth_cores(device)) {
             GTEST_SKIP() << "No idle ethernet cores found";
         }
@@ -347,7 +348,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, IdleEthTestInvalidReadWriteAddressL1) 
 
     for (const auto& mesh_device : this->devices_) {
         auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         if (!does_device_have_idle_eth_cores(device)) {
             GTEST_SKIP() << "No idle ethernet cores found";
         }
@@ -382,7 +383,7 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, IdleEthTestReadWriteMultipleCoresL1) {
 
     for (const auto& mesh_device : this->devices_) {
         auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         if (!does_device_have_idle_eth_cores(device)) {
             GTEST_SKIP() << "No idle ethernet cores found";
         }

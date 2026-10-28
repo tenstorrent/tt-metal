@@ -13,14 +13,15 @@
 #include <utility>
 #include <unistd.h>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_event.hpp>
 #include "mesh_event_impl.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "impl/context/metal_env_impl.hpp"
-#include <umd/device/chip_helpers/sysmem_manager.hpp>
-#include <umd/device/chip_helpers/sysmem_buffer.hpp>
+#include <tt-umd/chip_helpers/sysmem_manager.hpp>
+#include <tt-umd/chip_helpers/sysmem_buffer.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <distributed/mesh_device_impl.hpp>
@@ -152,12 +153,34 @@ void PinnedMemoryImpl::initialize_from_devices(
         use_64bit_address_space_ = true;
     }
 
+    const uint64_t pcie_tile_local_noc_addr_base = metal_env_->get_hal().get_pcie_tile_local_noc_addr_base();
     for (ChipId mmio_device_id : unique_mmio_devices) {
-        auto buffer =
-            cluster.map_sysmem_buffer(mmio_device_id, aligned_host_ptr, mapped_size, map_to_noc, to_umd_access(access));
+        const auto map = [&](bool through_iatu) {
+            auto buffer = cluster.map_sysmem_buffer(
+                mmio_device_id, aligned_host_ptr, mapped_size, through_iatu, to_umd_access(access));
+            if (!buffer) {
+                throw std::runtime_error(
+                    "Failed to create SysmemBuffer for MMIO device " + std::to_string(mmio_device_id));
+            }
+            return buffer;
+        };
+        auto buffer = map(map_to_noc);
 
-        if (!buffer) {
-            throw std::runtime_error("Failed to create SysmemBuffer for MMIO device " + std::to_string(mmio_device_id));
+        // The device addresses this buffer by its IOVA, but below KMD 2.10.0 (64-bit streaming DMA mask) the IOMMU
+        // can hand out one the PCIe tile serves itself: writes there never reach the host, and reads return the
+        // tile's configuration registers. Map the buffer through the outbound iATU instead, whose output reaches any
+        // IOVA. get_noc_addr then returns its iATU address.
+        // IOVAs from 2^58 up outside that range stay directly addressed: below KMD 2.10.0 an AMD IOMMU hands out all
+        // of its IOVAs from the top of the 64-bit space, those reach the host in practice, and the iATU has too few
+        // regions (16 per device) to map every buffer.
+        if (use_64bit_address_space_ && buffer->get_iova() + (mapped_size - 1) >= pcie_tile_local_noc_addr_base) {
+            log_debug(
+                tt::LogMetal,
+                "PinnedMemory: IOVA 0x{:x} on device {} is in the PCIe tile's own NoC range; mapping through the iATU",
+                buffer->get_iova(),
+                mmio_device_id);
+            buffer.reset();
+            buffer = map(/*through_iatu=*/true);
         }
 
         mmio_buffers[mmio_device_id] = std::move(buffer);
@@ -251,15 +274,16 @@ std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId devic
     auto pcie_xy = pcie_cores.front();
     uint32_t pcie_xy_enc = metal_env_->get_hal().noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
 
-    if (use_64bit_address_space_) {
-        return PinnedMemory::NocAddr{
-            .pcie_xy_enc = pcie_xy_enc,
-            .addr = buffer_it->second->get_iova(host_offset_),
-            .device_id = mmio_device_id};
-    }
-
+    // A buffer mapped through the iATU has a NOC address of its own; that includes 64-bit buffers whose IOVA the
+    // device cannot reach directly (see initialize_from_devices).
     auto noc_addr_opt = buffer_it->second->get_noc_address();
     if (!noc_addr_opt.has_value()) {
+        if (use_64bit_address_space_) {
+            return PinnedMemory::NocAddr{
+                .pcie_xy_enc = pcie_xy_enc,
+                .addr = buffer_it->second->get_iova(host_offset_),
+                .device_id = mmio_device_id};
+        }
         return std::nullopt;
     }
 

@@ -4,6 +4,7 @@
 import pytest
 import torch
 from helpers.constraints import is_valid_quasar_unpack_to_dest
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -228,7 +229,7 @@ def _unpack_to_dest_acc(input_format: DataFormat) -> DestAccumulation:
     fp32 lanes and stores once per output element, so it only rounds what the packer would have
     rounded anyway.
     """
-    dest_acc = DestAccumulation.Yes if input_format.is_32_bit() else DestAccumulation.No
+    dest_acc = dest_acc_for(input_format)
     # Checked against the harness's own rule, so a format whose legal width does not follow from
     # is_32_bit() fails here rather than on device.
     assert is_valid_quasar_unpack_to_dest(

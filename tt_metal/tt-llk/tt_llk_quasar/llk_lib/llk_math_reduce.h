@@ -103,7 +103,7 @@ inline void _reduce_row_transpose_fpu_()
     }
 
     _reduce_row_transpose_alu_cfg_exit_();
-    _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, true /* EN_32BIT_DEST */>(DataFormat::Int8, DataFormat::Int8);
+    _configure_default_alu_data_format_state_<true /* EN_32BIT_DEST */>(DataFormat::Int8, DataFormat::Int8);
 }
 
 /**

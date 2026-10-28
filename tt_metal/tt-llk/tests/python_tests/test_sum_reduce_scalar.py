@@ -20,12 +20,14 @@ scalar alone.
 
 Coverage: bf16 (num_tiles up to 8, the DEST half-sync capacity) plus native
 fp32 DEST (up to 4 tiles), for HiFi2/HiFi4, across the full 32x32 tile
-(num_faces=4) and the 16x32 (num_faces=2) / 16x16 (num_faces=1) "tiny tiles".
+(num_faces=4), the 16x32 (num_faces=2) / 16x16 (num_faces=1) "tiny tiles", and
+1x32 to 8x32 tiles with short faces.
 """
 
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, MathFidelity
 from helpers.param_config import parametrize
@@ -36,8 +38,10 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    TEST_FACE_DIMS,
     TILE_COUNT,
 )
+from helpers.tile_constants import MAX_TILE_ELEMENTS
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import tolerances
 
@@ -48,18 +52,13 @@ FORMATS = [
 ]
 
 # Full 32x32 tile (4 faces) plus the tiny tiles: 16x32 (2 faces, num_faces=2)
-# and 16x16 (1 face, num_faces=1). The reduce collapses every element to [0]
-# regardless of tile geometry.
-TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16]]
+# and 16x16 (1 face, num_faces=1), and 1x32 to 8x32 tiles with short faces.
+# The reduce collapses every element to [0] regardless of tile geometry.
+TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16], [1, 32], [2, 32], [4, 32], [8, 32]]
 
-
-def _dest_acc(output_format):
-    """Native fp32 DEST is required whenever the output is Float32."""
-    return (
-        DestAccumulation.Yes
-        if output_format == DataFormat.Float32
-        else DestAccumulation.No
-    )
+# Stale-row poison for SrcA (see sum_reduce_scalar_test.cpp).
+POISON_TILES = 2
+POISON_VALUE = 100.0
 
 
 def _num_tiles_for_format(formats):
@@ -68,7 +67,7 @@ def _num_tiles_for_format(formats):
     tile-slots, so it applies to tiny tiles too."""
     return (
         [1, 2, 3, 4]
-        if _dest_acc(formats.output_format) == DestAccumulation.Yes
+        if dest_acc_for(formats.output_format) == DestAccumulation.Yes
         else [1, 2, 3, 7, 8]
     )
 
@@ -94,7 +93,7 @@ def test_sum_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions):
 
     tile_shape = construct_tile_shape(tile_dimensions)
     elements_per_tile = tile_shape.total_tile_size()
-    dest_acc = _dest_acc(formats.output_format)
+    dest_acc = dest_acc_for(formats.output_format)
     input_dimensions = [num_tiles * tile_dimensions[0], tile_dimensions[1]]
 
     # A ~ U[0, 1] keeps the accumulated sum well inside bf16's dynamic range for
@@ -118,6 +117,11 @@ def test_sum_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions):
     # scaler^2 == 1.0 drops out).
     golden_scalar = float(src_A.to(torch.float32).sum().item())
 
+    # The poison follows the input tiles in buffer_A as full tiles.
+    poison = torch.full(
+        (POISON_TILES * MAX_TILE_ELEMENTS,), POISON_VALUE, dtype=src_A.dtype
+    )
+
     configuration = TestConfig(
         "sources/sum_reduce_scalar_test.cpp",
         formats,
@@ -128,14 +132,15 @@ def test_sum_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions):
             TILE_COUNT(num_tiles),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, tile_shape.num_faces_c_dim),
+            TEST_FACE_DIMS(face_r_dim=tile_shape.face_r_dim),
         ],
         variant_stimuli=StimuliConfig(
-            src_A,
+            torch.cat([src_A, poison]),
             formats.input_format,
             src_B,
             formats.input_format,
             formats.output_format,
-            tile_count_A=tile_cnt_A,
+            tile_count_A=tile_cnt_A + len(poison) // elements_per_tile,
             tile_count_B=tile_cnt_A,
             tile_count_res=1,
             num_faces=tile_shape.total_num_faces(),

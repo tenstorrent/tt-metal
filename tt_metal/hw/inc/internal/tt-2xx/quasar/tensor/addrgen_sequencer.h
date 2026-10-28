@@ -42,6 +42,7 @@
 #include "internal/tt-2xx/quasar/noc_address_backend.h"
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include "internal/tt-2xx/quasar/overlay/addrgen_state.h"
+#include "internal/tensor/transfer_noc_addr.h"
 
 namespace tt_addrgen {
 
@@ -1054,7 +1055,7 @@ struct PagesRecipe {
         const Accessor& acc = *static_cast<const Accessor*>(acc_ptr);
         if constexpr (Accessor::DSpec::is_interleaved) {
             return plan_interleaved<Accessor::DSpec::is_dram>(
-                acc.get_bank_base_address(), acc.get_aligned_page_size(), i);
+                tensor_accessor::detail::TransferAccess::bank_base(acc), acc.get_aligned_page_size(), i);
         } else {
             return plan_sharded(acc, i, noc);
         }

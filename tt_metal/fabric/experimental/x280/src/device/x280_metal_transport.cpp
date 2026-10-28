@@ -12,10 +12,10 @@
 #include <llrt/tt_cluster.hpp>
 #include <mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/arc/firmware_telemetry_reader.hpp>
-#include <umd/device/cluster.hpp>
-#include <umd/device/types/noc_id.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
+#include <tt-umd/arc/firmware_telemetry_reader.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/types/noc_id.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
 
 #include <algorithm>
 #include <limits>

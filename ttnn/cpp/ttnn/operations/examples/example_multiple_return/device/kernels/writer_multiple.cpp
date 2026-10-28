@@ -4,43 +4,44 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr1 = get_arg_val<uint32_t>(0);
-    uint32_t dst_addr2 = get_arg_val<uint32_t>(1);
-    uint32_t num_tiles = get_arg_val<uint32_t>(2);
-    uint32_t start_id = get_arg_val<uint32_t>(3);
-
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr auto dst1_args = TensorAccessorArgs<1>();
-    constexpr auto dst2_args = TensorAccessorArgs<dst1_args.next_compile_time_args_offset()>();
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t start_id = get_arg(args::start_id);
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer dfb_out(dfb::out);
 
-    const auto s1 = TensorAccessor(dst1_args, dst_addr1);
-    const auto s2 = TensorAccessor(dst2_args, dst_addr2);
+    // Each output is optional: the host binds its tensor, and defines the matching RETURN_OUTPUT*
+    // flag, only when the operation returns that output.
+#ifdef RETURN_OUTPUT1
+    const auto s1 = TensorAccessor(tensor::dst1);
+#endif
+#ifdef RETURN_OUTPUT2
+    const auto s2 = TensorAccessor(tensor::dst2);
+#endif
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_out.wait_front(onetile);
+        dfb_out.wait_front(onetile);
 
-        if (dst_addr1 != 0) {
-            noc.async_write(cb_out, s1, s1.get_aligned_page_size(), {.offset_bytes = 0}, {.page_id = i});
-            noc.async_write_barrier();
-        }
+#ifdef RETURN_OUTPUT1
+        noc.async_write(dfb_out, s1, s1.get_aligned_page_size(), {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write_barrier();
+#endif
 
-        if (dst_addr2 != 0) {
-            noc.async_write(cb_out, s2, s2.get_aligned_page_size(), {.offset_bytes = 0}, {.page_id = i});
-            noc.async_write_barrier();
-        }
+#ifdef RETURN_OUTPUT2
+        noc.async_write(dfb_out, s2, s2.get_aligned_page_size(), {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write_barrier();
+#endif
 
-        cb_out.pop_front(onetile);
+        dfb_out.pop_front(onetile);
     }
 }

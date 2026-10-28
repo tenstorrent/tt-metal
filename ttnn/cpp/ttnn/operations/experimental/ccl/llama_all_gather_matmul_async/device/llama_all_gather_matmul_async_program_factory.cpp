@@ -65,23 +65,27 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     const auto& global_cb = args.matmul_struct.global_cb;
 
     auto* mesh_device = input0.device();
-    IDevice* sender_device = mesh_device->get_device(mesh_coordinate);
 
     const auto& mesh_view = mesh_device->get_view();
-    std::vector<IDevice*> devices_to_use = {};
+    std::vector<MeshCoordinate> coords_to_use;
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     if (args.cluster_axis.has_value()) {
-        devices_to_use = (args.cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(mesh_coordinate[1])
-                                                          : mesh_view.get_devices_on_row(mesh_coordinate[0]);
-        fabric_node_ids = (args.cluster_axis.value() == 0) ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
-                                                           : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);
-    } else {
-        devices_to_use = args.devices;
-        fabric_node_ids.reserve(devices_to_use.size());
-        for (auto* device : devices_to_use) {
-            auto coord = mesh_view.find_device(device->id());
-            fabric_node_ids.push_back(mesh_device->get_fabric_node_id(coord));
+        if (args.cluster_axis.value() == 0) {
+            for (uint32_t row = 0; row < mesh_view.num_rows(); ++row) {
+                coords_to_use.emplace_back(row, mesh_coordinate[1]);
+            }
+        } else {
+            for (uint32_t col = 0; col < mesh_view.num_cols(); ++col) {
+                coords_to_use.emplace_back(mesh_coordinate[0], col);
+            }
         }
+    } else {
+        const auto tensor_coords = input0.device_storage().get_coords();
+        coords_to_use.assign(tensor_coords.begin(), tensor_coords.end());
+    }
+    fabric_node_ids.reserve(coords_to_use.size());
+    for (const auto& coord : coords_to_use) {
+        fabric_node_ids.push_back(mesh_device->get_fabric_node_id(coord));
     }
 
     std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
@@ -89,7 +93,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
 
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < args.ring_size; ++i) {
-        if (devices_to_use.at(i) == sender_device) {
+        if (coords_to_use.at(i) == mesh_coordinate) {
             device_index = i;
             if (i != 0) {
                 backward_fabric_node_id = fabric_node_ids.at(i - 1);
@@ -140,7 +144,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        sender_device->id(),
+        mesh_coordinate,
         is_first_chip,
         is_last_chip);
 
@@ -197,7 +201,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     log_debug(tt::LogOp, "intermediate_tensor_shard_num_pages: {}", intermediate_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =

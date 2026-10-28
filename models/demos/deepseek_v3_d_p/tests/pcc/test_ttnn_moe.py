@@ -53,6 +53,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_gate_outputs,
     get_sp_mesh_composer,
     get_tp_mesh_composer,
+    routed_expert_combine_overlap_arg,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
@@ -140,6 +141,7 @@ def run_model(
     gate_up_scale=1.0,
     score_func=None,
     skip_upstream_reference=False,
+    overlap_routed_expert_with_combine=False,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -163,7 +165,8 @@ def run_model(
     ``gate_up_scale`` multiplies the routed and shared gate/up projections in place so they reach
     the clamp; it is part of the weight-cache key. ``score_func`` is the gate's router affinity,
     None keeping the gate config's default. ``skip_upstream_reference`` drops the vendored-model
-    cross-check.
+    cross-check. ``overlap_routed_expert_with_combine`` goes straight to TtMoe: off unless the caller passes
+    routed_expert_combine_overlap_arg for a model that opts in (Kimi K2.7, GLM 5.3, Mistral Small 4).
 
     A HASH_HOST / HASH_DEVICE ``gate_fallback_mode`` selects hash routing: the tid2eid table and
     per-token ids are built here and handed to both sides, and the torch reference takes the
@@ -559,6 +562,7 @@ def run_model(
         latent_weights=latent_weights,
         latent_use_norm=latent_use_norm,
         rms_norm_eps=rms_norm_eps,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -1056,6 +1060,7 @@ def test_glm_moe(
         request,
         is_balanced=is_balanced,
         padded_percent=padded_percent,
+        overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(GLM53Config),
     )
 
 
@@ -1171,6 +1176,7 @@ def test_kimi_moe(
         num_links=num_links,
         gate_fallback_mode=gate_fallback_mode,
         request=request,
+        overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(KimiK27Config),
     )
 
 

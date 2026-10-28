@@ -5,7 +5,7 @@
 #pragma once
 
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include <umd/device/cluster_descriptor.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
 
 #include <memory>
 

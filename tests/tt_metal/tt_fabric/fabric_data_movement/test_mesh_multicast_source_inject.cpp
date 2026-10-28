@@ -168,7 +168,10 @@ const char* branch_name(RoutingDirection primary_output) {
 }
 
 bool direction_is_connectable(
-    const ControlPlane& control_plane, const FabricNodeId& source, RoutingDirection direction) {
+    const tt_metal::distributed::MeshDevice& mesh_device,
+    const ControlPlane& control_plane,
+    const FabricNodeId& source,
+    RoutingDirection direction) {
     const auto neighbors = control_plane.get_intra_chip_neighbors(source, direction);
     if (neighbors.empty()) {
         return false;
@@ -177,7 +180,7 @@ bool direction_is_connectable(
     const FabricNodeId first_hop(source.mesh_id, neighbors.front());
     const auto forwarding_direction = control_plane.get_forwarding_direction(source, first_hop);
     return forwarding_direction.has_value() && forwarding_direction.value() == direction &&
-           !get_forwarding_link_indices(source, first_hop).empty();
+           !get_forwarding_link_indices(mesh_device, source, first_hop).empty();
 }
 
 std::optional<std::set<ChipId>> target_devices(
@@ -344,7 +347,8 @@ std::optional<SourceInjectCandidate> select_candidate(BaseFabricFixture* fixture
 
                         const bool all_outputs_connectable =
                             std::all_of(root_outputs.begin(), root_outputs.end(), [&](RoutingDirection output) {
-                                return direction_is_connectable(control_plane, source, output);
+                                return direction_is_connectable(
+                                    *fixture->get_devices().front(), control_plane, source, output);
                             });
                         if (!all_outputs_connectable) {
                             return false;
@@ -393,7 +397,8 @@ std::optional<SourceInjectCandidate> select_candidate(BaseFabricFixture* fixture
     return best;
 }
 
-std::vector<eth_chan_directions> attempted_directions(const SourceInjectCandidate& candidate) {
+std::vector<eth_chan_directions> attempted_directions(
+    const tt_metal::distributed::MeshDevice& mesh_device, const SourceInjectCandidate& candidate) {
     auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
     const uint32_t max_connections =
         candidate.express && tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE ? 5 : 4;
@@ -415,7 +420,7 @@ std::vector<eth_chan_directions> attempted_directions(const SourceInjectCandidat
             break;
         }
         if ((!candidate.express && direction == RoutingDirection::Z) ||
-            !direction_is_connectable(control_plane, candidate.source, direction)) {
+            !direction_is_connectable(mesh_device, control_plane, candidate.source, direction)) {
             continue;
         }
         append_if_absent(direction);
@@ -497,7 +502,7 @@ void run_source_inject_test(BaseFabricFixture* fixture, SourceInjectCoverage cov
         *source_device, sender_logical_core, worker_mem_map.test_results_address, zero_results, CoreType::WORKER);
     tt_metal::MetalContext::instance().get_cluster().l1_barrier(candidate->source_physical_id);
 
-    const auto connection_directions = attempted_directions(candidate.value());
+    const auto connection_directions = attempted_directions(*source_device, candidate.value());
     ASSERT_GE(connection_directions.size(), candidate->root_outputs.size());
     for (const RoutingDirection output : candidate->root_outputs) {
         const auto eth_direction = control_plane.routing_direction_to_eth_direction(output);
