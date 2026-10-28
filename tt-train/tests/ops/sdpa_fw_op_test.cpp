@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
+#include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
@@ -32,6 +33,7 @@
 #include "metal/operations.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_config.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
+#include "ops/scaled_dot_product_attention.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -563,9 +565,8 @@ void run_sdpa_test(
 
     const std::array<std::size_t, 4> value_shape{
         config.batch_size, config.num_key_heads, config.sequence_length, head_dim_v};
-    xt::xarray<float> value_tensor =
-        round_to_bf16(ttml::test_utils::make_uniform_xarray<float>(
-            value_shape, config.value_min, config.value_max, seed + 2U));
+    xt::xarray<float> value_tensor = round_to_bf16(
+        ttml::test_utils::make_uniform_xarray<float>(value_shape, config.value_min, config.value_max, seed + 2U));
 
     // Optional gate: (B, num_query_heads, S, head_dim_v) - same shape as the kernel output.
     std::optional<xt::xarray<float>> gate_tensor;
@@ -703,8 +704,7 @@ void run_sdpa_test(
 
         // (2) the logsumexp is packed before the gate path runs, so it must be bit-identical.
         if (return_intermediates) {
-            xt::xarray<float> ungated_interm_xtensor = core::to_xtensor(ungated[1].value());
-            EXPECT_TRUE(xt::all(xt::equal(interm_xtensor, ungated_interm_xtensor)))
+            EXPECT_TRUE(xt::all(xt::equal(interm_xtensor, core::to_xtensor(ungated[1].value()))))
                 << "Gate changed the intermediates (logsumexp) in " << config.test_name;
         }
     }
@@ -1544,8 +1544,7 @@ host_shape_and_chunks(const SDPATestConfig& config) {
         .has_gate = config.use_gate,
         .return_intermediates = config.return_intermediates};
     return {
-        shape,
-        resolve_chunks(config.program_config, shape, ttml::metal::available_l1_bytes(*device), grid.x * grid.y)};
+        shape, resolve_chunks(config.program_config, shape, ttml::metal::available_l1_bytes(*device), grid.x * grid.y)};
 }
 
 // The schedule the program factory would build for config on this device.
@@ -1933,23 +1932,105 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_None_DiffVDim_Gate) {
         .test_name = "ChunkKnobs_None_DiffVDim_Gate"});
 }
 
+// Few heavy items on many cores: the late items are heavier than a core's fair share, so the schedule cuts
+// them into step ranges computed on different cores and merged. 2 heads, S=1024, 64-row chunks: 32 items,
+// up to four pieces each.
+const SDPATestConfig kSplitUnitsBase{
+    .batch_size = 1U,
+    .sequence_length = 1024U,
+    .query_dim = 128U,
+    .key_value_dim = 128U,
+    .num_query_heads = 2U,
+    .num_key_heads = 2U,
+    .mask_type = ttml::metal::AttentionMaskType::Causal,
+    .test_name = "ChunkKnobs_SplitUnits"};
+
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // Few heavy items on many cores: the late items are heavier than a core's fair share, so the schedule
-    // cuts them into step ranges computed on different cores and merged. 2 heads, S=1024, 64-row chunks:
-    // 32 items, up to four pieces each; the same rows uncut, and on 32 cores so senders, whole items and
-    // mergers share cores.
-    const SDPATestConfig base{
-        .batch_size = 1U,
-        .sequence_length = 1024U,
-        .query_dim = 128U,
-        .key_value_dim = 128U,
-        .num_query_heads = 2U,
-        .num_key_heads = 2U,
-        .mask_type = ttml::metal::AttentionMaskType::Causal,
-        .test_name = "ChunkKnobs_SplitUnits"};
-    run_chunk_knob_sweep(base, {{64, 128, 1, 4, 0}, {64, 128, 1, 1, 0}, {64, 128, 1, 0, 32}});
-    run_split_vs_unsplit(base, {64, 128, 1, 4, 0});
+    // The one blocking run of the split kernel: the cut rows against the same rows uncut.
+    run_split_vs_unsplit(kSplitUnitsBase, {64, 128, 1, 4, 0});
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_Sweep) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // The same rows against the references with four pieces, uncut, and on 32 cores so senders, whole items
+    // and mergers share cores.
+    run_chunk_knob_sweep(kSplitUnitsBase, {{64, 128, 1, 4, 0}, {64, 128, 1, 1, 0}, {64, 128, 1, 0, 32}});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits_Backward) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // The merged logsumexp and output feed the backward kernel. On a shape the default pick cuts, the
+    // gradients of the cut forward must match those of the uncut forward, and the autograd op, which passes
+    // no program config and so cuts by default, must produce the same gradients as the metal path.
+    using namespace ttml;
+    SDPATestConfig config = kSplitUnitsBase;
+    config.value_min = 0.0F;  // see expect_split_matches_unsplit
+    config.test_name = "ChunkKnobs_SplitUnits_Backward";
+    const auto split_schedule = host_schedule(config);
+    ASSERT_GT(split_schedule.num_slots, 0U) << "the default pick must cut this shape";
+    const FoldErrorTerms terms = fold_error_terms(config, split_schedule);
+
+    auto* device = &autograd::ctx().get_device();
+    const std::array<std::size_t, 4> shape{1U, 2U, 1024U, 64U};
+    const uint32_t seed = 7U;
+    auto make = [&](uint32_t s, float lo, float hi) {
+        return core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, lo, hi, seed + s), device);
+    };
+    const ttnn::Tensor query = make(0U, -1.0F, 1.0F);
+    const ttnn::Tensor key = make(1U, -1.0F, 1.0F);
+    const ttnn::Tensor value = make(2U, 0.0F, 1.0F);
+    const ttnn::Tensor grad_output = make(3U, -1.0F, 1.0F);
+
+    struct Grads {
+        xt::xarray<float> dQ, dK, dV;
+    };
+    auto grads_of = [&](const metal::SDPAForwardProgramConfig& cfg) {
+        auto fw = metal::sdpa_fw(
+            query,
+            key,
+            value,
+            metal::AttentionMaskType::Causal,
+            std::nullopt,
+            0.0F,
+            /*return_intermediates=*/true,
+            std::nullopt,
+            cfg);
+        auto [dQ, dK, dV, dGate] = metal::sdpa_bw(
+            grad_output, fw[0].value(), query, key, value, fw[1].value(), metal::AttentionMaskType::Causal);
+        return Grads{core::to_xtensor(dQ), core::to_xtensor(dK), core::to_xtensor(dV)};
+    };
+    const Grads split = grads_of({});
+    const Grads unsplit = grads_of({.max_pieces = 1U});
+    // The gradients inherit the forward's output and logsumexp gaps (relative, the unshared steps' truncation)
+    // and add the backward kernel's own rounding of them; the bound is the forward's mean bound on the mean.
+    const float mean_rel_tol = 1e-3F + 4.8828125e-4F * static_cast<float>(terms.partials + terms.extra_unsplit_steps);
+    auto expect_close = [&](const xt::xarray<float>& a, const xt::xarray<float>& b, const char* what) {
+        ASSERT_EQ(a.shape(), b.shape());
+        const float mean_rel = xt::mean(xt::abs(a - b))() / xt::mean(xt::abs(b))();
+        fmt::print(
+            "{}: split vs unsplit {} mean relative gap {:.3e} (bound {:.1e})\n",
+            config.test_name,
+            what,
+            mean_rel,
+            mean_rel_tol);
+        EXPECT_LT(mean_rel, mean_rel_tol) << config.test_name << ": " << what << " of the cut forward is off";
+        EXPECT_TRUE(xt::all(xt::isfinite(a))) << what;
+    };
+    expect_close(split.dQ, unsplit.dQ, "dQ");
+    expect_close(split.dK, unsplit.dK, "dK");
+    expect_close(split.dV, unsplit.dV, "dV");
+
+    // The autograd entry point: forward, then backward with the same upstream gradient.
+    auto q = autograd::create_tensor(query, /* requires_grad */ true);
+    auto k = autograd::create_tensor(key, /* requires_grad */ true);
+    auto v = autograd::create_tensor(value, /* requires_grad */ true);
+    auto out = ops::scaled_dot_product_attention(q, k, v);
+    out->set_grad(grad_output);
+    out->backward();
+    EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(q->get_grad()), split.dQ))) << "autograd dQ != metal dQ";
+    EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(k->get_grad()), split.dK))) << "autograd dK != metal dK";
+    EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(v->get_grad()), split.dV))) << "autograd dV != metal dV";
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_Long) {
@@ -1986,22 +2067,34 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_ManyPieces
     run_split_vs_unsplit(base, {128, 32, 1, 16, 0});
 }
 
+// Splits with stacked heads, a different value dim and the gate; the gate is applied by the merger only.
+const SDPATestConfig kSplitUnitsGqaGateBase{
+    .batch_size = 1U,
+    .sequence_length = 512U,
+    .query_dim = 512U,      // 4 heads * 128
+    .key_value_dim = 256U,  // 2 kv heads * 128
+    .value_dim = 128U,      // 2 kv heads * 64
+    .num_query_heads = 4U,
+    .num_key_heads = 2U,
+    .mask_type = ttml::metal::AttentionMaskType::Causal,
+    .use_gate = true,
+    .test_name = "ChunkKnobs_SplitUnits_GQA_Gate"};
+
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits_GQA_Gate) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // Splits with stacked heads, a different value dim and the gate; the gate is applied by the merger only.
-    const SDPATestConfig base{
-        .batch_size = 1U,
-        .sequence_length = 512U,
-        .query_dim = 512U,      // 4 heads * 128
-        .key_value_dim = 256U,  // 2 kv heads * 128
-        .value_dim = 128U,      // 2 kv heads * 64
-        .num_query_heads = 4U,
-        .num_key_heads = 2U,
-        .mask_type = ttml::metal::AttentionMaskType::Causal,
-        .use_gate = true,
-        .test_name = "ChunkKnobs_SplitUnits_GQA_Gate"};
-    run_chunk_knob_sweep(base, {{64, 128, 2, 4, 0}, {128, 256, 2, 3, 16}});
-    run_split_vs_unsplit(base, {64, 128, 2, 4, 0});
+    run_split_vs_unsplit(kSplitUnitsGqaGateBase, {64, 128, 2, 4, 0});
+    // The gated split kernel without the logsumexp: a variant no other test compiles.
+    SDPATestConfig no_intermediates = kSplitUnitsGqaGateBase;
+    no_intermediates.program_config = program_config_of({64, 128, 2, 4, 0});
+    no_intermediates.return_intermediates = false;
+    no_intermediates.test_name = "ChunkKnobs_SplitUnits_GQA_Gate_NoIntermediates";
+    ASSERT_GT(host_schedule(no_intermediates).num_slots, 0U);
+    run_sdpa_test(no_intermediates);
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_GQA_Gate_Sweep) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    run_chunk_knob_sweep(kSplitUnitsGqaGateBase, {{64, 128, 2, 4, 0}, {128, 256, 2, 3, 16}});
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_NumCores) {
