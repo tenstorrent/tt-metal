@@ -17,6 +17,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_DECAY_L1_BYTES_PER_CORE,
     KDA_HISTORY_EXCHANGE_ROWS,
     KDA_HISTORY_EXCHANGE_SEMAPHORES,
+    KDA_NO_SEQUENCE_PARALLEL_AXIS,
     KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE,
@@ -144,27 +145,31 @@ class ttKDA:
         layer_idx: int = 0,
         weight_cache_path: Path | None = None,
         tt_ccl: TT_CCL | None = None,
-        sp_axis: int = 0,
+        sp_axis: int | None = 0,
         tp_axis: int = 1,
         program_config: KDAProgramConfig | None = None,
         weights: KDAWeights | None = None,
         *,
         active_seq_len: int,
     ) -> None:
-        if tp_axis not in (0, 1) or sp_axis not in (0, 1) or sp_axis == tp_axis:
+        # sp_axis=None (tt-blaze G53F-0250): no sequence parallelism on any mesh -- each row of a multi-row mesh runs its
+        # own sequence (the row-local prefill waves); TP still reduces over ``tp_axis``
+        if tp_axis not in (0, 1) or (sp_axis is not None and (sp_axis not in (0, 1) or sp_axis == tp_axis)):
             raise ValueError(f"KDA requires distinct 2D SP/TP axes, got SP={sp_axis}, TP={tp_axis}")
         program_config = program_config or KDAProgramConfig()
         self.device = mesh_device
         self.tensor_parallel_axis = tp_axis
-        self.sequence_parallel_axis = sp_axis
+        self.sequence_parallel_axis = KDA_NO_SEQUENCE_PARALLEL_AXIS if sp_axis is None else sp_axis
         self.sequence_parallel_size = (
-            tuple(mesh_device.shape)[self.sequence_parallel_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
+            tuple(mesh_device.shape)[sp_axis] if isinstance(mesh_device, ttnn.MeshDevice) and sp_axis is not None else 1
         )
         if active_seq_len <= 0 or active_seq_len % (self.sequence_parallel_size * KDA_CHUNK_SIZE):
             raise ValueError("active_seq_len must give a positive tile-aligned local physical length")
         self.active_seq_len_local = active_seq_len // self.sequence_parallel_size
         self._is_sequence_parallel = self.sequence_parallel_size > 1
         self._tp_cluster_axis = None if not self._is_sequence_parallel else self.tensor_parallel_axis
+        if sp_axis is None and isinstance(mesh_device, ttnn.MeshDevice) and tuple(mesh_device.shape)[1 - tp_axis] > 1:
+            self._tp_cluster_axis = self.tensor_parallel_axis  # row-local on a 2D mesh: reduce over the TP axis only
         # A bounded gate's projection already applies sigmoid(scale * (x @ W + bias)); chunk preparation applies the
         # lower bound, so only the softplus gate needs a separate activation.
         self._bounded_gate = config.gate_lower_bound is not None

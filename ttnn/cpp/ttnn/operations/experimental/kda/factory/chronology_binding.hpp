@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <initializer_list>
 #include <optional>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -9,6 +11,19 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 namespace ttnn::experimental::prim::kda_factory_detail {
+// tt-blaze G53F-0250 (row-local prefill waves): sequence_parallel_axis == kNoSequenceParallelAxis runs the op on every
+// device as its own sequence -- rank 0 of 1 -- so each row of a multi-row mesh can hold a different prompt. It is part
+// of the op attributes, hence of the program hash. The kernels already specialize sp_size == 1 (a 1-row mesh's case).
+inline constexpr uint32_t kNoSequenceParallelAxis = std::numeric_limits<uint32_t>::max();
+inline bool valid_sequence_parallel_axis(const ttnn::MeshDevice& device, uint32_t axis) {
+    return axis == kNoSequenceParallelAxis || axis < device.shape().dims();
+}
+inline uint32_t sp_size_of(const ttnn::MeshDevice& device, uint32_t axis) {
+    return axis == kNoSequenceParallelAxis ? 1u : device.shape()[axis];
+}
+inline uint32_t sp_rank_of(const ttnn::MeshCoordinate& coordinate, uint32_t axis) {
+    return axis == kNoSequenceParallelAxis ? 0u : coordinate[axis];
+}
 // Rank belongs to mesh placement, not to caller-owned tensor data. The mesh
 // adapter retains each coordinate's scalar specialization on program-cache hits.
 inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
@@ -19,7 +34,7 @@ inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
     uint32_t local_rows,
     std::initializer_list<tt::tt_metal::experimental::KernelSpecName> chronology_readers) {
     using namespace tt::tt_metal::experimental;
-    TT_FATAL(sequence_parallel_axis < device.shape().dims(), "KDA: invalid sequence_parallel_axis");
+    TT_FATAL(valid_sequence_parallel_axis(device, sequence_parallel_axis), "KDA: invalid sequence_parallel_axis");
     ttnn::device_operation::MeshWorkloadArtifacts workload;
     for (const auto& coordinate : tensor_coords.coords()) {
         auto spec = artifacts.spec;
@@ -28,8 +43,8 @@ inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
                 return kernel.unique_id == chronology_reader;
             });
             TT_FATAL(reader != spec.kernels.end(), "KDA: chronology reader is absent from the program");
-            reader->compile_time_args.insert({"sp_rank", coordinate[sequence_parallel_axis]});
-            reader->compile_time_args.insert({"sp_size", device.shape()[sequence_parallel_axis]});
+            reader->compile_time_args.insert({"sp_rank", sp_rank_of(coordinate, sequence_parallel_axis)});
+            reader->compile_time_args.insert({"sp_size", sp_size_of(device, sequence_parallel_axis)});
             reader->compile_time_args.insert({"local_rows", local_rows});
         }
         workload.programs.push_back({

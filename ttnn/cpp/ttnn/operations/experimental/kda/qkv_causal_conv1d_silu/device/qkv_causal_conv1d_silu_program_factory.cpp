@@ -96,7 +96,8 @@ void add_history_exchange(
     uint32_t channel_tiles) {
     const auto& device = in.input.mesh_tensor().device();
     const uint32_t axis = attrs.sequence_parallel_axis;
-    const uint32_t sp_size = device.shape()[axis];
+    // exchange_route() below reads the real axis: it only runs when sp_size > 1 (never for kNoSequenceParallelAxis)
+    const uint32_t sp_size = kda_factory_detail::sp_size_of(device, axis);
     // A 2D multicast is routed by the connection's ETH direction, so every hop must leave in the same direction.
     // 1D fabric follows its routing plane, which may turn (the QuietBox ring).
     TT_FATAL(

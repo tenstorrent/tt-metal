@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
     KDA_HIGH_BW_PREFIX_GATHER_LINKS,
     KDA_LOCAL_PREFIX_MEMORY_CONFIG,
+    KDA_NO_SEQUENCE_PARALLEL_AXIS,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PREP_OUTPUT_BF16_MASK,
     KDA_PREPARATION_L1_BYTES_PER_CORE,
@@ -597,7 +598,9 @@ class KDARecurrence:
             )
         self._sequence_parallel_axis = sequence_parallel_axis
         self._sequence_parallel = (
-            isinstance(device, ttnn.MeshDevice) and tuple(device.shape)[sequence_parallel_axis] > 1
+            isinstance(device, ttnn.MeshDevice)
+            and sequence_parallel_axis != KDA_NO_SEQUENCE_PARALLEL_AXIS
+            and tuple(device.shape)[sequence_parallel_axis] > 1
         )
         grouped = self._sequence_parallel or program_config.local_scan_strategy == "grouped"
         if grouped:

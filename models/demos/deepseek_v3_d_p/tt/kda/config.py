@@ -11,6 +11,10 @@ from typing import Literal
 import ttnn
 
 KDA_CHUNK_SIZE = ttnn.TILE_SIZE
+# tt-blaze G53F-0250 (row-local prefill waves): the ops' sequence_parallel_axis meaning "no sequence parallelism" -- every
+# device is its own sequence (rank 0 of 1), so each row of a multi-row mesh can prefill a different prompt
+# (kda_factory_detail::kNoSequenceParallelAxis in factory/chronology_binding.hpp).
+KDA_NO_SEQUENCE_PARALLEL_AXIS = 0xFFFFFFFF
 KDA_QKV_DTYPE = ttnn.bfloat16
 KDA_GATE_DTYPE = ttnn.bfloat16
 KDA_RECURRENT_STATE_DTYPE = ttnn.float32
