@@ -40,7 +40,7 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     }
     uint32_t pos = buf->head++;
     __atomic_store_n(lock, 0, __ATOMIC_RELEASE);
-#elif
+#else
     // A read at +4*(inc+8) posts `inc` and returns the pre-increment value.
     uint32_t pos = *reinterpret_cast<volatile uint32_t*>(watcher_ring_buf_sem + 4 * (1 + 8));
 #endif
