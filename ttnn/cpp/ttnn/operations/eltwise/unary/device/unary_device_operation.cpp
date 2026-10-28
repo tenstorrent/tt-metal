@@ -140,8 +140,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.storage_type()));
 
     TT_FATAL(
-        input_tensor.buffer() != nullptr,
-        "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
+        input_tensor.is_allocated(), "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
     validate_integer_input_dtype(args.op_chain, input_tensor.dtype());
 

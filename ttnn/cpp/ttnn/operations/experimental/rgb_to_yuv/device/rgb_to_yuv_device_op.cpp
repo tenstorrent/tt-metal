@@ -30,7 +30,7 @@ void RgbToYuvDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& in = tensor_args.input;
     TT_FATAL(in.storage_type() == StorageType::DEVICE, "Input must be on device");
-    TT_FATAL(in.buffer() != nullptr, "Input buffer must be allocated");
+    TT_FATAL(in.is_allocated(), "Input buffer must be allocated");
     TT_FATAL(in.dtype() == DataType::BFLOAT16, "Input must be bfloat16");
     TT_FATAL(in.layout() == Layout::ROW_MAJOR, "Input must be row-major (CHWT)");
 

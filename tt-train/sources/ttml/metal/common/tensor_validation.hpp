@@ -36,7 +36,7 @@ inline void check_device_tensor(
         op,
         name,
         enchantum::to_string(tensor.storage_type()));
-    TT_FATAL(tensor.buffer() != nullptr, "{}: {} buffer is null", op, name);
+    TT_FATAL(tensor.is_allocated(), "{}: {} buffer is null", op, name);
     if (req.buffer_type.has_value()) {
         TT_FATAL(
             tensor.buffer()->buffer_type() == *req.buffer_type,

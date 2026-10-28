@@ -134,8 +134,7 @@ void validate_runtime_args(
         const auto& prefix = *tensor_args.concat_prefix;
         require_standard_tile(prefix, "concat_prefix");
         TT_FATAL(
-            prefix.storage_type() == StorageType::DEVICE && prefix.buffer() != nullptr,
-            "concat_prefix must be on device");
+            prefix.storage_type() == StorageType::DEVICE && prefix.is_allocated(), "concat_prefix must be on device");
         TT_FATAL(prefix.device() == input.device(), "concat_prefix must be on the input device");
         TT_FATAL(prefix.dtype() == input.dtype(), "concat_prefix dtype must match input");
         TT_FATAL(prefix.logical_shape().rank() == 4, "concat_prefix must be rank 4");
@@ -161,7 +160,7 @@ void validate_runtime_args(
         // without this guard a uint32-then-bf16 sequence would silently reuse the cached program.
         const auto& metadata = tensor_args.metadata.value();
         TT_FATAL(metadata.storage_type() == StorageType::DEVICE, "metadata must be on device");
-        TT_FATAL(metadata.buffer() != nullptr, "metadata must be allocated in a buffer on device");
+        TT_FATAL(metadata.is_allocated(), "metadata must be allocated in a buffer on device");
         TT_FATAL(metadata.device() == input.device(), "metadata must be on the same device as input");
         TT_FATAL(
             metadata.dtype() == DataType::UINT32,
@@ -226,10 +225,10 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_miss(
 
     // Every operand is bound as a tensor parameter and accessed on the input's mesh device, so all
     // must be allocated and live on that same device.
-    TT_FATAL(input.buffer() != nullptr, "input must be allocated in a buffer on device");
-    TT_FATAL(cos.buffer() != nullptr, "cos must be allocated in a buffer on device");
-    TT_FATAL(sin.buffer() != nullptr, "sin must be allocated in a buffer on device");
-    TT_FATAL(trans_mat.buffer() != nullptr, "trans_mat must be allocated in a buffer on device");
+    TT_FATAL(input.is_allocated(), "input must be allocated in a buffer on device");
+    TT_FATAL(cos.is_allocated(), "cos must be allocated in a buffer on device");
+    TT_FATAL(sin.is_allocated(), "sin must be allocated in a buffer on device");
+    TT_FATAL(trans_mat.is_allocated(), "trans_mat must be allocated in a buffer on device");
     TT_FATAL(cos.device() == input.device(), "cos must be on the same device as input");
     TT_FATAL(sin.device() == input.device(), "sin must be on the same device as input");
     TT_FATAL(trans_mat.device() == input.device(), "trans_mat must be on the same device as input");

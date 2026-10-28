@@ -20,7 +20,7 @@ namespace {
 
 void check_tiled_device(const Tensor& tensor, const char* name, std::initializer_list<DataType> dtypes) {
     TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE && tensor.buffer() != nullptr,
+        tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated(),
         "sigmoid_gated_rms_norm: {} must be an allocated device tensor",
         name);
     TT_FATAL(tensor.layout() == Layout::TILE, "sigmoid_gated_rms_norm: {} must use TILE layout", name);

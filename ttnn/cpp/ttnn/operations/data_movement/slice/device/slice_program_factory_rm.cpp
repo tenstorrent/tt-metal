@@ -327,7 +327,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_sticks)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // The kernels take the accessor's compile-time page size rather than a runtime one, so pin the
     // equivalence here: a route that skips slice.cpp's resharding guard fails loudly instead of

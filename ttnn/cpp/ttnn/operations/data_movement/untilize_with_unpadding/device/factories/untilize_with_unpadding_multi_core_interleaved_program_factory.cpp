@@ -79,7 +79,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         unpadded_row_size_bytes = output_shape[-1] * a.element_size();
     }
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     DataflowBufferSpec in_dfb{
         .unique_id = MCI_IN,

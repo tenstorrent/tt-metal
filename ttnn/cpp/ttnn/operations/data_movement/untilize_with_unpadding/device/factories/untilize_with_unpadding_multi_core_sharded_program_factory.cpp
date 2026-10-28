@@ -163,7 +163,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         .borrowed_from = src_sharded ? std::optional<TensorParamName>{SH_INPUT} : std::nullopt,
     };
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
     uint32_t aligned_page_size = static_cast<uint32_t>(output.buffer()->aligned_page_size());

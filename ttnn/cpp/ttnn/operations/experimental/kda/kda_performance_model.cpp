@@ -33,7 +33,7 @@ double physical_bytes(const Tensor& tensor) {
 
 void validate_tensor(const Tensor& tensor, const MeshDevice& device, std::string_view role) {
     TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated() && tensor.buffer() != nullptr,
+        tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated(),
         "KDA performance model requires allocated device {} tensors",
         role);
     TT_FATAL(tensor.device() == &device, "KDA performance model requires all {} tensors on the same device", role);
@@ -93,7 +93,7 @@ KdaProfilerModel make_profiler_model(
     const Tensor& first_input = *inputs.front();
     TT_FATAL(
         first_input.storage_type() == StorageType::DEVICE && first_input.is_allocated() &&
-            first_input.buffer() != nullptr && first_input.device() != nullptr,
+            first_input.device() != nullptr,
         "KDA performance model requires allocated device input tensors");
 
     auto* device = first_input.device();
