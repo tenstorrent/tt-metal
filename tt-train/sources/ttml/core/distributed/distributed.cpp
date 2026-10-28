@@ -156,6 +156,11 @@ void synchronize_gradients_along(
     }
 }
 
+// The dtype a gradient sync sums in: the one the call passes, else the training config's default.
+std::optional<ttnn::DataType> gradient_reduce_dtype(std::optional<ttnn::DataType> reduce_dtype) {
+    return reduce_dtype.has_value() ? reduce_dtype : autograd::ctx().get_gradient_reduce_dtype();
+}
+
 }  // namespace
 
 void synchronize_gradients(
@@ -171,7 +176,7 @@ void synchronize_gradients(
     if (pctx.is_ddp_enabled()) {
         cluster_axes.push_back(pctx.get_ddp_axis().value());
     }
-    synchronize_gradients_along(parameters, cluster_axes, reduce_dtype);
+    synchronize_gradients_along(parameters, cluster_axes, gradient_reduce_dtype(reduce_dtype));
 }
 
 void synchronize_gradients(
@@ -179,7 +184,9 @@ void synchronize_gradients(
     const std::vector<uint32_t>& cluster_axes,
     std::optional<ttnn::DataType> reduce_dtype) {
     synchronize_gradients_along(
-        parameters, ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()), reduce_dtype);
+        parameters,
+        ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()),
+        gradient_reduce_dtype(reduce_dtype));
 }
 
 }  // namespace ttml::core::distributed
