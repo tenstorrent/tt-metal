@@ -358,7 +358,6 @@ public:
     // Each worker that takes part wakes this many others before running its own calls, so that the caller
     // enters the kernel once per fan-out instead of once per worker.
     static constexpr size_t WAKE_FANOUT = 4;
-    static constexpr uint32_t NONE = UINT32_MAX;
 
     using Participants = ttsl::SmallVector<NumaAwareExecutor*, 32>;  // 32: one per Galaxy device
 
@@ -372,7 +371,7 @@ public:
 
     // Sized for a pool of `capacity` workers; `slot` is the job's place in the pool's ring.
     ParallelJob(size_t capacity, uint32_t slot) :
-        slot_(slot), claims_(capacity), participant_of_worker_(capacity, NONE) {}
+        slot_(slot), claims_(capacity), participant_of_worker_(capacity, NO_INDEX) {}
 
     ParallelJob(const ParallelJob&) = delete;
     ParallelJob& operator=(const ParallelJob&) = delete;
@@ -422,16 +421,16 @@ public:
         }
         planned_ = false;
         for (auto* executor : participants_) {
-            participant_of_worker_[executor->index()] = NONE;
+            participant_of_worker_[executor->index()] = NO_INDEX;
         }
         participants_.clear();
         first_call_.clear();
         last_call_.clear();
-        next_call_.assign(device_ids.size(), NONE);
+        next_call_.assign(device_ids.size(), NO_INDEX);
         for (uint32_t call = 0; call < device_ids.size(); call++) {
             auto* executor = executor_of(device_ids[call]);
             uint32_t& participant = participant_of_worker_[executor->index()];
-            if (participant == NONE) {
+            if (participant == NO_INDEX) {
                 participant = static_cast<uint32_t>(participants_.size());
                 participants_.push_back(executor);
                 first_call_.push_back(call);
@@ -460,8 +459,8 @@ public:
     // Worker, holding the job: wakes its children, runs its calls and releases the job. A finished job is only
     // released: its executors may be stopping.
     void participate(NumaAwareExecutor* executor) noexcept {
-        const uint32_t node = remaining_.finished() ? NONE : participant_of_worker_[executor->index()];
-        if (node != NONE) {
+        const uint32_t node = remaining_.finished() ? NO_INDEX : participant_of_worker_[executor->index()];
+        if (node != NO_INDEX) {
             for_each_child(node, [this](size_t child) { wake_subtree(child); });
             run_if_unclaimed(node);
         }
@@ -473,7 +472,7 @@ public:
         if (claims_[node].use.exchange(use_, std::memory_order_acq_rel) == use_) {
             return;
         }
-        for (uint32_t call = first_call_[node]; call != NONE; call = next_call_[call]) {
+        for (uint32_t call = first_call_[node]; call != NO_INDEX; call = next_call_[call]) {
             try {
                 (*fn_)(call);
             } catch (...) {
@@ -532,7 +531,9 @@ private:
     std::vector<Claim> claims_;  // Indexed by participant.
     // Wake tree in heap order: the caller wakes [0], and [i] wakes [i * WAKE_FANOUT + 1 .. (i + 1) * WAKE_FANOUT].
     Participants participants_;
-    ttsl::SmallVector<uint32_t, 64> participant_of_worker_;  // Indexed by executor index; NONE if not taking part.
+    // The empty entry of the index tables below: a worker not taking part, or the end of a participant's calls.
+    static constexpr uint32_t NO_INDEX = UINT32_MAX;
+    ttsl::SmallVector<uint32_t, 64> participant_of_worker_;  // Indexed by executor index.
     // Each participant's calls in call order: first_call_ and last_call_ by participant, next_call_ by call.
     ttsl::SmallVector<uint32_t, 32> first_call_;
     ttsl::SmallVector<uint32_t, 32> last_call_;
@@ -745,13 +746,13 @@ private:
 
     void map_worker_to_device(uint32_t worker, uint32_t device_id) {
         if (worker_of_device_.size() <= device_id) {
-            worker_of_device_.resize(device_id + 1, ParallelJob::NONE);
+            worker_of_device_.resize(device_id + 1, NO_WORKER);
         }
         worker_of_device_[device_id] = worker;
     }
 
     uint32_t worker_of(uint32_t device_id) const {
-        if (device_id >= worker_of_device_.size() || worker_of_device_[device_id] == ParallelJob::NONE) {
+        if (device_id >= worker_of_device_.size() || worker_of_device_[device_id] == NO_WORKER) {
             throw std::out_of_range("parallel_for: no worker is bound to this device");
         }
         return worker_of_device_[device_id];
@@ -766,7 +767,8 @@ private:
     std::atomic<uint32_t> last_job_ = 0;
     // The job of the current parallel_for, (generation << 32) | slot; every worker watches it.
     alignas(64) std::atomic<uint64_t> published_ = 0;
-    // Worker by physical device id (ParallelJob::NONE if none).
+    // Worker by physical device id; NO_WORKER for a device without one.
+    static constexpr uint32_t NO_WORKER = UINT32_MAX;
     std::vector<uint32_t> worker_of_device_;
     // Executors backing this pool.
     std::vector<std::unique_ptr<NumaAwareExecutor>> workers_;
