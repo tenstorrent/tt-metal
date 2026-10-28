@@ -362,10 +362,10 @@ public:
 
     using Participants = ttsl::SmallVector<NumaAwareExecutor*, 32>;  // 32: one per Galaxy device
 
-    // A use of a job is the job's generation in the high half of a word: the pool publishes it with the job's slot
-    // in the low half, and state_ keeps it with the holder count there.
-    static constexpr uint64_t pack(uint32_t generation, uint32_t low) {
-        return (static_cast<uint64_t>(generation) << GENERATION_SHIFT) | low;
+    // Words tagged with a job's generation in the high half: the published word carries the slot in the low half,
+    // state_ the holder count.
+    static constexpr uint64_t pack(uint32_t generation, uint32_t slot_or_holders) {
+        return (static_cast<uint64_t>(generation) << GENERATION_SHIFT) | slot_or_holders;
     }
     static constexpr uint32_t generation_of(uint64_t word) { return static_cast<uint32_t>(word >> GENERATION_SHIFT); }
     static constexpr uint32_t slot_of(uint64_t published) { return static_cast<uint32_t>(published & LOW_HALF); }
@@ -386,7 +386,7 @@ public:
         if ((state & LOW_HALF) != 0) {
             return false;
         }
-        const uint64_t next = pack(generation_of(state) + 1, /*holders=*/1);
+        const uint64_t next = pack(generation_of(state) + 1, 1);  // The caller becomes the only holder.
         if (!state_.compare_exchange_strong(state, next, std::memory_order_acquire, std::memory_order_relaxed)) {
             return false;
         }
