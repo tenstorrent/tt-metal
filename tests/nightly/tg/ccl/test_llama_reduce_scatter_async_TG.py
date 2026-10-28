@@ -1,1 +1,0 @@
-../../../ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_async_TG.py

@@ -57,7 +57,8 @@ BALANCE = os.environ.get("RS_BALANCE", "1") == "1"  # rings of even G: split the
 MUX_BUFFERS = int(os.environ.get("RS_MUX_BUFFERS", "2"))  # buffers per client channel on the mux
 MUX_NOC = int(os.environ.get("RS_MUX_NOC", "1"))
 WORKER_PLACEMENT = os.environ.get("RS_WORKER_PLACEMENT", "spread")  # "spread" | "mux" | "dram"
-BASELINE = os.environ.get("RS_BASELINE", "1") == "1"  # also time ttnn.reduce_scatter on the same line
+# also time ttnn.reduce_scatter on the same line; off where the TTNN CCL ops were removed (agent-eval branches)
+BASELINE = os.environ.get("RS_BASELINE", "1") == "1" and hasattr(ttnn, "reduce_scatter")
 # max |device - fp32 sum| allowed: the sum of G bf16 values, each partial add rounded to bf16 (as the source branch's
 # MiMo test: max(0.25, 2 x ttnn.reduce_scatter's error))
 ATOL = float(os.environ.get("RS_ATOL", "0.25"))

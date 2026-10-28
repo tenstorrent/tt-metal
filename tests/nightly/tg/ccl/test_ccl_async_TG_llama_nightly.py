@@ -1,1 +1,0 @@
-../../../ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
