@@ -5,9 +5,12 @@
 #include "moe_padding_config_device_operation.hpp"
 
 #include <cstdint>
+#include <cstdlib>
 #include <utility>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -215,6 +218,25 @@ tt::tt_metal::ProgramDescriptor MoePaddingConfigDeviceOperation::ProgramFactory:
     // The config buffer is passed as a Buffer* binding (not a raw address) so cache hits take the fast
     // path that patches its address and skips create_descriptor.
     writer_kernel.emplace_runtime_args(core, {config.buffer()});
+
+    // DO NOT MERGE -- fault injection. TT_INJECT_MOE_HANG_POS=<tokens> wedges this kernel once a
+    // chunk's actual_start reaches that value; TT_INJECT_MOE_HANG_RANK picks the rank (default 2).
+    // Only chip 0 of the rank's mesh is armed. Fully inert when POS is unset.
+    if (const char* hang_pos = std::getenv("TT_INJECT_MOE_HANG_POS")) {
+        const char* rank_env = std::getenv("TT_INJECT_MOE_HANG_RANK");
+        const int hang_rank = (rank_env != nullptr) ? std::atoi(rank_env) : 2;
+        const auto ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        const bool armed_chip = coord.to_linear_index(mesh_view.shape()) == 0;
+        if (static_cast<int>(*ctx->rank()) == hang_rank && armed_chip) {
+            writer_kernel.defines.emplace_back("TT_INJECT_HANG_POS", hang_pos);
+            log_warning(
+                tt::LogOp,
+                "moe_padding_config HANG INJECTION ARMED: rank={} coord={} wedge when actual_start>={}",
+                hang_rank,
+                coord,
+                hang_pos);
+        }
+    }
 
     desc.kernels.push_back(std::move(writer_kernel));
     return desc;
