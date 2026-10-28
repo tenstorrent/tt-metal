@@ -199,11 +199,14 @@ struct GenerationPolicy {
     // fact), and the seq axis + feature width from its NdShardSpec.
 };
 
-// Bytes for one chunk of `tokens_per_chunk` tokens. The feature width and dtype sizing are read from
-// the tensor (NdShardSpec shard_shape's full-width axes + TensorLayout) — no feature_dim arg, no sizing
-// flag. When tokens_per_chunk == the shard's seq granule this is exactly metal's NdShard shard/page
-// byte size; other granules scale it linearly. (No stored InnerFootprint: F is the shard feature width.)
-uint32_t chunk_size_bytes(const TensorSpec& tensor, uint32_t tokens_per_chunk);
+// Bytes for one chunk of `tokens_per_chunk` tokens, from the tensor's pages: a TILE tensor's tiles
+// across the feature width, or a ROW_MAJOR tensor's one page per token padded to the arch's DRAM
+// alignment (as a scaled-FP8 KVPE row is). When tokens_per_chunk == the shard's seq granule this is
+// metal's NdShard shard byte size; other granules scale it linearly.
+uint32_t chunk_size_bytes(const KvLayoutSpec& spec, uint32_t tokens_per_chunk);
+
+// The DRAM page alignment of `arch`.
+uint32_t dram_alignment(tt::ARCH arch);
 
 // F — the per-token FEATURE width, derived from the tensor: the product of the NdShardSpec shard_shape
 // axes that span their full logical extent (the seq axis is tiled at the token block; batch/head axes
