@@ -546,6 +546,16 @@ DRAM_SLICED_CASES = [
         "max_k3x3_s2_h2_tile_c40",
         dict(channels=40, in_h=16, in_w=16, tile_input=True, shard_scheme="height", dram_slice=("height", 2)),
     ),
+    # C % 8 != 0: the ROW_MAJOR shard row is wider than the slice row (36 -> 40), so padded_slice
+    # zero-pads each row's tail
+    ("max_k3x3_s2_h2_rm_c36", dict(channels=36, in_h=16, in_w=16, dram_slice=("height", 2))),
+    # 60 -> 64 channels: a 128-byte row, so the pad runs on the DRAM-aligned path (the 80-byte rows of
+    # 36/40 channels take the non-aligned one when the DRAM alignment is 32 or 64 bytes)
+    ("max_k3x3_s2_h2_rm_c60", dict(channels=60, in_h=16, in_w=16, dram_slice=("height", 2))),
+    (
+        "max_k3x3_s2_h2_tile_c36",
+        dict(channels=36, in_h=16, in_w=16, tile_input=True, shard_scheme="height", dram_slice=("height", 2)),
+    ),
     (
         "avg_k2x2_s2_h2_tile",
         dict(
