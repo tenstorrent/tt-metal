@@ -19,6 +19,7 @@ memory map of its shard, so nothing larger than the tensor asked for is ever res
 from __future__ import annotations
 
 import json
+import mmap
 import os
 import struct
 import threading
@@ -174,6 +175,11 @@ class EngramTable:
     def __init__(self, ckpt: Checkpoint, layer: int):
         self.weight = ckpt.view(f"layers.{layer}.engram.embed.weight").view(torch.uint8)  # [N, 256] fp8 bits
         self.scale = ckpt.view(f"layers.{layer}.engram.embed.scale").view(torch.uint8)  # [N, 8] e8m0 bits
+        # Random row reads: no read-ahead around each page fault (owner 2026-10-28; ENGRAM_HOST_PATH.md 3b-3d: with the
+        # default 256 KB read-ahead a cold 5120-token chunk read ~23 GB per layer to use ~32 MB, ~4.5 s; MADV_RANDOM:
+        # ~0.5 GB, ~0.6 s). Same bytes, page cache unchanged.
+        for name in (f"layers.{layer}.engram.embed.weight", f"layers.{layer}.engram.embed.scale"):
+            ckpt._map(ckpt.weight_map[name])._mmap.madvise(mmap.MADV_RANDOM)
         self.num_rows, self.dim = self.weight.shape
 
     def rows(self, ids: torch.Tensor) -> torch.Tensor:
