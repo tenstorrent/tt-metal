@@ -1,0 +1,66 @@
+{
+ "csv": "/home/andy/bringup/goldens/kairos/profiles/iter_00/tracy/reports/2026_10_28_11_13_45/ops_perf_results_2026_10_28_11_13_45.csv",
+ "shape": "paper",
+ "precision": "accuracy",
+ "rows": 512,
+ "sections": {
+  "embed": {
+   "profiled": 1,
+   "mean_ms": 4.305663,
+   "full_count": 1,
+   "full_ms": 4.305663
+  },
+  "enc_block": {
+   "profiled": 2,
+   "mean_ms": 47.569702,
+   "full_count": 6,
+   "full_ms": 285.418212
+  },
+  "enc_norm": {
+   "profiled": 1,
+   "mean_ms": 0.259135,
+   "full_count": 1,
+   "full_ms": 0.259135
+  },
+  "dec_block": {
+   "profiled": 2,
+   "mean_ms": 66.33320549999999,
+   "full_count": 6,
+   "full_ms": 397.99923299999995
+  },
+  "dec_norm": {
+   "profiled": 1,
+   "mean_ms": 0.091344,
+   "full_count": 1,
+   "full_ms": 0.091344
+  },
+  "head": {
+   "profiled": 1,
+   "mean_ms": 2.406997,
+   "full_count": 1,
+   "full_ms": 2.406997
+  }
+ },
+ "reduced_kernel_ms": 234.86895399999997,
+ "full_estimate_ms": 690.480584,
+ "op_to_op_gap_ms": 151.14411,
+ "ops": 170,
+ "categories_ms": {
+  "MatmulDeviceOperation": 176.09189300000003,
+  "ReshapeViewDeviceOperation": 23.548472999999998,
+  "BinaryNgDeviceOperation": 14.329642000000005,
+  "TransposeDeviceOperation": 6.735502,
+  "UnaryDeviceOperation": 3.805494000000001,
+  "SoftmaxDeviceOperation": 2.9017109999999997,
+  "LayerNormDeviceOperation": 1.9221820000000003,
+  "NlpCreateHeadsDeviceOperation": 1.91624,
+  "TypecastDeviceOperation": 1.455917,
+  "SliceDeviceOperation": 1.076508,
+  "NLPConcatHeadsDeviceOperation": 0.819696,
+  "ConcatDeviceOperation": 0.265696
+ },
+ "measured_full_ms": 691.2936246953905,
+ "measured_reduced_ms": 235.14068080112338,
+ "estimate_vs_measured": -0.0011761148466380433,
+ "reduced_vs_measured": -0.0011555924742483459
+}
