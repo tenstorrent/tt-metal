@@ -18,6 +18,7 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_gemma_4_26b_a4b_it.py` | google/gemma-4-26B-A4B-it | transformers `gemma4` (MoE) |
 | `generate_golden_gpt_oss_120b.py` | openai/gpt-oss-120b | transformers `gpt_oss`, MXFP4 experts dequantized |
 | `generate_golden_minimax_m3.py` | MiniMaxAI/MiniMax-M3 | transformers `minimax_m3_vl` |
+| `generate_golden_minimax_m3_1_flash.py` | MiniMaxAI/MiniMax-M3.1-Flash | M3's class, all layers sparse, MXFP8/NVFP4 dequantized |
 | `generate_golden_deepseek_v4_flash.py` | deepseek-ai/DeepSeek-V4-Flash | transformers `deepseek_v4`, FP8/FP4 dequantized |
 | `generate_golden_deepseek_v4_pro_0813.py` | deepseek-ai/DeepSeek-V4-Pro-0813 | same class as Flash |
 | `generate_golden_glm_5_2.py` | zai-org/GLM-5.2 | transformers `glm_moe_dsa` |
@@ -101,6 +102,14 @@ after the projections reads only its own query row, so the trace is bit-identica
 at isl 10240, all 468 tensors). At startup the script checks the chunked forward against the installed transformers'
 `MiniMaxM3VLIndexer.forward` on a tiny random indexer and exits if upstream has changed. isl 56320 on one H200:
 2.4 min, ~9 GB GPU peak, 50 GB on disk.
+
+**MiniMax-M3.1-Flash:** M3's architecture with every layer sparse, stored MXFP8 (dense linears) + NVFP4 (routed
+experts); transformers 5.12 dequantizes neither combination, so convert() does (the script header has the formulas
+and the real-checkpoint check). `HF_GOLDEN_SERVING=hopper` instead emulates vLLM serving it on Hopper (PR #63232):
+e4m3 KV and index-K caches read back by prefill, fp32 router, and one top-16 block selection per KV head, where
+transformers shares the max over the 4 index heads between all heads. That last one is not rounding: it changes which
+keys attention sees once N > 2048. It writes `isl<N>-serving-hopper` beside the plain trace; at startup its attention
+and indexer are checked against upstream's with quantization off and the selection shared.
 
 **DeepSeek-V4 (Flash, Pro-0813) at long ISL:** the indexer scorer holds [N, 64 heads, N // 4] fp32 scores (~200 GB
 each at isl 56320). `HF_GOLDEN_INDEXER_CHUNK` builds them a slice of query rows at a time; weights_proj still runs on

@@ -217,6 +217,11 @@ class LayerwiseGolden:
         """Checkpoint tensors (keys relative to ``prefix``) -> the module's parameter names. Dequantize here."""
         return sd
 
+    def trace_name(self, args: argparse.Namespace) -> str:
+        """The trace directory under <root>/<hf-repo>/: isl<N>. A variant of the same checkpoint (e.g. an emulated
+        serving stack) appends to it, so its trace sits beside the plain one and shares the token cache."""
+        return f"isl{args.isl}"
+
     def layer_types(self, text_config) -> list[str]:
         n = text_config.num_hidden_layers
         return list(getattr(text_config, "layer_types", None) or ["full_attention"] * n)[:n]
@@ -396,7 +401,7 @@ class LayerwiseGolden:
         stages = self.stages(model, backbone, text_config)
         materialize = Loader(model, compute, device)
 
-        out = args.root / args.hf_repo / f"isl{args.isl}"
+        out = args.root / args.hf_repo / self.trace_name(args)
         if (out / "metadata.json").exists():
             raise SystemExit(f"{out} exists; delete it to regenerate")
         (out / "hidden").mkdir(parents=True, exist_ok=True)
