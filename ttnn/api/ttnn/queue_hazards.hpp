@@ -34,16 +34,18 @@ class Tensor;
 // Without one, the access is ordered or refused before it is enqueued:
 // - Memory the allocator handed out again (another buffer where a freed one was) is ordered: the stream waits for
 //   exactly the old buffer's accesses it would race with. The allocator picked the address, so the program could not.
-// - The same buffer is refused, naming both operations.
+// - The same buffer is refused under Mode::check, naming both operations, and ordered under Mode::order.
 //
 // Waits are fences (tt-metalium/experimental/queue_fence.hpp): a stream waits for the accesses it races with, not for
-// whatever their streams enqueued after them.
+// whatever their streams enqueued after them. A wait on another queue uses the earliest event recorded there at or
+// after the access, if there is one; otherwise an event is recorded when the wait is needed, and that sits behind
+// everything the queue was given since.
 //
-// Off unless TTNN_CHECK_QUEUE_HAZARDS is 1, or set_mode() turns it on. TTNN_QUEUE_ORDERING_LOG=<file> writes a line per
-// launch, host transfer, ordering edge and enqueued wait.
+// Off unless TTNN_CHECK_QUEUE_HAZARDS is 1 (check) or "order", or set_mode() turns it on.
+// TTNN_QUEUE_ORDERING_LOG=<file> writes a line per launch, host transfer, ordering edge and enqueued wait.
 namespace ttnn::queue_hazards {
 
-enum class Mode { off, check };
+enum class Mode { off, check, order };
 
 Mode mode();
 // Starts over: history from before is dropped.

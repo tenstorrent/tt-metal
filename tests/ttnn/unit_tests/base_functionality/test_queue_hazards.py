@@ -5,7 +5,7 @@
 """Memory ordering across streams: a command queue's programs on one sub-device, or its host transfers.
 
 Memory the allocator hands out again is ordered after its old tenant's accesses; an unordered access to the same tensor
-is refused. The correctness tests use a slow reader on one column of cores so
+is refused under "check" and ordered under "order". The correctness tests use a slow reader on one column of cores so
 that, without ordering, the race window is wide (each corrupts 6/6 with ordering off).
 """
 
@@ -130,6 +130,22 @@ def test_wait_for_orders_a_read_after_its_producer(two_streams, consumer_queue):
         copied = ttnn.multiply(produced, 1.0)
     ttnn.synchronize_device(device)
     assert relative_error(ttnn.to_torch(copied), ttnn.to_torch(produced)) < 0.01
+
+
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
+@skip_for_slow_dispatch()
+def test_order_mode_orders_a_read_after_its_producer(two_streams):
+    device = two_streams
+    warm_up(device)
+    a, b = tensor(device, A), tensor(device, B)
+    ttnn.synchronize_device(device)
+    with queue_ordering("order"):
+        with on(1):
+            produced = ttnn.matmul(a, b)
+        with on(0):
+            copied = ttnn.multiply(produced, 1.0)
+        ttnn.synchronize_device(device)
+        assert relative_error(ttnn.to_torch(copied), ttnn.to_torch(produced)) < 0.01
 
 
 @pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)

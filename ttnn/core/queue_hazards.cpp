@@ -143,7 +143,13 @@ struct QueueState {
 struct MeshState {
     std::array<QueueState, kMaxQueues> queues;
     Clock host{};  // what the host has seen finish: everything enqueued from now on follows it
-    std::map<std::pair<uint32_t, uint32_t>, Clock> events;  // (queue, event id) -> what the event covers
+    // (queue, event id) -> the event and what it covers. A wait for a point on another queue uses the earliest event
+    // recorded at or after it: one recorded when the wait is needed sits behind everything that queue was given since.
+    struct RecordedEvent {
+        Clock covered;
+        MeshEvent event;
+    };
+    std::map<std::pair<uint32_t, uint32_t>, RecordedEvent> events;
     std::map<tt::tt_metal::BufferType, std::map<uint64_t, Region>> regions;  // by memory space, by start address
 
     // Whether an access by `stream`, enqueued now, follows `earlier`.
@@ -187,7 +193,7 @@ std::atomic<Mode>& mode_flag() {
         if (value == nullptr || std::string_view(value) == "0") {
             return Mode::off;
         }
-        return Mode::check;
+        return std::string_view(value) == "order" ? Mode::order : Mode::check;
     }();
     return flag;
 }
@@ -362,7 +368,7 @@ void wait_for_accesses(MeshState& state, MeshDevice& device, Stream stream, cons
     }
     auto& cq = device.mesh_command_queue(static_cast<uint8_t>(stream.queue));
     Clock implied{};
-    for (const auto& [_, access] : latest) {
+    for (const auto& [index, access] : latest) {
         const Stream other = access->stream;
         QueueFence fence{.cq_id = other.queue};
         if (!other.transfers()) {
@@ -370,9 +376,30 @@ void wait_for_accesses(MeshState& state, MeshDevice& device, Stream stream, cons
             fence.epoch = access->point.epoch;
             fence.count = static_cast<uint32_t>(access->point.count);
         }
-        tt::tt_metal::experimental::EnqueueWaitForQueueFence(cq, fence);
+        const MeshState::RecordedEvent* recorded = nullptr;
+        if (other.queue != stream.queue) {
+            for (auto it = state.events.lower_bound({other.queue, 0});
+                 it != state.events.end() && it->first.first == other.queue;
+                 ++it) {
+                if (it->second.covered[index] >= access->point) {
+                    recorded = &it->second;
+                    break;
+                }
+            }
+        }
+        if (recorded != nullptr) {
+            cq.enqueue_wait_for_event(recorded->event);
+            merge(implied, recorded->covered);
+        } else {
+            tt::tt_metal::experimental::EnqueueWaitForQueueFence(cq, fence);
+        }
         if (std::FILE* log = log_file()) {
-            fmt::print(log, "wait\t{}\t{}\n", short_name(stream), short_name(other));
+            fmt::print(
+                log,
+                "wait\t{}\t{}\t{}\n",
+                short_name(stream),
+                short_name(other),
+                recorded != nullptr ? "event" : "fence");
         }
         merge(implied, state.implied_by(*access));
     }
@@ -404,7 +431,7 @@ Footprint footprint_of(std::span<const Tensor* const> reads, std::span<const Ten
 }
 
 // Orders `footprint`, about to be accessed by `stream`, after every earlier access on another stream it races with:
-// waits where the memory changed tenants, and refuses otherwise.
+// waits where the memory changed tenants or the mode orders, and refuses otherwise.
 void order(
     MeshState& state, MeshDevice& device, Stream stream, std::string_view operation, const Footprint& footprint) {
     const auto& stall_group = device.get_sub_device_stall_group();
@@ -426,7 +453,7 @@ void order(
                 earlier.buffer == range.buffer ? "same" : "reuse",
                 enchantum::to_string(range.type));
         }
-        if (earlier.buffer == range.buffer) {
+        if (earlier.buffer == range.buffer && mode_flag().load(std::memory_order_relaxed) != Mode::order) {
             refuse(operation, stream, writes, range, earlier, earlier_writes);
         }
         waits.push_back(&earlier);
@@ -591,7 +618,7 @@ void on_record_event(const MeshEvent& event, std::span<const SubDeviceId> sub_de
     std::lock_guard lock(mutex);
     auto& state = states[device->id()];
     const Clock covered = queue_progress(state, *device, event.mesh_cq_id(), sub_device_ids);
-    state.events[{event.mesh_cq_id(), event.id()}] = covered;
+    state.events.insert_or_assign({event.mesh_cq_id(), event.id()}, MeshState::RecordedEvent{covered, event});
     // A record blocks its queue until what it covers is done, so everything the queue runs later follows it.
     state.queues[event.mesh_cq_id()].wait(covered);
     while (state.events.size() > kMaxEvents) {
@@ -604,7 +631,7 @@ void on_wait_for_event(QueueId waiting_queue, const MeshEvent& event) {
     auto& state = states[event.device()->id()];
     const auto it = state.events.find({event.mesh_cq_id(), event.id()});
     if (it != state.events.end()) {
-        state.queues[waiting_queue.get()].wait(it->second);
+        state.queues[waiting_queue.get()].wait(it->second.covered);
     }
 }
 
@@ -613,7 +640,7 @@ void on_event_synchronize(const MeshEvent& event) {
     auto& state = states[event.device()->id()];
     const auto it = state.events.find({event.mesh_cq_id(), event.id()});
     if (it != state.events.end()) {
-        merge(state.host, it->second);
+        merge(state.host, it->second.covered);
     }
 }
 

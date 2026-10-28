@@ -230,14 +230,14 @@ void py_module(nb::module_& mod) {
         "set_queue_ordering",
         [](const std::string& mode) {
             const auto parsed = enchantum::cast<ttnn::queue_hazards::Mode>(mode);
-            TT_FATAL(parsed.has_value(), "Unknown queue ordering mode {}: use off or check", mode);
+            TT_FATAL(parsed.has_value(), "Unknown queue ordering mode {}: use off, check or order", mode);
             ttnn::queue_hazards::set_mode(*parsed);
         },
         nb::arg("mode"),
         R"doc(
         Experimental. How device memory accesses on different streams (a command queue on a sub-device, or its host
-        transfers) are ordered: "off", or "check" (memory handed out again is ordered; an unordered access to the same
-        tensor is refused).
+        transfers) are ordered: "off", "check" (memory handed out again is ordered; an unordered access to the same
+        tensor is refused) or "order" (both are ordered).
         )doc");
     mod.def(
         "wait_for",
