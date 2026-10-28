@@ -13,6 +13,9 @@
 // T tokens, computes beta = sigmoid(b) and decay = exp(-exp(A) * softplus(a + dt_bias)) in software fp32 (the very
 // functions of reader_gdn_decode_step_conv_fast.cpp, gdn_step_gate_math.hpp) and pushes them as T all-equal fp32
 // scalar tiles beta_t[t] / dec[t]; the gate selector tiles (csel, rsel) and the SFPU gate path do not exist.
+// VB > 1 (value blocks): core (u, h, s) reads only state column tiles [s*Vs, (s+1)*Vs) of each of the Kt tile rows of
+// the initial block (KVs = Kt*Vs tiles, row-major (i, j) at i*Vs + j); every other read is the full head's, as the
+// conv / l2norm / gate prefix runs in full on every block.
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
@@ -54,8 +57,9 @@ template <
     uint32_t norm_eps_bits,
     uint32_t ctrl_bytes,
     uint32_t hold_sentinel,
-    uint32_t AB2>
-TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
+    uint32_t AB2,
+    uint32_t VB>
+TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     const auto qkv_acc = TensorAccessor(tensor::qkv);
     const auto wa_acc = TensorAccessor(tensor::win_a);
     const auto wb_acc = TensorAccessor(tensor::win_b);
@@ -90,6 +94,9 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
     Noc noc;
     constexpr uint32_t KV = Kt * Vt;
     constexpr uint32_t Ch = 2 * Kt + Vt;
+    static_assert(VB >= 1 && Vt % VB == 0, "value blocks must divide Vt");
+    constexpr uint32_t Vs = Vt / VB;  // this block's state column tiles
+    constexpr uint32_t KVs = Kt * Vs;
     constexpr uint32_t rf = Nv / Nk;
     const uint32_t hk = h / rf;
     const uint32_t bh = u * Nv + h;
@@ -134,6 +141,17 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
     if (mi > T - 1) {
         mi = T - 1;  // ctrl contents are data (not validated by the host): an out-of-range mi is clamped, not reported
     }
+    // the initial state of this block: KVs tiles of ring block blk (VB = 1: the whole 16-tile block in one run)
+    auto read_state = [&]() {
+        if constexpr (VB == 1) {
+            (void)s;
+            read_tiles_at(ring_acc, state_in, noc, blk * KV, KV, 0);
+        } else {
+            for (uint32_t i = 0; i < Kt; ++i) {
+                read_tiles_at(ring_acc, state_in, noc, blk * KV + i * Vt + s * Vs, Vs, i * Vs);
+            }
+        }
+    };
 
     // ---- constants and per-head scalars (each scalar is a small read with its own barrier)
     {
@@ -300,8 +318,8 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
         dtb_bits = read_head_scalar_bits < dtb_fp32 != 0 > (dtb_acc, dtb_s, noc, h);
         nea_bits = read_head_scalar_bits < nea_fp32 != 0 > (nea_acc, nea_s, noc, h);
     }
-    state_in.reserve_back(KV);
-    read_tiles_at(ring_acc, state_in, noc, blk * KV, KV, 0);
+    state_in.reserve_back(KVs);
+    read_state();
     // The T gate pairs of user u from rows r0 .. r0+T-1 of the a|b tile(s): a[h] at column h & 31 of entry 0,
     // b[h] at column (Nv + h) & 31 of entry b_idx (AB2) / entry 0. bf16 -> fp32 bits is exact (<< 16); the gate math
     // is reader_gdn_decode_step_conv_fast.cpp's, bit for bit. The ab_in slot stays reserved (staging, never pushed).
@@ -330,17 +348,17 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
     {
         DeviceZoneScopedN("rd_state");
         noc.async_read_barrier();
-        state_in.push_back(KV);
+        state_in.push_back(KVs);
     }
 #else
     // ---- the initial state, last: 16 tiles from ring block blk (the writer's block-0 write of this core is ordered
     // after this read completes, since compute cannot produce a state before it is pushed)
     {
         DeviceZoneScopedN("rd_state");
-        state_in.reserve_back(KV);
-        read_tiles_at(ring_acc, state_in, noc, blk * KV, KV, 0);
+        state_in.reserve_back(KVs);
+        read_state();
         noc.async_read_barrier();
-        state_in.push_back(KV);
+        state_in.push_back(KVs);
     }
 #endif
 }

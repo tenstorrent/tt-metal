@@ -36,6 +36,10 @@ void bind_gdn_spec_step(nb::module_& mod) {
                 SFPU, and the stored state is the full fp32 sum of the state add (not a SrcA-truncated copy).
             fp32_state (bool): default False, needs fast_mode. gdn_decode_step's fp32_state arithmetic: the
                 recurrent-state decay and add run on the SFPU in exact fp32 (no per-token tf32 truncation).
+            value_blocks (int): default 1. Split each (user, head)'s state columns over up to this many cores (<= 4;
+                the largest divisor of value_dim / 32 whose B * Nv * blocks cores fit the grid is taken). Each core
+                runs the recurrence on its column tiles; the blocks swap their pre-norm output tiles so the gated
+                RMSNorm sees the full row. Bit-identical to value_blocks=1 (out, ring, window).
             With fast_mode=True, fp32_state=True a T = 1 call is bit-identical (out, state, window) to
             gdn_decode_step(..., fast_mode=True, fp32_state=True), and a T-step call equals T chained T = 1 calls.
         )doc",
@@ -67,7 +71,8 @@ void bind_gdn_spec_step(nb::module_& mod) {
         nb::arg("output_dtype") = ttnn::DataType::BFLOAT16,
         nb::arg("fast_mode") = false,
         nb::arg("fp32_state") = false,
-        nb::arg("max_users") = 0);
+        nb::arg("max_users") = 0,
+        nb::arg("value_blocks") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::kda::gdn_spec_step::detail
