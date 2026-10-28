@@ -142,6 +142,36 @@ hide a bloated workload and mask the effect of 1-3.
 Stage 1 is mostly a change to `reference/weights.py` `EngramTable` (shared with the CPU reference). Keep the
 reference's numerics; a performance path may live in `tt/engram.py` instead if the reference must stay as it is.
 
+## 4a. Proposed final design (2026-10-28; owner to close the open items) and work split
+
+Owner decision: the engram work is done on the 2x2 and then ported to the Galaxy; the Galaxy meanwhile implements the
+other host-time picks (P.1-P.5: prepared reduce-scatters, prepared fused tail, per-layer prepared fused head,
+persistent CCL outputs, one-program RoPE).
+
+| decision | proposal | alternative |
+|---|---|---|
+| table storage | resident in RAM: anonymous memory, `MADV_HUGEPAGE`, loaded once at model load (~189 GiB, ~30 s); setting `ENGRAM_TABLE=resident\|mmap\|auto` (auto = resident when RAM allows) | mmap + `MADV_RANDOM` + threads (small hosts) |
+| lookup | multi-threaded gather, explicit thread counts (torch 8 x Python 8 measured best, ~10 ms per layer per chunk) | - |
+| dequant | on the device: upload fp8 bytes + e8m0 bytes (half of today's bf16), then two 256-entry lookup tables with `ttnn.embedding` (fp8 byte -> bf16 value, e8m0 byte -> bf16 power of two) and one multiply; exact, no fork needed | host dequant as today |
+| upload | split over TP, all-gather over TP on the device | replicated as today |
+| timing | worker started at `begin_chunk`; poll between layer dispatches; non-blocking write on the same command queue into buffers preallocated at load; synchronous fallback at the layer's deadline; within the chunk only (no tt-d-gen change) | also prefetch the next chunk (needs the runner to see its ids) |
+| code location | model-only path in `tt/engram.py`; `reference/weights.py` stays the reference | change `EngramTable` itself |
+| acceptance | rows bit-identical at every stage; A/B warm and cold; K.1 for the async stage | - |
+
+Open for the owner: (1) ~189 GiB of RAM + ~30 s of load time per runner process on the Galaxy acceptable? (2) device
+dequant via the lookup-table trick, or host dequant first? (3) next-chunk prefetch in or out of scope?
+
+### Coordination rules between the 2x2 and the Galaxy sessions
+- Number ranges: Galaxy uses DS41-130..149 and F207..F219; the 2x2 uses DS41-150..169 and F220..F229 (two F200 / F201
+  collided last time).
+- Settings: the engram settings go in their own block in `tt/settings.py` (both sessions append settings there).
+- Ownership: the 2x2 owns `tt/engram.py`, `tt/engram_kv.py`, `reference/weights.py`; the Galaxy owns `tt/ccl.py`,
+  `models/demos/moe_block`, the RoPE and reduce-scatter forks. A `tt/model.py` change is named in its commit message.
+- Git: `git fetch && git rebase origin/dnijemcevic/model_bringup` before every push; never force; small commits.
+- After pulling the Galaxy's picks, the 2x2 re-runs its own gates: they change shared paths (CCL, MoE block) it runs.
+- The real combined saving exists only after the port, measured on the Galaxy: an engram worker competes for CPU and
+  the GIL with the main dispatch thread the picks speed up.
+
 ## 5. 2x2 vs Galaxy: what can differ, and where each piece belongs
 
 ### Do on the 2x2 (QuietBox)
