@@ -178,7 +178,8 @@ the values, rel L2 3.5e-3 vs the exact rows; a format change, so C (accuracy) an
   at 56k + K.1 is the confirmation.
 
 **Defaults (owner 2026-10-28):** `ENGRAM_TABLE=resident`, `ENGRAM_GATHER_THREADS=8`, `ENGRAM_ROWS=bfp8` (bf16 kept as
-the option; `random` = read-ahead off, for a host without the RAM). Resident + bfp8 holds each table in RAM already
+the option; `random` = read-ahead off, for a host without the RAM, and what tests use: F222 `test="random"`,
+same rows, no table build at each test's start). Resident + bfp8 holds each table in RAM already
 as bfloat8_b (`tt/engram.py:resident_bfp8`: 272 B a row, 16 exponents next to the 256 magnitudes, 104.4 GB a layer;
 built at process start from the checkpoint, nothing written to disk: 84 s a layer cold on the QB, 1.24 GB/s). A
 5120-token chunk from hash to TILE bytes (`engram_bfp8.tile_rows`, one pass): 1 / 4 / 8 / 16 threads 202 / 11.9 /
