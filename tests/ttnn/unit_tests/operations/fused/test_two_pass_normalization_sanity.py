@@ -111,7 +111,6 @@ def test_two_pass_group_norm_dram_multicore_fp32(device):
     )
 
 
-# Too large to replay from L1 on a Blackhole p150b, so the reader streams the input twice.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_two_pass_group_norm_dram_multicore_streaming(device):
     group_norm_dram_unit.test_group_norm_DRAM(device, 1, 1152, 128, 128, 32, 2, 8, 4, "two_pass")
