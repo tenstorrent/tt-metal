@@ -487,8 +487,9 @@ TEST_F(SiLUOpTest, SiluBw_InPlaceIntoDLdout_CacheHit_TwoCoreGroups) {
     // A separate preallocated output: the key of the in-place launches, the output now a buffer of its own.
     const auto c = make_silu_bw_inputs(shape, 91U);
     const auto c_preallocated = zeros_on_device(shape);
+    const auto entries_before_c = device.num_program_cache_entries();
     const auto c_dL_da = metal::silu_bw(c.input, c.dL_dout, c_preallocated);
-    EXPECT_EQ(device.num_program_cache_entries(), entries_before_hit) << "launch C must reuse launch A's program";
+    EXPECT_EQ(device.num_program_cache_entries(), entries_before_c) << "launch C must reuse launch A's program";
     EXPECT_EQ(c_dL_da.buffer()->address(), c_preallocated.buffer()->address()) << "must return the preallocated output";
     expect_new_buffers({b.input, b.dL_dout, b.dL_dout}, {c.input, c.dL_dout, c_preallocated}, "launch C");
     expect_silu_bw_matches_reference(c_preallocated, c, "launch C (preallocated, cache hit)");

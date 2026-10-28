@@ -388,8 +388,9 @@ TEST_F(SwigluPackedOpTest, Backward_InPlaceOverPacked_CacheHit_TwoCoreGroups) {
     // A separate preallocated grad: the key of the in-place launches, the grad now a buffer of its own.
     const auto c = make_inputs(1U, seq, kTwoCoreGroupInner, 131U);
     const auto c_preallocated = zeros_on_device(packed_shape(1U, seq, kTwoCoreGroupInner));
+    const auto entries_before_c = device.num_program_cache_entries();
     const auto c_dpacked = metal::swiglu_packed_bw(c.packed, c.dL_dh, c_preallocated);
-    EXPECT_EQ(device.num_program_cache_entries(), entries_before_hit) << "launch C must reuse launch A's program";
+    EXPECT_EQ(device.num_program_cache_entries(), entries_before_c) << "launch C must reuse launch A's program";
     EXPECT_EQ(c_dpacked.buffer()->address(), c_preallocated.buffer()->address()) << "must return the preallocated grad";
     expect_new_buffers({b.packed, b.dL_dh, b.packed}, {c.packed, c.dL_dh, c_preallocated}, "launch C");
     expect_backward_matches_reference(c_preallocated, c, c.dL_dh_stored, "launch C (preallocated, cache hit)");

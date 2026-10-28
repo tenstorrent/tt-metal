@@ -77,12 +77,15 @@ inline uint32_t partial_grid_seq_len(uint32_t padding) {
     return (static_cast<uint32_t>(grid.y) / 2U + 1U) * tt::constants::TILE_HEIGHT - padding;
 }
 
-// A bf16 TILE tensor of `value`, e.g. a preallocated output filled with a value the op cannot write.
+// A bf16 TILE tensor of `value`, e.g. a preallocated output filled with a value the op cannot write. ttnn fills a large
+// one on the device, with a program that adds a cache entry of its own: make it before reading the entry count that a
+// launch's cache check compares with.
 inline ttnn::Tensor filled_on_device(const std::vector<uint32_t>& shape, float value) {
     return ttml::core::full(ttnn::Shape(shape), value, &ttml::autograd::ctx().get_device());
 }
 
-// A bf16 TILE tensor of zeros, e.g. for a preallocated output.
+// A bf16 TILE tensor of zeros, e.g. for a preallocated output. Make it before reading the entry count, as for
+// filled_on_device().
 inline ttnn::Tensor zeros_on_device(const std::vector<uint32_t>& shape) {
     return ttml::core::zeros(ttnn::Shape(shape), &ttml::autograd::ctx().get_device());
 }
