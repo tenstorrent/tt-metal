@@ -2,14 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The mHC site's projection on the decode tile with two ops fewer (``tt/v41/mhc.py``, ``V41_MHC_PROJ_W=dram``: the
-weight read from DRAM by the K-split cores, no L1 copy; ``V41_MHC_RSQRT=fused``: the rsqrt of the mean of squares
+"""The mHC site's projection on the decode tile with two ops fewer (``tt/v41/mhc.py``,
+``V41_MHC_PROJ_W=dram``: the
+weight read from DRAM by the K-split cores, no L1 copy; ``V41_MHC_RSQRT=fused``: the rsqrt of the mean of
+squares
 applied to the mix's coefficient tile inside the stream mix, no ``ttnn.rsqrt``) against the
 served path.
 
-No weights: a ``_V41Site`` with a random projection, ``V41_MD_TRIALS`` random fp32 ``[1, 1, 32, 4 * 1280]`` stream
-tiles a chip (every chip its own), ``fused_rms_project`` with each new choice alone and both compared bit for bit
-with the served path's on every chip, the prefill shape (``T`` 5,120 / sp) checked to keep the L1 copy, then each
+No weights: a ``_V41Site`` with a random projection, ``V41_MD_TRIALS`` random fp32 ``[1, 1, 32, 4 * 1280]``
+stream
+tiles a chip (every chip its own), ``fused_rms_project`` with each new choice alone and both compared bit for
+bit
+with the served path's on every chip, the prefill shape (``T`` 5,120 / sp) checked to keep the L1 copy, then
+each
 path under trace (``V41_MD_REPLAYS`` replays of ``V41_MD_CALLS`` calls) for the per-site device time. Results:
 ``V41_MD_RESULT``, ``V41_MD_OUT``."""
 
@@ -101,12 +106,20 @@ def test_v41_mhc_decode_ops(mesh_device, device_params):
             ttnn.deallocate(out)
         for t in (x, ref):
             ttnn.deallocate(t)
-    # the prefill shape keeps the L1 copy (one split: every core reads the whole weight) whatever the flag says
-    big = streams(5120 // sp, 99)
-    out = project(big, False, True)
-    assert tuple(out.shape) == (1, 1, 5120 // sp, 32), tuple(out.shape)
-    for t in (big, out):
-        ttnn.deallocate(t)
+    # the prefill shapes (several tile rows) keep the L1 copy whatever the flag says: the chunk's and the
+    # short
+    # chunk's rows, each path under trace, the DRAM choice no slower than the served one
+    for rows in (5120 // sp, 2048 // sp):
+        big = streams(rows, 99)
+        out = project(big, False, True)
+        assert tuple(out.shape) == (1, 1, rows, 32), tuple(out.shape)
+        ttnn.deallocate(out)
+        served_us = _trace_us(mesh_device, lambda: project(big, True, False), 8, replays)
+        dram_us = _trace_us(mesh_device, lambda: project(big, False, True), 8, replays)
+        logger.info(f"mhc decode ops prefill rows {rows}: served {served_us} us a site, dram choice {dram_us}")
+        result[f"prefill_{rows}_us"] = {"served": served_us, "both": dram_us}
+        assert dram_us <= served_us * 1.05, (rows, served_us, dram_us)
+        ttnn.deallocate(big)
     # the traced per-site time of each path
     x = streams(32, 7)
     timing = {"served": _trace_us(mesh_device, lambda: project(x, True, False), calls, replays)}

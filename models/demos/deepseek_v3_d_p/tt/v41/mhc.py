@@ -53,15 +53,19 @@ def initial_pre_mix(mesh_device, config, tokens: int) -> ttnn.Tensor:
 
 
 # the TP sum of the projection's one fp32 tile on the decode tile: ``all_reduce`` (``TtMHCWrap._tp_sum``:
-# ``all_reduce_async``, which for one tile is an all-broadcast, a concat, a reshape, a transpose and a sum: ~30 us
+# ``all_reduce_async``, which for one tile is an all-broadcast, a concat, a reshape, a transpose and a sum:
+# ~30 us
 # a site over nine ops) or ``gather`` (one all-gather of the tile over the TP chips along
 # dim 1 and the same ``ttnn.sum`` over that dim: ~11 us). Prefill shapes keep the all-reduce.
 _TP_SUM = os.environ.get("V41_MHC_TP_SUM", "all_reduce")
 assert _TP_SUM in ("all_reduce", "gather"), _TP_SUM
 # the decode tile's projection: ``V41_MHC_PROJ_W=dram`` reads the projection weight from its
-# DRAM tensor (each K-split core reads its own blocks once: no L1 copy op a site; ``l1`` the copy as before, what the
-# prefill's one-split cores need) and ``V41_MHC_RSQRT=fused`` applies the rsqrt to the mix's coefficient tile inside
-# the stream mix (no ``ttnn.rsqrt`` op a site; ``op`` as before). Both bit for bit (tests/v41/test_v41_mhc_decode_ops.py).
+# DRAM tensor (each K-split core reads its own blocks once: no L1 copy op a site; ``l1`` the copy as before,
+# what the
+# prefill's one-split cores need) and ``V41_MHC_RSQRT=fused`` applies the rsqrt to the mix's coefficient tile
+# inside
+# the stream mix (no ``ttnn.rsqrt`` op a site; ``op`` as before). Both bit for bit
+# (tests/v41/test_v41_mhc_decode_ops.py).
 _PROJ_W = os.environ.get("V41_MHC_PROJ_W", "l1")
 assert _PROJ_W in ("l1", "dram"), _PROJ_W
 _RSQRT = os.environ.get("V41_MHC_RSQRT", "op")
@@ -69,13 +73,17 @@ assert _RSQRT in ("op", "fused"), _RSQRT
 
 
 class _V41Site(TtMHCWrap):
-    """``TtMHCWrap`` with its split projection, collapse and hc_post as one fused op each (one pass over the streams).
+    """``TtMHCWrap`` with its split projection, collapse and hc_post as one fused op each (one pass over the
+    streams).
 
-    collapse and hc_post are bit-identical to the composite path (with its typecasts to and from the bf16 sublayer);
-    the projection accumulates the same fp32 matmul and an fp32 sum of squares, and TP-sums both in one all-reduce."""
+    collapse and hc_post are bit-identical to the composite path (with its typecasts to and from the bf16
+    sublayer);
+    the projection accumulates the same fp32 matmul and an fp32 sum of squares, and TP-sums both in one
+    all-reduce."""
 
     def __init__(self, device, cfg, fn, base, scale, **kwargs):
-        # fn_T gets zero columns up to the tile width: the fused projection puts mean(x^2) + eps in column mix_hc
+        # fn_T gets zero columns up to the tile width: the fused projection puts mean(x^2) + eps in column
+        # mix_hc
         self.mix_hc = fn.shape[0]
         assert self.mix_hc < 32, self.mix_hc
         fn = torch.cat([fn.float(), torch.zeros(32 - self.mix_hc, fn.shape[1])])
@@ -83,7 +91,8 @@ class _V41Site(TtMHCWrap):
 
     def _tp_sum(self, t):
         """Sum the projection's fp32 ``[1, 1, T, 32]`` over the TP chips, the result on every chip (the module
-        comment on ``_TP_SUM``): on the decode tile (``T <= 32``) with ``V41_MHC_TP_SUM=gather``, one all-gather
+        comment on ``_TP_SUM``): on the decode tile (``T <= 32``) with ``V41_MHC_TP_SUM=gather``, one
+        all-gather
         along dim 1 (``[1, tp, T, 32]``) and ``ttnn.sum`` over it, the reduction the all-reduce composite ends
         with on the same tiles in the same order (bit for bit, ``tests/v41/test_v41_mhc_tp_sum.py``). A concat
         and ``reduce_scatter_minimal_async`` (two ops) was tried and dropped: it sums in bf16 whatever the
@@ -140,7 +149,8 @@ class TtV41HyperConnections(LightweightModule):
         return x, ffn_pre
 
     def final_collapse(self, x, pre_mix):
-        """After the last block: collapse the streams with its FFN ``pre`` -> ``[1, 1, S/sp, hidden/tp]`` fp32."""
+        """After the last block: collapse the streams with its FFN ``pre`` -> ``[1, 1, S/sp, hidden/tp]``
+        fp32."""
         return self.ffn_site.collapse(x, pre_mix, ttnn.float32)
 
 
@@ -149,7 +159,8 @@ _CB_IN, _CB_COEF, _CB_CSRC, _CB_H, _CB_OUT = 0, 1, 2, 3, 16
 _FP32_TILE_BYTES = 32 * 32 * 4
 _BF16_TILE_BYTES = 32 * 32 * 2
 _MAX_BLOCK_UNITS = 6  # units per block (a divisor of the stream width in tiles); + 2 must fit the 8 fp32 DST tiles
-# blocks buffered per stream / sublayer / output CB. Measured (traced, 1 chip, production hc_post 2560 x 4x1280, bf16
+# blocks buffered per stream / sublayer / output CB. Measured (traced, 1 chip, production hc_post 2560 x
+# 4x1280, bf16
 # h): 2 -> 373 us, 3 -> 341, 4 -> 327, 5 and 6 -> 329 (collapse 173 us at every depth); 4 uses ~0.85 MB of L1.
 _MIX_DEPTH = 4
 
@@ -158,13 +169,18 @@ def _stream_mix(
     streams, n: int, coef_srcs, table, outputs: int, x=None, dtype=ttnn.float32, coef_rsqrt: bool = False
 ) -> ttnn.Tensor:
     """One fused op: ``out_j = sum_k coef[j][k] * in_k`` per token, fp32, ``in = [x?] + streams 0..n-1``.
-    ``coef_rsqrt``: every coefficient is ``rsqrt`` of the source's value (the SFPU's, as ``ttnn.rsqrt`` on an fp32
+    ``coef_rsqrt``: every coefficient is ``rsqrt`` of the source's value (the SFPU's, as ``ttnn.rsqrt`` on an
+    fp32
     tile: bit for bit).
 
-    ``streams`` [1, 1, T, n*C] fp32, ``x`` optional [1, 1, T, C] fp32 or bf16 (exact in fp32), ``coef_srcs`` one or
-    two [1, 1, T, <=32] fp32 tensors and ``table[j][k] = (src, col)``: term k of output j is weighted by column
-    ``col`` of ``coef_srcs[src]``. Returns [1, 1, T, outputs*C] ``dtype`` (fp32, or bf16: the fp32 result rounded
-    to nearest-even, as ``ttnn.typecast``; output j at columns [j*C, (j+1)*C)). The terms of each output are accumulated in fp32 in order
+    ``streams`` [1, 1, T, n*C] fp32, ``x`` optional [1, 1, T, C] fp32 or bf16 (exact in fp32), ``coef_srcs``
+    one or
+    two [1, 1, T, <=32] fp32 tensors and ``table[j][k] = (src, col)``: term k of output j is weighted by
+    column
+    ``col`` of ``coef_srcs[src]``. Returns [1, 1, T, outputs*C] ``dtype`` (fp32, or bf16: the fp32 result
+    rounded
+    to nearest-even, as ``ttnn.typecast``; output j at columns [j*C, (j+1)*C)). The terms of each output are
+    accumulated in fp32 in order
     k = 0, 1, ... as one multiply and then addcmuls, like ``tt_mhc._mix``."""
     tensors = [streams] + ([x] if x is not None else []) + list(coef_srcs)
     for t in tensors:
@@ -189,8 +205,10 @@ def _stream_mix(
         device,
         streams.memory_config(),
     )
-    # whole blocks of one tile row per reader barrier: every CB reservation stays contiguous; the largest block that
-    # still gives every core of the grid a block (a few tile rows, the decode step: smaller blocks, more cores)
+    # whole blocks of one tile row per reader barrier: every CB reservation stays contiguous; the largest
+    # block that
+    # still gives every core of the grid a block (a few tile rows, the decode step: smaller blocks, more
+    # cores)
     grid = device.compute_with_storage_grid_size()
     candidates = [b for b in range(1, _MAX_BLOCK_UNITS + 1) if ct % b == 0]
     filling = [b for b in candidates if tokens // 32 * ct // b >= grid.x * grid.y]
@@ -294,7 +312,8 @@ def fused_collapse(x, pre, n: int, dtype=ttnn.float32) -> ttnn.Tensor:
 
 
 def fused_hc_post(h, residual, post, comb, n: int) -> ttnn.Tensor:
-    """``new_j = post_j * h + sum_i comb[i, j] * residual_i`` -> [1, 1, T, n*C] fp32 (``TtMHCWrap.hc_post``); ``h``
+    """``new_j = post_j * h + sum_i comb[i, j] * residual_i`` -> [1, 1, T, n*C] fp32 (``TtMHCWrap.hc_post``);
+    ``h``
     fp32 or bf16 (the bf16 sublayer output, taken exactly)."""
     table = [[(0, j)] + [(1, i * n + j) for i in range(n)] for j in range(n)]
     return _stream_mix(residual, n, [post, comb], table, outputs=n, x=h)
@@ -314,9 +333,11 @@ def _f32_bits(v: float) -> int:
 
 
 def fused_project(x, fn_T, mix_col: int, width: int, eps_part: float) -> ttnn.Tensor:
-    """One pass over the streams: [1, 1, T, K] fp32 ``x``, [1, 1, K, 32] fp32 ``fn_T`` (zero from ``mix_col`` on)
+    """One pass over the streams: [1, 1, T, K] fp32 ``x``, [1, 1, K, 32] fp32 ``fn_T`` (zero from ``mix_col``
+    on)
     -> [1, 1, T, 32] fp32 with ``x @ fn_T`` in columns < ``mix_col`` and ``sum(x^2) / width + eps_part`` in
-    column ``mix_col``: this chip's partial mixes and share of ``mean(x^2) + eps``, summed across TP by the caller."""
+    column ``mix_col``: this chip's partial mixes and share of ``mean(x^2) + eps``, summed across TP by the
+    caller."""
     for t in (x, fn_T):
         assert t.dtype == ttnn.float32 and t.layout == ttnn.TILE_LAYOUT, (t.dtype, t.layout)
         assert not t.memory_config().is_sharded(), "the mHC projection takes interleaved tensors"
@@ -329,7 +350,8 @@ def fused_project(x, fn_T, mix_col: int, width: int, eps_part: float) -> ttnn.Te
 
     device = x.device()
     grid = device.compute_with_storage_grid_size()
-    # a few tile rows (the decode step): K is split over the cores in whole blocks, each core a partial [T, 32]
+    # a few tile rows (the decode step): K is split over the cores in whole blocks, each core a partial [T,
+    # 32]
     # (its mixes and its share of the sum of squares, eps included once over the splits) that the caller sums
     splits = 1 if rows >= grid.x * grid.y else max(1, min(nb, grid.x * grid.y // rows))
     out = ttnn.allocate_tensor_on_device(
@@ -444,20 +466,25 @@ def fused_project(x, fn_T, mix_col: int, width: int, eps_part: float) -> ttnn.Te
 def fused_rms_project(
     x, fn_T, mix_col: int, norm_eps: float, tp_factor: int = 1, tp_sum=None, weight_in_l1=None, fused_rsqrt=None
 ) -> ttnn.Tensor:
-    """``tt_mhc._project`` in one pass over the streams and one TP reduction: [1, 1, T, K] -> [1, 1, T, 32] with
-    ``RMSNorm(x) @ fn`` in columns < ``mix_col`` (``tp_sum`` sums the partial mixes and mean of squares together,
+    """``tt_mhc._project`` in one pass over the streams and one TP reduction: [1, 1, T, K] -> [1, 1, T, 32]
+    with
+    ``RMSNorm(x) @ fn`` in columns < ``mix_col`` (``tp_sum`` sums the partial mixes and mean of squares
+    together,
     replicated on every TP chip). Columns >= ``mix_col`` are scratch the Sinkhorn op does not read.
     ``weight_in_l1`` / ``fused_rsqrt`` (None: ``V41_MHC_PROJ_W`` / ``V41_MHC_RSQRT``): the module comment."""
     weight_in_l1 = _PROJ_W == "l1" if weight_in_l1 is None else weight_in_l1
     fused_rsqrt = _RSQRT == "fused" if fused_rsqrt is None else fused_rsqrt
-    grid = x.device().compute_with_storage_grid_size()
-    if weight_in_l1 or x.shape[-2] // 32 >= grid.x * grid.y:
-        # every core reads all of the (small) weight (the prefill's one split): from L1, not 80x from DRAM
+    if weight_in_l1 or int(x.shape[-2]) > 32:
+        # every core reads the weight once per tile row it owns (the prefill's rows: several a core, or one
+        # split
+        # with every core reading all of it): from L1, not from DRAM once a row (the prefill
+        # chunk +0.8 % with the DRAM read on its 8 to 20 tile rows)
         w = ttnn.to_memory_config(fn_T, ttnn.L1_MEMORY_CONFIG)
         r = fused_project(x, w, mix_col, x.shape[-1] * tp_factor, norm_eps / tp_factor)
         ttnn.deallocate(w)
     else:
-        # the decode tile: K split over the cores, each reading its own blocks of the weight once (from DRAM)
+        # the decode tile (one tile row): K split over the cores, each reading its own blocks of the weight
+        # once
         r = fused_project(x, fn_T, mix_col, x.shape[-1] * tp_factor, norm_eps / tp_factor)
     if tp_sum is not None:
         r = tp_sum(r)
