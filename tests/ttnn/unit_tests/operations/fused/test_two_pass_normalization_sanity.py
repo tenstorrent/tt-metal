@@ -9,12 +9,16 @@ import ttnn
 
 from tt_py_test_utils_common.utility_functions import run_for_wormhole_b0_or_blackhole
 from tests.ttnn.nightly.unit_tests.operations.fused import (
+    test_group_norm as nightly_group_norm,
     test_two_pass_group_norm as group_norm,
     test_two_pass_group_norm_dram as group_norm_dram,
     test_two_pass_layer_norm as layer_norm,
     test_two_pass_layer_norm_sharded as sharded_layer_norm,
 )
 from tests.ttnn.nightly.unit_tests.operations.fused.test_two_pass_layer_norm import enabled_program_cache
+from tests.ttnn.unit_tests.operations.fused import test_group_norm_DRAM as group_norm_dram_unit
+
+pytestmark = pytest.mark.merge_gate
 
 
 def test_two_pass_layer_norm_unrepresentative_anchor(device):
@@ -91,3 +95,23 @@ def test_two_pass_group_norm_dram_large_offset(device):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_two_pass_group_norm_dirty_padding(device):
     group_norm_dram.test_group_norm_non_tile_aligned_dirty_padding_grids_DRAM(device, 2, 1, 3, ttnn.TILE_LAYOUT)
+
+
+# The group-norm cases above run on one core, so they never reach the Welford receiver kernels or the
+# cross-core statistics combine. These multi-core cases do.
+def test_two_pass_group_norm_sharded_multicore_fp32_offset(device):
+    nightly_group_norm.test_group_norm_sharded_two_pass_fp32_row_major_matches_tile(
+        device, 100.0, 1, 1280, 16, 16, 32, 4, 8
+    )
+
+
+def test_two_pass_group_norm_dram_multicore_fp32(device):
+    group_norm_dram_unit.test_group_norm_interleaved_all_config(
+        device, 1, 128, 1, 512, 32, 2, 4, 4, ttnn.float32, ttnn.bfloat16, "two_pass"
+    )
+
+
+# Too large to replay from L1 on a Blackhole p150b, so the reader streams the input twice.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+def test_two_pass_group_norm_dram_multicore_streaming(device):
+    group_norm_dram_unit.test_group_norm_DRAM(device, 1, 1152, 128, 128, 32, 2, 8, 4, "two_pass")

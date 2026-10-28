@@ -11,6 +11,8 @@ import ttnn
 from tests.ttnn.nightly.unit_tests.operations.reduction import test_two_pass_reduction as regression
 from tests.ttnn.unit_tests.operations.reduce.test_reduction import enabled_program_cache
 
+pytestmark = pytest.mark.merge_gate
+
 
 def test_two_pass_hw_batch_combine(device, enabled_program_cache):
     regression.test_std_var_hw_compact_lane_combine(
