@@ -1316,10 +1316,6 @@ void MeshGraphDescriptor::check_pipeline_feasibility() const {
 
     const bool found = search(search, 0);
     if (out_of_steps) {
-        log_warning(
-            tt::LogFabric,
-            "pipeline feasibility stopped after {} steps without an answer; the pipelines are accepted",
-            kStepLimit);
         return;
     }
     TT_FATAL(found, "{}", failure);
