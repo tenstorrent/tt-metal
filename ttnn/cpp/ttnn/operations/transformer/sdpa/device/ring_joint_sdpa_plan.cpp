@@ -221,7 +221,9 @@ std::optional<ring_joint::FloaterSchedule> floater_eligibility(
     const uint32_t NH = tensor_args.input_q.logical_shape()[1];
     ring_joint::FloaterSchedule schedule{};
     if (!(tensor_args.has_k_expand() && ksplit.count > 1 && !args.has_sliding_window() &&
-          !tensor_args.attention_sink.has_value() && ksplit.num_q_chunks == 2 &&
+          !tensor_args.attention_sink.has_value() && ksplit.num_q_chunks == 2 && args.program_config.has_value() &&
+          args.program_config->q_chunk_size == ring_joint::kFloaterQChunkSize &&
+          args.program_config->k_chunk_size == ring_joint::kFloaterKChunkSize &&
           ring_joint::floater_schedule(NH, ksplit.count, schedule) &&
           (NH / 2) * ksplit.count == ring_joint::kFloaterHomeBlocks && ksplit.grid == CoreCoord(11, 10) &&
           ag.ring_size == 8 && args.ccl_core_grid_offset == CoreCoord(ksplit.grid.x, 0) && ag.num_links == 2 &&

@@ -28,6 +28,10 @@ constexpr uint32_t kFloaterGroups = 5;
 constexpr uint32_t kFloaterCores = kFloaterGroupCores * kFloaterGroups;
 // Home blocks of the layout: 2x2 blocks of (2 heads x 2 Q chunks) per K-split band on a 10x10 sub-grid.
 constexpr uint32_t kFloaterHomeBlocks = 24;
+// The chunk sizes the schedules below were tuned at. A floater expands K for every piece it runs, which a smaller Q
+// chunk does not amortize: at q128 (2k chunks) the floaters cost K3 ~10 ms per 512k-prefix chunk instead of saving.
+constexpr uint32_t kFloaterQChunkSize = 320;
+constexpr uint32_t kFloaterKChunkSize = 256;
 // First-piece visits a floater group runs, at most (the home blocks go round-robin over the groups).
 constexpr uint32_t kFloaterFirstPieceVisits = (kFloaterHomeBlocks + kFloaterGroups - 1) / kFloaterGroups;
 
