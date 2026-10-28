@@ -1,0 +1,74 @@
+{
+ "used": [
+  {
+   "id": "DS41-125",
+   "how": "the limit is measured on the ring (last 128 positions): GoldenKV(window=\"last\") compares dumped layers' window KV on the last min(128, hi - lo) positions of each range in test_adapter_acks / test_runner_contract; entry's Fix updated to the owner decision",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-124",
+   "how": "non-dumped layers keep the ring-snapshot positions (unchanged); coverage_failures still fails a layer never compared",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "tp_sum's gather_add (mesh-column order) kept as the fixed-order fallback when the column split does not fit",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the brief names the report at bringup/results/knowledge_use/, but its allowed paths only list ledgers/galaxy_8x4-full/results/knowledge_use (written there, as attempts 1-5)",
+  "a reduce-scatter by row blocks on TP > 2 is not row-position invariant: layer 0 KV bytes depend on the chunk start (DS41-128, new)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: only the test's golden comparison positions changed"
+  },
+  {
+   "id": "OV-12",
+   "answer": "n/a",
+   "evidence": "done in attempt 3-5 (kv_contract.golden_rows full / last-window per layer); untouched; test_contract passed on this tree"
+  },
+  {
+   "id": "OV-15",
+   "answer": "n/a",
+   "evidence": "done in attempt 5 (server_rules.golden_geometry: seed s4096/2048/4096, 8x4 s10240/5120/10240); untouched"
+  },
+  {
+   "id": "OV-16",
+   "answer": "done",
+   "evidence": "tests/bringup/contract/caches.py GoldenKV(window=\"last\"): dumped layers 0,1,2,3,14,20,21,24 compared on [max(lo, hi-128), hi) of each ack / final range (768 rows each), others on ring-snapshot positions (512 rows), compressed / index every row; limits untouched. test_adapter_acks PASS (0 failures, K.1.units.log). Also applied to test_runner_contract.kv_checks, which runs the same golden_failures with the same state_threshold limit; test_runner_smoke not touched"
+  }
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "K.1",
+  "role": "contract",
+  "attempt": 6,
+  "agent": "bringup-engineer",
+  "t": "2026-10-28T01:08:23",
+  "head": "e6586d9c18e",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/K.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/K.1_runner_smoke.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/K.1.contract.6.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/caches.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/ccl.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ },
+ "cited_only": [
+  "DS41-128"
+ ]
+}
