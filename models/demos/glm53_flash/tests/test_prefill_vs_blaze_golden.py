@@ -148,6 +148,31 @@ def _kda_state_host(model: GLM53MeshModel, dec, row: int = 0) -> dict[str, torch
     return {"recurrent_state": rec.contiguous(), "conv_history": conv.contiguous().to(torch.bfloat16)}
 
 
+def _kda_states_host_rows(model: GLM53MeshModel, dec, n: int) -> list[dict[str, torch.Tensor]]:
+    """``_kda_state_host(row=r)`` for rows 0..n-1 from ONE mesh read per tensor (tt-blaze G53F-0250 S6b): every chip
+    supplies its own shard in a single ``ConcatMeshToTensor`` read, so a prefill wave's 8 members cost about one
+    multi-chip read instead of 8 one-row reads (G53F-0182: 1 GiB in 0.66 s mesh-wide vs 1.52 s from one chip)."""
+    st = dec.kda_batched
+    cols, D = model.mesh.cols, model.mesh.rows * model.mesh.cols
+    composer = ttnn.ConcatMeshToTensor(model.mesh.device, dim=0)
+    rec_all = ttnn.to_torch(st.recurrent, mesh_composer=composer)
+    conv_all = ttnn.to_torch(st.convolution, mesh_composer=composer)
+    rb, cb = rec_all.shape[0] // D, conv_all.shape[0] // D
+    tiled = st.convolution.layout == ttnn.TILE_LAYOUT  # tap-major tiles [taps, B, W_c] vs ttKDA's [B, taps, W_c]
+    out = []
+    for r in range(n):
+        chips = [r * cols + c for c in range(cols)]
+        rec = torch.cat([rec_all[d * rb : (d + 1) * rb] for d in chips], dim=1)[0:1].float()
+        conv = torch.cat([conv_all[d * cb : (d + 1) * cb] for d in chips], dim=2)
+        if tiled:
+            conv = conv.permute(1, 0, 2)
+        conv = conv[0:1].float()
+        taps = conv.shape[1]
+        conv = conv.reshape(1, taps, cols, 3, -1).permute(0, 1, 3, 2, 4).reshape(1, taps, -1)
+        out.append({"recurrent_state": rec.contiguous(), "conv_history": conv.contiguous().to(torch.bfloat16)})
+    return out
+
+
 def _replicated_rows_host(model: GLM53MeshModel, t: ttnn.Tensor, nb: int, row: int | None = None) -> torch.Tensor:
     """The first ``nb`` dim-0 rows of a mesh-REPLICATED tensor ``t`` on the host (tt-blaze G53F-0182). ``row`` (tt-blaze
     G53F-0250): ``t`` is replicated only within each mesh row (a prefill wave: row r holds prompt r) -- read row

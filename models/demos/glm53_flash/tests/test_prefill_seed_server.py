@@ -48,7 +48,11 @@ from safetensors.torch import save
 
 import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
-from models.demos.glm53_flash.tests.test_prefill_vs_blaze_golden import _dsa_state_host, _kda_state_host
+from models.demos.glm53_flash.tests.test_prefill_vs_blaze_golden import (
+    _dsa_state_host,
+    _kda_state_host,
+    _kda_states_host_rows,
+)
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.mesh import mesh_device_params
 from models.demos.glm53_flash.tt.mesh_model import GLM53MeshModel
@@ -357,13 +361,20 @@ def _serve_wave(model, hdr: dict, ranks: dict, decs: dict, push_layers: list, mt
             nb += parts_len(b)
         return L, nb, time.perf_counter() - tx, acks
 
+    # S6b (GLM53F_WAVE_EXPORT=mesh, default): a KDA layer's n members come from ONE mesh-wide read per tensor; "rows"
+    # reads each member's row on its own (the first version, ~0.5 s per member at S' 252)
+    mesh_export = os.environ.get("GLM53F_WAVE_EXPORT", "mesh") == "mesh"
     futs = []
     for L in order:
         dec = decs[L]
-        for m in range(n):
-            state = (
+        if dec.cache is None and mesh_export:
+            states = _kda_states_host_rows(model, dec, n)
+        else:
+            states = [
                 _dsa_state_host(model, dec, sp, row=m) if dec.cache is not None else _kda_state_host(model, dec, row=m)
-            )
+                for m in range(n)
+            ]
+        for m, state in enumerate(states):
             bodies[(L, m)] = st_parts(state) if zc else save({k: v.contiguous() for k, v in state.items()})
         futs.append(pool.submit(push_layer, L))
     t_exp = time.perf_counter()
@@ -381,6 +392,7 @@ def _serve_wave(model, hdr: dict, ranks: dict, decs: dict, push_layers: list, mt
         bytes=sum(o[1] for o in outs),
         server_s=round(t3 - t1, 4),
         zerocopy=int(zc),
+        export=("mesh" if mesh_export else "rows"),
     )
     logger.info(f"[seed-server] wave of {n}: {rep}")
     return rep
@@ -471,9 +483,18 @@ def test_prefill_seed_server(mesh_device):
             ttnn.deallocate(lg)
             for dec in model.layers:
                 _dsa_state_host(model, dec, n, row=1) if dec.cache is not None else _kda_state_host(model, dec, row=1)
+            tr = time.perf_counter()
+            kda = [dec for dec in model.layers if dec.cache is None]
+            for dec in kda:  # S6b: every member's KDA state from one mesh read per tensor
+                _kda_states_host_rows(model, dec, model.mesh.rows)
+            tm = time.perf_counter()
+            by_mesh = _kda_states_host_rows(model, kda[0], model.mesh.rows)
+            by_row = [_kda_state_host(model, kda[0], row=r) for r in range(model.mesh.rows)]
+            same = all(torch.equal(a[k], b[k]) for a, b in zip(by_mesh, by_row) for k in a)
             logger.info(
                 f"[seed-server] wave warm-up {n} tokens x {model.mesh.rows} pass {rep}: prefill {tp - tw:.3f} s, "
-                f"one member's export {time.perf_counter() - tp:.3f} s"
+                f"one member's export {tr - tp:.3f} s, all {model.mesh.rows} members' KDA by mesh read {tm - tr:.3f} s "
+                f"(== per-row reads: {same})"
             )
     decs = {d.layer_idx: d for d in model.layers}
     if _MTP["block"] is not None:  # the MTP layer exports like a DSA layer: its cache + pooled-key index
