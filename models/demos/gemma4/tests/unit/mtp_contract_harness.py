@@ -293,7 +293,9 @@ def install_decoder(model, shapes=DEFAULT_SHAPES, max_rows=None, widths=None, st
     if step_ms is not None:
         decoder.costs = scripted_costs(shapes, model._mtp_widths, step_ms)
         model._spec_costs = dict(decoder.costs)
-        model._spec_plain_cost = CostLine.of(plain_ms if plain_ms is not None else PLAIN_MS)
+        model._spec_plain_cost = {
+            int(model.model_args[0].max_batch_size): CostLine.of(plain_ms if plain_ms is not None else PLAIN_MS)
+        }
     return decoder
 
 
@@ -318,6 +320,8 @@ def build_mtp_model(
     model.model = [Target(model.events, ring=ring)]
     attach_sampling_state(model)
     model.model_args = [SimpleNamespace(max_seq_len=max_seq_len, max_batch_size=max_batch_size)]
+    model.tt_supported_decode_batch_sizes = (int(max_batch_size),)  # the warmed decode buckets
+    model.tt_supported_decode_batch_sizes = (int(max_batch_size),)  # the warmed decode buckets
     model.kv_cache = [[("k", "v"), ("k", "v")]]
     model.mesh_device = object()
     model._bounded_sliding_kv_cache = ring is not None
@@ -413,9 +417,10 @@ def stub_drafter_modules(monkeypatch, events, costs=None, plain_ms=PLAIN_MS):
             self.costs = dict(costs or {})
             built.append(("decoder", kwargs))
 
-    def time_plain_step(self, warmup_kwargs, page_table, position=0, repeats=2):
-        events.append(("time_plain", int(warmup_kwargs["max_batch_size"]), int(position), page_table.tolist()))
-        return float(plain_ms)
+    def time_plain_step(self, warmup_kwargs, page_table, position=0, repeats=2, batch=None):
+        batch = int(batch or warmup_kwargs["max_batch_size"])
+        events.append(("time_plain", batch, int(position), page_table[:batch].tolist()))
+        return float(plain_ms) + (0.0 if batch == int(warmup_kwargs["max_batch_size"]) else -float(batch))
 
     common = sys.modules["models.demos.gemma4.tt.common"]
     monkeypatch.setattr(common, "create_assistant_model", create_assistant_model, raising=False)

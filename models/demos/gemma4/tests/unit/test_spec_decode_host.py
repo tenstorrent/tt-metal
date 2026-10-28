@@ -878,12 +878,12 @@ def test_auto_draft_len_batched_row_cap(batch, prompt_len, expected):
 
 
 @pytest.mark.usefixtures("_no_draft_len_env")
-def test_auto_draft_len_batched_env_override_wins(monkeypatch):
+def test_auto_draft_len_batched_env_override_wins(monkeypatch, expect_error):
     monkeypatch.setenv("GEMMA4_SPEC_DRAFT_LEN", "2")
     assert auto_draft_len_batched(4096, 32) == 2  # explicit K bypasses the cap
 
     # -- the acceptance-adaptive policy: the measured cost table, the entry cost and the amortized retry
-    _policy_the_cost_table_is_consumed_as_measured()
+    _policy_the_cost_table_is_consumed_as_measured(expect_error)
     _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length()
 
 
@@ -1911,6 +1911,8 @@ def test_every_layer_verifies_and_reseeds_through_its_own_group_table(monkeypatc
 # ===== Acceptance-adaptive draft length (tt/spec_policy.py): the pure policy functions.
 from models.demos.gemma4.tt.spec_policy import (  # noqa: E402
     SPEC_ADAPTIVE_ENV,
+    SPEC_CALIB_MIN_ENV,
+    SPEC_CALIB_PROBE_STEPS_ENV,
     SPEC_ENTRY_HORIZON_ENV,
     SPEC_EWMA_ENV,
     SPEC_EXIT_GAIN_ENV,
@@ -1919,13 +1921,17 @@ from models.demos.gemma4.tt.spec_policy import (  # noqa: E402
     SPEC_PROBE_STEPS_ENV,
     SPEC_RETRY_OVERHEAD_ENV,
     SPEC_RETRY_STEPS_ENV,
+    SPEC_STATS_STEPS_ENV,
     AcceptanceStats,
+    Calibration,
     CostLine,
+    ModeStats,
     RecordCandidate,
     SpecPolicy,
     SpecPolicyConfig,
     cost_at,
     describe_costs,
+    mode_name,
     rank_records,
 )
 
@@ -1971,6 +1977,10 @@ def _policy_policy_config_reads_every_knob_from_the_env(expect_error=None):
         SPEC_PLAIN_STEP_MS_ENV: "22.5",
     }
     assert SpecPolicyConfig.from_env(env) == SpecPolicyConfig(False, 1.25, 0.9, 16, 4, 0.05, 0, 0.5, (22.5,))
+    env.update({SPEC_STATS_STEPS_ENV: "64", SPEC_CALIB_MIN_ENV: "3", SPEC_CALIB_PROBE_STEPS_ENV: "0"})
+    assert SpecPolicyConfig.from_env(env) == SpecPolicyConfig(False, 1.25, 0.9, 16, 4, 0.05, 0, 0.5, (22.5,), 64, 3, 0)
+    env.update({SPEC_STATS_STEPS_ENV: "64", SPEC_CALIB_MIN_ENV: "3", SPEC_CALIB_PROBE_STEPS_ENV: "0"})
+    assert SpecPolicyConfig.from_env(env) == SpecPolicyConfig(False, 1.25, 0.9, 16, 4, 0.05, 0, 0.5, (22.5,), 64, 3, 0)
     assert SpecPolicyConfig.from_env({SPEC_PLAIN_STEP_MS_ENV: " "}).plain_step_ms is None
     assert SpecPolicyConfig.from_env({SPEC_PLAIN_STEP_MS_ENV: "31,83"}).plain_step_ms == (31.0, 83.0)
 
@@ -2044,6 +2054,14 @@ def _policy_rank_records_scores_expected_tokens_per_cost_relative_to_the_plain_s
         rank_records([RecordCandidate((1, 5), 2048, 0.0)], rows, _PLAIN)
     with expect_error(ValueError, "at least one drafting row"):
         rank_records(_cands(_COSTS), [], _PLAIN)
+    # a partial replay drafts for its members only: a row left out commits one token from the plain decode
+    partial = rank_records([RecordCandidate((8, 3), 2048, 35.0 + 20.0, 0.0, members=(0,))], rows, _PLAIN)[0]
+    assert partial.members == (0,) and partial.expected_tokens == pytest.approx(4.0 + 1.0)
+    assert partial.gain == pytest.approx(2.5 / 2.75)
+    with expect_error(ValueError, "members"):
+        rank_records([RecordCandidate((8, 3), 2048, 35.0, 0.0, members=(0, 2))], rows, _PLAIN)
+    with expect_error(ValueError, "members"):
+        rank_records([RecordCandidate((8, 3), 2048, 35.0, 0.0, members=())], rows, _PLAIN)
 
 
 def _policy_the_policy_picks_k5_at_high_acceptance_and_drops_to_k3_k1_and_plain_as_it_falls(expect_error=None):
@@ -2102,6 +2120,25 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     assert cost_at(30.0, 700) == 30.0 and cost_at((0, 30.0, 1000, 80.0), 250) == 42.5 and cost_at(line, 250) == 42.5
     assert CostLine.of(line) is line and CostLine.flat(7.0, 100) == CostLine(0, 7.0, 100, 7.0)
     assert CostLine(0, 30.0, 0, 80.0).at(10) == 30.0, "a line without a span is flat"
+    # online calibration: a mode reads the warmup prior until it has min_samples clean steps, then its EWMA
+    calib = Calibration(2)
+    mode = ("step", (8, 3), 2048)
+    assert calib.step_ms(mode, 35.0) == 35.0 and not calib.calibrated(mode)
+    calib.note_step(mode, 80.0, 3, True)
+    calib.note_step(mode, 90.0, 3, False)  # not clean: counted, never calibrates
+    assert calib.step_ms(mode, 35.0) == 35.0 and calib.modes[mode].steps == 2 and calib.modes[mode].clean == 1
+    calib.note_step(mode, 84.0, 3, True)
+    assert calib.calibrated(mode) and calib.step_ms(mode, 35.0) == pytest.approx(81.0)  # 80 + 0.25 x (84 - 80)
+    assert calib.modes[mode].tokens_ewma == pytest.approx(3.0) and calib.modes[mode].tokens == 9
+    assert calib.reseed_ms((8, 3), 250.0) == 250.0
+    calib.note_reseed((8, 3), 300.0)
+    calib.note_reseed((8, 3), 340.0)
+    assert calib.reseed_ms((8, 3), 250.0) == pytest.approx(310.0) and calib.reseeds[(8, 3)][0] == 2
+    assert calib.steps_without("plain") == 3 and calib.steps_without("step") == 0
+    calib.note_step(("plain", 8), 31.0, 8, True)
+    assert calib.steps_without("plain") == 0 and calib.steps_without("step") == 1
+    with expect_error(ValueError, "min_samples"):
+        Calibration(0)
 
 
 def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length(expect_error=None):
@@ -2129,6 +2166,28 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert all(hopeless.decide([RecordCandidate((16, 1), 1024, 120.0)], [row], _PLAIN, 5) is None for _ in range(10))
     never = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0), 5)
     assert all(never.decide(_cands(_COSTS), [row], _PLAIN, 5) is None for _ in range(20))
+    # the calibration probe: a speculating batch serves one plain step once calib_probe_steps passed without
+    # a clean plain sample and the probe's cost (the reseed to resume, the tokens forgone) is amortized
+    probing = SpecPolicy(SpecPolicyConfig(calib_probe_steps=3, retry_overhead=2.0, probe_steps=0), 5)
+    rows = [_row([1.0] * 5)]
+    kinds = []
+    for _ in range(5):
+        choice = probing.decide(_cands(_COSTS), rows, _PLAIN, 5)
+        kinds.append(None if choice is None else choice.reason)
+        if choice is not None:
+            probing.calibration.note_step(("step", choice.shape, choice.width), 50.0, 6, True)
+        else:
+            probing.calibration.note_step(("plain", 1), 20.0, 1, True)
+    assert kinds == ["gain", "gain", "gain", None, "gain"] and probing.last_reason == "gain"
+    assert probing.calibration.steps_without("plain") == 1
+    never = SpecPolicy(SpecPolicyConfig(calib_probe_steps=0, probe_steps=0), 5)
+    for _ in range(6):
+        assert never.decide(_cands(_COSTS), rows, _PLAIN, 5) is not None
+        never.calibration.note_step(("step", (1, 5), 1024), 50.0, 6, True)
+    costly = SpecPolicy(SpecPolicyConfig(calib_probe_steps=3, retry_overhead=0.03, probe_steps=0), 5)
+    for _ in range(6):  # 5 tokens forgone x 20 ms over 3+ steps is far above 3 % of them: no probe
+        assert costly.decide(_cands(_COSTS), rows, _PLAIN, 5) is not None
+        costly.calibration.note_step(("step", (1, 5), 1024), 50.0, 6, True)
 
 
 def _policy_below_the_cap_the_policy_probes_the_next_larger_draft_length_every_n_steps(expect_error=None):
@@ -2189,3 +2248,29 @@ def _policy_describe_costs_lists_the_plain_step_then_every_record(expect_error=N
         "(16, 1): S_k 2048 30.0"
     )
     assert describe_costs({}, 20.0) == "plain 20.0" and describe_costs({}, None) == "plain unmeasured"
+    # the plain step per decode bucket, and the stats line's pieces
+    assert describe_costs({}, {1: 22.7, 32: CostLine(0, 30.7, 262138, 217.1)}) == (
+        "plain b1 22.7, b32 30.7@0..217.1@262138"
+    )
+    assert mode_name(("plain", 8)) == "plain[b=8]" and mode_name(("step", (8, 3), 2048)) == "(8,3)@2048"
+    stats = ModeStats()
+    assert stats.describe("plain[b=8]") == "plain[b=8]: 0 steps, 0 tokens, 0 clean"
+    stats.note(31.0, 8, True, 0.25)
+    stats.note(33.0, 8, True, 0.25)
+    stats.note(99.0, 8, False, 0.25)
+    assert stats.describe("plain[b=8]") == (
+        "plain[b=8]: 3 steps, 24 tokens, 2 clean, 32.0 ms/step, 8.00 tokens/step, 4.0 ms/token, ewma 31.5"
+    )
+    calib = Calibration(8)
+    calib.note_step(("plain", 8), 31.0, 8, True)
+    calib.note_reseed((8, 3), 248.0)
+    calib.note_phase("replay", 41.5)
+    calib.note_phase("replay", 42.5)
+    calib.note_prefill()
+    assert calib.describe() == (
+        "plain[b=8]: 1 steps, 8 tokens, 1 clean, 31.0 ms/step, 8.00 tokens/step, 3.9 ms/token, ewma 31.0 | "
+        "reseeds 1 at 248.0 ms | phases ms/call: replay 42.0 | prefills 1 | calibrated: none"
+    )
+    calib.flush_window()
+    assert calib.describe() == "reseeds 0 | prefills 0 | calibrated: none"
+    assert calib.describe(window=False).startswith("plain[b=8]: 1 steps, 8 tokens, 1 clean")

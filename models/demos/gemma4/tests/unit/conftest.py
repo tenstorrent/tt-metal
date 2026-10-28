@@ -364,6 +364,8 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,), cls=None, en
     model.model = [Target(model.events, ring=ring)]
     attach_sampling_state(model)
     model.model_args = [SimpleNamespace(max_seq_len=1024, max_batch_size=32)]
+    model.tt_supported_decode_batch_sizes = (32,)  # the warmed decode buckets
+    model.tt_supported_decode_batch_sizes = (32,)  # the warmed decode buckets
     model.kv_cache = [[("k", "v"), ("k", "v")]]
     model._spec_decoder = Decoder(model.events, widths=widths)
     model._spec_width_set = True

@@ -85,6 +85,35 @@ request's session and the retry lands on the first step of a later request
 below the rows-based cap, after ``GEMMA4_SPEC_PROBE_STEPS`` consecutive such
 steps one step is replayed at the next larger draft length (no reseed), so
 deeper positions are re-observed (``0`` disables the probe).
+
+Calibration
+-----------
+
+The warmup table is only the prior. The adapter times every step it serves
+(the wall between two consecutive proposals, the tokens the runner committed
+in it) and feeds ``Calibration``: per mode (``("plain", bucket)`` for the
+plain step at the decode bucket of the live rows, ``("step", shape, width)``
+for a record at its rung) an EWMA of the clean wall per step and of the
+tokens per step, and per shape the reseed as served. A sample is clean when
+no prefill ran inside the interval, the mode did not change at its start,
+nothing reseeded at its start and the live rows stayed. Once a mode has
+``GEMMA4_SPEC_CALIB_MIN`` clean samples the decision reads the measured
+wall instead of the table; the entry rule compares the measured record
+wall per expected token against the measured plain wall, and the reseed as
+served. While one mode serves, after ``GEMMA4_SPEC_CALIB_PROBE_STEPS`` steps
+without a sample of the other one a bounded probe of the other mode (one
+step, overhead-gated like the retry) keeps both estimates fresh.
+
+Joining rows
+------------
+
+A row that would reseed while the batch already speculates can be left out
+of the replay: it then commits one token per step from the plain decode the
+verify runs beside the replay for it, which costs the batch one plain step
+per step (``RecordCandidate.members`` names the rows in the replay, the
+candidate's cost carries that plain step). The batch enters the full
+record, reseeding the joiners, only when the entry rule pays with the
+reseed as served.
 """
 
 from __future__ import annotations
@@ -109,6 +138,12 @@ SPEC_PROBE_STEPS_DEFAULT = "32"
 SPEC_EWMA_ENV = "GEMMA4_SPEC_EWMA"
 SPEC_EWMA_DEFAULT = "0.1"
 SPEC_PLAIN_STEP_MS_ENV = "GEMMA4_SPEC_PLAIN_STEP_MS"
+SPEC_STATS_STEPS_ENV = "GEMMA4_SPEC_STATS_STEPS"
+SPEC_STATS_STEPS_DEFAULT = "256"
+SPEC_CALIB_MIN_ENV = "GEMMA4_SPEC_CALIB_MIN"
+SPEC_CALIB_MIN_DEFAULT = "8"
+SPEC_CALIB_PROBE_STEPS_ENV = "GEMMA4_SPEC_CALIB_PROBE_STEPS"
+SPEC_CALIB_PROBE_STEPS_DEFAULT = "256"
 #: The env knobs the policy reads, for harnesses that clear the shell's values.
 SPEC_POLICY_ENV = (
     SPEC_ADAPTIVE_ENV,
@@ -120,7 +155,12 @@ SPEC_POLICY_ENV = (
     SPEC_PROBE_STEPS_ENV,
     SPEC_EWMA_ENV,
     SPEC_PLAIN_STEP_MS_ENV,
+    SPEC_STATS_STEPS_ENV,
+    SPEC_CALIB_MIN_ENV,
+    SPEC_CALIB_PROBE_STEPS_ENV,
 )
+#: The EWMA weight of one clean step sample in the online cost calibration.
+CALIB_EWMA = 0.25
 #: A row's own conditional at a position overrides the batch prior's after this many observations of it.
 ROW_MIN_OBSERVATIONS = 3
 #: Consecutive decisions below the exit gain before a speculating batch leaves for the plain step.
@@ -184,6 +224,9 @@ class SpecPolicyConfig:
     probe_steps: int = 32
     ewma: float = 0.1
     plain_step_ms: tuple | None = None
+    stats_steps: int = 256
+    calib_min: int = 8
+    calib_probe_steps: int = 256
 
     @classmethod
     def from_env(cls, env=None):
@@ -203,6 +246,9 @@ class SpecPolicyConfig:
             probe_steps=_env_int(env, SPEC_PROBE_STEPS_ENV, SPEC_PROBE_STEPS_DEFAULT, low=0),
             ewma=_env_float(env, SPEC_EWMA_ENV, SPEC_EWMA_DEFAULT, low=0.0, high=1.0),
             plain_step_ms=parse_plain_step_env(env.get(SPEC_PLAIN_STEP_MS_ENV)),
+            stats_steps=_env_int(env, SPEC_STATS_STEPS_ENV, SPEC_STATS_STEPS_DEFAULT, low=1),
+            calib_min=_env_int(env, SPEC_CALIB_MIN_ENV, SPEC_CALIB_MIN_DEFAULT, low=1),
+            calib_probe_steps=_env_int(env, SPEC_CALIB_PROBE_STEPS_ENV, SPEC_CALIB_PROBE_STEPS_DEFAULT, low=0),
         )
 
 
@@ -342,13 +388,16 @@ class AcceptanceStats:
 @dataclasses.dataclass(frozen=True)
 class RecordCandidate:
     """One record the step may replay: its shape, the verify width the step's positions select, the cost of
-    one step on it (ms, at the step's position) and the cost of entering it this step (the reseed, or the
-    dFlash bootstrap replay; 0 for a continuing record)."""
+    one step on it (ms, at the step's position; a partial replay's cost carries the plain step the rows left
+    out need), the cost of entering it this step (the reseed, or the dFlash bootstrap replay; 0 for a
+    continuing record) and ``members``, the indices of the rows the replay drafts for (None = every row; a
+    row left out commits one token per step from the plain decode)."""
 
     shape: tuple
     width: int
     cost_ms: float
     entry_ms: float = 0.0
+    members: tuple | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -356,11 +405,12 @@ class RecordChoice:
     shape: tuple
     width: int
     rows: int
-    expected_tokens: float  # summed over the drafting rows
+    expected_tokens: float  # summed over the batch's rows (one per row left out of the replay)
     cost_ms: float
     entry_ms: float
     gain: float  # tokens per ms relative to the plain step (1.0 = the same throughput), entry excluded
     reason: str  # "gain", "enter", "hold", "retry" or "probe"
+    members: tuple | None = None
 
     @property
     def tokens_per_row(self):
@@ -383,13 +433,177 @@ def rank_records(candidates, rows, plain_ms):
         if float(cand.entry_ms) < 0.0:
             raise ValueError(f"record {cand.shape} at S_k={cand.width} has a negative entry cost {cand.entry_ms}")
         k_v = int(cand.shape[1])
-        tokens = sum(stats.expected_tokens(k_v) for stats in rows)
+        members = None if cand.members is None else tuple(int(i) for i in cand.members)
+        if members is not None and (not members or any(i < 0 or i >= n for i in members)):
+            raise ValueError(f"record {cand.shape} names members {members} outside the {n} rows")
+        inside = range(n) if members is None else members
+        tokens = sum(rows[i].expected_tokens(k_v) for i in inside) + (n - len(inside))
         gain = (tokens / n) / (cost / plain_ms)
         ranked.append(
-            RecordChoice(tuple(cand.shape), int(cand.width), n, tokens, cost, float(cand.entry_ms), gain, "gain")
+            RecordChoice(
+                tuple(cand.shape), int(cand.width), n, tokens, cost, float(cand.entry_ms), gain, "gain", members
+            )
         )
-    ranked.sort(key=lambda c: (-c.gain, c.cost_ms, c.shape))
+    ranked.sort(key=lambda c: (-c.gain, c.cost_ms, c.shape, c.members is not None))
     return ranked
+
+
+class ModeStats:
+    """What one mode (the plain step at a bucket, or a record at a rung) measured in serving.
+
+    ``steps``/``tokens`` count every step served in the mode, ``clean`` the
+    samples that calibrate it (``wall_ewma`` ms per step, ``tokens_ewma``
+    committed tokens per step, ``wall_sum`` for the window's mean).
+    """
+
+    __slots__ = ("steps", "tokens", "clean", "wall_sum", "wall_ewma", "tokens_ewma")
+
+    def __init__(self):
+        self.steps = 0
+        self.tokens = 0
+        self.clean = 0
+        self.wall_sum = 0.0
+        self.wall_ewma = None
+        self.tokens_ewma = None
+
+    def note(self, wall_ms, tokens, clean, alpha):
+        self.steps += 1
+        self.tokens += int(tokens)
+        if not clean:
+            return
+        self.clean += 1
+        self.wall_sum += float(wall_ms)
+        if self.wall_ewma is None:
+            self.wall_ewma, self.tokens_ewma = float(wall_ms), float(tokens)
+        else:
+            self.wall_ewma += alpha * (float(wall_ms) - self.wall_ewma)
+            self.tokens_ewma += alpha * (float(tokens) - self.tokens_ewma)
+
+    def describe(self, name, rows_hint=None):
+        if self.clean:
+            mean = self.wall_sum / self.clean
+            per_token = mean / max(self.tokens_ewma, 1e-9) if self.tokens_ewma else float("nan")
+            text = (
+                f"{name}: {self.steps} steps, {self.tokens} tokens, {self.clean} clean, {mean:.1f} ms/step, "
+                f"{self.tokens_ewma:.2f} tokens/step, {per_token:.1f} ms/token, ewma {self.wall_ewma:.1f}"
+            )
+        else:
+            text = f"{name}: {self.steps} steps, {self.tokens} tokens, 0 clean"
+        return text
+
+
+def mode_name(mode):
+    """``plain[b=8]`` or ``(8,3)@2048`` for the stats line."""
+    if mode[0] == "plain":
+        return f"plain[b={mode[1]}]"
+    shape = mode[1]
+    return f"({shape[0]},{shape[1]})@{mode[2]}"
+
+
+class Calibration:
+    """Online cost measurements that override the warmup table once a mode has enough clean samples.
+
+    ``modes`` keep the engine-life ``ModeStats`` per mode and ``window`` the
+    ones since the last stats line; ``reseeds`` the reseed ms EWMA per
+    shape (and their count and sum, engine life and window).
+    """
+
+    def __init__(self, min_samples, alpha=CALIB_EWMA):
+        self.min_samples = int(min_samples)
+        self.alpha = float(alpha)
+        if self.min_samples < 1:
+            raise ValueError(f"Calibration needs min_samples >= 1, got {min_samples}")
+        self.modes = {}
+        self.window = {}
+        self.reseeds = {}  # shape -> [count, ms_sum, ewma]
+        self.window_reseeds = [0, 0.0]
+        self.phases = {}  # name -> [calls, ms_sum] (engine life)
+        self.window_phases = {}
+        self.prefills = 0
+        self.window_prefills = 0
+        self.steps_since = {}  # mode kind ("plain" / "step") -> steps since its last clean sample
+
+    def note_step(self, mode, wall_ms, tokens, clean):
+        """One served step of ``mode`` (``("plain", bucket)`` or ``("step", shape, width)``)."""
+        mode = tuple(mode)
+        for table in (self.modes, self.window):
+            table.setdefault(mode, ModeStats()).note(wall_ms, tokens, clean, self.alpha)
+        for kind in ("plain", "step"):
+            if kind == mode[0] and clean:
+                self.steps_since[kind] = 0
+            else:
+                self.steps_since[kind] = self.steps_since.get(kind, 0) + 1
+
+    def note_reseed(self, shape, ms):
+        entry = self.reseeds.setdefault(tuple(shape), [0, 0.0, None])
+        entry[0] += 1
+        entry[1] += float(ms)
+        entry[2] = float(ms) if entry[2] is None else entry[2] + self.alpha * (float(ms) - entry[2])
+        self.window_reseeds[0] += 1
+        self.window_reseeds[1] += float(ms)
+
+    def note_phase(self, name, ms):
+        for table in (self.phases, self.window_phases):
+            entry = table.setdefault(name, [0, 0.0])
+            entry[0] += 1
+            entry[1] += float(ms)
+
+    def note_prefill(self):
+        self.prefills += 1
+        self.window_prefills += 1
+
+    def calibrated(self, mode):
+        stats = self.modes.get(tuple(mode))
+        return stats is not None and stats.clean >= self.min_samples
+
+    def step_ms(self, mode, prior):
+        """The measured wall per step of ``mode`` once calibrated, else ``prior`` (the warmup table)."""
+        stats = self.modes.get(tuple(mode))
+        if stats is not None and stats.clean >= self.min_samples:
+            return float(stats.wall_ewma)
+        return float(prior)
+
+    def reseed_ms(self, shape, prior):
+        """The reseed of ``shape`` as served once measured ``min_samples`` times, else ``prior``."""
+        entry = self.reseeds.get(tuple(shape))
+        if entry is not None and entry[0] >= self.min_samples:
+            return float(entry[2])
+        return float(prior)
+
+    def steps_without(self, kind):
+        """Steps since the last clean sample of the ``kind`` ("plain" or "step") of mode."""
+        return self.steps_since.get(kind, 0)
+
+    def describe(self, window=True):
+        """The stats line's body: every mode, the reseeds, the phases, the prefills, the calibrated modes."""
+        table = self.window if window else self.modes
+        parts = [stats.describe(mode_name(mode)) for mode, stats in sorted(table.items(), key=lambda kv: str(kv[0]))]
+        if window:
+            count, total = self.window_reseeds
+            phases = self.window_phases
+            prefills = self.window_prefills
+        else:
+            count = sum(entry[0] for entry in self.reseeds.values())
+            total = sum(entry[1] for entry in self.reseeds.values())
+            phases = self.phases
+            prefills = self.prefills
+        parts.append(f"reseeds {count}" + (f" at {total / count:.1f} ms" if count else ""))
+        if phases:
+            parts.append(
+                "phases ms/call: "
+                + ", ".join(f"{name} {ms / calls:.1f}" for name, (calls, ms) in phases.items() if calls)
+            )
+        parts.append(f"prefills {prefills}")
+        calibrated = [mode_name(mode) for mode in sorted(self.modes, key=str) if self.calibrated(mode)]
+        parts.append("calibrated: " + (", ".join(calibrated) if calibrated else "none"))
+        return " | ".join(parts)
+
+    def flush_window(self):
+        """Close the stats window: its ``ModeStats``, reseeds, phases and prefills start over."""
+        self.window = {}
+        self.window_reseeds = [0, 0.0]
+        self.window_phases = {}
+        self.window_prefills = 0
 
 
 def _smallest_k(choices, above=None):
@@ -418,11 +632,13 @@ class SpecPolicy:
         self.config = config
         self.k_max = int(k_max)
         self.prior = AcceptanceStats(self.k_max, config.ewma)
+        self.calibration = Calibration(config.calib_min)
         self.declined = 0
         self.below_exit = 0
         self.below_cap = 0
         self.last_k = None
         self.trial = False
+        self.last_reason = None  # why the last decision was what it was ("gain", ..., "exit", "calibrate", "declined")
 
     def new_row(self):
         return self.prior.child()
@@ -465,15 +681,43 @@ class SpecPolicy:
             return None
         return dataclasses.replace(cheapest, reason="retry")
 
+    def plain_probe_due(self, choice, plain_ms):
+        """Whether a speculating batch should serve one plain step to refresh the plain estimate: at least
+        ``calib_probe_steps`` steps since the last clean plain sample, and the probe's cost (the reseed the
+        batch pays to resume plus the tokens one plain step forgoes) within ``retry_overhead`` of them."""
+        cfg = self.config
+        if cfg.calib_probe_steps <= 0:
+            return False
+        since = self.calibration.steps_without("plain")
+        if since < cfg.calib_probe_steps:
+            return False
+        forgone = max(0.0, choice.tokens_per_row - 1.0) * float(plain_ms)
+        return choice.entry_ms + forgone <= cfg.retry_overhead * since * float(plain_ms)
+
     def would_speculate(self, candidates, rows, plain_ms):
         """Whether ``decide`` would replay a record now, without changing any counter (the dFlash bootstrap gate)."""
         ranked = rank_records(candidates, rows, plain_ms)
-        best = ranked[0]
-        if best.gain >= self.config.min_gain and self.entry_pays(best, plain_ms):
+        if self.admissible(ranked, plain_ms) is not None:
             return True
-        if self.speculating and not self.trial and best.entry_ms <= 0.0 and best.gain >= self.config.exit_gain:
+        held = self.holdable(ranked)
+        if self.speculating and not self.trial and held is not None and held.gain >= self.config.exit_gain:
             return True
         return self.retry_choice(ranked, plain_ms) is not None
+
+    def admissible(self, ranked, plain_ms):
+        """The best candidate that clears the entry gain and whose entry (if any) pays over the horizon."""
+        for choice in ranked:
+            if choice.gain >= self.config.min_gain and self.entry_pays(choice, plain_ms):
+                return choice
+        return None
+
+    @staticmethod
+    def holdable(ranked):
+        """The best candidate a speculating batch can hold without entering (no reseed this step)."""
+        for choice in ranked:
+            if choice.entry_ms <= 0.0:
+                return choice
+        return None
 
     def decide(self, candidates, rows, plain_ms, k_cap):
         """The record for a step of ``rows`` (their statistics) among ``candidates``, or None for plain.
@@ -486,30 +730,38 @@ class SpecPolicy:
         if not candidates:
             raise ValueError("decide needs at least one candidate record")
         ranked = rank_records(candidates, rows, plain_ms)
-        best = ranked[0]
+        best = self.admissible(ranked, plain_ms)
+        held = self.holdable(ranked)
         choice = None
-        if best.gain >= cfg.min_gain and self.entry_pays(best, plain_ms):
+        reason = "declined"
+        if best is not None:
             choice = dataclasses.replace(best, reason="enter" if best.entry_ms > 0.0 else "gain")
             self.below_exit = 0
-        elif self.speculating and not self.trial and best.entry_ms <= 0.0:
-            # Hysteresis: a speculating batch holds its best record above the exit gain, and leaves only
-            # after EXIT_STEPS consecutive decisions below it. A retry is a trial and gets no hold.
-            if best.gain >= cfg.exit_gain:
+        elif self.speculating and not self.trial and held is not None:
+            # Hysteresis: a speculating batch holds its best entry-free record above the exit gain, and
+            # leaves only after EXIT_STEPS consecutive decisions below it. A retry is a trial and gets no hold.
+            if held.gain >= cfg.exit_gain:
                 self.below_exit = 0
-                choice = dataclasses.replace(best, reason="hold")
+                choice = dataclasses.replace(held, reason="hold")
             else:
                 self.below_exit += 1
                 if self.below_exit < EXIT_STEPS:
-                    choice = dataclasses.replace(best, reason="hold")
+                    choice = dataclasses.replace(held, reason="hold")
+                else:
+                    reason = "exit"
         else:
             choice = self.retry_choice(ranked, plain_ms)
+        if choice is not None and choice.reason in ("gain", "hold") and self.plain_probe_due(choice, plain_ms):
+            choice, reason = None, "calibrate"
         if choice is None:
             self.declined += 1
             self.below_cap = 0
             self.below_exit = 0
             self.last_k = 0
             self.trial = False
+            self.last_reason = reason
             return None
+        self.last_reason = choice.reason
         self.declined = 0
         self.trial = choice.reason == "retry"
         if int(choice.shape[1]) < int(k_cap) and choice.entry_ms <= 0.0:
@@ -526,8 +778,14 @@ class SpecPolicy:
 
 
 def describe_costs(costs, plain):
-    """One line for the warmup log: the plain step and every record's step and reseed cost lines (ms)."""
-    parts = [f"plain {CostLine.of(plain).describe()}" if plain is not None else "plain unmeasured"]
+    """One line for the warmup log: the plain step (per decode bucket when a table) and every record's step and
+    reseed cost lines (ms)."""
+    if plain is None:
+        parts = ["plain unmeasured"]
+    elif isinstance(plain, dict):
+        parts = ["plain " + ", ".join(f"b{b} {CostLine.of(line).describe()}" for b, line in sorted(plain.items()))]
+    else:
+        parts = [f"plain {CostLine.of(plain).describe()}"]
     shapes = sorted({key[1] for key in costs})
     for shape in shapes:
         steps = sorted((key[2], value) for key, value in costs.items() if key[0] == "step" and key[1] == shape)

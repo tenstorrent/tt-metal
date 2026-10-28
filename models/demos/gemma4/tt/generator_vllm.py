@@ -4775,30 +4775,149 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
             raise RuntimeError(f"{type(self).__name__} declares no _SPEC_N (verify block height) for the policy")
         self._spec_policy = SpecPolicy(SpecPolicyConfig.from_env(), int(n) - 1)
         # The cost table measured at warmup ({("step", shape, S_k): CostLine, ("reseed", shape): CostLine}) and
-        # the plain decode step's CostLine; None until measured, which keeps the fixed behaviour serving.
+        # the plain decode step's CostLine per decode bucket ({bucket: CostLine}); None until measured, which
+        # keeps the fixed behaviour serving. Both are the online calibration's priors (``_spec_record_ms``).
         self._spec_costs = None
         self._spec_plain_cost = None
         self._spec_cost_warning_logged = False
+        # The instrumentation (``_spec_interval_begin`` / ``_spec_interval_end``): the previous proposal
+        # (its begin time, the mode it decided, its live rows, the mode decided before it), what happened
+        # since (prefills, a reseed or bootstrap), the phases timed in the current proposal and the stats
+        # window.
+        self._spec_last_propose = None
+        self._spec_prefills_since = 0
+        self._spec_entry_since = False
+        self._spec_call_phases = {}
+        self._spec_last_phase_ms = 0.0
+        self._spec_window_steps = 0
+        self._spec_mode_now = None
         # (draft length of the last logged decision, its time, switches suppressed since): one INFO line per
         # switch, rate-limited to one per SPEC_POLICY_LOG_INTERVAL_S.
         self._spec_policy_logged = (None, 0.0, 0)
 
     # -- the acceptance-adaptive policy: what both rails share --------------------------
+    def _spec_plain_buckets(self):
+        """The decode buckets the plain step is timed at: the warmed ``tt_supported_decode_batch_sizes`` up to
+        the engine batch, else the engine batch alone."""
+        max_b = int(self.model_args[0].max_batch_size)
+        sizes = getattr(self, "tt_supported_decode_batch_sizes", None) or ()
+        buckets = sorted({int(b) for b in sizes if 1 <= int(b) <= max_b})
+        return buckets or [max_b]
+
+    def _spec_plain_bucket(self, live_rows):
+        """The decode bucket ``live_rows`` run the plain step at: the smallest timed bucket covering them."""
+        buckets = sorted(self._spec_plain_cost) if self._spec_plain_cost else [int(self.model_args[0].max_batch_size)]
+        for bucket in buckets:
+            if bucket >= int(live_rows):
+                return bucket
+        return buckets[-1]
+
+    def _spec_plain_ms_for(self, live_rows, position):
+        """``(ms, bucket)``: the plain step of ``live_rows`` at ``position``, measured in serving once its bucket
+        is calibrated, else the warmup line of that bucket."""
+        bucket = self._spec_plain_bucket(live_rows)
+        prior = cost_at(self._spec_plain_cost[bucket], position)
+        return self._spec_policy.calibration.step_ms(("plain", bucket), prior), bucket
+
+    def _spec_record_ms(self, shape, width, position):
+        """One step of record ``shape`` at rung ``width``: measured in serving once calibrated, else the warmup
+        line at ``position``; None when the table has no line for the rung."""
+        line = self._spec_costs.get(("step", tuple(shape), int(width)))
+        if line is None:
+            return None
+        return self._spec_policy.calibration.step_ms(("step", tuple(shape), int(width)), cost_at(line, position))
+
+    def _spec_reseed_ms(self, shape, position, prior=None):
+        """The reseed of ``shape`` (the entry cost): as served once measured enough, else the warmup line at
+        ``position`` (or ``prior`` when the table has none, as for the dFlash bootstrap); None without either."""
+        line = self._spec_costs.get(("reseed", tuple(shape)))
+        if line is not None:
+            prior = cost_at(line, position)
+        if prior is None:
+            return None
+        return self._spec_policy.calibration.reseed_ms(tuple(shape), prior)
+
+    def _spec_timed(self, phase, fn, *args, **kwargs):
+        """Run ``fn`` and account its wall under ``phase`` (the current proposal's phases and the stats)."""
+        t0 = time.perf_counter()
+        out = fn(*args, **kwargs)
+        ms = (time.perf_counter() - t0) * 1e3
+        self._spec_last_phase_ms = ms
+        self._spec_call_phases[phase] = self._spec_call_phases.get(phase, 0.0) + ms
+        self._spec_policy.calibration.note_phase(phase, ms)
+        return out
+
+    def _spec_note_prefill(self):
+        self._spec_prefills_since += 1
+        self._spec_policy.calibration.note_prefill()
+
+    def _spec_note_entry(self, shape, ms):
+        """A reseed (or bootstrap) of ``shape`` took ``ms``: the interval it falls in is not a clean sample."""
+        self._spec_entry_since = True
+        self._spec_policy.calibration.note_reseed(tuple(shape), ms)
+
+    def _spec_interval_begin(self, live_rows, tokens):
+        """At the top of a proposal: the wall since the previous proposal began is one step of the mode that
+        proposal decided, a clean sample unless a prefill ran inside it, a reseed started it, the mode changed
+        at its start or the live rows changed; ``tokens`` is what the runner committed in it."""
+        now = time.perf_counter()
+        last = self._spec_last_propose
+        if last is not None:
+            t_begin, mode, prev_live, before = last
+            clean = (
+                self._spec_prefills_since == 0
+                and not self._spec_entry_since
+                and int(prev_live) == int(live_rows)
+                and before == mode
+            )
+            self._spec_policy.calibration.note_step(mode, (now - t_begin) * 1e3, tokens, clean)
+        self._spec_prefills_since = 0
+        self._spec_entry_since = False
+        self._spec_call_phases = {}
+        self._spec_mode_now = None
+        return now
+
+    def _spec_interval_end(self, prefix, t_begin, mode, live_rows):
+        """At the end of a proposal that decided ``mode`` for ``live_rows``: account the host bookkeeping
+        (the proposal's wall less its timed phases) and open the next interval; every
+        ``GEMMA4_SPEC_STATS_STEPS`` proposals the stats line is written."""
+        total = (time.perf_counter() - t_begin) * 1e3
+        self._spec_policy.calibration.note_phase("host", max(0.0, total - sum(self._spec_call_phases.values())))
+        before = self._spec_last_propose[1] if self._spec_last_propose is not None else None
+        self._spec_last_propose = (t_begin, tuple(mode), int(live_rows), before)
+        self._spec_window_steps += 1
+        if self._spec_window_steps >= self._spec_policy.config.stats_steps:
+            self._spec_log_stats(prefix)
+
+    def _spec_log_stats(self, prefix, final=False):
+        """``<prefix> adaptive stats: window N steps | <modes> | reseeds | phases | prefills | calibrated`` every
+        window, and ``<prefix> adaptive summary: engine life N steps | ...`` on release."""
+        calib = self._spec_policy.calibration
+        if final:
+            total = sum(stats.steps for stats in calib.modes.values())
+            logger.info(f"{prefix} adaptive summary: engine life {total} steps | {calib.describe(window=False)}")
+            return
+        logger.info(f"{prefix} adaptive stats: window {self._spec_window_steps} steps | {calib.describe(window=True)}")
+        calib.flush_window()
+        self._spec_window_steps = 0
+
     def _spec_top_position(self):
         """The highest position a step's decision is costed at: the context minus one verify block."""
         return max(0, int(self.model_args[0].max_seq_len) - int(self._SPEC_N))
 
-    def _spec_time_plain_step(self, warmup_kwargs, page_table, position=0, repeats=2):
-        """One plain decode step's cost in ms at ``position``: the minimum of ``repeats`` timed traced replays
-        with readback.
+    def _spec_time_plain_step(self, warmup_kwargs, page_table, position=0, repeats=2, batch=None):
+        """One plain decode step's cost in ms at ``position`` for the decode bucket ``batch`` (the engine batch
+        when None): the minimum of ``repeats`` timed traced replays with readback.
 
         The call is the decode warmup's own (``WarmupForwardMixin``): the
-        base decode on zero tokens at ``position`` through ``page_table``
-        (block 0), the device-sampled trace the serving steps replay when the
-        warmup sampled on device, read back on return, so the number covers
-        the input upload, the replay and the token readback.
+        base decode on zero tokens at ``position`` through the first
+        ``batch`` rows of ``page_table`` (block 0), the device-sampled trace
+        of that bucket the serving steps replay when the warmup sampled on
+        device, read back on return, so the number covers the input upload,
+        the replay and the token readback.
         """
-        max_b = int(warmup_kwargs.get("max_batch_size") or self.model_args[0].max_batch_size)
+        max_b = int(batch or warmup_kwargs.get("max_batch_size") or self.model_args[0].max_batch_size)
+        page_table = page_table[:max_b]
         tokens = torch.zeros(max_b, 1, dtype=torch.int32)
         start_pos = torch.full((max_b,), int(position), dtype=torch.int32)
         params = self._create_sampling_params(
@@ -4827,16 +4946,24 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
         return best
 
     def _spec_plain_step_cost(self, warmup_kwargs, page_table, top_position):
-        """The plain step's ``CostLine`` from position 0 to ``top_position``: ``GEMMA4_SPEC_PLAIN_STEP_MS``
-        when set (one number is flat, two are the line's ends), else timed at both positions."""
+        """The plain step's ``CostLine`` from position 0 to ``top_position`` per decode bucket
+        (``{bucket: CostLine}``): ``GEMMA4_SPEC_PLAIN_STEP_MS`` when set (one number is flat, two are the
+        line's ends, the same for every bucket), else timed at both positions for every warmed bucket."""
         env = self._spec_policy.config.plain_step_ms
         top = int(top_position)
-        if env is not None:
-            lo, hi = (env[0], env[-1])
-            return CostLine(0, float(lo), top, float(hi))
-        at_zero = self._spec_time_plain_step(warmup_kwargs, page_table, position=0)
-        at_top = self._spec_time_plain_step(warmup_kwargs, page_table, position=top) if top > 0 else at_zero
-        return CostLine(0, float(at_zero), top, float(at_top))
+        table = {}
+        for bucket in self._spec_plain_buckets():
+            if env is not None:
+                table[bucket] = CostLine(0, float(env[0]), top, float(env[-1]))
+                continue
+            at_zero = self._spec_time_plain_step(warmup_kwargs, page_table, position=0, batch=bucket)
+            at_top = (
+                self._spec_time_plain_step(warmup_kwargs, page_table, position=top, batch=bucket)
+                if top > 0
+                else at_zero
+            )
+            table[bucket] = CostLine(0, float(at_zero), top, float(at_top))
+        return table
 
     def _spec_log_cost_table(self, prefix, costs, plain, timings, seconds):
         cfg = self._spec_policy.config
@@ -4845,7 +4972,8 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
             f"{prefix} adaptive K: cost table ({timings} timings in {seconds:.1f}s; ms, lines in the position, "
             f"plain step from {source}; min_gain={cfg.min_gain:.2f}, exit_gain={cfg.exit_gain:.2f}, "
             f"entry_horizon={cfg.entry_horizon}, retry={cfg.retry_steps} steps at {cfg.retry_overhead:.3f} overhead, "
-            f"probe={cfg.probe_steps}, ewma={cfg.ewma:.2f}): {describe_costs(costs, plain)}"
+            f"probe={cfg.probe_steps}, ewma={cfg.ewma:.2f}, calib_min={cfg.calib_min}, "
+            f"calib_probe={cfg.calib_probe_steps}, stats every {cfg.stats_steps}): {describe_costs(costs, plain)}"
         )
 
     def _spec_cost_table_ready(self, prefix):
@@ -4880,14 +5008,16 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
         was = "none" if previous is None else f"K={previous}"
         skipped = f", {suppressed} switches unlogged" if suppressed else ""
         if choice is None:
+            why = self._spec_policy.last_reason or "declined"
             logger.info(
-                f"{prefix} adaptive K: {n} rows, cap {cap_text} -> plain step (was {was}{skipped}); "
+                f"{prefix} adaptive K: {n} rows, cap {cap_text} -> plain step ({why}; was {was}{skipped}); "
                 f"EWMA accepted {accepted}, per-position {cond_text}, plain {plain_ms:.1f} ms"
             )
         else:
             entry = f", entry {choice.entry_ms:.1f} ms" if choice.entry_ms > 0.0 else ""
+            members = f" for {len(choice.members)}/{n} rows" if choice.members is not None else ""
             logger.info(
-                f"{prefix} adaptive K: {n} rows, cap {cap_text} -> record {choice.shape} S_k={choice.width} "
+                f"{prefix} adaptive K: {n} rows, cap {cap_text} -> record {choice.shape} S_k={choice.width}{members} "
                 f"({choice.reason}; was {was}{skipped}); EWMA accepted {accepted}, per-position {cond_text}, "
                 f"expected {choice.tokens_per_row:.2f} tokens/row at {choice.cost_ms:.1f} ms "
                 f"({choice.cost_ms / plain_ms:.2f}x plain {plain_ms:.1f}{entry}), gain {choice.gain:.2f}x"
@@ -5511,7 +5641,8 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         plain = self._spec_plain_step_cost(warmup_kwargs, torch.zeros(max_b, blocks, dtype=torch.int32), top)
         self._spec_costs = costs
         self._spec_plain_cost = plain
-        self._spec_log_cost_table("Gemma4DFlash", costs, plain, 2 * len(costs) + 2, time.perf_counter() - t0)
+        timings = 2 * len(costs) + (0 if self._spec_policy.config.plain_step_ms is not None else 2 * len(plain))
+        self._spec_log_cost_table("Gemma4DFlash", costs, plain, timings, time.perf_counter() - t0)
 
     # -- the policy on this rail: speculate or not, per step ---------------------------
     def _dflash_policy_candidate(self, position, entering):
@@ -5522,11 +5653,13 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         if width is None:
             return None
         shape = (1, int(self._SPEC_CONTRACT_K))
-        line = self._spec_costs.get(("step", shape, int(width)))
-        if line is None:
+        cost = self._spec_record_ms(shape, width, position)
+        if cost is None:
             return None
-        cost = cost_at(line, position)
-        return RecordCandidate(shape, int(width), cost, cost if entering else 0.0)
+        # The bootstrap (ingest and first replay) is the entry: the table has no line for it, so its prior
+        # is one step; serving measures it (``_dflash_bootstrap``).
+        entry = self._spec_reseed_ms(shape, position, prior=cost) if entering else 0.0
+        return RecordCandidate(shape, int(width), cost, entry)
 
     def _dflash_policy_admits(self, position):
         """Whether a session may start at ``position``: the batch prior's expected tokens pay for the replays
@@ -5538,7 +5671,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         if candidate is None:
             return True
         policy = self._spec_policy
-        plain_ms = cost_at(self._spec_plain_cost, position)
+        plain_ms, _bucket = self._spec_plain_ms_for(1, position)
         if policy.would_speculate([candidate], [policy.prior], plain_ms):
             return True
         self._spec_policy_note("Gemma4DFlash", None, policy.last_k, 1, str(candidate.shape), [policy.prior], plain_ms)
@@ -5552,7 +5685,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         if candidate is None:
             return True
         policy = self._spec_policy
-        plain_ms = cost_at(self._spec_plain_cost, position)
+        plain_ms, _bucket = self._spec_plain_ms_for(1, position)
         previous = policy.last_k
         stats = [self._dflash_stats]
         choice = policy.decide([candidate], stats, plain_ms, int(self._SPEC_CONTRACT_K))
@@ -5600,6 +5733,8 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         self._dflash_end_session()
 
     def release_persistent_capture(self) -> None:
+        if self._spec_last_propose is not None:
+            self._spec_log_stats("Gemma4DFlash", final=True)
         self._dflash_retained = None
         self._dflash_live_owner = None
         self._dflash_pending_owner = None
@@ -5703,6 +5838,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         if args:
             kwargs["tokens"] = args[0]
             args = args[1:]
+        self._spec_note_prefill()
         tokens = kwargs.get("tokens")
         rows = int(tokens.shape[0]) if tokens is not None else 1
         prompt_lens = kwargs.get("prompt_lens")
@@ -6001,13 +6137,16 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
 
     def _dflash_bootstrap(self, row, anchor, position, kwargs, page_tables_per_layer):
         owner = self._dflash_pending_owner
-        self._spec_bootstrap(
+        self._spec_timed(
+            "reseed",
+            self._spec_bootstrap,
             int(anchor),
             int(position),
             kwargs.get("page_table"),
             kwargs.get("kv_cache"),
             page_tables_per_layer=page_tables_per_layer,
         )
+        self._spec_note_entry((1, int(self._SPEC_CONTRACT_K)), self._spec_last_phase_ms)
         self._dflash_pending_owner = None
         self._dflash_live_owner = owner
         self._spec_owner_slot = owner[0] if owner else None
@@ -6148,6 +6287,17 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         k = int(num_drafts)
         rows = int(committed.shape[0]) if committed is not None and committed.dim() > 1 else 1
         live = self._spec_live_rows(positions, rows)
+        width = int(committed.shape[1]) if committed is not None and committed.dim() > 1 else 1
+        tokens = sum(max(1, min(int(counts.reshape(-1)[r]), width)) if counts is not None else 1 for r in live)
+        t_begin = self._spec_interval_begin(len(live), tokens)
+        self._spec_mode_now = ("plain", self._spec_plain_bucket(max(1, len(live))))
+        try:
+            return self._dflash_propose(k, rows, live, committed, positions, counts)
+        finally:
+            self._spec_interval_end("Gemma4DFlash", t_begin, self._spec_mode_now, len(live))
+
+    def _dflash_propose(self, k, rows, live, committed, positions, counts):
+        """``propose_draft_tokens`` proper; ``_spec_mode_now`` ends as the mode the step serves."""
         if len(live) != 1:
             self._dflash_leave_speculation("several live rows at proposal", live)
             return self._spec_decline(rows, k)
@@ -6178,7 +6328,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
                 f"decoder position {position} disagrees with the runner's anchor position {anchor_position}"
             )
             return self._spec_decline(rows, k)
-        self._dflash_refresh_tables(dec)
+        self._spec_timed("refresh", self._dflash_refresh_tables, dec)
         reason = self._dflash_decline_reason(dec, position)
         if reason is not None:
             self._dflash_decline_session(reason)
@@ -6186,9 +6336,10 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         if not self._dflash_choose(position):
             self._dflash_end_session()
             return self._spec_decline(rows, k)
-        dec.select_width(position)
-        drafts, posterior = dec.contract_replay(first=self._spec_first_step)
+        width = dec.select_width(position)
+        drafts, posterior = self._spec_timed("replay", dec.contract_replay, first=self._spec_first_step)
         self._spec_first_step = False
+        self._spec_mode_now = ("step", (1, int(self._SPEC_CONTRACT_K)), int(width or dec.width_for(position)))
         drafts = [int(t) for t in list(drafts)[:k]]
         self._dflash_retained = RetainedProposal(
             anchor_token=int(anchor),
@@ -6254,7 +6405,14 @@ SPEC_DRAFT_LEN_ENV = "GEMMA4_SPEC_DRAFT_LEN"
 #   GEMMA4_SPEC_PROBE_STEPS=32    after this many steps below the cap, one step at the next larger draft length (0 = off)
 #   GEMMA4_SPEC_EWMA=0.1          the acceptance EWMA weight of one verify
 #   GEMMA4_SPEC_PLAIN_STEP_MS     the plain decode step cost (``ms`` flat, or ``ms_at_0,ms_at_top``); unset = timed
-#                                 at warmup at position 0 and at the top position (every cost is a line in the position)
+#                                 at warmup at position 0 and at the top position, per warmed decode bucket (every
+#                                 cost is a line in the position)
+#   GEMMA4_SPEC_CALIB_MIN=8       clean serving samples of a mode (the plain step at a bucket, a record at a rung)
+#                                 after which its measured wall replaces the warmup table in the decision
+#   GEMMA4_SPEC_CALIB_PROBE_STEPS=256  steps a speculating batch serves without a plain sample before one plain
+#                                 step refreshes the plain estimate (overhead-gated like the retry; 0 = off)
+#   GEMMA4_SPEC_STATS_STEPS=256   proposals per "adaptive stats:" line (steps, tokens, clean walls per mode,
+#                                 reseeds, phases, prefills); "adaptive summary:" on release covers the engine life
 # Without a cost table (the decoder could not measure, and no plain cost is
 # given) the fixed policy serves and a warning says so.
 SPEC_K_BY_ROWS_ENV = "GEMMA4_SPEC_K_BY_ROWS"
@@ -6742,7 +6900,8 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             self._mtp_step_tables = None
         self._spec_costs = costs
         self._spec_plain_cost = plain
-        self._spec_log_cost_table("Gemma4MTP", costs, plain, 2 * len(costs) + 2, time.perf_counter() - t0)
+        timings = 2 * len(costs) + (0 if self._spec_policy.config.plain_step_ms is not None else 2 * len(plain))
+        self._spec_log_cost_table("Gemma4MTP", costs, plain, timings, time.perf_counter() - t0)
 
     # -- sessions ------------------------------------------------------------------
     def _mtp_session_at(self, slot):
@@ -6799,6 +6958,8 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
     def release_persistent_capture(self) -> None:
         for slot in list(self._mtp_sessions):
             self._mtp_drop_session(slot, "shutdown")
+        if self._spec_last_propose is not None:
+            self._spec_log_stats("Gemma4MTP", final=True)
         if self._mtp_dropped_proposals:
             # Each one cost a drafter replay that answered nothing (an ordinary decode the runner had
             # submitted before the proposal was published, contract s.4d); a steady rate here means the
@@ -6827,6 +6988,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         for slot in list(empty_slots) if empty_slots is not None else ():
             self._mtp_drop_session(int(slot), "prefill")
             self._spec_close_slot_generation(int(slot))
+        self._spec_note_prefill()
         return super().prefill_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
 
     # -- decode ------------------------------------------------------------------------
@@ -7220,52 +7382,60 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             and retained.row_id == int(row)
         )
 
-    def _mtp_choose_record(self, default, drafting, k, last):
-        """The record to replay for ``drafting`` rows, or None for a plain step (``spec_policy.SpecPolicy``).
+    def _mtp_choose_record(self, default, drafting, k, last, live_rows):
+        """``(shape, members)`` to replay for ``drafting`` rows, or ``(None, None)`` for a plain step
+        (``spec_policy.SpecPolicy``).
 
         ``default`` is the smallest record covering the rows, whose draft
         length (clamped to the runner's ``k``) caps the choice: every
         captured record covering the rows with a draft length up to that
-        cap is a candidate, costed at the rows' top position on the rung
-        that position selects, with the reseed of its shape as the entry
-        cost when a row reseeds this step. Without the cost table (the fixed
-        policy, or warmup measured nothing) the default serves; a candidate
-        whose rung has no measured cost is skipped, and when that leaves
-        none the default serves too.
+        cap is a candidate, costed at the rows' top position (the warmup
+        line of its rung until serving calibrated it), with the reseed of
+        its shape as the entry cost when a row reseeds this step. When rows
+        continue from the last replay while others would reseed, the record
+        over the continuing rows alone is a candidate too: the rows left out
+        take one token per step from the plain decode the verify runs beside
+        the replay, which the candidate's cost carries. Without the cost
+        table (the fixed policy, or warmup measured nothing) the default
+        serves for every row; a candidate whose rung has no measured cost is
+        skipped, and when that leaves none the default serves too.
         """
         if not self._spec_cost_table_ready("Gemma4MTP"):
-            return default
+            return default, None
         policy = self._spec_policy
-        costs = self._spec_costs
         n = len(drafting)
         cap = min(int(default[1]), int(k))
         top = max(int(target[3]) for target in drafting)
-        plain_ms = cost_at(self._spec_plain_cost, top)
-        reseed = any(not self._mtp_seed_continues(session, r, last) for r, session, _a, _p, _n in drafting)
+        plain_ms, _bucket = self._spec_plain_ms_for(live_rows, top)
+        continuing = tuple(
+            i for i, (r, session, _a, _p, _n) in enumerate(drafting) if self._mtp_seed_continues(session, r, last)
+        )
+        joining = len(continuing) < n
         candidates = []
         for shape in self._mtp_shapes:
-            if int(shape[0]) < n or int(shape[1]) > cap:
+            if int(shape[1]) > cap or int(shape[0]) < max(1, len(continuing)):
                 continue
             width = self._mtp_width_for(shape, top)
             if width is None:
                 continue
-            cost = costs.get(("step", shape, int(width)))
-            if cost is None:
+            step = self._spec_record_ms(shape, width, top)
+            if step is None:
                 continue
-            entry = 0.0
-            if reseed:
-                extra = costs.get(("reseed", shape))
-                if extra is None:
-                    continue
-                entry = cost_at(extra, top)
-            candidates.append(RecordCandidate(shape, int(width), cost_at(cost, top), entry))
+            if int(shape[0]) >= n:
+                entry = self._spec_reseed_ms(shape, top) if joining else 0.0
+                if entry is not None:
+                    candidates.append(RecordCandidate(shape, int(width), step, entry))
+            if joining and continuing:
+                candidates.append(RecordCandidate(shape, int(width), step + plain_ms, 0.0, members=continuing))
         if not candidates:
-            return default
+            return default, None
         previous = policy.last_k
         stats = [session.stats for _r, session, *_ in drafting]
         choice = policy.decide(candidates, stats, plain_ms, cap)
         self._spec_policy_note("Gemma4MTP", choice, previous, n, str(default), stats, plain_ms)
-        return None if choice is None else choice.shape
+        if choice is None:
+            return None, None
+        return choice.shape, choice.members
 
     def _mtp_check_result(self, result, shape, live):
         if tuple(result.shape) != tuple(shape):
@@ -7308,6 +7478,17 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         live = self._spec_live_rows(positions, rows)
         if not live:
             return self._spec_decline(rows, k)
+        width = int(committed.shape[1]) if committed.dim() > 1 else 1
+        tokens = sum(max(1, min(int(counts.reshape(-1)[r]), width)) if counts is not None else 1 for r in live)
+        t_begin = self._spec_interval_begin(len(live), tokens)
+        self._spec_mode_now = ("plain", self._spec_plain_bucket(len(live)))
+        try:
+            return self._mtp_propose(k, rows, live, committed, positions, counts)
+        finally:
+            self._spec_interval_end("Gemma4MTP", t_begin, self._spec_mode_now, len(live))
+
+    def _mtp_propose(self, k, rows, live, committed, positions, counts):
+        """``propose_draft_tokens`` proper; ``_spec_mode_now`` ends as the mode the step serves."""
         targets = []  # (row, session, anchor, position)
         for r in live:
             block = self._spec_row(committed, rows, r)
@@ -7375,9 +7556,16 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 f"({SPEC_MAX_ROWS_ENV}={self._mtp_max_rows})",
             )
         last = self._mtp_last_replay
-        shape = self._mtp_choose_record(shape, drafting, k, last)
+        shape, members = self._mtp_choose_record(shape, drafting, k, last, len(live))
         if shape is None:
             return self._mtp_decline_step(rows, k, live, "the adaptive policy chose the plain step", log=False)
+        if members is not None:
+            # The rows left out join no replay this step: they commit one token each from the plain decode
+            # the verify runs beside the replay, and reseed when the batch enters the full record.
+            for i, target in enumerate(drafting):
+                if i not in members:
+                    target[1].retained = None
+            drafting = [drafting[i] for i in members]
         k_v = int(shape[1])
         # Row ids are the propose rows: the runner settled every slot move
         # before it asked, so a row is its state slot here, and the decoder
@@ -7416,9 +7604,9 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             posits.append(int(position))
             seed_cols.append(seed)
         decoder = self._mtp_decoder
-        full, layers = self._mtp_step_page_tables()
+        full, layers = self._spec_timed("tables", self._mtp_step_page_tables)
         if self._mtp_tables_changed(layers):
-            decoder.serving_refresh_page_tables(layers)
+            self._spec_timed("refresh", decoder.serving_refresh_page_tables, layers)
             self._mtp_installed_tables = [None if table is None else table.clone() for table in layers]
         # Both calls below rewrite the decoder's shared verify-logits buffer.
         self._mtp_replay_serial += 1
@@ -7427,17 +7615,21 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             # The reseed is its own decoder call over ITS rows: its table is
             # ordered by them and zero past them, like the replay's own.
             by_row = {r: (a, p) for r, a, p in zip(row_ids, anchors, posits)}
-            decoder.serving_reseed(
+            self._spec_timed(
+                "reseed",
+                decoder.serving_reseed,
                 shape,
                 reseed,
                 [by_row[r][0] for r in reseed],
                 [by_row[r][1] for r in reseed],
                 self._mtp_record_rows(full, shape[0], reseed),
             )
+            self._spec_note_entry(shape, self._spec_last_phase_ms)
         flat = self._mtp_record_rows(full, shape[0], row_ids)
-        result = decoder.serving_step(shape, row_ids, anchors, posits, flat, seed_cols)
+        result = self._spec_timed("replay", decoder.serving_step, shape, row_ids, anchors, posits, flat, seed_cols)
         self._mtp_check_result(result, shape, len(drafting))
         self._mtp_last_replay = result
+        self._spec_mode_now = ("step", tuple(shape), int(result.width))
         if not declined:
             self._mtp_decline_logged = None  # a full proposal: the next decline is a new event
         # A row that target argmax ids cannot answer is verified in logits

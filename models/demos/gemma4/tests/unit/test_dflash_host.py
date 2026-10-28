@@ -2868,9 +2868,10 @@ def _warm(adapter, monkeypatch, plain_ms=33.0, env=None):
     model.model_args[0].max_seq_len = 4096
     model._harness_warmup_model_decode = lambda self, *a, **k: "warm"
 
-    def time_plain_step(self, warmup_kwargs, page_table, position=0, repeats=2):
-        model.events.append(("time_plain", list(page_table.shape), int(position)))
-        return plain_ms + position / 100.0
+    def time_plain_step(self, warmup_kwargs, page_table, position=0, repeats=2, batch=None):
+        batch = int(batch or warmup_kwargs.get("max_batch_size") or model.model_args[0].max_batch_size)
+        model.events.append(("time_plain", list(page_table[:batch].shape), int(position)))
+        return plain_ms + position / 100.0 - (0.0 if batch == 32 else float(batch))
 
     monkeypatch.setattr(adapter.Gemma4DFlashContractForCausalLM, "_spec_time_plain_step", time_plain_step)
     return model
@@ -3248,13 +3249,18 @@ def _with_costs(model, step_ms=DFLASH_STEP_MS, plain_ms=DFLASH_PLAIN_MS):
     in the position)."""
     model._spec_decoder.costs = {1024: float(step_ms)}
     model._spec_costs = {("step", (1, 5), 1024): CostLine.flat(step_ms)}
-    model._spec_plain_cost = CostLine.flat(plain_ms)
+    model._spec_plain_cost = {32: CostLine.flat(plain_ms)}
     return model
 
 
 def _costed(adapter, monkeypatch):
     """A contract model with the CI leg's costs, a three-step retry at a 0.6 overhead and no probe."""
-    env = {"GEMMA4_SPEC_RETRY_STEPS": "3", "GEMMA4_SPEC_RETRY_OVERHEAD": "0.6", "GEMMA4_SPEC_PROBE_STEPS": "0"}
+    env = {
+        "GEMMA4_SPEC_RETRY_STEPS": "3",
+        "GEMMA4_SPEC_RETRY_OVERHEAD": "0.6",
+        "GEMMA4_SPEC_PROBE_STEPS": "0",
+        "GEMMA4_SPEC_CALIB_MIN": "1000",  # the pinned sequences read the scripted table
+    }
     return _with_costs(build_model(adapter, monkeypatch, env=env))
 
 
@@ -3331,6 +3337,12 @@ def _dflash_rejections_end_the_session_and_the_request_runs_plain(adapter, monke
     prior = costed._spec_policy.prior
     assert prior.effective_cond(5) == pytest.approx([0.35 * 0.9**7] + [0.35] * 4)
     assert costed._spec_policy.declined == 3, "the decline and the two plain steps count toward the retry"
+    # the instrumentation: every closed interval is one step of the mode the proposal decided
+    calib = costed._spec_policy.calibration
+    assert calib.modes[("step", (1, 5), 1024)].steps == 7 and calib.modes[("plain", 32)].steps == 2
+    assert calib.reseeds[(1, 5)][0] == 1, "the bootstrap is the entry, measured once"
+    assert calib.phases["replay"][0] == 7 and calib.phases["refresh"][0] == 8 and calib.phases["host"][0] == 10
+    assert all(stats.wall_sum >= 0.0 for stats in calib.modes.values())
 
 
 def _dflash_after_n_plain_steps_the_next_request_bootstraps_and_its_first_proposal_is_the_retry(
@@ -3355,7 +3367,9 @@ def _dflash_after_n_plain_steps_the_next_request_bootstraps_and_its_first_propos
         "prior, per-position 0.35/0.35/0.35/0.35/0.35, expected 1.54 tokens/row at 46.9 ms (1.38x plain 34.0), "
         "gain 1.11x"
     )
-    assert lines[1].startswith("Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> plain step (was K=5); EWMA accepted 0.")
+    assert lines[1].startswith(
+        "Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> plain step (exit; was K=5); EWMA accepted 0."
+    )
     assert "(retry; was K=0)" in lines[2] and "gain 0.91x" in lines[2]
     # another rejection: the trial observed, the policy declines at once and the request runs plain
     out = _verify(costed, [[950, 1001, 1002, 1003, 1004, 1005]], [list(range(3, 9))], [5], keys=[20])
@@ -3427,7 +3441,7 @@ def _dflash_the_traced_warmup_measures_every_captured_width_and_times_the_plain_
     assert model._spec_costs == {
         ("step", (1, 5), w): CostLine(0, 40.0 + i, top, 60.0 + i) for i, w in enumerate(ladder)
     }
-    assert model._spec_plain_cost == CostLine(0, 33.0, top, 33.0 + top / 100.0)
+    assert model._spec_plain_cost == {32: CostLine(0, 33.0, top, 33.0 + top / 100.0)}
     assert _names(_RecordingDecoder.instances[0], "measure") == [("measure", top, tuple(ladder))]
     assert _names(model, "time_plain") == [
         ("time_plain", [32, 64], 0),
@@ -3435,13 +3449,26 @@ def _dflash_the_traced_warmup_measures_every_captured_width_and_times_the_plain_
     ], "the decode warmup's zero table (batch x blocks) at position 0 and at the top"
     model.release_persistent_capture()
     assert model._spec_costs is None and model._spec_plain_cost is None
+    # every warmed decode bucket gets its own plain line (the bucket of a step's live rows is its prior)
+    model = _warm(adapter, monkeypatch)
+    model.tt_supported_decode_batch_sizes = (1, 8, 32)
+    model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64)
+    model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
+    assert [e[1] for e in _names(model, "time_plain")] == [[1, 64], [1, 64], [8, 64], [8, 64], [32, 64], [32, 64]]
+    assert model._spec_plain_cost == {
+        1: CostLine(0, 32.0, top, 32.0 + top / 100.0),
+        8: CostLine(0, 25.0, top, 25.0 + top / 100.0),
+        32: CostLine(0, 33.0, top, 33.0 + top / 100.0),
+    }
+    assert [model._spec_plain_bucket(n) for n in (1, 2, 8, 9, 32, 40)] == [1, 8, 8, 32, 32, 32]
+    assert model._spec_plain_ms_for(2, 0) == (25.0, 8)
 
 
 def _dflash_the_plain_step_cost_from_the_env_skips_the_timed_replay(adapter, monkeypatch, expect_error=None):
     model = _warm(adapter, monkeypatch, env={"GEMMA4_SPEC_PLAIN_STEP_MS": "35.5"})
     model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64)
     model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
-    assert model._spec_plain_cost == CostLine(0, 35.5, 4096 - 6, 35.5) and _names(model, "time_plain") == []
+    assert model._spec_plain_cost == {32: CostLine(0, 35.5, 4096 - 6, 35.5)} and _names(model, "time_plain") == []
 
 
 def _dflash_adaptive_off_measures_nothing_at_warmup(adapter, monkeypatch, expect_error=None):
@@ -3461,9 +3488,16 @@ def _dflash_adaptive_off_measures_nothing_at_warmup(adapter, monkeypatch, expect
 MTP_STEP_MS = {(1, 5): 50.0, (5, 5): 50.0, (8, 3): 35.0, (16, 1): 30.0}
 
 
-def _mtp_adaptive(adapter, monkeypatch):
+def _mtp_adaptive(adapter, monkeypatch, env=None):
     """A model with the scripted cost table, a three-step retry at a 0.2 overhead and no probe."""
-    env = {"GEMMA4_SPEC_RETRY_STEPS": "3", "GEMMA4_SPEC_RETRY_OVERHEAD": "0.2", "GEMMA4_SPEC_PROBE_STEPS": "0"}
+    # the pinned sequences read the scripted table: the host walls never calibrate a mode
+    env = {
+        "GEMMA4_SPEC_RETRY_STEPS": "3",
+        "GEMMA4_SPEC_RETRY_OVERHEAD": "0.2",
+        "GEMMA4_SPEC_PROBE_STEPS": "0",
+        "GEMMA4_SPEC_CALIB_MIN": "1000",
+        **(env or {}),
+    }
     model = mh.build_mtp_model(adapter, monkeypatch, env=env)
     mh.install_decoder(model, step_ms=MTP_STEP_MS, plain_ms=mh.PLAIN_MS)
     return model
@@ -3542,6 +3576,22 @@ def _mtp_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_
     assert _names(adaptive, "reseed")[-1][1:3] == ((16, 1), [0]), "the retry reseeds after the plain steps"
     assert adaptive._mtp_sessions[0].stats.cond[0] == pytest.approx(0.9**17)
     assert adaptive._spec_policy.declined == 2 and not adaptive._spec_policy.trial
+    # the instrumentation: the closed intervals by mode, clean only without a switch, a reseed or a prefill
+    calib = adaptive._spec_policy.calibration
+    modes = {mode: (stats.steps, stats.clean) for mode, stats in calib.modes.items()}
+    assert modes[("step", (1, 5), 1024)] == (6, 5), "the first interval starts with a reseed"
+    assert modes[("step", (8, 3), 1024)] == (11, 10), "the first (8,3) interval starts at a switch"
+    assert modes[("plain", 32)] == (4, 2), "the last decision's interval never closes; the switches are not clean"
+    assert modes[("step", (16, 1), 1024)] == (1, 0), "the retry reseeds"
+    assert calib.reseeds[(1, 5)][0] == 1 and calib.reseeds[(16, 1)][0] == 1
+    assert {name: calls for name, (calls, _ms) in calib.phases.items()} == {
+        "tables": 18,
+        "refresh": 1,
+        "reseed": 2,
+        "replay": 18,
+        "host": 23,
+    }
+    assert calib.prefills == 1 and calib.window_prefills == 1
 
 
 def _mtp_a_batch_may_replay_a_smaller_record_than_its_rows_select(
@@ -3559,6 +3609,39 @@ def _mtp_a_batch_may_replay_a_smaller_record_than_its_rows_select(
     assert proposal.num_valid.tolist() == [3] * 5
     step = mh._steps(mtp)[-1]
     assert step[1] == (8, 3) and step[2] == [0, 1, 2, 3, 4] and step[7][5:] == [[0, 0, 0, 0]] * 3
+    # a row joining a speculating batch stays out of the replay (its token from the plain decode the verify
+    # runs beside it) while its reseed does not pay over the entry horizon
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
+    mtp = mh.build_mtp_model(
+        adapter, monkeypatch, env={"GEMMA4_SPEC_PROBE_STEPS": "0", "GEMMA4_SPEC_CALIB_MIN": "1000"}
+    )
+    mh.install_decoder(mtp, step_ms=MTP_STEP_MS)
+    mh._prefill(mtp, rows=5)
+    keys = [10 + 2 * r for r in range(5)]
+    mh._ordinary(mtp, [3] * 5, [2] * 5, keys, result=_tensor([30] * 5))
+    proposal = mh._propose(mtp, [[30] + [-1] * 5] * 5, [[3] + [-1] * 5] * 5)  # the first proposal: every row reseeds
+    assert proposal.num_valid.tolist() == [5] * 5 and _names(mtp, "reseed")[-1][1:3] == ((5, 5), [0, 1, 2, 3, 4])
+    drafts = proposal.draft_token_ids.tolist()
+    blocks = [mh._block(30, drafts[r]) for r in range(5)]
+    out = mh._verify(mtp, blocks, [mh._positions(3, 6)] * 5, [5] * 5, keys)
+    ids = out.argmax_ids.tolist()
+    mtp._spec_costs.update({("reseed", shape): 5000.0 for shape in mh.DEFAULT_SHAPES})
+    # a sixth request joins: its first step is a plain decode beside the others' verify, then it proposes too
+    mh._prefill(mtp, slot=5, key=20)
+    committed = [ids[r] for r in range(5)] + [[40] + [-1] * 5]
+    posits = [mh._positions(4, 6)] * 5 + [[3] + [-1] * 5]
+    proposal = mh._propose(mtp, committed, posits, counts=[6] * 5 + [1])
+    # 64 x (4 x 20 - 35) = 2880 ms of saving over the horizon does not cover a 5000 ms reseed of (8,3): the
+    # five continuing rows replay (8,3) alone, the joiner commits its one token from the plain decode
+    assert proposal.num_valid.tolist() == [3] * 5 + [0]
+    step = _names(mtp, "step")[-1]
+    assert step[1] == (8, 3) and step[2] == [0, 1, 2, 3, 4] and len(_names(mtp, "reseed")) == 1
+    assert mtp._mtp_sessions[5].retained is None
+    line = [m for m in messages if "for 5/6 rows" in m]
+    assert len(line) == 1 and "-> record (8, 3) S_k=1024 for 5/6 rows (gain; was K=5)" in line[0]
+    assert "at 55.0 ms (2.75x plain 20.0), gain 1.27x" in line[0]
 
 
 def _mtp_the_reseed_cost_of_entering_speculation_is_part_of_the_candidates_cost(
@@ -3651,10 +3734,25 @@ def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
     ]
     assert "(retry; was K=0)" in lines[3] and "at 30.0 ms (1.50x plain 20.0), gain 0.79x" in lines[3]
     assert lines[2] == (
-        "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> plain step (was K=3); EWMA accepted 0.93, "
+        "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> plain step (exit; was K=3); EWMA accepted 0.93, "
         "per-position 0.19/1.00/1.00/1.00/1.00, plain 20.0 ms"
     )
     assert [m for m in messages if "proposing nothing" in m] == [], "the policy's plain steps use their own line"
+    # the stats line every GEMMA4_SPEC_STATS_STEPS proposals (window counters, then they start over)
+    stats = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: stats.append(str(message)))
+    windowed = _mtp_adaptive(adapter, monkeypatch, env={"GEMMA4_SPEC_STATS_STEPS": "4"})
+    _mtp_rounds(windowed, [5, 5, 5, 5, 5, 5, 5])
+    lines = [m for m in stats if m.startswith("Gemma4MTP adaptive stats:")]
+    assert len(lines) == 2 and lines[0].startswith("Gemma4MTP adaptive stats: window 4 steps | (1,5)@1024: 3 steps")
+    assert re.search(
+        r"\(1,5\)@1024: 3 steps, 18 tokens, 2 clean, \d+\.\d ms/step, 6\.00 tokens/step, \d+\.\d ms/token, "
+        r"ewma \d+\.\d \| reseeds 1 at \d+\.\d ms \| phases ms/call: tables \d+\.\d, refresh \d+\.\d, "
+        r"reseed \d+\.\d, replay \d+\.\d, host \d+\.\d \| prefills 1 \| calibrated: none$",
+        lines[0],
+    )
+    assert lines[1].startswith("Gemma4MTP adaptive stats: window 4 steps | (1,5)@1024: 4 steps, 24 tokens, 4 clean")
+    assert "reseeds 0 | phases ms/call: tables" in lines[1] and "| prefills 0 | calibrated: none" in lines[1]
 
 
 def _mtp_record_switches_are_rate_limited_to_one_line_per_interval(
@@ -3681,6 +3779,13 @@ def _mtp_the_session_summary_reports_the_accepted_drafts_ewma(
         "Gemma4MTP contract summary: slot 0 (release) 3 steps, 11 tokens, 3.67 tokens/step, "
         "4.80 accepted drafts/verify (EWMA over 2)"
     ]
+    # the engine-life summary on release
+    adaptive.release_persistent_capture()
+    summary = [m for m in messages if m.startswith("Gemma4MTP adaptive summary:")]
+    assert len(summary) == 1 and summary[0].startswith(
+        "Gemma4MTP adaptive summary: engine life 2 steps | (1,5)@1024: 2 steps, 10 tokens"
+    )
+    assert "| reseeds 1 at " in summary[0] and "| prefills 1 | calibrated: none" in summary[0]
 
 
 def _mtp_warmup_measures_the_records_and_times_the_plain_step_after_the_capture(
@@ -3701,7 +3806,7 @@ def _mtp_warmup_measures_the_records_and_times_the_plain_step_after_the_capture(
     ]
     top = 1024 - 6  # the context minus one verify block: every cost is a line from position 0 to here
     assert mtp._spec_costs == {key: CostLine.of(value) for key, value in costs.items()}
-    assert mtp._spec_plain_cost == CostLine(0, 21.5, top, 21.5)
+    assert mtp._spec_plain_cost == {32: CostLine(0, 21.5, top, 21.5)}
     assert _names(mtp, "measure") == [("measure", top, sorted(costs))]
     zero = [[0] * 8] * 32  # the decode warmup's zero table: 32 rows, 8 blocks (the null block)
     assert _names(mtp, "refresh") == [("refresh", [zero, zero])], "a bounded target's ring tables are installed first"
@@ -3711,6 +3816,14 @@ def _mtp_warmup_measures_the_records_and_times_the_plain_step_after_the_capture(
     assert all(torch.equal(t, torch.tensor(zero, dtype=torch.int32)) for t in mtp._mtp_installed_tables)
     mtp.release_persistent_capture()
     assert mtp._spec_costs is None and mtp._spec_plain_cost is None
+    # every warmed decode bucket gets its own plain line, timed at 0 and at the top
+    mtp = mh.build_mtp_model(adapter, monkeypatch, warm=False, env={"GEMMA4_ASSISTANT_MODEL": assistant_dir})
+    mtp.tt_supported_decode_batch_sizes = (1, 32)
+    mh.stub_drafter_modules(monkeypatch, mtp.events, costs=costs, plain_ms=21.5)
+    mh._warmup(mtp, True)
+    assert [e[1:3] for e in _names(mtp, "time_plain")] == [(1, 0), (1, top), (32, 0), (32, top)]
+    assert _names(mtp, "time_plain")[0][3] == [[0] * 8]
+    assert mtp._spec_plain_cost == {1: CostLine(0, 20.5, top, 20.5), 32: CostLine(0, 21.5, top, 21.5)}
 
 
 def _mtp_the_plain_step_cost_from_the_env_skips_the_timed_replay(
@@ -3721,7 +3834,7 @@ def _mtp_the_plain_step_cost_from_the_env_skips_the_timed_replay(
         mtp = mh.build_mtp_model(adapter, monkeypatch, warm=False, env=env)
         mh.stub_drafter_modules(monkeypatch, mtp.events, costs={("step", (1, 5), 1024): 50.0})
         mh._warmup(mtp, True)
-        assert _names(mtp, "time_plain") == [] and mtp._spec_plain_cost == line, raw
+        assert _names(mtp, "time_plain") == [] and mtp._spec_plain_cost == {32: line}, raw
 
 
 def _mtp_adaptive_off_measures_nothing_at_warmup(adapter, monkeypatch, assistant_dir=None, expect_error=None):
