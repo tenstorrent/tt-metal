@@ -34,7 +34,8 @@ from models.demos.blackhole.embedding_gemma2.tt.config import (
     act_memory_config,
     compute_kernel_config_hifi4,
 )
-from models.demos.blackhole.embedding_gemma2.tt.linear import WEIGHT_DTYPE, linear
+from models.demos.blackhole.embedding_gemma2.tt.linear import linear
+from models.demos.blackhole.embedding_gemma2.tt.precision import TextPrecision, resolve_precision
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.rope import RotaryTables
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight, substate
@@ -65,7 +66,7 @@ def _sdpa_heuristic(head_dim: int, batch: int, num_heads: int, seq_len: int, num
 
 
 def sdpa_program_config(
-    head_dim: int, seq_len: int, batch: int = 1, num_heads: int = 4, device_grid=None
+    head_dim: int, seq_len: int, batch: int = 1, num_heads: int = 4, device_grid=None, exp_approx: bool = False
 ) -> ttnn.SDPAProgramConfig:
     """Chunk sizes keep every core busy: the op parallelizes over batch x Q heads x Q chunks.
 
@@ -83,7 +84,7 @@ def sdpa_program_config(
         compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
         q_chunk_size=min(q_chunk, seq_len),
         k_chunk_size=min(k_chunk, seq_len),
-        exp_approx_mode=False,
+        exp_approx_mode=exp_approx,
     )
 
 
@@ -98,6 +99,7 @@ class Attention(LightweightModule):
         v_norm: RMSNorm,
         rope: RotaryTables,
         masks=None,
+        precision: TextPrecision | None = None,
     ):
         super().__init__()
         self.config = config
@@ -109,14 +111,15 @@ class Attention(LightweightModule):
         self.rope = rope
         self.masks = masks  # AttentionMasks (shared), source of the sliding-layer SDPA block map
         self.compute_kernel_config = compute_kernel_config_hifi4()
-        # HiFi2 + fp32 accumulation: 2.0-2.3x faster than HiFi4 at the tuned chunks, PCC vs an fp32
-        # golden 0.99990+ (E5a sdpa_sweep); fp32_dest_acc off was rejected (PCC 0.9988-0.9995).
-        self.sdpa_compute_kernel_config = ttnn.types.BlackholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        precision = precision or resolve_precision(None).text
+        i = config.layer_idx
+        self.qkv_policy = precision.matmul("attn_qkv", i)
+        self.o_policy = precision.matmul("attn_o", i)
+        self.act_dtype = precision.activation_ttnn_dtype
+        # E5a default: HiFi2 + fp32 accumulation, 2.0-2.3x faster than HiFi4 at the tuned chunks,
+        # PCC vs an fp32 golden 0.99990+ (sdpa_sweep). Fidelity / fp32 acc / exp_approx: policy.
+        self.sdpa_policy = precision.sdpa_for(i)
+        self.sdpa_compute_kernel_config = self.sdpa_policy.compute_kernel_config
 
     @classmethod
     def from_state_dict(
@@ -129,8 +132,12 @@ class Attention(LightweightModule):
         cache_dir: Path | None = None,
         name: str = "self_attn",
         masks=None,
+        precision: TextPrecision | None = None,
     ) -> "Attention":
-        """`state_dict` holds the HF `layers.<i>.self_attn.` sub-state."""
+        """`state_dict` holds the HF `layers.<i>.self_attn.` sub-state; `precision` the text policy
+        (None: the default precision file)."""
+        precision = precision or resolve_precision(None).text
+        i = config.layer_idx
         H = config.hidden_size
         wq, wk, wv, wo = (state_dict[f"{p}_proj.weight"] for p in ("q", "k", "v", "o"))
         expect = {
@@ -147,20 +154,35 @@ class Attention(LightweightModule):
             device,
             cache_dir=cache_dir,
             name=f"{name}.wqkv.weight",
-            dtype=WEIGHT_DTYPE,
+            dtype=precision.matmul("attn_qkv", i).ttnn_dtype,
         )
         wo_t = as_weight(
-            linear_weight(wo), device, cache_dir=cache_dir, name=f"{name}.o_proj.weight", dtype=WEIGHT_DTYPE
+            linear_weight(wo),
+            device,
+            cache_dir=cache_dir,
+            name=f"{name}.o_proj.weight",
+            dtype=precision.matmul("attn_o", i).ttnn_dtype,
         )
         hd_norm = RMSNormConfig(dim=config.head_dim, eps=config.rms_norm_eps)
+        ckc_norm = precision.norms.compute_kernel_config
         q_norm = RMSNorm.from_state_dict(
-            substate(state_dict, "q_norm"), hd_norm, device, cache_dir=cache_dir, name=f"{name}.q_norm"
+            substate(state_dict, "q_norm"),
+            hd_norm,
+            device,
+            cache_dir=cache_dir,
+            name=f"{name}.q_norm",
+            compute_kernel_config=ckc_norm,
         )
         k_norm = RMSNorm.from_state_dict(
-            substate(state_dict, "k_norm"), hd_norm, device, cache_dir=cache_dir, name=f"{name}.k_norm"
+            substate(state_dict, "k_norm"),
+            hd_norm,
+            device,
+            cache_dir=cache_dir,
+            name=f"{name}.k_norm",
+            compute_kernel_config=ckc_norm,
         )
-        v_norm = RMSNorm(RMSNormConfig(dim=config.head_dim, eps=config.rms_norm_eps, with_scale=False), None)
-        return cls(config, wqkv, wo_t, q_norm, k_norm, v_norm, rope, masks=masks)
+        v_norm = RMSNorm(RMSNormConfig(dim=config.head_dim, eps=config.rms_norm_eps, with_scale=False), None, ckc_norm)
+        return cls(config, wqkv, wo_t, q_norm, k_norm, v_norm, rope, masks=masks, precision=precision)
 
     def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor, out_memory_config=None) -> ttnn.Tensor:
         cfg = self.config
@@ -169,7 +191,7 @@ class Attention(LightweightModule):
         # intermediates in L1 when they fit (config.act_memory_config); the q tensor is the largest
         mem_qkv = act_memory_config(dev, B, S, cfg.q_width + 2 * cfg.kv_width)
         mem_q = mem_kv = act_memory_config(dev, B, S, cfg.q_width)  # one config for the q/k/v heads
-        xqkv = linear(x, self.wqkv, memory_config=mem_qkv)
+        xqkv = linear(x, self.wqkv, memory_config=mem_qkv, policy=self.qkv_policy, dtype=self.act_dtype)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=cfg.num_heads,
@@ -204,7 +226,12 @@ class Attention(LightweightModule):
             attn_mask_block_map=block_map,
             scale=cfg.scaling,
             program_config=sdpa_program_config(
-                cfg.head_dim, S, x.shape[0], cfg.num_heads, x.device().compute_with_storage_grid_size()
+                cfg.head_dim,
+                S,
+                x.shape[0],
+                cfg.num_heads,
+                x.device().compute_with_storage_grid_size(),
+                exp_approx=self.sdpa_policy.exp_approx,
             ),
             compute_kernel_config=self.sdpa_compute_kernel_config,
             memory_config=mem_q,
@@ -216,6 +243,6 @@ class Attention(LightweightModule):
 
         if out_memory_config is None:
             out_memory_config = act_memory_config(dev, B, S, cfg.hidden_size)
-        out = linear(o_cat, self.wo, memory_config=out_memory_config)
+        out = linear(o_cat, self.wo, memory_config=out_memory_config, policy=self.o_policy, dtype=self.act_dtype)
         ttnn.deallocate(o_cat)
         return out

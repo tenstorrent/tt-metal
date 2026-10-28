@@ -183,13 +183,17 @@ class EmbeddingGemma2(LightweightModule):
         vision: bool = True,
         audio: bool = True,
         cache_dir: Path | None = None,
+        precision=None,
     ) -> "EmbeddingGemma2":
         """Load the text tower and (optionally) the vision and audio towers. Open the device with a
-        trace region (the tests use 256 MiB for the full-model traces)."""
+        trace region (the tests use 256 MiB for the full-model traces). `precision`: text-tower
+        precision policy (None: the selected config, see tt/precision.py)."""
         import json
 
         snapshot = resolve_snapshot(model_id_or_path)
-        text = TextEncoder.from_pretrained(device, str(snapshot), max_seq_len=max_seq_len, cache_dir=cache_dir)
+        text = TextEncoder.from_pretrained(
+            device, str(snapshot), max_seq_len=max_seq_len, cache_dir=cache_dir, precision=precision
+        )
         venc = VisionEncoder.from_pretrained(device, str(snapshot), cache_dir=cache_dir) if vision else None
         aenc = AudioEncoder.from_pretrained(device, str(snapshot), cache_dir=cache_dir) if audio else None
         cfg = json.loads((snapshot / "config.json").read_text())

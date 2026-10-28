@@ -69,14 +69,17 @@ class TextEncoder(LightweightModule):
         max_seq_len: int = 8192,
         cache_dir: Path | None = None,
         state_dict: dict[str, torch.Tensor] | None = None,
+        precision=None,
     ) -> "TextEncoder":
+        """`precision`: None loads the selected precision config (tt/precision.py); a path, dict or
+        PrecisionConfig overrides it (sweep / safe-baseline override)."""
         snapshot = resolve_snapshot(model_id_or_path)
         config = TextModelConfig.from_hf(load_text_config_dict(snapshot), max_seq_len=max_seq_len)
         if state_dict is None:
             state_dict = load_text_state_dict(snapshot)
         cache_dir = Path(cache_dir) if cache_dir is not None else default_weight_cache_dir() / snapshot.name
         cache_dir.mkdir(parents=True, exist_ok=True)
-        model = TextModel.from_state_dict(state_dict, config, device, cache_dir=cache_dir)
+        model = TextModel.from_state_dict(state_dict, config, device, cache_dir=cache_dir, precision=precision)
         return cls(model, device)
 
     # ---------------------------------------------------------------- host side

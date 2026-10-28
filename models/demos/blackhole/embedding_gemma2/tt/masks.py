@@ -45,6 +45,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.config import FULL, MASK_NEG, SLIDING
 
+# E5a default; the text model passes its precision policy's `mask_dtype`
 MASK_DTYPE = ttnn.bfloat4_b
 BLOCK_MAP_MIN_SEQ = int(os.environ.get("EG2_BLOCK_MAP_MIN_SEQ", "4096"))
 
@@ -73,9 +74,10 @@ def band_block_map(seq_len: int, radius: int, q_chunk: int, k_chunk: int) -> tor
 
 
 class AttentionMasks(LightweightModule):
-    def __init__(self, device, sliding_window: int, sliding_head_dim: int = 256, num_heads: int = 4):
+    def __init__(self, device, sliding_window: int, sliding_head_dim: int = 256, num_heads: int = 4, dtype=MASK_DTYPE):
         super().__init__()
         self.device = device
+        self.dtype = dtype
         self.sliding_window = sliding_window
         self.sliding_head_dim = sliding_head_dim
         self.num_heads = num_heads
@@ -99,7 +101,7 @@ class AttentionMasks(LightweightModule):
             return
         self.bands[seq_len] = ttnn.from_torch(
             band_mask(seq_len, self.sliding_window),
-            dtype=MASK_DTYPE,
+            dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -131,11 +133,11 @@ class AttentionMasks(LightweightModule):
             raise RuntimeError(f"AttentionMasks.prepare({S}) must run before forward (setup-time upload)")
         bias = self.key_bias(keep)
         dram = ttnn.DRAM_MEMORY_CONFIG
-        full = ttnn.add(self.zero_cols[S], bias, dtype=MASK_DTYPE, memory_config=dram)
+        full = ttnn.add(self.zero_cols[S], bias, dtype=self.dtype, memory_config=dram)
         band = self.bands[S]
         if band is None:
             sliding = full
         else:
-            sliding = ttnn.add(band, bias, dtype=MASK_DTYPE, memory_config=dram)
+            sliding = ttnn.add(band, bias, dtype=self.dtype, memory_config=dram)
         ttnn.deallocate(bias)
         return {SLIDING: sliding, FULL: full}

@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Text-tower projections: bfp8 weights, HiFi2, measured program configs (E5a `mm_sweep`).
+"""Text-tower projections: measured program configs (E5a `mm_sweep`), precision from the policy.
 
-Policy (doc/optimized_text/README.md, "Matmul search"):
-    weights      bfloat8_b (the checkpoint is bf16; per-op PCC vs fp32 0.9999+). bfp4 was rejected:
-                 per-op PCC 0.993-0.994 on every role, below the 0.995 per-layer bar.
-    fidelity     HiFi2. LoFi was 0-5 % faster and lost a further 5e-5 PCC per op; left for E6.
+Weight dtype, compute fidelity and fp32 accumulation per weight group come from the precision
+policy (`tt/precision.py`, `doc/datatype_sweep/`): text modules pass a `MatmulPolicy` as `policy=`.
+Without one (vision tower callers) the call uses the E5a default: HiFi2, fp32 accumulation
+(`EG2_MM_FP32`), bf16 output.
+
+Program configs (doc/optimized_text/README.md, "Matmul search"):
     wide roles   (N >= 768 or K == 512: QKV, MLP gate/up, PLE, head) 2D multicast on the
                  full grid, in0_block_w 8 (2x faster than the default config at M = 512).
     deep roles   (K >= 1024 and N == 512: attention out, MLP down) at M >= 2048:
@@ -24,8 +26,8 @@ from functools import lru_cache
 
 import ttnn
 
-WEIGHT_DTYPE = ttnn.bfloat16 if os.environ.get("EG2_WEIGHT_DTYPE") == "bf16" else ttnn.bfloat8_b
-# fp32 dest accumulation for the 2D-multicast roles (minimal_matmul always accumulates in fp32).
+# Default (no policy) fp32 dest accumulation for the 2D-multicast roles; minimal_matmul without a
+# policy always accumulates in fp32. Text calls take both from their MatmulPolicy.
 FP32_ACC = os.environ.get("EG2_MM_FP32", "1") == "1"
 
 
@@ -107,10 +109,18 @@ def mcast2d_config(M: int, K: int, N: int, gx: int, gy: int, activation: str | N
 GELU_IN_MUL_MAX_TOKENS = int(os.environ.get("EG2_GELU_IN_MUL_MAX_TOKENS", "1024"))
 
 
-def gated_product(x: ttnn.Tensor, w_gate: ttnn.Tensor, other: ttnn.Tensor, *, memory_config) -> ttnn.Tensor:
-    """gelu_tanh(x @ w_gate) * other, x [B, 1, S, K]."""
+def gated_product(
+    x: ttnn.Tensor,
+    w_gate: ttnn.Tensor,
+    other: ttnn.Tensor,
+    *,
+    memory_config,
+    policy=None,
+    dtype=ttnn.bfloat16,
+) -> ttnn.Tensor:
+    """gelu_tanh(x @ w_gate) * other, x [B, 1, S, K]. `policy` / `dtype` as in `linear`."""
     if x.shape[0] * x.shape[2] <= GELU_IN_MUL_MAX_TOKENS:
-        gate = linear(x, w_gate, memory_config=memory_config)
+        gate = linear(x, w_gate, memory_config=memory_config, policy=policy, dtype=dtype)
         out = ttnn.multiply(
             gate,
             other,
@@ -118,7 +128,7 @@ def gated_product(x: ttnn.Tensor, w_gate: ttnn.Tensor, other: ttnn.Tensor, *, me
             input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)],
         )
     else:
-        gate = linear(x, w_gate, activation="gelu_tanh", memory_config=memory_config)
+        gate = linear(x, w_gate, activation="gelu_tanh", memory_config=memory_config, policy=policy, dtype=dtype)
         out = ttnn.multiply(gate, other, memory_config=memory_config)
     ttnn.deallocate(gate)
     return out
@@ -130,8 +140,19 @@ def linear(
     *,
     activation: str | None = None,
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    policy=None,
+    dtype=ttnn.bfloat16,
 ) -> ttnn.Tensor:
-    """x [B, 1, S, K] @ w [1, 1, K, N] -> [B, 1, S, N] bf16 TILE (optionally gelu_tanh fused)."""
+    """x [B, 1, S, K] @ w [1, 1, K, N] -> [B, 1, S, N] `dtype` TILE (optionally gelu_tanh fused).
+
+    `policy` (a `precision.MatmulPolicy`) sets the compute fidelity and fp32 accumulation; the
+    weight dtype is the one `w` was built with (`policy.dtype` at construction). None: HiFi2,
+    fp32 accumulation `FP32_ACC` (2D config) / always (minimal_matmul)."""
+    if policy is None:
+        fp32_acc, ckc_2d, ckc_minimal = FP32_ACC, _ckc(FP32_ACC), _ckc(True)
+    else:
+        fp32_acc = policy.fp32_acc
+        ckc_2d = ckc_minimal = policy.compute_kernel_config
     shape = x.shape
     B, S, K = shape[0], shape[-2], shape[-1]
     N = w.shape[-1]
@@ -143,24 +164,24 @@ def linear(
     # mm_grid sweep); the 2D config wins elsewhere.
     # minimal_matmul's fused activation is slow (PLE gate + gelu at M=4096: 218 us vs 40 us without).
     if activation is not None or not ((N <= 768 and M >= 2048) or M >= 8192):
-        pc = mcast2d_config(M, K, N, grid.x, grid.y, activation, FP32_ACC)
+        pc = mcast2d_config(M, K, N, grid.x, grid.y, activation, fp32_acc)
     if pc is None:
         out = ttnn.experimental.minimal_matmul(
             x2,
             w,
             fused_activation=_activation(activation),
-            compute_kernel_config=_ckc(True),
+            compute_kernel_config=ckc_minimal,
             memory_config=memory_config,
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
         )
     else:
         out = ttnn.linear(
             x2,
             w,
             program_config=pc,
-            compute_kernel_config=_ckc(FP32_ACC),
+            compute_kernel_config=ckc_2d,
             memory_config=memory_config,
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
         )
     if x2 is not x:
         out = ttnn.reshape(out, (B, shape[1], S, N))

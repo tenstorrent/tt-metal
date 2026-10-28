@@ -31,6 +31,7 @@ from models.demos.blackhole.embedding_gemma2.tt.config import (
 )
 from models.demos.blackhole.embedding_gemma2.tt.mlp import MLP
 from models.demos.blackhole.embedding_gemma2.tt.per_layer_input import PerLayerInputBlock
+from models.demos.blackhole.embedding_gemma2.tt.precision import TextPrecision, resolve_precision
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.rope import RotaryTables
 from models.demos.blackhole.embedding_gemma2.tt.weights import substate
@@ -47,8 +48,10 @@ class EncoderLayer(LightweightModule):
         mlp: MLP,
         ple_block: PerLayerInputBlock,
         layer_scalar: float,
+        residual_dtype: str = "bf16",
     ):
         super().__init__()
+        self.residual_dtype = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[residual_dtype]
         self.config = config
         self.input_layernorm = norms["input_layernorm"]
         self.post_attention_layernorm = norms["post_attention_layernorm"]
@@ -69,14 +72,22 @@ class EncoderLayer(LightweightModule):
         *,
         cache_dir: Path | None = None,
         masks=None,
+        precision: TextPrecision | None = None,
     ) -> "EncoderLayer":
-        """`state_dict` holds the HF `layers.<i>.` sub-state; `masks` the shared AttentionMasks."""
+        """`state_dict` holds the HF `layers.<i>.` sub-state; `masks` the shared AttentionMasks;
+        `precision` the text precision policy (None: the default precision file)."""
+        precision = precision or resolve_precision(None).text
         i = config.layer_idx
         prefix = f"layers.{i}"
         norm_cfg = RMSNormConfig(dim=config.hidden_size, eps=config.rms_norm_eps)
         norms = {
             n: RMSNorm.from_state_dict(
-                substate(state_dict, n), norm_cfg, device, cache_dir=cache_dir, name=f"{prefix}.{n}"
+                substate(state_dict, n),
+                norm_cfg,
+                device,
+                cache_dir=cache_dir,
+                name=f"{prefix}.{n}",
+                compute_kernel_config=precision.norms.compute_kernel_config,
             )
             for n in _NORMS
         }
@@ -88,17 +99,30 @@ class EncoderLayer(LightweightModule):
             cache_dir=cache_dir,
             name=f"{prefix}.self_attn",
             masks=masks,
+            precision=precision,
         )
         mlp = MLP.from_state_dict(
-            substate(state_dict, "mlp"), config.mlp, device, cache_dir=cache_dir, name=f"{prefix}.mlp", optimized=True
+            substate(state_dict, "mlp"),
+            config.mlp,
+            device,
+            cache_dir=cache_dir,
+            name=f"{prefix}.mlp",
+            optimized=True,
+            precision=precision,
+            layer_idx=i,
         )
         ple_block = PerLayerInputBlock.from_state_dict(
-            substate(state_dict, "ple_block"), config, device, cache_dir=cache_dir, name=f"{prefix}.ple_block"
+            substate(state_dict, "ple_block"),
+            config,
+            device,
+            cache_dir=cache_dir,
+            name=f"{prefix}.ple_block",
+            precision=precision,
         )
         scalar = state_dict["layer_scalar"]
         if scalar.numel() != 1:
             raise ValueError(f"{prefix}.layer_scalar: expected 1 element, got {tuple(scalar.shape)}")
-        return cls(config, norms, attention, mlp, ple_block, float(scalar.float().item()))
+        return cls(config, norms, attention, mlp, ple_block, float(scalar.float().item()), precision.residual_dtype)
 
     def forward(self, x: ttnn.Tensor, per_layer_input: ttnn.Tensor, mask: ttnn.Tensor) -> ttnn.Tensor:
         B, S, H = x.shape[0], x.shape[2], x.shape[3]
@@ -109,7 +133,8 @@ class EncoderLayer(LightweightModule):
         ttnn.deallocate(h)
         a_n = self.post_attention_layernorm(a, memory_config=mem)
         ttnn.deallocate(a)
-        h1 = ttnn.add(x, a_n, memory_config=dram)
+        rdt = self.residual_dtype
+        h1 = ttnn.add(x, a_n, dtype=rdt, memory_config=dram)
         ttnn.deallocate(a_n)
 
         f = self.pre_feedforward_layernorm(h1, memory_config=mem)
@@ -117,7 +142,7 @@ class EncoderLayer(LightweightModule):
         ttnn.deallocate(f)
         m_n = self.post_feedforward_layernorm(m, memory_config=mem)
         ttnn.deallocate(m)
-        h2 = ttnn.add(h1, m_n, memory_config=dram)
+        h2 = ttnn.add(h1, m_n, dtype=rdt, memory_config=dram)
         ttnn.deallocate(h1)
         ttnn.deallocate(m_n)
 

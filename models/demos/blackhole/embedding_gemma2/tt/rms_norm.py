@@ -9,7 +9,8 @@
 Contract
     input   any-rank TILE tensor whose last dim == config.dim (bf16, DRAM interleaved)
     output  same shape / layout / dtype
-    The reduction runs with HiFi4 + fp32 dest accumulation to match the fp32 HF norm.
+    The reduction runs with HiFi4 + fp32 dest accumulation to match the fp32 HF norm, unless the
+    caller passes `compute_kernel_config` (the text tower passes its precision policy's norms).
 """
 
 from __future__ import annotations
@@ -25,13 +26,13 @@ from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, norm_w
 
 
 class RMSNorm(LightweightModule):
-    def __init__(self, config: RMSNormConfig, weight: ttnn.Tensor | None):
+    def __init__(self, config: RMSNormConfig, weight: ttnn.Tensor | None, compute_kernel_config=None):
         super().__init__()
         if config.with_scale and weight is None:
             raise ValueError("RMSNorm with_scale=True needs a weight")
         self.config = config
         self.weight = weight
-        self.compute_kernel_config = compute_kernel_config_norm()
+        self.compute_kernel_config = compute_kernel_config or compute_kernel_config_norm()
 
     @classmethod
     def from_state_dict(
@@ -42,6 +43,7 @@ class RMSNorm(LightweightModule):
         *,
         cache_dir: Path | None = None,
         name: str = "norm",
+        compute_kernel_config=None,
     ) -> "RMSNorm":
         weight = None
         if config.with_scale:
@@ -55,7 +57,7 @@ class RMSNorm(LightweightModule):
                 name=f"{name}.weight",
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
-        return cls(config, weight)
+        return cls(config, weight, compute_kernel_config)
 
     def forward(self, x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
         return ttnn.rms_norm(

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "config_id": "base_bfp8_hifi2",
+  "description": "E5a text policy (pre-sweep baseline): bfp8 weights, HiFi2 + fp32 accumulation matmuls, HiFi2 + fp32 SDPA, HiFi4 norms, bf16 activations and residual, bfp4 masks.",
+  "text": {
+    "weights": {
+      "attn_qkv": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true},
+      "attn_o": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true},
+      "mlp_gate_up": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true},
+      "mlp_down": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true},
+      "ple_proj": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true},
+      "ple_block": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true},
+      "final_proj": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true}
+    },
+    "layer_exceptions": [],
+    "sdpa": {"fidelity": "HiFi2", "fp32_acc": true, "exp_approx": false},
+    "norms": {"fidelity": "HiFi4", "fp32_acc": true},
+    "activation_dtype": "bf16",
+    "residual_dtype": "bf16",
+    "mask_dtype": "bfp4"
+  },
+  "vision": {
+    "status": "recorded, not consumed in E6a (E6b wires it); values are the hard-coded E5b policy",
+    "weights": {"attn_qkv": "bf16", "attn_o": "bf16", "mlp": "bf16", "patch_embedder": "bf16", "projector": "bf16"},
+    "matmul_fidelity": "HiFi2",
+    "matmul_fp32_acc": true,
+    "sdpa": {"fidelity": "HiFi2", "fp32_acc": true, "exp_approx": false},
+    "norms": {"fidelity": "HiFi4", "fp32_acc": true},
+    "mask_dtype": "bfp4"
+  },
+  "audio": {
+    "status": "recorded, not consumed in E6a (E6b wires it); values are the hard-coded E5c policy",
+    "weights": "bf16",
+    "matmul_fidelity": "HiFi4",
+    "matmul_fp32_acc": true,
+    "attention": "q / k / v / logits / softmax in fp32",
+    "norms": {"fidelity": "HiFi4", "fp32_acc": true}
+  },
+  "kv_cache_dtype": "n/a: encoder, single chip (no KV cache)",
+  "ccl_dtype": "n/a: encoder, single chip (no CCL)",
+  "logits_dtype": "n/a: encoder, single chip (pooled fp32 embedding, no logits)",
+  "sampling": "n/a: encoder, single chip (no sampling)"
+}

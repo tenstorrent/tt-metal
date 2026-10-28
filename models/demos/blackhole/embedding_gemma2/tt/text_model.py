@@ -34,10 +34,11 @@ from models.demos.blackhole.embedding_gemma2.tt.config import (
 )
 from models.demos.blackhole.embedding_gemma2.tt.embedding import TextEmbedding
 from models.demos.blackhole.embedding_gemma2.tt.encoder_layer import EncoderLayer
-from models.demos.blackhole.embedding_gemma2.tt.linear import WEIGHT_DTYPE, linear
+from models.demos.blackhole.embedding_gemma2.tt.linear import linear
 from models.demos.blackhole.embedding_gemma2.tt.masks import AttentionMasks
 from models.demos.blackhole.embedding_gemma2.tt.per_layer_input import PerLayerInput
 from models.demos.blackhole.embedding_gemma2.tt.pooler import Pooler
+from models.demos.blackhole.embedding_gemma2.tt.precision import PrecisionConfig, resolve_precision
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.rope import RotaryTables
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight, substate
@@ -55,8 +56,11 @@ class TextModel(LightweightModule):
         w_out: ttnn.Tensor,
         rope: RotaryTables,
         masks: AttentionMasks,
+        precision: PrecisionConfig | None = None,
     ):
         super().__init__()
+        self.precision = precision or resolve_precision(None)
+        self.out_policy = self.precision.text.matmul("final_proj")
         self.config = config
         self.device = device
         self.embedding = embedding
@@ -78,11 +82,16 @@ class TextModel(LightweightModule):
         *,
         cache_dir: Path | None = None,
         num_layers: int | None = None,
+        precision=None,
     ) -> "TextModel":
         """`state_dict`: HF text-tower keys without the `language_model.` prefix.
 
         num_layers < config.num_layers builds a truncated stack (debug / per-layer tests only).
+        precision: None (default) loads `doc/datatype_sweep/selected_precision_config.json` (or the
+        file named by EMBEDDING_GEMMA2_PRECISION); also a path, a dict or a PrecisionConfig.
         """
+        precision = resolve_precision(precision)
+        tp = precision.text
         n = config.num_layers if num_layers is None else num_layers
         rope = RotaryTables.build(config, device)
         masks = AttentionMasks(
@@ -90,14 +99,21 @@ class TextModel(LightweightModule):
             config.sliding_window,
             sliding_head_dim=config.head_dim_for(SLIDING),
             num_heads=config.layers[0].attention.num_heads,
+            dtype=tp.mask_ttnn_dtype,
         )
         embedding = TextEmbedding.from_state_dict(state_dict, config, device, cache_dir=cache_dir)
         ple = PerLayerInput.from_state_dict(
-            substate(state_dict, "ple"), config.per_layer_input, device, cache_dir=cache_dir
+            substate(state_dict, "ple"), config.per_layer_input, device, cache_dir=cache_dir, precision=tp
         )
         layers = [
             EncoderLayer.from_state_dict(
-                substate(state_dict, f"layers.{i}"), config.layers[i], device, rope, cache_dir=cache_dir, masks=masks
+                substate(state_dict, f"layers.{i}"),
+                config.layers[i],
+                device,
+                rope,
+                cache_dir=cache_dir,
+                masks=masks,
+                precision=tp,
             )
             for i in range(n)
         ]
@@ -107,14 +123,19 @@ class TextModel(LightweightModule):
             device,
             cache_dir=cache_dir,
             name="norm",
+            compute_kernel_config=tp.norms.compute_kernel_config,
         )
         w = state_dict["embedding_projection.weight"]
         if tuple(w.shape) != (config.embedding_dim, config.hidden_size):
             raise ValueError(f"embedding_projection: unexpected shape {tuple(w.shape)}")
         w_out = as_weight(
-            linear_weight(w), device, cache_dir=cache_dir, name="embedding_projection.weight", dtype=WEIGHT_DTYPE
+            linear_weight(w),
+            device,
+            cache_dir=cache_dir,
+            name="embedding_projection.weight",
+            dtype=tp.matmul("final_proj").ttnn_dtype,
         )
-        return cls(config, device, embedding, ple, layers, norm, w_out, rope, masks)
+        return cls(config, device, embedding, ple, layers, norm, w_out, rope, masks, precision)
 
     def prepare(self, seq_len: int) -> None:
         """Setup-time per-bucket constants (band mask). Must run before forward / trace capture."""
@@ -142,7 +163,13 @@ class TextModel(LightweightModule):
     def head(self, h: ttnn.Tensor) -> ttnn.Tensor:
         """Final norm + per-token 512->768 projection. [B,1,S,768]."""
         n = self.norm(h)
-        out = linear(n, self.w_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = linear(
+            n,
+            self.w_out,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            policy=self.out_policy,
+            dtype=self.precision.text.activation_ttnn_dtype,
+        )
         ttnn.deallocate(n)
         return out
 
