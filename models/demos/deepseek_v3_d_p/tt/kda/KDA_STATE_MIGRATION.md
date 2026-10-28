@@ -31,7 +31,7 @@ maps configs back to layers with `cache_kind` / `cache_layer_rows`.
 
 with `H_local = 96 / TP`, `D = 128`, `K - 1 = 3`. Heads are TP-sharded; every SP row holds a replica.
 
-The contract form is a second copy the engine owns (`KdaStates`, allocated by
+The contract form is the carries' only store, owned by the engine (`KdaStates`, allocated by
 `KimiK3Adapter.allocate_kv_cache`, one consolidated slab per state kind so a `KvCacheStage` can name
 it by one base address):
 

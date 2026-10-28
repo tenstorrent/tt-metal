@@ -5,7 +5,8 @@
 ``ttKDA`` reads and writes its state in the *native* form: ``recurrent`` ``[1, H_local, D, D]`` FP32
 TILE and ``convolution`` ``[1, K-1, 3*H_local*D]`` BF16 ROW_MAJOR, both interleaved DRAM, heads
 sharded across TP and the complete state replicated across SP. The kernels accept nothing else, so
-the native carries stay as they are and migration reads a second copy in the *contract* form.
+a layer runs on one native scratch carry, loaded from and stored back to the *contract* form, which is
+the carries' only store and what migration reads.
 
 The contract fixes what one migration segment is and requires every segment to be one contiguous
 DRAM span, round-robin over the DRAM banks exactly like the kvpe cache:
@@ -444,7 +445,7 @@ def _zero_fill(tensor: ttnn.Tensor) -> None:
 
 @dataclass
 class KdaStates:
-    """The engine-owned contract copy of every KDA layer's state on this rank.
+    """The engine-owned store of every KDA layer's state on this rank, in the contract form.
 
     ``recurrent`` and ``convolution`` are the two slabs described in the module docstring; both are
     single allocations so a ``KvCacheStage`` can name each by one base address. ``layer_ids`` are
