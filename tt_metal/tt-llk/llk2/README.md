@@ -19,7 +19,8 @@ inc/common/                 arch-independent, always on the include path
 inc/blackhole/              one arch; the build adds inc/common and one inc/<arch>
     resolver/               each op's OpApi: accepts, options, work, plan
     llk_lib/                one header per thread or op: unpack.h (every unpack op), matmul.h, eltwise_binary.h,
-                            copy.h and vec.h (math or pack), math_common.h (what every math configure shares)
+                            copy.h and vec.h (math or pack), pack.h (pack), dest.h (Dest sync),
+                            dataflow_buffer.h, math_common.h (what every math configure shares)
 tests/                      an out-of-tree consumer of the tt-llk test harness
 ```
 
@@ -35,8 +36,11 @@ include path.
 | `copy` | `compute_api/copy.h` | `llk_lib/unpack.h` (incl. unpack to Dest), `llk_lib/copy.h` | `test_llk2_copy.py` |
 | `vec_silu`, `vec_tanh`, `vec_gelu`, `vec_gelu_tanh`, `vec_relu_max`, `vec_sigmoid`, `vec_hardsigmoid`, `vec_hardtanh`, `vec_selu`, `vec_softplus` | `compute_api/vec.h` | `llk_lib/vec.h` | `test_llk2_vec.py` |
 | dataflow buffers (`wait_front`, `reserve_back`, `release`) | `tensor/dataflow_buffer.h` | `llk_lib/dataflow_buffer.h` | `test_llk2_dfb.py` |
+| `pack` (`relu`, `l1_acc`) | `compute_api/pack.h` | `llk_lib/pack.h` | `test_llk2_pack.py`, `test_llk2_matmul.py` |
+| Dest sync | `compute_api/dest.h` | `llk_lib/dest.h` | every test |
 
-Pack and the math-to-pack Dest sync still use today's LLKs in the tests.
+A test kernel takes a Dest section, runs ops into it and packs it with the Dest sync API (`compute_api/dest.h`):
+`dest_acquire`, `dest_commit`, `pack`, `dest_release`. No init call.
 
 ## Running the tests
 

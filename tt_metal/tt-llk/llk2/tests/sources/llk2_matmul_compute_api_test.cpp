@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute API test: llk2::matmul on Tensors, one kernel body for all three threads.
-// Math-to-pack Dest sync and the pack itself still use today's LLKs; matmul is the only 2.0 op so far.
+// Compute API test: llk2::matmul on Tensors, one kernel body for all three threads. Only Tensors, the Compute API
+// (matmul, pack) and the Dest sync API: no LLK, init or per-thread code.
 
 #include <cstdint>
 
@@ -20,56 +20,37 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #define LLK2_DEST_FP32     is_fp32_dest_acc_en
 #define LLK2_MATH_FIDELITY static_cast<std::uint32_t>(MATH_FIDELITY)
+#include "compute_api/dest.h"
 #include "compute_api/matmul.h"
-
-#ifdef LLK_TRISC_MATH
-#include "llk_math_common.h"
-#endif
-#ifdef LLK_TRISC_PACK
-#include "llk_lib_pack_wrappers.h"
-#include "llk_pack_common.h"
-#endif
+#include "compute_api/pack.h"
 
 constexpr DataFormat in0_format  = static_cast<DataFormat>(UNPACK_A_IN);
 constexpr DataFormat in1_format  = static_cast<DataFormat>(UNPACK_B_IN);
+constexpr DataFormat out_format  = static_cast<DataFormat>(PACK_OUT);
 constexpr DataFormat dest_format = llk2::kernel_settings.dest_fp32 ? DataFormat::Float32 : DataFormat::Float16_b;
 
-// The Resolver must pick the register formats the harness picked for the same test.
 inline constexpr auto& in0_spec = llk2::l1_spec<RT_DIM * llk2::default_tile_dim, KT_DIM * llk2::default_tile_dim, in0_format>;
 inline constexpr auto& in1_spec = llk2::l1_spec<KT_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, in1_format>;
+inline constexpr auto& out_spec = llk2::l1_spec<RT_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, out_format>;
+inline constexpr auto& acc_spec = llk2::dst_spec<RT_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, dest_format>; // [M, N] in Dest
+
+// The Resolver must pick the register formats the harness picked for the same test.
 static_assert(llk2::resolved<llk2::matmul_op, in0_spec, in1_spec, llk2::matmul_modifiers {}>.plan.in0.writes == static_cast<DataFormat>(UNPACK_A_OUT));
 static_assert(llk2::resolved<llk2::matmul_op, in0_spec, in1_spec, llk2::matmul_modifiers {}>.plan.in1.writes == static_cast<DataFormat>(UNPACK_B_OUT));
+// And the packer's input format, except where pack starts from the Dest format and the harness from the unpacker's
+// (a block-float input with a 16-bit Dest; see resolver/pack.h).
+constexpr DataFormat pack_in = llk2::resolved<llk2::pack_op, acc_spec, out_spec, llk2::pack_modifiers {}>.plan.pack.in_format;
+static_assert(pack_in == static_cast<DataFormat>(PACK_IN) || (llk2::is_bfp(static_cast<DataFormat>(PACK_IN)) && pack_in == dest_format));
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    [[maybe_unused]] const Operand& buffer_A   = params.buffer_A;
-    [[maybe_unused]] const Operand& buffer_B   = params.buffer_B;
-    [[maybe_unused]] const Operand& buffer_Res = params.buffer_Res;
+    const auto x   = llk2::Tensor<in0_spec>(params.buffer_A[0]);
+    const auto w   = llk2::Tensor<in1_spec>(params.buffer_B[0]);
+    const auto out = llk2::Tensor<out_spec>(params.buffer_Res[0]);
 
-    const auto x   = llk2::Tensor<in0_spec>(buffer_A[0]);
-    const auto w   = llk2::Tensor<in1_spec>(buffer_B[0]);
-    const auto acc = llk2::dst_tensor<RT_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, dest_format>(0); // [M, N] in Dest from row 0
-
-#ifdef LLK_TRISC_MATH
-    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_math_wait_for_dest_available_<dest_sync>();
-#endif
-
+    const auto acc = llk2::dest_acquire<acc_spec>();
     llk2::matmul(x, w, acc); // acc += x * w
-
-#ifdef LLK_TRISC_MATH
-    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
-#endif
-
-#ifdef LLK_TRISC_PACK
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
-    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_packer_wait_for_math_done_();
-    for (std::uint32_t i = 0; i < RT_DIM * CT_DIM; i++)
-    {
-        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(buffer_Res[i]));
-    }
-    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
-#endif
+    llk2::dest_commit(acc);
+    llk2::pack(acc, out);
+    llk2::dest_release(acc);
 }
