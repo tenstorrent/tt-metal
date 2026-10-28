@@ -217,8 +217,8 @@ class TtKairos:
         return {
             "B": B,
             "xs": t(xs.reshape(1, 1, B * N_TOK, K_EMB)),
-            "enc_mask": t(key_add[:, None, None, :].expand(B, 1, S_PAD, S_PAD)),  # 0 / NEG: exact in bf16
-            "cross_mask": t(key_add[:, None, None, :].expand(B, 1, D_PAD, S_PAD)),
+            "enc_mask": t(key_add[:, None, None, :].expand(B, 1, TILE, S_PAD)),  # 0 / NEG: exact in bf16; one tile row
+            "cross_mask": t(key_add[:, None, None, :].expand(B, 1, TILE, S_PAD)),  # (the softmax broadcasts it)
             "enc_rope": [tuple(map(t, rope_tables(f, pe))) for f in enc_f],
             "dec_rope": [
                 (
