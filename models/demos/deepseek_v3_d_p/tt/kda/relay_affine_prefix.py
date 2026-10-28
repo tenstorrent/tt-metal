@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The sequence-parallel prefix as a relay around the SP ring (ttnn.experimental.kda.relay_affine_prefix): each rank
-applies its own [A | B] summary to the entry state its predecessor sends and forwards the result.
+"""The sequence-parallel prefix as a relay along the SP axis (ttnn.experimental.kda.relay_affine_prefix): each rank
+applies its own [A | B] summary to the entry state its predecessor sends and forwards the result, and the last rank hands
+the final state to the first. It needs a 2D fabric: on a torus that hand-off is one hop, on a mesh it crosses the SP
+line.
 
 The relay's landing buffers are L1 tensors sharded one head per head core, at the same address on every device; they
 outlive each call, since a rank's predecessor writes into them before the rank's own call starts. Layers run one after
@@ -14,19 +16,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import ttnn
-
-# Fabric configs that wrap a mesh axis (axis 0 = rows), as ttnn::ccl::get_usable_topology sees them.
-_WRAPPED_AXES = {
-    ttnn.FabricConfig.FABRIC_2D_TORUS_XY: (0, 1),
-    ttnn.FabricConfig.FABRIC_1D_RING: (0, 1),
-    ttnn.FabricConfig.FABRIC_2D_TORUS_X: (1,),
-    ttnn.FabricConfig.FABRIC_2D_TORUS_Y: (0,),
-}
-
-
-def fabric_wraps_axis(axis: int) -> bool:
-    """Whether the current fabric config wraps mesh axis `axis` into a ring."""
-    return axis in _WRAPPED_AXES.get(ttnn.get_fabric_config(), ())
 
 
 def persistent_semaphores(mesh_device, count: int) -> list:

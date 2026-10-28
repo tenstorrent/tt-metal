@@ -23,25 +23,13 @@ constexpr uint32_t slots = get_compile_time_arg_val(7);             // unit buff
 constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(8);  // on the head cores
 constexpr auto start_args = TensorAccessorArgs<9>();
 constexpr uint32_t chunks = (unit_bytes + chunk_bytes - 1) / chunk_bytes;
+#if !defined(ROUTING_MODE) || ((ROUTING_MODE & ROUTING_MODE_2D) == 0)
+#error "relay_affine_prefix routes over a 2D fabric"
+#endif
 // One packet header per packet of each slot, out of this RISC's share of the pool.
 static_assert(
     slots * chunks <= MEM_PACKET_HEADER_POOL_SIZE / MaxDMProcessorsPerCoreType / PACKET_HEADER_MAX_SIZE,
     "the sender's packet headers exceed the packet header pool");
-
-namespace {
-
-void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_id, uint16_t mesh_id) {
-#if defined(ROUTING_MODE) && ((ROUTING_MODE & ROUTING_MODE_2D) != 0)
-    (void)fabric_set_unicast_route(hdr, chip_id, mesh_id);
-#else
-    (void)chip_id;
-    (void)mesh_id;
-    (void)fabric_set_unicast_route<false>(
-        reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(hdr), static_cast<uint16_t>(1));
-#endif
-}
-
-}  // namespace
 
 // Sender core (one per link): reads each finished tile column out of its head cores and forwards it into the
 // successor's landing buffer (the first rank's final-state landing, from the last rank) over the fabric.
@@ -83,7 +71,9 @@ void kernel_main() {
     for (uint32_t b = 0; b < slots; ++b) {
         for (uint32_t c = 0; c < chunks; ++c) {
             hdrs[b][c] = PacketHeaderPool::allocate_header();
-            route_one_hop(hdrs[b][c], dst_chip_id, dst_mesh_id);
+            // 2D routing: the hand-off from the last rank to the first crosses the mesh when the fabric does not wrap
+            // the SP axis.
+            (void)fabric_set_unicast_route(hdrs[b][c], dst_chip_id, dst_mesh_id);
         }
     }
     conn.open();

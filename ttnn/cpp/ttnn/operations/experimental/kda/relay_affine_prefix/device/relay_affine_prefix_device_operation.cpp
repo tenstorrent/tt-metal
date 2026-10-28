@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_projection.hpp"
@@ -57,8 +58,13 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
 
     const auto* mesh = in.packed.device();
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
+    TT_FATAL(mesh->shape()[attrs.sequence_parallel_axis] >= 2, "{}: needs at least two SP ranks", operation_name);
+    // The last rank hands the final state to the first: one hop on a torus, across the SP line on a mesh, which only
+    // 2D routing reaches.
     TT_FATAL(
-        mesh->shape()[attrs.sequence_parallel_axis] > 2, "{}: needs a ring of more than two SP ranks", operation_name);
+        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+        "{}: needs a 2D fabric (FABRIC_2D or a torus)",
+        operation_name);
     TT_FATAL(
         attrs.num_links > 0 && attrs.cores.size() >= heads + attrs.num_links,
         "{}: needs a core per head, then a sender per link",
