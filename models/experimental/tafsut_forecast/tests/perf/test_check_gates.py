@@ -43,6 +43,7 @@ def test_lower_is_better_set():
         "spread_ratio_max",
         "bias_row_p50",
         "bias_row_max",
+        "bias_row_p95",
     } <= LOWER_IS_BETTER
 
 

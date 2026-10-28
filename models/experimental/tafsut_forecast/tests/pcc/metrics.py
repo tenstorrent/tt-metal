@@ -36,6 +36,8 @@ All head metrics use the head output at the read-out tokens in normalized space,
                     (PLAN v1.22 ``level_shift``) moves it one for one, element noise averages out
     bias_row_max    the largest of those per-row biases: a shift on a minority of rows, which the median misses
                     (D3 item 3)
+    bias_row_p95    the 95th percentile of those biases (>= 100 rows): a shift on >= 5 % of the rows, on cases where
+                    single rows of the performance preset already exceed the shift (D3 item 3)
     pcc_step        PCC of the step-to-step differences along the horizon (within each 32-step patch): a forecast
                     delayed by a step (PLAN v1.22 ``lag1``) keeps its values but not its increments
     pcc_final       PCC of the single-pass [targets, 9, H] forecast after inverse scaling and band calibration
@@ -138,6 +140,7 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
         "abs_err_max": float(err.max()),  # gross single-element check, not a band check (v1.16)
         "bias_row_p50": float(bias.median()),
         "bias_row_max": float(bias.max()),
+        "bias_row_p95": na(len(bias) >= MIN_P01, lambda: torch.quantile(bias, 0.95)),
         "pcc_step": pearson(step_diff(g_head), step_diff(head)),
         "pcc_final": pearson(g_q, q),
         "pcc_final_spread": pearson(q_spread(g_q), q_spread(q)),

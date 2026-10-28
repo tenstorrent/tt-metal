@@ -41,6 +41,7 @@ LOWER_IS_BETTER = {
     "abs_err_max",
     "bias_row_p50",
     "bias_row_max",
+    "bias_row_p95",
     "spread_ratio_p99",
     "spread_ratio_max",
 }
