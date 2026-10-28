@@ -777,16 +777,29 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // The values this program runs with. Where both inputs are borrowed the reader runs one thread, and where
     // the output is borrowed the writer does; a borrowed ring's stride is then max(R, C) or max(C, W), which the
-    // anchor's tile count divides. The rule does not batch beside a DRAM operand.
+    // anchor's tile count divides. Beside a DRAM operand the rule batches only as below.
     const auto in_dram = [](const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; };
     const bool any_dram = in_dram(a) || (!is_scalar && in_dram(*b_opt)) || in_dram(c);
+    // Batching beside DRAM needs interleaved a, b, c and nothing borrowed; NoC-moved shards abort on ttsim.
+    const auto interleaved = [](const Tensor& tensor) { return !tensor.memory_config().is_sharded(); };
+    uint32_t tiles_per_compute_thread = 0;
+    if (anchor.kind == AnchorKind::kNone && interleaved(a) && interleaved(*b_opt) && interleaved(c) &&
+        (in_dram(a) || in_dram(*b_opt))) {
+        // The most tiles split_work_to_cores gives a cluster.
+        const uint32_t tiles_per_cluster =
+            tt::div_up(c_num_tiles, std::min<uint32_t>(op.worker_grid.num_cores(), c_num_tiles));
+        tiles_per_compute_thread = tt::div_up(tiles_per_cluster, native_compute_threads(t));
+    }
     const NativeConfig cfg = resolve_native_config(
         t,
         {.inputs = !a_borrowed || !b_borrowed,
          .output = !c_borrowed,
          .dram = any_dram,
          .sfpu = is_sfpu,
-         .dst_32bit = fp32_dest_acc_en});
+         .dst_32bit = fp32_dest_acc_en,
+         .tiles_per_compute_thread = tiles_per_compute_thread,
+         // Batched fp32 divide measured slower at every size.
+         .batch_pays = !(op_type == BinaryOpType::DIV && fp32_dest_acc_en)});
     const uint32_t reader_threads = cfg.reader_threads;
     const uint32_t writer_threads = cfg.writer_threads;
     // A borrowed ring must divide by the compute count, so, until the DFB can give each tile counter its own
@@ -971,18 +984,6 @@ ProgramArtifacts create_no_bcast_artifacts(
         describe_native_value(t.entries_per_thread, cfg.entries_per_thread),
         in_producers_consumers,
         out_producers_consumers);
-    // Above ring stride 1 the FPU kernel's binary unpack reads tile p of a batch p entries on, not p strides on, so
-    // only one tile of each batch is right; the SFPU kernel copies through the single-operand unpack, which strides.
-    // The rule never batches there, so only a set TTNN_QSR_TILES_PER_CYCLE reaches this.
-    if (num_tiles_per_cycle > 1 && !native_compute_batch_exact(cfg, is_sfpu)) {
-        log_warning(
-            tt::LogOp,
-            "binary_ng Quasar-native: tiles_per_cycle={} above ring stride 1 (in: max(R,C)={}, out: "
-            "max(C,W)={}) runs, but its output is WRONG: only one tile of each batch is right",
-            describe_native_value(t.tiles_per_cycle, num_tiles_per_cycle),
-            in_producers_consumers,
-            out_producers_consumers);
-    }
     // Tile counters each DM role round-robins, mirroring the DFB's calculate_num_tile_counters for a
     // STRIDED ring: the reader produces into the in DFB and the writer consumes from the out DFB, so
     // each owns the ratio when compute is the wider side. A batch strides within one counter by it.
