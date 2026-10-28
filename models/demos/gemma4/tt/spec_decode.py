@@ -2235,6 +2235,11 @@ class SpeculativeDecoder:
             f"(max_rows={max_rows}) in {time.perf_counter() - t0:.1f}s"
         )
 
+    def _srv_trace_region_mb(self):
+        """Bytes allocated in the device's TRACE region, summed over the banks, in MB (capture budgeting)."""
+        view = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.TRACE)
+        return float(view.total_bytes_allocated_per_bank) * float(view.num_banks) / 1e6
+
     def serving_capture(self):
         """Capture one trace per prepared record (call once, after serving_prepare)."""
         from loguru import logger as _lg
@@ -2242,6 +2247,8 @@ class SpeculativeDecoder:
         self._srv_require(captured=False)
         t_all = time.perf_counter()
         cost = {}
+        used = self._srv_trace_region_mb()
+        _lg.info(f"[spec-serving] trace region before the record captures: {used:.1f} MB in use")
         for key, rec in self._srv_records.items():
             t0 = time.perf_counter()
             tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
@@ -2251,6 +2258,12 @@ class SpeculativeDecoder:
             rec["verify_x"] = verify_x
             rec["vidx"] = vidx
             cost[key] = round(time.perf_counter() - t0, 2)
+            now = self._srv_trace_region_mb()
+            _lg.info(
+                f"[spec-serving] captured record shape={rec['shape']} S_k={rec['S_k']}: "
+                f"+{now - used:.1f} MB trace, {now:.1f} MB in use"
+            )
+            used = now
         self._srv_captured = True
         # The capture passes replayed nothing real: no previous verify, no seed.
         self._srv_last = None

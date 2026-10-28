@@ -216,7 +216,9 @@
   benchmark-timeout: 5
   mesh-device: P150x8
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 3000000000}'
+  # trace_region_size 3 GB: measurement budget for the speculative records (the capture pass logs the TRACE
+  # region usage per record); the production entries carry the measured size.
   # MTP drafter on the plugin's speculative contract: vLLM schedules the drafts,
   # the plugin verifies and accepts them. conc-1 greedy at the client so every
   # step takes the spec path; batched speculation (k_by_rows) and batched
