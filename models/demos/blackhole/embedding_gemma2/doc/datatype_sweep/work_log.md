@@ -214,11 +214,15 @@ default's soak; that run was `p3_qkv_gu_exp`. They now cite `review_soak_p3_qkv_
   RMSNorm (`e5c/scripts/rejected_norm.py`) behind `audio.norms.sharded`. `audio/linear.py` CB
   budget learned the bfp8 / bfp4 tile sizes. `AudioModel(act_dtype=float32)` still overrides the
   activation-stream output dtypes (the fp32-activation tests).
-- `tt/embedding_model.py` (one line outside the brief's file list, needed for the policy to reach
-  the towers through the public API): `EmbeddingGemma2.from_pretrained(precision=...)` resolves the
-  policy once and passes it to all three towers (it used to reach the text tower only).
+- `tt/embedding_model.py` (+15/-4 lines, outside the brief's file list; an accepted scope exception,
+  needed so `precision=` reaches all three towers through the public API):
+  `EmbeddingGemma2.from_pretrained(precision=...)` resolves the policy once and passes it to all
+  three towers (it used to reach the text tower only).
 - Bit-identity check (`scripts/wire_check.sh`, before any selection): vision + audio suites on the
-  wired code with the E5 policies in the file: 482 metric records, all equal to `e6/results_gates_r1.jsonl`.
+  wired code with the E5 policies in the file: `e6b/results_wire.jsonl` has 497 metric records; 488
+  equal `e6/results_gates_r1.jsonl` exactly; the other 9 are timing rows (vision
+  `vision_latency_device_ms` / `vision_latency_e2e_ms` / `vision_host_prep_ms` at 1x2560, 4x2560,
+  8x1280) that differ within run-to-run noise.
 
 ## 12. Screens (phase 1, phase 2)
 

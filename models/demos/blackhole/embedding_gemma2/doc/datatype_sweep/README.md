@@ -388,6 +388,16 @@ concatenation; E5c base 0.7726 at s30 token 267 / 0.7705). For s10 token 126 and
 low cosine is a property of the model (Audio worst-token sensitivity, below); s30 token 559 under
 the selected config was not put through that check **[I: same pattern, not measured]**.
 
+The vision worst-token drop is TT-attributable to the SDPA `exp_approx` lever, not to model
+ill-conditioning **[M]**: on the landscape case the selected `v_exp_bfp8w4` gives 0.708 (token 191)
+against 0.928 for the E5b base and 0.941 for HF bf16 vs HF fp32 (`hf_bf16_soft_token_cos_min`,
+`e6/results_gates_r1.jsonl`); `sdpa_exp_approx` alone gives 0.7265 (video8 frame 2 token 21,
+`e6b/sweep_vision.jsonl`). The impact on the probe is small: the median per-input worst token goes
+from 0.981 (base) to 0.971 (selected) over the 18 probe inputs, and the probe embedding cosine min is
+0.99854 against 0.99869 for the base (`e6b/probe_vision.jsonl`). Worst-token cosine is not gated; the
+pre-stated selection policy selects `v_exp_bfp8w4`. The base's own minimum, 0.864 (portrait token
+45), equals HF bf16's 0.866 on the same case: that one is model-intrinsic.
+
 ### Probe inputs
 
 `dtype_sweep_towers.py probe`, eager forward of the full model built with the candidate
@@ -497,8 +507,9 @@ both pass and the default-built models hold `BFLOAT4_B` `w_down` / `ffw2` weight
 (`pfp_e6b_2b_planted_valid.log`); reverted: passes (the gate run, `gate_g1_precision.log`).
 
 Bit-identity of the wiring **[M]**: with the E5 policies in the file (before the selection), the
-vision and audio suites logged 482 metric records equal value for value to the E6a gate run r1
-(`e6b/results_wire.jsonl` vs `e6/results_gates_r1.jsonl`, 0 differences). The text section and
+vision and audio suites logged 497 metric records (`e6b/results_wire.jsonl`); 488 equal the E6a
+gate run r1 (`e6/results_gates_r1.jsonl`) value for value; the other 9 are timing rows (vision
+latency device / e2e / host prep at 1x2560, 4x2560, 8x1280) that differ within run-to-run noise. The text section and
 text parsing are unchanged (text gate results: Gates).
 
 Return to the safe baseline: `EMBEDDING_GEMMA2_PRECISION=<.../doc/datatype_sweep/baseline_precision_config.json>`
@@ -561,8 +572,12 @@ Sustained rises over burst for the selected vision policy at 1 x 2560 (+5.1 %) a
 - The weakest probe inputs are synthetic (1 kHz tone 0.99114, 3- and 5-frame video 0.995): margins
   to the 0.99 bar of 1.1e-3 (audio) and 4.8e-3 (vision). Real-speech probe clips are >= 0.99732.
 - The worst-token cosine is lower than the E5 baselines (vision 0.708 vs 0.864, audio 0.697 vs
-  0.773) and is not a gate; the audio tokens checked are ill-conditioned in the model (below), the
-  vision ones were not analysed.
+  0.773) and is not a gate. The audio tokens checked (s10 token 126, s30 token 267) are
+  ill-conditioned in the model (below); s30 token 559 is inferred to follow the same pattern, not
+  measured. The vision drop is TT-attributable to SDPA `exp_approx` (landscape 0.708 selected vs
+  0.928 base and 0.941 HF bf16; `exp_approx` alone 0.7265), not model ill-conditioning; probe impact
+  is small (median per-input worst token 0.981 -> 0.971 over 18 inputs, embedding cosine 0.99854 vs
+  0.99869 base). The base's 0.864 (portrait token 45) equals HF bf16's own 0.866 (model-intrinsic).
 - `doc/context_contract.json` unchanged: no capacity change (bfp8 weights only shrink DRAM use).
 - `sweep_results.json` holds summary rows for the tower configs (worst metrics, perf medians, probe
   summary; policy and construction evidence for the selected configs and the bases) to stay under
