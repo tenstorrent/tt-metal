@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 
 #include <mutex>
@@ -1675,6 +1676,42 @@ void DeviceProfiler::readRiscProfilerResults(
             // previous quick-push marker of this risc (the corrupted ones carry the chunk's ID_LH word there).
             std::optional<uint32_t> qp_time_h;
             std::size_t lastRunStartIndex = 0;
+            // tmp-diag: 16 words before and 8 after `at`, the word at `at` marked with '>'.
+            auto words_around = [&](std::size_t at) {
+                std::string words;
+                const std::size_t lo = at >= 16 ? at - 16 : 0;
+                const std::size_t hi = std::min(at + 8, bufferRiscShift + bufferEndIndex);
+                for (std::size_t w = lo; w < hi; w++) {
+                    words += fmt::format("{}{:08x}", (w == at ? " >" : " "), data_buffer.at(w));
+                }
+                return words;
+            };
+            // tmp-diag: TT_METAL_PROFILER_RAW_DUMP_DIR=<dir> appends every lane's raw DRAM words (as read, before
+            // any decoding) to <dir>/dev<id>.txt: one header line per lane and read, then 16 hex words per line.
+            if (const char* raw_dir = std::getenv("TT_METAL_PROFILER_RAW_DUMP_DIR"); raw_dir != nullptr && *raw_dir) {
+                static std::mutex raw_dump_mutex;
+                static uint32_t raw_dump_seq = 0;
+                std::lock_guard<std::mutex> lock(raw_dump_mutex);
+                std::ofstream raw(fmt::format("{}/dev{}.txt", raw_dir, device_id), std::ios::app);
+                raw << fmt::format(
+                    "lane device {} core ({},{}) {} flat {} riscidx {} words {} region_start {} seq {}\n",
+                    device_id,
+                    worker_core.x,
+                    worker_core.y,
+                    enchantum::to_string(riscType),
+                    coreFlatID,
+                    riscEndIndex,
+                    bufferEndIndex,
+                    bufferRiscShift,
+                    raw_dump_seq++);
+                for (std::size_t w = 0; w < bufferEndIndex; w += 16) {
+                    std::string line;
+                    for (std::size_t k = w; k < std::min(w + 16, static_cast<std::size_t>(bufferEndIndex)); k++) {
+                        line += fmt::format("{}{:08x}", (k == w ? "" : " "), data_buffer.at(bufferRiscShift + k));
+                    }
+                    raw << line << '\n';
+                }
+            }
 
             uint32_t opTime_H = 0;
             uint32_t opTime_L = 0;
@@ -1767,16 +1804,31 @@ void DeviceProfiler::readRiscProfilerResults(
                             uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
                             if (timer_id || time_H) {
                                 uint32_t time_L = data_buffer.at(index + 1);
+                                // tmp-diag: a marker with timer id 0 is a chunk header pair (ID_LH, ID_LL) read in
+                                // marker mode, i.e. the (0,0) run-start sentinel in front of it was missed.
+                                if (timer_id == 0) {
+                                    log_warning(
+                                        tt::LogMetal,
+                                        "tmp-diag: id-0 marker (time_H {} time_L {}, VALID {}) device {} core ({},{}) {} "
+                                        "at word {} = {} words into the chunk starting at {}, risc region [{}, +{}):{}",
+                                        time_H,
+                                        time_L,
+                                        (data_buffer.at(index) >> 31) & 1,
+                                        device_id,
+                                        worker_core.x,
+                                        worker_core.y,
+                                        enchantum::to_string(riscType),
+                                        index - bufferRiscShift,
+                                        index - lastRunStartIndex,
+                                        lastRunStartIndex - bufferRiscShift,
+                                        bufferRiscShift,
+                                        bufferEndIndex,
+                                        words_around(index));
+                                }
                                 // tmp-diag (39900 = Hash16 of "PROFILER-NOC-QUICK-PUSH")
                                 if ((timer_id & kernel_profiler::PROFILER_TIMER_STATIC_ID_MASK) == 39900) {
                                     if (qp_time_h.has_value() && *qp_time_h != time_H) {
-                                        std::string words;
-                                        const std::size_t lo = index >= 16 ? index - 16 : 0;
-                                        const std::size_t hi = std::min(index + 8, bufferRiscShift + bufferEndIndex);
-                                        for (std::size_t w = lo; w < hi; w++) {
-                                            words += fmt::format(
-                                                "{}{:08x}", (w == index ? " >" : " "), data_buffer.at(w));
-                                        }
+                                        const std::string words = words_around(index);
                                         log_warning(
                                             tt::LogMetal,
                                             "tmp-diag: quick-push {} time_H {} -> {} (time_L {}) device {} core ({},{}) "
