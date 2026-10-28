@@ -450,7 +450,8 @@ public:
         Layout output_layout,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config,
         bool config_tensor_in_dram,
-        MeshDevice* device) :
+        MeshDevice* device,
+        bool block_shard_width_rm_slices = false) :
         batch_size(batch_size),
         input_shape(input_shape),
         channels(channels),
@@ -509,8 +510,9 @@ public:
         // run_sliced_op writes each slice back with the quasar slice_write, which takes only sharded input.
         // A ROW_MAJOR slice must be height or block sharded: a width-sharded one is moved to interleaved L1
         // first, which that slice_write rejects. The slices are internal (the result is DRAM interleaved), so
-        // pool width-sharded ROW_MAJOR slices block-sharded instead.
-        if (output_layout == Layout::ROW_MAJOR && shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        // pool width-sharded ROW_MAJOR slices block-sharded instead (only for the attr that runs the slices).
+        if (block_shard_width_rm_slices && output_layout == Layout::ROW_MAJOR &&
+            shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             log_debug(
                 tt::LogOp, "Pool2D DRAM slicing: ROW_MAJOR output, pooling the width-sharded slices block-sharded");
             shard_layout = TensorMemoryLayout::BLOCK_SHARDED;
@@ -775,41 +777,50 @@ static std::vector<Tensor> pool2d_DRAM(
     uint32_t output_height = output_shape[1];
     uint32_t output_width = output_shape[2];
 
-    // Create pool slice attribute for slice configuration
-    auto pool_slice_attr = Pool2dSliceAttr(
-        batch_size,
-        Pool2dSliceAttr::IOShape{input_h, input_w},
-        channels,
-        kernel_size,
-        stride,
-        sliding_window::get_pair_n4_padding(padding),
-        dilation,
-        ceil_mode,
-        count_include_pad,
-        divisor_override,
-        applied_shard_scheme,
-        return_indices,
-        pool_type,
-        // Every slice is gathered ROW_MAJOR (a TILE input is untilized below, BFLOAT8_B -> BFLOAT16), so size
-        // the slices for what the per-slice pool actually reads. Sizing them for TILE would align the channels
-        // to the tile width and the NHW to the tile height, which the ROW_MAJOR gather does not produce.
+    auto make_pool_slice_attr = [&](Layout input_layout, DataType input_dtype, bool for_slices) {
+        return Pool2dSliceAttr(
+            batch_size,
+            Pool2dSliceAttr::IOShape{input_h, input_w},
+            channels,
+            kernel_size,
+            stride,
+            sliding_window::get_pair_n4_padding(padding),
+            dilation,
+            ceil_mode,
+            count_include_pad,
+            divisor_override,
+            applied_shard_scheme,
+            return_indices,
+            pool_type,
+            input_dtype,
+            dtype,
+            input_layout,
+            output_layout,
+            compute_kernel_config,
+            config_tensor_in_dram,
+            input_tensor.device(),
+            for_slices);
+    };
+    // Runs the slices. Every slice is gathered ROW_MAJOR (a TILE input is untilized below, BFLOAT8_B -> BFLOAT16),
+    // so size the slices for what the per-slice pool actually reads: TILE would align the channels to the tile
+    // width and the NHW to the tile height, which the ROW_MAJOR gather does not produce.
+    auto pool_slice_attr = make_pool_slice_attr(
+        Layout::ROW_MAJOR,
         input_tensor.layout() == Layout::TILE
             ? ttnn::operations::data_movement::untilize_output_dtype(input_tensor.dtype())
             : input_tensor.dtype(),
-        dtype,
-        Layout::ROW_MAJOR,
-        output_layout,
-        compute_kernel_config,
-        config_tensor_in_dram,
-        input_tensor.device());
+        /*for_slices=*/true);
 
     // Determine slice configuration (automatic if not provided or num_slices==0)
     Op2DSliceConfig dram_slice_config;
     if (dram_slice_config_.has_value() && dram_slice_config_.value().num_slices > 0) {
         dram_slice_config = dram_slice_config_.value();
     } else {
+        // Count with the input as given: a single slice falls back to pool2d_L1 on that input, so its estimate
+        // must hold for it (more slices than the ROW_MAJOR gather needs is fine).
+        auto count_slice_attr = make_pool_slice_attr(input_tensor.layout(), input_tensor.dtype(), /*for_slices=*/false);
         dram_slice_config = op_slicing::determine_slice_config(
-            &pool_slice_attr,
+            &count_slice_attr,
             ttnn::Shape{batch_size, input_h, input_w, channels},
             ttnn::Shape{batch_size, output_height, output_width, channels},
             dram_slice_config_,
