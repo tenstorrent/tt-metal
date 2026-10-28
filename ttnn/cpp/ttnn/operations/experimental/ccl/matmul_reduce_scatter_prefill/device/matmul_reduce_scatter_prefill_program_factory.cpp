@@ -19,6 +19,8 @@
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
@@ -974,8 +976,7 @@ void MatmulReduceScatterPrefillMeshWorkloadFactory::override_runtime_arguments(
     const auto out_addr = static_cast<uint32_t>(output.buffer()->address());
     const Buffer& staging = *tensor_args.staging.buffer();
     const auto staging_addr = static_cast<uint32_t>(staging.address());
-    for (auto& [range, program] : cached.workload.get_programs()) {
-        const shared_variables_t& sv = cached.shared_variables.at(range);
+    for (const auto& [range, sv] : cached.shared_variables) {  // a walk, no lookup per program
         sv.reader.get()[args::reader_common::A_ADDR] = a_addr;
         sv.reader.get()[args::reader_common::W_ADDR] = w_addr;
         sv.writer.get()[args::writer_common::OUT_ADDR] = out_addr;
@@ -984,6 +985,7 @@ void MatmulReduceScatterPrefillMeshWorkloadFactory::override_runtime_arguments(
         }
         sv.port_reader.get()[args::port_reader_common::FINISHED_BASE] = staging_addr;
         sv.port_sender.get()[args::port_sender_common::STAGING_ADDR] = staging_addr;
+        auto& program = cached.workload.get_programs().at(range);  // only when the staging tensor moved
         for (size_t i = 0; i < sv.staging_cbs.size(); ++i) {
             UpdateDynamicCircularBufferAddress(program, sv.staging_cbs[i], staging, sv.staging_offsets[i]);
         }
@@ -1027,6 +1029,22 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
 }
 
 Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles) {
+    // The staging layout of a size is the same on every call: build it once (the sharded page mapping over the full
+    // grid is most of create_device_tensor's cost) and allocate only the buffer per call.
+    struct StagingLayout {
+        TensorSpec spec;
+        tt::tt_metal::distributed::DeviceLocalBufferConfig device_local;
+        tt::tt_metal::distributed::ReplicatedBufferConfig replicated;
+        tt::tt_metal::TensorTopology topology;
+    };
+    static ttsl::Indestructible<std::map<std::pair<MeshKey, uint32_t>, StagingLayout>> layouts;
+    const auto key = std::make_pair(mesh->id(), staging_tiles);
+    if (const auto it = layouts.get().find(key); it != layouts.get().end()) {
+        const StagingLayout& layout = it->second;
+        auto buffer = tt::tt_metal::distributed::MeshBuffer::create(layout.replicated, layout.device_local, mesh);
+        return set_tensor_id(Tensor(
+            tt::tt_metal::mesh_tensor_from_buffer_with_topology(std::move(*buffer), layout.spec, layout.topology)));
+    }
     const CoreCoord g = mesh->compute_with_storage_grid_size();
     const CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(g.x - 1, g.y - 1)));
     const auto n = static_cast<uint32_t>(g.x * g.y);
@@ -1040,7 +1058,18 @@ Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t st
     const TensorSpec spec(
         ttnn::Shape({n * staging_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), cfg));
-    return create_device_tensor(spec, mesh);
+    Tensor first = create_device_tensor(spec, mesh);
+    layouts.get().emplace(
+        key,
+        StagingLayout{
+            .spec = spec,
+            .device_local =
+                {.page_size = spec.compute_page_size_bytes(),
+                 .buffer_type = BufferType::L1,
+                 .sharding_args = spec.compute_buffer_sharding_args()},
+            .replicated = {.size = spec.compute_packed_buffer_size_bytes()},
+            .topology = first.tensor_topology()});
+    return first;
 }
 
 MeshResources& mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh) {
