@@ -497,7 +497,8 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // (ckernel::math::replay_buf_offset on) to the FPU, whose matmul records its MVMUL sequence
     // there in its init and replays it per tile, so a longer record would corrupt a kernel that
     // runs exp between two matmul calls. Head and tail are issued inline around each replay; the
-    // Replay Expander queues them while it emits the body, so the split costs no cycles.
+    // Replay Expander queues them in its FIFO while it emits the body, so the SFPU sees the same
+    // instruction stream as from a whole-pair record.
     static_assert(
         EXP_21F_TTI_PAIR_BODY_LEN <= ckernel::math::replay_buf_offset, "the record must fit the SFPU replay slots");
 
