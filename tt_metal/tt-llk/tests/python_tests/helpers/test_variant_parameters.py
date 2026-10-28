@@ -321,10 +321,10 @@ class MATMUL_L1_ACC(TemplateParameter):
     """Blackhole matmul pack thread with the packer L1 accumulate switch on, as the ttnn bmm kernels run the later K blocks of a spilled output
     (llk_pack_reconfig_l1_acc(1) after the first pack). The perf loop accumulates into the same L1 tiles; the values do not matter."""
 
-    l1_acc: L1Accumulation = L1Accumulation.No
+    matmul_l1_acc: L1Accumulation = L1Accumulation.No
 
     def convert_to_cpp(self) -> str:
-        return f"#define MATMUL_L1_ACC {1 if self.l1_acc == L1Accumulation.Yes else 0}"
+        return f"#define MATMUL_L1_ACC {1 if self.matmul_l1_acc == L1Accumulation.Yes else 0}"
 
 
 @dataclass
