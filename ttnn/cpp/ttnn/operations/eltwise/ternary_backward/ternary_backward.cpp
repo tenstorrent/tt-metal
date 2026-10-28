@@ -144,7 +144,7 @@ std::vector<std::optional<Tensor>> where_bw(
     result.reserve(2);
     // A broadcast operand's gradient is computed at grad's shape, reduced to the operand's shape, then
     // copied into the preallocated output if there is one.
-    auto finish = [&](const Tensor& operand, std::optional<Tensor>& preallocated, auto&& compute) {
+    auto finish = [&](const Tensor& operand, std::optional<Tensor>& preallocated, const auto& compute) {
         if (operand.logical_shape() == grad.logical_shape()) {
             if (preallocated.has_value()) {
                 compute(preallocated);

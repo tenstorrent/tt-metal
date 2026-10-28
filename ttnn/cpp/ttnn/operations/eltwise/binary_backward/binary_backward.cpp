@@ -121,7 +121,7 @@ std::optional<Tensor> operand_grad(
     const Tensor& operand,
     std::optional<Tensor>& preallocated,
     const std::optional<MemoryConfig>& memory_config,
-    Compute&& compute) {
+    const Compute& compute) {
     if (!is_broadcasted_over(operand.logical_shape(), grad.logical_shape())) {
         Tensor out = compute(preallocated);
         return preallocated.has_value() ? preallocated : std::optional<Tensor>{out};
