@@ -7,7 +7,6 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum {
 
@@ -23,20 +22,11 @@ std::array<ttnn::Tensor, 4> offset_cumsum(
 
     auto reshaped = ttnn::reshape(input_tensor, ttnn::Shape({1, n_routed_experts}));
 
-    auto gathered = ttnn::all_gather(
-        reshaped,
-        /*dim=*/0,
-        /*cluster_axis=*/cluster_axis,
-        /*memory_config=*/memory_config,
-        /*persistent_output_tensor=*/std::nullopt,
-        /*subdevice_id=*/std::nullopt,
-        /*sub_core_grid=*/std::nullopt,
-        /*num_links=*/num_links,
-        /*topology=*/std::nullopt,
-        /*chunks_per_sync=*/std::nullopt,
-        /*num_workers_per_link=*/std::nullopt,
-        /*num_buffers_per_channel=*/std::nullopt,
-        /*use_l1_small_for_semaphores=*/use_l1_small_for_semaphores);
+    // TODO(nuked-op all_gather): restore real call
+    (void)num_links;
+    (void)memory_config;
+    (void)use_l1_small_for_semaphores;
+    auto gathered = reshaped;
 
     auto row_major = ttnn::to_layout(gathered, tt::tt_metal::Layout::ROW_MAJOR, std::nullopt, std::nullopt);
 

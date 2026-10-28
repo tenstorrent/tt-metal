@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/fabric_socket.hpp"
-#include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async.hpp"
-#include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async.hpp"
+#include <tt_stl/assert.hpp>
 #include <stdexcept>
 
 namespace ttnn::distributed {
@@ -34,13 +33,17 @@ FabricSocket::FabricSocket(const tt::tt_metal::distributed::MeshSocket& mesh_soc
 void FabricSocket::send(const ttnn::Tensor& tensor) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     assert(check_if_send_socket(mesh_socket_));
-    ttnn::experimental::send_async(tensor, mesh_socket_);
+    // TODO(nuked-op send_async): restore real call
+    (void)tensor;
+    TT_THROW("FabricSocket::send: ttnn.experimental.send_async was removed (TODO(nuked-op send_async))");
 }
 
 void FabricSocket::recv(ttnn::Tensor& tensor) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     assert(check_if_recv_socket(mesh_socket_));
-    ttnn::experimental::recv_async(tensor, mesh_socket_);
+    // TODO(nuked-op recv_async): restore real call
+    (void)tensor;
+    TT_THROW("FabricSocket::recv: ttnn.experimental.recv_async was removed (TODO(nuked-op recv_async))");
 }
 
 tt::tt_metal::distributed::multihost::Rank FabricSocket::get_rank() const {

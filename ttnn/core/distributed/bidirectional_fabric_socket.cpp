@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/bidirectional_fabric_socket.hpp"
-#include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async.hpp"
-#include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::distributed {
 
@@ -14,10 +13,16 @@ BidirectionalFabricSocket::BidirectionalFabricSocket(
     send_socket_(send_socket), recv_socket_(recv_socket) {}
 
 void BidirectionalFabricSocket::send(const ttnn::Tensor& tensor) {
-    ttnn::experimental::send_async(tensor, send_socket_);
+    // TODO(nuked-op send_async): restore real call
+    (void)tensor;
+    TT_THROW("BidirectionalFabricSocket::send: ttnn.experimental.send_async was removed (TODO(nuked-op send_async))");
 }
 
-void BidirectionalFabricSocket::recv(ttnn::Tensor& tensor) { ttnn::experimental::recv_async(tensor, recv_socket_); }
+void BidirectionalFabricSocket::recv(ttnn::Tensor& tensor) {
+    // TODO(nuked-op recv_async): restore real call
+    (void)tensor;
+    TT_THROW("BidirectionalFabricSocket::recv: ttnn.experimental.recv_async was removed (TODO(nuked-op recv_async))");
+}
 
 tt::tt_metal::distributed::multihost::Rank BidirectionalFabricSocket::get_rank() const {
     auto socket_config = send_socket_.get_config();

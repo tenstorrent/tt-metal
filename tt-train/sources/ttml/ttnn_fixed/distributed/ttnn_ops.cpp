@@ -15,11 +15,7 @@
 #include "tt-metalium/experimental/fabric/fabric.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
-#include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
-#include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -56,7 +52,7 @@ bool is_cluster_axis_ring(uint32_t cluster_axis) {
 // Get the appropriate CCL topology based on cluster axis ring status
 // The options are Linear, Ring, based on where the fabric was initialized with
 // wrap around connections along the axis.
-ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
+[[maybe_unused]] ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
     if (!cluster_axis.has_value()) {
         auto* mesh_device = &ttml::autograd::ctx().get_device();
         const auto& mesh_shape = mesh_device->shape();
@@ -83,113 +79,45 @@ ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
 
 }  // namespace
 
+// TODO(nuked-op ccl): the TTNN CCL ops (all_gather_async, all_reduce_async, reduce_scatter_minimal_async,
+// mesh_partition) were removed for agent evaluation. These wrappers keep their signatures and pass the
+// input through so tt-train builds; they are NOT correct on a multi-device mesh.
 ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();
-    auto num_devices = mesh_device->num_devices();
-    if (num_devices == 1U) {
+    if (mesh_device->num_devices() == 1U) {
         throw std::logic_error("All gather should not be called for a single device case");
     }
-    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
-    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, /* cluster_axis */ cluster_axis);
-
-    // Determine topology based on cluster axis configuration (Ring if torus, Linear otherwise)
-    auto topology = get_topology(cluster_axis);
-
-    // Use cluster_axis overload for 2D mesh
-    // Note: Pass topology (not hardcoded Ring) - Ring only works with proper TORUS fabric config
-    return ttnn::experimental::all_gather_async(
-        tensor,
-        /* persistent_output_buffer */ std::nullopt,
-        dim,
-        ccl_resources.get_all_gather_semaphore(),
-        num_links,
-        /* memory_config */ std::nullopt,
-        topology,
-        /* subdevice_id */ std::nullopt,
-        cluster_axis,
-        /* use_optimal_ccl_for_llama */ false,
-        /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
+    // TODO(nuked-op all_gather_async): restore real call
+    (void)dim;
+    (void)cluster_axis;
+    return tensor;
 }
 
 ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();
-    auto num_devices = mesh_device->num_devices();
-    if (num_devices == 1U) {
+    if (mesh_device->num_devices() == 1U) {
         throw std::logic_error("All reduce should not be called for a single device case");
     }
-
-    auto shape = tensor.logical_shape();
-    if (shape.rank() != 4U) {
+    if (tensor.logical_shape().rank() != 4U) {
         throw std::logic_error("All reduce supports only 4D tensors");
     }
-
-    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
-    auto all_reduce_barrier_semaphores = ccl_resources.get_all_reduce_barrier_semaphores();
-    auto all_gather_semaphores = ccl_resources.get_all_gather_semaphore();
-    auto reduce_scatter_semaphores = ccl_resources.get_reduce_scatter_semaphores();
-
-    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, /* cluster_axis */ cluster_axis);
-
-    // Determine topology based on cluster axis configuration (Ring if torus, Linear otherwise)
-    auto topology = get_topology(cluster_axis);
-
-    if (cluster_axis.has_value()) {
-        // Use cluster_axis overload for 2D mesh
-        // Note: Pass topology (not hardcoded Ring) - Ring only works with proper TORUS fabric config
-        return ttnn::experimental::all_reduce_async(
-            tensor,
-            cluster_axis,
-            *mesh_device,
-            all_reduce_barrier_semaphores,
-            reduce_scatter_semaphores,
-            all_gather_semaphores,
-            reduction_common::ReduceType::Sum,
-            /* memory_config */ std::nullopt,
-            topology,
-            std::optional<size_t>(num_links),
-            /* worker_subdevice_id_opt */ std::nullopt);
-    } else {
-        // Use original overload for 1D mesh
-        return ttnn::experimental::all_reduce_async(
-            tensor,
-            num_devices,
-            all_reduce_barrier_semaphores,
-            reduce_scatter_semaphores,
-            all_gather_semaphores,
-            reduction_common::ReduceType::Sum,
-            /* memory_config */ std::nullopt,
-            topology,
-            /* num_preferred_links */ num_links);
-    }
+    // TODO(nuked-op all_reduce_async): restore real call
+    (void)cluster_axis;
+    return tensor;
 }
 
 ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
-    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
-    auto& mesh_device = ttml::autograd::ctx().get_device();
-    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(mesh_device, /* cluster_axis */ cluster_axis);
-
-    // Determine topology based on cluster axis configuration (Ring if torus, Linear otherwise)
-    auto topology = get_topology(cluster_axis);
-
-    // Note: Pass topology (not hardcoded Ring) - Ring only works with proper TORUS fabric config
-    return ttnn::experimental::reduce_scatter_minimal_async(
-        tensor,
-        /* persistent_output_buffers */ std::nullopt,
-        dim,
-        ccl_resources.get_reduce_scatter_semaphores(),
-        ccl_resources.get_barrier_semaphore(),
-        num_links,
-        /* memory_config */ std::nullopt,
-        /* intermediate_memory_config */ std::nullopt,
-        topology,
-        /* subdevice_id */ std::nullopt,
-        /* cluster_axis */ cluster_axis);
+    // TODO(nuked-op reduce_scatter_minimal_async): restore real call
+    (void)dim;
+    (void)cluster_axis;
+    return tensor;
 }
 
 ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
-    // ttnn::mesh_partition already returns the input unchanged when the axis size is 1,
-    // so no single-device guard is needed here.
-    return ttnn::mesh_partition(tensor, dim, cluster_axis, /* memory_config */ std::nullopt);
+    // TODO(nuked-op mesh_partition): restore real call
+    (void)dim;
+    (void)cluster_axis;
+    return tensor;
 }
 
 ttnn::Tensor ring_shift(
