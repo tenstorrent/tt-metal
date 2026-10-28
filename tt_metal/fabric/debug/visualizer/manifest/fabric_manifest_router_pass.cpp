@@ -71,23 +71,23 @@ uint32_t read_emitted_value(const std::vector<NamedArgs>& named_ct_args_per_risc
     return value;
 }
 
-// A sender channel's `name` argument, as the ERISCs in `serviced_by`, which run the channel, all receive it. The
-// builder gives an ERISC that doesn't run the channel either the same value or 0, for an argument it gates on running
-// the channel, such as SENDER_CH_{}_WAIT_STATIC_CONNECTION. When no ERISC runs the channel, every ERISC must agree.
-uint32_t read_sender_channel_value(
+// Reads a sender channel's `name` argument. The builder assigns each sender channel to ERISCs (`assigned_to`, from
+// IS_SENDER_CHANNEL_{}_SERVICED), and those must all have the same value. Any other ERISC must have that value or 0,
+// since the builder zeroes some arguments, such as SENDER_CH_{}_WAIT_STATIC_CONNECTION, on ERISCs it didn't assign.
+int32_t read_sender_channel_value(
     const std::vector<NamedArgs>& named_ct_args_per_risc,
     const std::string& name,
-    const std::vector<uint32_t>& serviced_by) {
-    if (serviced_by.empty()) {
+    const std::vector<uint32_t>& assigned_to) {
+    if (assigned_to.empty()) {
         return read_emitted_value(named_ct_args_per_risc, name);
     }
-    const uint32_t value = get_named_arg(named_ct_args_per_risc.at(serviced_by.front()), name);
+    const uint32_t value = get_named_arg(named_ct_args_per_risc.at(assigned_to.front()), name);
     for (uint32_t risc_id = 0; risc_id < named_ct_args_per_risc.size(); ++risc_id) {
         const uint32_t actual = get_named_arg(named_ct_args_per_risc[risc_id], name);
-        const bool runs_channel = std::ranges::find(serviced_by, risc_id) != serviced_by.end();
+        const bool is_assigned = std::ranges::find(assigned_to, risc_id) != assigned_to.end();
         TT_FATAL(
-            actual == value || (!runs_channel && actual == 0),
-            "Fabric manifest: ERISC{} {} is {}, but the ERISCs that run the channel have {}",
+            actual == value || (!is_assigned && actual == 0),
+            "Fabric manifest: ERISC{} {} is {}, but the ERISCs assigned the channel have {}",
             risc_id,
             name,
             actual,
@@ -410,19 +410,21 @@ bool is_vc_run_by_kernel(const ManifestRouterInputs& inputs, uint32_t vc) {
     }
 }
 
-// The ERISCs whose `serviced_name` argument is set, or none when the kernel does not run the VC's steps.
-std::vector<uint32_t> collect_serviced_by(
-    const ManifestRouterInputs& inputs, uint32_t vc, const std::string& serviced_name) {
-    if (!is_vc_run_by_kernel(inputs, vc)) {
-        return {};
-    }
-    std::vector<uint32_t> serviced_by;
+// The ERISCs the builder assigned a channel to: those whose `serviced_name` argument is set.
+std::vector<uint32_t> collect_assigned_eriscs(const ManifestRouterInputs& inputs, const std::string& serviced_name) {
+    std::vector<uint32_t> assigned_to;
     for (uint32_t risc_id = 0; risc_id < inputs.kernel.named_ct_args.size(); ++risc_id) {
         if (get_named_arg(inputs.kernel.named_ct_args[risc_id], serviced_name) != 0) {
-            serviced_by.push_back(risc_id);
+            assigned_to.push_back(risc_id);
         }
     }
-    return serviced_by;
+    return assigned_to;
+}
+
+// The ERISCs that run a channel: those it was assigned to, or none when the kernel does not run the VC's steps.
+std::vector<uint32_t> collect_serviced_by(
+    const ManifestRouterInputs& inputs, uint32_t vc, const std::vector<uint32_t>& assigned_to) {
+    return is_vc_run_by_kernel(inputs, vc) ? assigned_to : std::vector<uint32_t>{};
 }
 
 // Why the channel's step runs or not. An unserviced channel must be off for a reason the manifest knows, which it
@@ -495,7 +497,8 @@ manifest::SenderChannel collect_sender_channel(const ChannelContext& ctx, const 
     const uint32_t c = index.compact;
 
     manifest::SenderChannel sender;
-    sender.serviced_by = collect_serviced_by(inputs, index.vc, fmt::format("IS_SENDER_CHANNEL_{}_SERVICED", c));
+    const auto assigned_to = collect_assigned_eriscs(inputs, fmt::format("IS_SENDER_CHANNEL_{}_SERVICED", c));
+    sender.serviced_by = collect_serviced_by(inputs, index.vc, assigned_to);
     sender.status = collect_status(
         ctx,
         "sender",
@@ -518,7 +521,7 @@ manifest::SenderChannel collect_sender_channel(const ChannelContext& ctx, const 
          .fabric_position = index.fabric_position,
          .worker_channel = ctx.producer_slots.worker_channel(index.vc) == index.channel},
         ctx.emission,
-        [&](const std::string& name) { return read_sender_channel_value(args, name, sender.serviced_by); });
+        [&](const std::string& name) { return read_sender_channel_value(args, name, assigned_to); });
     return sender;
 }
 
@@ -549,7 +552,8 @@ manifest::ReceiverChannel collect_receiver_channel(const ChannelContext& ctx, co
     const uint32_t c = index.compact;
 
     manifest::ReceiverChannel receiver;
-    receiver.serviced_by = collect_serviced_by(inputs, index.vc, fmt::format("IS_RECEIVER_CHANNEL_{}_SERVICED", c));
+    receiver.serviced_by = collect_serviced_by(
+        inputs, index.vc, collect_assigned_eriscs(inputs, fmt::format("IS_RECEIVER_CHANNEL_{}_SERVICED", c)));
     receiver.status = collect_status(
         ctx,
         "receiver",
