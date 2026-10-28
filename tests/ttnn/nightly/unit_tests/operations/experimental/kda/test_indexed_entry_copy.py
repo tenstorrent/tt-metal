@@ -64,53 +64,51 @@ def _nd_dram(device, shard_shape):
     )
 
 
+# (index[0], index_scale, index_offset) -> the entry of a 7-entry table that is copied, or None for a no-op.
+_TABLE_ENTRIES = 7
+INDEXING = [
+    ((0, 1, 0), 0),
+    ((3, 1, 0), 3),
+    ((6, 1, 0), 6),  # last entry
+    ((0, 3, 2), 2),
+    ((1, 3, 2), 5),
+    ((7, 1, 0), None),  # past the end before scaling
+    ((2, 3, 2), None),  # past the end only after scaling: 8
+    ((0xFFFFFFFF, 1, 0), None),  # the largest index
+    ((2, 0x80000001, 0), None),  # a naive 32-bit index * scale wraps back to 2
+    ((1, 1, 0xFFFFFFFF), None),  # a naive 32-bit index + offset wraps back to 0
+    ((0, 0xFFFFFFFF, 1), 1),  # a valid index under a scale that would overflow a naive bound
+]
+
+
 @pytest.mark.parametrize("dtype, layout, entry_shape, nd_shard", FORMS)
-@pytest.mark.parametrize("scale, offset", [(1, 0), (3, 2)], ids=["plain", "scaled"])
-def test_load_and_store_selected_entries(device, dtype, layout, entry_shape, nd_shard, scale, offset):
-    entries = 7
-    table_host = _random((entries, *entry_shape), dtype, 1)
+def test_index_selects_the_entry(device, dtype, layout, entry_shape, nd_shard):
+    """Each INDEXING row loads the selected entry and stores into it, or leaves both tensors untouched."""
+    table_host = _random((_TABLE_ENTRIES, *entry_shape), dtype, 1)
     table = _to_device(table_host, device, dtype, layout, _table_memory(device, nd_shard))
-    single = _to_device(torch.zeros(1, *entry_shape, dtype=TORCH_DTYPE[dtype]), device, dtype, layout)
-    for value in sorted({0, (entries - 1 - offset) // scale // 2, (entries - 1 - offset) // scale}):
-        entry = value * scale + offset
+    single_host = _random((1, *entry_shape), dtype, 2)
+    single = _to_device(single_host, device, dtype, layout)
+    for n, ((value, scale, offset), entry) in enumerate(INDEXING):
+        row = f"index {value:#x} scale {scale:#x} offset {offset:#x}"
         index = _index(device, value)
 
         ttnn.experimental.kda.indexed_entry_copy(table, single, index, index_scale=scale, index_offset=offset)
-        assert torch.equal(ttnn.to_torch(single), table_host[entry : entry + 1]), f"load entry {entry}"
+        if entry is not None:
+            single_host = table_host[entry : entry + 1].clone()
+        assert torch.equal(ttnn.to_torch(single), single_host), f"load, {row}"
 
-        update = _random((1, *entry_shape), dtype, 100 + entry)
+        update = _random((1, *entry_shape), dtype, 100 + n)
         source = _to_device(update, device, dtype, layout)
         ttnn.experimental.kda.indexed_entry_copy(source, table, index, index_scale=scale, index_offset=offset)
-        table_host[entry : entry + 1] = update
-        assert torch.equal(ttnn.to_torch(table), table_host), f"store entry {entry} or a neighbour"
+        if entry is not None:
+            table_host[entry : entry + 1] = update
+        assert torch.equal(ttnn.to_torch(table), table_host), f"store, {row}"
         ttnn.deallocate(source)
         ttnn.deallocate(index)
 
 
-@pytest.mark.parametrize("dtype, layout, entry_shape, nd_shard", FORMS)
-def test_entry_past_the_end_writes_nothing(device, dtype, layout, entry_shape, nd_shard):
-    entries = 4
-    table_host = _random((entries, *entry_shape), dtype, 2)
-    table = _to_device(table_host, device, dtype, layout, _table_memory(device, nd_shard))
-    single_host = _random((1, *entry_shape), dtype, 3)
-    single = _to_device(single_host, device, dtype, layout)
-    # Past the end before scaling; only after scaling; the largest index; and two whose 32-bit entry
-    # index * scale + offset would wrap back into range (2 * 0x80000001 -> 2, 1 + 0xFFFFFFFF -> 0).
-    for value, scale, offset in [(entries, 1, 0), (1, 2, 2), (0xFFFFFFFF, 1, 0), (2, 0x80000001, 0), (1, 1, 0xFFFFFFFF)]:
-        index = _index(device, value)
-        ttnn.experimental.kda.indexed_entry_copy(table, single, index, index_scale=scale, index_offset=offset)
-        ttnn.experimental.kda.indexed_entry_copy(single, table, index, index_scale=scale, index_offset=offset)
-        ttnn.deallocate(index)
-    assert torch.equal(ttnn.to_torch(table), table_host)
-    assert torch.equal(ttnn.to_torch(single), single_host)
-
-    # A valid index under a scale that would overflow a naive bound still reaches its entry.
-    index = _index(device, 0)
-    ttnn.experimental.kda.indexed_entry_copy(table, single, index, index_scale=0xFFFFFFFF, index_offset=1)
-    assert torch.equal(ttnn.to_torch(single), table_host[1:2])
-
-
-@pytest.mark.parametrize("dtype, layout, entry_shape, nd_shard", FORMS)
+# One entry on both sides needs no ND form: the consumer's single-entry tensors are interleaved.
+@pytest.mark.parametrize("dtype, layout, entry_shape, nd_shard", [FORMS[0], FORMS[2]])
 def test_single_entry_on_both_sides_copies_at_entry_zero(device, dtype, layout, entry_shape, nd_shard):
     source_host = _random((1, *entry_shape), dtype, 4)
     source = _to_device(source_host, device, dtype, layout)
@@ -187,28 +185,22 @@ def test_one_trace_follows_the_index(device, dtype, layout, entry_shape, nd_shar
         ttnn.release_trace(device, trace)
 
 
-def test_rejects_row_major_nd_sharding(device, expect_error):
-    table = _to_device(
-        torch.zeros(4, 3, 192), device, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, _nd_dram(device, [1, 3, 64])
-    )
-    single = _to_device(torch.zeros(1, 3, 192), device, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
-    with expect_error(RuntimeError, "ND-sharded DRAM for TILE"):
-        ttnn.experimental.kda.indexed_entry_copy(table, single, _index(device, 0), index_scale=1, index_offset=0)
-
-
 @pytest.mark.parametrize(
-    "source_shape, destination_shape, message",
+    "dtype, layout, source_shape, destination_shape, source_nd_shard, message",
     [
-        ((2, 32, 32), (2, 32, 32), "must hold a single entry"),
-        ((4, 32, 64), (1, 32, 32), "differ past dim 0"),
-        ((4, 30, 32), (1, 32, 32), "differ past dim 0"),  # same padded shape, different logical shape
-        ((64, 32), (32, 32), "at least 3 for TILE"),
+        (ttnn.float32, ttnn.TILE_LAYOUT, (2, 32, 32), (2, 32, 32), None, "must hold a single entry"),
+        (ttnn.float32, ttnn.TILE_LAYOUT, (4, 32, 64), (1, 32, 32), None, "differ past dim 0"),
+        # same padded shape, different logical shape
+        (ttnn.float32, ttnn.TILE_LAYOUT, (4, 30, 32), (1, 32, 32), None, "differ past dim 0"),
+        (ttnn.float32, ttnn.TILE_LAYOUT, (64, 32), (32, 32), None, "at least 3 for TILE"),
+        # a row-major ND page is one shard row, which the entry page count does not model
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (4, 3, 192), (1, 3, 192), [1, 3, 64], "ND-sharded DRAM for TILE"),
     ],
-    ids=["two-multi-entry", "entry-shape", "logical-shape", "rank-2-tile"],
+    ids=["two-multi-entry", "entry-shape", "logical-shape", "rank-2-tile", "row-major-nd"],
 )
-def test_rejects(device, expect_error, source_shape, destination_shape, message):
-    source = _to_device(torch.zeros(source_shape), device, ttnn.float32, ttnn.TILE_LAYOUT)
-    destination = _to_device(torch.zeros(destination_shape), device, ttnn.float32, ttnn.TILE_LAYOUT)
+def test_rejects(device, expect_error, dtype, layout, source_shape, destination_shape, source_nd_shard, message):
+    source = _to_device(torch.zeros(source_shape), device, dtype, layout, _table_memory(device, source_nd_shard))
+    destination = _to_device(torch.zeros(destination_shape), device, dtype, layout)
     with expect_error(RuntimeError, message):
         ttnn.experimental.kda.indexed_entry_copy(source, destination, _index(device, 0), index_scale=1, index_offset=0)
 
