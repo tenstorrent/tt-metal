@@ -42,6 +42,7 @@ from models.demos.glm53_flash.custom_ops.index_score_decode.op import IndexScore
 from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import prefill_linear
+from models.demos.glm53_flash.tt.mesh import from_torch_host_layout
 
 TILE = 32
 STATIC_PREFILL_ENV = "GLM53_INDEX_STATIC_PREFILL"  # "1" (default): shape-static eager maintenance of aligned chunks
@@ -69,9 +70,7 @@ POOL_DTYPE = {"bfloat16": ttnn.bfloat16, "bfloat8_b": ttnn.bfloat8_b}[os.environ
 
 
 def _upload(device, t: torch.Tensor, dtype, layout=ttnn.TILE_LAYOUT):
-    return ttnn.from_torch(
-        t.contiguous(), dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    return from_torch_host_layout(t, dtype, layout, device)  # host-side layout: no Tilize program per shape
 
 
 def _compute(device, fidelity=ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_acc=False):

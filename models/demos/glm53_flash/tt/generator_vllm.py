@@ -600,8 +600,8 @@ class GLM53FlashForCausalLM:
 
     def _warmup_prefill_lengths(self) -> list[int]:
         """The prompt lengths the eager warm-up walks. ``GLM53_VLLM_WARMUP_PREFILL`` = ``auto`` (default): every
-        prefill bucket up to the device chunk as a lone prompt (its first-chunk programs) and as the continuation
-        of a full device chunk (``chunk + bucket``: the same programs with history, the conv / KDA / index
+        prefill bucket up to the device chunk, full and ragged (``b - 1``), as a lone prompt (its first-chunk
+        programs) and as the continuation of a full device chunk (``chunk + bucket``: the same programs with history, the conv / KDA / index
         maintenance variants of a second chunk), so no chunk shape of any prompt compiles after the captures (a
         1590-token prompt = a 1024 chunk + a 566-token continuation padded to the 1024 bucket: the 2026-10-28
         served APC seal hit). A comma-separated list walks exactly those lengths (the old ``128,32768`` catalog
@@ -617,7 +617,12 @@ class GLM53FlashForCausalLM:
             except ImportError:
                 buckets = list(self.geometry.traced_prefill_lengths)
             buckets = [b for b in buckets if b <= chunk]
-            cand = sorted(set(buckets + [chunk] + [chunk + b for b in buckets]))
+            # every bucket full AND ragged (b - 1: the rows-past-the-prompt paths, e.g. the router's pad mask),
+            # lone and as the continuation of a full chunk
+            cand = sorted(
+                {n for b in buckets for n in (b, max(1, b - 1), chunk + b, chunk + max(1, b - 1))}
+                | {chunk, max(1, chunk - 1)}
+            )
         else:
             cand = [int(part) for part in raw.split(",") if part.strip()]
         out: list[int] = []

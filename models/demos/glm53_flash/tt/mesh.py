@@ -77,6 +77,18 @@ def mesh_device_params(rows: int, cols: int, **overrides) -> dict:
     return params
 
 
+def from_torch_host_layout(
+    t: torch.Tensor, dtype, layout, device, *, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=None
+) -> ttnn.Tensor:
+    """``ttnn.from_torch`` whose layout conversion runs on the HOST (``from_torch`` without a device, then
+    ``to_device``: a copy, no program). With a device given, ``from_torch`` tilizes on the device — a Tilize
+    program per tensor shape, which under a sealed program cache (after the trace captures) is a request-time
+    compile. For the small per-request constants (masks, selectors, bounds) the host conversion is free."""
+    kw = {"mesh_mapper": mesh_mapper} if mesh_mapper is not None else {}
+    host = ttnn.from_torch(t.contiguous(), dtype=dtype, layout=layout, **kw)
+    return ttnn.to_device(host, device, memory_config=memory_config)
+
+
 @dataclass(frozen=True)
 class GLMMesh:
     """A mesh device plus the axis convention. ``tp`` = columns, ``dp`` = rows."""
@@ -152,6 +164,13 @@ class GLMMesh:
             assert t.shape[cols] % self.cols == 0, (tuple(t.shape), cols, self.cols)
         if rows is not None:
             assert t.shape[rows] % self.rows == 0, (tuple(t.shape), rows, self.rows)
+        if self.allocations_frozen[0]:
+            # after a capture no program may be built, and ``from_torch`` with a device tilizes ON the device
+            # (a Tilize program per shape; the 2026-10-28 served APC seal hit on the ragged chunk's router
+            # mask): convert on the host, then a plain copy
+            return from_torch_host_layout(
+                t, dtype, layout, self.device, memory_config=memory_config, mesh_mapper=self.shard_2d(rows, cols)
+            )
         return ttnn.from_torch(
             t.contiguous(),
             dtype=dtype,

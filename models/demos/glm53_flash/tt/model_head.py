@@ -43,7 +43,7 @@ from models.demos.glm53_flash.reference.checkpoint import (
 )
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
-from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
+from models.demos.glm53_flash.tt.mesh import GLMMesh, from_torch_host_layout, single_chip
 
 TILE = 32
 
@@ -225,7 +225,7 @@ class TtModelHead(LightweightModule):
         ttnn.deallocate(hn)
         onehot = torch.zeros(1, 1, TILE, TILE)
         onehot[0, 0, 0, r] = 1.0
-        sel = ttnn.from_torch(onehot, dtype=tile.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+        sel = from_torch_host_layout(onehot, tile.dtype, ttnn.TILE_LAYOUT, self.device)  # no Tilize program
         picked = ttnn.matmul(sel, tile, dtype=tile.dtype, compute_kernel_config=self.hifi4)  # row 0 = row r
         logits = self.logits(picked)  # [1, 1, 32, vocab]
         out = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, 1, int(logits.shape[-1])])

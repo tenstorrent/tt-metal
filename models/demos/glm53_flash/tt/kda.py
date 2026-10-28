@@ -65,7 +65,7 @@ from models.demos.glm53_flash.custom_ops.kda_decode.op import (
 )
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
-from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
+from models.demos.glm53_flash.tt.mesh import GLMMesh, from_torch_host_layout, interleave_blocks, single_chip
 
 L2_NORM_EPS = 1e-6  # FLA l2norm: x / sqrt(sum(x^2) + 1e-6)
 # decode path: "composite" (GLM53_KDA_FUSED=0) | "block" (GLM53_KDA_FUSED=1: one kda_decode program for the whole block)
@@ -497,9 +497,7 @@ class TtKDA(LightweightModule):
         B = int(state.convolution.shape[1])
         mask = torch.zeros(taps, B, 1)
         mask[:, user, 0] = 1.0
-        up = lambda t: ttnn.from_torch(
-            t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        up = lambda t: from_torch_host_layout(t, ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device)  # no Tilize program
         mask_dev, keep_dev = up(mask), up(1.0 - mask)
         ttnn.multiply(state.convolution, keep_dev, output_tensor=state.convolution)  # zero the slot's rows
         new_rows = ttnn.multiply(conv, mask_dev)  # [taps,1,W] x [taps,B,1] -> [taps,B,W]
