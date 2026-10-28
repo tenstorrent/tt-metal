@@ -242,6 +242,7 @@ jobs:
     if: ${{ inputs.stage2-baseline-ref != '' }}
     continue-on-error: true
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -281,7 +282,7 @@ jobs:
           path: stage2-baseline/
 
   llk-perf-exec:
-    needs: [load-test-matrix, build-images, llk-perf-shadow-compile]
+    needs: [load-test-matrix, build-images, llk-perf-shadow-compile, stage2-baseline]
     if: >-
       ${{ !cancelled() && inputs.architecture != 'quasar' && needs.build-images.result == 'success'
           && needs.load-test-matrix.result == 'success' && needs.load-test-matrix.outputs.matrix != '[]' }}
@@ -454,8 +455,8 @@ jobs:
           THRESHOLD: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].threshold }}
           MODULE_THRESHOLDS: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].module_thresholds }}
         run: |
-          # 2 min stay for the uploads.
-          export LLK_STAGE2_DEADLINE=$(( JOB_START_EPOCH + (TIMEOUT_MINUTES - 2) * 60 ))
+          # JOB_START_EPOCH is stamped after container init (up to ~3 min on a cold pull); 2 more stay for the uploads.
+          export LLK_STAGE2_DEADLINE=$(( JOB_START_EPOCH + (TIMEOUT_MINUTES - 5) * 60 ))
           tests/run_llk_perf_merge_stage2.sh "$RUNNER_TEMP/stage2-baseline/$CHIP_ARCH" "$RUNNER_TEMP/stage2"
       - name: "Stage 2: upload the result"
         if: ${{ !cancelled() && steps.stage2-baseline.outcome == 'success' }}
@@ -463,7 +464,9 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: llk-perf-stage2-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
-          path: ${{ runner.temp }}/stage2/stage2.json
+          path: |
+            ${{ runner.temp }}/stage2/stage2.json
+            ${{ runner.temp }}/stage2/stage2.base
           if-no-files-found: ignore
 
       # Shadow steps: after the official upload, report-only, llk-shadow-* artifacts only.

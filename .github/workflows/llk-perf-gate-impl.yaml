@@ -416,6 +416,13 @@ jobs:
             printf '\n> ⚠️ %s of %s %s leg(s) left a stage-2 result, so the gate keeps the stage-1 verdict.\n' \
               "$RESULTS" "$LEGS" "$ARCH" >> stage2.md
           fi
+          # Stage 2 counts only when every leg compared against the gate's own baseline.
+          GATE_BASE=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
+          if find stage2 -name stage2.base -exec cat {} + | grep -qvx "$GATE_BASE"; then
+            BLOCKS=true
+            printf '\n> ⚠️ A leg re-measured against another baseline than the gate (%s), so the gate keeps the stage-1 verdict.\n' \
+              "$GATE_BASE" >> stage2.md
+          fi
           echo "blocks=$BLOCKS" >> "$GITHUB_OUTPUT"
           printf '\n' >> perf_gate_report.md
           cat stage2.md >> perf_gate_report.md
@@ -475,7 +482,8 @@ jobs:
                 || '' }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          GATE_EXIT_CODE: ${{ steps.compare.outputs.gate_exit_code }}
+          # Stage 2 clearing every stage-1 regression makes the post clean, like the job.
+          GATE_EXIT_CODE: ${{ steps.stage2.outputs.blocks == 'false' && '0' || steps.compare.outputs.gate_exit_code }}
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
           MEASURE_RESULT: ${{ steps.measured.outputs.result }}
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}

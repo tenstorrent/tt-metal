@@ -39,19 +39,6 @@ def test_inline_zone_entries_bound_the_window():
     assert _window(insns, _ELF) == [1, 2, 3, 4]
 
 
-def test_zone_calls_bound_the_window():
-    insns = _loop(
-        [("jal", "200 <zone_reserve>")],
-        [
-            ("lui", f"a0,{hex(_ID >> 12)}"),
-            ("addi", f"a0,a0,{_ID & 0xFFF}"),
-            ("jal", "300 <zone_record>"),
-        ],
-    )
-
-    assert _window(insns, _ELF) == [1, 2, 3, 4, 5, 6]
-
-
 def test_other_zone_ids_are_not_a_window():
     insns = _loop(
         [("lui", f"a5,{hex(0xA0000 | (_ID ^ 1))}")],

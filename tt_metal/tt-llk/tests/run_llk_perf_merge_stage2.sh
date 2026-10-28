@@ -18,6 +18,11 @@ if [[ ! -f "$BASELINE/baseline.csv" ]]; then
   exit 0
 fi
 
+# The gate checks this against its own baseline: a leg that read another one (the queue entry ahead
+# uploaded in between) does not count.
+BASE_SHA="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("commit_sha", ""))' "$BASELINE/baseline_metadata.json")"
+echo "$BASE_SHA" > "$OUT/stage2.base"
+
 COMPARE=(--threshold "${THRESHOLD:?}" --min-cycles 30 --module-threshold "${MODULE_THRESHOLDS:-}")
 
 python3 "$LLK/perf/regression_compare.py" "${COMPARE[@]}" \
@@ -38,20 +43,22 @@ measure() {
     echo "::warning::No time left to measure the $1 side."
     return
   fi
-  LLK_PERF_NODE_LIST="$OUT/nodes.txt" RUNNER_TEMP="$OUT/tmp-$1" timeout -k 20 "$left" "$2/tests/run_llk_perf_placement.sh" \
+  LLK_PERF_NODE_LIST="$OUT/nodes.txt" RUNNER_TEMP="$OUT/tmp-$1" timeout -k 20 "$(( left - 20 ))" "$2/tests/run_llk_perf_placement.sh" \
     || echo "::warning::Stage 2 on the $1 side did not finish; what it missed is reported as not re-measured."
 }
 
-BASE_SHA="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("commit_sha", ""))' "$BASELINE/baseline_metadata.json")"
 BASE="$OUT/base"
 mkdir -p "$BASE"
 git -C "$REPO" fetch -q --depth 1 origin "$BASE_SHA"
-git -C "$REPO" archive FETCH_HEAD tt_metal/tt-llk tt_metal/hw tt_metal/hostdevcommon \
+git -C "$REPO" archive FETCH_HEAD tt_metal/tt-llk tt_metal/hw tt_metal/hostdevcommon tt_metal/sfpi-version \
   ttnn/cpp/ttnn/operations/experimental | tar -x -C "$BASE"
 
 # No stage2.json from here on means the gate keeps the stage-1 verdict.
 if [[ ! -x "$BASE/tt_metal/tt-llk/tests/run_llk_perf_placement.sh" ]]; then
   echo "::warning::The baseline commit ${BASE_SHA} predates stage 2; nothing to compare with."
+  exit 0
+elif [[ ! -f "$BASE/tt_metal/tt-llk/tests/sfpi-version" ]]; then
+  echo "::error::The baseline commit ${BASE_SHA} has no SFPI pin in the archive; nothing to compare with."
   exit 0
 elif ! cmp -s "$LLK/tests/sfpi-version" "$BASE/tt_metal/tt-llk/tests/sfpi-version"; then
   echo "::warning::The baseline commit ${BASE_SHA} pins another SFPI; nothing to compare with."

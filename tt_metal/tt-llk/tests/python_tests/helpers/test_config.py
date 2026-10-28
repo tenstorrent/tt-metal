@@ -122,6 +122,8 @@ class TestOutcome:
 
 
 LLK_CODE_SHIFT = int(os.environ.get("LLK_CODE_SHIFT", "0"))
+# The link flag that applies it; the object cache key leaves it out, so every position reuses the objects.
+CODE_SHIFT_FLAG = "-Wl,--defsym=__llk_code_shift="
 
 
 class TestConfig:
@@ -1707,7 +1709,7 @@ class TestConfig:
         key = [
             token.replace(root, "<artefacts>")
             for token in head
-            if not token.startswith("-Wl,--defsym=__llk_code_shift=")
+            if not token.startswith(CODE_SHIFT_FLAG)
         ]
         digest = sha256((json.dumps(key) + source).encode()).hexdigest()[:32]
         obj = Path(cache) / f"{digest}.o"
@@ -1851,11 +1853,7 @@ class TestConfig:
                         f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
                         f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
                     ],
-                    (
-                        [f"-Wl,--defsym=__llk_code_shift={LLK_CODE_SHIFT}"]
-                        if LLK_CODE_SHIFT
-                        else []
-                    ),
+                    ([f"{CODE_SHIFT_FLAG}{LLK_CODE_SHIFT}"] if LLK_CODE_SHIFT else []),
                     # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
                     # that -nostdlib drops; only referenced helpers are linked.
                     ["-x", "c++", "-", "-lc", "-lgcc", "-o"],
