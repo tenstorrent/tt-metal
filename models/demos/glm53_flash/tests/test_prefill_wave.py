@@ -38,6 +38,8 @@ S = int(os.environ.get("GLM53_WAVE_S", "512"))
 MAX_SEQ = int(os.environ.get("GLM53_WAVE_MAX_SEQ", "2048"))
 PCC_BAR = float(os.environ.get("GLM53_WAVE_PCC", "0.999"))
 SWAP_BAR = float(os.environ.get("GLM53_WAVE_SWAP_PCC", "0.9999"))
+# real-text prompts (comma-separated ids; 8 windows of S tokens); "random" = uniform random ids (near-tie logits)
+IDS = os.environ.get("GLM53_WAVE_IDS", "/mnt/tt-data/sdawle/glm53f/needle/needle_260000_d10.ids")
 _DT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 EXPERT_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp4")]
 EXPERT_DOWN_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp4")]
@@ -119,8 +121,14 @@ def test_prefill_wave_vs_sp(mesh_device):
     )
     rows, cols = model.mesh.rows, model.mesh.cols
     logger.info(f"model: mesh {MESH} layers {layers} S {S} built in {time.perf_counter() - t0:.0f} s")
-    gen = torch.Generator().manual_seed(250)
-    prompts = [torch.randint(1, cfg.vocab_size - 1, (S,), generator=gen) for _ in range(rows)]
+    if IDS == "random":
+        gen = torch.Generator().manual_seed(250)
+        prompts = [torch.randint(1, cfg.vocab_size - 1, (S,), generator=gen) for _ in range(rows)]
+    else:
+        text = torch.tensor([int(v) for v in open(IDS).read().split(",") if v.strip()], dtype=torch.long)
+        stride = max(S, (text.numel() - S) // rows)
+        prompts = [text[r * stride : r * stride + S].clone() for r in range(rows)]
+        assert all(p.numel() == S for p in prompts), "the ids file is too short for the wave's prompts"
 
     # -- references: each prompt alone through the SP prefill (slot 0 on every row), kept on the host
     ref = []
