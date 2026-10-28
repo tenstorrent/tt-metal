@@ -217,6 +217,9 @@ def test_rejects(device, expect_error, source_shape, destination_shape, message)
 # rank's 18 KDA layers in the slab and the layer at position 5: every KDA layer does each of these once per chunk.
 _K3_LAYERS, _K3_SLOTS, _K3_POSITION = 18, 2, 5
 _PRODUCTION_PERF_MARGIN = 0.05
+# The 1.5 MiB copies are DRAM-bound with reads and writes sharing the channels, and vary about +/-5% run to run on a
+# Blackhole P150 (8.39-9.29 us store over 8 runs), so their band is wider than the latency-bound tail's.
+_RECURRENT_PERF_MARGIN = 0.07
 
 
 @dataclass(frozen=True)
@@ -228,11 +231,12 @@ class _ProductionCase:
     nd_shard: list[int] | None
     load: bool
     expected_duration_ns: int
+    margin: float = _PRODUCTION_PERF_MARGIN
 
 
 _PRODUCTION_CASES = (
-    _ProductionCase("recurrent-store", ttnn.float32, ttnn.TILE_LAYOUT, (24, 128, 128), [1, 1, 128, 32], False, 8_800),
-    _ProductionCase("recurrent-load", ttnn.float32, ttnn.TILE_LAYOUT, (24, 128, 128), [1, 1, 128, 32], True, 8_940),
+    _ProductionCase("recurrent-store", ttnn.float32, ttnn.TILE_LAYOUT, (24, 128, 128), [1, 1, 128, 32], False, 8_800, _RECURRENT_PERF_MARGIN),
+    _ProductionCase("recurrent-load", ttnn.float32, ttnn.TILE_LAYOUT, (24, 128, 128), [1, 1, 128, 32], True, 8_940, _RECURRENT_PERF_MARGIN),
     _ProductionCase("convolution-store", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, False, 1_940),
     _ProductionCase("convolution-load", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, True, 1_950),
 )
@@ -287,9 +291,9 @@ def test_kimi_k3_production_performance(device, case: _ProductionCase) -> None:
         f"dram_bytes={performance.work.dram_bytes}, ideal_dram_ns={performance.ideal_dram_ns:.2f}, "
         f"dram_utilization_pct={performance.dram_utilization_pct:.2f}"
     )
-    lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
-    upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
+    lower = case.expected_duration_ns * (1 - case.margin)
+    upper = case.expected_duration_ns * (1 + case.margin)
     assert lower <= duration_ns <= upper, (
         f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
-        f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+        f"(reference {case.expected_duration_ns} ns, margin +/- {case.margin * 100:.0f}%)"
     )
