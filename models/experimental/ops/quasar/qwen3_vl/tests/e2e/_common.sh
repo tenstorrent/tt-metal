@@ -22,7 +22,7 @@ TEXT_LAYERS=2
 DECODE_STEPS=1
 # Tap deepstack at block 0 so two vision blocks still run the deepstack mergers and their add into the text layers.
 DEEPSTACK_AT=0
-# Tiny (256x256 image, 128-token prefill) is the fast iteration size; demo matches the graph captures.
+# Tiny (256x256 image, 128-token prefill) is the size run on Quasar; demo matches the WH N150 graph captures (WH/BH only).
 SIZE=tiny
 KV_BLOCKS="" # paged KV-cache blocks of 32 tokens; empty uses the preset's value.
 HOST_OPS=""

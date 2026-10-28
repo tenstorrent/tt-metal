@@ -8,7 +8,12 @@ from models.experimental.ops.quasar.qwen3_vl.tests.e2e.config import RunConfig
 
 def pytest_addoption(parser):
     g = parser.getgroup("qwen3_vl_e2e")
-    g.addoption("--qwen-size", default="tiny", choices=["tiny", "demo"])
+    g.addoption(
+        "--qwen-size",
+        default="tiny",
+        choices=["tiny", "demo"],
+        help="Input sizes; layers are set separately. demo (WH N150 capture sizes) is WH/BH only, not run on Quasar.",
+    )
     g.addoption("--qwen-vision-layers", type=int, default=2)
     g.addoption("--qwen-text-layers", type=int, default=2)
     g.addoption("--qwen-decode-steps", type=int, default=1)

@@ -25,7 +25,7 @@ Script defaults: `--size tiny --vision-layers 2 --text-layers 2 --decode-steps 1
 
 | Flag | Meaning |
 |---|---|
-| `--size tiny\|demo` | tiny: 256x256 image, 64 image tokens, 78-token prompt padded to 128. demo: the graph-capture sizes (2752 image tokens, 4096 prefill). |
+| `--size tiny\|demo` | tiny: 256x256 image, 64 image tokens, 78-token prompt padded to 128. demo: the graph-capture sizes (2752 image tokens, 4096 prefill), WH/BH only: Quasar runs use tiny, and the vision QKV/WO program configs do not fit small Quasar grids at demo sizes. |
 | `--vision-layers N`, `--text-layers N` | blocks of the 24-block vision tower / 36-layer text model to run |
 | `--decode-steps K` | teacher-forced decode steps after prefill (0 = prefill only) |
 | `--deepstack-at I\|real` | move the deepstack tap to vision block I (in TT and HF alike); `real` keeps 5/11/17 |
