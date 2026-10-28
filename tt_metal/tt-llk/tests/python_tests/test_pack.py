@@ -10,8 +10,6 @@ Tests the LLK pack kernel with:
 - Destination sync modes (SyncHalf for double-buffering, SyncFull for single-buffering)
 """
 
-import os
-
 import pytest
 import torch
 from conftest import skip_for_wormhole
@@ -223,8 +221,8 @@ def test_pack(
             DEST_SYNC(dest_sync),
             PACK_BLOCK(pack_block),
             PACK_SRC_FROM_OUTPUT(),
-        ]
-        + ([PACK_RMW_DEST()] if os.environ.get("LLK_PACK_RMW") == "1" else []),
+            PACK_RMW_DEST(),
+        ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
             DEST_INDEX(dest_index),
