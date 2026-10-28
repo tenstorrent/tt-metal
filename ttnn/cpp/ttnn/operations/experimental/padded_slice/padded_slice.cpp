@@ -86,7 +86,7 @@ ttnn::Tensor padded_slice(
     bool rm_input = input_tensor.layout() == Layout::ROW_MAJOR;
     // No-op check
     if (no_step && starts_zero && ends_max && no_pad && rm_input) {
-        return ret_adjustment(input_tensor);
+        return finalize_into_preallocated(ret_adjustment(input_tensor));
     }
 
     // Create modified vectors with wrapped indices and adjust them to match the tensor's rank
