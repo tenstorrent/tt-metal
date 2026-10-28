@@ -218,9 +218,17 @@ def test_prep_rejects_gates_of_different_length(device, expect_error):
         )
 
 
-def test_prep_rejects_zero_chunk_size(device, expect_error):
-    """The prep launcher derives the chunk count by dividing by chunk_size before the prim validates it."""
+@pytest.mark.parametrize("qk_flat", [False, True], ids=["head_major", "flat"])
+def test_prep_rejects_zero_chunk_size(device, expect_error, qk_flat):
+    """The prep launcher derives the chunk count by dividing by chunk_size before the prim validates it.
+    Only flat q/k take the T / chunk_size path."""
     q, k, v, g, beta, _ = _make_inputs(4, 1, seed=20261026, scale=KDIM**-0.5)
+    flat_kwargs = {}
+    if qk_flat:
+        # One head: flat [B, T, Hk*K] with B = BH = 4 and T = one chunk.
+        q = q.reshape(4, CHUNK, KDIM)
+        k = k.reshape(4, CHUNK, KDIM)
+        flat_kwargs = dict(qk_flat=True, Hk=1, qk_norm=True)
     with expect_error(RuntimeError, "chunk_size must be 32 or 64"):
         _t.chunk_gdn_prep(
             _dev(device, q, ttnn.bfloat16),
@@ -230,6 +238,7 @@ def test_prep_rejects_zero_chunk_size(device, expect_error):
             _dev(device, _gate(beta), ttnn.float32),
             *_const_tiles(device),
             chunk_size=0,
+            **flat_kwargs,
         )
 
 
