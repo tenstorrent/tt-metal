@@ -16,6 +16,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_gates import session_stamp  # noqa: E402
+
 KERNEL = "DEVICE KERNEL DURATION [ns]"
 GAP = "OP TO OP LATENCY [ns]"
 TOP = 15
@@ -72,7 +75,10 @@ def main(iter_dir: Path, csv_path: Path | None = None):
     gaps = sum(_f(r[GAP]) for _n, r in ops) / 1e6
     summary = {"csv": str(csv_path), "shape": meta["shape"], "precision": meta["precision"], "rows": meta["rows"],
                "sections": sec, "reduced_kernel_ms": reduced, "full_estimate_ms": est, "op_to_op_gap_ms": gaps,
-               "ops": len(ops), "categories_ms": dict(sorted(cats.items(), key=lambda kv: -kv[1]))}
+               "ops": len(ops), "categories_ms": dict(sorted(cats.items(), key=lambda kv: -kv[1])),
+               # v1.23: the profile job's session stamp, and this summary's own
+               "profile_stamp": {k: meta.get(k) for k in ("git_head", "git_dirty", "started_at")},
+               "summary_stamp": session_stamp()}
     for bench in (iter_dir / "bench.json", iter_dir / "bench_reduced.json"):
         if not bench.is_file():
             continue

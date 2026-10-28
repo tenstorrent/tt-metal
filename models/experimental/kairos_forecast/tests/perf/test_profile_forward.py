@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 
 from models.experimental.kairos_forecast.reference import dataflow as DF
+from models.experimental.kairos_forecast.tests.perf.check_gates import session_stamp
 from models.experimental.kairos_forecast.tests.perf.suite import load
 from models.experimental.kairos_forecast.tt.common import Precision
 from models.experimental.kairos_forecast.tt.generator import _cat_fronts
@@ -23,6 +24,7 @@ from models.experimental.kairos_forecast.tt.router_state import RouterState
 LAYERS = tuple(int(x) for x in os.environ.get("PROFILE_LAYERS", "2+2").split("+"))
 PRECISION = os.environ.get("PROFILE_PRECISION", "accuracy")
 SHAPE = os.environ.get("PROFILE_SHAPE", "paper")
+STAMP = session_stamp()  # v1.23: profiles are stamped too
 
 
 def test_profile_forward(device):
@@ -49,5 +51,5 @@ def test_profile_forward(device):
     if out:
         meta = {"shape": SHAPE, "precision": PRECISION, "rows": int(inp["B"]), "layer_counts": {
             "embed": 1, "enc_block": [LAYERS[0], 6], "enc_norm": 1, "dec_block": [LAYERS[1], 6], "dec_norm": 1,
-            "head": 1}}
+            "head": 1}, **STAMP}
         (Path(out) / "layer_counts.json").write_text(json.dumps(meta, indent=1) + "\n")

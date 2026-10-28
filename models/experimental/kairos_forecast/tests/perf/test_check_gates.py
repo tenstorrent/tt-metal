@@ -5,9 +5,13 @@
 
 import copy
 
-from models.experimental.kairos_forecast.tests.perf.check_gates import LOWER_IS_BETTER, check
+from models.experimental.kairos_forecast.tests.perf.check_gates import LOWER_IS_BETTER
+from models.experimental.kairos_forecast.tests.perf.check_gates import check as _check
 
-FLOORS = {"pcc_normalized": 0.999, "pcc_final": 0.99, "route_mismatch_rows": 0, "bias_max_abs_diff": 1e-6}
+FLOORS = {"pcc_normalized": 0.999, "pcc_final": 0.99, "route_mismatch_rows": 0, "bias_max_abs_diff": 1e-6,
+          "bias_row_p50": 0.01, "bias_row_max": 0.03, "pcc_step": 0.999, "bias_row_p50_final": 0.01,
+          "pcc_step_final": 0.999, "inactive_max_err": 0.05, "spread_ratio_p50": [0.97, 1.03],
+          "spread_ratio_p01": 0.9}
 GATES = {
     "floors": {"*/accuracy": dict(FLOORS, abs_err_max=0.05), "*/performance": dict(FLOORS, abs_err_max=0.1)},
     "drift": {"pcc_normalized": {"abs": 1e-3}, "route_mismatch_rows": {"abs": 0}, "abs_err_max": {"rel": 0.1}},
@@ -19,13 +23,30 @@ GOOD = {
     "bias_max_abs_diff": 2e-7,
     "min_top3_margin": 1e-3,
     "abs_err_max": 0.02,
+    "bias_row_p50": 0.001,
+    "bias_row_max": 0.005,
+    "pcc_step": 0.9999,
+    "bias_row_p50_final": 0.001,
+    "bias_row_max_final": 0.004,
+    "pcc_step_final": 0.9999,
+    "inactive_max_err": 0.01,
+    "spread_ratio_p50": 1.0,
+    "spread_ratio_p01": 0.98,
+    "active_rows": 400,
+    "excluded_rows": 50,
     "git_head": "x",
     "git_dirty": "",
+    "started_at": 2000.0,
 }
+TIMES = {"x": 1000.0}
 
 
 def _rec(name="paper", precision="accuracy", **kw):
     return dict(GOOD, name=name, precision=precision, **kw)
+
+
+def check(cand, base, gates, **kw):
+    return _check(cand, base, gates, commit_times=TIMES, **kw)
 
 
 def _fails(r, metric):
@@ -33,7 +54,45 @@ def _fails(r, metric):
 
 
 def test_lower_is_better_set():
-    assert {"route_mismatch_rows", "bias_max_abs_diff", "abs_err_max"} <= LOWER_IS_BETTER
+    assert {"route_mismatch_rows", "bias_max_abs_diff", "abs_err_max", "bias_row_p50", "bias_row_max",
+            "bias_row_p50_final", "bias_row_max_final", "inactive_max_err"} <= LOWER_IS_BETTER
+
+
+def test_bias_row_fails():  # v1.24, lower is better
+    for k in ("bias_row_p50", "bias_row_max", "bias_row_p50_final"):
+        assert _fails(_rec(**{k: 0.05}), k), k
+
+
+def test_inactive_max_err_fails():
+    assert _fails(_rec(inactive_max_err=0.2), "inactive_max_err")
+    # not applicable without inactive rows: prints, does not fail
+    assert not _fails(_rec(inactive_max_err=0.2, excluded_rows=0), "inactive_max_err")
+
+
+def test_pcc_step_fails():
+    assert _fails(_rec(pcc_step=0.99), "pcc_step")
+    assert _fails(_rec(pcc_step_final=0.99), "pcc_step_final")
+
+
+def test_not_applicable_below_active_rows(capsys):
+    r = _rec(active_rows=9, spread_ratio_p01=0.1)  # p01 needs >= 100 active rows
+    assert not _fails(r, "spread_ratio_p01")
+    assert "not applicable (n_active=9 < 100)" in capsys.readouterr().out
+    assert _fails(_rec(active_rows=9, spread_ratio_p50=1.2), "spread_ratio_p50")  # p50 applies at >= 8
+    assert not _fails(_rec(active_rows=2, spread_ratio_p50=1.2), "spread_ratio_p50")
+
+
+def test_started_before_commit_fails():  # v1.22 / v1.23
+    assert any("started before" in f for f in check([_rec(started_at=999.0)], [_rec()], GATES))
+    r = {k: v for k, v in _rec().items() if k != "started_at"}
+    assert any("stamp" in f for f in check([r], [_rec()], GATES))
+
+
+def test_missing_case_or_precision_fails():  # v1.24
+    base = [_rec(), _rec(precision="performance"), _rec("ragged")]
+    fails = check([_rec(), _rec("ragged")], base, GATES)
+    assert any("missing from the candidate set" in f for f in fails)
+    assert not check(base, base, GATES)
 
 
 def test_good_passes():

@@ -23,13 +23,15 @@ import pytest
 import torch
 
 from models.experimental.kairos_forecast.reference import dataflow as DF
-from models.experimental.kairos_forecast.tests.perf.check_gates import git_stamp
+from models.experimental.kairos_forecast.tests.perf.check_gates import session_stamp
 from models.experimental.kairos_forecast.tests.perf.suite import GIFT_CASES, load, run_case
 from models.experimental.kairos_forecast.tt.common import Precision
 from models.experimental.kairos_forecast.tt.generator import KairosGenerator
 from models.experimental.kairos_forecast.tt.model import TtKairos
 from models.experimental.kairos_forecast.tt.router_state import RouterState
 from models.experimental.kairos_forecast.tt.trace import TracedKairos, _leaves
+
+STAMP = session_stamp()  # v1.23: taken once, at collection (the session start); every record carries it
 
 LAYERS = tuple(int(x) for x in os.environ.get("BENCH_LAYERS", "6+6").split("+"))
 RUNS = int(os.environ.get("BENCH_RUNS", "5"))
@@ -129,14 +131,14 @@ def test_forward_perf(device, W, shape, precision):
         "device_s_min": min(dev),
         "split_runs": runs,
         "steady_runs": steady,
-        **git_stamp(),
+        **STAMP,
     }
     if full:
         for r in recs:  # main record carries the generate() metrics; a rollout's _tf record is written alongside
             if r["name"] == shape:
                 entry.update({k: v for k, v in r.items() if k not in ("name", "precision", "e2e_s")})
             else:
-                _record({**r, "test": "teacher_forced", **git_stamp()})
+                _record({**r, "test": "teacher_forced", **STAMP})
     print(f"[PERF] {shape}/{precision} layers {LAYERS}: device {entry['device_ms']:.2f} ms (min "
           f"{1e3 * entry['device_s_min']:.2f}), steady {entry['steady_s'] * 1e3:.1f} ms, "
           f"split {json.dumps({k: round(statistics.median(r[k] for r in runs) * 1e3, 2) for k in runs[0]})}"

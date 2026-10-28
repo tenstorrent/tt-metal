@@ -18,8 +18,13 @@ metrics; ``candidate <= baseline + tol`` (absolute) or ``<= baseline x (1 + rel)
 
 ``drift_by`` overrides ``drift`` per ``<shape>/<precision>`` (or ``*/<precision>``); ``null`` removes a metric. A
 tolerance with ``ref`` (a path relative to gates.json) checks that metric against that record instead of the
-baseline (D6). A drift metric missing from either record is a FAIL (v1.17). A candidate record must carry
-``git_head`` and an empty ``git_dirty`` (v1.16); ``--allow-unstamped`` admits records written before that.
+baseline (D6). A drift metric missing from either record is a FAIL (v1.17), and so is a candidate set that lacks a
+case or precision of the baseline. A candidate record must carry the session stamp (v1.16, v1.23): ``git_head``, an
+empty ``git_dirty`` and a ``started_at`` no earlier than ``git_head``'s commit time, all taken once when the job's
+session started (``session_stamp()``); ``--allow-unstamped`` admits records written before that.
+
+Applicability (v1.12, v1.14): band percentiles p01 / p99 apply at >= 100 active rows, p50 at >= 8, and
+``inactive_max_err`` only when the case has inactive rows; every skipped check prints ``not applicable (...)``.
 """
 
 from __future__ import annotations
@@ -38,12 +43,32 @@ LOWER_IS_BETTER = {
     "spread_ratio_max",
     "route_mismatch_rows",  # D0 amendment 1: floor == 0
     "bias_max_abs_diff",  # D0 amendment 2: <= 1e-6
+    "bias_row_p50",  # v1.24: row |mean error|, head space
+    "bias_row_max",
+    "bias_row_p50_final",  # the same in data space (over the target's scale)
+    "bias_row_max_final",
 }
 # D0 amendment 1 / D2 fix 4: gated on the target and every suite / bench case in both precisions, report-only for
 # free-running rollout steps >= 2 and e2e_stream.
 ROUTING_KEYS = {"route_mismatch_rows", "bias_max_abs_diff", "min_top3_margin"}
 # PLAN v1.20: absolute floors on every case, both precisions; a gates.json without them is a FAIL.
-REQUIRED_FLOORS = {"pcc_normalized", "pcc_final", "route_mismatch_rows", "bias_max_abs_diff"}
+# D3 / v1.24: the level-shift, lag and inactive-row metrics are gated on every case too.
+REQUIRED_FLOORS = {"pcc_normalized", "pcc_final", "route_mismatch_rows", "bias_max_abs_diff", "bias_row_p50",
+                   "bias_row_max", "pcc_step", "bias_row_p50_final", "pcc_step_final", "inactive_max_err"}
+# v1.14: (metric, minimum active rows). Population percentiles over fewer rows are really the min / max.
+MIN_ACTIVE = {"spread_ratio_p01": 100, "spread_ratio_p99": 100, "pcc_row_p01_active": 100, "pcc_row_p01": 100,
+              "spread_ratio_p50": 8}
+
+
+def not_applicable(record: dict, metric: str) -> str | None:
+    """Why `metric` is not checked on `record` (None: it is checked)."""
+    need = MIN_ACTIVE.get(metric)
+    n = record.get("active_rows")
+    if need is not None and n is not None and n < need:
+        return f"n_active={n} < {need}"
+    if metric == "inactive_max_err" and record.get("excluded_rows") == 0:
+        return "no inactive rows"
+    return None
 
 
 def report_only(record: dict, metric: str) -> bool:
@@ -53,6 +78,9 @@ def report_only(record: dict, metric: str) -> bool:
 DEFAULT_GATES = Path(__file__).resolve().parents[2] / "doc" / "optimize" / "gates.json"
 # D5: drift is always against this fixed round-0 record (both precisions, all shapes); a b2b base is timing only
 DEFAULT_BASELINE = DEFAULT_GATES.parent / "iter_00" / "bench.json"
+
+
+_SESSION = {}
 
 
 def git_stamp() -> dict:
@@ -65,6 +93,24 @@ def git_stamp() -> dict:
         "git_head": git("rev-parse", "HEAD"),
         "git_dirty": git("status", "--porcelain", "--", "tt", "tests", "ops"),
     }
+
+
+def session_stamp() -> dict:
+    """v1.23: the stamp taken once, at the first call in this process (tests call it at import, i.e. at session
+    start), with ``started_at`` (unix time); every record of the session carries this same stamp."""
+    import time
+
+    if not _SESSION:
+        _SESSION.update(started_at=time.time(), **git_stamp())
+    return dict(_SESSION)
+
+
+def commit_time(head: str) -> float | None:
+    import subprocess
+
+    r = subprocess.run(["git", "show", "-s", "--format=%ct", head], cwd=Path(__file__).resolve().parent,
+                       capture_output=True, text=True)
+    return float(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
 
 
 def _floors(gates: dict, name: str, precision: str) -> dict:
@@ -80,6 +126,12 @@ def _drift(gates: dict, name: str, precision: str) -> dict:
     return {k: v for k, v in out.items() if v is not None}
 
 
+def load_records(path: Path) -> list[dict]:
+    """bench.json (a list) or the suite's JSON lines (suite.jsonl)."""
+    text = Path(path).read_text()
+    return [json.loads(x) for x in text.splitlines() if x.strip()] if str(path).endswith(".jsonl") else json.loads(text)
+
+
 def _by_key(records: list[dict]) -> dict:
     return {(r["name"], r["precision"]): r for r in records}
 
@@ -92,23 +144,40 @@ def passes(metric: str, v: float, floor) -> bool:
 
 
 def check(
-    cand: list[dict], base: list[dict] | None, gates: dict, gates_dir: Path | None = None, allow_unstamped=False
+    cand: list[dict], base: list[dict] | None, gates: dict, gates_dir: Path | None = None, allow_unstamped=False,
+    require_coverage=True, commit_times: dict | None = None,
 ) -> list[str]:
+    """commit_times: {git_head: unix time} overrides the git lookup (unit tests)."""
     failures = []
     base_by = _by_key(base or [])
     refs = {}
+    if require_coverage and base:
+        for key in sorted(base_by.keys() - _by_key(cand).keys()):
+            print(f"FAIL coverage {key[0]}/{key[1]}: in the baseline, missing from the candidate set (v1.24)")
+            failures.append(f"{key}: missing from the candidate set")
     for r in cand:
         key = (r["name"], r["precision"])
-        if "git_head" not in r and not allow_unstamped:
-            failures.append(f"{key}: no git_head / git_dirty stamp")
+        if ("git_head" not in r or "started_at" not in r) and not allow_unstamped:
+            print(f"FAIL stamp {key[0]}/{key[1]}: no session stamp (git_head, started_at)")
+            failures.append(f"{key}: no git_head / started_at session stamp")
         if r.get("git_dirty"):
             print(f"FAIL tree {key[0]}/{key[1]} dirty at {r.get('git_head')}: {r['git_dirty']!r}")
             failures.append(f"{key}: dirty tree")
+        if "started_at" in r and "git_head" in r:
+            ct = commit_times.get(r["git_head"]) if commit_times else commit_time(r["git_head"])
+            if ct is None or r["started_at"] < ct:
+                print(f"FAIL stamp {key[0]}/{key[1]}: started_at {r['started_at']} before commit {r['git_head']} "
+                      f"({ct}) (v1.22)")
+                failures.append(f"{key}: started before its commit")
         floors = _floors(gates, *key)
         for metric in sorted(REQUIRED_FLOORS - floors.keys()):
             print(f"FAIL floor {key[0]}/{key[1]} {metric}: no absolute floor (v1.20)")
             failures.append(f"{key} {metric}: no floor")
         for metric, floor in floors.items():
+            why = not_applicable(r, metric)
+            if why:
+                print(f"n/a  floor {key[0]}/{key[1]} {metric}: not applicable ({why})")
+                continue
             v = r.get(metric)
             if v is None:
                 failures.append(f"{key} {metric}: missing")
@@ -122,10 +191,14 @@ def check(
         for metric, tol in _drift(gates, *key).items():
             if report_only(r, metric):
                 continue
+            why = not_applicable(r, metric)
+            if why:
+                print(f"n/a  drift {key[0]}/{key[1]} {metric}: not applicable ({why})")
+                continue
             if "ref" in tol:
                 path = (gates_dir or DEFAULT_GATES.parent) / tol["ref"]
                 if path not in refs:
-                    refs[path] = _by_key(json.loads(path.read_text()))
+                    refs[path] = _by_key(load_records(path))
                 b = refs[path].get(key)
             else:
                 b = base_by.get(key)
@@ -171,8 +244,8 @@ def main():
     ap.add_argument("--allow-unstamped", action="store_true", help="admit records without git_head (pre-v1.16)")
     args = ap.parse_args()
     gates = json.loads(args.gates.read_text())
-    cand = json.loads(args.candidate.read_text())
-    base = json.loads(args.baseline.read_text()) if args.baseline else None
+    cand = load_records(args.candidate)
+    base = load_records(args.baseline) if args.baseline else None
     failures = check(cand, base, gates, args.gates.parent, args.allow_unstamped)
     print(f"{len(failures)} failure(s)" + (": " + "; ".join(failures) if failures else ""))
     sys.exit(1 if failures else 0)

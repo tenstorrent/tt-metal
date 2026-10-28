@@ -9,10 +9,12 @@ import pytest
 
 from models.experimental.kairos_forecast.reference import dataflow as DF
 from models.experimental.kairos_forecast.tests.helpers import FLOORS, FLOORS_PERFORMANCE
-from models.experimental.kairos_forecast.tests.perf.check_gates import git_stamp
+from models.experimental.kairos_forecast.tests.perf.check_gates import session_stamp
 from models.experimental.kairos_forecast.tests.perf.suite import run_case
 from models.experimental.kairos_forecast.tt.common import Precision
 from models.experimental.kairos_forecast.tt.model import TtKairos
+
+STAMP = session_stamp()  # v1.23: taken once, at collection (the session start); every record carries it
 
 CASES = os.environ.get("KAIROS_CASES", "single,single_plain,single_short,ragged,single_long_horizon,long_horizon,paper")
 
@@ -28,7 +30,7 @@ def test_suite(device, W, case, prec):
     m = TtKairos(device, W, getattr(Precision, prec)())
     recs, _ = run_case(m, case, prec, collapsed=case == "paper")
     floors = FLOORS if prec == "accuracy" else FLOORS_PERFORMANCE
-    stamp = git_stamp()
+    stamp = STAMP
     for r in recs:
         r.update(stamp)
         keys = ("pcc_normalized", "pcc_normalized_full", "pcc_final", "pcc_spread", "pcc_row_min", "spread_ratio_p01",
