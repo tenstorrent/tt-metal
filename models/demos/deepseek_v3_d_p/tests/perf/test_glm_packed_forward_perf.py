@@ -25,6 +25,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.common.prefill.prefill_chunk import PrefillChunk
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -40,9 +41,6 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
-
-# TODO: import from models.demos.common.prefill.prefill_chunk once #62535 moves it there.
-from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk
 
 _REPLAYS = int(os.environ.get("GLM_PACKED_PERF_REPLAYS", "5"))
 _TRACE_REGION_SIZE = 512 * 1024 * 1024
