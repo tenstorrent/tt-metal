@@ -10,7 +10,7 @@
 
 Contract (forward)
     `AudioDeviceInputs` built by `AudioEncoder.prepare_inputs` and uploaded (see audio_encoder.py):
-        mel [B,4S,128,1] fp32 ROW_MAJOR, frame_mask [B,1,4S,1] fp32 TILE, mask1 [1,1,B*2S*64,1] bf16
+        mel [B,1,4S,128] fp32 TILE, frame_mask [B,1,4S,1] fp32 TILE, mask1 [1,1,B*2S*64,1] bf16
         TILE, attn_mask [B,1,S,64] fp32 TILE. S is a token bucket (config.TOKEN_BUCKETS).
     Returns (soft [B,1,S,512] bf16, hidden [B,1,S,1536] fp32). Clip b's soft tokens are rows
     0..n_b-1 (n_b = valid tokens). forward() issues device ops only, so it can be captured in a trace,

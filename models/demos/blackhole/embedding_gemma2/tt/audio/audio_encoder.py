@@ -6,7 +6,7 @@
 Host work lives here and only here. From the processor outputs (`input_features` [B, T, 128] log-mel,
 `input_features_mask` [B, T], True = valid frame; `extract_features` runs the HF feature extractor
 on raw 16 kHz waveforms) `prepare_inputs` builds, per forward:
-    mel         log-mel frames zero padded to the frame bucket 4S              [B,4S,128,1] fp32 RM
+    mel         log-mel frames zero padded to the frame bucket 4S              [B,1,4S,128] fp32 TILE
     frame_mask  1 for valid frames                                             [B,1,4S,1]   fp32
     mask1       frame_mask[::2] repeated over the 64 conv0 frequency rows       [1,1,B*2S*64,1] bf16
     attn_mask   additive band + key-validity mask (attention.attention_mask)   [B,1,S,64]   fp32
@@ -121,8 +121,8 @@ class AudioEncoder(LightweightModule):
         frames = SUBSAMPLE * S
         fm = torch.zeros((B, frames), dtype=torch.float32)
         fm[:, :T] = input_features_mask.float()
-        mel = torch.zeros((B, frames, F, 1), dtype=torch.float32)
-        mel[:, :T, :, 0] = input_features.float()
+        mel = torch.zeros((B, 1, frames, F), dtype=torch.float32)
+        mel[:, 0, :T, :] = input_features.float()
         mask1 = fm[:, ::2].reshape(B, frames // 2, 1).expand(B, frames // 2, F // 2).reshape(1, 1, -1, 1)
         # valid tokens form a prefix (right padding); attention keys are masked by count
         num_tokens = tmask.sum(-1).tolist()
@@ -134,7 +134,7 @@ class AudioEncoder(LightweightModule):
             return ttnn.from_torch(t.contiguous(), dtype=dt, layout=ttnn.TILE_LAYOUT)
 
         tensors = AudioDeviceInputs(
-            mel=ttnn.from_torch(mel, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            mel=tile(mel, ttnn.float32),
             frame_mask=tile(fm.reshape(B, 1, frames, 1), ttnn.float32),
             mask1=tile(mask1, ttnn.bfloat16),
             attn_mask=tile(amask, ttnn.float32),
@@ -155,8 +155,8 @@ class AudioEncoder(LightweightModule):
     # ---------------------------------------------------------------- eager
     def prepare(self, x: AudioDeviceInputs) -> None:
         """Setup for the shape of `x` (conv weight layout). Must run before any trace capture."""
-        key = (x.mel.shape[0], x.mel.shape[1] // SUBSAMPLE)
-        if self._traces and not self.model.subsample.prepared(x.mel.shape[0], x.mel.shape[1]):
+        key = (x.mel.shape[0], x.mel.shape[2] // SUBSAMPLE)
+        if self._traces and not self.model.subsample.prepared(x.mel.shape[0], x.mel.shape[2]):
             raise RuntimeError(f"shape {key} was not prepared before the traces were captured; use capture_all()")
         self.model.prepare(x)
 

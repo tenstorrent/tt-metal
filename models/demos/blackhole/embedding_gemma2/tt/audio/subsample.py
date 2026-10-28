@@ -19,7 +19,7 @@ Both convs run on device (`ttnn.conv2d`, fp32 mel in for conv0, bf16 weights, Hi
 unprepared shape.
 
 Contract (forward)
-    mel         [B, T, 128, 1] fp32 ROW_MAJOR DRAM, T = 4 * S (frame bucket); frames past the clip are 0
+    mel         [B, 1, T, 128] fp32 TILE DRAM, T = 4 * S (frame bucket); frames past the clip are 0
     frame_mask  [B, 1, T, 1] fp32 TILE DRAM (1 valid frame / 0 padding), multiplied into mel on device
     mask1       [1, 1, B*(T/2)*64, 1] bf16 TILE DRAM: frame_mask[::2] repeated over the 64 frequency rows
     output      [B, 1, S, 1024] act_dtype (bf16 default) TILE DRAM (rows >= the clip's token count are
@@ -136,7 +136,7 @@ class AudioSubsample(LightweightModule):
 
     def prepare(self, x: "AudioSubsampleInputs") -> None:
         """Lay out both conv weights for (batch, frames) by running the stack once (setup only)."""
-        B, T = x.mel.shape[0], x.mel.shape[1]
+        B, T = x.mel.shape[0], x.mel.shape[2]
         if (B, T) in self._conv_w:
             return
         ws = []
@@ -150,13 +150,13 @@ class AudioSubsample(LightweightModule):
         self._conv_w[(B, T)] = tuple(ws)
 
     def _mask_mel(self, x: "AudioSubsampleInputs") -> ttnn.Tensor:
-        """mel [B,T,128,1] RM * frame_mask -> [B,T,128,1] RM (multiplied in tile layout as [B,1,T,128])."""
-        B, T, F, _ = x.mel.shape
+        """mel [B,1,T,128] TILE * frame_mask -> [B,T,128,1] RM (the conv0 NHWC input, C = 1).
+
+        E5c: the host uploads mel in tile layout (was [B,T,128,1] row-major, which cost a 0.75 ms
+        row-major reshape at 1 x 768 before the multiply)."""
+        B, _, T, F = x.mel.shape
         dram = ttnn.DRAM_MEMORY_CONFIG
-        m = ttnn.reshape(x.mel, (B, 1, T, F))
-        mt = ttnn.to_layout(m, ttnn.TILE_LAYOUT, memory_config=dram)
-        masked = ttnn.multiply(mt, x.frame_mask, memory_config=dram)
-        ttnn.deallocate(mt)
+        masked = ttnn.multiply(x.mel, x.frame_mask, memory_config=dram)
         rm = ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
         ttnn.deallocate(masked)
         return ttnn.reshape(rm, (B, T, F, 1))
@@ -184,7 +184,7 @@ class AudioSubsample(LightweightModule):
     def conv_stack(self, x: "AudioSubsampleInputs") -> ttnn.Tensor:
         """Masked conv0 / LN / ReLU / mask / conv1 / LN / ReLU, flattened: [B, 1, S, 1024] bf16 (HF
         input_proj_linear input)."""
-        B, T = x.mel.shape[0], x.mel.shape[1]
+        B, T = x.mel.shape[0], x.mel.shape[2]
         if (B, T) not in self._conv_w:
             raise RuntimeError(f"conv weights not prepared for (batch, frames) {(B, T)}; call prepare() at setup")
         ws = self._conv_w[(B, T)]
