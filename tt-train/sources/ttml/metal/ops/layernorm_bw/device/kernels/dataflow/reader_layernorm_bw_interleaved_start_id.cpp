@@ -25,7 +25,8 @@ constexpr bool do_mask_w = true;
 constexpr bool do_mask_w = false;
 #endif
 
-// Gamma, and the two passes that feed the row sums when not everything fits in L1, are only needed for dx.
+// Gamma, the scaler and mask tiles, and the two passes that feed the row sums when not everything fits in L1, are only
+// needed for dx.
 #ifdef COMPUTE_GRAD_INPUT
 constexpr bool compute_grad_input = true;
 #else
@@ -44,14 +45,16 @@ void kernel_main() {
 
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
-    // Generate mask tile.
-    if constexpr (do_mask_w) {
-        generate_mask_tile(cb_mask_w_idx, one, zero, mask_w);
+    if constexpr (compute_grad_input) {
+        // Generate mask tile.
+        if constexpr (do_mask_w) {
+            generate_mask_tile(cb_mask_w_idx, one, zero, mask_w);
+        }
+        // Generate tile with scalar (1/N).
+        generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
     }
-    // Generate tile with scalar (1/N).
-    generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
 
-    const uint32_t tile_bytes = get_tile_size(cb_scaler_idx);
+    const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     constexpr auto gamma_args = TensorAccessorArgs<4>();
     constexpr auto input_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto mean_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -117,7 +120,7 @@ void kernel_main() {
             }
         }
 
-        // Three passes: for computing dx, dgamma_components, and dbeta_components
+        // Final pass: one read of each block feeds dx, dgamma_components and dbeta_components
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t row_tile_idx = (r * Wt) + c;
             const uint32_t current_block_size = std::min(block_size, Wt - c);

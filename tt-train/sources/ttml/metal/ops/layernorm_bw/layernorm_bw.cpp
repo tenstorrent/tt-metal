@@ -15,27 +15,9 @@ std::vector<std::optional<ttnn::Tensor>> layernorm_bw(
     const ttnn::Tensor& mean_tensor,
     const ttnn::Tensor& rstd_tensor,
     const ttnn::Tensor& dL_dout_tensor,
-    const bool compute_grad_input,
-    const bool compute_grad_gamma,
-    const bool compute_grad_beta) {
-    // Call the device operation
-    // Returns: [dx, dgamma_components, dbeta_components]; a skipped grad is nullopt
-    auto result = ttnn::prim::ttml_layernorm_bw(
-        input_tensor,
-        gamma_tensor,
-        mean_tensor,
-        rstd_tensor,
-        dL_dout_tensor,
-        /* preallocated_dx */ std::nullopt,
-        /* preallocated_dgamma_components */ std::nullopt,
-        /* preallocated_dbeta_components */ std::nullopt,
-        compute_grad_input,
-        compute_grad_gamma,
-        compute_grad_beta);
-
+    const LayerNormBackwardGrads& grads) {
     // dL_dgamma and dL_dbeta require sum over batches so we cannot perform this sum in the kernel.
-    // Instead we return the components and reduce them here.
-
+    // Instead we reduce their components here.
     auto reduction_with_reshape_to2D = [](const ttnn::Tensor& tensor) {
         return ttnn::reshape(
             ttnn::sum(
@@ -50,10 +32,31 @@ std::vector<std::optional<ttnn::Tensor>> layernorm_bw(
                 /*compute_kernel_config */ core::ComputeKernelConfig::precise()),
             ttnn::Shape({1, 1, 1, tensor.logical_shape()[3]}));
     };
+
+    // dbeta_components is a copy of dL_dout, so dbeta alone needs no kernel.
+    if (grads.beta && !grads.input && !grads.gamma) {
+        return {std::nullopt, std::nullopt, reduction_with_reshape_to2D(dL_dout_tensor)};
+    }
+
+    // Call the device operation
+    // Returns: [dx, dgamma_components, dbeta_components]; a skipped grad is nullopt
+    auto result = ttnn::prim::ttml_layernorm_bw(
+        input_tensor,
+        gamma_tensor,
+        mean_tensor,
+        rstd_tensor,
+        dL_dout_tensor,
+        /* preallocated_dx */ std::nullopt,
+        /* preallocated_dgamma_components */ std::nullopt,
+        /* preallocated_dbeta_components */ std::nullopt,
+        grads.input,
+        grads.gamma,
+        grads.beta);
+
     return {
         result[0],  // dx - already complete
-        compute_grad_gamma ? std::make_optional(reduction_with_reshape_to2D(result[1].value())) : std::nullopt,
-        compute_grad_beta ? std::make_optional(reduction_with_reshape_to2D(result[2].value())) : std::nullopt};
+        grads.gamma ? std::make_optional(reduction_with_reshape_to2D(result[1].value())) : std::nullopt,
+        grads.beta ? std::make_optional(reduction_with_reshape_to2D(result[2].value())) : std::nullopt};
 }
 
 }  // namespace ttml::metal

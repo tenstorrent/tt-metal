@@ -88,9 +88,9 @@ bool fits_in_l1_check(
     const uint32_t bf16_row_memory_padded_to_block_size =
         closest_to_Wt_multiple_of_block_size * bfloat16_single_tile_size_bytes;
     // Memory for input data CBs
-    const uint32_t scaler_memory = kNumScalerTiles * bfloat16_single_tile_size_bytes;
-    const uint32_t mask_memory = kNumMaskTiles * bfloat16_single_tile_size_bytes;
-    // Gamma is only used for dx.
+    // Gamma, the scaler and mask tiles, and the two row sums are only used for dx.
+    const uint32_t scaler_memory = compute_grad_input ? kNumScalerTiles * bfloat16_single_tile_size_bytes : 0U;
+    const uint32_t mask_memory = compute_grad_input ? kNumMaskTiles * bfloat16_single_tile_size_bytes : 0U;
     const uint32_t gamma_memory = compute_grad_input ? bf16_row_memory : 0U;
     const uint32_t x_hat_memory = bf16_row_memory_padded_to_block_size;
     const uint32_t input_memory = bf16_row_memory;
@@ -105,8 +105,9 @@ bool fits_in_l1_check(
     const uint32_t dbeta_components_memory = compute_grad_beta ? output_cb_memory : 0U;
 
     // Memory for intermediate computation CBs
-    const uint32_t dy_gamma_sum_memory = kNumDyGammaSumTiles * float32_single_tile_size_bytes;
-    const uint32_t dy_gamma_xnorm_sum_memory = kNumDyGammaXnormSumTiles * float32_single_tile_size_bytes;
+    const uint32_t dy_gamma_sum_memory = compute_grad_input ? kNumDyGammaSumTiles * float32_single_tile_size_bytes : 0U;
+    const uint32_t dy_gamma_xnorm_sum_memory =
+        compute_grad_input ? kNumDyGammaXnormSumTiles * float32_single_tile_size_bytes : 0U;
     const uint32_t rstd_bcast_memory = kNumRstdBcastTiles * bfloat16_single_tile_size_bytes;
     const uint32_t mean_bcast_memory = kNumMeanBcastTiles * bfloat16_single_tile_size_bytes;
 
@@ -227,12 +228,12 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     tt::DataFormat precise_data_format = tt::DataFormat::Float32;
 
     // Input data CBs
-    [[maybe_unused]] auto cb_scaler = create_circular_buffer(
-        program, all_cores, kScalerCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
-    [[maybe_unused]] auto cb_mask_w = create_circular_buffer(
-        program, all_cores, kMaskWCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
-    // Gamma is only read for dx.
+    // Gamma, the scaler and mask tiles, and the two row sums are only used for dx.
     if (compute_grad_input) {
+        [[maybe_unused]] auto cb_scaler = create_circular_buffer(
+            program, all_cores, kScalerCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+        [[maybe_unused]] auto cb_mask_w = create_circular_buffer(
+            program, all_cores, kMaskWCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
         [[maybe_unused]] auto cb_gamma = create_circular_buffer(
             program, all_cores, kGammaCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
     }
@@ -286,20 +287,22 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         default_data_format,
         bfloat16_single_tile_size_bytes,
         kNumRstdBcastTiles);
-    [[maybe_unused]] auto cb_scaled_dy_gamma_sum = create_circular_buffer(
-        program,
-        all_cores,
-        kScaledDyGammaSumCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kNumDyGammaSumTiles);
-    [[maybe_unused]] auto cb_scaled_dy_gamma_xnorm_sum = create_circular_buffer(
-        program,
-        all_cores,
-        kScaledDyGammaXnormSumCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kNumDyGammaXnormSumTiles);
+    if (compute_grad_input) {
+        [[maybe_unused]] auto cb_scaled_dy_gamma_sum = create_circular_buffer(
+            program,
+            all_cores,
+            kScaledDyGammaSumCbIndex,
+            precise_data_format,
+            float32_single_tile_size_bytes,
+            kNumDyGammaSumTiles);
+        [[maybe_unused]] auto cb_scaled_dy_gamma_xnorm_sum = create_circular_buffer(
+            program,
+            all_cores,
+            kScaledDyGammaXnormSumCbIndex,
+            precise_data_format,
+            float32_single_tile_size_bytes,
+            kNumDyGammaXnormSumTiles);
+    }
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -338,18 +341,25 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     tt::tt_metal::TensorAccessorArgs(mean_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(rstd_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dLdout_buffer).append_to(reader_compile_time_args);
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
+    kernels.reader = create_reader_kernel(
+        program,
+        all_cores,
+        reader_compile_time_args,
+        select_defines(defines, {kMaskWDefineKey, kEverythingFitsInL1DefineKey, kComputeGradInputDefineKey}),
+        kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
-    // A skipped output gets placeholder args so the writer's accessor offsets do not depend on the flags.
-    for (auto* buffer : {dx_buffer, dgamma_components_buffer, dbeta_components_buffer}) {
-        if (buffer != nullptr) {
-            tt::tt_metal::TensorAccessorArgs(buffer).append_to(writer_compile_time_args);
-        } else {
-            tt::tt_metal::TensorAccessorArgs().append_to(writer_compile_time_args);
-        }
+    // A skipped output's buffer is nullptr, which gives placeholder args, so the writer's accessor offsets do not
+    // depend on the flags.
+    for (const auto* buffer : {dx_buffer, dgamma_components_buffer, dbeta_components_buffer}) {
+        tt::tt_metal::TensorAccessorArgs(buffer).append_to(writer_compile_time_args);
     }
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
+    kernels.writer = create_writer_kernel(
+        program,
+        all_cores,
+        writer_compile_time_args,
+        select_defines(defines, {kComputeGradInputDefineKey, kComputeGradGammaDefineKey, kComputeGradBetaDefineKey}),
+        kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
@@ -1331,10 +1332,36 @@ TEST_F(SDPABackwardTest, Validation_RejectsMalformedPreallocatedGradGate) {
             grad_gate,
             grads);
     };
-    EXPECT_ANY_THROW(call_with_grads(std::nullopt, {.query = false, .key = false}))
+    const auto rejects_preallocated_grad_gate = ::testing::ThrowsMessage<std::runtime_error>(
+        ::testing::HasSubstr("preallocated_grad_gate needs a gate and grads.gate"));
+    EXPECT_THAT([&] { call_with_grads(std::nullopt, {.query = false, .key = false}); }, rejects_preallocated_grad_gate)
         << "sdpa_bw should reject a preallocated_grad_gate without a gate";
-    EXPECT_ANY_THROW(call_with_grads(gate, {.gate = false}))
+    EXPECT_THAT([&] { call_with_grads(gate, {.gate = false}); }, rejects_preallocated_grad_gate)
         << "sdpa_bw should reject a preallocated_grad_gate when grad_gate is not requested";
+}
+
+// The Q and KV ops each reject a request for none of their outputs, so sdpa_bw launches neither when no grad is
+// requested.
+TEST_F(SDPABackwardTest, NoRequestedGradReturnsNoGrads) {
+    using namespace ttml;
+    const auto in = make_minimal_sdpa_bw_inputs();
+    const auto [grad_q, grad_k, grad_v, grad_gate] = metal::sdpa_bw(
+        in.grad_output,
+        in.attn_output,
+        in.query,
+        in.key,
+        in.value,
+        in.intermediates,
+        metal::AttentionMaskType::None,
+        /*attn_mask=*/std::nullopt,
+        /*dropout_probability=*/0.0F,
+        /*gate=*/std::nullopt,
+        /*preallocated_grad_gate=*/std::nullopt,
+        {.query = false, .key = false, .value = false, .gate = false});
+    EXPECT_FALSE(grad_q.has_value());
+    EXPECT_FALSE(grad_k.has_value());
+    EXPECT_FALSE(grad_v.has_value());
+    EXPECT_FALSE(grad_gate.has_value());
 }
 
 TEST_F(SDPABackwardTest, Validation_RejectsRowMajorGate) {
@@ -1738,6 +1765,18 @@ INSTANTIATE_TEST_SUITE_P(
             .grad_k = false,
             .grad_v = false,
             .mask_type = ttml::metal::AttentionMaskType::None},
+        // As OnlyQ on balanced row pairs: 2 batches x 8 heads x 16 sequence tiles = 256 Q rows, more than there are
+        // cores.
+        SDPABackwardSkipCase{
+            .name = "OnlyQ_Balanced",
+            .grad_k = false,
+            .grad_v = false,
+            .batch_size = 2U,
+            .num_query_heads = 8U,
+            .num_kv_heads = 8U,
+            .sequence_length = 512U},
+        // Q kernel with its K/V loop but no u_scaler; KV kernel with grad_V alone.
+        SDPABackwardSkipCase{.name = "FrozenK", .grad_k = false},
         // Q kernel without its K/V loop, computing only u_scaler, so no mask CB or define even with a DRAM mask;
         // KV kernel with grad_K alone, which does read the mask.
         SDPABackwardSkipCase{
@@ -1770,6 +1809,24 @@ INSTANTIATE_TEST_SUITE_P(
             .grad_q = false,
             .grad_k = false,
             .mask_type = ttml::metal::AttentionMaskType::Arbitrary},
+        // KV kernel with grad_K alone, causal on unpaired rows (4 K/V rows).
+        SDPABackwardSkipCase{.name = "OnlyK_Causal", .grad_q = false, .grad_v = false},
+        // KV kernel with grad_K or grad_V alone and no mask.
+        SDPABackwardSkipCase{
+            .name = "OnlyK_NoMask",
+            .grad_q = false,
+            .grad_v = false,
+            .mask_type = ttml::metal::AttentionMaskType::None},
+        SDPABackwardSkipCase{
+            .name = "OnlyV_NoMask",
+            .grad_q = false,
+            .grad_k = false,
+            .mask_type = ttml::metal::AttentionMaskType::None},
+        // KV kernel with grad_K or grad_V alone, four query heads per K/V head.
+        SDPABackwardSkipCase{
+            .name = "OnlyK_GQA", .grad_q = false, .grad_v = false, .num_query_heads = 8U, .num_kv_heads = 2U},
+        SDPABackwardSkipCase{
+            .name = "OnlyV_GQA", .grad_q = false, .grad_k = false, .num_query_heads = 8U, .num_kv_heads = 2U},
         // Q rows that the full backward pairs for balanced parallelism (4 x 8 x 8 = 256); without grad_Q they are
         // split evenly instead. KV kernel with both grads, four query heads per K/V head.
         SDPABackwardSkipCase{

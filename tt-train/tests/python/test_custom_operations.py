@@ -642,6 +642,7 @@ class TestCustomOperationsWithDevice:
         """ctx.needs_input_grad marks which inputs need a grad, so backward can skip the rest."""
 
         computed = []
+        seen_needs_input_grad = []
 
         class MulOp(Function):
             @staticmethod
@@ -652,6 +653,7 @@ class TestCustomOperationsWithDevice:
 
             @staticmethod
             def backward(ctx, grad_output):
+                seen_needs_input_grad.append(ctx.needs_input_grad)
                 a, b = ctx.saved_tensors
                 grad_output = ttnn.multiply(grad_output, ctx.scale)
                 grad_a = grad_b = None
@@ -672,6 +674,8 @@ class TestCustomOperationsWithDevice:
         output = MulOp.apply(a_tensor, b_tensor, 2.0)
         output.backward(retain_graph=False)
 
+        # One entry per forward input; the non-tensor scale never needs a grad.
+        assert seen_needs_input_grad == [(True, False, False)]
         # d/da(a * b * s) = b * s = 10.0
         assert computed == ["a"]
         np.testing.assert_array_almost_equal(

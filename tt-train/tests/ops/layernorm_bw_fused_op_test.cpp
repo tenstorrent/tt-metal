@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -473,6 +474,8 @@ struct LayerNormBwSkipCase {
     bool compute_grad_input = true;
     bool compute_grad_gamma = true;
     bool compute_grad_beta = true;
+    // dbeta alone is reduced straight from dL_dout, so no layernorm_bw program runs.
+    bool runs_kernel = true;
 };
 
 // gtest prints a failing row's parameter through this; without it the row prints as raw bytes.
@@ -534,9 +537,7 @@ TEST_P(LayerNormBwSkipTest, RequestedGradsMatchFullBackward) {
                 in.mean,
                 in.rstd,
                 in.dL_dout,
-                compute_grad_input,
-                compute_grad_gamma,
-                compute_grad_beta);
+                {.input = compute_grad_input, .gamma = compute_grad_gamma, .beta = compute_grad_beta});
         };
     const std::array<bool, 3> requested{c.compute_grad_input, c.compute_grad_gamma, c.compute_grad_beta};
     // The full backward also compiles the dgamma / dbeta reductions, so the skipping runs below only add their own
@@ -554,8 +555,8 @@ TEST_P(LayerNormBwSkipTest, RequestedGradsMatchFullBackward) {
     const auto entries_before = device->num_program_cache_entries();
     const auto skip_first = run(first, c.compute_grad_input, c.compute_grad_gamma, c.compute_grad_beta);
     const auto entries_after_first = device->num_program_cache_entries();
-    EXPECT_EQ(entries_after_first, entries_before + 1U)
-        << c.name << ": the skipping run must compile exactly one program of its own";
+    EXPECT_EQ(entries_after_first, entries_before + (c.runs_kernel ? 1U : 0U))
+        << c.name << ": the skipping run must compile exactly one program of its own, or none without a kernel";
     const auto skip_second = run(second, c.compute_grad_input, c.compute_grad_gamma, c.compute_grad_beta);
     EXPECT_EQ(device->num_program_cache_entries(), entries_after_first)
         << c.name << ": the second skipping run at identical shapes missed the program cache";
@@ -577,6 +578,7 @@ TEST_P(LayerNormBwSkipTest, RequestedGradsMatchFullBackward) {
 
 // C = 127: Wt = 4, so a partial block of 3 and masking; 256 tile rows give every core more than one row on Wormhole
 // and Blackhole. C = 16383: Wt = 512, so input, dL_dout and x_hat alone (3 MB) exceed L1 even without gamma.
+// C = 6399: Wt = 200, so input, dL_dout and x_hat (1.2 MB) fit in Blackhole's L1 only without gamma's 0.4 MB.
 INSTANTIATE_TEST_SUITE_P(
     LayerNormBwSkipCases,
     LayerNormBwSkipTest,
@@ -591,12 +593,32 @@ INSTANTIATE_TEST_SUITE_P(
             .name = "BetaOnly_FitsInL1",
             .shape = {1U, 1U, 8192U, 127U},
             .compute_grad_input = false,
-            .compute_grad_gamma = false},
+            .compute_grad_gamma = false,
+            .runs_kernel = false},
         LayerNormBwSkipCase{
             .name = "NoBeta_DoesNotFitInL1", .shape = {1U, 1U, 64U, 16383U}, .compute_grad_beta = false},
+        LayerNormBwSkipCase{
+            .name = "InputOnly_DoesNotFitInL1",
+            .shape = {1U, 1U, 64U, 16383U},
+            .compute_grad_gamma = false,
+            .compute_grad_beta = false},
+        LayerNormBwSkipCase{
+            .name = "NoInput_FitsInL1OnlyWithoutGamma", .shape = {1U, 1U, 64U, 6399U}, .compute_grad_input = false},
         LayerNormBwSkipCase{
             .name = "GammaOnly_DoesNotFitInL1",
             .shape = {1U, 1U, 64U, 16383U},
             .compute_grad_input = false,
             .compute_grad_beta = false}),
     [](const ::testing::TestParamInfo<LayerNormBwSkipCase>& info) { return info.param.name; });
+
+// The kernel always writes at least one output, so a call that requests none must be refused.
+TEST_F(LayerNormBackwardOpTest, BackwardRejectsNoRequestedGrad) {
+    const LayerNormBwInputs in = make_layernorm_bw_inputs({1U, 1U, 32U, 64U}, 1U);
+    EXPECT_THAT(
+        [&in] {
+            ttml::metal::layernorm_bw(
+                in.input, in.gamma, in.mean, in.rstd, in.dL_dout, {.input = false, .gamma = false, .beta = false});
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "at least one of compute_grad_input, compute_grad_gamma and compute_grad_beta must be set")));
+}

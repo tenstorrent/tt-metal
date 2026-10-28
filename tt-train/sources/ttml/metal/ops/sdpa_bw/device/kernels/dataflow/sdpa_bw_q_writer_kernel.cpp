@@ -55,10 +55,10 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(1);   // sequence length in tiles
     constexpr uint32_t vWt = get_compile_time_arg_val(2);  // V/dO width in tiles (grad_gate / gated dO rows)
 
-    // Generate helper tiles once at the start. The row-reduce tile is only consumed by the u_scaler reduction.
-    if constexpr (compute_grad_query || compute_u_scaler) {
-        generate_matmul_row_reduce_tile(cb_mat_mul_reduce);  // tile for matmul row reduce
-    }
+    // Generate helper tiles once at the start. The row-reduce tile is only consumed by the u reduction.
+#ifdef COMPUTE_U
+    generate_matmul_row_reduce_tile(cb_mat_mul_reduce);  // tile for matmul row reduce
+#endif
 
 #ifdef CAUSAL_MASK
     // Generate causal mask tile ONCE - will be reused for every diagonal

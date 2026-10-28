@@ -11,6 +11,7 @@
 #include <optional>
 #include <ostream>
 #include <string>
+#include <tt_stl/reflection.hpp>
 #include <vector>
 #include <xtensor/core/xmath.hpp>
 #include <xtensor/generators/xbuilder.hpp>
@@ -18,6 +19,9 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.hpp"
+#include "metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.hpp"
+#include "metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/layernorm_op.hpp"
 #include "ops/multi_head_utils.hpp"
@@ -27,6 +31,16 @@
 #include "test_utils/random_data.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
+#include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
+#include "ttnn/operations/eltwise/unary_backward/device/unary_backward_device_operation.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_concat_heads/device/nlp_concat_heads_device_operation.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
+#include "ttnn/operations/moreh/moreh_mean/device/moreh_mean_device_operation.hpp"
+#include "ttnn/operations/moreh/moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp"
+#include "ttnn/operations/moreh/moreh_sum/device/moreh_sum_device_operation.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_op_device_operation.hpp"
 
 namespace {
 
@@ -52,8 +66,12 @@ struct GradSkipCase {
     std::string name;
     std::function<OpUnderTest()> make;
     std::vector<size_t> frozen;  // indices into OpUnderTest::inputs
-    // Device ops that tt-train itself launches for the frozen inputs' grads; the frozen run must launch fewer of each.
-    std::vector<std::string> must_skip;
+    // Device ops that tt-train itself launches for the frozen inputs' grads, with how many fewer times the frozen run
+    // must launch each.
+    OpCounts skips;
+    // The frozen inputs' grads are skipped inside a fused kernel that still runs, so the frozen run must compile a
+    // program of its own.
+    bool changes_kernel_flags = false;
 };
 
 // gtest prints a failing row's parameter through this; without it the row prints as raw bytes.
@@ -61,19 +79,28 @@ void PrintTo(const GradSkipCase& c, std::ostream* os) {
     *os << c.name;
 }
 
-// Device-op names as the graph capture records them.
-constexpr const char* kBinary = "BinaryNgDeviceOperation";
-constexpr const char* kUnary = "UnaryDeviceOperation";
-constexpr const char* kMatmul = "MatmulDeviceOperation";
-constexpr const char* kMorehSum = "MorehSumOperation";
-constexpr const char* kMorehMean = "MorehMeanOperation";
-constexpr const char* kReduce = "ReduceDeviceOperation";
-constexpr const char* kSwigluElemwiseBw = "SwigluElemwiseBwDeviceOperation";
-constexpr const char* kUnaryBackward = "UnaryBackwardDeviceOperation";
-constexpr const char* kNlpConcatHeads = "NLPConcatHeadsDeviceOperation";
-constexpr const char* kTernary = "TernaryDeviceOperation";
-constexpr const char* kSdpaBwQ = "SDPABackwardQDeviceOperation";
-constexpr const char* kSdpaBwKV = "SDPABackwardKVDeviceOperation";
+// Device-op names as the graph capture records them. They come from the op types, so renaming an op breaks the build
+// rather than silently counting zero.
+template <typename Op>
+std::string op_name() {
+    return std::string(ttsl::get_type_name<Op>());
+}
+
+const std::string kBinary = op_name<ttnn::operations::binary_ng::BinaryNgDeviceOperation>();
+const std::string kUnary = op_name<ttnn::operations::unary::UnaryDeviceOperation>();
+const std::string kMatmul = op_name<ttnn::prim::MatmulDeviceOperation>();
+const std::string kMorehSum = op_name<ttnn::operations::moreh::moreh_sum::MorehSumOperation>();
+const std::string kMorehMean = op_name<ttnn::operations::moreh::moreh_mean::MorehMeanOperation>();
+const std::string kMorehSoftmaxBw =
+    op_name<ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOperation>();
+const std::string kReduce = op_name<ttnn::prim::ReduceDeviceOperation>();
+const std::string kConcat = op_name<ttnn::prim::ConcatDeviceOperation>();
+const std::string kSwigluElemwiseBw =
+    op_name<ttml::metal::ops::swiglu_elemwise_bw::device::SwigluElemwiseBwDeviceOperation>();
+const std::string kUnaryBackward = op_name<ttnn::operations::unary_backward::UnaryBackwardDeviceOperation>();
+const std::string kNlpConcatHeads = op_name<ttnn::experimental::prim::NLPConcatHeadsDeviceOperation>();
+const std::string kSdpaBwQ = op_name<ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation>();
+const std::string kSdpaBwKV = op_name<ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation>();
 
 xt::xarray<float> uniform(const std::vector<uint32_t>& shape, float lo, float hi, uint32_t seed) {
     return ttml::test_utils::make_uniform_xarray<float>(shape, lo, hi, seed);
@@ -85,7 +112,9 @@ struct BackwardRun {
     std::vector<std::string> calls;
 };
 
-BackwardRun run_backward(const OpUnderTest& op, const std::vector<bool>& requires_grad) {
+// With freeze_before_backward, every input is frozen after forward recorded the op's node, so backward still runs it.
+BackwardRun run_backward(
+    const OpUnderTest& op, const std::vector<bool>& requires_grad, bool freeze_before_backward = false) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<TensorPtr> inputs;
     for (size_t i = 0; i < op.inputs.size(); ++i) {
@@ -97,6 +126,11 @@ BackwardRun run_backward(const OpUnderTest& op, const std::vector<bool>& require
     const auto& out_shape = out_value.logical_shape();
     const auto out_grad = uniform(std::vector<uint32_t>(out_shape.cbegin(), out_shape.cend()), -1.F, 1.F, 99U);
     out->set_grad(ttml::core::from_xtensor(out_grad, device, out_value.layout()));
+    if (freeze_before_backward) {
+        for (const auto& input : inputs) {
+            input->set_requires_grad(false);
+        }
+    }
 
     BackwardRun run;
     {
@@ -236,12 +270,6 @@ TensorPtr mul_op(const TensorPtr& a, const TensorPtr& b) {
 TensorPtr div_op(const TensorPtr& a, const TensorPtr& b) {
     return ttml::ops::div(a, b);
 }
-TensorPtr min_op(const TensorPtr& a, const TensorPtr& b) {
-    return ttml::ops::min(a, b);
-}
-TensorPtr max_op(const TensorPtr& a, const TensorPtr& b) {
-    return ttml::ops::max(a, b);
-}
 
 }  // namespace
 
@@ -261,17 +289,30 @@ protected:
 };
 
 // add_grad drops a frozen input's grad, so the grads alone cannot show its work was skipped. Each row runs backward
-// with every input trainable, then with `frozen` frozen. The second run must launch fewer of each of the row's
-// `must_skip` device ops and no more of any op, and every trainable input must get the same grad bit for bit.
+// with every input trainable, then with `frozen` frozen. The second run must launch each of the row's `skips` device
+// ops exactly that many fewer times and no op more often, a fused kernel that takes the flags must compile a new
+// program, and every trainable input must get the same grad bit for bit.
 TEST_P(GradSkippingTest, FrozenInputsSkipTheirGradWork) {
     const GradSkipCase& c = GetParam();
     const OpUnderTest op = c.make();
+    auto* device = &ttml::autograd::ctx().get_device();
+    if (c.changes_kernel_flags) {
+        // Another row may already have compiled the frozen run's program.
+        device->enable_program_cache();
+        device->clear_program_cache();
+    }
     std::vector<bool> requires_grad(op.inputs.size(), true);
     const BackwardRun reference = run_backward(op, requires_grad);
+    const auto entries_after_reference = device->num_program_cache_entries();
     for (const size_t i : c.frozen) {
         requires_grad[i] = false;
     }
     const BackwardRun frozen = run_backward(op, requires_grad);
+    if (c.changes_kernel_flags) {
+        EXPECT_GT(device->num_program_cache_entries(), entries_after_reference)
+            << c.name
+            << ": the frozen run reused the full backward's programs, so the skip flags did not reach the kernel";
+    }
 
     OpCounts skipped = count_device_ops(reference.calls);
     for (const auto& [name, count] : count_device_ops(frozen.calls)) {
@@ -281,9 +322,9 @@ TEST_P(GradSkippingTest, FrozenInputsSkipTheirGradWork) {
     for (const auto& [name, count] : skipped) {
         EXPECT_GE(count, 0) << c.name << ": frozen backward launches " << name << " more often. Ops: " << frozen_ops;
     }
-    for (const auto& name : c.must_skip) {
-        EXPECT_GT(skipped[name], 0) << c.name << ": frozen backward did not skip any " << name
-                                    << ". Ops: " << frozen_ops;
+    for (const auto& [name, count] : c.skips) {
+        EXPECT_EQ(skipped[name], count) << c.name << ": frozen backward skipped the wrong number of " << name
+                                        << ". Ops: " << frozen_ops;
     }
     for (size_t i = 0; i < op.inputs.size(); ++i) {
         if (!requires_grad[i]) {
@@ -306,194 +347,221 @@ INSTANTIATE_TEST_SUITE_P(
             .name = "Add_FrozenBroadcastA",
             .make = [] { return binary(add_op, kFeatureRow, kActivation); },
             .frozen = {0},
-            .must_skip = {kMorehSum}},
+            .skips = {{kMorehSum, 2}}},
         GradSkipCase{
             .name = "Add_FrozenBroadcastB",
             .make = [] { return binary(add_op, kActivation, kFeatureRow); },
             .frozen = {1},
-            .must_skip = {kMorehSum}},
+            .skips = {{kMorehSum, 2}}},
         GradSkipCase{
             .name = "Sub_FrozenBroadcastA",
             .make = [] { return binary(sub_op, kFeatureRow, kActivation); },
             .frozen = {0},
-            .must_skip = {kMorehSum}},
+            .skips = {{kMorehSum, 2}}},
         // neg
         GradSkipCase{
             .name = "Sub_FrozenB",
             .make = [] { return binary(sub_op, kActivation, kActivation); },
             .frozen = {1},
-            .must_skip = {kUnary}},
+            .skips = {{kUnary, 1}}},
         GradSkipCase{
             .name = "Mul_FrozenA",
             .make = [] { return binary(mul_op, kActivation, kActivation); },
             .frozen = {0},
-            .must_skip = {kBinary}},
+            .skips = {{kBinary, 1}}},
         GradSkipCase{
             .name = "Mul_FrozenB",
             .make = [] { return binary(mul_op, kActivation, kActivation); },
             .frozen = {1},
-            .must_skip = {kBinary}},
+            .skips = {{kBinary, 1}}},
         // b * out_grad, then the broadcast reduction back to b's shape.
         GradSkipCase{
             .name = "Mul_FrozenBroadcastB",
             .make = [] { return binary(mul_op, kActivation, kFeatureRow); },
             .frozen = {1},
-            .must_skip = {kBinary, kMorehSum}},
+            .skips = {{kBinary, 1}, {kMorehSum, 2}}},
         // b in [1, 3) keeps 1 / b well away from overflow. a: grad * reciprocal(b). b: -grad * (a * 1/b) * 1/b.
         GradSkipCase{
             .name = "Div_FrozenA",
             .make = [] { return binary(div_op, kActivation, kActivation, 1.F); },
             .frozen = {0},
-            .must_skip = {kUnary, kBinary}},
+            .skips = {{kUnary, 1}, {kBinary, 1}}},
         GradSkipCase{
             .name = "Div_FrozenB",
             .make = [] { return binary(div_op, kActivation, kActivation, 1.F); },
             .frozen = {1},
-            .must_skip = {kUnary, kBinary}},
-        // The frozen side's comparison of b - a with zero and its where; the tie split is shared.
-        GradSkipCase{
-            .name = "Min_FrozenA",
-            .make = [] { return binary(min_op, kActivation, kActivation); },
-            .frozen = {0},
-            .must_skip = {kUnary, kTernary}},
-        GradSkipCase{
-            .name = "Min_FrozenB",
-            .make = [] { return binary(min_op, kActivation, kActivation); },
-            .frozen = {1},
-            .must_skip = {kUnary, kTernary}},
-        GradSkipCase{
-            .name = "Max_FrozenA",
-            .make = [] { return binary(max_op, kActivation, kActivation); },
-            .frozen = {0},
-            .must_skip = {kUnary, kTernary}},
-        GradSkipCase{
-            .name = "Max_FrozenB",
-            .make = [] { return binary(max_op, kActivation, kActivation); },
-            .frozen = {1},
-            .must_skip = {kUnary, kTernary}},
+            .skips = {{kUnary, 2}, {kBinary, 3}}},
         // The dtensor chain; normalized_tensor is still recomputed for dgamma.
         GradSkipCase{
             .name = "CompositeLayerNorm_FrozenTensor",
             .make = [] { return layernorm(ttml::ops::composite_layernorm, /*with_beta=*/true); },
             .frozen = {0},
-            .must_skip = {kBinary, kMorehMean}},
+            .skips = {{kBinary, 6}, {kMorehMean, 2}}},
         GradSkipCase{
             .name = "CompositeLayerNorm_FrozenGamma",
             .make = [] { return layernorm(ttml::ops::composite_layernorm, /*with_beta=*/true); },
             .frozen = {1},
-            .must_skip = {kBinary, kMorehSum}},
+            .skips = {{kBinary, 1}, {kMorehSum, 3}}},
         // Without beta there is no dbeta branch at all; gamma's skip is unchanged.
         GradSkipCase{
             .name = "CompositeLayerNormNoBeta_FrozenGamma",
             .make = [] { return layernorm(ttml::ops::composite_layernorm, /*with_beta=*/false); },
             .frozen = {1},
-            .must_skip = {kBinary, kMorehSum}},
+            .skips = {{kBinary, 1}, {kMorehSum, 3}}},
         GradSkipCase{
             .name = "CompositeLayerNorm_FrozenBeta",
             .make = [] { return layernorm(ttml::ops::composite_layernorm, /*with_beta=*/true); },
             .frozen = {2},
-            .must_skip = {kMorehSum}},
+            .skips = {{kMorehSum, 3}}},
         // dx is skipped inside layernorm_bw, which is still launched for dgamma and dbeta, so there is no op to count;
         // the row checks that their grads are unchanged.
         GradSkipCase{
             .name = "LayerNorm_FrozenTensor",
             .make = [] { return layernorm(ttml::ops::layernorm, /*with_beta=*/true); },
-            .frozen = {0}},
+            .frozen = {0},
+            .changes_kernel_flags = true},
         // The kernel skips the frozen side's partials and the wrapper skips their reduction.
         GradSkipCase{
             .name = "LayerNorm_FrozenGamma",
             .make = [] { return layernorm(ttml::ops::layernorm, /*with_beta=*/true); },
             .frozen = {1},
-            .must_skip = {kReduce}},
+            .skips = {{kReduce, 1}},
+            .changes_kernel_flags = true},
         GradSkipCase{
             .name = "LayerNormNoBeta_FrozenGamma",
             .make = [] { return layernorm(ttml::ops::layernorm, /*with_beta=*/false); },
             .frozen = {1},
-            .must_skip = {kReduce}},
+            .skips = {{kReduce, 1}},
+            .changes_kernel_flags = true},
         GradSkipCase{
             .name = "LayerNorm_FrozenBeta",
             .make = [] { return layernorm(ttml::ops::layernorm, /*with_beta=*/true); },
             .frozen = {2},
-            .must_skip = {kReduce}},
+            .skips = {{kReduce, 1}},
+            .changes_kernel_flags = true},
         GradSkipCase{
             .name = "RMSNormComposite_FrozenTensor",
             .make = rmsnorm_composite,
             .frozen = {0},
-            .must_skip = {kBinary, kMorehSum}},
+            .skips = {{kBinary, 7}, {kMorehSum, 1}}},
         GradSkipCase{
-            .name = "RMSNormComposite_FrozenGamma", .make = rmsnorm_composite, .frozen = {1}, .must_skip = {kBinary}},
+            .name = "RMSNormComposite_FrozenGamma", .make = rmsnorm_composite, .frozen = {1}, .skips = {{kBinary, 2}}},
         // dx is skipped inside rmsnorm_bw, which is still launched for dgamma, so there is no op to count; the row
         // checks that gamma's grad is unchanged.
-        GradSkipCase{.name = "RMSNorm_FrozenTensor", .make = rmsnorm, .frozen = {0}},
+        GradSkipCase{.name = "RMSNorm_FrozenTensor", .make = rmsnorm, .frozen = {0}, .changes_kernel_flags = true},
         // The kernel skips the dgamma partials and the wrapper skips their reduction.
-        GradSkipCase{.name = "RMSNorm_FrozenGamma", .make = rmsnorm, .frozen = {1}, .must_skip = {kReduce}},
+        GradSkipCase{
+            .name = "RMSNorm_FrozenGamma",
+            .make = rmsnorm,
+            .frozen = {1},
+            .skips = {{kReduce, 1}},
+            .changes_kernel_flags = true},
         // dx = dL_dlinear1 @ w1 + dL_dgate @ w3.
-        GradSkipCase{.name = "SwiGLU_FrozenX", .make = swiglu, .frozen = {0}, .must_skip = {kMatmul}},
-        GradSkipCase{.name = "SwiGLU_FrozenW1", .make = swiglu, .frozen = {1}, .must_skip = {kMatmul}},
-        GradSkipCase{.name = "SwiGLU_FrozenW2", .make = swiglu, .frozen = {2}, .must_skip = {kMatmul}},
-        GradSkipCase{.name = "SwiGLU_FrozenW3", .make = swiglu, .frozen = {3}, .must_skip = {kMatmul}},
+        GradSkipCase{.name = "SwiGLU_FrozenX", .make = swiglu, .frozen = {0}, .skips = {{kMatmul, 2}}},
+        GradSkipCase{.name = "SwiGLU_FrozenW1", .make = swiglu, .frozen = {1}, .skips = {{kMatmul, 1}}},
+        GradSkipCase{.name = "SwiGLU_FrozenW2", .make = swiglu, .frozen = {2}, .skips = {{kMatmul, 1}}},
+        GradSkipCase{.name = "SwiGLU_FrozenW3", .make = swiglu, .frozen = {3}, .skips = {{kMatmul, 1}}},
         // The shared dL_dprod matmul and swiglu_elemwise_bw, then dx (2 matmuls + add), dW1 and dW3.
         GradSkipCase{
-            .name = "SwiGLU_OnlyW2", .make = swiglu, .frozen = {0, 1, 3}, .must_skip = {kMatmul, kSwigluElemwiseBw}},
+            .name = "SwiGLU_OnlyW2",
+            .make = swiglu,
+            .frozen = {0, 1, 3},
+            .skips = {{kMatmul, 5}, {kSwigluElemwiseBw, 1}}},
         GradSkipCase{
             .name = "SDPAComposite_FrozenQ",
             .make = [] { return attention(/*sigmoid=*/false); },
             .frozen = {0},
-            .must_skip = {kMatmul}},
+            .skips = {{kMatmul, 1}}},
         GradSkipCase{
             .name = "SDPAComposite_FrozenK",
             .make = [] { return attention(/*sigmoid=*/false); },
             .frozen = {1},
-            .must_skip = {kMatmul}},
+            .skips = {{kMatmul, 1}}},
         GradSkipCase{
             .name = "SDPAComposite_FrozenV",
             .make = [] { return attention(/*sigmoid=*/false); },
             .frozen = {2},
-            .must_skip = {kMatmul}},
+            .skips = {{kMatmul, 1}}},
         // dL/d(attention weights), the softmax backward and its scale, dQ and dK.
         GradSkipCase{
             .name = "SDPAComposite_OnlyV",
             .make = [] { return attention(/*sigmoid=*/false); },
             .frozen = {0, 1},
-            .must_skip = {kMatmul, "MorehSoftmaxBackwardOperation"}},
+            .skips = {{kMatmul, 3}, {kMorehSoftmaxBw, 1}}},
         GradSkipCase{
             .name = "SigmoidSDPA_FrozenQ",
             .make = [] { return attention(/*sigmoid=*/true); },
             .frozen = {0},
-            .must_skip = {kMatmul}},
+            .skips = {{kMatmul, 1}}},
         GradSkipCase{
             .name = "SigmoidSDPA_FrozenK",
             .make = [] { return attention(/*sigmoid=*/true); },
             .frozen = {1},
-            .must_skip = {kMatmul}},
+            .skips = {{kMatmul, 1}}},
         GradSkipCase{
             .name = "SigmoidSDPA_FrozenV",
             .make = [] { return attention(/*sigmoid=*/true); },
             .frozen = {2},
-            .must_skip = {kMatmul}},
+            .skips = {{kMatmul, 1}}},
         // dL/d(attention weights), the sigmoid backward and its recomputed input, dQ and dK with their scales.
         GradSkipCase{
             .name = "SigmoidSDPA_OnlyV",
             .make = [] { return attention(/*sigmoid=*/true); },
             .frozen = {0, 1},
-            .must_skip = {kMatmul, kUnaryBackward}},
+            .skips = {{kMatmul, 3}, {kUnaryBackward, 1}}},
         // As SigmoidSDPA_OnlyV, plus the where that masks the sigmoid backward (a BinaryNg op for a scalar `other`).
         GradSkipCase{
             .name = "SigmoidSDPAMasked_OnlyV",
             .make = [] { return attention(/*sigmoid=*/true, /*causal_mask=*/true); },
             .frozen = {0, 1},
-            .must_skip = {kMatmul, kUnaryBackward}},
+            .skips = {{kMatmul, 3}, {kUnaryBackward, 1}}},
         // grad_Q is skipped inside the Q kernel, which still runs for u_scaler, so there is no op to count; the row
         // checks that grad_K and grad_V are unchanged.
-        GradSkipCase{.name = "FusedSDPA_FrozenQ", .make = fused_attention, .frozen = {0}},
-        GradSkipCase{.name = "FusedSDPA_FrozenKV", .make = fused_attention, .frozen = {1, 2}, .must_skip = {kSdpaBwKV}},
-        // Without a gate, grad_V alone needs nothing from the Q kernel.
-        GradSkipCase{.name = "FusedSDPA_OnlyV", .make = fused_attention, .frozen = {0, 1}, .must_skip = {kSdpaBwQ}},
+        GradSkipCase{.name = "FusedSDPA_FrozenQ", .make = fused_attention, .frozen = {0}, .changes_kernel_flags = true},
         GradSkipCase{
-            .name = "GroupedHeads_FrozenQs", .make = grouped_heads, .frozen = {0}, .must_skip = {kNlpConcatHeads}},
+            .name = "FusedSDPA_FrozenKV",
+            .make = fused_attention,
+            .frozen = {1, 2},
+            .skips = {{kSdpaBwKV, 1}},
+            .changes_kernel_flags = true},
+        // Without a gate, grad_V alone needs nothing from the Q kernel.
+        GradSkipCase{
+            .name = "FusedSDPA_OnlyV",
+            .make = fused_attention,
+            .frozen = {0, 1},
+            .skips = {{kSdpaBwQ, 1}},
+            .changes_kernel_flags = true},
+        GradSkipCase{
+            .name = "GroupedHeads_FrozenQs", .make = grouped_heads, .frozen = {0}, .skips = {{kNlpConcatHeads, 1}}},
         GradSkipCase{
             .name = "GroupedHeads_FrozenKvs",
             .make = grouped_heads,
             .frozen = {1},
-            .must_skip = {kNlpConcatHeads, "ConcatDeviceOperation"}}),
+            .skips = {{kNlpConcatHeads, 2}, {kConcat, 1}}}),
+    [](const ::testing::TestParamInfo<GradSkipCase>& info) { return info.param.name; });
+
+// Grad functions read requires_grad when backward runs, so an op whose inputs were all frozen after forward still has
+// its node called. It must launch no grad work, rather than ask the fused kernel for no grads at all.
+class FrozenAfterForwardTest : public GradSkippingTest {};
+
+TEST_P(FrozenAfterForwardTest, BackwardLaunchesNoGradWork) {
+    const GradSkipCase& c = GetParam();
+    const OpUnderTest op = c.make();
+    const BackwardRun run =
+        run_backward(op, std::vector<bool>(op.inputs.size(), true), /*freeze_before_backward=*/true);
+    EXPECT_TRUE(count_device_ops(run.calls).empty())
+        << c.name << ": backward launched device ops: " << fmt::format("{}", fmt::join(run.calls, ", "));
+    for (size_t i = 0; i < run.grads.size(); ++i) {
+        EXPECT_FALSE(run.grads[i].has_value()) << c.name << ": frozen input " << i << " got a grad";
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    FrozenAfterForwardCases,
+    FrozenAfterForwardTest,
+    ::testing::Values(
+        GradSkipCase{.name = "RMSNorm", .make = rmsnorm},
+        GradSkipCase{.name = "LayerNorm", .make = [] { return layernorm(ttml::ops::layernorm, /*with_beta=*/true); }},
+        GradSkipCase{
+            .name = "LayerNormNoBeta", .make = [] { return layernorm(ttml::ops::layernorm, /*with_beta=*/false); }}),
     [](const ::testing::TestParamInfo<GradSkipCase>& info) { return info.param.name; });
