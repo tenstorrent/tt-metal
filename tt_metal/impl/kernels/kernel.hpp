@@ -20,7 +20,7 @@
 #include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
 #include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include "impl/context/metal_context.hpp"
-#include "impl/metal2_host_api/raw_allocation_support.hpp"
+#include "impl/metal2_host_api/sram_arena_support.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
@@ -168,14 +168,14 @@ struct TensorBindingHandle {
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
 // A scratchpad is an uninitialized, node-local L1 region, private to a kernel by default.
-//  - The base address is allocated at Program-compile time or supplied through a RawAllocation
+//  - The base address is allocated at Program-compile time or supplied through an SRAMArena
 //    argument, and is passed to the kernel as an implicit CRTA.
 //  - Since the address is persistent across enqueues, we store it on the Kernel object rather
 //    than rely on the statefulness of the CRTA buffer. (The invariant of SetProgramRunArgs is that
 //    the CRTA and RTA buffers are completely overwritten when it's called.)
 //  - It is possible for DFB size overrides to be applied between enqueues. If this happens, the
 //    allocated scratchpad addresses will update between enqueues as well.
-//  - The address is 0 until local memory is allocated or a RawAllocation argument is bound.
+//  - The address is 0 until local memory is allocated or an SRAMArena argument is bound.
 //  - Unlike ScratchpadBindingHandle, TensorBindingHandle does NOT store the address, as for bound
 //    tensors the base address is strictly a user enqueue-time argument.
 struct ScratchpadBindingHandle {
@@ -195,7 +195,7 @@ struct ScratchpadBindingHandle {
     // The ScratchpadSpecName serves as an identifier & does not carry specific meaning.
     using AllocationIdentifier = experimental::ScratchpadSpecName;
     std::optional<experimental::ScratchpadSpecName> shared_allocation_identifier;
-    std::optional<RawAllocationSource> borrowed_from;
+    std::optional<SRAMArenaSource> borrowed_from;
 };
 
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).

@@ -27,13 +27,13 @@ struct DataflowBufferSpec {
 
     // Invariant: When set:
     // - Names a TensorParameter declared in ProgramSpec::tensor_parameters or a
-    //   RawAllocationParameter declared in ProgramAdvancedOptions::raw_allocation_parameters.
+    //   SRAMArenaParameter declared in ProgramAdvancedOptions::sram_arena_parameters.
     // - The bound memory object has L1/SRAM storage on every node occupied by the DFB.
     // - When borrowing from a tensor, its TensorSpec is L1-resident (L1 or L1_SMALL),
     //   and each occupied node's allocation can hold entry_size * num_entries bytes.
-    // - When borrowing from a RawAllocation, advanced_options.borrowed_memory_offset
+    // - When borrowing from an SRAMArena, advanced_options.borrowed_memory_offset
     //   + entry_size * num_entries must not exceed its per-node size on any occupied node.
-    std::optional<std::variant<TensorParamName, RawAllocationParamName>> borrowed_from = std::nullopt;
+    std::optional<std::variant<TensorParamName, SRAMArenaParamName>> borrowed_from = std::nullopt;
 
     DFBAdvancedOptions advanced_options;
 };
@@ -44,9 +44,9 @@ struct DFBAdvancedOptions {
     // Invariant:
     // - Must be a multiple of the L1 alignment.
     // - Must be zero when DataflowBufferSpec::borrowed_from is unset or names a TensorParameter.
-    // - When borrowing from a RawAllocation, borrowed_memory_offset
+    // - When borrowing from an SRAMArena, borrowed_memory_offset
     //   + DataflowBufferSpec::entry_size * DataflowBufferSpec::num_entries must not exceed
-    //   the RawAllocation's per-node size on any node occupied by the DFB.
+    //   the SRAMArena's per-node size on any node occupied by the DFB.
     uint32_t borrowed_memory_offset = 0;  // in bytes
 };
 ```

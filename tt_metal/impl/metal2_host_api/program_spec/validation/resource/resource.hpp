@@ -11,14 +11,14 @@
 #include <tt_stl/fmt.hpp>
 
 #include "impl/metal2_host_api/program_spec/validation/validate_spec.hpp"
-#include "impl/metal2_host_api/raw_allocation_support.hpp"
+#include "impl/metal2_host_api/sram_arena_support.hpp"
 
 namespace tt::tt_metal::experimental {
 
 // ----------------------------------------------------------------------------
 // Resource validation: declarations, bindings, and cross-kernel usage of every
 // resource a ProgramSpec declares (DFBs, prefetcher pipes, scratchpads,
-// semaphores, tensor parameters, raw-allocation parameters).
+// semaphores, tensor parameters, SRAM arena parameters).
 // ----------------------------------------------------------------------------
 //
 // Callers outside this folder use only the three phase drivers below
@@ -65,10 +65,10 @@ PrefetcherPipeRoles ValidatePrefetcherPipeRoles(const ValidationContext& ctx);
 void ValidatePrefetcherPipeLanesAndRelays(
     const ValidationContext& ctx, const PrefetcherPipeRoles& roles, tt::ARCH arch);
 
-// raw_allocation.cpp
-void ValidateRawAllocationParameter(const RawAllocationParameter& parameter);
-void ValidateRawAllocationBorrowing(
-    const RawAllocationSource& source,
+// sram_arena.cpp
+void ValidateSRAMArenaParameter(const SRAMArenaParameter& parameter);
+void ValidateSRAMArenaBorrowing(
+    const SRAMArenaSource& source,
     const CollectedSpecData& collected,
     std::string_view borrower,
     const NodeRangeSet& occupied_nodes,

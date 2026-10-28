@@ -20,12 +20,12 @@
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "program_allocation_support.hpp"
 #include "impl/buffers/semaphore.hpp"
-#include "impl/metal2_host_api/raw_allocation_support.hpp"
+#include "impl/metal2_host_api/sram_arena_support.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
-#include "tt-metalium/experimental/allocation/raw_allocation_properties.hpp"
-#include "tt-metalium/experimental/metal2_host_api/raw_allocation_parameter.hpp"
+#include "tt-metalium/experimental/sram_arena/sram_arena_properties.hpp"
+#include "tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp"
 #include "tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp"
 #include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
@@ -622,9 +622,9 @@ public:
     void register_tensor_parameter(
         const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations);
 
-    // Describes the required properties and device of a RawAllocation argument.
-    struct RegisteredRawAllocationParameter {
-        experimental::RawAllocationProperties properties;
+    // Describes the required properties and device of an SRAMArena argument.
+    struct RegisteredSRAMArenaParameter {
+        experimental::SRAMArenaProperties properties;
         // invariant: The device outlives the program.
         std::reference_wrapper<const distributed::MeshDevice> device;
     };
@@ -632,13 +632,13 @@ public:
     // Declare the required properties and device for a named allocation argument.
     // precondition: device outlives the program.
     // side-effect: Add the declaration to the program's runtime argument schema.
-    void register_raw_allocation_parameter(
+    void register_sram_arena_parameter(
         const std::string& name,
-        const experimental::RawAllocationProperties& properties,
+        const experimental::SRAMArenaProperties& properties,
         const distributed::MeshDevice& device);
 
-    // Return the program's RawAllocation parameter declarations.
-    const std::unordered_map<std::string, RegisteredRawAllocationParameter>& get_raw_allocation_parameters() const;
+    // Return the program's SRAMArena parameter declarations.
+    const std::unordered_map<std::string, RegisteredSRAMArenaParameter>& get_sram_arena_parameters() const;
 
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const std::string& name) const;
@@ -658,7 +658,7 @@ public:
     // Identifies the memory source and byte offset of a borrowed DFB.
     struct DFBBorrowedBinding {
         uint32_t dfb_id;
-        std::variant<experimental::TensorParamName, RawAllocationSource> source;
+        std::variant<experimental::TensorParamName, SRAMArenaSource> source;
     };
 
     // Register the memory source and byte offset of a borrowed DFB.
@@ -790,7 +790,7 @@ private:
             std::optional<BoundTensorFootprint> bound;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
-        std::unordered_map<std::string, RegisteredRawAllocationParameter> raw_allocation_parameters;
+        std::unordered_map<std::string, RegisteredSRAMArenaParameter> sram_arena_parameters;
 
         std::vector<DFBBorrowedBinding> dfb_borrowed_bindings;
     };

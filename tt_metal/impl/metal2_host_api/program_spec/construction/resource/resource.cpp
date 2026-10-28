@@ -16,8 +16,8 @@ ProgramResources RegisterResources(
     MetalEnvImpl& metal_env,
     detail::ProgramImpl& program_impl) {
     ProgramResources resources;
-    for (const auto& parameter : spec.advanced_options.raw_allocation_parameters) {
-        program_impl.register_raw_allocation_parameter(parameter.unique_id.get(), parameter.properties, mesh_device);
+    for (const auto& parameter : spec.advanced_options.sram_arena_parameters) {
+        program_impl.register_sram_arena_parameter(parameter.unique_id.get(), parameter.properties, mesh_device);
     }
     resources.tensor_parameters = RegisterTensorParameters(spec, mesh_device, program_impl);
     resources.dfbs = RegisterDataflowBuffers(spec, collected, risc_masks, program_impl);

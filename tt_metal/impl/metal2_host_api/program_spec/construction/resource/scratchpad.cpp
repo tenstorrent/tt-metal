@@ -72,12 +72,12 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
         handle.llk_metadata = LLKMetadataFromScratchpad(*scratchpad_spec);
         if (const auto& source = scratchpad_spec->advanced_options.borrowed_from) {
-            handle.borrowed_from = RawAllocationSource{.allocation = source->allocation, .offset = source->offset};
+            handle.borrowed_from = SRAMArenaSource{.allocation = source->allocation, .offset = source->offset};
         }
         if (scratchpad_spec->advanced_options.allow_instance_multi_binding) {
             handle.shared_allocation_identifier = scratchpad_spec->unique_id;
         }
-        // The address stays 0 until local allocation or RawAllocation argument binding.
+        // The address stays 0 until local allocation or SRAMArena argument binding.
         out.handles.push_back(std::move(handle));
         crta_word_index += 1;  // one address word per scratchpad binding
     }

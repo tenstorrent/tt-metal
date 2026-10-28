@@ -33,7 +33,7 @@ It is inevitable that these invariants exist but we should keep them to a minimu
 | `scratchpad_spec/` | `scratchpad_spec.hpp` |
 | `semaphore_spec/` | `semaphore_spec.hpp` |
 | `tensor_parameter/` | `tensor_parameter.hpp` |
-| `raw_allocation_parameter/` | `raw_allocation_parameter.hpp` |
+| `sram_arena_parameter/` | `sram_arena_parameter.hpp` |
 | `prefetcher_pipe_parameter/` | `prefetcher_pipe_parameter.hpp` |
 | `advanced_options/` | `advanced_options.hpp` |
 | `program_spec/` | `program_spec.hpp` |

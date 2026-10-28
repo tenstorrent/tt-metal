@@ -856,22 +856,22 @@ void ProgramImpl::register_tensor_parameter(
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
 }
 
-void ProgramImpl::register_raw_allocation_parameter(
+void ProgramImpl::register_sram_arena_parameter(
     const std::string& name,
-    const experimental::RawAllocationProperties& properties,
+    const experimental::SRAMArenaProperties& properties,
     const distributed::MeshDevice& device) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    const auto [it, inserted] = metal2_registry_->raw_allocation_parameters.try_emplace(
-        name, RegisteredRawAllocationParameter{properties, std::cref(device)});
-    TT_FATAL(inserted, "Duplicate raw allocation parameter name: {}", name);
+    const auto [it, inserted] = metal2_registry_->sram_arena_parameters.try_emplace(
+        name, RegisteredSRAMArenaParameter{properties, std::cref(device)});
+    TT_FATAL(inserted, "Duplicate SRAM arena parameter name: {}", name);
 }
 
-const std::unordered_map<std::string, ProgramImpl::RegisteredRawAllocationParameter>&
-ProgramImpl::get_raw_allocation_parameters() const {
-    static const std::unordered_map<std::string, RegisteredRawAllocationParameter> empty;
-    return metal2_registry_ ? metal2_registry_->raw_allocation_parameters : empty;
+const std::unordered_map<std::string, ProgramImpl::RegisteredSRAMArenaParameter>&
+ProgramImpl::get_sram_arena_parameters() const {
+    static const std::unordered_map<std::string, RegisteredSRAMArenaParameter> empty;
+    return metal2_registry_ ? metal2_registry_->sram_arena_parameters : empty;
 }
 
 const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& name) const {

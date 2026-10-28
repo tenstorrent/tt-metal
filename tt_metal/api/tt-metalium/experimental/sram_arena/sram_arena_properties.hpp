@@ -13,7 +13,7 @@ namespace tt::tt_metal::experimental {
 /**
  * Describes an allocation with the same starting address and size across all SRAM banks on each device.
  */
-struct LockstepAllocationProperties {
+struct LockstepSRAMArenaProperties {
     using size_type = uint32_t;
 
     // Number of bytes to reserve in each participating bank.
@@ -21,7 +21,7 @@ struct LockstepAllocationProperties {
     // Invariant: must be > 0.
     size_type per_bank_size;  // in bytes
 
-    // Currently RawAllocation is SRAM only,
+    // Currently SRAMArena is SRAM only,
     // but if we want to generalize it:
     //
     // MemoryResource resource = SRAM;
@@ -30,7 +30,7 @@ struct LockstepAllocationProperties {
 /**
  * Describes an allocation with the same starting address and size across the specified SRAM banks on each device.
  */
-struct RangeLockstepAllocationProperties {
+struct RangeLockstepSRAMArenaProperties {
     using size_type = uint32_t;
 
     // Nodes whose SRAM banks participate in the allocation.
@@ -46,6 +46,6 @@ struct RangeLockstepAllocationProperties {
     // MemoryResource resource = SRAM;
 };
 
-using RawAllocationProperties = std::variant<LockstepAllocationProperties, RangeLockstepAllocationProperties>;
+using SRAMArenaProperties = std::variant<LockstepSRAMArenaProperties, RangeLockstepSRAMArenaProperties>;
 
 }  // namespace tt::tt_metal::experimental

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fast-dispatch acceptance tests for lockstep and range-lockstep RawAllocation borrowing on WH/BH.
+// Fast-dispatch acceptance tests for lockstep and range-lockstep SRAMArena borrowing on WH/BH.
 // These expect working borrowed placement; unsupported construction is a test failure.
 
 #include <gtest/gtest.h>
@@ -21,7 +21,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/experimental/allocation/raw_allocation.hpp>
+#include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -29,7 +29,7 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 
 #include "command_queue_fixture.hpp"
-#include "impl/allocation/raw_allocation_impl.hpp"
+#include "impl/sram_arena/sram_arena_impl.hpp"
 #include "impl/dispatch/slow_dispatch.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 
@@ -40,7 +40,7 @@ using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
 
-class RawAllocationTest : public UnitMeshCQSingleCardFixture {
+class SRAMArenaTest : public UnitMeshCQSingleCardFixture {
 protected:
     void SetUp() override {
         UnitMeshCQSingleCardFixture::SetUp();
@@ -58,8 +58,8 @@ protected:
     uint32_t alignment = 0;
 };
 
-using RawAllocationRangeLockstep = RawAllocationTest;
-using RawAllocationLockstep = RawAllocationTest;
+using SRAMArenaRangeLockstep = SRAMArenaTest;
+using SRAMArenaLockstep = SRAMArenaTest;
 
 constexpr uint32_t kSentinel = 0xDEADBEEFu;
 constexpr uint32_t kScratchPattern = 0x13570000u;
@@ -146,7 +146,7 @@ void ExpectReport(distributed::MeshCommandQueue& cq, const MeshTensor& report, s
 
 KernelSpec ScratchpadWriter() {
     auto kernel = MakeMinimalGen1DMKernel("writer", DataMovementProcessor::RISCV_0);
-    kernel.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/raw_allocation_scratchpad.cpp";
+    kernel.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/sram_arena_scratchpad.cpp";
     kernel.runtime_arg_schema.runtime_arg_names = {"scratch_seed"};
     kernel.tensor_bindings = {{.tensor_parameter_name = TensorParamName{"report"}, .accessor_name = "report"}};
     kernel.scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
@@ -155,37 +155,37 @@ KernelSpec ScratchpadWriter() {
 
 enum class AllocationMode { Lockstep, RangeLockstep };
 
-class RawAllocationScratchpadUpdates : public RawAllocationTest, public ::testing::WithParamInterface<AllocationMode> {
+class SRAMArenaScratchpadUpdates : public SRAMArenaTest, public ::testing::WithParamInterface<AllocationMode> {
 protected:
     void SetUp() override {
-        RawAllocationTest::SetUp();
+        SRAMArenaTest::SetUp();
         if (HasFatalFailure() || IsSkipped()) {
             return;
         }
         const NodeRangeSet nodes{NodeRange(NodeCoord{0, 0})};
         const uint32_t reservation_bytes = 4 * alignment;
-        const RawAllocationProperties properties =
+        const SRAMArenaProperties properties =
             GetParam() == AllocationMode::Lockstep
-                ? RawAllocationProperties{LockstepAllocationProperties{.per_bank_size = reservation_bytes}}
-                : RawAllocationProperties{RangeLockstepAllocationProperties{
+                ? SRAMArenaProperties{LockstepSRAMArenaProperties{.per_bank_size = reservation_bytes}}
+                : SRAMArenaProperties{RangeLockstepSRAMArenaProperties{
                       .banks_to_be_allocated_on = nodes, .per_bank_size = reservation_bytes}};
         const auto report_spec = ReportSpec(nodes, alignment);
         ProgramSpec spec;
-        spec.name = "RawAllocationScratchpadUpdates";
+        spec.name = "SRAMArenaScratchpadUpdates";
         spec.kernels = {ScratchpadWriter()};
-        spec.advanced_options.raw_allocation_parameters = {
-            {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+        spec.advanced_options.sram_arena_parameters = {
+            {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
         spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 2 * alignment}};
-        spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::RawAllocationBorrowing{
-            .allocation = RawAllocationParamName{"arena"}, .offset = alignment};
+        spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::SRAMArenaBorrowing{
+            .allocation = SRAMArenaParamName{"arena"}, .offset = alignment};
         spec.tensor_parameters = {{.unique_id = TensorParamName{"report"}, .spec = report_spec}};
         spec.work_units = {MakeMinimalWorkUnit("work", nodes, {"writer"})};
         workload.add_program(
             distributed::MeshCoordinateRange(mesh_device->shape()), MakeProgramFromSpec(*mesh_device, spec));
         initial.emplace(
-            std::visit([&](const auto& props) { return allocate_on_sram(*mesh_device, props); }, properties));
+            std::visit([&](const auto& props) { return SRAMArena::allocate(*mesh_device, props); }, properties));
         replacement.emplace(
-            std::visit([&](const auto& props) { return allocate_on_sram(*mesh_device, props); }, properties));
+            std::visit([&](const auto& props) { return SRAMArena::allocate(*mesh_device, props); }, properties));
         report.emplace(CreateSentinelTensor(*mesh_device, report_spec));
         std::vector<uint32_t> sentinel(reservation_bytes / sizeof(uint32_t), kSentinel);
         ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, Base(*initial), sentinel));
@@ -197,19 +197,19 @@ protected:
         report.reset();
         replacement.reset();
         initial.reset();
-        RawAllocationTest::TearDown();
+        SRAMArenaTest::TearDown();
     }
 
-    static uint32_t Base(const RawAllocation& allocation) {
+    static uint32_t Base(const SRAMArena& allocation) {
         return std::visit(
             [](const auto& layout) { return static_cast<uint32_t>(layout.addr); }, allocation.impl().layout);
     }
 
     Program& program() { return workload.get_programs().begin()->second; }
 
-    ProgramRunArgs Args(const RawAllocation& allocation, uint32_t seed = kScratchPattern) {
+    ProgramRunArgs Args(const SRAMArena& allocation, uint32_t seed = kScratchPattern) {
         ProgramRunArgs args;
-        args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(allocation)}};
+        args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(allocation)}};
         args.tensor_args = {{TensorParamName{"report"}, TensorArgument{*report}}};
         args.kernel_run_args = {
             {.kernel = KernelSpecName{"writer"},
@@ -223,7 +223,7 @@ protected:
         return mesh_device->mesh_command_queue().enqueue_read_tensor(*report).to_vector<uint32_t>().at(0);
     }
 
-    std::vector<uint32_t> ReadReservation(const RawAllocation& allocation) {
+    std::vector<uint32_t> ReadReservation(const SRAMArena& allocation) {
         return ReadArena(*mesh_device, NodeCoord{0, 0}, Base(allocation), 4 * alignment);
     }
 
@@ -233,13 +233,13 @@ protected:
         return expected;
     }
 
-    std::optional<RawAllocation> initial;
-    std::optional<RawAllocation> replacement;
+    std::optional<SRAMArena> initial;
+    std::optional<SRAMArena> replacement;
     std::optional<MeshTensor> report;
     distributed::MeshWorkload workload;
 };
 
-TEST_P(RawAllocationScratchpadUpdates, FullResetRebindsScratchpad) {
+TEST_P(SRAMArenaScratchpadUpdates, FullResetRebindsScratchpad) {
     // A full argument reset moves scratchpad writes to the replacement reservation.
     SetProgramRunArgs(program(), Args(*initial));
     Enqueue();
@@ -250,12 +250,12 @@ TEST_P(RawAllocationScratchpadUpdates, FullResetRebindsScratchpad) {
     EXPECT_EQ(ReadReservation(*initial), ExpectedReservation(kScratchPattern));
 }
 
-TEST_P(RawAllocationScratchpadUpdates, PartialUpdateRebindsScratchpad) {
+TEST_P(SRAMArenaScratchpadUpdates, PartialUpdateRebindsScratchpad) {
     // An allocation-only update moves scratchpad writes without resupplying kernel arguments.
     SetProgramRunArgs(program(), Args(*initial));
     Enqueue();
     ProgramRunArgs update;
-    update.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(*replacement)}};
+    update.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(*replacement)}};
     UpdateProgramRunArgs(program(), update);
     Enqueue();
     EXPECT_EQ(ReportedAddress(), Base(*replacement) + alignment);
@@ -263,7 +263,7 @@ TEST_P(RawAllocationScratchpadUpdates, PartialUpdateRebindsScratchpad) {
     EXPECT_EQ(ReadReservation(*initial), ExpectedReservation(kScratchPattern));
 }
 
-TEST_P(RawAllocationScratchpadUpdates, PartialUpdateRetainsOmittedAllocation) {
+TEST_P(SRAMArenaScratchpadUpdates, PartialUpdateRetainsOmittedAllocation) {
     // Updating a kernel argument preserves the omitted scratchpad allocation binding.
     SetProgramRunArgs(program(), Args(*initial));
     Enqueue();
@@ -277,7 +277,7 @@ TEST_P(RawAllocationScratchpadUpdates, PartialUpdateRetainsOmittedAllocation) {
 
 INSTANTIATE_TEST_SUITE_P(
     AllocationModes,
-    RawAllocationScratchpadUpdates,
+    SRAMArenaScratchpadUpdates,
     ::testing::Values(AllocationMode::Lockstep, AllocationMode::RangeLockstep),
     [](const ::testing::TestParamInfo<AllocationMode>& info) {
         return info.param == AllocationMode::Lockstep ? "Lockstep" : "RangeLockstep";
@@ -286,8 +286,8 @@ INSTANTIATE_TEST_SUITE_P(
 KernelSpec DFBProducer(bool writes_scratchpad = false) {
     auto kernel = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     kernel.source = writes_scratchpad
-                        ? "tests/tt_metal/tt_metal/test_kernels/dataflow/raw_allocation_scratchpad_and_dfb_producer.cpp"
-                        : "tests/tt_metal/tt_metal/test_kernels/dataflow/raw_allocation_dfb_producer.cpp";
+                        ? "tests/tt_metal/tt_metal/test_kernels/dataflow/sram_arena_scratchpad_and_dfb_producer.cpp"
+                        : "tests/tt_metal/tt_metal/test_kernels/dataflow/sram_arena_dfb_producer.cpp";
     kernel.runtime_arg_schema.runtime_arg_names = {"dfb_seed"};
     if (writes_scratchpad) {
         kernel.runtime_arg_schema.runtime_arg_names.push_back("scratch_seed");
@@ -301,7 +301,7 @@ KernelSpec DFBProducer(bool writes_scratchpad = false) {
 
 KernelSpec DFBConsumer() {
     auto kernel = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
-    kernel.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/raw_allocation_dfb_consumer.cpp";
+    kernel.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/sram_arena_dfb_consumer.cpp";
     kernel.runtime_arg_schema.runtime_arg_names = {"output_page_start"};
     kernel.tensor_bindings = {
         {.tensor_parameter_name = TensorParamName{"report"}, .accessor_name = "report"},
@@ -310,10 +310,10 @@ KernelSpec DFBConsumer() {
     return kernel;
 }
 
-class RawAllocationDFBUpdates : public RawAllocationTest, public ::testing::WithParamInterface<AllocationMode> {
+class SRAMArenaDFBUpdates : public SRAMArenaTest, public ::testing::WithParamInterface<AllocationMode> {
 protected:
     void SetUp() override {
-        RawAllocationTest::SetUp();
+        SRAMArenaTest::SetUp();
         if (HasFatalFailure() || IsSkipped()) {
             return;
         }
@@ -321,21 +321,21 @@ protected:
         fixture_entry_size = tt::round_up(1024, alignment);
         fixture_offset = alignment;
         fixture_reservation_bytes = 2 * fixture_entry_size + 2 * alignment;
-        const RawAllocationProperties properties =
+        const SRAMArenaProperties properties =
             GetParam() == AllocationMode::Lockstep
-                ? RawAllocationProperties{LockstepAllocationProperties{.per_bank_size = fixture_reservation_bytes}}
-                : RawAllocationProperties{RangeLockstepAllocationProperties{
+                ? SRAMArenaProperties{LockstepSRAMArenaProperties{.per_bank_size = fixture_reservation_bytes}}
+                : SRAMArenaProperties{RangeLockstepSRAMArenaProperties{
                       .banks_to_be_allocated_on = nodes, .per_bank_size = fixture_reservation_bytes}};
         const TensorSpec report_spec = ReportSpec(nodes, alignment);
         const TensorSpec output_spec = OutputSpec(1, fixture_entry_size);
         ProgramSpec spec;
-        spec.name = "RawAllocationDFBUpdates";
+        spec.name = "SRAMArenaDFBUpdates";
         spec.kernels = {DFBProducer(), DFBConsumer()};
-        spec.advanced_options.raw_allocation_parameters = {
-            {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+        spec.advanced_options.sram_arena_parameters = {
+            {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
         spec.dataflow_buffers = {MakeMinimalDFB("fifo", fixture_entry_size, kDFBDepth)};
         spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-        spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+        spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
         spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = fixture_offset;
         spec.tensor_parameters = {
             {.unique_id = TensorParamName{"report"}, .spec = report_spec},
@@ -344,9 +344,9 @@ protected:
         fixture_workload.add_program(
             distributed::MeshCoordinateRange(mesh_device->shape()), MakeProgramFromSpec(*mesh_device, spec));
         fixture_initial.emplace(
-            std::visit([&](const auto& props) { return allocate_on_sram(*mesh_device, props); }, properties));
+            std::visit([&](const auto& props) { return SRAMArena::allocate(*mesh_device, props); }, properties));
         fixture_replacement.emplace(
-            std::visit([&](const auto& props) { return allocate_on_sram(*mesh_device, props); }, properties));
+            std::visit([&](const auto& props) { return SRAMArena::allocate(*mesh_device, props); }, properties));
         fixture_report.emplace(CreateSentinelTensor(*mesh_device, report_spec));
         fixture_output.emplace(CreateSentinelTensor(*mesh_device, output_spec));
         std::vector<uint32_t> sentinel(fixture_reservation_bytes / sizeof(uint32_t), kSentinel);
@@ -360,19 +360,19 @@ protected:
         fixture_report.reset();
         fixture_replacement.reset();
         fixture_initial.reset();
-        RawAllocationTest::TearDown();
+        SRAMArenaTest::TearDown();
     }
 
-    static uint32_t Base(const RawAllocation& allocation) {
+    static uint32_t Base(const SRAMArena& allocation) {
         return std::visit(
             [](const auto& layout) { return static_cast<uint32_t>(layout.addr); }, allocation.impl().layout);
     }
 
     Program& fixture_program() { return fixture_workload.get_programs().begin()->second; }
 
-    ProgramRunArgs Args(const RawAllocation& allocation, uint32_t seed) {
+    ProgramRunArgs Args(const SRAMArena& allocation, uint32_t seed) {
         ProgramRunArgs args;
-        args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(allocation)}};
+        args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(allocation)}};
         args.tensor_args = {
             {TensorParamName{"report"}, TensorArgument{*fixture_report}},
             {TensorParamName{"output"}, TensorArgument{*fixture_output}}};
@@ -392,7 +392,7 @@ protected:
         return mesh_device->mesh_command_queue().enqueue_read_tensor(tensor).to_vector<uint32_t>();
     }
 
-    std::vector<uint32_t> ReadReservation(const RawAllocation& allocation) {
+    std::vector<uint32_t> ReadReservation(const SRAMArena& allocation) {
         return ReadArena(*mesh_device, NodeCoord{0, 0}, Base(allocation), fixture_reservation_bytes);
     }
 
@@ -412,14 +412,14 @@ protected:
     uint32_t fixture_entry_size = 0;
     uint32_t fixture_offset = 0;
     uint32_t fixture_reservation_bytes = 0;
-    std::optional<RawAllocation> fixture_initial;
-    std::optional<RawAllocation> fixture_replacement;
+    std::optional<SRAMArena> fixture_initial;
+    std::optional<SRAMArena> fixture_replacement;
     std::optional<MeshTensor> fixture_report;
     std::optional<MeshTensor> fixture_output;
     distributed::MeshWorkload fixture_workload;
 };
 
-TEST_P(RawAllocationDFBUpdates, FullResetRebindsDFB) {
+TEST_P(SRAMArenaDFBUpdates, FullResetRebindsDFB) {
     // A full reset moves DFB transfers to the replacement reservation and preserves the first reservation.
     SetProgramRunArgs(fixture_program(), Args(*fixture_initial, kDFBPattern));
     Enqueue();
@@ -432,12 +432,12 @@ TEST_P(RawAllocationDFBUpdates, FullResetRebindsDFB) {
     EXPECT_EQ(ReadReservation(*fixture_initial), ExpectedReservation(kDFBPattern));
 }
 
-TEST_P(RawAllocationDFBUpdates, PartialUpdateRebindsDFB) {
+TEST_P(SRAMArenaDFBUpdates, PartialUpdateRebindsDFB) {
     // An allocation-only update moves DFB transfers without supplying tensor or kernel arguments again.
     SetProgramRunArgs(fixture_program(), Args(*fixture_initial, kDFBPattern));
     Enqueue();
     ProgramRunArgs update;
-    update.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(*fixture_replacement)}};
+    update.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(*fixture_replacement)}};
     UpdateProgramRunArgs(fixture_program(), update);
     Enqueue();
     EXPECT_EQ(ReadTensor(*fixture_report), ExpectedReport(Base(*fixture_replacement) + fixture_offset));
@@ -446,7 +446,7 @@ TEST_P(RawAllocationDFBUpdates, PartialUpdateRebindsDFB) {
     EXPECT_EQ(ReadReservation(*fixture_initial), ExpectedReservation(kDFBPattern));
 }
 
-TEST_P(RawAllocationDFBUpdates, PartialUpdateRetainsOmittedAllocation) {
+TEST_P(SRAMArenaDFBUpdates, PartialUpdateRetainsOmittedAllocation) {
     // Updating kernel arguments keeps DFB transfers in the previously supplied reservation.
     SetProgramRunArgs(fixture_program(), Args(*fixture_initial, kDFBPattern));
     Enqueue();
@@ -462,45 +462,45 @@ TEST_P(RawAllocationDFBUpdates, PartialUpdateRetainsOmittedAllocation) {
 
 INSTANTIATE_TEST_SUITE_P(
     AllocationModes,
-    RawAllocationDFBUpdates,
+    SRAMArenaDFBUpdates,
     ::testing::Values(AllocationMode::Lockstep, AllocationMode::RangeLockstep),
     [](const ::testing::TestParamInfo<AllocationMode>& info) {
         return info.param == AllocationMode::Lockstep ? "Lockstep" : "RangeLockstep";
     });
 
-TEST_F(RawAllocationRangeLockstep, ScratchpadDefaultOffset) {
+TEST_F(SRAMArenaRangeLockstep, ScratchpadDefaultOffset) {
     // The scratchpad starts at the allocation’s base address, and its writes land there.
     const NodeRangeSet node_set{NodeRange(NodeCoord{0, 0})};
     const uint32_t scratch_bytes = 2 * alignment;
     const uint32_t offset = 0;
     const uint32_t reservation_bytes_per_bank =
         offset + scratch_bytes + alignment;  // Includes a trailing sentinel region.
-    const RangeLockstepAllocationProperties properties{
+    const RangeLockstepSRAMArenaProperties properties{
         .banks_to_be_allocated_on = node_set, .per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
 
     ProgramSpec spec;
-    spec.name = "RawAllocationScratchpadDefaultOffset";
+    spec.name = "SRAMArenaScratchpadDefaultOffset";
     spec.kernels = {ScratchpadWriter()};
-    spec.advanced_options.raw_allocation_parameters = {
-        {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
     spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::RawAllocationBorrowing{.allocation = RawAllocationParamName{"arena"}};
+        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}};
     spec.tensor_parameters = {{.unique_id = TensorParamName{"report"}, .spec = report_spec}};
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"writer"})};
 
     // Construct the program before supplying its reservation.
     auto program = MakeProgramFromSpec(*mesh_device, spec);
-    auto arena = allocate_on_sram(*mesh_device, properties);
-    const auto base = static_cast<uint32_t>(std::get<RangeLockstepAllocation>(arena.impl().layout).addr);
+    auto arena = SRAMArena::allocate(*mesh_device, properties);
+    const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto& cq = mesh_device->mesh_command_queue();
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
     ProgramRunArgs args;
-    args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(arena)}};
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
     args.tensor_args = {{TensorParamName{"report"}, TensorArgument{report}}};
     args.kernel_run_args = {
         {.kernel = KernelSpecName{"writer"},
@@ -515,26 +515,26 @@ TEST_F(RawAllocationRangeLockstep, ScratchpadDefaultOffset) {
     ExpectReport(cq, report, {{.scratchpad = base + offset}});
 }
 
-TEST_F(RawAllocationRangeLockstep, DFBDefaultOffset) {
+TEST_F(SRAMArenaRangeLockstep, DFBDefaultOffset) {
     // The DFB starts at the allocation’s base address, and producer-to-consumer data transfer works.
     const NodeRangeSet node_set{NodeRange(NodeCoord{0, 0})};
     const uint32_t entry_size = tt::round_up(1024, alignment);
     const uint32_t dfb_bytes = kDFBDepth * entry_size;
     const uint32_t offset = 0;
     const uint32_t reservation_bytes_per_bank = offset + dfb_bytes + alignment;  // Includes a trailing sentinel region.
-    const RangeLockstepAllocationProperties properties{
+    const RangeLockstepSRAMArenaProperties properties{
         .banks_to_be_allocated_on = node_set, .per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 
     ProgramSpec spec;
-    spec.name = "RawAllocationDFBDefaultOffset";
+    spec.name = "SRAMArenaDFBDefaultOffset";
     spec.kernels = {DFBProducer(), DFBConsumer()};
-    spec.advanced_options.raw_allocation_parameters = {
-        {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
         {.unique_id = TensorParamName{"output"}, .spec = output_spec}};
@@ -542,8 +542,8 @@ TEST_F(RawAllocationRangeLockstep, DFBDefaultOffset) {
 
     // Construct the program before supplying its reservation.
     auto program = MakeProgramFromSpec(*mesh_device, spec);
-    auto arena = allocate_on_sram(*mesh_device, properties);
-    const auto base = static_cast<uint32_t>(std::get<RangeLockstepAllocation>(arena.impl().layout).addr);
+    auto arena = SRAMArena::allocate(*mesh_device, properties);
+    const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
     auto& cq = mesh_device->mesh_command_queue();
@@ -551,7 +551,7 @@ TEST_F(RawAllocationRangeLockstep, DFBDefaultOffset) {
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
     ProgramRunArgs args;
-    args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(arena)}};
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
     args.tensor_args = {
         {TensorParamName{"report"}, TensorArgument{report}}, {TensorParamName{"output"}, TensorArgument{output}}};
     args.kernel_run_args = {
@@ -571,39 +571,39 @@ TEST_F(RawAllocationRangeLockstep, DFBDefaultOffset) {
     ExpectReport(cq, report, {{.dfb_write = base + offset, .dfb_read = base + offset}});
 }
 
-TEST_F(RawAllocationRangeLockstep, ScratchpadNonzeroOffset) {
+TEST_F(SRAMArenaRangeLockstep, ScratchpadNonzeroOffset) {
     // The scratchpad starts at `base + offset`, and its writes land there.
     const NodeRangeSet node_set{NodeRange(NodeCoord{0, 0})};
     const uint32_t scratch_bytes = 2 * alignment;
     const uint32_t offset = alignment;
     const uint32_t reservation_bytes_per_bank =
         offset + scratch_bytes + alignment;  // Includes a trailing sentinel region.
-    const RangeLockstepAllocationProperties properties{
+    const RangeLockstepSRAMArenaProperties properties{
         .banks_to_be_allocated_on = node_set, .per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
 
     ProgramSpec spec;
-    spec.name = "RawAllocationScratchpadNonzeroOffset";
+    spec.name = "SRAMArenaScratchpadNonzeroOffset";
     spec.kernels = {ScratchpadWriter()};
-    spec.advanced_options.raw_allocation_parameters = {
-        {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::RawAllocationBorrowing{
-        .allocation = RawAllocationParamName{"arena"}, .offset = offset};
+    spec.scratchpads[0].advanced_options.borrowed_from =
+        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}, .offset = offset};
     spec.tensor_parameters = {{.unique_id = TensorParamName{"report"}, .spec = report_spec}};
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"writer"})};
 
     // Construct the program before supplying its reservation.
     auto program = MakeProgramFromSpec(*mesh_device, spec);
-    auto arena = allocate_on_sram(*mesh_device, properties);
-    const auto base = static_cast<uint32_t>(std::get<RangeLockstepAllocation>(arena.impl().layout).addr);
+    auto arena = SRAMArena::allocate(*mesh_device, properties);
+    const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto& cq = mesh_device->mesh_command_queue();
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
     ProgramRunArgs args;
-    args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(arena)}};
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
     args.tensor_args = {{TensorParamName{"report"}, TensorArgument{report}}};
     args.kernel_run_args = {
         {.kernel = KernelSpecName{"writer"},
@@ -618,26 +618,26 @@ TEST_F(RawAllocationRangeLockstep, ScratchpadNonzeroOffset) {
     ExpectReport(cq, report, {{.scratchpad = base + offset}});
 }
 
-TEST_F(RawAllocationRangeLockstep, DFBNonzeroOffset) {
+TEST_F(SRAMArenaRangeLockstep, DFBNonzeroOffset) {
     // The DFB starts at `base + offset`, and producer-to-consumer data transfer works.
     const NodeRangeSet node_set{NodeRange(NodeCoord{0, 0})};
     const uint32_t entry_size = tt::round_up(1024, alignment);
     const uint32_t dfb_bytes = kDFBDepth * entry_size;
     const uint32_t offset = alignment;
     const uint32_t reservation_bytes_per_bank = offset + dfb_bytes + alignment;  // Includes a trailing sentinel region.
-    const RangeLockstepAllocationProperties properties{
+    const RangeLockstepSRAMArenaProperties properties{
         .banks_to_be_allocated_on = node_set, .per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 
     ProgramSpec spec;
-    spec.name = "RawAllocationDFBNonzeroOffset";
+    spec.name = "SRAMArenaDFBNonzeroOffset";
     spec.kernels = {DFBProducer(), DFBConsumer()};
-    spec.advanced_options.raw_allocation_parameters = {
-        {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
     spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = offset;
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
@@ -646,8 +646,8 @@ TEST_F(RawAllocationRangeLockstep, DFBNonzeroOffset) {
 
     // Construct the program before supplying its reservation.
     auto program = MakeProgramFromSpec(*mesh_device, spec);
-    auto arena = allocate_on_sram(*mesh_device, properties);
-    const auto base = static_cast<uint32_t>(std::get<RangeLockstepAllocation>(arena.impl().layout).addr);
+    auto arena = SRAMArena::allocate(*mesh_device, properties);
+    const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
     auto& cq = mesh_device->mesh_command_queue();
@@ -655,7 +655,7 @@ TEST_F(RawAllocationRangeLockstep, DFBNonzeroOffset) {
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
     ProgramRunArgs args;
-    args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(arena)}};
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
     args.tensor_args = {
         {TensorParamName{"report"}, TensorArgument{report}}, {TensorParamName{"output"}, TensorArgument{output}}};
     args.kernel_run_args = {
@@ -675,7 +675,7 @@ TEST_F(RawAllocationRangeLockstep, DFBNonzeroOffset) {
     ExpectReport(cq, report, {{.dfb_write = base + offset, .dfb_read = base + offset}});
 }
 
-TEST_F(RawAllocationRangeLockstep, BorrowingAcrossNodes) {
+TEST_F(SRAMArenaRangeLockstep, BorrowingAcrossNodes) {
     // Each selected node receives the correct borrowed addresses and produces its own expected data.
     const std::vector<NodeCoord> nodes{{0, 0}, {1, 0}};
     const NodeRangeSet node_set{NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}}};
@@ -686,22 +686,22 @@ TEST_F(RawAllocationRangeLockstep, BorrowingAcrossNodes) {
     const uint32_t dfb_offset = 4 * alignment;
     const uint32_t reservation_bytes_per_bank =
         dfb_offset + dfb_bytes + alignment;  // Includes a trailing sentinel region.
-    const RangeLockstepAllocationProperties properties{
+    const RangeLockstepSRAMArenaProperties properties{
         .banks_to_be_allocated_on = node_set, .per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 
     ProgramSpec spec;
-    spec.name = "RawAllocationBorrowingAcrossNodes";
+    spec.name = "SRAMArenaBorrowingAcrossNodes";
     spec.kernels = {DFBProducer(true), DFBConsumer()};
-    spec.advanced_options.raw_allocation_parameters = {
-        {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::RawAllocationBorrowing{
-        .allocation = RawAllocationParamName{"arena"}, .offset = scratch_offset};
+    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::SRAMArenaBorrowing{
+        .allocation = SRAMArenaParamName{"arena"}, .offset = scratch_offset};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
     spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = dfb_offset;
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
@@ -710,8 +710,8 @@ TEST_F(RawAllocationRangeLockstep, BorrowingAcrossNodes) {
 
     // Construct the program before supplying its reservation.
     auto program = MakeProgramFromSpec(*mesh_device, spec);
-    auto arena = allocate_on_sram(*mesh_device, properties);
-    const auto base = static_cast<uint32_t>(std::get<RangeLockstepAllocation>(arena.impl().layout).addr);
+    auto arena = SRAMArena::allocate(*mesh_device, properties);
+    const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
     auto& cq = mesh_device->mesh_command_queue();
@@ -721,7 +721,7 @@ TEST_F(RawAllocationRangeLockstep, BorrowingAcrossNodes) {
     }
 
     ProgramRunArgs args;
-    args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(arena)}};
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
     args.tensor_args = {
         {TensorParamName{"report"}, TensorArgument{report}}, {TensorParamName{"output"}, TensorArgument{output}}};
     ProgramRunArgs::KernelRunArgs producer_args{.kernel = KernelSpecName{"producer"}};
@@ -756,7 +756,7 @@ TEST_F(RawAllocationRangeLockstep, BorrowingAcrossNodes) {
         });
 }
 
-TEST_F(RawAllocationRangeLockstep, SharedByScratchpadAndDFB) {
+TEST_F(SRAMArenaRangeLockstep, SharedByScratchpadAndDFB) {
     // Both resources use their assigned regions, with correct data and no corruption between them.
     const NodeRangeSet node_set{NodeRange(NodeCoord{0, 0})};
     const uint32_t scratch_bytes = 2 * alignment;
@@ -766,22 +766,22 @@ TEST_F(RawAllocationRangeLockstep, SharedByScratchpadAndDFB) {
     const uint32_t dfb_offset = 4 * alignment;
     const uint32_t reservation_bytes_per_bank =
         dfb_offset + dfb_bytes + alignment;  // Includes a trailing sentinel region.
-    const RangeLockstepAllocationProperties properties{
+    const RangeLockstepSRAMArenaProperties properties{
         .banks_to_be_allocated_on = node_set, .per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 
     ProgramSpec spec;
-    spec.name = "RawAllocationSharedByScratchpadAndDFB";
+    spec.name = "SRAMArenaSharedByScratchpadAndDFB";
     spec.kernels = {DFBProducer(true), DFBConsumer()};
-    spec.advanced_options.raw_allocation_parameters = {
-        {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::RawAllocationBorrowing{
-        .allocation = RawAllocationParamName{"arena"}, .offset = scratch_offset};
+    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::SRAMArenaBorrowing{
+        .allocation = SRAMArenaParamName{"arena"}, .offset = scratch_offset};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
     spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = dfb_offset;
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
@@ -790,8 +790,8 @@ TEST_F(RawAllocationRangeLockstep, SharedByScratchpadAndDFB) {
 
     // Construct the program before supplying its reservation.
     auto program = MakeProgramFromSpec(*mesh_device, spec);
-    auto arena = allocate_on_sram(*mesh_device, properties);
-    const auto base = static_cast<uint32_t>(std::get<RangeLockstepAllocation>(arena.impl().layout).addr);
+    auto arena = SRAMArena::allocate(*mesh_device, properties);
+    const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
     auto& cq = mesh_device->mesh_command_queue();
@@ -799,7 +799,7 @@ TEST_F(RawAllocationRangeLockstep, SharedByScratchpadAndDFB) {
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
     ProgramRunArgs args;
-    args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(arena)}};
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
     args.tensor_args = {
         {TensorParamName{"report"}, TensorArgument{report}}, {TensorParamName{"output"}, TensorArgument{output}}};
     args.kernel_run_args = {
@@ -824,38 +824,38 @@ TEST_F(RawAllocationRangeLockstep, SharedByScratchpadAndDFB) {
         {{.scratchpad = base + scratch_offset, .dfb_write = base + dfb_offset, .dfb_read = base + dfb_offset}});
 }
 
-TEST_F(RawAllocationLockstep, ScratchpadDefaultOffset) {
+TEST_F(SRAMArenaLockstep, ScratchpadDefaultOffset) {
     // The scratchpad starts at the allocation’s base address, and its writes land there.
     const NodeRangeSet node_set{NodeRange(NodeCoord{0, 0})};
     const uint32_t scratch_bytes = 2 * alignment;
     const uint32_t offset = 0;
     const uint32_t reservation_bytes_per_bank =
         offset + scratch_bytes + alignment;  // Includes a trailing sentinel region.
-    const LockstepAllocationProperties properties{.per_bank_size = reservation_bytes_per_bank};
+    const LockstepSRAMArenaProperties properties{.per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
 
     ProgramSpec spec;
-    spec.name = "RawAllocationLockstepScratchpadDefaultOffset";
+    spec.name = "SRAMArenaLockstepScratchpadDefaultOffset";
     spec.kernels = {ScratchpadWriter()};
-    spec.advanced_options.raw_allocation_parameters = {
-        {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
     spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::RawAllocationBorrowing{.allocation = RawAllocationParamName{"arena"}};
+        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}};
     spec.tensor_parameters = {{.unique_id = TensorParamName{"report"}, .spec = report_spec}};
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"writer"})};
 
     // Construct the program before supplying its reservation.
     auto program = MakeProgramFromSpec(*mesh_device, spec);
-    auto arena = allocate_on_sram(*mesh_device, properties);
-    const auto base = static_cast<uint32_t>(std::get<LockstepAllocation>(arena.impl().layout).addr);
+    auto arena = SRAMArena::allocate(*mesh_device, properties);
+    const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto& cq = mesh_device->mesh_command_queue();
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
     ProgramRunArgs args;
-    args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(arena)}};
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
     args.tensor_args = {{TensorParamName{"report"}, TensorArgument{report}}};
     args.kernel_run_args = {
         {.kernel = KernelSpecName{"writer"},
@@ -870,25 +870,25 @@ TEST_F(RawAllocationLockstep, ScratchpadDefaultOffset) {
     ExpectReport(cq, report, {{.scratchpad = base + offset}});
 }
 
-TEST_F(RawAllocationLockstep, DFBDefaultOffset) {
+TEST_F(SRAMArenaLockstep, DFBDefaultOffset) {
     // The DFB starts at the allocation’s base address, and producer-to-consumer data transfer works.
     const NodeRangeSet node_set{NodeRange(NodeCoord{0, 0})};
     const uint32_t entry_size = tt::round_up(1024, alignment);
     const uint32_t dfb_bytes = kDFBDepth * entry_size;
     const uint32_t offset = 0;
     const uint32_t reservation_bytes_per_bank = offset + dfb_bytes + alignment;  // Includes a trailing sentinel region.
-    const LockstepAllocationProperties properties{.per_bank_size = reservation_bytes_per_bank};
+    const LockstepSRAMArenaProperties properties{.per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 
     ProgramSpec spec;
-    spec.name = "RawAllocationLockstepDFBDefaultOffset";
+    spec.name = "SRAMArenaLockstepDFBDefaultOffset";
     spec.kernels = {DFBProducer(), DFBConsumer()};
-    spec.advanced_options.raw_allocation_parameters = {
-        {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
         {.unique_id = TensorParamName{"output"}, .spec = output_spec}};
@@ -896,8 +896,8 @@ TEST_F(RawAllocationLockstep, DFBDefaultOffset) {
 
     // Construct the program before supplying its reservation.
     auto program = MakeProgramFromSpec(*mesh_device, spec);
-    auto arena = allocate_on_sram(*mesh_device, properties);
-    const auto base = static_cast<uint32_t>(std::get<LockstepAllocation>(arena.impl().layout).addr);
+    auto arena = SRAMArena::allocate(*mesh_device, properties);
+    const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
     auto& cq = mesh_device->mesh_command_queue();
@@ -905,7 +905,7 @@ TEST_F(RawAllocationLockstep, DFBDefaultOffset) {
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
     ProgramRunArgs args;
-    args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(arena)}};
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
     args.tensor_args = {
         {TensorParamName{"report"}, TensorArgument{report}}, {TensorParamName{"output"}, TensorArgument{output}}};
     args.kernel_run_args = {
@@ -925,38 +925,38 @@ TEST_F(RawAllocationLockstep, DFBDefaultOffset) {
     ExpectReport(cq, report, {{.dfb_write = base + offset, .dfb_read = base + offset}});
 }
 
-TEST_F(RawAllocationLockstep, ScratchpadNonzeroOffset) {
+TEST_F(SRAMArenaLockstep, ScratchpadNonzeroOffset) {
     // The scratchpad starts at `base + offset`, and its writes land there.
     const NodeRangeSet node_set{NodeRange(NodeCoord{0, 0})};
     const uint32_t scratch_bytes = 2 * alignment;
     const uint32_t offset = alignment;
     const uint32_t reservation_bytes_per_bank =
         offset + scratch_bytes + alignment;  // Includes a trailing sentinel region.
-    const LockstepAllocationProperties properties{.per_bank_size = reservation_bytes_per_bank};
+    const LockstepSRAMArenaProperties properties{.per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
 
     ProgramSpec spec;
-    spec.name = "RawAllocationLockstepScratchpadNonzeroOffset";
+    spec.name = "SRAMArenaLockstepScratchpadNonzeroOffset";
     spec.kernels = {ScratchpadWriter()};
-    spec.advanced_options.raw_allocation_parameters = {
-        {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::RawAllocationBorrowing{
-        .allocation = RawAllocationParamName{"arena"}, .offset = offset};
+    spec.scratchpads[0].advanced_options.borrowed_from =
+        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}, .offset = offset};
     spec.tensor_parameters = {{.unique_id = TensorParamName{"report"}, .spec = report_spec}};
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"writer"})};
 
     // Construct the program before supplying its reservation.
     auto program = MakeProgramFromSpec(*mesh_device, spec);
-    auto arena = allocate_on_sram(*mesh_device, properties);
-    const auto base = static_cast<uint32_t>(std::get<LockstepAllocation>(arena.impl().layout).addr);
+    auto arena = SRAMArena::allocate(*mesh_device, properties);
+    const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto& cq = mesh_device->mesh_command_queue();
     std::vector<uint32_t> initial_arena(reservation_bytes_per_bank / sizeof(uint32_t), kSentinel);
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
     ProgramRunArgs args;
-    args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(arena)}};
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
     args.tensor_args = {{TensorParamName{"report"}, TensorArgument{report}}};
     args.kernel_run_args = {
         {.kernel = KernelSpecName{"writer"},
@@ -971,25 +971,25 @@ TEST_F(RawAllocationLockstep, ScratchpadNonzeroOffset) {
     ExpectReport(cq, report, {{.scratchpad = base + offset}});
 }
 
-TEST_F(RawAllocationLockstep, DFBNonzeroOffset) {
+TEST_F(SRAMArenaLockstep, DFBNonzeroOffset) {
     // The DFB starts at `base + offset`, and producer-to-consumer data transfer works.
     const NodeRangeSet node_set{NodeRange(NodeCoord{0, 0})};
     const uint32_t entry_size = tt::round_up(1024, alignment);
     const uint32_t dfb_bytes = kDFBDepth * entry_size;
     const uint32_t offset = alignment;
     const uint32_t reservation_bytes_per_bank = offset + dfb_bytes + alignment;  // Includes a trailing sentinel region.
-    const LockstepAllocationProperties properties{.per_bank_size = reservation_bytes_per_bank};
+    const LockstepSRAMArenaProperties properties{.per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 
     ProgramSpec spec;
-    spec.name = "RawAllocationLockstepDFBNonzeroOffset";
+    spec.name = "SRAMArenaLockstepDFBNonzeroOffset";
     spec.kernels = {DFBProducer(), DFBConsumer()};
-    spec.advanced_options.raw_allocation_parameters = {
-        {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
     spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = offset;
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
@@ -998,8 +998,8 @@ TEST_F(RawAllocationLockstep, DFBNonzeroOffset) {
 
     // Construct the program before supplying its reservation.
     auto program = MakeProgramFromSpec(*mesh_device, spec);
-    auto arena = allocate_on_sram(*mesh_device, properties);
-    const auto base = static_cast<uint32_t>(std::get<LockstepAllocation>(arena.impl().layout).addr);
+    auto arena = SRAMArena::allocate(*mesh_device, properties);
+    const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
     auto& cq = mesh_device->mesh_command_queue();
@@ -1007,7 +1007,7 @@ TEST_F(RawAllocationLockstep, DFBNonzeroOffset) {
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
     ProgramRunArgs args;
-    args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(arena)}};
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
     args.tensor_args = {
         {TensorParamName{"report"}, TensorArgument{report}}, {TensorParamName{"output"}, TensorArgument{output}}};
     args.kernel_run_args = {
@@ -1027,7 +1027,7 @@ TEST_F(RawAllocationLockstep, DFBNonzeroOffset) {
     ExpectReport(cq, report, {{.dfb_write = base + offset, .dfb_read = base + offset}});
 }
 
-TEST_F(RawAllocationLockstep, BorrowingAcrossNodes) {
+TEST_F(SRAMArenaLockstep, BorrowingAcrossNodes) {
     // Each selected node receives the correct borrowed addresses and produces its own expected data.
     const std::vector<NodeCoord> nodes{{0, 0}, {1, 0}};
     const NodeRangeSet node_set{NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}}};
@@ -1038,21 +1038,21 @@ TEST_F(RawAllocationLockstep, BorrowingAcrossNodes) {
     const uint32_t dfb_offset = 4 * alignment;
     const uint32_t reservation_bytes_per_bank =
         dfb_offset + dfb_bytes + alignment;  // Includes a trailing sentinel region.
-    const LockstepAllocationProperties properties{.per_bank_size = reservation_bytes_per_bank};
+    const LockstepSRAMArenaProperties properties{.per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 
     ProgramSpec spec;
-    spec.name = "RawAllocationLockstepBorrowingAcrossNodes";
+    spec.name = "SRAMArenaLockstepBorrowingAcrossNodes";
     spec.kernels = {DFBProducer(true), DFBConsumer()};
-    spec.advanced_options.raw_allocation_parameters = {
-        {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::RawAllocationBorrowing{
-        .allocation = RawAllocationParamName{"arena"}, .offset = scratch_offset};
+    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::SRAMArenaBorrowing{
+        .allocation = SRAMArenaParamName{"arena"}, .offset = scratch_offset};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
     spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = dfb_offset;
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
@@ -1061,8 +1061,8 @@ TEST_F(RawAllocationLockstep, BorrowingAcrossNodes) {
 
     // Construct the program before supplying its reservation.
     auto program = MakeProgramFromSpec(*mesh_device, spec);
-    auto arena = allocate_on_sram(*mesh_device, properties);
-    const auto base = static_cast<uint32_t>(std::get<LockstepAllocation>(arena.impl().layout).addr);
+    auto arena = SRAMArena::allocate(*mesh_device, properties);
+    const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
     auto& cq = mesh_device->mesh_command_queue();
@@ -1072,7 +1072,7 @@ TEST_F(RawAllocationLockstep, BorrowingAcrossNodes) {
     }
 
     ProgramRunArgs args;
-    args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(arena)}};
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
     args.tensor_args = {
         {TensorParamName{"report"}, TensorArgument{report}}, {TensorParamName{"output"}, TensorArgument{output}}};
     ProgramRunArgs::KernelRunArgs producer_args{.kernel = KernelSpecName{"producer"}};
@@ -1107,7 +1107,7 @@ TEST_F(RawAllocationLockstep, BorrowingAcrossNodes) {
         });
 }
 
-TEST_F(RawAllocationLockstep, SharedByScratchpadAndDFB) {
+TEST_F(SRAMArenaLockstep, SharedByScratchpadAndDFB) {
     // Both resources use their assigned regions, with correct data and no corruption between them.
     const NodeRangeSet node_set{NodeRange(NodeCoord{0, 0})};
     const uint32_t scratch_bytes = 2 * alignment;
@@ -1117,21 +1117,21 @@ TEST_F(RawAllocationLockstep, SharedByScratchpadAndDFB) {
     const uint32_t dfb_offset = 4 * alignment;
     const uint32_t reservation_bytes_per_bank =
         dfb_offset + dfb_bytes + alignment;  // Includes a trailing sentinel region.
-    const LockstepAllocationProperties properties{.per_bank_size = reservation_bytes_per_bank};
+    const LockstepSRAMArenaProperties properties{.per_bank_size = reservation_bytes_per_bank};
     const auto report_spec = ReportSpec(node_set, alignment);
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 
     ProgramSpec spec;
-    spec.name = "RawAllocationLockstepSharedByScratchpadAndDFB";
+    spec.name = "SRAMArenaLockstepSharedByScratchpadAndDFB";
     spec.kernels = {DFBProducer(true), DFBConsumer()};
-    spec.advanced_options.raw_allocation_parameters = {
-        {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::RawAllocationBorrowing{
-        .allocation = RawAllocationParamName{"arena"}, .offset = scratch_offset};
+    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::SRAMArenaBorrowing{
+        .allocation = SRAMArenaParamName{"arena"}, .offset = scratch_offset};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
     spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = dfb_offset;
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
@@ -1140,8 +1140,8 @@ TEST_F(RawAllocationLockstep, SharedByScratchpadAndDFB) {
 
     // Construct the program before supplying its reservation.
     auto program = MakeProgramFromSpec(*mesh_device, spec);
-    auto arena = allocate_on_sram(*mesh_device, properties);
-    const auto base = static_cast<uint32_t>(std::get<LockstepAllocation>(arena.impl().layout).addr);
+    auto arena = SRAMArena::allocate(*mesh_device, properties);
+    const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
     auto output = CreateSentinelTensor(*mesh_device, output_spec);
     auto& cq = mesh_device->mesh_command_queue();
@@ -1149,7 +1149,7 @@ TEST_F(RawAllocationLockstep, SharedByScratchpadAndDFB) {
     ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, base, initial_arena));
 
     ProgramRunArgs args;
-    args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(arena)}};
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
     args.tensor_args = {
         {TensorParamName{"report"}, TensorArgument{report}}, {TensorParamName{"output"}, TensorArgument{output}}};
     args.kernel_run_args = {

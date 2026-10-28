@@ -237,7 +237,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .tensix_scope = tensix_scope,
         // DFB borrowed memory mode is declared at program creation time.
         // The actual backing memory L1 address is attached at runtime: from the borrowed
-        // TensorParameter's MeshTensor, a RawAllocationParameter's allocation, or (relay) from the
+        // TensorParameter's MeshTensor, an SRAMArenaParameter's allocation, or (relay) from the
         // PrefetcherPipe ring the relay aliases.
         .borrows_memory =
             dfb_spec->borrowed_from.has_value() || !dfb_spec->advanced_options.prefetcher_pipe_relays.empty(),
@@ -280,8 +280,8 @@ DataflowBufferHandles RegisterDataflowBuffers(
             if (const auto* tensor_name = std::get_if<TensorParamName>(&*dfb_spec.borrowed_from)) {
                 binding.source = *tensor_name;
             } else {
-                binding.source = RawAllocationSource{
-                    .allocation = std::get<RawAllocationParamName>(*dfb_spec.borrowed_from),
+                binding.source = SRAMArenaSource{
+                    .allocation = std::get<SRAMArenaParamName>(*dfb_spec.borrowed_from),
                     .offset = dfb_spec.advanced_options.borrowed_memory_offset};
             }
             program_impl.register_dfb_borrowed_binding(std::move(binding));

@@ -42,14 +42,14 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/prefetcher_pipe_relays.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/prefetcher_pipe_roles.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/program_spec_fields.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/raw_allocation_references.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/sram_arena_references.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/references.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/semaphores.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/valid_program_specs.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/work_unit_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/work_unit_capacity.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/work_unit_spec.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/raw_allocation_parameter/raw_allocation_parameter.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/sram_arena_parameter/sram_arena_parameter.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/scratchpad_spec/borrowed_memory.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/scratchpad_spec/scratchpad_spec.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/kernel_hash/dataflow_buffer_spec.cpp
@@ -71,8 +71,8 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/merge_program_run_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/named_runtime_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/prefetcher_pipe_args.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/raw_allocation_args.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/raw_allocation_dfb.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/sram_arena_args.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/sram_arena_dfb.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/runtime_varargs.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/tensor_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/update_program_run_args.cpp
@@ -93,7 +93,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/kernel_args_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/llk_operand_mul.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/mesh_workload_factories.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/integration_tests/raw_allocation.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/integration_tests/sram_arena.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/scratchpad.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/scratchpad_fast_dispatch.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/trisc0_rvv_vadd.cpp

@@ -132,10 +132,10 @@ struct ProgramRunArgs {
         //  - Borrowed from a TensorParameter: if you update the DFB's size from an
         //    UpdateProgramRunArgs call (i.e. partial args update; advanced users only),
         //    you must ALSO supply its backing tensor_arg.
-        //  - Borrowed from a RawAllocationParameter: the DFB may be resized without re-supplying
-        //    its RawAllocation. The resized DFB must still fit within the RawAllocation
-        //    (checked against the RawAllocationParameter's declared size). There are NO checks
-        //    for overlap with other DFBs or scratchpads placed in the same RawAllocation
+        //  - Borrowed from an SRAMArenaParameter: the DFB may be resized without re-supplying
+        //    its SRAMArena. The resized DFB must still fit within the SRAMArena
+        //    (checked against the SRAMArenaParameter's declared size). There are NO checks
+        //    for overlap with other DFBs or scratchpads placed in the same SRAMArena
         //    (see DFBAdvancedOptions::borrowed_memory_offset).
     };
     // DFBRunOverrides is optional. Provide entries only when overriding DFB sizes.
@@ -145,7 +145,7 @@ struct ProgramRunArgs {
     // Advanced options (see advanced_options.hpp)
     ////////////////////////////////////////////////////////////////////////
     // Companion to ProgramAdvancedOptions on the schema side; holds the
-    // experimental RawAllocation and PrefetcherPipe arguments.
+    // experimental SRAMArena and PrefetcherPipe arguments.
     AdvancedProgramRunArgs advanced_options;
 };
 

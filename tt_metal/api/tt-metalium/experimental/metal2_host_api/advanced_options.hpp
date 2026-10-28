@@ -12,7 +12,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/raw_allocation_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -43,7 +43,7 @@
 //       These class names will need to retain an explicit experimental:: name scope.
 namespace tt::tt_metal::experimental {
 class PrefetcherPipe;
-struct RawAllocation;
+struct SRAMArena;
 }  // namespace tt::tt_metal::experimental
 
 namespace tt::tt_metal::experimental {
@@ -56,17 +56,17 @@ using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 
 struct ProgramAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
-    // RawAllocation parameters (experimental)
+    // SRAMArena parameters (experimental)
     ////////////////////////////////////////////////////////////////////////////////
 
-    // A RawAllocation is a user-managed resource that simply reserves a region of
+    // An SRAMArena is a user-managed resource that simply reserves a region of
     // device memory, with no specific semantics beyond allocation / reservation.
-    // Advanced users can manually allocate Program-scope resources from within a
-    // RawAllocation, rather than rely on the runtime's default allocation behavior.
+    // Advanced users can manually allocate Program-scope resources from within an
+    // SRAMArena, rather than rely on the runtime's default allocation behavior.
     //
-    // RawAllocation parameters specify the properties of the RawAllocation the
-    // Program expects; a matching RawAllocation object must be provided at runtime.
-    Group<RawAllocationParameter> raw_allocation_parameters;
+    // SRAMArena parameters specify the properties of the SRAMArena the
+    // Program expects; a matching SRAMArena object must be provided at runtime.
+    Group<SRAMArenaParameter> sram_arena_parameters;
 
     ////////////////////////////////////////////////////////////////////////////////
     // PrefetcherPipe parameters (experimental)
@@ -280,16 +280,16 @@ struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
 
     // When a DFB is built on borrowed memory, its allocated storage is placed at the
-    // base address of the borrowed-from memory object. When borrowing from a
-    // RawAllocation, you may place the DFB's storage location at an arbitrary offset
+    // base address of the borrowed-from memory object. When borrowing from an
+    // SRAMArena, you may place the DFB's storage location at an arbitrary offset
     // into that reserved memory region.
     //
     // The borrowed_memory_offset feature enables advanced users to handle their own
     // Program-scope resource allocation decisions (a form of arena allocation).
     //
     // CONSTRAINTS:
-    //  - The DFB must fit within the RawAllocation on every node it occupies, i.e.
-    //    borrowed_memory_offset plus size_per_node cannot exceed the RawAllocation's
+    //  - The DFB must fit within the SRAMArena on every node it occupies, i.e.
+    //    borrowed_memory_offset plus size_per_node cannot exceed the SRAMArena's
     //    per-node size.
     //  - borrowed_memory_offset must be a multiple of the SRAM alignment.
     //  - A DFB that borrows from a MeshTensor must have a zero offset; this is a
@@ -299,7 +299,7 @@ struct DFBAdvancedOptions {
     //
     // CAUTION:
     //  - There are NO legality checks concerning the overlap of DFBs or Scratchpads
-    //    allocated within the same RawAllocation. This permits advanced users to
+    //    allocated within the same SRAMArena. This permits advanced users to
     //    implement sophisticated temporal memory re-use strategies. Responsibility
     //    for ensuring correctness lies entirely with the user.
     //
@@ -366,36 +366,36 @@ struct ScratchpadAdvancedOptions {
     // Build the scratchpad on borrowed memory.
     //
     // Instead of automatically allocating Program execution-lifetime scratchpad storage,
-    // place the scratchpad inside a user-managed RawAllocation. The scratchpad gets a
+    // place the scratchpad inside a user-managed SRAMArena. The scratchpad gets a
     // non-owning view of the memory for the duration of Program execution.
     //
-    // The RawAllocationParameter is declared in ProgramAdvancedOptions::raw_allocation_parameters
-    // and bound here. The actual RawAllocation is supplied at runtime via ProgramRunArgs.
+    // The SRAMArenaParameter is declared in ProgramAdvancedOptions::sram_arena_parameters
+    // and bound here. The actual SRAMArena is supplied at runtime via ProgramRunArgs.
     //
     // The scratchpad's storage is placed borrowed_from->offset bytes past the base address of
-    // the RawAllocation. This enables advanced users to handle their own Program-scope resource
+    // the SRAMArena. This enables advanced users to handle their own Program-scope resource
     // allocation decisions (a form of arena allocation), e.g. packing several scratchpads and
-    // DFBs into one RawAllocation.
+    // DFBs into one SRAMArena.
     //
     // Unlike a DFB, a scratchpad cannot borrow from a TensorParameter. To use a tensor's local
     // shard as kernel working memory, use a regular host TensorBinding and a device-side
     // LocalTensorAccessor instead.
     //
     // CONSTRAINTS:
-    //  - The scratchpad must fit within the RawAllocation on every node it occupies, i.e.
-    //    borrowed_from->offset plus size_per_node cannot exceed the RawAllocation's per-node size.
+    //  - The scratchpad must fit within the SRAMArena on every node it occupies, i.e.
+    //    borrowed_from->offset plus size_per_node cannot exceed the SRAMArena's per-node size.
     //  - borrowed_from->offset must be a multiple of the SRAM alignment.
     //
     // CAUTION:
     //  - There are NO legality checks concerning the overlap of DFBs or Scratchpads
-    //    allocated within the same RawAllocation. This permits advanced users to
+    //    allocated within the same SRAMArena. This permits advanced users to
     //    implement sophisticated temporal memory re-use strategies. Responsibility
     //    for ensuring correctness lies entirely with the user.
-    struct RawAllocationBorrowing {
-        RawAllocationParamName allocation;
+    struct SRAMArenaBorrowing {
+        SRAMArenaParamName allocation;
         uint32_t offset = 0;  // in bytes
     };
-    std::optional<RawAllocationBorrowing> borrowed_from = std::nullopt;
+    std::optional<SRAMArenaBorrowing> borrowed_from = std::nullopt;
 };
 
 struct AdvancedKernelRunArgs {
@@ -419,28 +419,28 @@ struct AdvancedKernelRunArgs {
 
 struct AdvancedProgramRunArgs {
     ////////////////////////////////////////////////////////////////////////////////
-    // RawAllocation arguments (experimental)
+    // SRAMArena arguments (experimental)
     ////////////////////////////////////////////////////////////////////////////////
 
-    // The actual RawAllocation argument. (Non-owning reference.)
-    using RawAllocationArgument = std::reference_wrapper<const tt::tt_metal::experimental::RawAllocation>;
+    // The actual SRAMArena argument. (Non-owning reference.)
+    using SRAMArenaArgument = std::reference_wrapper<const tt::tt_metal::experimental::SRAMArena>;
 
-    // A RawAllocationArgument must be specified:
-    //  For EVERY RawAllocationParameter in the ProgramSpec, when calling SetProgramRunArgs.
-    //  For any SUBSET of RawAllocationParameters, when calling UpdateProgramRunArgs.
+    // An SRAMArenaArgument must be specified:
+    //  For EVERY SRAMArenaParameter in the ProgramSpec, when calling SetProgramRunArgs.
+    //  For any SUBSET of SRAMArenaParameters, when calling UpdateProgramRunArgs.
     //
-    // The supplied RawAllocation MUST live on the MeshDevice the Program was built for, and its
-    // properties MUST match the RawAllocationParameter's (see raw_allocation_parameter.hpp).
+    // The supplied SRAMArena MUST live on the MeshDevice the Program was built for, and its
+    // properties MUST match the SRAMArenaParameter's (see sram_arena_parameter.hpp).
     //
-    // A different RawAllocation may be supplied for each Program execution. Every DFB and
-    // scratchpad that borrows from the parameter is then placed at the new RawAllocation's
+    // A different SRAMArena may be supplied for each Program execution. Every DFB and
+    // scratchpad that borrows from the parameter is then placed at the new SRAMArena's
     // base address plus the borrower's offset.
     //
-    // CAUTION: RawAllocation is an RAII object. The user is responsible for keeping it alive until
+    // CAUTION: SRAMArena is an RAII object. The user is responsible for keeping it alive until
     //          the last Program execution that uses it has completed on the device. A stale binding
-    //          to a destroyed RawAllocation (e.g. one retained by an UpdateProgramRunArgs call that
+    //          to a destroyed SRAMArena (e.g. one retained by an UpdateProgramRunArgs call that
     //          omits it) will produce undefined behavior.
-    Table<RawAllocationParamName, RawAllocationArgument> raw_allocation_args;
+    Table<SRAMArenaParamName, SRAMArenaArgument> sram_arena_args;
 
     ////////////////////////////////////////////////////////////////////////////////
     // PrefetcherPipe arguments (experimental)
@@ -513,6 +513,6 @@ struct SemaphoreAdvancedOptions {
 
 using PrefetcherPipeBinding = KernelAdvancedOptions::PrefetcherPipeBinding;
 using PrefetcherPipeArgument = AdvancedProgramRunArgs::PrefetcherPipeArgument;
-using RawAllocationArgument = AdvancedProgramRunArgs::RawAllocationArgument;
+using SRAMArenaArgument = AdvancedProgramRunArgs::SRAMArenaArgument;
 
 }  // namespace tt::tt_metal::experimental

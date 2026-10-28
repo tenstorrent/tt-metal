@@ -24,7 +24,7 @@ namespace {
 
 // Validate borrowed-memory DFBs.
 //
-// DataflowBufferSpec::borrowed_from names either a TensorParameter or a RawAllocationParameter.
+// DataflowBufferSpec::borrowed_from names either a TensorParameter or an SRAMArenaParameter.
 // These checks use the declared properties; they neither allocate memory nor attach a runtime
 // backing object to the DFB. Without a borrow source, borrowed_memory_offset must be zero.
 //
@@ -39,7 +39,7 @@ namespace {
 // Those remain the user's responsibility; this is an advanced feature. The attach-time sizing
 // check remains authoritative for the actual backing buffer (see the sizing discussion below).
 //
-// For a RawAllocationParameter, ValidateRawAllocationBorrowing checks that:
+// For an SRAMArenaParameter, ValidateSRAMArenaBorrowing checks that:
 //  - the named parameter exists,
 //  - the offset is a multiple of the device's L1 alignment,
 //  - range-lockstep properties cover every node occupied by the DFB; all-bank lockstep needs
@@ -48,7 +48,7 @@ namespace {
 // Occupied nodes are the union of the producer and consumer kernels' placements. Capacity is
 // checked per node against the requested extent, without counting allocator alignment padding;
 // the entry-size product and offset sum use 64-bit arithmetic to avoid 32-bit overflow.
-// Raw-allocation parameter properties are validated before borrowers.
+// SRAM arena parameter properties are validated before borrowers.
 void ValidateBorrowedMemory(
     const DataflowBufferSpec& dfb,
     const CollectedSpecData& collected,
@@ -60,9 +60,9 @@ void ValidateBorrowedMemory(
             offset == 0, "DFB '{}' borrowed_memory_offset must be zero when borrowed_from is unset.", dfb.unique_id);
         return;
     }
-    if (const auto* allocation_name = std::get_if<RawAllocationParamName>(&*dfb.borrowed_from)) {
-        ValidateRawAllocationBorrowing(
-            RawAllocationSource{.allocation = *allocation_name, .offset = offset},
+    if (const auto* allocation_name = std::get_if<SRAMArenaParamName>(&*dfb.borrowed_from)) {
+        ValidateSRAMArenaBorrowing(
+            SRAMArenaSource{.allocation = *allocation_name, .offset = offset},
             collected,
             fmt::format("DFB '{}'", dfb.unique_id),
             collected.dfb_node_set.at(dfb.unique_id),
