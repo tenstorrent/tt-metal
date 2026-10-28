@@ -29,7 +29,7 @@ pc = time.perf_counter
 OUT = os.environ.get("DSV41_ROUND_TL_OUT", "/tmp/round_tl")
 _CUR = [None]  # the record of the round in flight
 _REC = []  # all records of the current pass
-_STATE = {"pass": 0, "label": "", "last_end": None, "calib": False, "cap": False, "marks": None, "tid_marks": {}, "nround": {}, "prof_rounds": []}
+_STATE = {"nr_pass": 0, "pass": 0, "label": "", "last_end": None, "calib": False, "cap": False, "marks": None, "tid_marks": {}, "nround": {}, "prof_rounds": []}
 
 
 def _ms(t0):
