@@ -511,15 +511,18 @@ class GLM53FlashForCausalLM:
             self._ensure_decode_inputs(U)
             if not self.already_warmed_up_prefill:
                 lengths = self._warmup_prefill_lengths()
+                slots = self._warmup_slots(U)
                 for n in lengths:
                     dummy = torch.arange(n, dtype=torch.long) % 1000 + 1000
                     plan = PrefillPlan("eager", PrefillPlanner.walk(0, n, self.geometry.device_prefill_chunk))
                     t0 = time.perf_counter()
-                    self._prefill_one(dummy, 0, plan, want_logits=False)
+                    into = slots if n == lengths[0] else slots[:1]
+                    for u in into:
+                        self._prefill_one(dummy, u, plan, want_logits=False)
                     self._sync()
                     logger.info(
-                        f"GLM53 vLLM: eager prefill warm-up ({n} tokens in {len(plan.chunks)} device chunk(s)) in "
-                        f"{time.perf_counter() - t0:.1f} s"
+                        f"GLM53 vLLM: eager prefill warm-up ({n} tokens in {len(plan.chunks)} device chunk(s) into "
+                        f"{len(into)} slot(s)) in {time.perf_counter() - t0:.1f} s"
                     )
                 logger.info(f"GLM53 vLLM: after the prefill warm-up: {_dram_line(_mesh_device_of(self.model))}")
                 n = lengths[0]
@@ -586,20 +589,43 @@ class GLM53FlashForCausalLM:
         dev.set_program_cache_misses_allowed(False)
         logger.info(f"GLM53 vLLM: program cache sealed after the captures ({dev.num_program_cache_entries()} programs)")
 
+    def _warmup_slots(self, U: int) -> list[int]:
+        """``GLM53_VLLM_WARMUP_SLOTS``: the physical slots the shortest warm-up prompt is prefilled into (default
+        ``all``: every one of the ``U`` slots, so a program whose variant depends on the slot index — the eager
+        per-user state writes — is built at boot, never at the first request into that slot; an int keeps the
+        first that many)."""
+        raw = os.environ.get("GLM53_VLLM_WARMUP_SLOTS", "all").strip().lower()
+        n = U if raw in ("", "all") else max(1, min(U, int(raw)))
+        return list(range(n))
+
     def _warmup_prefill_lengths(self) -> list[int]:
-        """``GLM53_VLLM_WARMUP_PREFILL``: comma-separated prompt lengths the eager warm-up walks (default ``128``:
-        the short-prompt programs). The Galaxy catalog sets ``128,32768``: a full 16 K device chunk and its
-        continuation at start 16384 compile at boot, so the first long request does not compile mid-session.
-        Lengths are clamped to ``max_seq_len``; duplicates and empty entries dropped."""
-        raw = os.environ.get("GLM53_VLLM_WARMUP_PREFILL", "128")
+        """The prompt lengths the eager warm-up walks. ``GLM53_VLLM_WARMUP_PREFILL`` = ``auto`` (default): every
+        prefill bucket up to the device chunk as a lone prompt (its first-chunk programs) and as the continuation
+        of a full device chunk (``chunk + bucket``: the same programs with history, the conv / KDA / index
+        maintenance variants of a second chunk), so no chunk shape of any prompt compiles after the captures (a
+        1590-token prompt = a 1024 chunk + a 566-token continuation padded to the 1024 bucket: the 2026-10-28
+        served APC seal hit). A comma-separated list walks exactly those lengths (the old ``128,32768`` catalog
+        form). Lengths are clamped to ``max_seq_len``; duplicates and empty entries dropped; the shortest comes
+        first (it is the one prefilled into every slot)."""
+        raw = os.environ.get("GLM53_VLLM_WARMUP_PREFILL", "auto").strip().lower()
+        chunk = self.geometry.device_prefill_chunk
+        if raw in ("", "auto"):
+            try:  # the served branches' bucket set (GLM53_PREFILL_BUCKETS); the base pads to the traced lengths
+                from models.demos.glm53_flash.tt.vllm_config import prefill_buckets
+
+                buckets = list(prefill_buckets())
+            except ImportError:
+                buckets = list(self.geometry.traced_prefill_lengths)
+            buckets = [b for b in buckets if b <= chunk]
+            cand = sorted(set(buckets + [chunk] + [chunk + b for b in buckets]))
+        else:
+            cand = [int(part) for part in raw.split(",") if part.strip()]
         out: list[int] = []
-        for part in raw.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            n = min(int(part), self.geometry.max_seq_len)
+        for n in cand:
+            n = min(int(n), self.geometry.max_seq_len)
             if n >= 1 and n not in out:
                 out.append(n)
+        out.sort()
         return out or [min(128, self.geometry.max_seq_len)]
 
     def _ensure_decode_inputs(self, U: int) -> None:

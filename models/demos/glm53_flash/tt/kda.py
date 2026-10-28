@@ -488,17 +488,23 @@ class TtKDA(LightweightModule):
 
     def write_user_conv_state(self, state: KdaState, user: int, conv: ttnn.Tensor):
         """Write one user's history (``[taps, 1, W]`` tiles, as ``prefill_forward`` returns it in block mode) into
-        slot ``user`` of the batched tap-major tile history (row-major slice / concat round trip; prefill boundary
-        only, never traced)."""
+        slot ``user`` of the batched tap-major tile history: ``dst * keep + new * mask`` with host-built one-hot
+        user masks ``[taps, B, 1]`` (every product is x * 1.0 or x * 0.0, exact in bf16: the traced prefill's
+        blend, ``functional_decoder._write_user_kda_state_slot``). One program whatever ``user`` is; the earlier
+        row-major slice / concat round trip built a slice program per user index, the first prefill into a slot
+        the warm-up had not used compiling it at request time under live traces (the 2026-10-28 served seal hit)."""
         taps = self.kcfg.conv_kernel_size - 1
-        B = state.convolution.shape[1]
-        rm = self.conv_to_rm(state.convolution)  # [B, taps, W]
-        new_rm = self.conv_to_rm(conv)  # [1, taps, W]
-        rows = [new_rm if u == user else ttnn.slice(rm, [u, 0, 0], [u + 1, taps, self.conv_width]) for u in range(B)]
-        stacked = ttnn.concat(rows, dim=0)
-        tiles = self.conv_to_tiles(stacked)
-        ttnn.copy(tiles, state.convolution)
-        for t in rows + [stacked, tiles, rm]:
+        B = int(state.convolution.shape[1])
+        mask = torch.zeros(taps, B, 1)
+        mask[:, user, 0] = 1.0
+        up = lambda t: ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        mask_dev, keep_dev = up(mask), up(1.0 - mask)
+        ttnn.multiply(state.convolution, keep_dev, output_tensor=state.convolution)  # zero the slot's rows
+        new_rows = ttnn.multiply(conv, mask_dev)  # [taps,1,W] x [taps,B,1] -> [taps,B,W]
+        ttnn.add(state.convolution, new_rows, output_tensor=state.convolution)
+        for t in (new_rows, mask_dev, keep_dev):
             ttnn.deallocate(t)
 
     # ---------------------------------------------------------------- prefill
