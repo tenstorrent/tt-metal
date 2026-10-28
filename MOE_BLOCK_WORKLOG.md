@@ -2300,3 +2300,28 @@ Why: the random stress's F1 (K3 on the TP line: same-x replays differ by whole e
   at a freed one's address reused the old program (row bytes, CBs, accessors). Scratch repro on the line: W 3584 then
   3072 at the same address -> every chip wrong; with shape / dtype / layout / page size / memory config in the key, 4 of
   4 calls right.
+
+## Codex review fixes: combine unpack, router weights, prepared-program key, latent_norm, guards (2026-10-28, bh-lb-09)
+Why: codex's read-only review of e49692459bd (block + head) found these; verified against the code, fixed one commit
+each. Checked against the stress draws: K3 ring4 640 / GLM-5.3-Flash 2x4 5120 with snap -14, 300 replays + 3 eager
+calls each, and the head (K3 ring, 300 replays). Before / after outputs were dumped and compared bitwise.
+- Combine accumulator (714cbaa98d3): CB_ACC is now UnpackToDestFp32 (the out pass's copy_tile read the fp32 sums as
+  TF32). The compiled unpack dst format went from Tf32 to Float32, but 0 bitwise changes on K3 / GLM, snap on and
+  off: the TF32 step never changed a bf16 output here. GLM experts + combine 1379-1384 -> 1386-1388 us (+0.4%); K3
+  unchanged.
+- Router weights (d14d9d1d522): each weight is now the pick's exact fp32 score, which the fin packs back over HOLD. It
+  used to be rebuilt as the key's truncated (score + bias) - bias. Picks are bit-identical in every run. Uniform
+  routing: 0.6% of weights move by 1 ulp, and PCC is unchanged (head weights PCC 0.99911 is limited by logit
+  precision). hot_spread (bias 50): 28-50% of weights change; max |w - host| drops 1.57e-3 -> 0.60e-3 (K3) and
+  5.6e-3 -> 2.9e-3 (GLM). test_router_split_equal k3 / k27 is bit-exact. The fin now runs one score tile a pass;
+  the traced head is unchanged.
+- Prepared-program key (c7bc5d7ac9f): the key now holds each slot's io index (tagged), per-core place and arg count,
+  and frozen CB buffers and offsets. Outputs are bit-identical. A scratch check keys apart codex's [a, a, b] /
+  [a, b, b] case.
+- latent_norm=False (2e1e4d68451): "auto" now takes the ops tail and the summary says why. K3 PCC 0.988 -> 0.994.
+- Guards (1f591587d7a): fabric_all_gather_py replays its port protocol on the host and raises on the CB-group /
+  inc_every deadlock. It also raises for a page larger than the payload. se_engine3 raises when ceil(NB / GY) > 64
+  (trid_of / slot_of), or when the SE_BRW table overflows. Not fixed in the kernels: the reader can't push a part
+  group without breaking the CB's group alignment. The fabric_all_gather_ttnn copy of the module is unchanged.
+- Perf (K3 ring4 640 traced, device sum, slowest chip, 3 reads each): 1700-1704 us before, 1697-1706 us after. Head
+  388-391, dispatch 55, experts + combine 1151, tail 113-116 us: all unchanged.
