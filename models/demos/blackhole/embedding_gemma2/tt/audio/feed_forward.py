@@ -76,9 +76,12 @@ class AudioFeedForward(LightweightModule):
         h = self.pre_norm(x)
         a = self.ffw1(h)
         ttnn.deallocate(h)
-        s = ttnn.silu(a, memory_config=dram)
+        # silu and ffw2's input clamp in one SFPU pass (same ops, same order)
+        s = ttnn.unary_chain(
+            a, [ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), self.ffw2.input_clamp()], memory_config=dram
+        )
         ttnn.deallocate(a)
-        d = self.ffw2(s)
+        d = self.ffw2.project(s)
         ttnn.deallocate(s)
         n = self.post_norm(d)
         ttnn.deallocate(d)

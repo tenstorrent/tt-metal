@@ -55,19 +55,27 @@ class ClippableLinear(LightweightModule):
         weight = as_weight(linear_weight(w), device, cache_dir=cache_dir, name=f"{name}.weight")
         return cls(weight, clip_bounds(state_dict, name), out_dtype)
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def input_clamp(self) -> ttnn.UnaryWithParam:
+        """The input clamp as a unary op, for callers that fuse it into the producer of x."""
+        return ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, self.bounds.input_min, self.bounds.input_max)
+
+    def project(self, xc: ttnn.Tensor) -> ttnn.Tensor:
+        """clamp_out(xc @ W) for an input already clamped to the input bounds."""
         b = self.bounds
-        dram = ttnn.DRAM_MEMORY_CONFIG
-        xc = ttnn.clamp(x, min=b.input_min, max=b.input_max, memory_config=dram)
         # output clamp fused into the matmul (HARDTANH on the fp32 destination before packing; the
         # bounds are bf16 values, so clamp-then-round == round-then-clamp)
-        out = audio_linear(
+        return audio_linear(
             xc,
             self.weight,
             dtype=self.out_dtype,
             compute_kernel_config=self.compute_kernel_config,
             activation=hardtanh(b.output_min, b.output_max),
-            memory_config=dram,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        b = self.bounds
+        xc = ttnn.clamp(x, min=b.input_min, max=b.input_max, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = self.project(xc)
         ttnn.deallocate(xc)
         return out
