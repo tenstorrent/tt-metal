@@ -85,21 +85,6 @@ def op(name: str):
     return getattr(ttnn.experimental.quasar, name) if quasar_forks_enabled() else getattr(ttnn, name)
 
 
-def skip_bfloat8_on_quasar():
-    """Skip a case whose device output is bfloat8_b when running on Quasar.
-
-    Quasar has no block-float formats (Bfp8_b / Bfp4_b / Bfp2_b): ``is_data_format_supported``
-    excludes them and ``ValidateProgramSpec`` rejects any DFB carrying one before a kernel is
-    built (``DFB 'out' has data format 'Bfp8_b' which is not supported on architecture quasar``).
-    The model's bfloat8_b casts (detect-head anchors/strides, the :327 to_layout) therefore need a
-    model-level dtype decision on Quasar (bf16 or the MxFp8 family); the bf16 variants of the same
-    call sites are covered by the sibling tests in each file. Host-side casts (``ttnn.to_dtype``)
-    are unaffected.
-    """
-    if ttnn.get_arch_name() == "quasar":
-        pytest.skip("bfloat8_b is not a Quasar data format (model dtype decision, not an op bug)")
-
-
 # =============================================================================
 # RTL emulator (ZEBU) detection
 # =============================================================================
