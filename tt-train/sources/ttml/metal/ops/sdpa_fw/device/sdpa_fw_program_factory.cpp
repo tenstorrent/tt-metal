@@ -50,8 +50,6 @@ constexpr auto kCurMmOutCbIndex = tt::CBIndex::c_14;     // running P @ V accumu
 constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
 constexpr auto kGateCbIndex = tt::CBIndex::c_16;
 
-constexpr uint32_t kNumScalerTiles = 1U;
-
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
@@ -276,10 +274,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     }
 
     [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
-        program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+        program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.reduction_scaler);
 
     [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
-        program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+        program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.matmul_reduce);
 
     // Scores of one step, row-major; single-buffered, softmax rewrites in place (see the TODO on the
     // softmax helpers in sdpa_compute_utils.hpp).
