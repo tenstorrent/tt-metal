@@ -46,9 +46,8 @@ void kernel_main() {
     constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_5;
     constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_6;
 
-    constexpr uint16_t one = 0x00003F80;                          // (bfloat16)1.0 -> uint16_t
-    generate_tile_with_bfloat16_value(cb_reduction_scaler, one);  // tile with 1.0 for reduction
-    generate_matmul_row_reduce_tile(cb_matmul_reduce);            // tile for matmul row reduce
+    generate_tile_with_bfloat16_value(cb_reduction_scaler, BF16_ONE_BITS);  // tile with 1.0 for reduction
+    generate_matmul_row_reduce_tile(cb_matmul_reduce);                      // tile for matmul row reduce
 
 #ifdef CAUSAL_MASK
     // Emit *pre-transformed* mask tiles so the compute kernel can stamp them directly
