@@ -23,6 +23,12 @@
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
 
+// The shared layout header spells out the tile geometry so it stays kernel-includable; keep it in step with the host.
+static_assert(qkv_conv::tile_height == tt::constants::TILE_HEIGHT);
+static_assert(qkv_conv::tile_width == tt::constants::TILE_WIDTH);
+static_assert(qkv_conv::face_height == tt::constants::FACE_HEIGHT);
+static_assert(qkv_conv::face_width == tt::constants::FACE_WIDTH);
+
 namespace ttnn::experimental::prim {
 
 namespace {

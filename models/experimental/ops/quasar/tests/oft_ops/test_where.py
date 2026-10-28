@@ -15,6 +15,9 @@ Shape source (kernel cache):
     ``ternary_reader_nosubtilebcast_ttt`` / ``ternary_writer_nobcast``, all L1        [H]
 
 ``where`` selects values, so the check is exact.
+
+Cache #1 only. The second cache (in-tree OFT at ``628a4797bf7``) runs ``atan2`` natively
+(``test_atan2.py``) and has no ``where`` kernels.
 """
 
 import math

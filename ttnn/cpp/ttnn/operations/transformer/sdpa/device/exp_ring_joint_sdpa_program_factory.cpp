@@ -1478,7 +1478,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // rows disconnected, redistribute the same L1 across the remaining channels.
     const uint32_t num_mux_buffers_per_channel =
         args.num_buffers_per_channel * num_workers_per_link / num_mux_clients_per_group;
-    const size_t mux_buffer_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t mux_buffer_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_mux_full_size_channels,
         num_mux_header_only_channels,
@@ -1522,7 +1522,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     // All-gather CT args for the fabric writer (integrated K/V all-gather on MUX client columns)
     const uint32_t ag_page_size = input_tensor_k.buffer()->page_size();
-    const size_t ag_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t ag_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     constexpr uint32_t max_scatter_addresses = 4;
     const uint32_t ag_packet_size_in_pages =
         std::min(static_cast<uint32_t>(ag_packet_size_bytes / ag_page_size), max_scatter_addresses);

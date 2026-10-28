@@ -14,9 +14,8 @@
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/context/context_types.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
-#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt_align.hpp>
 #include <algorithm>
 #include <atomic>
@@ -33,7 +32,6 @@
 #include <vector>
 
 #include "hostdev/remote_dfb_config_layout.h"
-#include "llrt/hal/generated/dev_msgs.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "mesh_device.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -65,8 +63,7 @@ PrefetcherPipeConfigPageLayout compute_prefetcher_pipe_config_page_layout(
 }
 
 uint32_t l1_alignment_for(const distributed::MeshDevice* device) {
-    const auto context_id = extract_context_id(device);
-    return MetalContext::instance(context_id).hal().get_alignment(HalMemType::L1);
+    return device->impl().metal_env().get_hal().get_alignment(HalMemType::L1);
 }
 
 struct PrefetcherPipePageCommon {
@@ -326,12 +323,11 @@ void PrefetcherPipeSpaceImpl::unclaim(const CoreRangeSet& cores, PrefetcherPipeI
 
 void PrefetcherPipeSpaceImpl::write_page(const CoreRangeSet& cores, const std::vector<uint32_t>& page) const {
     TT_FATAL(page.size() * sizeof(uint32_t) == layout_.page_size, "PrefetcherPipeSpace: page has the wrong size");
-    const auto context_id = extract_context_id(device_);
-    const auto& cluster = MetalContext::instance(context_id).get_cluster();
+    const auto& cluster = device_->impl().metal_env().get_cluster();
     const uint32_t page_bytes = static_cast<uint32_t>(page.size() * sizeof(uint32_t));
     // Named: ranges() returns a view into the merged set, which must outlive the loop.
     const CoreRangeSet merged = cores.merge_ranges();
-    for (IDevice* target_device : device_->get_devices()) {
+    for (auto* target_device : device_->impl().get_devices()) {
         for (const CoreRange& range : merged.ranges()) {
             if (range.size() == 1) {
                 auto page_copy = page;
@@ -690,14 +686,10 @@ void PrefetcherPipeImpl::build_dram_sender_config_pages() {
         .applied_entry_size = initial_entry_size_};
     const uint32_t sender_page_addr = static_cast<uint32_t>(drisc_config_page_->addr());
     const uint32_t receiver_sent_base = space_->config_address() + layout.sent_offset;
-    TT_FATAL(
-        (receiver_sent_base & ~dev_msgs::REMOTE_CB_PACKED_ADDR_MASK) == 0,
-        "Receiver counter base 0x{:x} does not fit the packed remote-pointer field",
-        receiver_sent_base);
 
     const distributed::MeshDevice* mesh_device = space_->get_device();
     config_pages_.clear();
-    for (IDevice* target_device : mesh_device->get_devices()) {
+    for (auto* target_device : mesh_device->impl().get_devices()) {
         std::vector<CoreCoord> receiver_phys;
         receiver_phys.reserve(receivers.size());
         for (const CoreCoord& receiver : receivers) {

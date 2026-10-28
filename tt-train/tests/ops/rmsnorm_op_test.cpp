@@ -10,7 +10,7 @@
 #include <cassert>
 #include <optional>
 #include <string>
-#include <umd/device/cluster.hpp>
+#include <tt-umd/cluster.hpp>
 #include <utility>
 #include <vector>
 

@@ -959,15 +959,18 @@ def create_tt_model(
         ]
         tt_model_args.num_experts = max(expert_indices) if expert_indices else tt_model_args.num_local_experts
 
-    model = Transformer(
-        args=tt_model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        paged_attention_config=paged_attention_config,
-        prefetcher=prefetcher,
-    )
+    # A placeholder state_dict holds no weight data, so as_tensor must raise on an unloadable cache
+    # file rather than rebuild it from the placeholder.
+    with ttnn.as_tensor_cache_repair(not getattr(state_dict, "is_placeholder", False)):
+        model = Transformer(
+            args=tt_model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=tt_model_args.weight_cache_path(dtype),
+            paged_attention_config=paged_attention_config,
+            prefetcher=prefetcher,
+        )
 
     # If this run populated the cache from a cold host load, record completion so future runs
     # can skip the load. Only for full-model builds (a num_layers override produces a partial

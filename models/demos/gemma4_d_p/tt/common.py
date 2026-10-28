@@ -101,20 +101,23 @@ def create_tt_model(
     # above so the cache identity and the model share one value.
     precision = _precision_for_variant
 
-    model = Gemma4Model(
-        mesh_config=mesh_config,
-        hf_config=model_args,
-        state_dict=state_dict,
-        ccl_manager=ccl_manager,
-        prefill_chunk_size=prefill_chunk_size,
-        precision=precision,
-        dtype=dtype,
-        tensor_cache_path=tensor_cache_path,
-        max_seq_len=max_seq_len,
-        max_local_batch_size=max_batch_size,
-        num_layers=num_layers,
-        ring_kv_caches=ring_kv_caches,
-    )
+    # A placeholder state_dict holds no weight data, so as_tensor must raise on an unloadable cache
+    # file rather than rebuild it from the placeholder.
+    with ttnn.as_tensor_cache_repair(not getattr(state_dict, "is_placeholder", False)):
+        model = Gemma4Model(
+            mesh_config=mesh_config,
+            hf_config=model_args,
+            state_dict=state_dict,
+            ccl_manager=ccl_manager,
+            prefill_chunk_size=prefill_chunk_size,
+            precision=precision,
+            dtype=dtype,
+            tensor_cache_path=tensor_cache_path,
+            max_seq_len=max_seq_len,
+            max_local_batch_size=max_batch_size,
+            num_layers=num_layers,
+            ring_kv_caches=ring_kv_caches,
+        )
 
     # After a full cold build, record completion (+ capture host-consumed weights to the sidecar)
     # so future runs can skip the HF load.

@@ -5,7 +5,7 @@
 //
 // LLK SFPU typecast PERF kernel.
 //
-// Structurally identical to sources/eltwise_unary_sfpu_perf.cpp (same profiler
+// Structurally identical to sources/eltwise_unary_sfpu_test.cpp (same profiler
 // zones, run-type handling, unpack/datacopy/pack flow, LOOP_FACTOR loop), but
 // the MATH-isolate / L1-to-L1 measured loop performs the SFPU *typecast* op
 // instead of a generic SFPU unary op.
