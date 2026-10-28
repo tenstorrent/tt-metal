@@ -21,6 +21,11 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
     constexpr uint32_t per_core_block_dim = get_arg(args::per_core_block_dim);
+    // Tiles broadcast per DEST section. Above 1, tile t is read at index t and lands at DEST slot 2 * t + 1, as in the
+    // binary_ng SFPU broadcast kernels.
+    constexpr uint32_t tiles_per_section = get_arg(args::tiles_per_section);
+    static_assert(
+        per_core_block_dim % tiles_per_section == 0, "per_core_block_dim must be a multiple of tiles_per_section");
     DataflowBuffer dfb_src(dfb::src);
     DataflowBuffer dfb_dst(dfb::dst);
     const uint32_t icb = dfb_src.get_id();
@@ -28,21 +33,25 @@ void kernel_main() {
 
     compute_kernel_hw_startup(icb, ocb);
     unary_bcast_init<BCAST_DIM>(icb);
+    auto dst_slot = [](uint32_t tile_index, uint32_t t) { return tiles_per_section == 1 ? tile_index : 2 * t + 1; };
 
     // TODO (tt-metal #42792): revert to batched multi-tile broadcast once Quasar unpack<->pack semaphores land.
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            dfb_src.wait_front(1);
-            dfb_dst.reserve_back(1);
+        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; tile_index += tiles_per_section) {
+            dfb_src.wait_front(tiles_per_section);
+            dfb_dst.reserve_back(tiles_per_section);
             tile_regs_acquire();
-            // One tile visible per iteration: unpack always reads fifo front (index 0); dst slot is tile_index.
-            unary_bcast<BCAST_DIM>(icb, 0, tile_index);
+            for (uint32_t t = 0; t < tiles_per_section; ++t) {
+                unary_bcast<BCAST_DIM>(icb, t, dst_slot(tile_index, t));
+            }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(tile_index, ocb);
+            for (uint32_t t = 0; t < tiles_per_section; ++t) {
+                pack_tile(dst_slot(tile_index, t), ocb);
+            }
             tile_regs_release();
-            dfb_src.pop_front(1);
-            dfb_dst.push_back(1);
+            dfb_src.pop_front(tiles_per_section);
+            dfb_dst.push_back(tiles_per_section);
         }
     }
 #else

@@ -20,6 +20,7 @@
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_broadcast_operands.h"
+#include "llk_unpack_unary_broadcast_operands_to_dest.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -37,8 +38,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
     const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(INPUT_NUM_TILES_IN_BLOCK);
-    // Unpack to dest must use the num tiles per unpack parameter in order to unpack multiple tiles per Dest bank
-    const std::uint32_t num_tiles_per_unpack = unpack_to_dest ? tiles_in_block : 1;
 
     {
         START_PERF_MEASURE("INIT")
@@ -75,7 +74,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
-        _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(bfd_unpack, num_tiles_per_unpack);
+        if constexpr (unpack_to_dest)
+        {
+            // Dest-dvalid form: the bank tile offset stays 0, hardware moves this client between banks.
+            _llk_unpack_dest_init_();
+            _llk_unpack_unary_broadcast_operands_to_dest_init_<BROADCAST_TYPE>(bfd_unpack);
+        }
+        else
+        {
+            _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, is_fp32_dest_acc_en>(bfd_unpack, 1);
+        }
 
         PROFILER_SYNC();
     }
@@ -116,7 +124,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _llk_unpack_unary_broadcast_operands_<UNPACKER_ENGINE_SEL, unpack_to_dest>(block * tiles_in_block);
+                    for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
+                    {
+                        _llk_unpack_unary_broadcast_operands_to_dest_tile_((block * tiles_in_block) + tile /*l1_tile_idx*/, tile /*dst_tile_idx*/);
+                    }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
                         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
@@ -137,7 +148,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
                         const std::uint32_t input_tile_idx = (block * tiles_in_block) + tile;
-                        _llk_unpack_unary_broadcast_operands_<UNPACKER_ENGINE_SEL, unpack_to_dest>(input_tile_idx);
+                        _llk_unpack_unary_broadcast_operands_<UNPACKER_ENGINE_SEL>(input_tile_idx);
                     }
                 }
             }

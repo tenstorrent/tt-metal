@@ -4,6 +4,7 @@
 
 #include <tt_stl/reflection.hpp>
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -14,6 +15,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <random>
 #include <string>
 #include <type_traits>
 #include <variant>
@@ -74,6 +76,9 @@ struct UnaryBroadcastConfig {
     tt::DataFormat in_t;
     tt::DataFormat out_t;
     bool fp32_dest_acc_en = false;
+    // Quasar only: UnpackToDest on the src DFB, and the tiles broadcast per DEST section by the compute kernel.
+    bool unpack_to_dest = false;
+    std::uint32_t tiles_per_section = 1;
 };
 
 // Assume 1Xn tiles.
@@ -238,6 +243,23 @@ bool check_is_close(
         }
         return true;
     }
+    if (T_out == tt::DataFormat::Float32) {
+        // A broadcast only copies datums, so the 32-bit result must match bit for bit.
+        if (packed_golden.size() != device_res.size()) {
+            TT_THROW("{} mismatch: size golden={} device={}", result_label, packed_golden.size(), device_res.size());
+        }
+        auto it = std::mismatch(packed_golden.begin(), packed_golden.end(), device_res.begin());
+        if (it.first != packed_golden.end()) {
+            const size_t i = static_cast<size_t>(it.first - packed_golden.begin());
+            TT_THROW(
+                "{} mismatch at index {} golden={} device={}",
+                result_label,
+                i,
+                std::bit_cast<float>(*it.first),
+                std::bit_cast<float>(*it.second));
+        }
+        return true;
+    }
     TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
 }
 
@@ -378,6 +400,11 @@ void run_single_core_unary_broadcast_quasar(
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     compute_defines.emplace("BCAST_DIM", broadcast_dim_to_type.at(test_config.broadcast_dim));
 
+    experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
+    if (test_config.unpack_to_dest) {
+        unpack_modes = {{SRC_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
+    }
+
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast.cpp",
@@ -396,10 +423,14 @@ void run_single_core_unary_broadcast_quasar(
                  .endpoint_type = experimental::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_args = {{"per_core_block_cnt", num_blocks}, {"per_core_block_dim", block_size}},
+        .compile_time_args =
+            {{"per_core_block_cnt", num_blocks},
+             {"per_core_block_dim", block_size},
+             {"tiles_per_section", test_config.tiles_per_section}},
         .hw_config =
             experimental::ComputeHardwareConfig{
                 .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+                .unpack_modes = unpack_modes,
             },
     };
 
@@ -475,6 +506,19 @@ void get_packed_tilized_input_output_pair(
         std::vector<float> input = unpack_bfp8_tiles_into_float_vec(packed_tilized_input, true, false);
         packed_tilized_output =
             get_tilized_packed_golden_broadcast(input, {num_tiles, tile_width, tile_height}, bcast_dim, out_t);
+    } else if (in_t == tt::DataFormat::Float32) {
+        TT_FATAL(out_t == tt::DataFormat::Float32, "Float32 input is tested with Float32 output only");
+        std::mt19937 rng(0x5eed);
+        std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+        std::vector<std::uint32_t> input(num_tiles * num_single_tile_elem);
+        std::generate(input.begin(), input.end(), [&]() { return std::bit_cast<std::uint32_t>(dist(rng)); });
+        std::vector<std::uint32_t> broadcast =
+            get_broadcasted_vec(input, {num_tiles, tile_width, tile_height}, bcast_dim);
+
+        ::unit_tests::compute::GoldenConfig config = {
+            .num_tiles_r_dim = static_cast<int>(num_tiles), .num_tiles_c_dim = 1, .datum_bytes = 4};
+        packed_tilized_input = ::unit_tests::compute::gold_standard_tilize(input, config);
+        packed_tilized_output = ::unit_tests::compute::gold_standard_tilize(broadcast, config);
     }
 }
 
@@ -633,6 +677,50 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDf
                 run_single_core_unary_broadcast(this->device(), test_config);
             }
         }
+    }
+}
+
+// Float32 through a 32-bit Dest with UnpackToDest on the src DFB: unary_bcast unpacks to DEST and broadcasts there.
+// Two tiles per DEST section, read at input indices 0 and 1 and placed at DEST slots 1 and 3.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfbFloat32UnpackToDest) {
+    for (BroadcastDim bcast_dim : {BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR}) {
+        UnaryBroadcastConfig test_config = {
+            .broadcast_dim = bcast_dim,
+            .in_t = tt::DataFormat::Float32,
+            .out_t = tt::DataFormat::Float32,
+            .fp32_dest_acc_en = true,
+            .unpack_to_dest = true,
+            .tiles_per_section = 2,
+        };
+        log_info(
+            tt::LogTest,
+            "Testing UNARY BROADCAST unpack-to-dest bcast={} in_t={} out_t={}",
+            broadcast_dim_to_type.at(test_config.broadcast_dim),
+            test_config.in_t,
+            test_config.out_t);
+        run_single_core_unary_broadcast(this->device(), test_config);
+    }
+}
+
+// Float16_b through a 32-bit Dest with UnpackToDest on the src DFB: the unpacker cannot widen a 16-bit format into a
+// 32-bit DEST, so unary_bcast takes SrcB under the to-dest section handshake. Same layout as the Float32 variant.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfbFloat16bUnpackToDest) {
+    for (BroadcastDim bcast_dim : {BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR}) {
+        UnaryBroadcastConfig test_config = {
+            .broadcast_dim = bcast_dim,
+            .in_t = tt::DataFormat::Float16_b,
+            .out_t = tt::DataFormat::Float16_b,
+            .fp32_dest_acc_en = true,
+            .unpack_to_dest = true,
+            .tiles_per_section = 2,
+        };
+        log_info(
+            tt::LogTest,
+            "Testing UNARY BROADCAST unpack-to-dest bcast={} in_t={} out_t={}",
+            broadcast_dim_to_type.at(test_config.broadcast_dim),
+            test_config.in_t,
+            test_config.out_t);
+        run_single_core_unary_broadcast(this->device(), test_config);
     }
 }
 
