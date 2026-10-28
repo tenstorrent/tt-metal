@@ -778,10 +778,23 @@ def sparse_all_gather_2d(
     Fills every destination's slots; returns output. extra = (tensors, fn((r, c)) -> (cbs, kernels)): another op's
     CBs / kernels appended to each chip's program, on cores off port_cores_all(..) (it runs under the dispatch)."""
     # (the same buffers, options and no merged op: the descriptor of the last such call - its runtime args are these
-    # buffers' addresses; ~2 ms of host per call otherwise)
+    # buffers' addresses; ~2 ms of host per call otherwise. Each buffer by its address and what the descriptor compiled
+    # from it - shape, dtype, layout, page size, memory config (sharding: the accessors' compile-time args): a new
+    # buffer at a freed one's address with another width must not reuse the old row bytes / CB sizes / accessors)
     dkey = None
     if extra is None:
-        a_ = lambda t: None if t is None else int(t.buffer_address())  # noqa: E731
+        a_ = lambda t: (  # noqa: E731
+            None
+            if t is None
+            else (
+                int(t.buffer_address()),
+                tuple(t.shape),
+                t.dtype,
+                t.layout,
+                int(t.buffer_aligned_page_size()),
+                t.memory_config(),
+            )
+        )
         dkey = (
             id(output.device()),
             a_(output),
