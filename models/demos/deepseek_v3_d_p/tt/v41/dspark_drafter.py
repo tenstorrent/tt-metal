@@ -390,7 +390,7 @@ class TtDSparkDrafter:
         return t.reshape(1, 1, 1, n_taps * hidden).expand(1, 1, ROWS, -1).contiguous()
 
     def host_inputs(
-        self, token: int, main_hidden: torch.Tensor | None, position: int, write: bool | None = None
+        self, token: int, main_hidden: torch.Tensor | None, position: int, write: bool | None = None, tap_row: int = 0
     ) -> dict:
         """The draft call's host tensors at ``position`` = the reference's ``start_pos`` ``p``: the tap is position
         ``p``'s (its ``main_kv`` goes to ring slot ``p % 128``), ``token`` is the target's output at ``p`` (``x[p + 1]``,
@@ -411,6 +411,13 @@ class TtDSparkDrafter:
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, tuple(self.mesh_device.shape), dims=(None, 3)),
         )
+        # the row selector of a device tap tile (``stage(..., tap32=)``: the target step's taps of every tile row):
+        # ``sel @ tap32`` puts row ``tap_row`` on every row (one nonzero term a row: exact); without a device tile
+        # the host tap is used (use_tap32 0)
+        sel = torch.zeros(1, 1, ROWS, ROWS)
+        sel[0, 0, :, tap_row] = 1.0
+        inputs["sel"] = self._replicated(sel, ttnn.bfloat16, device=False)
+        inputs["use_tap32"] = self._replicated(torch.full((1, 1, 1, 1), 0.0), ttnn.bfloat16, device=False)
         main = cos_sin(cfg, False, torch.full((ROWS,), p, dtype=torch.int64))
         inputs["rope_main"] = tuple(self._replicated(t, ttnn.float32, device=False) for t in main)
         block = cos_sin(cfg, False, torch.arange(p + 1, p + 1 + ROWS))
@@ -443,11 +450,18 @@ class TtDSparkDrafter:
             ttnn.deallocate(t)
         return out
 
-    def stage(self, inputs: dict, tap=None) -> None:
+    def stage(self, inputs: dict, tap=None, tap32=None) -> None:
         """Copy the host inputs of ``host_inputs`` into the fixed device buffers (allocated by the first call);
-        ``tap``: a device tap (``tap_rows_from_streams``) copied over the host one."""
+        ``tap``: a device tap (``tap_rows_from_streams``) copied over the host one; ``tap32``: the target step's
+        tap tile of every row (``TtV41VerifyDecoder.taps``), copied into its buffer and selected by ``sel`` in the
+        graph (``use_tap32`` set to 1)."""
+        if tap32 is not None:
+            inputs = dict(
+                inputs, use_tap32=self._replicated(torch.full((1, 1, 1, 1), 1.0), ttnn.bfloat16, device=False)
+            )
         if not self.buffers:
             self.buffers = self.to_device(inputs)
+            self.buffers["tap32"] = ttnn.clone(self.buffers["tap"]) if tap32 is None else ttnn.clone(tap32)
         else:
             for k, v in inputs.items():
                 if isinstance(v, tuple):
@@ -457,6 +471,8 @@ class TtDSparkDrafter:
                     ttnn.copy_host_to_device_tensor(v, self.buffers[k])
         if tap is not None:
             ttnn.copy(tap, self.buffers["tap"])
+        if tap32 is not None:
+            ttnn.copy(tap32, self.buffers["tap32"])
 
     def _graph(self):
         """The draft call's graph on the buffers -> the device tensor read after it: the five drafts
@@ -549,9 +565,12 @@ class TtDSparkDrafter:
         """stage 0's ``main_x`` from the tap rows, every stage's ``main_kv`` into its ring at ``ring_idx`` (row 0 of the
         tile; the other rows' index is the sentinel). Returns ``main_x`` [1, 1, ROWS, hidden] bf16 replicated."""
         s = self.seeder
-        y = ttnn.linear(
-            fp8_qdq(inputs["tap"]), s.main_proj, dtype=ttnn.float32, compute_kernel_config=s.compute_kernel_config
-        )
+        tap = inputs["tap"]
+        if "tap32" in inputs:  # the target step's tap tile: row ``sel`` on every row, or the host tap (use_tap32 0)
+            picked = ttnn.matmul(inputs["sel"], inputs["tap32"], compute_kernel_config=s.compute_kernel_config)
+            use = inputs["use_tap32"]
+            tap = ttnn.add(ttnn.multiply(picked, use), ttnn.multiply(tap, ttnn.rsub(use, 1.0)))
+        y = ttnn.linear(fp8_qdq(tap), s.main_proj, dtype=ttnn.float32, compute_kernel_config=s.compute_kernel_config)
         y = ttnn.typecast(s.ccl.tp_all_reduce(y), ttnn.bfloat16)
         main_x = ttnn.rms_norm(y, weight=s.main_norm, epsilon=s.eps)
         xq = fp8_qdq(main_x)

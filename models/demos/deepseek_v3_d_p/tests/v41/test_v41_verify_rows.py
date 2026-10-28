@@ -80,6 +80,7 @@ def test_v41_verify_rows(mesh_device, device_params):
     text = orc.text_tokens(prompt_len + 8)[0]
     prompt = text[:prompt_len]
     record = {
+        "taps": os.environ.get("V41_VR_TAPS", "step"),
         "layers": layers,
         "n_layers": len(layers),
         "capacity": cap,
@@ -152,10 +153,14 @@ def test_v41_verify_rows(mesh_device, device_params):
     record["prefill_s"] = round(time.time() - t0, 1)
     record["first_token"] = first
     assert state.dspark_rings is not None, "the prefill did not seed the drafter's rings"
+    # V41_VR_TAPS=streams: the drafter's tap from the step's block outputs (eight eager ops a round); step
+    # (default): the step computes every row's tap in its graph and the drafter selects the accepted row's in its own
+    taps_mode = os.environ.get("V41_VR_TAPS", "step")
     tap_layers = list(C.DSPARK_TARGET_LAYER_IDS)
     stream_layers = [l - 1 for l in tap_layers]  # a tap is the block input of its layer: the previous block's output
     streams = {}
-    decoder.on_block = lambda layer, x: streams.__setitem__(layer, x) if layer in stream_layers else None
+    if taps_mode == "streams":
+        decoder.on_block = lambda layer, x: streams.__setitem__(layer, x) if layer in stream_layers else None
 
     def rejoin():
         decoder.join(0, prompt, state)
@@ -197,13 +202,18 @@ def test_v41_verify_rows(mesh_device, device_params):
         tap_row = None
         while len(committed) - 1 < n_tokens:
             t0 = time.time()
-            inputs = drafter.host_inputs(tok, None, frontier - 1, write=tap is not None)
-            tap_dev = (
-                drafter.tap_rows_from_streams([streams[l] for l in stream_layers], tap_row) if tap is not None else None
-            )
-            drafter.stage(inputs, tap_dev)
-            if tap_dev is not None:
-                ttnn.deallocate(tap_dev)
+            inputs = drafter.host_inputs(tok, None, frontier - 1, write=tap is not None, tap_row=tap_row or 0)
+            if taps_mode == "streams":
+                tap_dev = (
+                    drafter.tap_rows_from_streams([streams[l] for l in stream_layers], tap_row)
+                    if tap is not None
+                    else None
+                )
+                drafter.stage(inputs, tap_dev)
+                if tap_dev is not None:
+                    ttnn.deallocate(tap_dev)
+            else:
+                drafter.stage(inputs, tap32=decoder.taps if tap is not None else None)
             t1 = time.time()
             drafts = drafter.run(tok)[:k]
             t2 = time.time()

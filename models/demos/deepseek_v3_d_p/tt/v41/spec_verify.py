@@ -78,6 +78,11 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         )
         self._windows: dict[int, ttnn.Tensor] = {}
         self._uoff: dict[int, ttnn.Tensor] = {}
+        # with a seeder on the model: the drafter's tap of every tile row, [1, 1, ROWS, n_taps * hidden/tp] bf16 per
+        # chip (the hc-mean block inputs of the tap layers, chip-major), computed inside the step and kept at a fixed
+        # address per capture (``taps`` after a step: the drafter's ``stage(tap32=)`` input)
+        self.taps = None
+        self.capture_taps: dict[str, ttnn.Tensor] = {}
 
     # --- the step's layout ---------------------------------------------------------------------------------------
     def variant(self, tokens: dict) -> str:
@@ -232,7 +237,9 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         else:
             if mode == "capture":
                 self.captures[variant] = self._capture_step()
+                self.capture_taps[variant] = self.taps
             capture = self.captures[variant]
+            self.taps = self.capture_taps.get(variant)
             ttnn.synchronize_device(self.mesh_device)
             t3 = time.time()
             capture.controller.replay(blocking=False)
@@ -299,9 +306,12 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         h = model.embedding(self.inputs["token"])
         x = mhc_expand(ttnn.typecast(h, ttnn.float32), self.config.HC_MULT)
         pre = self.pre_mix
+        taps = []
         for layer, block, moe in zip(model.layers, model.blocks, self.moes):
             if layer in model.engram:
                 x = model.engram[layer](x, self.inputs["engram"][layer])
+            if model.dspark is not None and layer in self.config.DSPARK_TARGET_LAYER_IDS:
+                taps.append(model.dspark.tap(x))  # the block's input: the tap of every row
             x, pre = block.residual(
                 x,
                 pre,
@@ -310,6 +320,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             )
             if on_block is not None:
                 on_block(layer, x)
+        if taps:
+            self.taps = ttnn.concat(taps, dim=3)
         final = ttnn.typecast(model.blocks[-1].residual.final_collapse(x, pre), ttnn.bfloat16)
         logits, _ = model.head(final, 0)
         return self.sampler(logits, self.inputs)
