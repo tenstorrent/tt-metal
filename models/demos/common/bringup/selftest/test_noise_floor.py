@@ -29,6 +29,29 @@ def test_the_nudge_stays_inside_the_rounding_cell():
     assert torch.equal(NF.nudge(x, 3), NF.nudge(x, 3)) and not torch.equal(NF.nudge(x, 3), NF.nudge(x, 4))
 
 
+def test_an_fp4_input_is_nudged_by_the_size_of_its_quantizers_rounding():
+    """F223: an fp4/<block> input (an e2m1 quantizer output, scale per block) moves inside its e2m1 cell: the nudge's
+    error matches an fp4 quant-dequant's (scale amax / 6, round to the e2m1 grid), not bf16's ~100x smaller one."""
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(256, 512, generator=g) * torch.pow(2.0, torch.randint(-4, 4, (256, 1), generator=g).float())
+    grid = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0])
+    xg = x.view(256, -1, 16)
+    s = xg.abs().amax(-1, keepdim=True) / 6.0
+    m = (xg.abs() / s).unsqueeze(-1)
+    q = (grid[(m - grid).abs().argmin(-1)] * xg.sign() * s).view_as(x)
+    rel = lambda a: ((a.double() - x.double()).norm() / x.double().norm()).item()  # noqa: E731
+    r_q, r_n, r_b = rel(q), rel(NF.nudge(x, 0, "fp4/16")), rel(NF.nudge(x, 0, "bf16"))
+    assert 0.5 < r_n / r_q < 2.0, (r_n, r_q)
+    assert r_b < r_q / 30, (r_b, r_q)
+    y = NF.nudge(q, 1, "fp4/16")  # on the grid: within half a step of it
+    step = torch.where(
+        (q.view(256, -1, 16).abs() / s) < 2, 0.5, torch.where((q.view(256, -1, 16).abs() / s) < 4, 1.0, 2.0)
+    )
+    assert ((y - q).view(256, -1, 16).abs() <= 0.5 * step * s + 1e-6).all()
+    with pytest.raises(ValueError):
+        NF.nudge(torch.randn(4, 24), 0, "fp4/16")
+
+
 def test_input_dtypes_come_from_the_official_taps_map(tmp_path):
     class S:
         bringup_dir = tmp_path
@@ -39,6 +62,11 @@ def test_input_dtypes_come_from_the_official_taps_map(tmp_path):
     )
     assert NF.input_dtypes(S, "swa", "attention", 2) == ["bf16", "fixed"]
     assert NF.input_dtypes(S, "swa", "router", 1) == ["fp32"] and NF.input_dtypes(S, "mla", "router", 1) == ["bf16"]
+    (tmp_path / NF.TAPS_FILE).write_text("steps:\n  attention: {inputs: [bf16, fp4/16]}\n")
+    assert NF.input_dtypes(S, "swa", "attention", 2) == ["bf16", "fp4/16"]
+    (tmp_path / NF.TAPS_FILE).write_text("steps:\n  attention: {inputs: [fp4/x]}\n")
+    with pytest.raises(ValueError):
+        NF.input_dtypes(S, "swa", "attention", 1)
     (tmp_path / NF.TAPS_FILE).write_text("steps:\n  router: {inputs: [fp8]}\n")
     with pytest.raises(ValueError):
         NF.input_dtypes(S, "swa", "router", 1)
